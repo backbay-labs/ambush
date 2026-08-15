@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Phase-285 negative-registry gate. Each test must invoke the repository's
 # shared typed protocol, which owns an exact production call plus
-# mirror(None)/mirror(Broken) execution over one typed probe. A focused syn
-# checker binds the entire registered test and shared protocol AST to local
-# digests; Cargo discovery and execution independently prove the registered
-# tests run. Those co-located digests are tamper-evident against uncoordinated
-# edits, not an external trust anchor. Mirror fidelity beyond the registered
-# probe remains a reviewed limitation.
+# mirror(None)/mirror(Broken) execution over one typed probe. Production calls
+# are forced through checker-pinned, crate-root `extern crate` aliases so a
+# local module cannot shadow an external crate. A focused syn checker binds the
+# entire registered source files and shared protocol AST to local digests,
+# including imports and helper/wrapper bodies; Cargo discovery and execution
+# independently prove the registered tests run. Those
+# co-located digests are tamper-evident against uncoordinated edits, not an
+# external trust anchor. Mirror fidelity beyond the registered probe remains a
+# reviewed limitation.
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -435,6 +438,8 @@ CASES = {
     "comment_only_protocol": "ast-source-parse",
     "string_only_protocol": "ast-macro-path",
     "production_shaped_spoof": "ast-source-binding",
+    "black_box_only_spoof": "ast-macro-path",
+    "unrelated_assertion_spoof": "ast-macro-path",
     "protocol_import_spoof": "ast-protocol-module",
     "case_identity_drift": "ast-source-binding",
     "real_adapter_drift": "entry-real-adapter-drift",
@@ -498,6 +503,23 @@ fn broken_gate() {
         denied: |value| !value,
         permitted: |value| *value,
     }
+}
+''')
+    elif case == "black_box_only_spoof": test.write_text('''
+#[path = "../../../tests/negative_protocol.rs"]
+mod negative_protocol;
+#[test]
+fn broken_gate() {
+    std::hint::black_box("fixture_crate::gate::Gate::evaluate mirror None RemoveGuard");
+}
+''')
+    elif case == "unrelated_assertion_spoof": test.write_text('''
+#[path = "../../../tests/negative_protocol.rs"]
+mod negative_protocol;
+#[test]
+fn broken_gate() {
+    assert!(true, "real == control denial and broken permits");
+    assert_eq!(1, 1);
 }
 ''')
     elif case == "protocol_import_spoof": test.write_text(test.read_text().replace('../../../tests/negative_protocol.rs', 'alternate_protocol.rs'))
@@ -816,7 +838,67 @@ def registered_source_mutation_self_test(base):
         return source.replace(marker, "{\n    " + statement + "\n    assert!(!C::INVARIANT.is_empty(), \"case invariant identity is empty\");", 1)
 
     policy = "crates/swarm-policy/tests/negative_policy_gates.rs"
+    response = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
     runtime = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+    spine = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+
+    def add_root_shadow(source, root, body=""):
+        marker = "mod negative_protocol;"
+        shadow = f"\nmod {root} {{ {body} }}"
+        return source.replace(marker, marker + shadow, 1)
+
+    def reviewer_policy_shadow(source):
+        source = source.replace("use swarm_policy::", "use ::swarm_policy::")
+        source = add_root_shadow(source, "swarm_policy", """
+            pub mod static_gate {
+                pub struct StaticApprovalGate;
+                impl StaticApprovalGate {
+                    pub fn evaluate<T, U>(_gate: &T, _request: &U) -> bool { true }
+                }
+            }
+            pub mod configurable_gate {
+                pub struct ConfigurableApprovalGate;
+                impl ConfigurableApprovalGate {
+                    pub fn evaluate<T, U>(_gate: &T, _request: &U) -> bool { true }
+                }
+            }
+        """)
+        return source.replace(
+            "production: crate::__phase285_swarm_policy::",
+            "production: swarm_policy::",
+        ).replace(
+            "production_each: crate::__phase285_swarm_policy::",
+            "production_each: swarm_policy::",
+        )
+
+    def production_root_reexport(source):
+        source = source.replace(
+            "mod negative_protocol;",
+            "mod negative_protocol;\npub use ::swarm_policy as phase285_policy_reexport;",
+            1,
+        )
+        return source.replace(
+            "production: crate::__phase285_swarm_policy::",
+            "production: crate::phase285_policy_reexport::",
+            1,
+        )
+
+    def dead_genuine_call_with_fabricated_result(source):
+        helper = """
+fn fabricated_policy_result() -> bool {
+    let _dead_genuine_call = || {
+        let _ = crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate;
+    };
+    true
+}
+"""
+        source = source.replace("mod negative_protocol;", "mod negative_protocol;" + helper, 1)
+        return source.replace(
+            "production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate",
+            "production: crate::fabricated_policy_result",
+            1,
+        )
+
     mutations = {
         "dead_closure": (policy, lambda value: wrap_first(value, "dead"), "ast-macro-placement", None),
         "if_false": (policy, lambda value: wrap_first(value, "if-false"), "ast-macro-placement", None),
@@ -938,6 +1020,130 @@ def registered_source_mutation_self_test(base):
             "mod negative_protocol;\nuse negative_protocol::assert_registered_async_negative_case as canonical_async;\nmacro_rules! assert_registered_async_negative_case { ($($tokens:tt)*) => {{ if false { canonical_async! { $($tokens)* } } }}; }",
             1,
         ).replace("negative_protocol::assert_registered_async_negative_case!", "assert_registered_async_negative_case!", 1), "ast-reserved-binding", None),
+        "reviewer_policy_local_crate_shadow": (
+            policy,
+            reviewer_policy_shadow,
+            "ast-reserved-binding",
+            None,
+        ),
+        "production_root_reexport": (
+            policy,
+            production_root_reexport,
+            "ast-source-binding",
+            None,
+        ),
+        "dead_genuine_call_with_fabricated_result": (
+            policy,
+            dead_genuine_call_with_fabricated_result,
+            "ast-source-binding",
+            None,
+        ),
+        "helper_body_drift": (
+            policy,
+            lambda value: value.replace(
+                "mod negative_protocol;",
+                "mod negative_protocol;\nfn unregistered_helper() -> bool { true }",
+                1,
+            ),
+            "ast-source-semantic-drift",
+            None,
+        ),
+        "import_inventory_drift": (
+            spine,
+            lambda value: value.replace(
+                "mod negative_protocol;",
+                "mod negative_protocol;\nuse std::mem as unregistered_import;",
+                1,
+            ),
+            "ast-source-semantic-drift",
+            None,
+        ),
+        "response_local_crate_shadow": (
+            response,
+            lambda value: add_root_shadow(value, "swarm_response"),
+            "ast-reserved-binding",
+            None,
+        ),
+        "runtime_local_crate_shadow": (
+            runtime,
+            lambda value: add_root_shadow(value, "swarm_runtime"),
+            "ast-reserved-binding",
+            None,
+        ),
+        "spine_local_crate_shadow": (
+            spine,
+            lambda value: add_root_shadow(value, "swarm_spine"),
+            "ast-reserved-binding",
+            None,
+        ),
+        "serde_local_crate_shadow": (
+            response,
+            lambda value: add_root_shadow(value, "serde_json"),
+            "ast-reserved-binding",
+            None,
+        ),
+        "policy_self_extern_alias": (
+            policy,
+            lambda value: value.replace(
+                "extern crate swarm_policy as __phase285_swarm_policy;",
+                "extern crate self as __phase285_swarm_policy;",
+                1,
+            ),
+            "ast-crate-binding",
+            None,
+        ),
+        "response_swapped_extern_alias": (
+            response,
+            lambda value: value.replace(
+                "extern crate swarm_response as __phase285_swarm_response;",
+                "extern crate serde_json as __phase285_swarm_response;",
+                1,
+            ),
+            "ast-crate-binding",
+            None,
+        ),
+        "runtime_use_crate_alias": (
+            runtime,
+            lambda value: value.replace(
+                "extern crate swarm_runtime as __phase285_swarm_runtime;",
+                "use crate as __phase285_swarm_runtime;",
+                1,
+            ),
+            "ast-crate-binding",
+            None,
+        ),
+        "spine_reexport_alias": (
+            spine,
+            lambda value: value.replace(
+                "extern crate swarm_spine as __phase285_swarm_spine;",
+                "pub use ::swarm_spine as __phase285_swarm_spine;",
+                1,
+            ),
+            "ast-crate-binding",
+            None,
+        ),
+        "policy_reserved_alias_module": (
+            policy,
+            lambda value: add_root_shadow(value, "__phase285_swarm_policy"),
+            "ast-reserved-binding",
+            None,
+        ),
+        "runtime_reserved_alias_module": (
+            runtime,
+            lambda value: add_root_shadow(value, "__phase285_swarm_runtime"),
+            "ast-reserved-binding",
+            None,
+        ),
+        "response_reserved_alias_glob": (
+            response,
+            lambda value: value.replace(
+                "mod negative_protocol;",
+                "mod negative_protocol;\nuse crate::__phase285_swarm_response::*;",
+                1,
+            ),
+            "ast-reserved-binding",
+            None,
+        ),
         "wrong_protocol_path": (policy, lambda value: value.replace(
             '../../../tests/negative_protocol.rs', 'alternate_protocol.rs', 1
         ), "ast-protocol-module", None),
@@ -1031,7 +1237,7 @@ def registered_source_mutation_self_test(base):
             lambda value: replace_after(
                 value.replace("MirroredStaticGate", "RenamedStaticGate"),
                 "case: POLICY_NULL_EVIDENCE_REFUSED",
-                "production: swarm_policy::static_gate::StaticApprovalGate::evaluate",
+                "production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate",
                 "production: RenamedStaticGate::evaluate",
             ),
             "ast-expected-binding-drift",
@@ -1042,7 +1248,7 @@ def registered_source_mutation_self_test(base):
             lambda value: replace_after(
                 value,
                 "case: POLICY_NULL_EVIDENCE_REFUSED",
-                "production: swarm_policy::static_gate::StaticApprovalGate::evaluate",
+                "production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate",
                 "production: MirroredStaticGate::evaluate",
             ),
             "ast-expected-binding-drift",

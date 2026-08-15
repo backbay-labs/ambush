@@ -33,6 +33,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+extern crate swarm_policy as __phase285_swarm_policy;
+
 #[path = "../../../tests/negative_protocol.rs"]
 mod negative_protocol;
 
@@ -530,7 +532,7 @@ fn broken_action_target_validation_permits_empty_fields_across_all_action_varian
         probe: Vec<(&'static str, ActionRequest)> = probes,
         outcome: Vec<(&'static str, String)>,
         real_probe: probe,
-        production_each: swarm_policy::static_gate::StaticApprovalGate::evaluate,
+        production_each: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate,
         arguments_each: (
             &StaticApprovalGate::from_config(config),
             &item.1,
@@ -576,7 +578,7 @@ fn broken_deploy_decoy_minimum_permits_a_low_severity_deployment() {
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::static_gate::StaticApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate,
         arguments: (
             &StaticApprovalGate::from_config(config), probe, context,
         ),
@@ -621,7 +623,7 @@ fn broken_validate_request_permits_the_null_evidence_request_the_real_gate_refus
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::static_gate::StaticApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate,
         arguments: (&*real, probe, context),
         call: sync,
         normalize: |production_result| outcome(&production_result),
@@ -659,7 +661,7 @@ fn broken_minimum_severity_permits_the_low_severity_destructive_action_the_real_
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::static_gate::StaticApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate,
         arguments: (&*real, probe, context),
         call: sync,
         normalize: |production_result| outcome(&production_result),
@@ -702,7 +704,7 @@ fn broken_human_gate_permits_immediate_execution_of_what_the_real_gate_holds() {
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::static_gate::StaticApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate,
         arguments: (&*real, probe, context),
         call: sync,
         normalize: |production_result| outcome(&production_result),
@@ -750,7 +752,7 @@ fn broken_scope_rate_limit_permits_the_over_budget_action_the_real_gate_denies()
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::static_gate::StaticApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::static_gate::StaticApprovalGate::evaluate,
         arguments: (&*real, probe, context),
         call: sync,
         normalize: |production_result| outcome(&production_result),
@@ -911,7 +913,7 @@ fn broken_empty_ruleset_arm_permits_the_action_the_real_gate_fails_closed_on() {
         probe: ActionRequest = probe.clone(),
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
         arguments: (
             &ConfigurableApprovalGate::from_config(config), probe, context,
         ),
@@ -985,7 +987,7 @@ fn broken_time_window_admits_a_request_outside_the_configured_window() {
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
         arguments: (
             &ConfigurableApprovalGate::from_config(config), probe, context,
         ),
@@ -1024,7 +1026,7 @@ fn broken_agent_rate_limit_admits_the_over_budget_request() {
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
         arguments: (&*real, probe, context),
         call: sync,
         normalize: |production_result| outcome(&production_result),
@@ -1060,7 +1062,7 @@ fn broken_configured_deny_rule_turns_an_explicit_denial_into_allow() {
         probe: ActionRequest = probe,
         outcome: String,
         real_probe: probe,
-        production: swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
+        production: crate::__phase285_swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate,
         arguments: (
             &ConfigurableApprovalGate::from_config(config), probe, context,
         ),

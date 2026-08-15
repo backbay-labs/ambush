@@ -23,13 +23,15 @@ control denial and the broken operation permits. A separate compiled contract
 proves one call per role plus those assertion semantics, and the gate mutates the
 actual shared protocol to prove no-op, omitted/swapped-role, and removed or
 inverted-assertion variants fail. The shared macro owns the exact public
-production-entry invocation. A Rust-syntax checker digests the complete
-registered test function and shared protocol AST, including setup, operation
-roles, result normalization, and denial/permission predicates; it also rejects
-alternate imports, aliases, re-exports, and shadow definitions of the reserved
-protocol module or macros. Mapped markers and real adapters name the same
-public entry, except for two Serde conversion boundaries explicitly identified
-for review. The local digests detect uncoordinated drift but are co-located with
+production-entry invocation through an exact checker-pinned, crate-root
+`extern crate` alias, so a local module cannot redirect that path. A Rust-syntax
+checker digests each complete registered source file and the shared protocol
+AST, including imports, helper/wrapper bodies, setup, operation roles, result
+normalization, and denial/permission predicates; it also rejects alternate
+imports, aliases, re-exports, and shadow definitions of the reserved protocol
+module, macros, or production-crate bindings. Mapped markers and real adapters
+name the same public entry, except for two Serde conversion boundaries
+explicitly identified for review. The local digests detect uncoordinated drift but are co-located with
 the checker: they do not provide external provenance and cannot resist a
 coherent edit of all local inputs. This also does not mechanically prove
 handwritten-mirror fidelity beyond the registered probe. The reproduced

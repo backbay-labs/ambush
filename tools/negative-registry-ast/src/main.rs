@@ -8,12 +8,12 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
-    Attribute, Expr, ExprClosure, Ident, Item, ItemFn, ItemMod, Macro, Meta, Pat, Path as SynPath,
-    Result as SynResult, Stmt, Token, Type, braced, parenthesized,
+    Attribute, Expr, ExprClosure, Ident, Item, ItemExternCrate, ItemFn, ItemMod, Macro, Meta, Pat,
+    Path as SynPath, Result as SynResult, Stmt, Token, Type, Visibility, braced, parenthesized,
 };
 
 const EXPECTED: &str = include_str!("expected-bindings.tsv");
-const EXPECTED_SHA256: &str = "18c4aba7aa8ce06ed7479f6798feba9bd97e9939a8d3d5134b41dc6598bbea9d";
+const EXPECTED_SHA256: &str = "141efc77272b0b617b3ebf482570896c07e716967afd4d70c2c413e8ffa802bd";
 const PROTOCOL_SOURCE: &str = "tests/negative_protocol.rs";
 const PROTOCOL_SEMANTIC_SHA256: &str =
     "eb6ab292e42dabe4472fdbf7ff498e07ea1a3d4617994b4098532633bd871d5f";
@@ -23,6 +23,35 @@ const RESERVED: [&str; 3] = [
     "negative_protocol",
     "assert_registered_negative_case",
     "assert_registered_async_negative_case",
+];
+const CRATE_BINDINGS: [(&str, &str); 5] = [
+    ("swarm_policy", "__phase285_swarm_policy"),
+    ("swarm_response", "__phase285_swarm_response"),
+    ("swarm_runtime", "__phase285_swarm_runtime"),
+    ("swarm_spine", "__phase285_swarm_spine"),
+    ("serde_json", "__phase285_serde_json"),
+];
+const POLICY_BINDINGS: [(&str, &str); 1] = [CRATE_BINDINGS[0]];
+const RESPONSE_BINDINGS: [(&str, &str); 2] = [CRATE_BINDINGS[1], CRATE_BINDINGS[4]];
+const RUNTIME_BINDINGS: [(&str, &str); 1] = [CRATE_BINDINGS[2]];
+const SPINE_BINDINGS: [(&str, &str); 1] = [CRATE_BINDINGS[3]];
+const REGISTERED_SOURCE_SEMANTIC_SHA256: [(&str, &str); 4] = [
+    (
+        "crates/swarm-policy/tests/negative_policy_gates.rs",
+        "bde27c4be1b9bb4da99722eff9a04cf6c43cfc41f654b87f53e2c25e3cfbdc3d",
+    ),
+    (
+        "crates/swarm-response/tests/negative_containment_and_rollback.rs",
+        "5e4e20340ba176ec3c9922b9836e2174c13d7dca24c1bdea62f3dfc43e8f62b3",
+    ),
+    (
+        "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs",
+        "b09826c35ff7cd6134c4b0b262b4aae307c658754f520949d08776a4c6b6e340",
+    ),
+    (
+        "crates/swarm-spine/tests/negative_envelope_and_chain.rs",
+        "4aab18e0f432b0360964e7ed39ca6a9a7243b9c8e1520b35884d096811ae53e7",
+    ),
 ];
 const NORMALIZER_HELPERS: [(&str, &str, &str); 2] = [
     (
@@ -194,6 +223,106 @@ fn canonical_protocol_module(item: &ItemMod) -> bool {
         && attr_path_value(&item.attrs[0]).as_deref() == Some("../../../tests/negative_protocol.rs")
 }
 
+fn expected_crate_bindings(path: &Path) -> Option<&'static [(&'static str, &'static str)]> {
+    match path.to_string_lossy().as_ref() {
+        "crates/swarm-policy/tests/negative_policy_gates.rs" => Some(&POLICY_BINDINGS),
+        "crates/swarm-response/tests/negative_containment_and_rollback.rs" => {
+            Some(&RESPONSE_BINDINGS)
+        }
+        "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs" => Some(&RUNTIME_BINDINGS),
+        "crates/swarm-spine/tests/negative_envelope_and_chain.rs" => Some(&SPINE_BINDINGS),
+        _ => None,
+    }
+}
+
+fn is_reserved_binding(name: &str) -> bool {
+    RESERVED.contains(&name)
+        || CRATE_BINDINGS
+            .iter()
+            .any(|(root, alias)| name == *root || name == *alias)
+}
+
+fn source_production_path(production_entry: &str) -> Option<String> {
+    let (root, suffix) = production_entry.split_once("::")?;
+    let alias = CRATE_BINDINGS
+        .iter()
+        .find_map(|(candidate, alias)| (*candidate == root).then_some(*alias))?;
+    Some(format!("crate::{alias}::{suffix}"))
+}
+
+fn exact_extern_crate(item: &ItemExternCrate, root: &str, alias: &str) -> bool {
+    item.attrs.is_empty()
+        && matches!(item.vis, Visibility::Inherited)
+        && item.ident == root
+        && item
+            .rename
+            .as_ref()
+            .is_some_and(|(_, actual)| actual == alias)
+}
+
+#[derive(Default)]
+struct ExternCrateVisitor<'ast> {
+    declarations: Vec<&'ast ItemExternCrate>,
+}
+
+impl<'ast> Visit<'ast> for ExternCrateVisitor<'ast> {
+    fn visit_item_extern_crate(&mut self, item: &'ast ItemExternCrate) {
+        self.declarations.push(item);
+        visit::visit_item_extern_crate(self, item);
+    }
+}
+
+fn validate_crate_bindings(file: &syn::File, path: &Path, strict: bool) -> Vec<Violation> {
+    let Some(expected) = expected_crate_bindings(path) else {
+        return if strict {
+            vec![Violation::new(
+                "ast-crate-binding",
+                format!("{} is not a pinned negative-test target", path.display()),
+            )]
+        } else {
+            Vec::new()
+        };
+    };
+    let top_level = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternCrate(value) => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut visitor = ExternCrateVisitor::default();
+    visitor.visit_file(file);
+    let exact = |item: &&ItemExternCrate| {
+        expected
+            .iter()
+            .any(|(root, alias)| exact_extern_crate(item, root, alias))
+    };
+    if top_level.len() == expected.len()
+        && visitor.declarations.len() == expected.len()
+        && top_level.iter().all(exact)
+        && visitor.declarations.iter().all(exact)
+        && expected.iter().all(|(root, alias)| {
+            top_level
+                .iter()
+                .filter(|item| exact_extern_crate(item, root, alias))
+                .count()
+                == 1
+        })
+    {
+        Vec::new()
+    } else {
+        vec![Violation::new(
+            "ast-crate-binding",
+            format!(
+                "{} extern-crate inventory is not the exact pinned top-level set {:?}",
+                path.display(),
+                expected
+            ),
+        )]
+    }
+}
+
 fn item_name(item: &Item) -> Option<&Ident> {
     match item {
         Item::Const(value) => Some(&value.ident),
@@ -212,10 +341,18 @@ fn item_name(item: &Item) -> Option<&Ident> {
 
 fn pat_has_reserved(pat: &Pat) -> bool {
     let text = canonical(pat);
-    RESERVED.iter().any(|name| {
-        text.split(|c: char| !c.is_alphanumeric() && c != '_')
-            .any(|part| part == *name)
-    })
+    RESERVED
+        .iter()
+        .copied()
+        .chain(
+            CRATE_BINDINGS
+                .iter()
+                .flat_map(|(root, alias)| [*root, *alias]),
+        )
+        .any(|name| {
+            text.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|part| part == name)
+        })
 }
 
 #[derive(Default)]
@@ -226,17 +363,22 @@ struct ReservedVisitor {
 impl<'ast> Visit<'ast> for ReservedVisitor {
     fn visit_item(&mut self, item: &'ast Item) {
         if let Some(name) = item_name(item)
-            && RESERVED.contains(&name.to_string().as_str())
+            && is_reserved_binding(&name.to_string())
             && !matches!(item, Item::Mod(module) if canonical_protocol_module(module))
         {
             self.problems.push(format!("reserved item `{name}`"));
         }
         if let Item::Use(item_use) = item {
             let text = canonical(item_use);
-            if RESERVED.iter().any(|name| {
-                text.split(|c: char| !c.is_alphanumeric() && c != '_')
-                    .any(|part| part == *name)
-            }) {
+            if RESERVED
+                .iter()
+                .copied()
+                .chain(CRATE_BINDINGS.iter().map(|(_, alias)| *alias))
+                .any(|name| {
+                    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .any(|part| part == name)
+                })
+            {
                 self.problems
                     .push(format!("reserved import/re-export `{text}`"));
             }
@@ -245,7 +387,7 @@ impl<'ast> Visit<'ast> for ReservedVisitor {
             && item_macro
                 .ident
                 .as_ref()
-                .is_some_and(|ident| RESERVED.contains(&ident.to_string().as_str()))
+                .is_some_and(|ident| is_reserved_binding(&ident.to_string()))
         {
             self.problems.push(format!(
                 "reserved macro definition `{}`",
@@ -904,6 +1046,54 @@ fn validate_protocol_semantics() -> Option<Violation> {
     }
 }
 
+fn validate_registered_source_semantics(rows: &[ContractRow]) -> Vec<Violation> {
+    let actual_paths = rows
+        .iter()
+        .map(|row| row.file.to_string_lossy().to_string())
+        .collect::<BTreeSet<_>>();
+    let expected_paths = REGISTERED_SOURCE_SEMANTIC_SHA256
+        .iter()
+        .map(|(path, _)| (*path).to_owned())
+        .collect::<BTreeSet<_>>();
+    let mut violations = Vec::new();
+    if actual_paths != expected_paths {
+        violations.push(Violation::new(
+            "ast-source-file-set-drift",
+            format!("registered source files {actual_paths:?} != pinned {expected_paths:?}"),
+        ));
+    }
+    for (path, expected_digest) in REGISTERED_SOURCE_SEMANTIC_SHA256 {
+        let source = match fs::read_to_string(path) {
+            Ok(value) => value,
+            Err(error) => {
+                violations.push(Violation::new(
+                    "ast-source-semantic-drift",
+                    format!("{path}: {error}"),
+                ));
+                continue;
+            }
+        };
+        let file = match syn::parse_file(&source) {
+            Ok(value) => value,
+            Err(error) => {
+                violations.push(Violation::new(
+                    "ast-source-semantic-drift",
+                    format!("{path}: {error}"),
+                ));
+                continue;
+            }
+        };
+        let actual = digest(&canonical(&file));
+        if actual != expected_digest {
+            violations.push(Violation::new(
+                "ast-source-semantic-drift",
+                format!("{path} semantic digest `{actual}` != pinned `{expected_digest}`"),
+            ));
+        }
+    }
+    violations
+}
+
 fn validate_row(
     row: &ContractRow,
     strict: bool,
@@ -928,6 +1118,7 @@ fn validate_row(
             )];
         }
     };
+    violations.extend(validate_crate_bindings(&file, &row.file, strict));
     let modules = file
         .items
         .iter()
@@ -992,8 +1183,15 @@ fn validate_row(
     };
     let mutation = row.broken_variant.split("::").next().unwrap_or_default();
     let control = format!("{mutation}::None");
+    let expected_production = if expected_crate_bindings(&row.file).is_some() {
+        source_production_path(&row.production_entry)
+    } else if strict {
+        None
+    } else {
+        Some(row.production_entry.clone())
+    };
     if parsed.case != row.case_type
-        || parsed.production != row.production_entry
+        || expected_production.as_deref() != Some(parsed.production.as_str())
         || parsed.mutation != mutation
         || parsed.control != control
         || parsed.broken != row.broken_variant
@@ -1001,8 +1199,8 @@ fn validate_row(
         violations.push(Violation::new(
             "ast-source-binding",
             format!(
-                "{} source case/mutation/control/broken/production drifted",
-                row.invariant
+                "{} source case/mutation/control/broken/production drifted (production `{}` != pinned crate-root path {:?})",
+                row.invariant, parsed.production, expected_production
             ),
         ));
     }
@@ -1129,6 +1327,7 @@ fn main() {
             ));
         }
         violations.extend(validate_normalizer_helpers());
+        violations.extend(validate_registered_source_semantics(&rows));
         if let Some(protocol) = validate_protocol_semantics() {
             violations.push(protocol);
         }

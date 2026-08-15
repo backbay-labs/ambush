@@ -214,9 +214,9 @@ def run_checks(root, min_rows=12, min_crates=4, min_assumptions=8):
     if required_invariant_set & required_omission_set:
         report.violation("universe-mapped-omitted-overlap", "an ID is both mapped and omitted")
     if set(row_by_name) != required_invariant_set:
-        report.violation("universe-invariant-drift", f"mapping IDs {sorted(row_by_name)} != immutable universe {sorted(required_invariant_set)}")
+        report.violation("universe-invariant-drift", f"mapping IDs {sorted(row_by_name)} != locally ratcheted universe {sorted(required_invariant_set)}")
     if omission_ids != required_omission_set:
-        report.violation("universe-omission-drift", f"omission IDs {sorted(omission_ids)} != immutable universe {sorted(required_omission_set)}")
+        report.violation("universe-omission-drift", f"omission IDs {sorted(omission_ids)} != locally ratcheted universe {sorted(required_omission_set)}")
     if universe.get("invariant_count") != len(required_invariant_set):
         report.violation("universe-invariant-count", "invariant_count does not equal exact required set")
     if universe.get("omission_count") != len(required_omission_set):

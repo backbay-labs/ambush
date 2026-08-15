@@ -7,9 +7,11 @@
 # mirror(BrokenVariant) operations over one typed probe. `permits` and
 # `observed_when_neutralized` remain review prose rather than parsed stdout.
 # The compiled protocol contract proves the exact three roles and assertions.
-# The shared macro owns the production call; a Rust-syntax gate locally digests
-# the complete test and shared protocol AST, including setup, mirror roles and
-# denial/permission predicates. This detects uncoordinated drift, but the
+# The shared macro owns the production call through an exact checker-pinned,
+# crate-root extern alias; a Rust-syntax gate rejects local-crate shadows and
+# locally digests the complete registered source files and shared protocol AST,
+# including imports, helpers, setup, mirror roles, and denial/permission
+# predicates. This detects uncoordinated drift, but the
 # checker and its baselines are co-located and do not authenticate one another.
 # This does not prove a handwritten mirror faithful beyond the registered probe;
 # that broader fidelity remains a review duty.

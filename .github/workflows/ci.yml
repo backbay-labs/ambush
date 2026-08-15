@@ -188,7 +188,7 @@ jobs:
       # typed differential protocol, requires exact Cargo --list set equality,
       # and executes all four registered targets with exact passed/ignored
       # summary counts. Two quiet, isolated warm runs of the negative-registry
-      # gate took 164.98s and 173.67s wall clock on Darwin arm64 with rustc
+      # gate took 177.15s and 192.11s wall clock on Darwin arm64 with rustc
       # 1.97.1 (2026-08-14). The actual-source mutation crates dominate this
       # cost; CI timing remains cache- and machine-dependent.
       #

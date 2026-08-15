@@ -7,6 +7,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+extern crate serde_json as __phase285_serde_json;
+extern crate swarm_response as __phase285_swarm_response;
+
 #[path = "../../../tests/negative_protocol.rs"]
 mod negative_protocol;
 
@@ -108,7 +111,7 @@ fn broken_ttl_check_permits_a_zero_lifetime() {
         probe: i64 = 0,
         outcome: Result<i64, String>,
         real_probe: probe,
-        production: swarm_response::containment::ContainmentTtl::from_config_ms,
+        production: crate::__phase285_swarm_response::containment::ContainmentTtl::from_config_ms,
         arguments: (*probe),
         call: sync,
         normalize: |production_result| production_result.map(ContainmentTtl::get).map_err(|error| error.to_string()),
@@ -173,7 +176,7 @@ fn broken_open_permits_the_unbounded_lease_the_real_constructor_refuses() {
         probe: i64 = issued_at_ms,
         outcome: Result<i64, String>,
         real_probe: probe,
-        production: swarm_response::containment::ContainmentLease::open,
+        production: crate::__phase285_swarm_response::containment::ContainmentLease::open,
         arguments: (
             "containment:saturating",
             quarantine_action(),
@@ -263,7 +266,7 @@ fn broken_schema_check_loads_a_lease_from_an_unknown_wire_version() {
         probe: serde_json::Value = wire,
         outcome: Result<i64, String>,
         real_probe: probe,
-        production: serde_json::from_value::<ContainmentLease>,
+        production: crate::__phase285_serde_json::from_value::<ContainmentLease>,
         arguments: (probe.clone()),
         call: sync,
         normalize: |production_result| production_result.map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
@@ -291,7 +294,7 @@ fn broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rej
         probe: serde_json::Value = wire,
         outcome: Result<i64, String>,
         real_probe: probe,
-        production: serde_json::from_value::<ContainmentLease>,
+        production: crate::__phase285_serde_json::from_value::<ContainmentLease>,
         arguments: (probe.clone()),
         call: sync,
         normalize: |production_result| production_result.map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
@@ -377,7 +380,7 @@ fn broken_memory_duplicate_guard_accepts_a_second_open_for_one_lease() {
         probe: ContainmentLease = probe,
         outcome: Result<(), &'static str>,
         real_probe: probe,
-        production: swarm_response::containment::MemoryContainmentLeaseStore::open_lease,
+        production: crate::__phase285_swarm_response::containment::MemoryContainmentLeaseStore::open_lease,
         arguments: (&*store, probe),
         call: sync,
         normalize: |production_result| production_result.map_err(|error| match error {
@@ -401,7 +404,7 @@ fn broken_memory_not_open_guard_closes_an_unknown_lease() {
         probe: ContainmentLease = lease(1_000, 900_000),
         outcome: Result<(), &'static str>,
         real_probe: probe,
-        production: swarm_response::containment::MemoryContainmentLeaseStore::close,
+        production: crate::__phase285_swarm_response::containment::MemoryContainmentLeaseStore::close,
         arguments: (&MemoryContainmentLeaseStore::new(), &rollback_receipt_for(probe)),
         call: sync,
         normalize: |production_result| production_result.map_err(|error| match error {
@@ -429,7 +432,7 @@ fn broken_file_duplicate_guard_accepts_a_second_open_for_one_lease() {
         probe: ContainmentLease = probe,
         outcome: Result<(), &'static str>,
         real_probe: probe,
-        production: swarm_response::containment::FileContainmentLeaseStore::open_lease,
+        production: crate::__phase285_swarm_response::containment::FileContainmentLeaseStore::open_lease,
         arguments: (&*store, probe),
         call: sync,
         normalize: |production_result| production_result.map_err(|error| match error {
@@ -456,7 +459,7 @@ fn broken_file_not_open_guard_closes_an_unknown_lease() {
         probe: ContainmentLease = lease(1_000, 900_000),
         outcome: Result<(), &'static str>,
         real_probe: probe,
-        production: swarm_response::containment::FileContainmentLeaseStore::close,
+        production: crate::__phase285_swarm_response::containment::FileContainmentLeaseStore::close,
         arguments: (&*store, &rollback_receipt_for(probe)),
         call: sync,
         normalize: |production_result| production_result.map_err(|error| match error {
@@ -525,7 +528,7 @@ fn broken_empty_step_status_reports_success_without_any_inverse() {
         probe: Vec<RollbackStepOutcome> = steps,
         outcome: ResponseStatus,
         real_probe: probe,
-        production: swarm_response::rollback::RollbackReceipt::from_steps,
+        production: crate::__phase285_swarm_response::rollback::RollbackReceipt::from_steps,
         arguments: (lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()),
         call: sync,
         normalize: |production_result| production_result.status,
@@ -552,7 +555,7 @@ fn broken_partial_status_reports_success_with_an_unsupported_inverse() {
         probe: Vec<RollbackStepOutcome> = steps,
         outcome: ResponseStatus,
         real_probe: probe,
-        production: swarm_response::rollback::RollbackReceipt::from_steps,
+        production: crate::__phase285_swarm_response::rollback::RollbackReceipt::from_steps,
         arguments: (lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()),
         call: sync,
         normalize: |production_result| production_result.status,
@@ -614,7 +617,7 @@ fn broken_irreversible_inverse_invents_a_fresh_session_as_a_reversal() {
         probe: (ResponseAction, ResponseRollbackStepKind) = (action, step),
         outcome: Result<&'static str, &'static str>,
         real_probe: probe,
-        production: swarm_response::rollback::resolve_inverse,
+        production: crate::__phase285_swarm_response::rollback::resolve_inverse,
         arguments: (&probe.0, probe.1),
         call: sync,
         normalize: |production_result| production_result.map(|_| "mapped").map_err(|gap| if format!("{gap:?}").contains("Irreversible") { "irreversible" } else { "unexpected" }),
@@ -637,7 +640,7 @@ fn broken_unmapped_inverse_fabricates_an_operation_for_a_mismatched_step() {
         probe: (ResponseAction, ResponseRollbackStepKind) = (action, step),
         outcome: Result<&'static str, &'static str>,
         real_probe: probe,
-        production: swarm_response::rollback::resolve_inverse,
+        production: crate::__phase285_swarm_response::rollback::resolve_inverse,
         arguments: (&probe.0, probe.1),
         call: sync,
         normalize: |production_result| production_result.map(|_| "mapped").map_err(|_| "unmapped"),
@@ -688,7 +691,7 @@ async fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
         probe: ContainmentLease = empty,
         outcome: Result<(), &'static str>,
         real_probe: probe,
-        production: swarm_response::rollback::SandboxRollbackExecutor::rollback,
+        production: crate::__phase285_swarm_response::rollback::SandboxRollbackExecutor::rollback,
         arguments: (&SandboxRollbackExecutor, probe, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000),
         call: awaited,
         normalize: |production_result| production_result.map(|_| ()).map_err(|_| "no rollback steps"),
@@ -719,7 +722,7 @@ fn broken_mode_gate_reports_an_enforced_simulation_as_the_success_the_real_one_r
         probe: Vec<RollbackStepOutcome> = steps,
         outcome: ResponseStatus,
         real_probe: probe,
-        production: swarm_response::rollback::RollbackReceipt::from_steps,
+        production: crate::__phase285_swarm_response::rollback::RollbackReceipt::from_steps,
         arguments: (lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()),
         call: sync,
         normalize: |production_result| production_result.status,
@@ -789,7 +792,7 @@ async fn broken_sandbox_executor_claims_the_reversal_the_real_one_refuses_to_cla
         probe: ContainmentLease = lease(1_000, 900_000),
         outcome: (ResponseStatus, RollbackStepStatus),
         real_probe: probe,
-        production: swarm_response::rollback::SandboxRollbackExecutor::rollback,
+        production: crate::__phase285_swarm_response::rollback::SandboxRollbackExecutor::rollback,
         arguments: (&SandboxRollbackExecutor, probe, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000),
         call: awaited,
         normalize: |production_result| {
