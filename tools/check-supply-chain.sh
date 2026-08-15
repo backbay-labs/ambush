@@ -333,6 +333,15 @@ root = pathlib.Path(sys.argv[1])
 cyclonedx_version = sys.argv[2]
 
 
+def escape_log_text(value: object) -> str:
+    """Render untrusted text as one ASCII-only JSON string literal."""
+    return json.dumps(str(value), ensure_ascii=True)
+
+
+def escape_log_problems(problems: list[str]) -> str:
+    return "[" + ", ".join(escape_log_text(problem) for problem in problems) + "]"
+
+
 def git_tracked_utf8_paths(repository: pathlib.Path) -> list[str]:
     process = subprocess.run(
         ["git", "-C", str(repository), "ls-files", "-z"],
@@ -342,20 +351,23 @@ def git_tracked_utf8_paths(repository: pathlib.Path) -> list[str]:
     if process.returncode != 0:
         stderr = process.stderr.decode("utf-8", errors="backslashreplace").strip()
         raise SystemExit(
-            f"NUL-delimited git tracked-file inventory failed for {repository}: "
-            f"exit={process.returncode}, stderr={stderr!r}"
+            "NUL-delimited git tracked-file inventory failed for "
+            f"{escape_log_text(repository)}: exit={process.returncode}, "
+            f"stderr={escape_log_text(stderr)}"
         )
     payload = process.stdout
     if payload and not payload.endswith(b"\0"):
         raise SystemExit(
-            f"NUL-delimited git tracked-file inventory was unterminated for {repository}"
+            "NUL-delimited git tracked-file inventory was unterminated for "
+            f"{escape_log_text(repository)}"
         )
     raw_paths = payload[:-1].split(b"\0") if payload else []
     paths: list[str] = []
     for raw_path in raw_paths:
         if not raw_path:
             raise SystemExit(
-                f"NUL-delimited git tracked-file inventory contained an empty path for {repository}"
+                "NUL-delimited git tracked-file inventory contained an empty path for "
+                f"{escape_log_text(repository)}"
             )
         try:
             path = raw_path.decode("utf-8", errors="strict")
@@ -395,7 +407,8 @@ def load_contract_inventory(
         }
     except (OSError, UnicodeDecodeError) as exc:
         raise SystemExit(
-            f"cannot read tracked workflow/action inventory as UTF-8 in {repository}: {exc}"
+            "cannot read tracked workflow/action inventory as UTF-8 in "
+            f"{escape_log_text(repository)}: {escape_log_text(exc)}"
         ) from exc
     return (
         discovered_workflows,
@@ -677,7 +690,7 @@ def structural_cache_problems(
     if process.returncode != 0:
         raise SystemExit(
             "Ruby workflow cache validator failed closed: "
-            f"exit={process.returncode}, stderr={process.stderr.strip()!r}"
+            f"exit={process.returncode}, stderr={escape_log_text(process.stderr.strip())}"
         )
     try:
         result = json.loads(process.stdout)
@@ -806,7 +819,10 @@ def require_valid(
 ) -> None:
     problems = workflow_contract_problems(documents, actions)
     if problems:
-        raise SystemExit(f"{label} unexpectedly failed: {'; '.join(problems)}")
+        raise SystemExit(
+            f"{escape_log_text(label)} unexpectedly failed: "
+            f"{escape_log_problems(problems)}"
+        )
 
 
 def require_invalid(
@@ -818,12 +834,16 @@ def require_invalid(
     problems = workflow_contract_problems(documents, actions)
     missing = [item for item in expected if not any(item in problem for problem in problems)]
     if missing:
-        rendered = "; ".join(problems) if problems else "no problems"
+        rendered = escape_log_problems(problems)
         raise SystemExit(
-            f"{label} unexpectedly passed or failed vacuously; missing {missing!r}: {rendered}"
+            f"{escape_log_text(label)} unexpectedly passed or failed vacuously; "
+            f"missing {escape_log_problems(missing)}: {rendered}"
         )
     matched = [problem for problem in problems if any(item in problem for item in expected)]
-    print(f"workflow mutation refused: {label}: {'; '.join(matched)}")
+    print(
+        "workflow mutation refused: "
+        f"{escape_log_text(label)}: {escape_log_problems(matched)}"
+    )
 
 
 require_valid("checked-in workflows and action manifests", workflows)
@@ -890,10 +910,10 @@ jobs:
         ],
     )
 
-newline_action_name = ".github/actions/hidden\ncache/action.yml"
+newline_action_name = ".github/actions/hidden\n::error::forged\t\x1bcontrol/action.yml"
 newline_action_invocation = """
       - name: Invoke newline-path composite mutation
-        uses: "./.github/actions/hidden\\ncache"
+        uses: "./.github/actions/hidden\\n::error::forged\\t\\u001bcontrol"
 """
 newline_action_text = """name: newline cache probe
 description: exercises byte-safe tracked-file discovery
@@ -946,7 +966,7 @@ with tempfile.TemporaryDirectory(prefix="supply-newline-action-") as fixture_dir
             ).strip()
             raise SystemExit(
                 f"newline-path fixture git {' '.join(git_arguments)} failed: "
-                f"exit={git_process.returncode}, stderr={stderr!r}"
+                f"exit={git_process.returncode}, stderr={escape_log_text(stderr)}"
             )
     (
         fixture_workflow_names,
@@ -981,19 +1001,31 @@ with tempfile.TemporaryDirectory(prefix="supply-newline-action-") as fixture_dir
         if not any(item in problem for problem in newline_problems)
     ]
     if newline_missing:
-        rendered = "; ".join(newline_problems) if newline_problems else "no problems"
+        rendered = escape_log_problems(newline_problems)
         raise SystemExit(
             "real git newline-path composite fixture passed or failed vacuously; "
-            f"missing {newline_missing!r}: {rendered}"
+            f"missing {escape_log_problems(newline_missing)}: {rendered}"
         )
     newline_matched = [
         problem
         for problem in newline_problems
         if any(item in problem for item in newline_expected)
     ]
+    escaped_newline_problems = escape_log_problems(newline_matched)
+    expected_escapes = (r"\n::error::forged\t\u001bcontrol",)
+    raw_controls = ("\n", "\r", "\t", "\x1b")
+    if any(control in escaped_newline_problems for control in raw_controls):
+        raise SystemExit(
+            "hostile-path diagnostic escaping retained a raw newline, tab, or ESC byte"
+        )
+    if not all(expected in escaped_newline_problems for expected in expected_escapes):
+        raise SystemExit(
+            "hostile-path diagnostic escaping omitted the expected JSON escapes: "
+            + escape_log_text(escaped_newline_problems)
+        )
     print(
-        "workflow mutation refused: real git newline-path composite invoked after "
-        "forced installs: " + "; ".join(newline_matched).replace("\n", "\\n")
+        "workflow mutation refused: real git hostile-path composite invoked after "
+        f"forced installs: {escaped_newline_problems}"
     )
 
 cache_workflows = [ci_name, release_name]
@@ -1794,6 +1826,7 @@ fi
 python3 - "$ROOT_DIR/deny.toml" "$ROOT_DIR/Cargo.lock" \
   "$WORK_DIR/advisory-ignores" "${surfaces[@]}" <<'PY'
 import datetime
+import json
 import pathlib
 import re
 import sys
@@ -1818,6 +1851,11 @@ TODAY = datetime.date.today()
 # An advisory exception is a security decision with a deadline. Beyond this many
 # days the "deadline" stops being one, so the window itself is bounded.
 MAX_EXCEPTION_WINDOW_DAYS = 180
+
+
+def escape_log_text(value):
+    """Render untrusted policy/path text as one ASCII-only JSON string literal."""
+    return json.dumps(str(value), ensure_ascii=True)
 
 # A field that says "n/a" carries exactly as much as a field that is absent, and
 # reads as compliance. Both are rejected. Every string here is shorter than
@@ -2117,25 +2155,37 @@ def split_labelled(where, rest, head_label, tail_label):
 try:
     raw = deny_path.read_text(encoding="utf-8")
 except OSError as exc:
-    print(f"::error::cannot read {deny_path}: {exc}", file=sys.stderr)
+    print(
+        f"::error::{escape_log_text(f'cannot read {deny_path}: {exc}')}",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 try:
     config = tomllib.loads(raw)
 except tomllib.TOMLDecodeError as exc:
-    print(f"::error::{deny_path} does not parse as TOML: {exc}", file=sys.stderr)
+    print(
+        f"::error::{escape_log_text(f'{deny_path} does not parse as TOML: {exc}')}",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 try:
     lock_raw = lock_path.read_text(encoding="utf-8")
 except OSError as exc:
-    print(f"::error::cannot read {lock_path}: {exc}", file=sys.stderr)
+    print(
+        f"::error::{escape_log_text(f'cannot read {lock_path}: {exc}')}",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 try:
     lock_config = tomllib.loads(lock_raw)
 except tomllib.TOMLDecodeError as exc:
-    print(f"::error::{lock_path} does not parse as TOML: {exc}", file=sys.stderr)
+    print(
+        f"::error::{escape_log_text(f'{lock_path} does not parse as TOML: {exc}')}",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 lock_entries = lock_config.get("package")
@@ -2359,7 +2409,7 @@ if errors:
         file=sys.stderr,
     )
     for error in errors:
-        print(f"::error::  {error}", file=sys.stderr)
+        print(f"::error::  {escape_log_text(error)}", file=sys.stderr)
     sys.exit(1)
 
 out_path.write_text("".join(f"{advisory_id}\n" for advisory_id in ignore_ids))
