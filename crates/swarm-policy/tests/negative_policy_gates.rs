@@ -136,24 +136,6 @@ impl MirroredStaticGate {
         }
     }
 
-    fn destructive_action(request: &ActionRequest) -> bool {
-        matches!(
-            request.action,
-            ResponseAction::BlockEgress { .. }
-                | ResponseAction::IsolateHost { .. }
-                | ResponseAction::RevokeCredential { .. }
-                | ResponseAction::SinkholeDns { .. }
-                | ResponseAction::TerminateUserSession { .. }
-                | ResponseAction::InjectFirewallRule { .. }
-                | ResponseAction::QuarantineFile { .. }
-                | ResponseAction::KillProcess { .. }
-                | ResponseAction::SuspendProcess { .. }
-                | ResponseAction::DisableUserAccount { .. }
-                | ResponseAction::ForcePasswordReset { .. }
-                | ResponseAction::RemoveScheduledTask { .. }
-        )
-    }
-
     fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
         if self.mutation != StaticMutation::SkipNullEvidence && request.evidence.is_null() {
             return Err(ApprovalError::InvalidRequest(
@@ -283,7 +265,7 @@ impl MirroredStaticGate {
         self.validate_request(request)?;
 
         if self.mutation != StaticMutation::SkipMinimumSeverity
-            && Self::destructive_action(request)
+            && request.action.requires_governance_receipt()
             && request.severity == Severity::Low
         {
             return Ok(PolicyDecision::deny_with_rule(
@@ -307,7 +289,7 @@ impl MirroredStaticGate {
         }
 
         if self.mutation != StaticMutation::SkipHumanGate
-            && Self::destructive_action(request)
+            && request.action.requires_governance_receipt()
             && request.severity >= self.human_gate_severity
         {
             return Ok(PolicyDecision::require_human_with_rule(

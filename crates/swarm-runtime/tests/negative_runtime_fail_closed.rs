@@ -22,18 +22,21 @@ extern crate swarm_runtime as __phase285_swarm_runtime;
 mod negative_protocol;
 
 use async_trait::async_trait;
+use ed25519_dalek::SigningKey;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use swarm_consensus::{
-    ConsensusGovernanceReceipt, ConsensusGovernanceReceiptPayload, GovernanceReceiptDecision,
+    ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
+    GovernanceReceiptDecision,
 };
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
-use swarm_crypto::{Ed25519Signer, canonical_json_bytes, sha256_hex};
+use swarm_crypto::{canonical_json_bytes, sha256_hex};
 use swarm_guard::{Guard, GuardAction, GuardContext, GuardPipeline, GuardResult};
 use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
-    PolicyVerdict,
+    PolicyVerdict, governance::GovernanceAuthority,
 };
 use swarm_response::containment::{
     ContainmentLease, ContainmentLeaseStore, ContainmentTtl, MemoryContainmentLeaseStore,
@@ -102,10 +105,20 @@ fn request(action: ResponseAction, severity: Severity) -> ActionRequest {
     }
 }
 
-/// `BlockEgress` is destructive but is NOT a containment action, so
-/// `prepare_containment` returns `Ok(None)` for it and the rows below isolate
-/// the guard each is about. `QuarantineFile` is used only by the containment
-/// row, which is where that difference is the point.
+/// The downstream runtime rows must reach the guard they name. A governed
+/// action would be refused by the raw admission guard first, so these probes use
+/// a non-governed, non-containment action. The admission differential below is
+/// the only raw-runtime row that intentionally uses a governed action.
+fn trigger_edr_scan(severity: Severity) -> ActionRequest {
+    request(
+        ResponseAction::TriggerEdrScan {
+            host_id: "host-1".to_string(),
+            scan_profile: "deep".to_string(),
+        },
+        severity,
+    )
+}
+
 fn block_egress(severity: Severity) -> ActionRequest {
     request(
         ResponseAction::BlockEgress {
@@ -133,17 +146,14 @@ fn quarantine_file(severity: Severity) -> ActionRequest {
 enum RuntimeMutation {
     /// No mutation. The control.
     None,
+    /// The enforced governed-action admission guard deleted.
+    SkipDispatcherAdmission,
     /// The `PolicyVerdict::Deny => return Err(..)` arm deleted.
     SkipDenyVerdict,
     /// The `RequireHuman if LiveResponse => return Err(..)` arm deleted.
     SkipHumanGateVerdict,
     /// The `ensure_active_lease` call deleted.
     SkipLeaseExpiry,
-    /// `prepare_containment`'s "no lease store configured" refusal replaced by
-    /// `Ok(None)`, which is what it returned before cc5b169.
-    SkipContainmentStore,
-    /// A containment whose inverse preview cannot be derived is dispatched.
-    SkipContainmentPreviewError,
     /// An `ApprovalGate::evaluate` error is replaced by Allow.
     SkipPolicyError,
     /// An `ApprovalGate::issue_lease` error is replaced by a synthesized lease.
@@ -157,15 +167,14 @@ enum RuntimeMutation {
 /// Mirror of `SwarmRuntime::authorize_and_execute`, copied from
 /// `crates/swarm-runtime/src/lib.rs` with one guard removable.
 ///
-/// WHAT IS AND IS NOT MIRRORED. The real function's body is: evaluate, gate on
-/// the verdict, run the guard pipeline, prepare containment, issue a lease,
-/// check the lease is live, execute, decorate with governance, check the
-/// receipt status, record the lease. The mirror covers the sequence down to
-/// `execute`, and omits the guard pipeline and the governance decoration --
-/// both of which are inert for these probes: the runtimes under test are built
-/// with no guard pipeline (`SwarmRuntime::new` leaves it `None`) and the probe
-/// requests carry no `governance_receipt` in their evidence, so neither branch
-/// can fire on either side.
+/// WHAT IS AND IS NOT MIRRORED. The real function starts with raw governance
+/// admission, then evaluates policy, gates on the verdict, runs guards and
+/// containment preflight, issues and checks a lease, executes, decorates, and
+/// records. This mirror covers admission through response status. Guard has its
+/// own exact mirror below; containment has the direct preflight mirror below;
+/// governance decoration is unreachable on the raw route. All downstream rows
+/// use a non-governed, non-containment action, while the admission row alone
+/// uses governed `BlockEgress` and mutates only admission.
 ///
 /// The `RuntimeMutation::None` control asserts the mirror and the real function
 /// agree on both the result and the executor call count, which is what makes
@@ -174,11 +183,23 @@ async fn mirrored_authorize_and_execute(
     mode: RuntimeMode,
     policy: &dyn ApprovalGate,
     response: &dyn ResponseExecutor,
-    containment: Option<(&dyn ContainmentLeaseStore, ContainmentTtl)>,
     request: &ActionRequest,
     context: &ApprovalContext,
     mutation: RuntimeMutation,
 ) -> Result<ResponseReceipt, RuntimeError> {
+    let execution_mode = match mode {
+        RuntimeMode::DetectOnly => ExecutionMode::DryRun,
+        RuntimeMode::LiveResponse => ExecutionMode::Enforced,
+    };
+    if execution_mode == ExecutionMode::Enforced
+        && request.action.requires_governance_receipt()
+        && mutation != RuntimeMutation::SkipDispatcherAdmission
+    {
+        return Err(RuntimeError::GovernedActionRequiresAdmission {
+            action: request.action.kind(),
+        });
+    }
+
     let decision = match policy.evaluate(request, context) {
         Ok(decision) => decision,
         Err(_) if mutation == RuntimeMutation::SkipPolicyError => {
@@ -198,39 +219,6 @@ async fn mirrored_authorize_and_execute(
             return Err(ApprovalError::Denied(decision.reason.clone()).into());
         }
         _ => {}
-    }
-
-    let execution_mode = match mode {
-        RuntimeMode::DetectOnly => ExecutionMode::DryRun,
-        RuntimeMode::LiveResponse => ExecutionMode::Enforced,
-    };
-
-    // `prepare_containment`, reduced to the arm these rows are about.
-    if is_containment_action(&request.action)
-        && execution_mode == ExecutionMode::Enforced
-        && containment.is_none()
-        && mutation != RuntimeMutation::SkipContainmentStore
-    {
-        return Err(RuntimeError::ContainmentRefused {
-            action: request.action.kind(),
-            reason: "no containment lease store is configured".to_string(),
-        });
-    }
-    if is_containment_action(&request.action)
-        && execution_mode == ExecutionMode::Enforced
-        && mutation != RuntimeMutation::SkipContainmentPreviewError
-        && matches!(
-            &request.action,
-            ResponseAction::QuarantineFile { host_id, file_path }
-                if host_id.trim().is_empty() || file_path.trim().is_empty()
-        )
-    {
-        return Err(RuntimeError::ContainmentRefused {
-            action: request.action.kind(),
-            reason: "its inverse plan could not be derived: failed to build rehearsal preview: \
-                     file_path must not be empty"
-                .to_string(),
-        });
     }
 
     let lease = match policy.issue_lease(request, context) {
@@ -318,6 +306,38 @@ struct FixedOutcomeExecutor {
     outcome: Result<ResponseStatus, &'static str>,
 }
 
+#[derive(Debug, Clone)]
+struct CountingAllowGate {
+    evaluations: Arc<AtomicUsize>,
+}
+
+impl ApprovalGate for CountingAllowGate {
+    fn evaluate(
+        &self,
+        _request: &ActionRequest,
+        _context: &ApprovalContext,
+    ) -> Result<PolicyDecision, ApprovalError> {
+        self.evaluations.fetch_add(1, Ordering::SeqCst);
+        Ok(PolicyDecision::allow_with_rule(
+            "counting.allow",
+            "allowed after admission",
+        ))
+    }
+
+    fn issue_lease(
+        &self,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+    ) -> Result<CapabilityLease, ApprovalError> {
+        Ok(CapabilityLease {
+            capability_id: "counting-live-lease".to_string(),
+            expires_at_ms: context.now_ms.saturating_add(60_000),
+            action: request.action.kind().to_string(),
+            scope: None,
+        })
+    }
+}
+
 #[async_trait]
 impl ResponseExecutor for FixedOutcomeExecutor {
     async fn execute(
@@ -345,6 +365,7 @@ impl ResponseExecutor for FixedOutcomeExecutor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeProtocolResult {
     Success(ResponseStatus),
+    GovernanceRefused,
     ApprovalRefused,
     GuardRefused,
     ContainmentRefused,
@@ -357,6 +378,9 @@ fn runtime_protocol_outcome(
 ) -> (RuntimeProtocolResult, usize) {
     let result = match result {
         Ok(receipt) => RuntimeProtocolResult::Success(receipt.status),
+        Err(RuntimeError::GovernedActionRequiresAdmission { .. }) => {
+            RuntimeProtocolResult::GovernanceRefused
+        }
         Err(RuntimeError::Approval(_)) => RuntimeProtocolResult::ApprovalRefused,
         Err(RuntimeError::GuardRejected { .. }) => RuntimeProtocolResult::GuardRefused,
         Err(RuntimeError::ContainmentRefused { .. }) => RuntimeProtocolResult::ContainmentRefused,
@@ -366,10 +390,65 @@ fn runtime_protocol_outcome(
     (result, calls.load(Ordering::SeqCst))
 }
 
+// ---------------------------------------------------------------------------
+// RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_raw_admission_guard_evaluates_policy_and_executes_a_governed_action() {
+    let policy_calls = Arc::new(AtomicUsize::new(0));
+    let executor_calls = Arc::new(AtomicUsize::new(0));
+    let gate = CountingAllowGate {
+        evaluations: policy_calls.clone(),
+    };
+    let probe = block_egress(Severity::High);
+    let context = context(1_700_000_000_000);
+
+    negative_protocol::assert_registered_negative_case! {
+        case: RUNTIME_GOVERNED_ACTION_REQUIRES_ADMISSION,
+        mutation: RuntimeMutation,
+        control: RuntimeMutation::None,
+        broken: RuntimeMutation::SkipDispatcherAdmission,
+        state: {
+            gate: CountingAllowGate = gate,
+            context: ApprovalContext = context,
+            policy_calls: Arc<AtomicUsize> = policy_calls,
+            executor_calls: Arc<AtomicUsize> = executor_calls,
+        },
+        probe: ActionRequest = probe,
+        outcome: (RuntimeProtocolResult, usize, usize),
+        real_probe: probe,
+        production: crate::__phase285_swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: executor_calls.clone() })), probe, context),
+        call: awaited,
+        normalize: |production_result| {
+            let (outcome, executions) = runtime_protocol_outcome(production_result, executor_calls);
+            (outcome, policy_calls.load(Ordering::SeqCst), executions)
+        },
+        mirror: |_state, probe, mutation| {
+            let policy_calls = Arc::new(AtomicUsize::new(0));
+            let executor_calls = Arc::new(AtomicUsize::new(0));
+            let gate = CountingAllowGate { evaluations: policy_calls.clone() };
+            let result = mirrored_authorize_and_execute(
+                RuntimeMode::LiveResponse,
+                &gate,
+                &RecordingExecutor { calls: executor_calls.clone() },
+                probe,
+                context,
+                mutation,
+            ).await;
+            let (outcome, executions) = runtime_protocol_outcome(result, &executor_calls);
+            (outcome, policy_calls.load(Ordering::SeqCst), executions)
+        },
+        denied: |result| result == &(RuntimeProtocolResult::GovernanceRefused, 0, 0),
+        permitted: |result| matches!(result, (RuntimeProtocolResult::Success(_), 1, 1)),
+    }
+}
+
 #[test]
 fn broken_policy_error_fallback_executes_when_evaluation_failed() {
     let gate = FailingGate(GateFailure::Evaluate);
-    let probe = block_egress(Severity::Medium);
+    let probe = trigger_edr_scan(Severity::Medium);
     let context = context(1_700_000_000_000);
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_POLICY_ERROR_BLOCKS_EXECUTION,
@@ -390,7 +469,7 @@ fn broken_policy_error_fallback_executes_when_evaluation_failed() {
         normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
+            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, probe, context, mutation).await;
             runtime_protocol_outcome(result, &calls)
         },
         denied: |result| result == &(RuntimeProtocolResult::ApprovalRefused, 0),
@@ -401,7 +480,7 @@ fn broken_policy_error_fallback_executes_when_evaluation_failed() {
 #[test]
 fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
     let gate = FailingGate(GateFailure::IssueLease);
-    let probe = block_egress(Severity::Medium);
+    let probe = trigger_edr_scan(Severity::Medium);
     let context = context(1_700_000_000_000);
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_LEASE_ISSUE_ERROR_BLOCKS_EXECUTION,
@@ -422,7 +501,7 @@ fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
         normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
+            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, probe, context, mutation).await;
             runtime_protocol_outcome(result, &calls)
         },
         denied: |result| result == &(RuntimeProtocolResult::ApprovalRefused, 0),
@@ -436,7 +515,7 @@ fn broken_adapter_error_conversion_returns_false_success() {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
     };
-    let probe = block_egress(Severity::Medium);
+    let probe = trigger_edr_scan(Severity::Medium);
     let context = context(1_700_000_000_000);
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_ADAPTER_ERROR_NOT_SUCCESS,
@@ -458,7 +537,7 @@ fn broken_adapter_error_conversion_returns_false_success() {
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let executor = FixedOutcomeExecutor { calls: calls.clone(), outcome: Err("offline") };
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &executor, None, probe, context, mutation).await;
+            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &executor, probe, context, mutation).await;
             runtime_protocol_outcome(result, &calls)
         },
         denied: |result| result == &(RuntimeProtocolResult::ResponseRefused, 1),
@@ -472,7 +551,7 @@ fn broken_failed_receipt_check_returns_a_failure_as_success() {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
     };
-    let probe = block_egress(Severity::Medium);
+    let probe = trigger_edr_scan(Severity::Medium);
     let context = context(1_700_000_000_000);
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_FAILED_RECEIPT_NOT_SUCCESS,
@@ -494,7 +573,7 @@ fn broken_failed_receipt_check_returns_a_failure_as_success() {
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let executor = FixedOutcomeExecutor { calls: calls.clone(), outcome: Ok(ResponseStatus::Failed) };
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &executor, None, probe, context, mutation).await;
+            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &executor, probe, context, mutation).await;
             runtime_protocol_outcome(result, &calls)
         },
         denied: |result| result == &(RuntimeProtocolResult::ResponseRefused, 1),
@@ -557,7 +636,7 @@ fn broken_guard_rejection_reaches_the_executor() {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
     };
-    let probe = block_egress(Severity::Medium);
+    let probe = trigger_edr_scan(Severity::Medium);
     let context = context(1_700_000_000_000);
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_GUARD_REJECTION_BLOCKS_EXECUTION,
@@ -639,7 +718,7 @@ fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
         verdict: PolicyVerdict::Deny,
         lease_ttl_ms: 60_000,
     };
-    let probe = block_egress(Severity::High);
+    let probe = trigger_edr_scan(Severity::High);
     let context = context(1_700_000_000_000);
 
     negative_protocol::assert_registered_negative_case! {
@@ -661,7 +740,7 @@ fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
         normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
+            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, probe, context, mutation).await;
             runtime_protocol_outcome(result, &calls)
         },
         denied: |result| result == &(RuntimeProtocolResult::ApprovalRefused, 0),
@@ -679,7 +758,7 @@ fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds() {
         verdict: PolicyVerdict::RequireHuman,
         lease_ttl_ms: 60_000,
     };
-    let probe = block_egress(Severity::Critical);
+    let probe = trigger_edr_scan(Severity::Critical);
     let context = context(1_700_000_000_000);
 
     negative_protocol::assert_registered_negative_case! {
@@ -701,7 +780,7 @@ fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds() {
         normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
+            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, probe, context, mutation).await;
             runtime_protocol_outcome(result, &calls)
         },
         denied: |result| result == &(RuntimeProtocolResult::ApprovalRefused, 0),
@@ -741,7 +820,7 @@ fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtime_refu
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: -1,
     };
-    let probe = block_egress(Severity::Medium);
+    let probe = trigger_edr_scan(Severity::Medium);
     let context = context(1_700_000_000_000);
 
     negative_protocol::assert_registered_negative_case! {
@@ -763,7 +842,7 @@ fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtime_refu
         normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
+            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, probe, context, mutation).await;
             runtime_protocol_outcome(result, &calls)
         },
         denied: |result| result == &(RuntimeProtocolResult::ApprovalRefused, 0),
@@ -793,8 +872,45 @@ fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtime_refu
 // RUNTIME-CONTAINMENT-NEEDS-STORE
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContainmentPreflightMutation {
+    None,
+    SkipContainmentStore,
+    SkipContainmentPreviewError,
+}
+
+fn mirrored_preflight_containment(
+    has_store: bool,
+    request: &ActionRequest,
+    execution_mode: ExecutionMode,
+    mutation: ContainmentPreflightMutation,
+) -> Result<(), RuntimeError> {
+    if !is_containment_action(&request.action) || execution_mode == ExecutionMode::DryRun {
+        return Ok(());
+    }
+    if !has_store && mutation != ContainmentPreflightMutation::SkipContainmentStore {
+        return Err(RuntimeError::ContainmentRefused {
+            action: request.action.kind(),
+            reason: "no containment lease store is configured".to_string(),
+        });
+    }
+    if mutation != ContainmentPreflightMutation::SkipContainmentPreviewError
+        && matches!(
+            &request.action,
+            ResponseAction::QuarantineFile { host_id, file_path }
+                if host_id.trim().is_empty() || file_path.trim().is_empty()
+        )
+    {
+        return Err(RuntimeError::ContainmentRefused {
+            action: request.action.kind(),
+            reason: "its inverse plan could not be derived".to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[test]
-fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses_to_touch() {
+fn broken_containment_store_check_accepts_an_unbounded_preflight() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
@@ -804,49 +920,24 @@ fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses_to_to
 
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_CONTAINMENT_NEEDS_STORE,
-        mutation: RuntimeMutation,
-        control: RuntimeMutation::None,
-        broken: RuntimeMutation::SkipContainmentStore,
+        mutation: ContainmentPreflightMutation,
+        control: ContainmentPreflightMutation::None,
+        broken: ContainmentPreflightMutation::SkipContainmentStore,
         state: {
-            gate: FixedVerdictGate = gate.clone(),
-            context: ApprovalContext = context.clone(),
-            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
+            gate: FixedVerdictGate = gate,
+            context: ApprovalContext = context,
         },
-        probe: ActionRequest = probe.clone(),
-        outcome: (RuntimeProtocolResult, usize),
+        probe: ActionRequest = probe,
+        outcome: bool,
         real_probe: probe,
-        production: crate::__phase285_swarm_runtime::SwarmRuntime::authorize_and_execute,
-        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })), probe, context),
-        call: awaited,
-        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
-        mirror: |_state, probe, mutation| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
-            runtime_protocol_outcome(result, &calls)
-        },
-        denied: |result| result == &(RuntimeProtocolResult::ContainmentRefused, 0),
-        permitted: |result| matches!(result, (RuntimeProtocolResult::Success(_), 1)),
+        production: crate::__phase285_swarm_runtime::SwarmRuntime::preflight_containment,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor::default())), probe, context, ExecutionMode::Enforced),
+        call: sync,
+        normalize: |production_result| production_result.is_ok(),
+        mirror: |_state, probe, mutation| mirrored_preflight_containment(false, probe, ExecutionMode::Enforced, mutation).is_ok(),
+        denied: |result| !result,
+        permitted: |result| *result,
     }
-
-    // Control: WITH a store the real runtime executes and records the lease, so
-    // the refusal above is about the missing store and not about the action.
-    let store = Arc::new(MemoryContainmentLeaseStore::new());
-    let bounded_calls = Arc::new(AtomicUsize::new(0));
-    let bounded = SwarmRuntime::new(
-        RuntimeMode::LiveResponse,
-        gate,
-        RecordingExecutor {
-            calls: bounded_calls.clone(),
-        },
-    )
-    .with_containment_store(
-        store.clone(),
-        ContainmentTtl::from_config_ms(60_000).unwrap(),
-    );
-    negative_protocol::block_on_ready(bounded.authorize_and_execute(&probe, &context))
-        .expect("a bounded containment executes");
-    assert_eq!(bounded_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(store.open_leases().unwrap().len(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -872,31 +963,26 @@ fn broken_preview_error_guard_dispatches_a_containment_with_no_inverse_plan() {
 
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_CONTAINMENT_PREVIEW_REQUIRED,
-        mutation: RuntimeMutation,
-        control: RuntimeMutation::None,
-        broken: RuntimeMutation::SkipContainmentPreviewError,
+        mutation: ContainmentPreflightMutation,
+        control: ContainmentPreflightMutation::None,
+        broken: ContainmentPreflightMutation::SkipContainmentPreviewError,
         state: {
             gate: FixedVerdictGate = gate,
             context: ApprovalContext = context,
             store: Arc<MemoryContainmentLeaseStore> = store,
             ttl: ContainmentTtl = ttl,
-            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
-        outcome: (RuntimeProtocolResult, usize),
+        outcome: bool,
         real_probe: probe,
-        production: crate::__phase285_swarm_runtime::SwarmRuntime::authorize_and_execute,
-        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })
-                .with_containment_store(store.clone(), *ttl)), probe, context),
-        call: awaited,
-        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
-        mirror: |_state, probe, mutation| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, Some((store.as_ref(), *ttl)), probe, context, mutation).await;
-            runtime_protocol_outcome(result, &calls)
-        },
-        denied: |result| result == &(RuntimeProtocolResult::ContainmentRefused, 0),
-        permitted: |result| matches!(result, (RuntimeProtocolResult::Success(_), 1)),
+        production: crate::__phase285_swarm_runtime::SwarmRuntime::preflight_containment,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor::default())
+                .with_containment_store(store.clone(), *ttl)), probe, context, ExecutionMode::Enforced),
+        call: sync,
+        normalize: |production_result| production_result.is_ok(),
+        mirror: |_state, probe, mutation| mirrored_preflight_containment(true, probe, ExecutionMode::Enforced, mutation).is_ok(),
+        denied: |result| !result,
+        permitted: |result| *result,
     }
 }
 
@@ -924,36 +1010,67 @@ fn sample_rollback_receipt(step_status: RollbackStepStatus) -> RollbackReceipt {
     }
 }
 
-/// Attest `receipt` the way a governor does: sign a payload whose `proposal_id`
-/// is the sha256 of the canonical receipt-minus-attestation.
-fn attest(receipt: &RollbackReceipt) -> serde_json::Value {
+fn governance_anchor() -> Arc<GovernancePolicy> {
+    let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+    policy
+        .register_governor(
+            AgentId::new("tom", "negative-runtime"),
+            SigningKey::from_bytes(&[41; 32]),
+        )
+        .expect("the first fixture governor key registers");
+    policy
+}
+
+fn release_subject_value(receipt: &RollbackReceipt) -> serde_json::Value {
+    let mut subject = receipt.clone();
+    subject.governance_attestation = None;
+    serde_json::to_value(subject).unwrap()
+}
+
+/// Use the real sealed governance authority's release-signing path.
+fn attest(receipt: &RollbackReceipt, governance: &GovernancePolicy) -> serde_json::Value {
+    serde_json::to_value(
+        governance
+            .attest_release(&release_subject_value(receipt), 2_000)
+            .expect("the registered fixture governor attests the release"),
+    )
+    .unwrap()
+}
+
+/// Produce an internally valid, subject-bound attestation from a key that is
+/// deliberately absent from `governance_anchor()`.
+fn foreign_attest(receipt: &RollbackReceipt) -> serde_json::Value {
+    let signing_key = SigningKey::from_bytes(&[251; 32]);
+    let issued_by = AgentId::from_verifying_key(&signing_key.verifying_key());
+    let committee = ConsensusCommittee::new(vec![issued_by.clone()], 0).unwrap();
     let mut subject = receipt.clone();
     subject.governance_attestation = None;
     let proposal_id = sha256_hex(&canonical_json_bytes(&subject).unwrap());
-    let signer = Ed25519Signer::from_secret_material("negative-registry-governor");
-    // `ConsensusGovernanceReceipt::verify` re-derives the issuer from the
-    // signing key and refuses a receipt whose `issued_by` does not match, so
-    // the fixture governor has to be named the way a real one is.
-    let governor = AgentId::from_public_key_hex(signer.public_key_hex());
-    let payload = ConsensusGovernanceReceiptPayload {
-        schema_version: 1,
-        receipt_id: "gov-receipt:negative".to_string(),
-        decision: GovernanceReceiptDecision::Approve,
-        committee_id: "committee:negative".to_string(),
-        committee_members: vec![governor.clone()],
-        threshold: 1,
+    let commit = ConsensusCommit {
         height: 1,
-        round: 1,
-        previous_commit_hash: "genesis".to_string(),
-        commit_hash: "commit:negative".to_string(),
-        proposal_id,
+        round: 0,
+        committee_id: committee.committee_id().to_string(),
+        proposal: ConsensusProposal {
+            proposal_id,
+            payload: json!({"foreign": true}),
+        },
         prevote_tally: 1,
         precommit_tally: 1,
-        issued_by: governor,
-        issued_at_ms: 2_000,
+        commit_hash: "foreign-commit".to_string(),
     };
-    let signature = signer.sign(&canonical_json_bytes(&payload).unwrap());
-    serde_json::to_value(ConsensusGovernanceReceipt { payload, signature }).unwrap()
+    serde_json::to_value(
+        ConsensusGovernanceReceipt::issue(
+            &commit,
+            "foreign-previous-commit",
+            &committee,
+            GovernanceReceiptDecision::Approve,
+            issued_by,
+            &signing_key,
+            9_999,
+        )
+        .unwrap(),
+    )
+    .unwrap()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -962,6 +1079,7 @@ enum ReleaseAttestationMutation {
     SkipAttestationRequired,
     SkipMalformedAttestation,
     SkipSignatureValidation,
+    SkipTrustedSigner,
     SkipSubjectBinding,
 }
 
@@ -970,6 +1088,7 @@ enum ReleaseAttestationMutation {
 /// selectively removable -- mutation M2 from ce1ddd1, made permanent as a test.
 fn mirrored_verify_release_attestation(
     receipt: &RollbackReceipt,
+    governance: &dyn GovernanceAuthority,
     mutation: ReleaseAttestationMutation,
 ) -> Result<(), String> {
     let Some(raw) = receipt.governance_attestation.as_ref().cloned() else {
@@ -987,6 +1106,16 @@ fn mirrored_verify_release_attestation(
     if mutation != ReleaseAttestationMutation::SkipSignatureValidation {
         attestation.verify().map_err(|error| error.to_string())?;
     }
+    if mutation != ReleaseAttestationMutation::SkipTrustedSigner
+        && !governance
+            .governor_public_keys()
+            .contains(&attestation.payload.issued_by)
+    {
+        return Err(format!(
+            "untrusted signer: {}",
+            attestation.payload.issued_by
+        ));
+    }
     let mut subject = receipt.clone();
     subject.governance_attestation = None;
     let derived = sha256_hex(&canonical_json_bytes(&subject).map_err(|error| error.to_string())?);
@@ -1003,21 +1132,24 @@ fn mirrored_verify_release_attestation(
 
 #[test]
 fn broken_attestation_requirement_accepts_an_unattested_release() {
+    let governance = governance_anchor();
     let receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_RELEASE_ATTESTATION_REQUIRED,
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipAttestationRequired,
-        state: {},
+        state: {
+            governance: Arc<GovernancePolicy> = governance,
+        },
         probe: RollbackReceipt = receipt,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe),
+        arguments: (probe, Some(governance.as_ref())),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }
@@ -1025,6 +1157,7 @@ fn broken_attestation_requirement_accepts_an_unattested_release() {
 
 #[test]
 fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
+    let governance = governance_anchor();
     let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     receipt.governance_attestation = Some(json!({"broken": true}));
     negative_protocol::assert_registered_negative_case! {
@@ -1032,15 +1165,17 @@ fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipMalformedAttestation,
-        state: {},
+        state: {
+            governance: Arc<GovernancePolicy> = governance,
+        },
         probe: RollbackReceipt = receipt,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe),
+        arguments: (probe, Some(governance.as_ref())),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }
@@ -1048,26 +1183,80 @@ fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
 
 #[test]
 fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
+    let governance = governance_anchor();
     let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     let mut attestation: ConsensusGovernanceReceipt =
-        serde_json::from_value(attest(&receipt)).unwrap();
-    let impostor = Ed25519Signer::from_secret_material("negative-registry-impostor");
-    attestation.signature = impostor.sign(&canonical_json_bytes(&attestation.payload).unwrap());
+        serde_json::from_value(attest(&receipt, governance.as_ref())).unwrap();
+    let replacement = if attestation.signature.signature_hex.starts_with('0') {
+        "1"
+    } else {
+        "0"
+    };
+    attestation
+        .signature
+        .signature_hex
+        .replace_range(0..1, replacement);
     receipt.governance_attestation = Some(serde_json::to_value(attestation).unwrap());
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_RELEASE_SIGNATURE_VALID,
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipSignatureValidation,
-        state: {},
+        state: {
+            governance: Arc<GovernancePolicy> = governance,
+        },
         probe: RollbackReceipt = receipt,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe),
+        arguments: (probe, Some(governance.as_ref())),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
+}
+
+#[test]
+fn broken_release_signer_trust_accepts_a_valid_foreign_attestation() {
+    let governance = governance_anchor();
+    let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
+    receipt.governance_attestation = Some(foreign_attest(&receipt));
+    let attestation: ConsensusGovernanceReceipt = serde_json::from_value(
+        receipt
+            .governance_attestation
+            .clone()
+            .expect("the foreign fixture carries an attestation"),
+    )
+    .unwrap();
+    attestation
+        .verify()
+        .expect("the foreign attestation is internally valid");
+    let mut subject = receipt.clone();
+    subject.governance_attestation = None;
+    assert_eq!(
+        attestation.payload.proposal_id,
+        sha256_hex(&canonical_json_bytes(&subject).unwrap()),
+        "the foreign attestation remains bound to this release"
+    );
+
+    negative_protocol::assert_registered_negative_case! {
+        case: RUNTIME_RELEASE_SIGNER_TRUSTED,
+        mutation: ReleaseAttestationMutation,
+        control: ReleaseAttestationMutation::None,
+        broken: ReleaseAttestationMutation::SkipTrustedSigner,
+        state: {
+            governance: Arc<GovernancePolicy> = governance,
+        },
+        probe: RollbackReceipt = receipt,
+        outcome: bool,
+        real_probe: probe,
+        production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
+        arguments: (probe, Some(governance.as_ref())),
+        call: sync,
+        normalize: |production_result| production_result.is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }
@@ -1075,11 +1264,13 @@ fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
 
 #[test]
 fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuses() {
+    let governance = governance_anchor();
     // A release that did NOT land: the inverse failed and the host is still
     // contained. A governor attested that fact.
     let mut attested = sample_rollback_receipt(RollbackStepStatus::Failed);
-    attested.governance_attestation = Some(attest(&attested));
-    verify_release_attestation(&attested).expect("the genuine attestation verifies");
+    attested.governance_attestation = Some(attest(&attested, governance.as_ref()));
+    verify_release_attestation(&attested, Some(governance.as_ref()))
+        .expect("the genuine attestation verifies");
 
     // Now the stored artifact is rewritten to claim the host was restored. The
     // ed25519 signature is NOT touched and still verifies on its own -- it
@@ -1093,15 +1284,17 @@ fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuse
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipSubjectBinding,
-        state: {},
+        state: {
+            governance: Arc<GovernancePolicy> = governance,
+        },
         probe: RollbackReceipt = rewritten,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe),
+        arguments: (probe, Some(governance.as_ref())),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }

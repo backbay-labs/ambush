@@ -8,7 +8,7 @@ calls; `swarm-spine` envelope and chain verification; and `swarm-response`
 dispatch, containment construction/deserialization, and rollback classification.
 It is not a claim about every `if` in every crate.
 
-There are 57 mapped fail-closed invariants below. Five requirement-named
+There are 59 mapped fail-closed invariants below. Five requirement-named
 surfaces that do not themselves render a pre-dispatch refusal are recorded in
 [`omissions.toml`](omissions.toml), with an owner, reason, and clearing
 condition. `tools/check-mapping.sh` resolves both sets, requires every source
@@ -90,12 +90,13 @@ row would make the blast-radius registry false.
 | `RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS` | `swarm_response::rollback::RollbackReceipt::from_steps` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Success for failed, unsupported, irreversible, or mixed rollback outcomes. |
 | `RESPONSE-ROLLBACK-REQUIRES-STEPS` | `swarm_response::rollback::SandboxRollbackExecutor::rollback` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Running an executor against an empty inverse plan. |
 | `RESPONSE-SANDBOX-NEVER-REVERSES` | `swarm_response::rollback::SandboxRollbackExecutor::rollback` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | A Reversed step from an executor with no transport. |
+| `RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-CONFIG-INTEGRITY` | Raw enforced execution of a governed action without an opaque one-shot dispatcher admission. |
 | `RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Treating a policy evaluation error as Allow. |
 | `RUNTIME-DENY-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after a Deny verdict. |
 | `RUNTIME-HUMAN-GATE-BLOCKS-LIVE` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after RequireHuman in LiveResponse mode. |
 | `RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after the guard pipeline rejects. |
-| `RUNTIME-CONTAINMENT-NEEDS-STORE` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-KEYSTORE-ATOMICITY` | Enforced containment when no lease store can bound or undo it. |
-| `RUNTIME-CONTAINMENT-PREVIEW-REQUIRED` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-CONFIG-INTEGRITY` | Enforced containment when its blast radius and inverse plan cannot be derived. |
+| `RUNTIME-CONTAINMENT-NEEDS-STORE` | `swarm_runtime::SwarmRuntime::preflight_containment` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-KEYSTORE-ATOMICITY` | Enforced containment when no lease store can bound or undo it. |
+| `RUNTIME-CONTAINMENT-PREVIEW-REQUIRED` | `swarm_runtime::SwarmRuntime::preflight_containment` | `ASSUME-CONFIG-INTEGRITY` | Enforced containment when its blast radius and inverse plan cannot be derived. |
 | `RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after capability-lease issuance fails. |
 | `RUNTIME-EXPIRED-LEASE-REFUSED` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-OS-CLOCK`, `ASSUME-STATEFUL-GATE-DETERMINISM` | Execution at or after capability expiry. |
 | `RUNTIME-ADAPTER-ERROR-NOT-SUCCESS` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Converting a response-adapter error into a success receipt. |
@@ -103,7 +104,8 @@ row would make the blast-radius registry false.
 | `RUNTIME-RELEASE-ATTESTATION-REQUIRED` | `swarm_runtime::containment::verify_release_attestation` | `ASSUME-ED25519` | A rollback release with no governance attestation. |
 | `RUNTIME-RELEASE-ATTESTATION-WELL-FORMED` | `swarm_runtime::containment::verify_release_attestation` | `ASSUME-CANONICAL-JSON`, `ASSUME-ED25519` | A rollback release carrying malformed governance-attestation JSON. |
 | `RUNTIME-RELEASE-SIGNATURE-VALID` | `swarm_runtime::containment::verify_release_attestation` | `ASSUME-CANONICAL-JSON`, `ASSUME-ED25519` | A rollback release whose governance signature does not verify. |
-| `RUNTIME-RELEASE-SUBJECT-BOUND` | `swarm_runtime::containment::verify_release_attestation` | `ASSUME-CANONICAL-JSON`, `ASSUME-ED25519`, `ASSUME-SHA256` | A genuine attestation lifted onto a rewritten rollback body. This is subject binding, not yet the later trusted-governor anchor. |
+| `RUNTIME-RELEASE-SUBJECT-BOUND` | `swarm_runtime::containment::verify_release_attestation` | `ASSUME-CANONICAL-JSON`, `ASSUME-ED25519`, `ASSUME-SHA256` | A genuine attestation lifted onto a rewritten rollback body. |
+| `RUNTIME-RELEASE-SIGNER-TRUSTED` | `swarm_runtime::containment::verify_release_attestation` | `ASSUME-ED25519`, `ASSUME-GOVERNANCE-TRUST-ANCHOR` | A valid subject-bound release attestation from a signer outside the locally admitted governor set. |
 | `RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE` | `swarm_runtime::containment::release_lease` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR`, `ASSUME-KEYSTORE-ATOMICITY` | Closing the only open lease after a rollback step reports Failed. |
 | `SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED` | `swarm_spine::envelope::verify_envelope` | `ASSUME-ED25519` | An envelope with no issuer identity. |
 | `SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED` | `swarm_spine::envelope::verify_envelope` | `ASSUME-ED25519` | An envelope with no signature field. |
@@ -127,12 +129,17 @@ row would make the blast-radius registry false.
 
 `verify_chain_link` remains a public tested primitive with no production caller
 on this branch. The approval ledger builds links but does not verify them; the
-map describes the primitive, not a runtime guarantee. The known trust-anchor
-integration is also absent here and will add its own rows after rebase.
+map describes the primitive, not a runtime guarantee. Release verification is
+bound to the sealed governance authority's locally admitted governor keys; the
+signature, subject, and signer-trust differentials are independent probes.
 
-All negative tests are single-process. They do not prove concurrency, crash
-recovery, distributed JetStream failover, repository branch protection, or
-hosted CI. The workflow invokes both gates, but its `panic-contract` name and
+The Phase-285 registry tests are single-process and intentionally cover only the
+four declared policy, response, runtime, and spine surfaces. Separate governance
+state tests cover process locking, CAS, crash windows, durable one-shot action
+and human authorization, and restart recovery; those guards are not silently
+claimed as Phase-285 mapped rows. Neither lane proves distributed JetStream
+failover, repository branch protection, or hosted CI. The workflow invokes both
+gates, but its `panic-contract` name and
 Actions App identity are not provenance: another workflow can spoof both. On
 the current Free organization plan, the remaining protected enforcement needs
 a dedicated external GitHub App check with a separate integration ID (or an

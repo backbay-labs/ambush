@@ -162,6 +162,11 @@ cd "$ROOT_DIR"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
+ASSURANCE_HELPER_DIR="$ROOT_DIR/tools/negative-registry-ast"
+ASSURANCE_HELPER_MANIFEST="$ASSURANCE_HELPER_DIR/Cargo.toml"
+ASSURANCE_HELPER_LOCK="$ASSURANCE_HELPER_DIR/Cargo.lock"
+ASSURANCE_HELPER_DENY="$ASSURANCE_HELPER_DIR/deny.toml"
+
 locked_metadata() {
   cargo metadata --locked --format-version 1 --quiet "$@"
 }
@@ -220,6 +225,81 @@ if [ "$metadata_status" -ne 0 ]; then
 fi
 echo "locked resolution ok: Cargo.lock is current for the manifests"
 
+# The negative-registry AST verifier is an executable Rust package with its own
+# lockfile and intentionally separate workspace. Root-workspace scans cannot see
+# that graph. Prove its resolution is locked before treating either its code or
+# its dependency inventory as assurance evidence.
+cp "$ASSURANCE_HELPER_LOCK" "$WORK_DIR/assurance-helper-lock-baseline"
+helper_metadata_status=0
+if locked_metadata \
+  --manifest-path "$ASSURANCE_HELPER_MANIFEST" \
+  >"$WORK_DIR/assurance-helper-metadata.json"; then
+  helper_metadata_status=0
+else
+  helper_metadata_status=$?
+fi
+if ! cmp -s "$WORK_DIR/assurance-helper-lock-baseline" "$ASSURANCE_HELPER_LOCK"; then
+  echo "::error::locked metadata changed the negative-registry helper Cargo.lock" >&2
+  exit 1
+fi
+if [ "$helper_metadata_status" -ne 0 ]; then
+  echo "::error::the negative-registry helper Cargo.lock is stale" >&2
+  exit "$helper_metadata_status"
+fi
+
+# The helper gets no private waiver surface. It inherits the root license and
+# source policy exactly, scans all of its features, and permits neither advisory
+# ignores nor duplicate-version skips. A future policy change therefore updates
+# one reviewed root decision and this strict projection together.
+python3 - "$ROOT_DIR/deny.toml" "$ASSURANCE_HELPER_DENY" <<'PY'
+import pathlib
+import sys
+import tomllib
+
+root = tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+helper = tomllib.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+errors = []
+
+root_licenses = root.get("licenses", {})
+helper_licenses = helper.get("licenses", {})
+helper_allow = set(helper_licenses.get("allow", []))
+root_allow = set(root_licenses.get("allow", []))
+if not helper_allow or not helper_allow.issubset(root_allow):
+    errors.append("[licenses].allow must be a non-empty subset of the root policy")
+if helper_licenses.get("confidence-threshold") != root_licenses.get(
+    "confidence-threshold"
+):
+    errors.append("[licenses].confidence-threshold must match the root policy")
+if helper_licenses.get("exceptions") != []:
+    errors.append("[licenses].exceptions must stay empty")
+if helper.get("sources") != root.get("sources"):
+    errors.append("[sources] must exactly match the root policy")
+if helper.get("graph") != {"targets": [], "all-features": True}:
+    errors.append("[graph] must scan all helper features and all configured targets")
+
+advisories = helper.get("advisories", {})
+if advisories.get("ignore") != []:
+    errors.append("[advisories].ignore must stay empty")
+if advisories.get("db-path") != root.get("advisories", {}).get("db-path"):
+    errors.append("[advisories].db-path must match the root policy")
+if advisories.get("db-urls") != root.get("advisories", {}).get("db-urls"):
+    errors.append("[advisories].db-urls must match the root policy")
+
+root_bans = root.get("bans", {})
+helper_bans = helper.get("bans", {})
+for key in ("multiple-versions", "wildcards", "highlight"):
+    if helper_bans.get(key) != root_bans.get(key):
+        errors.append(f"[bans].{key} must match the root policy")
+if helper_bans.get("skip") != []:
+    errors.append("[bans].skip must stay empty")
+
+if errors:
+    for error in errors:
+        print(f"::error::negative-registry helper policy: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+echo "negative-registry helper locked resolution and zero-waiver policy ok"
+
 # Enforcement surfaces: every place other than deny.toml where an advisory could
 # be waived. Tracked or untracked, so a NEW workflow or gate script counts on the
 # commit that adds it (same enumeration as check-gates-wired.sh:74).
@@ -230,7 +310,8 @@ while IFS= read -r path; do
 done < <(
   git ls-files -c -o --exclude-standard -- \
     '.github/workflows/*.yml' '.github/workflows/*.yaml' \
-    'tools/*.sh' 'audit.toml' '.cargo/audit.toml' '*/audit.toml' \
+    'tools/*.sh' 'tools/negative-registry-ast/deny.toml' \
+    'audit.toml' '.cargo/audit.toml' '*/audit.toml' \
     | LC_ALL=C sort -u
 )
 
@@ -883,3 +964,40 @@ fi
 if [ "$audit_status" -ne 0 ]; then
   exit "$audit_status"
 fi
+
+# Scan the independently locked executable helper as its own dependency graph.
+# Its config contains no exceptions, so an advisory or duplicate tolerated for
+# the product graph cannot silently become part of the verifier's TCB.
+helper_deny_status=0
+if cargo deny \
+  --manifest-path "$ASSURANCE_HELPER_MANIFEST" \
+  --locked \
+  check --config "$ASSURANCE_HELPER_DENY" \
+  -D advisory-not-detected -D unmatched-skip -D unnecessary-skip \
+  advisories licenses bans sources; then
+  helper_deny_status=0
+else
+  helper_deny_status=$?
+fi
+if ! cmp -s "$WORK_DIR/assurance-helper-lock-baseline" "$ASSURANCE_HELPER_LOCK"; then
+  echo "::error::cargo-deny changed the negative-registry helper Cargo.lock" >&2
+  exit 1
+fi
+if [ "$helper_deny_status" -ne 0 ]; then
+  exit "$helper_deny_status"
+fi
+
+helper_audit_status=0
+if cargo audit --deny warnings --file "$ASSURANCE_HELPER_LOCK"; then
+  helper_audit_status=0
+else
+  helper_audit_status=$?
+fi
+if ! cmp -s "$WORK_DIR/assurance-helper-lock-baseline" "$ASSURANCE_HELPER_LOCK"; then
+  echo "::error::cargo-audit changed the negative-registry helper Cargo.lock" >&2
+  exit 1
+fi
+if [ "$helper_audit_status" -ne 0 ]; then
+  exit "$helper_audit_status"
+fi
+echo "negative-registry helper supply chain ok: locked, zero-waiver graph"

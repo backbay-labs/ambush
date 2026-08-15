@@ -4,9 +4,9 @@
 # also changed; it is not an external trust anchor.
 
 schema_version = 2
-invariant_count = 57
+invariant_count = 59
 omission_count = 5
-binding_count = 57
+binding_count = 59
 
 required_invariants = [
   "POLICY-EMPTY-RULESET-DENIES",
@@ -34,6 +34,7 @@ required_invariants = [
   "RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS",
   "RESPONSE-ROLLBACK-REQUIRES-STEPS",
   "RESPONSE-SANDBOX-NEVER-REVERSES",
+  "RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION",
   "RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION",
   "RUNTIME-DENY-BLOCKS-EXECUTION",
   "RUNTIME-HUMAN-GATE-BLOCKS-LIVE",
@@ -48,6 +49,7 @@ required_invariants = [
   "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED",
   "RUNTIME-RELEASE-SIGNATURE-VALID",
   "RUNTIME-RELEASE-SUBJECT-BOUND",
+  "RUNTIME-RELEASE-SIGNER-TRUSTED",
   "RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE",
   "SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED",
   "SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED",
@@ -97,11 +99,12 @@ required_bindings = [
   "RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS|RESPONSE_PARTIAL_ROLLBACK_NOT_SUCCESS|RESPONSE_PARTIAL_ROLLBACK_NOT_SUCCESS::real|swarm_response::rollback::RollbackReceipt::from_steps|swarm_response::rollback::RollbackReceipt::from_steps|DeriveStatusMutation::ReportPartialSuccess|negative_protocol::assert_registered_negative_case|direct",
   "RESPONSE-ROLLBACK-REQUIRES-STEPS|RESPONSE_ROLLBACK_REQUIRES_STEPS|RESPONSE_ROLLBACK_REQUIRES_STEPS::real|swarm_response::rollback::SandboxRollbackExecutor::rollback|swarm_response::rollback::SandboxRollbackExecutor::rollback|RequireStepsMutation::SkipRequiredSteps|negative_protocol::assert_registered_negative_case|direct",
   "RESPONSE-SANDBOX-NEVER-REVERSES|RESPONSE_SANDBOX_NEVER_REVERSES|RESPONSE_SANDBOX_NEVER_REVERSES::real|swarm_response::rollback::SandboxRollbackExecutor::rollback|swarm_response::rollback::SandboxRollbackExecutor::rollback|SandboxMutation::ClaimEnforcedReversed|negative_protocol::assert_registered_negative_case|direct",
+  "RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION|RUNTIME_GOVERNED_ACTION_REQUIRES_ADMISSION|RUNTIME_GOVERNED_ACTION_REQUIRES_ADMISSION::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipDispatcherAdmission|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION|RUNTIME_POLICY_ERROR_BLOCKS_EXECUTION|RUNTIME_POLICY_ERROR_BLOCKS_EXECUTION::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipPolicyError|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-DENY-BLOCKS-EXECUTION|RUNTIME_DENY_BLOCKS_EXECUTION|RUNTIME_DENY_BLOCKS_EXECUTION::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipDenyVerdict|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-HUMAN-GATE-BLOCKS-LIVE|RUNTIME_HUMAN_GATE_BLOCKS_LIVE|RUNTIME_HUMAN_GATE_BLOCKS_LIVE::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipHumanGateVerdict|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION|RUNTIME_GUARD_REJECTION_BLOCKS_EXECUTION|RUNTIME_GUARD_REJECTION_BLOCKS_EXECUTION::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|GuardMutation::SkipGuardRejection|negative_protocol::assert_registered_negative_case|direct",
-  "RUNTIME-CONTAINMENT-NEEDS-STORE|RUNTIME_CONTAINMENT_NEEDS_STORE|RUNTIME_CONTAINMENT_NEEDS_STORE::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipContainmentStore|negative_protocol::assert_registered_negative_case|direct",
+  "RUNTIME-CONTAINMENT-NEEDS-STORE|RUNTIME_CONTAINMENT_NEEDS_STORE|RUNTIME_CONTAINMENT_NEEDS_STORE::real|swarm_runtime::SwarmRuntime::preflight_containment|swarm_runtime::SwarmRuntime::preflight_containment|ContainmentPreflightMutation::SkipContainmentStore|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION|RUNTIME_LEASE_ISSUE_ERROR_BLOCKS_EXECUTION|RUNTIME_LEASE_ISSUE_ERROR_BLOCKS_EXECUTION::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipLeaseIssueError|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-EXPIRED-LEASE-REFUSED|RUNTIME_EXPIRED_LEASE_REFUSED|RUNTIME_EXPIRED_LEASE_REFUSED::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipLeaseExpiry|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-ADAPTER-ERROR-NOT-SUCCESS|RUNTIME_ADAPTER_ERROR_NOT_SUCCESS|RUNTIME_ADAPTER_ERROR_NOT_SUCCESS::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipAdapterError|negative_protocol::assert_registered_negative_case|direct",
@@ -123,10 +126,11 @@ required_bindings = [
   "RESPONSE-FILE-DUPLICATE-LEASE-REFUSED|RESPONSE_FILE_DUPLICATE_LEASE_REFUSED|RESPONSE_FILE_DUPLICATE_LEASE_REFUSED::real|swarm_response::containment::FileContainmentLeaseStore::open_lease|swarm_response::containment::FileContainmentLeaseStore::open_lease|StoreMutation::SkipFileDuplicateOpen|negative_protocol::assert_registered_negative_case|direct",
   "RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED|RESPONSE_FILE_CLOSE_UNKNOWN_LEASE_REFUSED|RESPONSE_FILE_CLOSE_UNKNOWN_LEASE_REFUSED::real|swarm_response::containment::FileContainmentLeaseStore::close|swarm_response::containment::FileContainmentLeaseStore::close|StoreMutation::SkipFileNotOpenClose|negative_protocol::assert_registered_negative_case|direct",
   "RESPONSE-IRREVERSIBLE-INVERSE-REFUSED|RESPONSE_IRREVERSIBLE_INVERSE_REFUSED|RESPONSE_IRREVERSIBLE_INVERSE_REFUSED::real|swarm_response::rollback::resolve_inverse|swarm_response::rollback::resolve_inverse|InverseMutation::InventIrreversibleInverse|negative_protocol::assert_registered_negative_case|direct",
-  "RUNTIME-CONTAINMENT-PREVIEW-REQUIRED|RUNTIME_CONTAINMENT_PREVIEW_REQUIRED|RUNTIME_CONTAINMENT_PREVIEW_REQUIRED::real|swarm_runtime::SwarmRuntime::authorize_and_execute|swarm_runtime::SwarmRuntime::authorize_and_execute|RuntimeMutation::SkipContainmentPreviewError|negative_protocol::assert_registered_negative_case|direct",
+  "RUNTIME-CONTAINMENT-PREVIEW-REQUIRED|RUNTIME_CONTAINMENT_PREVIEW_REQUIRED|RUNTIME_CONTAINMENT_PREVIEW_REQUIRED::real|swarm_runtime::SwarmRuntime::preflight_containment|swarm_runtime::SwarmRuntime::preflight_containment|ContainmentPreflightMutation::SkipContainmentPreviewError|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-RELEASE-ATTESTATION-REQUIRED|RUNTIME_RELEASE_ATTESTATION_REQUIRED|RUNTIME_RELEASE_ATTESTATION_REQUIRED::real|swarm_runtime::containment::verify_release_attestation|swarm_runtime::containment::verify_release_attestation|ReleaseAttestationMutation::SkipAttestationRequired|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED|RUNTIME_RELEASE_ATTESTATION_WELL_FORMED|RUNTIME_RELEASE_ATTESTATION_WELL_FORMED::real|swarm_runtime::containment::verify_release_attestation|swarm_runtime::containment::verify_release_attestation|ReleaseAttestationMutation::SkipMalformedAttestation|negative_protocol::assert_registered_negative_case|direct",
   "RUNTIME-RELEASE-SIGNATURE-VALID|RUNTIME_RELEASE_SIGNATURE_VALID|RUNTIME_RELEASE_SIGNATURE_VALID::real|swarm_runtime::containment::verify_release_attestation|swarm_runtime::containment::verify_release_attestation|ReleaseAttestationMutation::SkipSignatureValidation|negative_protocol::assert_registered_negative_case|direct",
+  "RUNTIME-RELEASE-SIGNER-TRUSTED|RUNTIME_RELEASE_SIGNER_TRUSTED|RUNTIME_RELEASE_SIGNER_TRUSTED::real|swarm_runtime::containment::verify_release_attestation|swarm_runtime::containment::verify_release_attestation|ReleaseAttestationMutation::SkipTrustedSigner|negative_protocol::assert_registered_negative_case|direct",
   "SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED|SPINE_ENVELOPE_ISSUER_FIELD_REQUIRED|SPINE_ENVELOPE_ISSUER_FIELD_REQUIRED::real|swarm_spine::envelope::verify_envelope|swarm_spine::envelope::verify_envelope|EnvelopeMutation::SkipIssuerFieldRequired|negative_protocol::assert_registered_negative_case|direct",
   "SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED|SPINE_ENVELOPE_SIGNATURE_FIELD_REQUIRED|SPINE_ENVELOPE_SIGNATURE_FIELD_REQUIRED::real|swarm_spine::envelope::verify_envelope|swarm_spine::envelope::verify_envelope|EnvelopeMutation::SkipSignatureFieldRequired|negative_protocol::assert_registered_negative_case|direct",
   "SPINE-ENVELOPE-ISSUER-KEY-VALID|SPINE_ENVELOPE_ISSUER_KEY_VALID|SPINE_ENVELOPE_ISSUER_KEY_VALID::real|swarm_spine::envelope::verify_envelope|swarm_spine::envelope::verify_envelope|EnvelopeMutation::SkipIssuerKeyValidation|negative_protocol::assert_registered_negative_case|direct",
@@ -182,6 +186,7 @@ omissions = [
 id = "swarm-runtime-authorization-release"
 production_prefixes = ["swarm_runtime::"]
 invariants = [
+  "RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION",
   "RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION",
   "RUNTIME-DENY-BLOCKS-EXECUTION",
   "RUNTIME-HUMAN-GATE-BLOCKS-LIVE",
@@ -196,6 +201,7 @@ invariants = [
   "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED",
   "RUNTIME-RELEASE-SIGNATURE-VALID",
   "RUNTIME-RELEASE-SUBJECT-BOUND",
+  "RUNTIME-RELEASE-SIGNER-TRUSTED",
   "RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE",
 ]
 omissions = [

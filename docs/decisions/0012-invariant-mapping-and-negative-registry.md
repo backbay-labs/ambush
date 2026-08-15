@@ -205,7 +205,7 @@ required workflow is pinned).
 
 ## What this buys, stated narrowly
 
-57 rows across `swarm-policy` (10), `swarm-response` (15), `swarm-runtime` (15)
+59 rows across `swarm-policy` (10), `swarm-response` (15), `swarm-runtime` (17)
 and `swarm-spine` (17), each with a same-probe differential mutation test, plus
 five enforced omissions for named surfaces that render no pre-dispatch refusal.
 
@@ -215,12 +215,14 @@ It does NOT buy:
   by MAPPING-02, not every crate. `swarm-agents::GovernancePolicy::can_act` is
   outside that declared universe; expanding the requirement must expand the
   scope registry rather than silently pretending it was already covered.
-- **evidence about concurrency or crash recovery.** Every row is proved by a
-  single-process, in-memory test. Phases 286 and 287 are where those come from.
-- **a trust anchor for release attestation.** `RUNTIME-RELEASE-SUBJECT-BOUND`
-  proves the attestation covers *this* receipt body. It does not prove a governor
-  you trust signed it; `ConsensusGovernanceReceipt::verify` checks the signature
-  against the public key carried inside the receipt. Open as task #27.
+- **whole-tree evidence about concurrency or crash recovery.** The mapped rows
+  remain single-process differentials over four declared surfaces. Separate
+  governance-state tests now prove process locking, sequence-and-digest CAS,
+  crash-window recovery, and durable one-shot action and human authorization;
+  those guards are outside this registry rather than silently claimed here.
+- **an externally mutable release signer.** Release verification is now bound
+  to the sealed governance authority's locally admitted governor keys, with
+  independent signature, subject, and signer-trust differentials.
 
 ## Two findings the table surfaced
 

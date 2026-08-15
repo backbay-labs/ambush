@@ -281,18 +281,19 @@ pub fn verify_release_attestation(
     // and collapsing them into one variant would report the second as the
     // first.
     // INVARIANT: RUNTIME-RELEASE-SIGNATURE-VALID
-    attestation
-        .verify()
-        .map_err(|source| ReleaseAttestationError::Signature {
+    if let Err(source) = attestation.verify() {
+        return Err(ReleaseAttestationError::Signature {
             rollback_id: rollback_id.clone(),
             source,
-        })?;
-    attestation
-        .verify_signed_by(&governor_public_keys)
-        .map_err(|source| ReleaseAttestationError::UntrustedSigner {
+        });
+    }
+    // INVARIANT: RUNTIME-RELEASE-SIGNER-TRUSTED
+    if let Err(source) = attestation.verify_signed_by(&governor_public_keys) {
+        return Err(ReleaseAttestationError::UntrustedSigner {
             rollback_id: rollback_id.clone(),
             source,
-        })?;
+        });
+    }
     let derived = release_subject_id(receipt).map_err(|source| {
         ReleaseAttestationError::Canonicalization {
             rollback_id: rollback_id.clone(),

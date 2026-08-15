@@ -98,10 +98,10 @@ PRODUCTION_PACKAGES = {
 EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-policy/Cargo.toml": "29ef642b8ba57958db7b202ebedb237d8b5bab1cb17b88d9e0e7ce56f9604520",
     "crates/swarm-response/Cargo.toml": "55d970d2348d4366791f1cb2e46df04872e33892af451c3919f67c45dd736760",
-    "crates/swarm-runtime/Cargo.toml": "ff747aa6587977bfe2062514da81793e8c7061911dea057bf2202f53ff8618d0",
+    "crates/swarm-runtime/Cargo.toml": "46910b606648f03bf3632ac41cc67bec57a5283eb73cf0ba1d5bec811bdf987d",
     "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
 }
-EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "850c5b414153abdfeb575d00bd3afe25f1564833da6ecae383c38cc5868473cd"
+EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "9dd5c6c4e9ea75e522315ba62a02f8bbaeb6cf09067fe0ca67693b70a3785c2d"
 PINNED_TOOLCHAIN = {
     "toolchain": {
         "channel": "1.97.1",

@@ -13,7 +13,7 @@ use syn::{
 };
 
 const EXPECTED: &str = include_str!("expected-bindings.tsv");
-const EXPECTED_SHA256: &str = "246d29b553e712336c93318ef5c0c45a0a88fa27ca5131f6fa6ac6dce562bff6";
+const EXPECTED_SHA256: &str = "5cde557c71242ba4c99e673d968af665f8f831f09cc26fbdc4b280f3847af5e0";
 const PROTOCOL_SOURCE: &str = "tests/negative_protocol.rs";
 const PROTOCOL_SEMANTIC_SHA256: &str =
     "2913a5d3a7dc9020b5526f1b98120c7b5e474c2a6ba2d3c1a2d7a4828af0a121";
@@ -33,7 +33,7 @@ const SPINE_BINDINGS: [(&str, &str); 1] = [CRATE_BINDINGS[3]];
 const REGISTERED_SOURCE_SEMANTIC_SHA256: [(&str, &str); 4] = [
     (
         "crates/swarm-policy/tests/negative_policy_gates.rs",
-        "bde27c4be1b9bb4da99722eff9a04cf6c43cfc41f654b87f53e2c25e3cfbdc3d",
+        "9ddedd8e2c46ae05c2a92609650dc2d571b5bc88806f09c8e6a1d0a844aace01",
     ),
     (
         "crates/swarm-response/tests/negative_containment_and_rollback.rs",
@@ -41,7 +41,7 @@ const REGISTERED_SOURCE_SEMANTIC_SHA256: [(&str, &str); 4] = [
     ),
     (
         "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs",
-        "58f814c3763f0f8043b6ba1c2b385187cd6226909b0609347bf9416bee7446df",
+        "27208472955bc23e7dba22d37defd6f6989a8ac0ce294eaf078b5af8c2cb5d36",
     ),
     (
         "crates/swarm-spine/tests/negative_envelope_and_chain.rs",
@@ -57,7 +57,7 @@ const NORMALIZER_HELPERS: [(&str, &str, &str); 2] = [
     (
         "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs",
         "runtime_protocol_outcome",
-        "34c3e0f446fc85eaa216f7466c525a042e26dea409cd0fdbbda6a54f16873cc5",
+        "85d60edcf0d4a394a2b0b7c72eb38365fe0a40721a5657cbb897a643e8070a5e",
     ),
 ];
 

@@ -598,6 +598,15 @@ struct PreparedContainment {
     issued_at_ms: i64,
 }
 
+/// Side-effect-free result of checking whether one response can be bounded.
+///
+/// The fields stay private deliberately. Callers can prove that containment
+/// preparation succeeds without gaining a second way to open or record leases;
+/// only the runtime consumes the prepared value on the execution path.
+pub struct ContainmentPreflight {
+    prepared: Option<PreparedContainment>,
+}
+
 /// Swarm runtime wiring detection, policy, and response into one Rust service.
 pub struct SwarmRuntime<P, E> {
     mode: RuntimeMode,
@@ -858,20 +867,23 @@ impl<P, E> SwarmRuntime<P, E> {
     /// later have the sweep issue a real inverse for something that never
     /// happened.
     ///
-    /// Non-containment actions never reach the store at all.
-    fn prepare_containment(
+    /// Non-containment actions never reach the store at all. This method does
+    /// not mutate the store or any runtime state; production execution consumes
+    /// its opaque result through `prepare_containment` below.
+    pub fn preflight_containment(
         &self,
         request: &ActionRequest,
         context: &ApprovalContext,
         execution_mode: ExecutionMode,
-    ) -> Result<Option<PreparedContainment>, RuntimeError> {
+    ) -> Result<ContainmentPreflight, RuntimeError> {
         if !crate::containment::is_containment_action(&request.action) {
-            return Ok(None);
+            return Ok(ContainmentPreflight { prepared: None });
         }
         if execution_mode == ExecutionMode::DryRun {
-            return Ok(None);
+            return Ok(ContainmentPreflight { prepared: None });
         }
 
+        // INVARIANT: RUNTIME-CONTAINMENT-NEEDS-STORE
         let Some(binding) = self.containment.as_ref() else {
             return Err(RuntimeError::ContainmentRefused {
                 action: request.action.kind(),
@@ -884,6 +896,7 @@ impl<P, E> SwarmRuntime<P, E> {
 
         // The same derivation the operator-facing rehearsal uses, so the plan on
         // the lease is the plan a human was shown.
+        // INVARIANT: RUNTIME-CONTAINMENT-PREVIEW-REQUIRED
         let preview = crate::service::preview::build_rehearsal_preview(
             request,
             &format!("containment-lease:{}", request.hunt_id.0),
@@ -894,12 +907,19 @@ impl<P, E> SwarmRuntime<P, E> {
             reason: format!("its inverse plan could not be derived: {error}"),
         })?;
 
-        Ok(Some(PreparedContainment {
-            store: binding.store.clone(),
-            ttl: binding.ttl,
-            preview,
-            issued_at_ms: context.now_ms,
-        }))
+        Ok(ContainmentPreflight {
+            prepared: Some(PreparedContainment {
+                store: binding.store.clone(),
+                ttl: binding.ttl,
+                preview,
+                issued_at_ms: context.now_ms,
+            }),
+        })
+    }
+
+    /// Consume the exact side-effect-free preflight result used by production.
+    fn prepare_containment(preflight: ContainmentPreflight) -> Option<PreparedContainment> {
+        preflight.prepared
     }
 
     /// Persist the lease for a containment that just took effect.
@@ -1000,6 +1020,7 @@ where
         context: &ApprovalContext,
     ) -> Result<ResponseReceipt, RuntimeError> {
         let execution_mode = self.execution_mode();
+        // INVARIANT: RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION
         Self::require_dispatcher_admission(request, execution_mode, false)?;
         // INVARIANT: RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION
         let decision = self.policy.evaluate(request, context)?;
@@ -1041,10 +1062,8 @@ where
 
         // Before `execute`, so a containment that cannot be leased never
         // reaches a host.
-        // INVARIANT: RUNTIME-CONTAINMENT-NEEDS-STORE
-        // INVARIANT: RUNTIME-CONTAINMENT-PREVIEW-REQUIRED
-        let prepared_containment =
-            self.prepare_containment(request, context, self.execution_mode())?;
+        let containment_preflight = self.preflight_containment(request, context, execution_mode)?;
+        let prepared_containment = Self::prepare_containment(containment_preflight);
 
         // INVARIANT: RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION
         let lease = self.policy.issue_lease(request, context)?;
@@ -1340,7 +1359,9 @@ where
                     // already rejected the request.
                     let containment = match &guard_rejection {
                         Some(_) => Ok(None),
-                        None => self.prepare_containment(request, context, execution_mode),
+                        None => self
+                            .preflight_containment(request, context, execution_mode)
+                            .map(Self::prepare_containment),
                     };
 
                     match (guard_rejection, containment) {

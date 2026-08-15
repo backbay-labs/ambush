@@ -29,6 +29,7 @@ invariants = [
   "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED",
   "RUNTIME-RELEASE-SIGNATURE-VALID",
   "RUNTIME-RELEASE-SUBJECT-BOUND",
+  "RUNTIME-RELEASE-SIGNER-TRUSTED",
   "SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED",
   "SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED",
   "SPINE-ENVELOPE-ISSUER-KEY-VALID",
@@ -63,6 +64,16 @@ invariants = [
   "SPINE-ENVELOPE-HASH-FIELD-REQUIRED",
   "SPINE-ENVELOPE-HASH-BOUND",
   "SPINE-ENVELOPE-SIGNATURE-VALID",
+]
+
+[[assumption]]
+id = "ASSUME-GOVERNANCE-TRUST-ANCHOR"
+owner = "swarm-agents"
+statement = "The GovernanceAuthority supplied to release verification is the process's authenticated, locally composed GovernancePolicy and its governor_public_keys are the admitted local trust set."
+holds_because = "The shipped composition shares one sealed GovernancePolicy across dispatch, ingest, containment, and release verification; external crates cannot forge an implementation."
+breaks_if = "A caller supplies a different authority instance, bypasses authenticated composition, or mutates the admitted governor set outside the signed persistence protocol."
+invariants = [
+  "RUNTIME-RELEASE-SIGNER-TRUSTED",
 ]
 
 [[assumption]]
@@ -188,6 +199,7 @@ invariants = [
   "POLICY-SCOPE-RATE-LIMIT",
   "POLICY-DESTRUCTIVE-HUMAN-GATE",
   "RESPONSE-TTL-STRICTLY-POSITIVE",
+  "RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION",
   "RUNTIME-CONTAINMENT-NEEDS-STORE",
   "RUNTIME-CONTAINMENT-PREVIEW-REQUIRED",
 ]
