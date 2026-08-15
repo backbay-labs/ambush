@@ -19,19 +19,24 @@
 # exact Cargo.lock/metadata identities (including the proc-macro packages) and
 # pinned rust-toolchain semantics,
 # requires canonical Cargo-auto-discovered integration and production-library
-# source paths, rejects explicit test overrides, custom builds, Cargo
+# source paths, rejects explicit test overrides and unreviewed local custom builds, Cargo
 # configuration from the repository or its ancestors, and
-# compiler/rustdoc/flags/target/wrapper/runner environment overrides. External
+# active-host compiler/rustdoc/flags/target/wrapper/runner environment
+# overrides. Inactive-target overrides are stripped. External
 # Cargo homes are ignored: every Cargo command uses a recreated config-free
 # gate-owned home, pinned cargo/rustc, and a
-# gate-owned isolated-Python rustc wrapper. The wrapper forces and audits one
+# gate-owned isolated-Python rustc wrapper, while the checker itself starts
+# through an absolute system-path Python. The wrapper forces and audits one
 # exact test-mode compile per target, including crate name and canonical source
 # realpath/hash. Checker-owned semantic digests cover the complete four
 # crate manifests and root execution-affecting TOML tables. It compiles with
 # `--locked`, binds emitted artifacts to the expected package and source, invokes
 # each test binary directly under a sanitized runtime environment rather than
 # trusting Cargo-runner output, and rejects execution-input drift across
-# compilation. Isolated Python plus environment rejection/neutralization
+# compilation. The full local custom-build target inventory is bound; the one
+# reviewed build script is manifest/source-digested, all additions are refused,
+# and audit wrapper/program hashes are checked around each Cargo process.
+# Isolated Python plus environment rejection/neutralization
 # precedes compilation of the gate's own Rust-syntax checker.
 # This does not prove a handwritten mirror faithful beyond the registered probe;
 # that broader fidelity remains a review duty.

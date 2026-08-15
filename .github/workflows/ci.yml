@@ -193,13 +193,13 @@ jobs:
       # and production-library targets so a same-name explicit test cannot
       # redirect execution, pins manifest/toolchain semantics, and forces an
       # audited target compile through a config-free Cargo home and pinned
-      # compiler. Two warm runs of the 139-self-test gate took 225.83s and
-      # 90.46s wall clock (38.24/38.89s user, 16.49/16.42s sys) on Darwin
+      # compiler. Two warm runs of the 144-self-test gate took 209.40s and
+      # 141.41s wall clock (38.76/38.42s user, 16.72/16.32s sys) on Darwin
       # 25.4.0 arm64 with rustc 1.97.1 (2026-08-15). Both began with no other
-      # Cargo process in this worktree, but system load was 44-55 and another
-      # worktree started compiling during measurement. These are explicitly
+      # Cargo process in this worktree, but system load was 24-42 and sibling
+      # worktrees were compiling during measurement. These are explicitly
       # contention-bound observations, not quiet measurements or a CI estimate;
-      # the stable ~55s CPU cost is the more useful local datum. Compiled
+      # the stable 54.74-55.48s CPU cost is the more useful local datum. Compiled
       # actual-source mutations dominate; timing remains cache- and
       # machine-dependent.
       #

@@ -92,7 +92,7 @@ cases. The gate binds relevant workspace/crate manifest fields and the exact
 Cargo.lock/metadata identities of the runtime, serialization, and proc-macro
 dependencies. It requires Cargo's canonical auto-discovered integration-test
 targets, rejects `autotests = false`, explicit or harness-disabled test targets,
-library overrides, and custom build scripts, and pins production libraries plus
+library overrides, and unreviewed custom build scripts, and pins production libraries plus
 registered tests to their exact package and canonical source path in Cargo
 metadata. Checker-owned semantic digests pin the complete parsed TOML of the
 four registered crate manifests and the root manifest's workspace, profile,
@@ -101,9 +101,12 @@ change is an explicit checker update rather than an unobserved build-input
 change. It pins the repository toolchain semantics and resolves the exact
 rustc/Cargo release and commit identities. Every Cargo command runs with a fresh
 config-free gate-owned `CARGO_HOME`; repository and ancestor Cargo configuration
-is refused, while compiler, wrapper, flags, linker, runner, Python, and loader
-override channels are rejected or neutralized. A gate-owned rustc wrapper runs
-under exact isolated Python and forces one target-only recompilation with unique
+is refused, active-host compiler/wrapper/flags/linker/runner overrides are
+rejected, and inactive-target, Python, and loader channels are neutralized. The
+checker itself starts through an absolute system-path Python interpreter, so a
+candidate-controlled `PATH/python3` cannot fabricate its final status. A
+gate-owned rustc wrapper runs under that exact isolated Python and forces one
+target-only recompilation with unique
 codegen metadata, then requires one audit record binding test mode, crate name,
 pinned rustc, canonical source realpath, and source hash. It associates the
 emitted artifact with that exact package/source identity and rechecks the source
@@ -118,7 +121,13 @@ empty cfg-gated body. Other executable fixtures reproduce external-Cargo-home
 `build.rustc`, absolute/relative rustc wrapper, workspace wrapper, rustflags,
 linker, and runner attacks, plus cwd/PYTHONPATH standard-library shadowing.
 Another fixture proves an added path dev-dependency's build script executes
-before the registered target. The isolated execution boundary defeats those
+before the registered target. Cargo metadata binds the complete local
+custom-build target inventory: the reviewed `swarm-ingest-tetragon` manifest and
+`build.rs` have checker-owned semantic/source digests, while an added transitive
+`swarm-core/build.rs` is rejected. Compiler-audit program and wrapper hashes are
+checked before and after every Cargo process, so the executable transitive
+fixture that overwrites the audit program is also refused after compilation.
+The isolated execution boundary defeats those
 substitutions and default-feature drift before the gate compiles its own
 Rust-syntax checker.
 

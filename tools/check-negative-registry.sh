@@ -14,20 +14,41 @@
 # crate name, test mode, canonical source path, and source hash per target. The
 # gate invokes each emitted test binary directly under a sanitized environment,
 # so Cargo runner/config and process/module-injection settings cannot fabricate
-# discovery/execution output. Compiler, flags, target, and runner environment
-# overrides are refused.
+# discovery/execution output. Active-host compiler, flags, target, and runner
+# environment overrides are refused; inactive-target overrides are stripped
+# from every child process.
 # Registered integration targets must remain Cargo-auto-discovered from their
-# canonical source files; production libraries and custom-build absence are
-# also bound through Cargo metadata. Checker-owned semantic digests pin all four
+# canonical source files; production libraries and the complete local
+# custom-build target inventory are also bound through Cargo metadata. The one
+# reviewed local build script is source- and manifest-digested, while all other
+# local custom-build targets are rejected. Checker-owned semantic digests pin all four
 # crate manifests plus root execution-affecting tables. Those co-located digests
 # are tamper-evident against uncoordinated edits, not an external trust anchor.
 # Mirror fidelity beyond the registered probe remains a reviewed limitation.
 set -euo pipefail
 
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+if [[ "$SCRIPT_DIR" == "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="."
+fi
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 cd "$ROOT_DIR"
 
-python3 -I - "$ROOT_DIR" <<'PY'
+PHASE285_PYTHON=""
+for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  if [[ -x "$candidate" ]] \
+    && "$candidate" -I -c 'import sys, tomllib; raise SystemExit(sys.version_info < (3, 11))' \
+      >/dev/null 2>&1; then
+    PHASE285_PYTHON="$candidate"
+    break
+  fi
+done
+if [[ -z "$PHASE285_PYTHON" ]]; then
+  echo "check-negative-registry requires Python >= 3.11 at a pinned system path" >&2
+  exit 1
+fi
+
+"$PHASE285_PYTHON" -I - "$ROOT_DIR" "$PHASE285_PYTHON" <<'PY'
 from __future__ import annotations
 
 import pathlib
@@ -45,6 +66,12 @@ import tempfile
 import tomllib
 
 REPO_ROOT = pathlib.Path(sys.argv[1])
+TRUSTED_PYTHON = pathlib.Path(sys.argv[2]).resolve()
+if pathlib.Path(sys.executable).resolve() != TRUSTED_PYTHON:
+    raise SystemExit(
+        f"unexpected Python interpreter {pathlib.Path(sys.executable).resolve()}, "
+        f"expected {TRUSTED_PYTHON}"
+    )
 sys.dont_write_bytecode = True
 assurance_spec = importlib.util.spec_from_file_location(
     "assurance_source", REPO_ROOT / "tools/assurance_source.py",
@@ -102,6 +129,14 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
 }
 EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "9dd5c6c4e9ea75e522315ba62a02f8bbaeb6cf09067fe0ca67693b70a3785c2d"
+ALLOWED_LOCAL_CUSTOM_BUILD = {
+    "swarm-ingest-tetragon": {
+        "manifest": "crates/swarm-ingest-tetragon/Cargo.toml",
+        "manifest_digest": "6c5a7b0a586f2a2e82930b03fc05296faa8b0e7da4e6f41fa6612d8603023cb8",
+        "script": "crates/swarm-ingest-tetragon/build.rs",
+        "script_digest": "13dbbcdbe498167d853c7417d4271f2883b47893c8c501a21063e45c739b3fc3",
+    },
+}
 PINNED_TOOLCHAIN = {
     "toolchain": {
         "channel": "1.97.1",
@@ -114,9 +149,11 @@ PINNED_CARGO_COMMIT = "c980f4866141969fab6254a680546a277789d6f0"
 SANITIZED_CARGO_HOME = None
 PINNED_CARGO = None
 PINNED_RUSTC = None
+PINNED_HOST = None
 RUSTC_AUDIT_WRAPPER = None
 RUSTC_AUDIT_PROGRAM = None
 RUSTC_AUDIT_LOG = None
+RUSTC_AUDIT_ARTIFACT_DIGESTS = {}
 REGISTERED_TARGETS = {
     ("swarm-policy", "negative_policy_gates"): "crates/swarm-policy/tests/negative_policy_gates.rs",
     ("swarm-response", "negative_containment_and_rollback"): "crates/swarm-response/tests/negative_containment_and_rollback.rs",
@@ -214,7 +251,11 @@ def cargo_config_sources(root):
     return sources
 
 
-def cargo_override_names(environment):
+def cargo_target_environment_name(target):
+    return re.sub(r"[^A-Za-z0-9]", "_", target).upper()
+
+
+def cargo_override_names(environment, *, active_target_only=True):
     forbidden = {
         "RUSTC",
         "RUSTDOC",
@@ -246,12 +287,21 @@ def cargo_override_names(environment):
             if value != PINNED_RUST_VERSION:
                 configured.append(name)
             continue
+        target_override = re.fullmatch(
+            r"CARGO_TARGET_([A-Z0-9_]+)_(?:LINKER|RUNNER|RUSTFLAGS|RUSTDOCFLAGS)",
+            name,
+        )
+        if target_override is not None:
+            if (
+                active_target_only
+                and PINNED_HOST is not None
+                and target_override.group(1) != cargo_target_environment_name(PINNED_HOST)
+            ):
+                continue
+            configured.append(name)
+            continue
         if (
             name in forbidden
-            or re.fullmatch(
-                r"CARGO_TARGET_[A-Z0-9_]+_(?:LINKER|RUNNER|RUSTFLAGS|RUSTDOCFLAGS)",
-                name,
-            )
             or re.fullmatch(r"CARGO_(?:REGISTRIES|CREDENTIAL)_[A-Z0-9_]+", name)
             or re.fullmatch(r"(?:CC|CXX|AR|RANLIB)_[A-Za-z0-9_-]+", name)
         ):
@@ -260,6 +310,7 @@ def cargo_override_names(environment):
 
 
 def resolve_pinned_toolchain(report):
+    global PINNED_HOST
     account_home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir)
     rustup = account_home / ".cargo/bin/rustup"
     if not rustup.is_file():
@@ -324,12 +375,21 @@ def resolve_pinned_toolchain(report):
             "resolved cargo/rustc do not match the pinned release and commit identities",
         )
         return None, None
+    host = re.search(r"^host: (\S+)$", rustc_version.stdout, re.M)
+    if host is None:
+        report.violation(
+            "dependency-toolchain-binary-drift",
+            "resolved rustc did not report a host target",
+        )
+        return None, None
+    PINNED_HOST = host.group(1)
     return resolved["cargo"], resolved["rustc"]
 
 
 def configure_sanitized_cargo_boundary(report):
     global SANITIZED_CARGO_HOME, PINNED_CARGO, PINNED_RUSTC
     global RUSTC_AUDIT_WRAPPER, RUSTC_AUDIT_PROGRAM, RUSTC_AUDIT_LOG
+    global RUSTC_AUDIT_ARTIFACT_DIGESTS
     PINNED_CARGO, PINNED_RUSTC = resolve_pinned_toolchain(report)
     if PINNED_CARGO is None or PINNED_RUSTC is None:
         return
@@ -377,15 +437,23 @@ def configure_sanitized_cargo_boundary(report):
         f"exec {json.dumps(sys.executable)} -I {json.dumps(str(RUSTC_AUDIT_PROGRAM))} \"$@\"\n"
     )
     RUSTC_AUDIT_WRAPPER.chmod(0o755)
+    RUSTC_AUDIT_ARTIFACT_DIGESTS = {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (RUSTC_AUDIT_PROGRAM, RUSTC_AUDIT_WRAPPER)
+    }
 
 
-def sanitized_cargo_environment(*, target_dir=None, extra=None, audit=True):
+def sanitized_cargo_environment(
+    *, target_dir=None, extra=None, audit=True, source_environment=None,
+):
     if SANITIZED_CARGO_HOME is None or PINNED_RUSTC is None:
         raise RuntimeError("sanitized Cargo boundary is not configured")
-    environment = dict(os.environ)
+    environment = dict(os.environ if source_environment is None else source_environment)
     for name in list(environment):
         if (
-            name in cargo_override_names({name: environment[name]})
+            name in cargo_override_names(
+                {name: environment[name]}, active_target_only=False,
+            )
             or name in {
                 "CARGO_HOME", "CARGO_TARGET_DIR", "RUSTUP_TOOLCHAIN",
                 "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONINSPECT",
@@ -420,7 +488,9 @@ def sanitized_runtime_environment():
     environment = dict(os.environ)
     for name in list(environment):
         if (
-            name in cargo_override_names({name: environment[name]})
+            name in cargo_override_names(
+                {name: environment[name]}, active_target_only=False,
+            )
             or name.startswith("CARGO_")
             or name.startswith("RUSTUP_")
             or name in {
@@ -446,7 +516,14 @@ def run_cargo(arguments, *, cwd, target_dir=None, extra_environment=None, audit=
             stdout="",
             stderr=f"refused Cargo config sources: {[str(path) for path in config_sources]}",
         )
-    return subprocess.run(
+    if audit:
+        changed = audit_artifact_changes()
+        if changed:
+            return subprocess.CompletedProcess(
+                [str(PINNED_CARGO), *arguments], 125, stdout="",
+                stderr=f"refused modified compiler-audit artifacts before Cargo: {changed}",
+            )
+    result = subprocess.run(
         [str(PINNED_CARGO), *arguments],
         cwd=cwd,
         env=sanitized_cargo_environment(
@@ -456,6 +533,24 @@ def run_cargo(arguments, *, cwd, target_dir=None, extra_environment=None, audit=
         ),
         **kwargs,
     )
+    if audit:
+        changed = audit_artifact_changes()
+        if changed:
+            stderr = result.stderr or ""
+            return subprocess.CompletedProcess(
+                result.args, 125, stdout=result.stdout,
+                stderr=f"{stderr}\ncompiler-audit artifacts changed during Cargo: {changed}",
+            )
+    return result
+
+
+def audit_artifact_changes():
+    changed = []
+    for path, expected in RUSTC_AUDIT_ARTIFACT_DIGESTS.items():
+        actual = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        if actual != expected:
+            changed.append(str(path))
+    return changed
 
 
 def root_execution_manifest(document):
@@ -651,6 +746,69 @@ def validate_production_metadata_targets(
             )
 
 
+def validate_local_custom_build_targets(root, metadata_packages, report):
+    observed = set()
+    for package in metadata_packages:
+        if package.get("source") is not None:
+            continue
+        custom_targets = [
+            target for target in package.get("targets", [])
+            if "custom-build" in target.get("kind", [])
+        ]
+        if not custom_targets:
+            continue
+        name = package.get("name")
+        expected = ALLOWED_LOCAL_CUSTOM_BUILD.get(name)
+        if expected is None:
+            report.violation(
+                "dependency-local-custom-build-target",
+                f"resolved local package `{name}` has an unreviewed custom-build target",
+            )
+            continue
+        observed.add(name)
+        manifest = (root / expected["manifest"]).resolve()
+        script = (root / expected["script"]).resolve()
+        expected_target = {
+            "name": "build-script-build",
+            "kind": ["custom-build"],
+            "crate_types": ["bin"],
+            "src_path": str(script),
+            "edition": "2024",
+            "doc": False,
+            "doctest": False,
+            "test": False,
+        }
+        actual_targets = [
+            {field: target.get(field) for field in expected_target}
+            for target in custom_targets
+        ]
+        manifest_digest = (
+            canonical_toml_digest(parse_toml(
+                manifest, report, "dependency-local-custom-build-manifest-read",
+            ))
+            if manifest.is_file() else None
+        )
+        script_digest = (
+            hashlib.sha256(script.read_bytes()).hexdigest() if script.is_file() else None
+        )
+        if (
+            pathlib.Path(package.get("manifest_path", "")).resolve() != manifest
+            or actual_targets != [expected_target]
+            or manifest_digest != expected["manifest_digest"]
+            or script_digest != expected["script_digest"]
+        ):
+            report.violation(
+                "dependency-local-custom-build-identity",
+                f"resolved local custom build `{name}` does not match its reviewed manifest, target, and script digests",
+            )
+    missing = set(ALLOWED_LOCAL_CUSTOM_BUILD) - observed
+    if missing:
+        report.violation(
+            "dependency-local-custom-build-missing",
+            f"reviewed local custom builds are absent from metadata: {sorted(missing)}",
+        )
+
+
 def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, production_packages=True):
     lock = parse_toml(root / "Cargo.lock", report, "dependency-lock-read")
     packages = lock.get("package", [])
@@ -691,6 +849,7 @@ def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, pr
     if production_packages:
         validate_production_metadata_targets(root, metadata_packages, resolved_ids, report)
         validate_metadata_test_targets(root, metadata_packages, resolved_ids, report)
+        validate_local_custom_build_targets(root, metadata_packages, report)
 
 
 def expected_test_target(root, relative):
@@ -840,6 +999,8 @@ def execution_input_snapshot(root, registered):
         "Cargo.toml",
         "Cargo.lock",
         "rust-toolchain.toml",
+        *(entry["manifest"] for entry in ALLOWED_LOCAL_CUSTOM_BUILD.values()),
+        *(entry["script"] for entry in ALLOWED_LOCAL_CUSTOM_BUILD.values()),
         ".cargo/config",
         ".cargo/config.toml",
         *(entry.get("test_file", "") for entry in registered),
@@ -2493,7 +2654,171 @@ def python_isolation_self_test(base):
     if wrapper.returncode or f"release: {PINNED_RUST_VERSION}" not in wrapper.stdout:
         ok = False
         print(f"isolated rustc audit wrapper was shadowed:\n{wrapper.stderr[-4000:]}", file=sys.stderr)
-    return ok, 3
+
+    attacker_path = base / "attacker-python-path"
+    attacker_path.mkdir()
+    marker = attacker_path / "python3-was-invoked"
+    fake_python = attacker_path / "python3"
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        f": > {json.dumps(str(marker))}\n"
+        "echo 'check-negative-registry OK: 57 executable tests + 5 protocol-contract tests; 144 self-tests passed (3 clean controls, 141 adversarial)'\n"
+    )
+    fake_python.chmod(0o755)
+    hostile_path_environment = dict(os.environ)
+    hostile_path_environment["PATH"] = str(attacker_path)
+    old_boundary = subprocess.run(
+        ["python3", "-I", "-c", "raise SystemExit(99)"],
+        env=hostile_path_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if old_boundary.returncode or "check-negative-registry OK:" not in old_boundary.stdout or not marker.is_file():
+        ok = False
+        print("PATH-resolved Python red fixture did not fabricate the gate result", file=sys.stderr)
+    marker.unlink(missing_ok=True)
+    protected = subprocess.run(
+        [str(TRUSTED_PYTHON), "-I", "-c", "print('trusted Python executed')"],
+        env=hostile_path_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if protected.returncode or protected.stdout.strip() != "trusted Python executed" or marker.exists():
+        ok = False
+        print("absolute trusted Python execution was replaced through PATH", file=sys.stderr)
+    return ok, 4
+
+
+def target_environment_scope_self_test():
+    ok = True
+    inactive_target = (
+        "x86_64-unknown-linux-gnu"
+        if PINNED_HOST != "x86_64-unknown-linux-gnu"
+        else "aarch64-apple-darwin"
+    )
+    inactive_name = f"CARGO_TARGET_{cargo_target_environment_name(inactive_target)}_LINKER"
+    inactive_environment = {inactive_name: "/attacker/inactive-linker"}
+    inactive_report = Report()
+    validate_cargo_execution_boundary(
+        REPO_ROOT, inactive_report, environment=inactive_environment,
+    )
+    sanitized = sanitized_cargo_environment(source_environment=inactive_environment)
+    if "dependency-execution-environment" in inactive_report.codes() or inactive_name in sanitized:
+        ok = False
+        print("inactive target linker override was not accepted then sanitized", file=sys.stderr)
+
+    active_name = f"CARGO_TARGET_{cargo_target_environment_name(PINNED_HOST)}_LINKER"
+    active_environment = {active_name: "/attacker/active-linker"}
+    active_report = Report()
+    validate_cargo_execution_boundary(
+        REPO_ROOT, active_report, environment=active_environment,
+    )
+    if (
+        "dependency-execution-environment" not in active_report.codes()
+        or active_name in sanitized_cargo_environment(source_environment=active_environment)
+    ):
+        ok = False
+        print("active target linker override was not refused and sanitized", file=sys.stderr)
+    return ok, 2
+
+
+def transitive_build_script_self_test(base):
+    ok = True
+    root = base / "transitive-build-script-audit-overwrite"
+    core = root / "swarm-core"
+    victim = root / "victim"
+    (core / "src").mkdir(parents=True)
+    (victim / "src").mkdir(parents=True)
+    (root / "Cargo.toml").write_text(
+        '[workspace]\nresolver = "2"\nmembers = ["swarm-core", "victim"]\n'
+    )
+    (core / "Cargo.toml").write_text(
+        '[package]\nname = "swarm-core"\nversion = "0.0.0"\nedition = "2024"\n'
+        'build = "build.rs"\n'
+    )
+    (core / "src/lib.rs").write_text("pub fn value() -> u8 { 1 }\n")
+    fabricated = victim / "src/fabricated.rs"
+    fabricated.write_text("pub fn value() -> u8 { 1 }\n")
+    attacker_program = (
+        "import os, pathlib, sys\n"
+        "compiler = sys.argv[1]\n"
+        f"victim = {str((victim / 'src/lib.rs').resolve())!r}\n"
+        f"fabricated = {str(fabricated.resolve())!r}\n"
+        "arguments = [fabricated if value.endswith('.rs') and str(pathlib.Path(value).resolve()) == victim else value for value in sys.argv[2:]]\n"
+        "os.execv(compiler, [compiler, *arguments])\n"
+    )
+    (core / "build.rs").write_text(
+        "fn main() {\n"
+        "    let log = std::path::PathBuf::from(std::env::var(\"PHASE285_RUSTC_AUDIT_LOG\").unwrap());\n"
+        "    let program = log.parent().unwrap().parent().unwrap().join(\"rustc-audit.py\");\n"
+        f"    std::fs::write(program, {json.dumps(attacker_program)}).unwrap();\n"
+        "}\n"
+    )
+    (victim / "Cargo.toml").write_text(
+        '[package]\nname = "victim"\nversion = "0.0.0"\nedition = "2024"\n'
+        '[dependencies]\nswarm-core = { path = "../swarm-core" }\n'
+    )
+    (victim / "src/lib.rs").write_text(
+        'compile_error!("the transitive build script must not replace this source");\n'
+    )
+    lock = run_cargo(
+        ["generate-lockfile"], cwd=root,
+        target_dir=REPO_ROOT / "target/assurance-transitive-build-script",
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    original_program = RUSTC_AUDIT_PROGRAM.read_bytes()
+    raw_environment = sanitized_cargo_environment(
+        target_dir=REPO_ROOT / "target/assurance-transitive-build-script-red",
+    )
+    try:
+        unprotected = subprocess.run(
+            [str(PINNED_CARGO), "check", "--locked", "-p", "victim"],
+            cwd=root, env=raw_environment,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ) if lock.returncode == 0 else lock
+    finally:
+        RUSTC_AUDIT_PROGRAM.write_bytes(original_program)
+    if unprotected.returncode:
+        ok = False
+        print(
+            f"transitive build-script red fixture did not substitute the victim source:\n"
+            f"{(unprotected.stdout + unprotected.stderr)[-4000:]}",
+            file=sys.stderr,
+        )
+
+    try:
+        attack = run_cargo(
+            ["check", "--locked", "-p", "victim"], cwd=root,
+            target_dir=REPO_ROOT / "target/assurance-transitive-build-script-protected",
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ) if lock.returncode == 0 else lock
+    finally:
+        RUSTC_AUDIT_PROGRAM.write_bytes(original_program)
+    if attack.returncode != 125 or "compiler-audit artifacts changed during Cargo" not in attack.stderr:
+        ok = False
+        print(
+            f"transitive build-script audit overwrite was not rejected:\n{(attack.stdout + attack.stderr)[-4000:]}",
+            file=sys.stderr,
+        )
+
+    metadata = run_cargo(
+        ["metadata", "--locked", "--format-version", "1"], cwd=root,
+        target_dir=REPO_ROOT / "target/assurance-transitive-build-script-metadata",
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    metadata_report = Report()
+    if metadata.returncode:
+        metadata_report.violation("dependency-metadata-failed", metadata.stderr[-4000:])
+    else:
+        validate_local_custom_build_targets(
+            root, json.loads(metadata.stdout).get("packages", []), metadata_report,
+        )
+    if "dependency-local-custom-build-target" not in metadata_report.codes():
+        ok = False
+        print(f"transitive swarm-core custom build was not rejected: {metadata_report.violations}", file=sys.stderr)
+    return ok, 2
 
 
 def dependency_execution_self_test(base):
@@ -2814,7 +3139,13 @@ fn body_must_run() {}
         print(f"encoded rustflags environment was not rejected: {flags_report.violations}", file=sys.stderr)
     isolation_ok, isolation_mutations = cargo_config_isolation_self_test(base)
     python_ok, python_mutations = python_isolation_self_test(base)
-    return ok and isolation_ok and python_ok, 4 + isolation_mutations + python_mutations
+    target_environment_ok, target_environment_mutations = target_environment_scope_self_test()
+    transitive_ok, transitive_mutations = transitive_build_script_self_test(base)
+    return (
+        ok and isolation_ok and python_ok and target_environment_ok and transitive_ok,
+        4 + isolation_mutations + python_mutations
+        + target_environment_mutations + transitive_mutations,
+    )
 
 
 def target_override_self_test(base):
@@ -3193,8 +3524,8 @@ def self_test():
 
 preflight = Report()
 validate_toolchain_identity(REPO_ROOT, preflight)
-validate_cargo_execution_boundary(REPO_ROOT, preflight)
 configure_sanitized_cargo_boundary(preflight)
+validate_cargo_execution_boundary(REPO_ROOT, preflight)
 if preflight.violations:
     for code, message in preflight.violations:
         print(f"[{code}] {message}", file=sys.stderr)
