@@ -193,13 +193,26 @@ impl FileAgentKeyStore {
 
     fn open_with_parent_sync<ParentSync>(
         root: impl AsRef<Path>,
-        mut sync_parent: ParentSync,
+        sync_parent: ParentSync,
     ) -> Result<Self, AgentIdentityError>
     where
         ParentSync: FnMut(&Path) -> std::io::Result<()>,
     {
+        Self::open_with_parent_sync_and_scan_hook(root, sync_parent, || {})
+    }
+
+    fn open_with_parent_sync_and_scan_hook<ParentSync, ScanHook>(
+        root: impl AsRef<Path>,
+        mut sync_parent: ParentSync,
+        after_missing_scan: ScanHook,
+    ) -> Result<Self, AgentIdentityError>
+    where
+        ParentSync: FnMut(&Path) -> std::io::Result<()>,
+        ScanHook: FnOnce(),
+    {
         let root = root.as_ref().to_path_buf();
         let missing = missing_key_root_directories(&root)?;
+        after_missing_scan();
         let mut created = Vec::with_capacity(missing.len());
         for directory in missing.iter().rev() {
             match fs::create_dir(directory) {
@@ -231,7 +244,11 @@ impl FileAgentKeyStore {
                 }
             }
         }
-        for directory in created.iter().rev() {
+        // Every opener that observed a path component missing owns a durability
+        // obligation for that directory entry. Another process may win the
+        // create race, but `AlreadyExists` does not prove that winner synced the
+        // anchoring parent before this opener returns.
+        for directory in &missing {
             let parent =
                 normalized_parent(directory).ok_or_else(|| AgentIdentityError::CreateDir {
                     path: directory.clone(),
@@ -932,6 +949,81 @@ mod tests {
             .load_or_create_with_status(AgentRole::Tom, "primary")
             .unwrap();
         assert_eq!(status, AgentKeyLoadStatus::Created);
+    }
+
+    #[test]
+    fn concurrent_first_open_loser_must_sync_every_ancestor_it_observed_missing() {
+        let anchor = temp_root("open-concurrent-missing-sync");
+        let first = anchor.join("first");
+        let root = first.join("keys");
+        let scan_reached = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let resume_loser = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let loser_scan_reached = std::sync::Arc::clone(&scan_reached);
+        let loser_resume = std::sync::Arc::clone(&resume_loser);
+        let loser_root = root.clone();
+        let loser_anchor = anchor.clone();
+
+        let loser = std::thread::spawn(move || {
+            let attempted_syncs = std::cell::RefCell::new(Vec::new());
+            let result = FileAgentKeyStore::open_with_parent_sync_and_scan_hook(
+                &loser_root,
+                |parent| {
+                    attempted_syncs.borrow_mut().push(parent.to_path_buf());
+                    if parent == loser_anchor {
+                        Err(std::io::Error::other(
+                            "injected losing-contender parent sync failure",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    loser_scan_reached.wait();
+                    loser_resume.wait();
+                },
+            );
+            (result, attempted_syncs.into_inner())
+        });
+
+        scan_reached.wait();
+        let winner_syncs = std::cell::RefCell::new(Vec::new());
+        let winner = FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            winner_syncs.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            winner_syncs.into_inner(),
+            vec![first.clone(), anchor.clone()]
+        );
+        resume_loser.wait();
+
+        let (loser_result, loser_syncs) = loser.join().unwrap();
+        assert!(matches!(
+            loser_result,
+            Err(super::AgentIdentityError::SyncKeyRootParent { ref path, .. }) if path == &anchor
+        ));
+        assert_eq!(
+            loser_syncs,
+            vec![first, anchor],
+            "a contender must sync every ancestor it observed missing even after losing every create race"
+        );
+        assert!(
+            root.is_dir(),
+            "the loser must not remove directories created by the winner"
+        );
+        drop(winner);
+
+        let existing_syncs = std::cell::RefCell::new(Vec::new());
+        FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            existing_syncs.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            existing_syncs.into_inner().is_empty(),
+            "a contender that observed an existing root has no ancestor-sync obligation"
+        );
     }
 
     #[test]

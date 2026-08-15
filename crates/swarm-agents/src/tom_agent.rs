@@ -1341,13 +1341,56 @@ impl GovernancePersistence {
                     source,
                 })?;
         let lock_identity = governance_lock_identity(&lock_path, &lock_metadata)?;
+        let state_anchor_absent = match fs::symlink_metadata(&path) {
+            Ok(_) => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(source) => {
+                return Err(GovernancePersistenceError::ReadState {
+                    path: path.clone(),
+                    source,
+                });
+            }
+        };
+        let checkpoint_anchor_absent = match fs::symlink_metadata(&sequence_path) {
+            Ok(_) => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(source) => {
+                return Err(GovernancePersistenceError::ReadSequence {
+                    path: sequence_path.clone(),
+                    source,
+                });
+            }
+        };
+        let anchors_absent = state_anchor_absent && checkpoint_anchor_absent;
         let lock_record = if created {
             let record = new_governance_lock_record();
             write_governance_lock_record(&lock_path, &mut lock_file, &record, true)?;
             record
         } else {
             match read_governance_lock_record(&lock_path, &lock_file) {
-                Ok(record) => record,
+                Ok(record) => {
+                    if open_mode == GovernanceLockOpenMode::Initialize && anchors_absent {
+                        // A prior fresh initialization may have created and
+                        // fsynced the record but failed syncing its parent.
+                        // Rewrite the exact valid record and sync the parent
+                        // before either signed anchor is created; do not rotate
+                        // the generation.
+                        write_governance_lock_record(&lock_path, &mut lock_file, &record, true)?;
+                    }
+                    record
+                }
+                Err(GovernancePersistenceError::InvalidLockRecord { .. })
+                    if open_mode == GovernanceLockOpenMode::Initialize && anchors_absent =>
+                {
+                    // A partial first initialization can leave a locked but
+                    // incomplete record before either signed anchor exists.
+                    // Under that exact empty-stream condition, establish and
+                    // durably anchor a fresh generation. Once either anchor
+                    // exists, corrupt lock metadata always fails closed.
+                    let record = new_governance_lock_record();
+                    write_governance_lock_record(&lock_path, &mut lock_file, &record, true)?;
+                    record
+                }
                 Err(GovernancePersistenceError::InvalidLockRecord { .. })
                     if open_mode == GovernanceLockOpenMode::Reinitialize =>
                 {
@@ -1358,17 +1401,6 @@ impl GovernancePersistence {
                 Err(error) => return Err(error),
             }
         };
-        if !created
-            && open_mode == GovernanceLockOpenMode::Initialize
-            && !path.exists()
-            && !sequence_path.exists()
-        {
-            // A prior fresh initialization may have created and fsynced the
-            // record but failed syncing its parent. Rewriting the exact valid
-            // record and syncing the parent makes that durable before either
-            // signed anchor is created; it never rotates the generation.
-            write_governance_lock_record(&lock_path, &mut lock_file, &lock_record, true)?;
-        }
         let lock_binding = governance_lock_binding(lock_identity, lock_record);
         verify_governance_lock_path(&lock_path, &lock_file, &lock_binding)?;
         Ok(Self {
@@ -6117,6 +6149,89 @@ mod tests {
         assert_eq!(fs::read(lock_path).unwrap(), record_before_retry);
         drop(retry);
         cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initialization_regenerates_a_partial_lock_only_for_an_empty_stream() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let key = SigningKey::from_bytes(&[146; 32]);
+        for (label, partial_record) in [("empty", b"".as_slice()), ("partial", b"{".as_slice())] {
+            let path = persistence_path(&format!("partial-empty-lock-{label}"));
+            let lock_path = GovernancePolicy::persistence_lock_path(&path);
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true).mode(0o600);
+            options
+                .open(&lock_path)
+                .unwrap()
+                .write_all(partial_record)
+                .unwrap();
+
+            let policy = GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key.clone(),
+            )
+            .expect("an incomplete empty-stream lock record must be regenerated durably");
+            let record: GovernanceLockRecord =
+                serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+            assert_eq!(
+                hex::decode(record.generation_id).unwrap().len(),
+                super::GOVERNANCE_LOCK_GENERATION_BYTES
+            );
+            assert!(path.exists());
+            assert!(GovernancePolicy::persistence_sequence_path(&path).exists());
+            drop(policy);
+            cleanup_persistence(&path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initialization_never_regenerates_a_corrupt_lock_for_an_existing_stream() {
+        let key = SigningKey::from_bytes(&[147; 32]);
+        for (label, keep_state, keep_checkpoint) in [
+            ("both", true, true),
+            ("state-only", true, false),
+            ("checkpoint-only", false, true),
+        ] {
+            let path = persistence_path(&format!("corrupt-existing-lock-initialize-{label}"));
+            let policy = initialize_signed_policy(&path, &key);
+            drop(policy);
+            let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+            if !keep_state {
+                fs::remove_file(&path).unwrap();
+            }
+            if !keep_checkpoint {
+                fs::remove_file(&sequence_path).unwrap();
+            }
+            let state_before = keep_state.then(|| fs::read(&path).unwrap());
+            let sequence_before = keep_checkpoint.then(|| fs::read(&sequence_path).unwrap());
+            let lock_path = GovernancePolicy::persistence_lock_path(&path);
+            fs::write(&lock_path, b"{").unwrap();
+
+            let error = GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key.clone(),
+            )
+            .expect_err("either signed anchor must forbid implicit lock regeneration");
+            assert!(matches!(
+                error,
+                GovernancePersistenceError::InvalidLockRecord { .. }
+            ));
+            assert_eq!(fs::read(&lock_path).unwrap(), b"{");
+            assert_eq!(state_before, keep_state.then(|| fs::read(&path).unwrap()));
+            assert_eq!(
+                sequence_before,
+                keep_checkpoint.then(|| fs::read(&sequence_path).unwrap())
+            );
+            cleanup_persistence(&path);
+        }
     }
 
     #[test]
