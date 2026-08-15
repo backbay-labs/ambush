@@ -379,6 +379,21 @@ authorization. A live demo step that names a governed action records
 but is ignored; quickstart retains `receipt_pack_id: null` in JSON for the same
 compatibility window.
 
+The governed-resume callback is a bearer-bearing internal hop. Its configured
+`operator_surface.runtime_base_url` is fully validated even when callers use a
+public `LocalOperatorSurface` config constructor, and its dedicated client
+ignores process proxies, refuses redirects, and applies a bounded timeout.
+A refused redirect never contacts its target and leaves the exact
+governance/human hold pending. Other transport failures can be ambiguous after
+delivery, so operators inspect the persisted hold before retrying; durable
+one-time consumption prevents an already consumed approval from executing again.
+
+Source compatibility note for this release: downstream implementations of the
+public `RequestResponseRouter` trait must remove the former `now_ms` parameter
+from `restore_human_preflight`. The dispatcher now owns the clock and samples it
+after the awaited, side-effect-free restoration step; external implementations
+cannot select the pack-validation or governance-consumption time.
+
 ## Config Keys That Define The Contract
 
 The active governance contract is anchored by these repo-owned settings:

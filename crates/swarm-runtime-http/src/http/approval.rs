@@ -193,6 +193,7 @@ pub(super) async fn approval_vote_append_handler(
                         )
                     })?;
                 resume_governed_approval(
+                    &state.callback_client,
                     &state.runtime_base_url,
                     &updated.report.approval_set_id,
                     &receipt_pack.report.pack_id,
@@ -201,6 +202,7 @@ pub(super) async fn approval_vote_append_handler(
                 .await?;
             } else {
                 resume_demo_approval(
+                    &state.callback_client,
                     &state.runtime_base_url,
                     &updated.report.approval_set_id,
                     &receipt_pack.report,
@@ -212,7 +214,8 @@ pub(super) async fn approval_vote_append_handler(
     Ok(Json(updated))
 }
 
-async fn resume_governed_approval(
+pub(super) async fn resume_governed_approval(
+    client: &reqwest::Client,
     runtime_base_url: &str,
     approval_set_id: &str,
     receipt_pack_id: &str,
@@ -223,7 +226,7 @@ async fn resume_governed_approval(
         runtime_base_url.trim_end_matches('/'),
         approval_set_id
     );
-    let response = reqwest::Client::new()
+    let response = client
         .post(url)
         .header(header::AUTHORIZATION.as_str(), authorization)
         .json(&json!({ "receipt_pack_id": receipt_pack_id }))
@@ -247,6 +250,7 @@ async fn resume_governed_approval(
 }
 
 async fn resume_demo_approval(
+    client: &reqwest::Client,
     runtime_base_url: &str,
     approval_set_id: &str,
     receipt_pack: &swarm_runtime::approval::ApprovalReceiptPackReport,
@@ -256,7 +260,7 @@ async fn resume_demo_approval(
         runtime_base_url.trim_end_matches('/'),
         approval_set_id
     );
-    let response = reqwest::Client::new()
+    let response = client
         .post(url)
         .json(&json!({ "receipt_pack": receipt_pack }))
         .send()

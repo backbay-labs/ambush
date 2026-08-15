@@ -943,13 +943,22 @@ operator_surface:
         scopes: ["read", "maintenance"]
 ```
 
-- `runtime_base_url` is the detect-server base URL used by the Providence widget, scoped drilldown links, and governed-approval resume. Because resume forwards the authenticated operator bearer, this URL must use HTTPS except for local development on an exact loopback host: `localhost`, any `127.0.0.0/8` address, or `::1`. Plaintext private, link-local, unspecified, remote, credential-bearing, and lookalike hostnames are rejected during configuration validation.
+- `runtime_base_url` is the detect-server base URL used by the Providence widget, scoped drilldown links, and governed-approval resume. Because resume forwards the authenticated operator bearer, this URL must use HTTPS except for local development on an exact loopback host: `localhost`, any `127.0.0.0/8` address, or `::1`. Plaintext private, link-local, unspecified, remote, credential-bearing, and lookalike hostnames are rejected during configuration validation. Both public `LocalOperatorSurface` config constructors run the complete validation contract before creating stores, clients, or callbacks.
+- Governed-resume callbacks use one dedicated client that ignores process proxy settings, never follows redirects, and has a 10-second total request timeout. A `3xx` is returned as an error without contacting its redirect target, so that refusal leaves the held action pending. A timeout or other transport error can be ambiguous after delivery; operators must inspect the persisted hold before retrying, and the one-time consume contract prevents a retry from executing an already consumed approval again.
 - `public_base_url` remains the operator-surface base URL for replay, audit-trail, and review links.
 - `allowed_embed_origins` drives `Content-Security-Policy: frame-ancestors` and `X-Frame-Options` for `/v1/demo/widget`.
 - `widget_token_ttl_secs` controls the lifetime of the signed read-only context tokens included in Providence links.
 - `auth.context_token_env` should be a dedicated signing secret in production; local development may reuse one principal token, but production should keep context-token signing separate from mutable operator credentials.
 - every entry in `auth.principals` must use a distinct token env so one bearer secret maps to exactly one operator identity.
 - approval voters must authenticate as the same signer-derived operator ID they submit in `voter_id`, and approval sets may only list principals that grant `approve`.
+
+Library compatibility note: the public `RequestResponseRouter::restore_human_preflight`
+method now accepts only `(&GovernedHumanAuthorizationHold, &str)`; the former
+caller-selected `now_ms` argument was removed. Downstream router implementations
+must update their signature for this release. The resume dispatcher samples its
+host clock after all awaited artifact loading and side-effect-free preflight work,
+then uses that same trusted time for pack freshness, durable governance
+consumption, lease construction, audit context, and execution.
 
 Optional TLS for both `swarm_detect --serve` and `swarmctl serve` is configured once at the top level:
 

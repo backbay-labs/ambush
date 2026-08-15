@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::LocalOperatorSurface;
+use super::approval::resume_governed_approval;
+use super::state::build_operator_callback_client;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::Json;
@@ -47,7 +49,7 @@ use swarm_ingest_runtime::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
 };
 use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
-use swarm_policy::{ActionRequest, ApprovalContext};
+use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision};
 use swarm_response::SwarmFindingEnvelope;
 use swarm_runtime::approval::{DefaultApprovalHarness, ThresholdRule};
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
@@ -85,6 +87,29 @@ use swarm_runtime::evolution::{
 use swarm_runtime_workbench::review_workbench::DefaultReviewWorkbenchHarness;
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct ScopedTestEnv {
+    name: String,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ScopedTestEnv {
+    fn set(name: impl Into<String>, value: &str) -> Self {
+        let name = name.into();
+        let previous = std::env::var_os(&name);
+        unsafe { std::env::set_var(&name, value) };
+        Self { name, previous }
+    }
+}
+
+impl Drop for ScopedTestEnv {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => unsafe { std::env::set_var(&self.name, value) },
+            None => unsafe { std::env::remove_var(&self.name) },
+        }
+    }
+}
 
 struct OneShotGovernedRequestAgent {
     id: AgentId,
@@ -272,6 +297,102 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     path
 }
 
+#[tokio::test]
+async fn public_operator_surface_constructors_reject_unvalidated_callback_urls() {
+    for (case, runtime_base_url) in [
+        ("remote-http", "http://detect.example"),
+        ("userinfo", "https://operator@detect.example"),
+        ("malformed", "://missing-scheme.example"),
+        ("no-host", "https://"),
+        ("unsupported-scheme", "ws://127.0.0.1:9090"),
+    ] {
+        let mut config = operator_config();
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+        let error = match LocalOperatorSurface::from_config("inline", config.clone()) {
+            Ok(_) => panic!("from_config accepted invalid case `{case}`"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("operator_surface.runtime_base_url"),
+            "from_config returned the wrong error for `{case}`: {error}"
+        );
+
+        let root = unique_temp_dir(&format!("invalid-callback-{case}"));
+        let error = match LocalOperatorSurface::from_config_and_paths(
+            "inline",
+            config,
+            surface_paths(&root),
+        ) {
+            Ok(_) => panic!("from_config_and_paths accepted invalid case `{case}`"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("operator_surface.runtime_base_url"),
+            "from_config_and_paths returned the wrong error for `{case}`: {error}"
+        );
+        assert!(
+            fs::read_dir(&root).unwrap().next().is_none(),
+            "validation failure must occur before artifact stores are created"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    let mut config = operator_config();
+    config.runtime.max_in_flight_actions = 0;
+    let error = match LocalOperatorSurface::from_config("inline", config.clone()) {
+        Ok(_) => panic!("from_config accepted an invalid non-URL config field"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("runtime.max_in_flight_actions"),
+        "from_config did not run full config validation: {error}"
+    );
+    let root = unique_temp_dir("invalid-non-url-config");
+    let error =
+        match LocalOperatorSurface::from_config_and_paths("inline", config, surface_paths(&root)) {
+            Ok(_) => panic!("from_config_and_paths accepted an invalid non-URL config field"),
+            Err(error) => error,
+        };
+    assert!(
+        error.to_string().contains("runtime.max_in_flight_actions"),
+        "from_config_and_paths did not run full config validation: {error}"
+    );
+    assert!(
+        fs::read_dir(&root).unwrap().next().is_none(),
+        "full validation must run before callbacks or artifact-store creation"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn public_operator_surface_constructors_accept_secure_callback_urls() {
+    for (case, runtime_base_url) in [
+        ("https", "https://detect.example"),
+        ("localhost", "http://localhost:9090"),
+        ("ipv4-loopback", "http://127.42.0.1:9090"),
+        ("ipv6-loopback", "http://[::1]:9090"),
+    ] {
+        let token_env = format!("SWARM_OPERATOR_CONSTRUCTOR_{case}_TOKEN").to_uppercase();
+        let _token_env = ScopedTestEnv::set(token_env.clone(), "constructor-token");
+        let mut config = operator_config();
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+        config.operator.auth.context_token_env = token_env.clone();
+        config.operator.auth.token_env = token_env.clone();
+
+        LocalOperatorSurface::from_config("inline", config.clone())
+            .unwrap_or_else(|error| panic!("from_config rejected `{case}`: {error}"));
+        let root = unique_temp_dir(&format!("valid-callback-{case}"));
+        LocalOperatorSurface::from_config_and_paths("inline", config, surface_paths(&root))
+            .unwrap_or_else(|error| panic!("from_config_and_paths rejected `{case}`: {error}"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 fn event(event_id: &str, command_line: &str) -> TelemetryEvent {
     TelemetryEvent {
         source: "synthetic".to_string(),
@@ -361,13 +482,21 @@ async fn spawn_notification_capture_server() -> (
 #[derive(Clone, Default)]
 struct ApprovalResumeCaptureState {
     requests: Arc<AsyncMutex<Vec<(String, Value)>>>,
+    authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
 }
 
 async fn approval_resume_capture_handler(
     State(state): State<ApprovalResumeCaptureState>,
     OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
+    state.authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
     state
         .requests
         .lock()
@@ -398,8 +527,188 @@ async fn spawn_approval_resume_capture_server() -> (
     (format!("http://{address}"), state, shutdown_tx, handle)
 }
 
+#[derive(Clone)]
+struct ApprovalRedirectState {
+    location: String,
+    authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+}
+
+async fn approval_redirect_handler(
+    State(state): State<ApprovalRedirectState>,
+    headers: HeaderMap,
+) -> (StatusCode, [(axum::http::HeaderName, String); 1]) {
+    state.authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    (
+        StatusCode::TEMPORARY_REDIRECT,
+        [(header::LOCATION, state.location)],
+    )
+}
+
+async fn spawn_approval_redirect_server(
+    location: String,
+) -> (
+    String,
+    ApprovalRedirectState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = ApprovalRedirectState {
+        location,
+        authorizations: Arc::new(AsyncMutex::new(Vec::new())),
+    };
+    let app = Router::new()
+        .route("/{*path}", post(approval_redirect_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (format!("http://{address}"), state, shutdown_tx, handle)
+}
+
+#[tokio::test]
+async fn governed_approval_callback_bypasses_even_an_explicit_proxy() {
+    let (target_url, target, target_shutdown, target_server) =
+        spawn_approval_resume_capture_server().await;
+    let (proxy_url, proxy, proxy_shutdown, proxy_server) =
+        spawn_approval_resume_capture_server().await;
+    let client = build_operator_callback_client(
+        reqwest::Client::builder().proxy(reqwest::Proxy::all(&proxy_url).unwrap()),
+    )
+    .unwrap();
+
+    let result = resume_governed_approval(
+        &client,
+        &target_url,
+        "approval-set:no-proxy",
+        "receipt-pack:no-proxy",
+        "Bearer callback-secret",
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "the dedicated client must connect directly to loopback"
+    );
+
+    assert!(
+        proxy.requests.lock().await.is_empty(),
+        "the callback and bearer must not traverse an explicit or environment proxy"
+    );
+    let target_requests = target.requests.lock().await;
+    assert_eq!(target_requests.len(), 1);
+    assert_eq!(
+        target_requests[0].0,
+        "/v1/governance/approvals/approval-set:no-proxy/resume"
+    );
+    drop(target_requests);
+    assert_eq!(
+        target.authorizations.lock().await.as_slice(),
+        [Some("Bearer callback-secret".to_string())]
+    );
+
+    let _ = proxy_shutdown.send(());
+    let _ = target_shutdown.send(());
+    let _ = proxy_server.await;
+    let _ = target_server.await;
+}
+
+#[tokio::test]
+async fn governed_approval_callback_refuses_redirect_without_consuming_held_action() {
+    const APPROVAL_SET_ID: &str = "approval-set:redirect-refusal";
+    let (target_url, target, target_shutdown, target_server) =
+        spawn_approval_resume_capture_server().await;
+    let redirect_location =
+        format!("{target_url}/v1/governance/approvals/{APPROVAL_SET_ID}/resume");
+    let (redirect_url, redirect, redirect_shutdown, redirect_server) =
+        spawn_approval_redirect_server(redirect_location).await;
+
+    let governance = GovernancePolicy::default();
+    governance
+        .register_governor(
+            AgentId::new("tom", "redirect-refusal"),
+            ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
+        )
+        .unwrap();
+    let request = ActionRequest {
+        hunt_id: HuntId("hunt-redirect-refusal".to_string()),
+        requested_by: AgentId::new("pounce", "redirect-refusal"),
+        action: ResponseAction::BlockEgress {
+            target: "203.0.113.77".to_string(),
+        },
+        severity: Severity::Critical,
+        evidence: json!({"signal": "redirect-refusal"}),
+    };
+    let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
+        panic!("configured governance must issue the exact pending authorization");
+    };
+    let receipt = serde_json::to_value(receipt).unwrap();
+    let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
+    let hold = governance
+        .begin_human_authorization_hold(
+            &request,
+            &receipt,
+            &PolicyDecision::require_human_with_rule(
+                "test.redirect-refusal",
+                "human approval is required",
+            ),
+            issued_at_ms,
+        )
+        .unwrap();
+    governance
+        .bind_human_approval_set(&hold.hold_id, APPROVAL_SET_ID, "approval-set-digest")
+        .unwrap();
+
+    let client = build_operator_callback_client(reqwest::Client::builder()).unwrap();
+    resume_governed_approval(
+        &client,
+        &redirect_url,
+        APPROVAL_SET_ID,
+        "receipt-pack:redirect-refusal",
+        "Bearer redirect-secret",
+    )
+    .await
+    .expect_err("a 3xx callback must fail closed instead of forwarding the bearer");
+
+    assert_eq!(
+        redirect.authorizations.lock().await.as_slice(),
+        [Some("Bearer redirect-secret".to_string())]
+    );
+    assert!(
+        target.requests.lock().await.is_empty(),
+        "the redirect target must receive no governed-resume request"
+    );
+    assert!(
+        target.authorizations.lock().await.is_empty(),
+        "the redirect target must receive no bearer"
+    );
+    assert!(
+        governance
+            .pending_human_authorization(APPROVAL_SET_ID)
+            .is_ok(),
+        "a failed callback must leave governance and the human hold pending"
+    );
+
+    let _ = redirect_shutdown.send(());
+    let _ = target_shutdown.send(());
+    let _ = redirect_server.await;
+    let _ = target_server.await;
+}
+
 fn notification_operator_config(target_url: String, dead_letter_path: String) -> SwarmConfig {
     let mut config = operator_config();
+    let quiet_start_hour = (swarm_runtime::runtime_events::now_ms()
+        .div_euclid(3_600_000)
+        .rem_euclid(24)) as u8;
     config.notification_channels.insert(
         "pager".to_string(),
         NotificationChannelConfig {
@@ -412,8 +721,11 @@ fn notification_operator_config(target_url: String, dead_letter_path: String) ->
                 window_ms: 60_000,
             },
             quiet_hours: Some(QuietHoursConfig {
-                start_hour_utc: 0,
-                end_hour_utc: 0,
+                // Cover the construction hour and the following 22 hours. This
+                // preserves the fixture's suppression contract while satisfying
+                // validation's ban on an ambiguous 00:00-00:00 interval.
+                start_hour_utc: quiet_start_hour,
+                end_hour_utc: (quiet_start_hour + 23) % 24,
             }),
             dead_letter_path,
         },
@@ -3059,7 +3371,7 @@ async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
         operator_id: voter_id.clone(),
         token_env: TOKEN_ENV.to_string(),
         token_expires_at_ms: None,
-        scopes: vec![OperatorScope::Approve],
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
     }];
     let root = unique_temp_dir("ordinary-approval-route");
     let mut paths = surface_paths(&root);
@@ -3159,7 +3471,7 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
         operator_id: operator_id.clone(),
         token_env: TOKEN_ENV.to_string(),
         token_expires_at_ms: None,
-        scopes: vec![OperatorScope::Approve],
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
     }];
 
     let governance = Arc::new(
