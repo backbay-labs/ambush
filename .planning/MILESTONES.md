@@ -16,7 +16,7 @@
 **Status:** Active
 **Started:** 2026-08-14
 **Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
-**Progress:** Phase 284 complete; phase 285 has 7/9 requirements satisfied on local integration commit c59ead0, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
+**Progress:** Phase 284 complete; phase 285 has 7/9 requirements satisfied on the current v1.79 integration branch, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
 
 ## Queued Milestones
 

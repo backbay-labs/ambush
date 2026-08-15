@@ -36,7 +36,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-15)
 **Last Activity:** 2026-08-15
 **Last Activity Description:** Reconciled all authoritative planning sources to v1.79. The current integration branch satisfies seven of nine phase-285 requirements; MAPPING-05 and FALSIFY-04 remain open because protected-required-check repository settings have not been externally verified.
 
-**Progress:** 25% — phase 284 complete; phase 285 is 7/9 satisfied on local integration commit c59ead0 with MAPPING-05 and FALSIFY-04 pending external acceptance; phases 286-287 not started.
+**Progress:** 25% — phase 284 complete; phase 285 is 7/9 satisfied on the current v1.79 integration branch with MAPPING-05 and FALSIFY-04 pending external acceptance; phases 286-287 not started.
 
 ## Memory
 
