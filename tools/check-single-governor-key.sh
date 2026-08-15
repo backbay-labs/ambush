@@ -99,6 +99,12 @@ if [[ -z "$SINGLE_GOVERNOR_CARGO" || ! -x "$SINGLE_GOVERNOR_CARGO" ]]; then
   echo "check-single-governor-key requires Cargo on the trusted PATH" >&2
   exit 1
 fi
+SINGLE_GOVERNOR_MUTATION_PROBE="${SWARM_SINGLE_GOVERNOR_MUTATION_PROBE:-0}"
+if [[ "$SINGLE_GOVERNOR_MUTATION_PROBE" != "0" \
+  && "$SINGLE_GOVERNOR_MUTATION_PROBE" != "1" ]]; then
+  echo "SWARM_SINGLE_GOVERNOR_MUTATION_PROBE must be 0 or 1" >&2
+  exit 1
+fi
 
 SCAN_PATHS=(
   "crates/swarm-governance/src"
@@ -167,20 +173,26 @@ scan_governance_capability_inventory() {
   local source_root="$1"
   local inventory_mode="${2:-fixture}"
   "$SINGLE_GOVERNOR_PYTHON" -I - \
-    "$source_root" "$inventory_mode" "$SINGLE_GOVERNOR_CARGO" <<'PY'
+    "$source_root" "$inventory_mode" "$SINGLE_GOVERNOR_CARGO" \
+    "$ROOT_DIR/target/single-governor-source-inventory" <<'PY'
 import hashlib
 import json
+import os
 import pathlib
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tomllib
 
 root = pathlib.Path(sys.argv[1])
 inventory_mode = sys.argv[2]
-strict_digest = inventory_mode == "strict"
+strict_digest = inventory_mode in {"strict", "strict-force-depinfo"}
+force_dep_info = inventory_mode == "strict-force-depinfo"
 privacy_only = inventory_mode == "privacy"
 cargo = pathlib.Path(sys.argv[3])
+assurance_target = pathlib.Path(sys.argv[4])
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
 EXPECTED_ROOT_MANIFEST_DIGEST = "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b"
 EXPECTED_ROOT_LOCK_DIGEST = "8afebe30e5aa8eeab54476b4607d568aa8ada2831475a028b427fe992283fe50"
@@ -277,6 +289,24 @@ EXPECTED_CLOSURE_MANIFEST_DIGESTS = {
     "swarm-runtime-workbench": "eab3a2b0578a2366e26604a69ca649ba03ce032d3fc45696876ae222573d24ce",
     "swarm-cli": "0593667747de0b4cd7792170f2c6bfa8fb0a5051767dca97ede20fad44a23dfe",
 }
+EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
+    "swarm-governance":
+        (2, "f3345ca1525686353fb3dfccef2df4ae9b561b1b8c1dae065f285d01b3fe1b61"),
+    "swarm-runtime":
+        (127, "4030777baafb8788b7ba53641e5cdde357cec3e5871640a34cce801f6f5717ff"),
+    "swarm-ingest-runtime":
+        (14, "058ccc0dfa06a4d13d3edb22a534ee2fd142f8d764545d948fe0573e325d2a41"),
+    "swarm-runtime-http":
+        (22, "b6e62e6c68f65da711fd5362a7ddfde3e28663d18a7a8a225212c83902c01020"),
+    "swarm-agents":
+        (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
+    "swarm-evolution":
+        (6, "de3afe080980d4901954dbddbef02f987a5eaef896b8af193efc05f0c4f028e9"),
+    "swarm-runtime-workbench":
+        (11, "b333bbfdc9f25b31982e33c30e49dc4663704b04ebc58531e93732300140f1f5"),
+    "swarm-cli":
+        (7, "31d1d554fba3635556d968f045861270859a24c7e1131607a8666467b09494db"),
+}
 EXPECTED_PRIVACY_SOURCE_DIGESTS = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"):
         "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896",
@@ -338,6 +368,69 @@ EXPECTED_CLOSURE_TARGET_ATTRIBUTES = {
     pathlib.Path("crates/swarm-evolution/src/lib.rs"): "#![forbid(unsafe_code)]",
     pathlib.Path("crates/swarm-runtime-workbench/src/lib.rs"): "#![forbid(unsafe_code)]",
     pathlib.Path("crates/swarm-cli/src/lib.rs"): "#![cfg_attr(not(test), forbid(unsafe_code))]",
+}
+EXPECTED_CLOSURE_TARGET_DEP_INFO = {
+    pathlib.Path("crates/swarm-governance/src/lib.rs"):
+        (1, "1879d6894abd451daf1965b928f0c487dee2a48b768b01d84795eecd54fcf840"),
+    pathlib.Path("crates/swarm-runtime/src/lib.rs"):
+        (63, "6eb983a48cf0b0ce3a372cbd5ff43d772b671adbf8bb57f2d70d083499993e17"),
+    pathlib.Path("crates/swarm-runtime/src/bin/generate_adversary_emulation_report.rs"):
+        (1, "2ac1fea5085cb1261d4a641a2d187f760a9695914438b5e79024cec0b7281ce9"),
+    pathlib.Path("crates/swarm-runtime/src/bin/swarm_debug_attest.rs"):
+        (1, "8eec9e48b0e573c9de8411260221ac958bb3f0c8da4a50f1bc56a038d53bc4be"),
+    pathlib.Path("crates/swarm-ingest-runtime/src/lib.rs"):
+        (11, "5bfb483f437753617f3b1eb53a37b410d291ca45328e1abd2b9ede17433f3277"),
+    pathlib.Path("crates/swarm-ingest-runtime/src/bin/generate_platform_openapi.rs"):
+        (1, "aedbc822aff15ffdd83b4c97c088a83b22cd358140802be85b0424b6e3cdc8dd"),
+    pathlib.Path("crates/swarm-runtime-http/src/lib.rs"):
+        (25, "760df5d6e1cd0ad46675b8b5d27984ddd07b9762841a6b4ec799a4ba858de871"),
+    pathlib.Path("crates/swarm-runtime-http/src/bin/swarm_detect.rs"):
+        (1, "e9a5ca27250a7e81c6e0a0fb36a6a435e5655bac53c4cde4dce7635dcf52382b"),
+    pathlib.Path("crates/swarm-runtime-http/src/bin/swarmctl.rs"):
+        (1, "6434697b0ee07f5447a26dcb0ee386746d795f9cd4e336e50789361002fa1329"),
+    pathlib.Path("crates/swarm-agents/src/lib.rs"):
+        (6, "3ed28be7109b735c5dfd3b67d3157896ebf2f1092b8ccc4c3e64ee16be6e96b3"),
+    pathlib.Path("crates/swarm-evolution/src/lib.rs"):
+        (5, "52daf51b99ca287272e6ca9c4653c6607eb87d8e9ff918f878c4248368a097da"),
+    pathlib.Path("crates/swarm-runtime-workbench/src/lib.rs"):
+        (10, "784281a62b833591581a15820dda82c0312f833ad9a5ba6ccdf0ee5e3f1ae3aa"),
+    pathlib.Path("crates/swarm-cli/src/lib.rs"):
+        (8, "2f85d4621421feabc955a4673f29eb5f83fe57a8727decaf75611db375f76f3a"),
+}
+EXPECTED_CLOSURE_PATH_DIRECTIVES = {
+    (
+        pathlib.Path("crates/swarm-cli/src/lib.rs"),
+        "core.inc",
+        pathlib.Path("crates/swarm-cli/src/core.inc"),
+    ),
+    *{
+        (
+            pathlib.Path("crates/swarm-runtime-http/src/cli/mod.rs"),
+            f"../../../swarm-cli/src/{name}",
+            pathlib.Path(f"crates/swarm-cli/src/{name}"),
+        )
+        for name in ("core.inc", "args.rs", "dispatch.rs", "format.rs", "tracing.rs")
+    },
+    *{
+        (
+            pathlib.Path("crates/swarm-runtime/src/mutation.rs"),
+            f"mutation/{name}.rs",
+            pathlib.Path(f"crates/swarm-runtime/src/mutation/{name}.rs"),
+        )
+        for name in ("autonomous", "fitness", "harness", "helpers", "render", "stores", "types")
+    },
+    *{
+        (
+            pathlib.Path("crates/swarm-runtime/src/evolution.rs"),
+            f"evolution/{name}.rs",
+            pathlib.Path(f"crates/swarm-runtime/src/evolution/{name}.rs"),
+        )
+        for name in ("assurance", "formal_safety", "harnesses", "helpers", "render", "stores", "types")
+    },
+}
+EXPECTED_CLOSURE_NON_RS_RUST_DIGESTS = {
+    pathlib.Path("crates/swarm-cli/src/core.inc"):
+        "a0def11bbf07f546082a72487d6260087822afc35e98f05b0817362a5c9692e2",
 }
 failed = False
 
@@ -461,6 +554,19 @@ def without_cfg_test_modules(source: str) -> str:
         opening = source.rfind("{", match.start(), match.end())
         end = matching_brace(source, opening) + 1
         for index in range(match.start(), end):
+            if output[index] != "\n":
+                output[index] = " "
+    external = re.compile(
+        r"(?m)^(?P<attrs>(?:[ \t]*#\s*\[[^\]\n]*\][ \t]*\n)+)"
+        r"[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[A-Za-z_]\w*\s*;",
+    )
+    for match in reversed(list(external.finditer(source))):
+        if not re.search(
+            r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]",
+            match.group("attrs"),
+        ):
+            continue
+        for index in range(match.start(), match.end()):
             if output[index] != "\n":
                 output[index] = " "
     return "".join(output)
@@ -780,6 +886,30 @@ if strict_digest:
                 file=sys.stderr,
             )
             failed = True
+        package_root = crate_roots[package]
+        package_entries = sorted(package_root.rglob("*"))
+        symlinks = [path for path in package_entries if path.is_symlink()]
+        package_files = [
+            path for path in package_entries if path.is_file() and not path.is_symlink()
+        ]
+        package_inventory = "".join(
+            f"{path.relative_to(root)}\0{hashlib.sha256(path.read_bytes()).hexdigest()}\n"
+            for path in package_files
+        )
+        actual_package_inventory = (
+            len(package_files),
+            hashlib.sha256(package_inventory.encode()).hexdigest(),
+        )
+        expected_package_inventory = EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY[package]
+        if symlinks or actual_package_inventory != expected_package_inventory:
+            print(
+                "governance capability inventory: complete regular-file identity for "
+                f"{package} is {actual_package_inventory}, expected "
+                f"{expected_package_inventory}; symlinks="
+                f"{sorted(str(path.relative_to(root)) for path in symlinks)}",
+                file=sys.stderr,
+            )
+            failed = True
         build_script = crate_roots[package] / "build.rs"
         if build_script.exists():
             print(
@@ -840,11 +970,61 @@ if strict_digest:
             failed = True
     validate_privacy_inventory()
 
+def cfg_test_external_module_sources() -> set[pathlib.Path]:
+    test_sources = set()
+    declaration = re.compile(
+        r"(?m)^(?P<attrs>(?:[ \t]*#\s*\[[^\]\n]*\][ \t]*\n)+)"
+        r"[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+"
+        r"(?P<name>[A-Za-z_]\w*)\s*;",
+    )
+    for declaring in sorted((root / "crates").glob("*/src/**/*.rs")):
+        raw = declaring.read_text(encoding="utf-8")
+        sanitized = production_source(raw)
+        for match in declaration.finditer(sanitized):
+            if not re.search(
+                r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]",
+                match.group("attrs"),
+            ):
+                continue
+            path_match = re.search(r"#\s*\[\s*path\s*=", match.group("attrs"))
+            if path_match is not None:
+                value_start = match.start("attrs") + path_match.end()
+                value_end = sanitized.find("]", value_start, match.end("attrs"))
+                literal_text = raw[value_start:value_end].strip()
+                try:
+                    literal = json.loads(literal_text)
+                except json.JSONDecodeError:
+                    literal = None
+                candidates = [declaring.parent / literal] if isinstance(literal, str) else []
+            else:
+                module = match.group("name")
+                candidates = [
+                    declaring.parent / f"{module}.rs",
+                    declaring.parent / module / "mod.rs",
+                ]
+                if declaring.stem not in {"lib", "main", "mod"}:
+                    candidates.extend((
+                        declaring.parent / declaring.stem / f"{module}.rs",
+                        declaring.parent / declaring.stem / module / "mod.rs",
+                    ))
+            resolved = [candidate.resolve() for candidate in candidates if candidate.is_file()]
+            if len(resolved) != 1:
+                print(
+                    "governance capability inventory: cfg(test) external module did not "
+                    f"resolve exactly once: {declaring.relative_to(root)}:{match.group('name')}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+            test_sources.add(resolved[0])
+    return test_sources
+
+cfg_test_sources = cfg_test_external_module_sources()
 source_files = sorted(
     path
     for path in (root / "crates").glob("*/src/**/*.rs")
     if path.name not in {"test.rs", "tests.rs"}
     and "tests" not in path.relative_to(root).parts
+    and path.resolve() not in cfg_test_sources
 )
 if not source_files:
     print("no shipped Rust source found for governance capability inventory", file=sys.stderr)
@@ -853,6 +1033,19 @@ raw_sources = {
     path.relative_to(root): path.read_text(encoding="utf-8")
     for path in source_files
 }
+if strict_digest:
+    for relative, expected in EXPECTED_CLOSURE_NON_RS_RUST_DIGESTS.items():
+        source_path = root / relative
+        actual = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_path.is_file() else None
+        if source_path.is_symlink() or actual != expected:
+            print(
+                "governance capability inventory: sanctioned non-.rs Rust source "
+                f"{relative} digest {actual} != pinned {expected}",
+                file=sys.stderr,
+            )
+            failed = True
+        if source_path.is_file() and not source_path.is_symlink():
+            raw_sources[relative] = source_path.read_text(encoding="utf-8")
 sources = {
     path: without_cfg_test_modules(production_source(raw))
     for path, raw in raw_sources.items()
@@ -863,6 +1056,115 @@ def reject(label: str, pattern: str) -> None:
     if matches:
         rendered = ", ".join(str(path) for path in matches)
         print(f"governance capability inventory: {label}: {rendered}", file=sys.stderr)
+        failed = True
+
+if strict_digest:
+    closure_sources = {
+        path: source
+        for path, source in sources.items()
+        if len(path.parts) > 2
+        and path.parts[0] == "crates"
+        and path.parts[1] in authority_closure
+    }
+    include_tokens = [
+        path
+        for path, source in closure_sources.items()
+        if path not in EXPECTED_CLOSURE_NON_RS_RUST_DIGESTS
+        and re.search(r"\binclude(?:_bytes|_str)?\b", source)
+    ]
+    if include_tokens:
+        print(
+            "governance capability inventory: production include/include_str/include_bytes "
+            "tokens are forbidden outside the exact sanctioned core.inc; "
+            "compiler source inputs must be ordinary modules or the exact sanctioned "
+            f"#[path] source: {', '.join(map(str, include_tokens))}",
+            file=sys.stderr,
+        )
+        failed = True
+    macro_definitions = [
+        path
+        for path, source in closure_sources.items()
+        if re.search(r"\bmacro_rules\s*!", source)
+    ]
+    if macro_definitions:
+        print(
+            "governance capability inventory: production macro_rules! definitions are "
+            "forbidden in the governance reverse closure because they can synthesize "
+            f"source directives: {', '.join(map(str, macro_definitions))}",
+            file=sys.stderr,
+        )
+        failed = True
+    observed_path_directives = set()
+    for relative, source in closure_sources.items():
+        raw = raw_sources[relative]
+        cfg_attr_paths = list(re.finditer(
+            r"#\s*\[\s*cfg_attr\b[^\]]*\bpath\s*=",
+            source,
+            re.DOTALL,
+        ))
+        if cfg_attr_paths:
+            print(
+                "governance capability inventory: cfg_attr path redirection is forbidden: "
+                f"{relative}",
+                file=sys.stderr,
+            )
+            failed = True
+        for match in re.finditer(r"#\s*\[\s*path\s*=", source):
+            closing = source.find("]", match.end())
+            if closing < 0:
+                print(
+                    f"governance capability inventory: unterminated #[path] in {relative}",
+                    file=sys.stderr,
+                )
+                failed = True
+                continue
+            literal_text = raw[match.end():closing].strip()
+            try:
+                literal = json.loads(literal_text)
+            except json.JSONDecodeError:
+                literal = None
+            if not isinstance(literal, str) or not literal:
+                print(
+                    "governance capability inventory: #[path] must use one exact ordinary "
+                    f"string literal: {relative}:{literal_text!r}",
+                    file=sys.stderr,
+                )
+                failed = True
+                continue
+            candidate = (root / relative).parent / literal
+            try:
+                resolved = candidate.resolve(strict=True)
+                resolved_relative = resolved.relative_to(root.resolve())
+            except (OSError, ValueError):
+                print(
+                    "governance capability inventory: #[path] source escaped or is missing: "
+                    f"{relative}:{literal}",
+                    file=sys.stderr,
+                )
+                failed = True
+                continue
+            cursor = root.resolve()
+            symlinked = False
+            for component in resolved_relative.parts:
+                cursor /= component
+                if cursor.is_symlink():
+                    symlinked = True
+                    break
+            if symlinked or not resolved.is_file():
+                print(
+                    "governance capability inventory: #[path] source must resolve through "
+                    f"regular files only: {relative}:{literal}",
+                    file=sys.stderr,
+                )
+                failed = True
+                continue
+            observed_path_directives.add((relative, literal, resolved_relative))
+    if observed_path_directives != EXPECTED_CLOSURE_PATH_DIRECTIVES:
+        print(
+            "governance capability inventory: production #[path] source graph drifted; "
+            f"found {sorted((str(a), b, str(c)) for a, b, c in observed_path_directives)}",
+            file=sys.stderr,
+        )
         failed = True
 
 declarations = [
@@ -1155,12 +1457,211 @@ reject(
     r"#\s*\[\s*derive\s*\([^\]]*\b(?:Default|Deserialize)\b[^\]]*\)\s*\]\s*"
     r"pub\s+struct\s+GovernanceAuthority\b",
 )
+
+def dependency_file_for_artifact(message: dict) -> pathlib.Path | None:
+    target = message.get("target", {})
+    kinds = set(target.get("kind", []))
+    for rendered in message.get("filenames", []):
+        artifact = pathlib.Path(rendered)
+        candidates = []
+        if artifact.suffix in {".rmeta", ".rlib"}:
+            stem = artifact.stem
+            if stem.startswith("lib"):
+                stem = stem[3:]
+            candidates.append(artifact.with_name(stem + ".d"))
+        if "bin" in kinds and not artifact.suffix:
+            candidates.append(artifact.with_suffix(".d"))
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+    return None
+
+def repo_inputs_from_dep_info(path: pathlib.Path) -> set[pathlib.Path]:
+    text = path.read_text(encoding="utf-8").replace("\\\n", " ")
+    first_rule = text.splitlines()[0] if text.splitlines() else ""
+    if ":" not in first_rule:
+        raise ValueError(f"dep-info {path} has no primary dependency rule")
+    inputs = set()
+    for rendered in shlex.split(first_rule.split(":", 1)[1], posix=True):
+        candidate = pathlib.Path(rendered)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        try:
+            relative = resolved.relative_to(root.resolve())
+        except ValueError as error:
+            raise ValueError(f"dep-info input escaped the workspace: {resolved}") from error
+        if relative.parts and relative.parts[0] == "target":
+            continue
+        if not resolved.is_file():
+            raise ValueError(f"dep-info input is not a regular file: {relative}")
+        inputs.add(relative)
+    return inputs
+
+def validate_compiler_source_inventory() -> None:
+    global failed
+    target_dir = assurance_target.resolve()
+    cargo_home = target_dir / "cargo-home"
+    if cargo_home.is_symlink():
+        cargo_home.unlink()
+    elif cargo_home.exists():
+        shutil.rmtree(cargo_home)
+    cargo_home.mkdir(parents=True)
+    account_cargo_home = pathlib.Path.home() / ".cargo"
+    for name in ("registry", "git"):
+        source = account_cargo_home / name
+        destination = cargo_home / name
+        if source.is_dir():
+            destination.symlink_to(source, target_is_directory=True)
+        else:
+            destination.mkdir()
+    environment = dict(os.environ)
+    for name in list(environment):
+        if (
+            name.startswith("CARGO_")
+            or name.startswith("RUSTUP_")
+            or name in {"RUSTC", "RUSTDOC", "RUSTFLAGS", "RUSTDOCFLAGS"}
+        ):
+            environment.pop(name, None)
+    environment.update({
+        "CARGO_HOME": str(cargo_home),
+        "CARGO_TARGET_DIR": str(target_dir),
+    })
+    forced_fixture_compile = force_dep_info and failed
+    expected_dep_info = (
+        {
+            pathlib.Path("crates/swarm-runtime-workbench/src/lib.rs"):
+                EXPECTED_CLOSURE_TARGET_DEP_INFO[
+                    pathlib.Path("crates/swarm-runtime-workbench/src/lib.rs")
+                ],
+        }
+        if forced_fixture_compile
+        else EXPECTED_CLOSURE_TARGET_DEP_INFO
+    )
+    command = [
+        str(cargo),
+        "check",
+        "--locked",
+        "--offline",
+        "--lib",
+        "--bins",
+        "--message-format=json",
+    ]
+    selected_packages = (
+        {"swarm-runtime-workbench"}
+        if forced_fixture_compile
+        else EXPECTED_AUTHORITY_REVERSE_CLOSURE
+    )
+    for package in sorted(selected_packages):
+        command.extend(("-p", package))
+    try:
+        process = subprocess.run(
+            command,
+            cwd=root,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=300,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(
+            f"governance capability inventory: controlled primary-package compile failed: {error}",
+            file=sys.stderr,
+        )
+        failed = True
+        return
+    if process.returncode:
+        print(
+            "governance capability inventory: controlled primary-package compile failed "
+            "with closure packages selected directly (dependency cap-lints are not an "
+            f"authority boundary): {(process.stdout + process.stderr)[-8000:]}",
+            file=sys.stderr,
+        )
+        failed = True
+        return
+    artifacts = {}
+    for line in process.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if message.get("reason") != "compiler-artifact":
+            continue
+        package_id = message.get("package_id")
+        if package_id not in resolved_closure_ids:
+            continue
+        target = message.get("target", {})
+        kinds = set(target.get("kind", []))
+        if not ({"lib", "bin"} & kinds):
+            continue
+        try:
+            target_root = pathlib.Path(target["src_path"]).resolve().relative_to(root.resolve())
+        except (KeyError, ValueError):
+            print(
+                f"governance capability inventory: compiled target escaped the workspace: {target}",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        if target_root not in expected_dep_info:
+            continue
+        dep_info = dependency_file_for_artifact(message)
+        if dep_info is None:
+            print(
+                "governance capability inventory: no compiler dep-info accompanied "
+                f"compiled target {target_root}",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        artifacts.setdefault(target_root, []).append(dep_info)
+    if set(artifacts) != set(expected_dep_info) or any(
+        len(values) != 1 for values in artifacts.values()
+    ):
+        print(
+            "governance capability inventory: controlled compiler target/dep-info "
+            "inventory drifted; found "
+            f"{sorted((str(path), len(values)) for path, values in artifacts.items())}",
+            file=sys.stderr,
+        )
+        failed = True
+    for target_root, dep_infos in artifacts.items():
+        if len(dep_infos) != 1:
+            continue
+        try:
+            inputs = repo_inputs_from_dep_info(dep_infos[0])
+        except (OSError, UnicodeError, ValueError) as error:
+            print(
+                f"governance capability inventory: cannot read {target_root} dep-info: {error}",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        rendered = "".join(f"{path}\n" for path in sorted(inputs))
+        actual = (len(inputs), hashlib.sha256(rendered.encode()).hexdigest())
+        expected = expected_dep_info[target_root]
+        if actual != expected:
+            print(
+                "governance capability inventory: compiler-consumed source/input set "
+                f"for {target_root} is count/digest {actual}, expected {expected}; "
+                f"found {sorted(map(str, inputs))}",
+                file=sys.stderr,
+            )
+            failed = True
+
+if strict_digest and (force_dep_info or not failed):
+    validate_compiler_source_inventory()
 raise SystemExit(1 if failed else 0)
 PY
 }
 # ---------------------------------------------------------------------------
 # THE FIXTURE. Runs on every invocation.
 # ---------------------------------------------------------------------------
+if [[ "$SINGLE_GOVERNOR_MUTATION_PROBE" == "0" ]]; then
 FIXTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/swarm-single-governor-key.XXXXXX")"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
@@ -1364,6 +1865,7 @@ plant_strict_privacy_fixture() {
   mkdir -p "$fixture_root"
   cp "$ROOT_DIR/Cargo.toml" "$fixture_root/Cargo.toml"
   cp "$ROOT_DIR/Cargo.lock" "$fixture_root/Cargo.lock"
+  cp -R "$ROOT_DIR/rulesets" "$fixture_root/rulesets"
   for crate_dir in "$ROOT_DIR"/crates/*; do
     [[ -d "$crate_dir" && -f "$crate_dir/Cargo.toml" ]] || continue
     crate_name="${crate_dir##*/}"
@@ -1389,6 +1891,115 @@ expect_strict_privacy_rejected() {
   fixture_adversarial_cases=$((fixture_adversarial_cases + 1))
   if scan_governance_capability_inventory "$fixture_root" privacy >/dev/null 2>&1; then
     echo "FIXTURE FAILURE: the strict privacy inventory accepted $description" >&2
+    fixture_failures=$((fixture_failures + 1))
+  fi
+}
+
+plant_compiler_input_fixture() {
+  local fixture_root="$FIXTURE_DIR/compiler-input"
+  if [[ ! -d "$fixture_root" ]]; then
+    plant_strict_privacy_fixture compiler-input >/dev/null
+    mv "$FIXTURE_DIR/privacy-compiler-input" "$fixture_root"
+    cp \
+      "$fixture_root/crates/swarm-runtime-workbench/src/lib.rs" \
+      "$fixture_root/crates/swarm-runtime-workbench/src/lib.rs.canonical"
+  fi
+  cp \
+    "$fixture_root/crates/swarm-runtime-workbench/src/lib.rs.canonical" \
+    "$fixture_root/crates/swarm-runtime-workbench/src/lib.rs"
+  rm -f \
+    "$fixture_root/crates/swarm-runtime-workbench/assurance_escape.inc" \
+    "$fixture_root/crates/swarm-runtime-workbench/capability_forge.txt" \
+    "$fixture_root/assurance_escape.rs" \
+    "$FIXTURE_DIR/authority_escape_external.rs"
+  printf '%s\n' "$fixture_root"
+}
+
+write_unsafe_compiler_input() {
+  local path="$1"
+  local cfg_attribute="${2:-}"
+  {
+    printf '%s\n' \
+    'use std::sync::Arc;' \
+    'use swarm_runtime::containment::ContainmentSweep;'
+    if [[ -n "$cfg_attribute" ]]; then
+      printf '%s\n' "$cfg_attribute"
+    fi
+    printf '%s\n' \
+    'pub fn install_assurance_escape(' \
+    '    raw: Arc<()>,' \
+    '    sweep: ContainmentSweep,' \
+    ') -> ContainmentSweep {' \
+    '    let authority = unsafe { std::mem::transmute_copy(&raw) };' \
+    '    std::mem::forget(raw);' \
+    '    sweep.with_governance_authority(authority)' \
+    '}'
+  } > "$path"
+}
+
+expect_compiler_input_builds() {
+  local fixture_root="$1"
+  local name="$2"
+  local mode="$3"
+  local cargo_args=(
+    check --manifest-path "$fixture_root/Cargo.toml"
+    --locked --offline -p swarm-runtime-workbench --lib
+  )
+  if [[ "$mode" == "cap-lints" ]]; then
+    cargo_args=(
+      rustc --manifest-path "$fixture_root/Cargo.toml"
+      --locked --offline -p swarm-runtime-workbench --lib -- --cap-lints allow
+    )
+  elif [[ "$mode" == "cap-lints-release-cfg" ]]; then
+    cargo_args=(
+      rustc --manifest-path "$fixture_root/Cargo.toml"
+      --locked --offline -p swarm-runtime-workbench --lib --
+      --cap-lints allow -C debug-assertions=no
+    )
+  fi
+  fixture_clean_controls=$((fixture_clean_controls + 1))
+  if [[ "$SINGLE_GOVERNOR_MUTATION_PROBE" == "1" ]]; then
+    return
+  fi
+  local source_target="$ROOT_DIR/target/single-governor-source-inventory"
+  local source_cargo_home="$source_target/cargo-home"
+  mkdir -p "$source_cargo_home"
+  local cache_name
+  for cache_name in registry git; do
+    if [[ -d "$HOME/.cargo/$cache_name" \
+      && ! -e "$source_cargo_home/$cache_name" ]]; then
+      ln -s "$HOME/.cargo/$cache_name" "$source_cargo_home/$cache_name"
+    fi
+  done
+  if ! CARGO_HOME="$source_cargo_home" CARGO_TARGET_DIR="$source_target" \
+    "$SINGLE_GOVERNOR_CARGO" "${cargo_args[@]}" \
+    >"$FIXTURE_DIR/${name}.stdout" \
+    2>"$FIXTURE_DIR/${name}.stderr"; then
+    echo "FIXTURE FAILURE: Cargo rejected valid compiler-input control $name" >&2
+    sed -n '1,60p' "$FIXTURE_DIR/${name}.stderr" >&2
+    fixture_failures=$((fixture_failures + 1))
+  fi
+}
+
+expect_compiler_input_rejected() {
+  local fixture_root="$1"
+  local name="$2"
+  local mode="$3"
+  local diagnostic="$4"
+  if [[ "$SINGLE_GOVERNOR_MUTATION_PROBE" == "1" \
+    && "$mode" == "strict-force-depinfo" ]]; then
+    mode="strict"
+    diagnostic="complete regular-file identity"
+  fi
+  fixture_adversarial_cases=$((fixture_adversarial_cases + 1))
+  if scan_governance_capability_inventory "$fixture_root" "$mode" \
+    >"$FIXTURE_DIR/${name}-gate.stdout" \
+    2>"$FIXTURE_DIR/${name}-gate.stderr"; then
+    echo "FIXTURE FAILURE: compiler source-input inventory accepted $name" >&2
+    fixture_failures=$((fixture_failures + 1))
+  elif ! grep -Fq "$diagnostic" "$FIXTURE_DIR/${name}-gate.stderr"; then
+    echo "FIXTURE FAILURE: $name failed without exercising $diagnostic" >&2
+    sed -n '1,80p' "$FIXTURE_DIR/${name}-gate.stderr" >&2
     fixture_failures=$((fixture_failures + 1))
   fi
 }
@@ -1870,6 +2481,84 @@ elif ! grep -q 'resolved normal reverse dependency closure drifted' \
   fixture_failures=$((fixture_failures + 1))
 fi
 
+compiler_input="$(plant_compiler_input_fixture)"
+write_unsafe_compiler_input \
+  "$compiler_input/crates/swarm-runtime-workbench/assurance_escape.inc"
+printf '%s\n' 'include!("../assurance_escape.inc");' \
+  >> "$compiler_input/crates/swarm-runtime-workbench/src/lib.rs"
+expect_compiler_input_builds "$compiler_input" include_non_rs_cap_lints cap-lints
+expect_compiler_input_rejected \
+  "$compiler_input" \
+  "an inferred transmute_copy in an include!-loaded non-.rs compiler input" \
+  strict-force-depinfo \
+  "controlled primary-package compile failed"
+
+compiler_input="$(plant_compiler_input_fixture)"
+write_unsafe_compiler_input \
+  "$compiler_input/crates/swarm-runtime-workbench/assurance_escape.inc"
+printf '%s\n' '#[path = "../assurance_escape.inc"] pub mod assurance_escape;' \
+  >> "$compiler_input/crates/swarm-runtime-workbench/src/lib.rs"
+expect_compiler_input_builds "$compiler_input" path_non_rs_cap_lints cap-lints
+expect_compiler_input_rejected \
+  "$compiler_input" \
+  "an inferred transmute_copy in a #[path]-loaded non-.rs compiler input" \
+  strict \
+  "production #[path] source graph drifted"
+
+compiler_input="$(plant_compiler_input_fixture)"
+write_unsafe_compiler_input \
+  "$compiler_input/crates/swarm-runtime-workbench/capability_forge.txt" \
+  '#[cfg(not(debug_assertions))]'
+printf '%s\n' \
+  'macro_rules! load_assurance_escape {' \
+  '    ($loader:ident, $path:literal) => { $loader!($path); };' \
+  '}' \
+  'load_assurance_escape!(include, "../capability_forge.txt");' \
+  >> "$compiler_input/crates/swarm-runtime-workbench/src/lib.rs"
+expect_compiler_input_builds \
+  "$compiler_input" macro_include_cap_lints_release_cfg cap-lints-release-cfg
+expect_compiler_input_rejected \
+  "$compiler_input" \
+  "a macro-wrapped include! source escape" \
+  strict \
+  "production include/include_str/include_bytes tokens are forbidden"
+
+compiler_input="$(plant_compiler_input_fixture)"
+printf '%s\n' 'pub fn untracked_workspace_source_control() {}' \
+  > "$compiler_input/assurance_escape.rs"
+printf '%s\n' '#[path = "../../../assurance_escape.rs"] pub mod assurance_escape;' \
+  >> "$compiler_input/crates/swarm-runtime-workbench/src/lib.rs"
+expect_compiler_input_rejected \
+  "$compiler_input" \
+  "an untracked workspace-root #[path] source" \
+  strict \
+  "production #[path] source graph drifted"
+
+compiler_input="$(plant_compiler_input_fixture)"
+printf '%s\n' 'pub fn external_source_control() {}' \
+  > "$FIXTURE_DIR/authority_escape_external.rs"
+printf '%s\n' \
+  '#[path = "../../../../authority_escape_external.rs"] pub mod assurance_escape;' \
+  >> "$compiler_input/crates/swarm-runtime-workbench/src/lib.rs"
+expect_compiler_input_builds "$compiler_input" external_path_builds check
+expect_compiler_input_rejected \
+  "$compiler_input" \
+  "a #[path] compiler input outside the workspace" \
+  strict-force-depinfo \
+  "dep-info input escaped the workspace"
+
+compiler_input="$(plant_compiler_input_fixture)"
+printf '%s\n' 'pub fn safe_included_source_control() {}' \
+  > "$compiler_input/crates/swarm-runtime-workbench/assurance_escape.inc"
+printf '%s\n' 'include!("../assurance_escape.inc");' \
+  >> "$compiler_input/crates/swarm-runtime-workbench/src/lib.rs"
+expect_compiler_input_builds "$compiler_input" safe_include_builds check
+expect_compiler_input_rejected \
+  "$compiler_input" \
+  "a safe new compiler-consumed include input" \
+  strict-force-depinfo \
+  "compiler-consumed source/input set"
+
 plant compiler_forbid_control '#![forbid(unsafe_code)]
 use std::sync::Arc;
 pub struct GovernancePolicy;
@@ -2135,6 +2824,7 @@ if [ "$fixture_failures" -ne 0 ]; then
   echo "nothing. Fix the scanner, not the fixture." >&2
   exit 1
 fi
+fi
 
 # ---------------------------------------------------------------------------
 # THE REAL SCAN
@@ -2156,6 +2846,11 @@ if [ -n "$violations" ]; then
 fi
 
 scan_governance_capability_inventory "$ROOT_DIR" strict
+
+if [[ "$SINGLE_GOVERNOR_MUTATION_PROBE" == "1" ]]; then
+  echo "single-governor mutation-probe mode is not an authority verdict" >&2
+  exit 1
+fi
 
 fixture_cases=$((fixture_adversarial_cases + fixture_clean_controls))
 echo "single-governor-key gate: $fixture_cases fixture cases behaved as documented" \

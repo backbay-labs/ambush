@@ -139,7 +139,7 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b",
     "Cargo.lock": "8afebe30e5aa8eeab54476b4607d568aa8ada2831475a028b427fe992283fe50",
-    "tools/check-single-governor-key.sh": "668855573c2a49859392de01d8bddd57403e85c3c4c2cac5206594f6a09e2b96",
+    "tools/check-single-governor-key.sh": "f39cf42acbb3536ef9de07ada1a7ec533459ac714c6faeedbf7fc7076e121220",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -148,6 +148,7 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "crates/swarm-evolution/Cargo.toml": "0fca9be1e6d92ad2acdd70fa1b06994bd6a28fd16381c3b42b0255f427f4887c",
     "crates/swarm-runtime-workbench/Cargo.toml": "eab3a2b0578a2366e26604a69ca649ba03ce032d3fc45696876ae222573d24ce",
     "crates/swarm-cli/Cargo.toml": "0593667747de0b4cd7792170f2c6bfa8fb0a5051767dca97ede20fad44a23dfe",
+    "crates/swarm-cli/src/core.inc": "a0def11bbf07f546082a72487d6260087822afc35e98f05b0817362a5c9692e2",
     "crates/swarm-governance/src/lib.rs": "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896",
     "crates/swarm-runtime/src/containment.rs": "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
     "crates/swarm-runtime/src/dispatcher.rs": "de7ad808ff477c7d1432b47360f4139e9ddaa5d5449a4fa5d21e28b5e86c8c8e",
@@ -159,6 +160,24 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "crates/swarm-ingest-runtime/src/ingest/platform_api.rs": "6a47977b16fd895e5bea265ce18335f6f8b291db28b9ab758591cfd4d8e7bc14",
     "crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs": "ec8fb17c3226fadbe6120a381714f88eccdf5225aa62a471923fc21df92d7adc",
     "crates/swarm-ingest-runtime/src/ingest/soar_verdict_handlers.rs": "c0a9d45eaf9302b1617295dfd7257e0158e35f1d16cd7bb429d45df9228f83fb",
+}
+GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
+    "swarm-governance":
+        (2, "f3345ca1525686353fb3dfccef2df4ae9b561b1b8c1dae065f285d01b3fe1b61"),
+    "swarm-runtime":
+        (127, "4030777baafb8788b7ba53641e5cdde357cec3e5871640a34cce801f6f5717ff"),
+    "swarm-ingest-runtime":
+        (14, "058ccc0dfa06a4d13d3edb22a534ee2fd142f8d764545d948fe0573e325d2a41"),
+    "swarm-runtime-http":
+        (22, "b6e62e6c68f65da711fd5362a7ddfde3e28663d18a7a8a225212c83902c01020"),
+    "swarm-agents":
+        (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
+    "swarm-evolution":
+        (6, "de3afe080980d4901954dbddbef02f987a5eaef896b8af193efc05f0c4f028e9"),
+    "swarm-runtime-workbench":
+        (11, "b333bbfdc9f25b31982e33c30e49dc4663704b04ebc58531e93732300140f1f5"),
+    "swarm-cli":
+        (7, "31d1d554fba3635556d968f045861270859a24c7e1131607a8666467b09494db"),
 }
 GOVERNANCE_ASSURANCE_CLOSURE_CRATES = (
     "swarm-governance",
@@ -187,8 +206,8 @@ GOVERNANCE_ASSURANCE_TARGET_ROOTS = {
 }
 SINGLE_GOVERNOR_GATE_REL = "tools/check-single-governor-key.sh"
 SINGLE_GOVERNOR_GATE_OUTPUT = (
-    "single-governor-key gate: 83 fixture cases behaved as documented "
-    "(70 adversarial, 13 controls); no key collection on the governance signing "
+    "single-governor-key gate: 94 fixture cases behaved as documented "
+    "(76 adversarial, 18 controls); no key collection on the governance signing "
     "path; shipped governance authority is one opaque concrete handle with an "
     "authenticated mint (crates/swarm-governance/src crates/swarm-consensus/src "
     "crates/swarm-policy/src)"
@@ -631,7 +650,8 @@ def configure_sanitized_cargo_boundary(report):
         "        source = candidate.resolve()\n"
         "        sources.append({'path': str(source), 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()})\n"
         "crate_name = arguments[arguments.index('--crate-name') + 1] if '--crate-name' in arguments else None\n"
-        "record = {'compiler': str(compiler), 'sources': sources, 'crate_name': crate_name, 'test': '--test' in arguments}\n"
+        "cap_lints = arguments[arguments.index('--cap-lints') + 1] if '--cap-lints' in arguments else None\n"
+        "record = {'compiler': str(compiler), 'sources': sources, 'crate_name': crate_name, 'test': '--test' in arguments, 'cap_lints': cap_lints}\n"
         "with open(os.environ['PHASE285_RUSTC_AUDIT_LOG'], 'a', encoding='utf-8') as audit:\n"
         "    audit.write(json.dumps(record, sort_keys=True) + '\\n')\n"
         "os.execv(str(pinned), [str(pinned), *arguments])\n"
@@ -849,6 +869,23 @@ def validate_governance_assurance_identity(root, report):
                 "governance-assurance-input-drift",
                 f"{relative} digest is {actual}, expected {expected}",
             )
+    for crate_name, expected in GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY.items():
+        crate_root = root / "crates" / crate_name
+        entries = sorted(crate_root.rglob("*")) if crate_root.is_dir() else []
+        symlinks = [path for path in entries if path.is_symlink()]
+        files = [path for path in entries if path.is_file() and not path.is_symlink()]
+        inventory = "".join(
+            f"{path.relative_to(root)}\0{hashlib.sha256(path.read_bytes()).hexdigest()}\n"
+            for path in files
+        )
+        actual = (len(files), hashlib.sha256(inventory.encode()).hexdigest())
+        if symlinks or actual != expected:
+            report.violation(
+                "governance-assurance-package-input-drift",
+                f"{crate_name} complete regular-file identity is {actual}, expected "
+                f"{expected}; symlinks="
+                f"{sorted(str(path.relative_to(root)) for path in symlinks)}",
+            )
     validate_registered_build_script_path(
         root,
         "crates/swarm-governance/Cargo.toml",
@@ -856,10 +893,12 @@ def validate_governance_assurance_identity(root, report):
     )
 
 
-def execute_single_governor_gate(root, report):
+def execute_single_governor_gate(root, report, *, mutation_probe=False):
     gate = (root / SINGLE_GOVERNOR_GATE_REL).resolve()
     environment = sanitized_runtime_environment()
     environment["SWARM_NEGATIVE_REGISTRY_PROTECTED"] = "1"
+    if mutation_probe:
+        environment["SWARM_SINGLE_GOVERNOR_MUTATION_PROBE"] = "1"
     try:
         result = subprocess.run(
             ["/bin/bash", "--noprofile", "--norc", str(gate)],
@@ -868,7 +907,7 @@ def execute_single_governor_gate(root, report):
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=120,
+            timeout=120 if mutation_probe else 600,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         report.violation("governance-assurance-gate-failed", str(error))
@@ -1256,10 +1295,11 @@ def registered_source_cache(root, registered):
 
 
 def execution_input_snapshot(root, registered):
-    governance_closure_sources = {
+    governance_closure_inputs = {
         str(path.relative_to(root))
         for crate_name in GOVERNANCE_ASSURANCE_CLOSURE_CRATES
-        for path in (root / "crates" / crate_name / "src").rglob("*.rs")
+        for path in (root / "crates" / crate_name).rglob("*")
+        if path.is_file() or path.is_symlink()
     }
     relative_paths = {
         MAPPING_REL,
@@ -1272,7 +1312,7 @@ def execution_input_snapshot(root, registered):
         "rust-toolchain.toml",
         *GOVERNANCE_ASSURANCE_INPUT_DIGESTS,
         *GOVERNANCE_ASSURANCE_TARGET_ROOTS,
-        *governance_closure_sources,
+        *governance_closure_inputs,
         *(
             f"crates/{crate_name}/build.rs"
             for crate_name in GOVERNANCE_ASSURANCE_CLOSURE_CRATES
@@ -1385,8 +1425,11 @@ def run_checks(root, minimum=12, execute_tests=False):
     initial_execution_inputs = execution_input_snapshot(root, registered) if execute_tests else None
     if execute_tests and root.resolve() == REPO_ROOT.resolve():
         validate_execution_dependencies(root, report)
-        if not report.violations:
-            execute_single_governor_gate(root, report)
+        execute_single_governor_gate(
+            root,
+            report,
+            mutation_probe=bool(report.violations),
+        )
     if document.get("schema_version") != 5:
         report.violation("registry-schema-version", "negative registry must use schema_version = 5")
     if not mapped: report.violation("no-rows", "mapping parsed to zero rows")
@@ -2942,7 +2985,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 177 self-tests passed (3 clean controls, 174 adversarial)'\n"
+        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 178 self-tests passed (3 clean controls, 175 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -2976,7 +3019,7 @@ def bootstrap_boundary_self_test(base):
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
         "check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; "
-        "177 self-tests passed (3 clean controls, 174 adversarial)"
+        "178 self-tests passed (3 clean controls, 175 adversarial)"
     )
 
     def startup_payload(name):
@@ -3490,6 +3533,7 @@ def governance_assurance_contract_self_test(base):
         root.mkdir(parents=True)
         shutil.copy2(REPO_ROOT / "Cargo.toml", root / "Cargo.toml")
         shutil.copy2(REPO_ROOT / "Cargo.lock", root / "Cargo.lock")
+        shutil.copytree(REPO_ROOT / "rulesets", root / "rulesets")
         for source in sorted((REPO_ROOT / "crates").iterdir()):
             if source.is_dir() and (source / "Cargo.toml").is_file():
                 shutil.copytree(source, root / "crates" / source.name)
@@ -3510,8 +3554,11 @@ def governance_assurance_contract_self_test(base):
             )
         validate_manifest_semantic_identity(relative, document, report)
         validate_registered_manifest_test_shape(relative, document, report)
-        if not report.violations:
-            execute_single_governor_gate(root, report)
+        execute_single_governor_gate(
+            root,
+            report,
+            mutation_probe=bool(report.violations),
+        )
         return report
 
     def add_workspace_alias_escape(root):
@@ -3599,7 +3646,7 @@ dependencies = [
         ))
         report = contract_report(unchecked)
         direct_gate_report = Report()
-        execute_single_governor_gate(unchecked, direct_gate_report)
+        execute_single_governor_gate(unchecked, direct_gate_report, mutation_probe=True)
         if (
             "governance-assurance-input-drift" not in report.codes()
             or "governance-assurance-gate-failed" not in direct_gate_report.codes()
@@ -3630,7 +3677,7 @@ impl ForgeAuthority for Arc<GovernancePolicy> {
     )
     trait_report = contract_report(trait_forge)
     trait_gate_report = Report()
-    execute_single_governor_gate(trait_forge, trait_gate_report)
+    execute_single_governor_gate(trait_forge, trait_gate_report, mutation_probe=True)
     if (
         "governance-assurance-input-drift" not in trait_report.codes()
         or "governance-assurance-gate-failed" not in trait_gate_report.codes()
@@ -3657,7 +3704,7 @@ pub fn mint_alternate(policy: Arc<GovernancePolicy>) -> AlternateAuthority {
     )
     alias_report = contract_report(alias_forge)
     alias_gate_report = Report()
-    execute_single_governor_gate(alias_forge, alias_gate_report)
+    execute_single_governor_gate(alias_forge, alias_gate_report, mutation_probe=True)
     if (
         "governance-assurance-input-drift" not in alias_report.codes()
         or "governance-assurance-gate-failed" not in alias_gate_report.codes()
@@ -3714,7 +3761,7 @@ impl ExposeErasedAuthority for ContainmentSweep {
 """)
     erased_report = contract_report(erased_getter)
     erased_gate_report = Report()
-    execute_single_governor_gate(erased_getter, erased_gate_report)
+    execute_single_governor_gate(erased_getter, erased_gate_report, mutation_probe=True)
     if (
         "governance-assurance-input-drift" not in erased_report.codes()
         or "governance-assurance-gate-failed" not in erased_gate_report.codes()
@@ -3746,7 +3793,7 @@ impl IngestState {
 """)
     descendant_report = contract_report(descendant_getter)
     descendant_gate_report = Report()
-    execute_single_governor_gate(descendant_getter, descendant_gate_report)
+    execute_single_governor_gate(descendant_getter, descendant_gate_report, mutation_probe=True)
     if (
         "governance-assurance-input-drift" not in descendant_report.codes()
         or "governance-assurance-gate-failed" not in descendant_gate_report.codes()
@@ -3777,7 +3824,7 @@ impl IngestState {
         )
         alias_report = contract_report(workspace_alias)
         alias_gate_report = Report()
-        execute_single_governor_gate(workspace_alias, alias_gate_report)
+        execute_single_governor_gate(workspace_alias, alias_gate_report, mutation_probe=True)
         if (
             compiled.returncode
             or "governance-assurance-input-drift" not in alias_report.codes()
@@ -3808,7 +3855,7 @@ impl ReleaseAuthorityLeak for () {}
 """)
     trait_default_report = contract_report(trait_default)
     trait_default_gate_report = Report()
-    execute_single_governor_gate(trait_default, trait_default_gate_report)
+    execute_single_governor_gate(trait_default, trait_default_gate_report, mutation_probe=True)
     if (
         "governance-assurance-input-drift" not in trait_default_report.codes()
         or "governance-assurance-gate-failed" not in trait_default_gate_report.codes()
@@ -3832,7 +3879,7 @@ pub extern "Rust" fn release_authority_extern(
 """)
     extern_report = contract_report(extern_clone)
     extern_gate_report = Report()
-    execute_single_governor_gate(extern_clone, extern_gate_report)
+    execute_single_governor_gate(extern_clone, extern_gate_report, mutation_probe=True)
     if (
         "governance-assurance-input-drift" not in extern_report.codes()
         or "governance-assurance-gate-failed" not in extern_gate_report.codes()
@@ -3841,6 +3888,158 @@ pub extern "Rust" fn release_authority_extern(
         print(
             "extern Rust authority clone did not fail both protected identity and gate: "
             f"{extern_report.violations}; {extern_gate_report.violations}",
+            file=sys.stderr,
+        )
+
+    git_dependency_escape = copy_fixture(
+        "governance-assurance-git-dependency-macro-include"
+    )
+    workbench_root = git_dependency_escape / "crates/swarm-runtime-workbench"
+    (workbench_root / "capability_forge.txt").write_text("""
+use std::sync::Arc;
+use swarm_runtime::containment::ContainmentSweep;
+
+#[cfg(not(debug_assertions))]
+pub fn install_assurance_escape(
+    raw: Arc<()>,
+    sweep: ContainmentSweep,
+) -> ContainmentSweep {
+    let authority = unsafe { std::mem::transmute_copy(&raw) };
+    std::mem::forget(raw);
+    sweep.with_governance_authority(authority)
+}
+""")
+    workbench_lib = workbench_root / "src/lib.rs"
+    workbench_lib.write_text(workbench_lib.read_text() + """
+
+macro_rules! load_assurance_escape {
+    ($loader:ident, $path:literal) => { $loader!($path); };
+}
+load_assurance_escape!(include, "../capability_forge.txt");
+""")
+    git_environment = sanitized_runtime_environment()
+    git_commands = (
+        ["/usr/bin/git", "init", "--quiet"],
+        ["/usr/bin/git", "add", "--all"],
+        [
+            "/usr/bin/git",
+            "-c", "user.name=phase285-assurance",
+            "-c", "user.email=phase285-assurance@example.invalid",
+            "commit", "--quiet", "-m", "compiler-input escape fixture",
+        ],
+    )
+    git_result = None
+    for command in git_commands:
+        git_result = subprocess.run(
+            command,
+            cwd=git_dependency_escape,
+            env=git_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if git_result.returncode:
+            break
+    revision = subprocess.run(
+        ["/usr/bin/git", "rev-parse", "HEAD"],
+        cwd=git_dependency_escape,
+        env=git_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ) if git_result is not None and git_result.returncode == 0 else git_result
+    consumer = base / "governance-assurance-external-git-consumer"
+    (consumer / "src").mkdir(parents=True)
+    if revision is not None and revision.returncode == 0:
+        git_url = git_dependency_escape.resolve().as_uri()
+        rev = revision.stdout.strip()
+        (consumer / "Cargo.toml").write_text(f"""
+[package]
+name = "governance-assurance-external-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+swarm-runtime = {{ git = {json.dumps(git_url)}, rev = {json.dumps(rev)} }}
+swarm-runtime-workbench = {{ git = {json.dumps(git_url)}, rev = {json.dumps(rev)} }}
+""")
+        (consumer / "src/lib.rs").write_text("""
+use std::sync::Arc;
+use swarm_runtime::containment::ContainmentSweep;
+use swarm_runtime_workbench::install_assurance_escape;
+
+pub fn install_from_dependency(
+    raw: Arc<()>,
+    sweep: ContainmentSweep,
+) -> ContainmentSweep {
+    install_assurance_escape(raw, sweep)
+}
+""")
+        lock = run_cargo(
+            ["generate-lockfile"],
+            cwd=consumer,
+            target_dir=REPO_ROOT / "target/assurance-governance-git-consumer",
+            audit=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        RUSTC_AUDIT_LOG.unlink(missing_ok=True)
+        compiled = run_cargo(
+            ["check", "--locked", "--offline", "--release"],
+            cwd=consumer,
+            target_dir=REPO_ROOT / "target/assurance-governance-git-consumer",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ) if lock.returncode == 0 else lock
+    else:
+        lock = revision
+        compiled = revision
+    audit_records = []
+    if RUSTC_AUDIT_LOG.is_file():
+        for line in RUSTC_AUDIT_LOG.read_text().splitlines():
+            try:
+                audit_records.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    workbench_was_dependency_capped = any(
+        record.get("crate_name") == "swarm_runtime_workbench"
+        and record.get("cap_lints") == "allow"
+        for record in audit_records
+    )
+    git_dependency_report = contract_report(git_dependency_escape)
+    git_dependency_gate_report = Report()
+    execute_single_governor_gate(
+        git_dependency_escape,
+        git_dependency_gate_report,
+        mutation_probe=True,
+    )
+    if (
+        revision is None
+        or revision.returncode
+        or lock is None
+        or lock.returncode
+        or compiled is None
+        or compiled.returncode
+        or not workbench_was_dependency_capped
+        or "governance-assurance-package-input-drift"
+            not in git_dependency_report.codes()
+        or "governance-assurance-gate-failed"
+            not in git_dependency_gate_report.codes()
+    ):
+        ok = False
+        print(
+            "release-mode external git dependency macro/include escape was not both "
+            "compiler-valid under dependency cap-lints and refused by the protected "
+            "regular-file/direct-gate boundary: "
+            f"git={None if revision is None else revision.returncode}; "
+            f"lock={None if lock is None else lock.returncode}; "
+            f"compile={None if compiled is None else compiled.returncode}:"
+            f"{'' if compiled is None else compiled.stderr[-3000:]}; "
+            f"cap_lints={workbench_was_dependency_capped}; "
+            f"protected={git_dependency_report.violations}; "
+            f"gate={git_dependency_gate_report.violations}",
             file=sys.stderr,
         )
 
@@ -3895,7 +4094,7 @@ pub extern "Rust" fn release_authority_extern(
             file=sys.stderr,
         )
 
-    return ok, 12
+    return ok, 13
 
 
 def dependency_execution_self_test(base):
