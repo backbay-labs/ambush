@@ -312,11 +312,13 @@ fi
 echo "supply-chain tools ok: cargo-deny $REQUIRED_CARGO_DENY_VERSION, cargo-audit $REQUIRED_CARGO_AUDIT_VERSION"
 
 # Keep executable provenance separate from downloaded-source reuse. This parser
-# asks git for every tracked workflow and local action manifest rather than
-# maintaining another file list. Ruby/Psych parses the YAML with aliases disabled
-# and rejects duplicate mapping keys from the syntax tree before safe_load can
-# apply its last-key-wins behavior. Every cache-family use must be a source-only
-# Cargo cache; split restore/save actions and composite-action caches are refused.
+# asks git for every tracked workflow and local action manifest through its
+# NUL-delimited interface rather than trusting quoted, line-delimited path output
+# or maintaining another file list. Non-UTF-8 path bytes fail closed. Ruby/Psych
+# parses the YAML with aliases disabled and rejects duplicate mapping keys from
+# the syntax tree before safe_load can apply its last-key-wins behavior. Every
+# cache-family use must be a source-only Cargo cache; split restore/save actions
+# and composite-action caches are refused.
 # Release jobs are held to their exact least-privilege token and tool-install
 # contracts. The mutations make every negative branch executable.
 python3 - "$ROOT_DIR" "$REQUIRED_CARGO_CYCLONEDX_VERSION" <<'PY'
@@ -325,34 +327,87 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 root = pathlib.Path(sys.argv[1])
 cyclonedx_version = sys.argv[2]
-tracked = subprocess.run(
-    ["git", "-C", str(root), "ls-files"],
-    check=True,
-    stdout=subprocess.PIPE,
-    text=True,
-).stdout.splitlines()
-workflow_names = sorted(
-    name
-    for name in tracked
-    if pathlib.PurePosixPath(name).parent == pathlib.PurePosixPath(".github/workflows")
-    and pathlib.PurePosixPath(name).suffix in {".yml", ".yaml"}
-)
+
+
+def git_tracked_utf8_paths(repository: pathlib.Path) -> list[str]:
+    process = subprocess.run(
+        ["git", "-C", str(repository), "ls-files", "-z"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0:
+        stderr = process.stderr.decode("utf-8", errors="backslashreplace").strip()
+        raise SystemExit(
+            f"NUL-delimited git tracked-file inventory failed for {repository}: "
+            f"exit={process.returncode}, stderr={stderr!r}"
+        )
+    payload = process.stdout
+    if payload and not payload.endswith(b"\0"):
+        raise SystemExit(
+            f"NUL-delimited git tracked-file inventory was unterminated for {repository}"
+        )
+    raw_paths = payload[:-1].split(b"\0") if payload else []
+    paths: list[str] = []
+    for raw_path in raw_paths:
+        if not raw_path:
+            raise SystemExit(
+                f"NUL-delimited git tracked-file inventory contained an empty path for {repository}"
+            )
+        try:
+            path = raw_path.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise SystemExit(
+                "tracked filename is not valid UTF-8; refusing a surrogate-escaped "
+                f"workflow/action inventory entry {raw_path!r}: {exc}"
+            ) from exc
+        paths.append(path)
+    return paths
+
+
+def load_contract_inventory(
+    repository: pathlib.Path,
+) -> tuple[list[str], dict[str, str], list[str], dict[str, str]]:
+    tracked_paths = git_tracked_utf8_paths(repository)
+    discovered_workflows = sorted(
+        name
+        for name in tracked_paths
+        if pathlib.PurePosixPath(name).parent
+        == pathlib.PurePosixPath(".github/workflows")
+        and pathlib.PurePosixPath(name).suffix in {".yml", ".yaml"}
+    )
+    discovered_actions = sorted(
+        name
+        for name in tracked_paths
+        if pathlib.PurePosixPath(name).name in {"action.yml", "action.yaml"}
+    )
+    try:
+        discovered_workflow_text = {
+            name: (repository / name).read_text(encoding="utf-8")
+            for name in discovered_workflows
+        }
+        discovered_action_text = {
+            name: (repository / name).read_text(encoding="utf-8")
+            for name in discovered_actions
+        }
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(
+            f"cannot read tracked workflow/action inventory as UTF-8 in {repository}: {exc}"
+        ) from exc
+    return (
+        discovered_workflows,
+        discovered_workflow_text,
+        discovered_actions,
+        discovered_action_text,
+    )
+
+
+workflow_names, workflows, action_names, action_manifests = load_contract_inventory(root)
 if not workflow_names:
     raise SystemExit("git reported no tracked .github/workflows/*.yml or *.yaml files")
-workflows = {
-    name: (root / name).read_text(encoding="utf-8") for name in workflow_names
-}
-action_names = sorted(
-    name
-    for name in tracked
-    if pathlib.PurePosixPath(name).name in {"action.yml", "action.yaml"}
-)
-action_manifests = {
-    name: (root / name).read_text(encoding="utf-8") for name in action_names
-}
 
 ci_name = ".github/workflows/ci.yml"
 release_name = ".github/workflows/release.yml"
@@ -655,12 +710,15 @@ def permission_blocks(body: str) -> list[str]:
 
 
 def workflow_contract_problems(
-    documents: dict[str, str], actions: dict[str, str] = action_manifests
+    documents: dict[str, str],
+    actions: dict[str, str] = action_manifests,
+    expected_workflow_names: list[str] = workflow_names,
+    expected_action_names: list[str] = action_names,
 ) -> list[str]:
     problems: list[str] = []
-    if sorted(documents) != workflow_names:
+    if sorted(documents) != expected_workflow_names:
         problems.append("validator input no longer equals git's tracked workflow inventory")
-    if sorted(actions) != action_names:
+    if sorted(actions) != expected_action_names:
         problems.append("validator input no longer equals git's tracked action-manifest inventory")
     cache_problems, _ = structural_cache_problems(documents, actions)
     problems.extend(cache_problems)
@@ -832,10 +890,13 @@ jobs:
         ],
     )
 
-composite_cache_mutation = dict(action_manifests)
-composite_name = ".github/actions/cache-probe/action.yaml"
-composite_cache_mutation[composite_name] = """name: cache probe
-description: cache parser mutation
+newline_action_name = ".github/actions/hidden\ncache/action.yml"
+newline_action_invocation = """
+      - name: Invoke newline-path composite mutation
+        uses: "./.github/actions/hidden\\ncache"
+"""
+newline_action_text = """name: newline cache probe
+description: exercises byte-safe tracked-file discovery
 runs:
   using: composite
   steps:
@@ -848,20 +909,92 @@ runs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           ~/.cargo/git/checkouts/
-        key: cargo-home-sources-v1-composite
+        key: cargo-home-sources-v1-newline
         restore-keys: |
           cargo-home-sources-v1-
 """
-require_invalid(
-    "tracked composite action split-cache/executable-path mutation",
-    workflows,
-    [
-        f"{composite_name}: runs.steps[0]",
+with tempfile.TemporaryDirectory(prefix="supply-newline-action-") as fixture_directory:
+    fixture_root = pathlib.Path(fixture_directory)
+    fixture_documents = dict(workflows)
+    fixture_ci = fixture_documents[ci_name]
+    mutated_ci = fixture_ci.replace(
+        audit_install,
+        audit_install + newline_action_invocation,
+        1,
+    )
+    if mutated_ci == fixture_ci:
+        raise SystemExit(
+            "could not place newline-path composite invocation after forced tool installs"
+        )
+    fixture_documents[ci_name] = mutated_ci
+    for name, text in {**fixture_documents, **action_manifests}.items():
+        destination = fixture_root / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(text, encoding="utf-8")
+    newline_action_path = fixture_root / newline_action_name
+    newline_action_path.parent.mkdir(parents=True, exist_ok=True)
+    newline_action_path.write_text(newline_action_text, encoding="utf-8")
+    for git_arguments in (("init", "-q"), ("add", "--all")):
+        git_process = subprocess.run(
+            ["git", "-C", str(fixture_root), *git_arguments],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if git_process.returncode != 0:
+            stderr = git_process.stderr.decode(
+                "utf-8", errors="backslashreplace"
+            ).strip()
+            raise SystemExit(
+                f"newline-path fixture git {' '.join(git_arguments)} failed: "
+                f"exit={git_process.returncode}, stderr={stderr!r}"
+            )
+    (
+        fixture_workflow_names,
+        fixture_workflows,
+        fixture_action_names,
+        fixture_actions,
+    ) = load_contract_inventory(fixture_root)
+    if newline_action_name not in fixture_action_names:
+        raise SystemExit(
+            "NUL-delimited fixture inventory omitted the tracked newline-path action"
+        )
+    invocation_offset = fixture_workflows[ci_name].find(newline_action_invocation)
+    forced_install_offset = fixture_workflows[ci_name].find(audit_install)
+    if invocation_offset <= forced_install_offset:
+        raise SystemExit(
+            "newline-path action fixture is not invoked after both forced tool installs"
+        )
+    newline_problems = workflow_contract_problems(
+        fixture_workflows,
+        fixture_actions,
+        fixture_workflow_names,
+        fixture_action_names,
+    )
+    newline_expected = [
+        f"{newline_action_name}: runs.steps[0]",
         "split cache restore/save actions are forbidden",
         "normalized paths must be exactly",
-    ],
-    composite_cache_mutation,
-)
+    ]
+    newline_missing = [
+        item
+        for item in newline_expected
+        if not any(item in problem for problem in newline_problems)
+    ]
+    if newline_missing:
+        rendered = "; ".join(newline_problems) if newline_problems else "no problems"
+        raise SystemExit(
+            "real git newline-path composite fixture passed or failed vacuously; "
+            f"missing {newline_missing!r}: {rendered}"
+        )
+    newline_matched = [
+        problem
+        for problem in newline_problems
+        if any(item in problem for item in newline_expected)
+    ]
+    print(
+        "workflow mutation refused: real git newline-path composite invoked after "
+        "forced installs: " + "; ".join(newline_matched).replace("\n", "\\n")
+    )
 
 cache_workflows = [ci_name, release_name]
 for name in cache_workflows:
@@ -1642,15 +1775,15 @@ echo "negative-registry helper locked resolution and zero-waiver policy ok"
 # be waived. Tracked or untracked, so a NEW workflow or gate script counts on the
 # commit that adds it (same enumeration as check-gates-wired.sh:74).
 surfaces=()
-while IFS= read -r path; do
+while IFS= read -r -d '' path; do
   [ -n "$path" ] || continue
   surfaces+=("$path")
 done < <(
-  git ls-files -c -o --exclude-standard -- \
+  git ls-files -z -c -o --exclude-standard -- \
     '.github/workflows/*.yml' '.github/workflows/*.yaml' \
     'tools/*.sh' 'tools/negative-registry-ast/deny.toml' \
     'audit.toml' '.cargo/audit.toml' '*/audit.toml' \
-    | LC_ALL=C sort -u
+    | LC_ALL=C sort -zu
 )
 
 if [ "${#surfaces[@]}" -eq 0 ]; then
