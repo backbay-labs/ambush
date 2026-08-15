@@ -139,7 +139,11 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b",
     "Cargo.lock": "8afebe30e5aa8eeab54476b4607d568aa8ada2831475a028b427fe992283fe50",
-    "tools/check-single-governor-key.sh": "f39cf42acbb3536ef9de07ada1a7ec533459ac714c6faeedbf7fc7076e121220",
+    ".github/workflows/ci.yml": "c635a85ed321c67dd040473dd330047d402a13be9ca492a6c12a4580b5bdf613",
+    ".github/workflows/release.yml": "937af30a8bc982a73615ca49e1e48f4d64049e82a7a28113cd1c72c2110d8e51",
+    "tools/check-supply-chain.sh": "786dec65543867ab2d4f30c051f01db21e879da76dc6c93bdcfa1f11beb35ce1",
+    "tools/generate-sbom.sh": "bc0f22839b2a172b2effeb8edb998529ce3ffaac33ec9837bf2ad0f8b308add2",
+    "tools/check-single-governor-key.sh": "1e58e2677dd7eda765cd143a8bb571b6965984a00db740913231efd2616a3a21",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -165,7 +169,7 @@ GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (2, "f3345ca1525686353fb3dfccef2df4ae9b561b1b8c1dae065f285d01b3fe1b61"),
     "swarm-runtime":
-        (127, "4030777baafb8788b7ba53641e5cdde357cec3e5871640a34cce801f6f5717ff"),
+        (127, "7d5d5b2852c1c675f825a0ffbfe22432fd7fead08122beb3f47fc708c1cb417b"),
     "swarm-ingest-runtime":
         (14, "058ccc0dfa06a4d13d3edb22a534ee2fd142f8d764545d948fe0573e325d2a41"),
     "swarm-runtime-http":
@@ -413,7 +417,7 @@ WORKFLOW_GATE_JOBS = {
 WORKFLOW_GLOBAL_ENVIRONMENT = (
     "env:\n"
     "  CARGO_TERM_COLOR: always\n"
-    "  CARGO_TARGET_DIR: target/ci"
+    "  CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci"
 )
 
 
@@ -624,15 +628,9 @@ def configure_sanitized_cargo_boundary(report):
     elif SANITIZED_CARGO_HOME.exists():
         shutil.rmtree(SANITIZED_CARGO_HOME)
     SANITIZED_CARGO_HOME.mkdir()
-    account_home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir)
-    trusted_cache = account_home / ".cargo"
     for name in ("registry", "git"):
-        source = trusted_cache / name
         destination = SANITIZED_CARGO_HOME / name
-        if source.is_dir():
-            destination.symlink_to(source, target_is_directory=True)
-        else:
-            destination.mkdir()
+        destination.mkdir()
     RUSTC_AUDIT_LOG = SANITIZED_CARGO_HOME / "rustc-audit.jsonl"
     RUSTC_AUDIT_PROGRAM = assurance_target / "rustc-audit.py"
     RUSTC_AUDIT_WRAPPER = assurance_target / "rustc-audit.sh"
@@ -774,6 +772,58 @@ def run_cargo(arguments, *, cwd, target_dir=None, extra_environment=None, audit=
     return result
 
 
+def hydrate_locked_workspace_cache(report):
+    lock_path = REPO_ROOT / "Cargo.lock"
+    lock_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    registered = registry_document(REPO_ROOT, report).get("entry", [])
+    input_snapshot = execution_input_snapshot(REPO_ROOT, registered)
+    lock = parse_toml(lock_path, report, "dependency-lock-read")
+    invalid_sources = []
+    for package in lock.get("package", []):
+        source = package.get("source")
+        if source is None:
+            continue
+        checksum = package.get("checksum")
+        if source != CRATES_IO_SOURCE or not isinstance(checksum, str) \
+                or re.fullmatch(r"[0-9a-f]{64}", checksum) is None:
+            invalid_sources.append((package.get("name"), package.get("version"), source, checksum))
+    if invalid_sources:
+        report.violation(
+            "dependency-cache-source-unpinned",
+            f"Cargo.lock contains non-registry or non-checksummed sources: {invalid_sources}",
+        )
+        return
+    fetched = run_cargo(
+        [
+            "fetch", "--locked", "--target", PINNED_HOST,
+            "--manifest-path", str(REPO_ROOT / "Cargo.toml"),
+        ],
+        cwd=REPO_ROOT,
+        audit=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if fetched.returncode:
+        report.violation(
+            "dependency-cache-hydration-failed",
+            "could not hydrate the empty gate-owned Cargo cache exclusively from "
+            f"the tracked locked/checksummed resolution: {fetched.stderr[-4000:]}",
+        )
+    current_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    if current_digest != lock_digest:
+        report.violation(
+            "dependency-cache-lock-mutated",
+            f"Cargo fetch changed Cargo.lock from {lock_digest} to {current_digest}",
+        )
+    current_snapshot = execution_input_snapshot(REPO_ROOT, registered)
+    if current_snapshot != input_snapshot:
+        report.violation(
+            "dependency-cache-input-mutated",
+            "Cargo fetch changed the exact protected execution-input snapshot",
+        )
+
+
 def audit_artifact_changes():
     changed = []
     for path, expected in RUSTC_AUDIT_ARTIFACT_DIGESTS.items():
@@ -893,10 +943,15 @@ def validate_governance_assurance_identity(root, report):
     )
 
 
-def execute_single_governor_gate(root, report, *, mutation_probe=False):
+def execute_single_governor_gate(
+    root, report, *, mutation_probe=False, cache_source=None,
+):
     gate = (root / SINGLE_GOVERNOR_GATE_REL).resolve()
     environment = sanitized_runtime_environment()
     environment["SWARM_NEGATIVE_REGISTRY_PROTECTED"] = "1"
+    environment["SWARM_SINGLE_GOVERNOR_CACHE_SOURCE"] = str(
+        SANITIZED_CARGO_HOME if cache_source is None else cache_source
+    )
     if mutation_probe:
         environment["SWARM_SINGLE_GOVERNOR_MUTATION_PROBE"] = "1"
     try:
@@ -911,7 +966,7 @@ def execute_single_governor_gate(root, report, *, mutation_probe=False):
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         report.violation("governance-assurance-gate-failed", str(error))
-        return
+        return None
     if result.returncode or result.stdout.strip() != SINGLE_GOVERNOR_GATE_OUTPUT:
         report.violation(
             "governance-assurance-gate-failed",
@@ -919,6 +974,7 @@ def execute_single_governor_gate(root, report, *, mutation_probe=False):
             f"exit={result.returncode}, stdout={result.stdout[-2000:]!r}, "
             f"stderr={result.stderr[-2000:]!r}",
         )
+    return result
 
 
 def validate_dependency_manifests(root, report):
@@ -2985,7 +3041,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 178 self-tests passed (3 clean controls, 175 adversarial)'\n"
+        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 179 self-tests passed (3 clean controls, 176 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -3019,7 +3075,7 @@ def bootstrap_boundary_self_test(base):
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
         "check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; "
-        "178 self-tests passed (3 clean controls, 175 adversarial)"
+        "179 self-tests passed (3 clean controls, 176 adversarial)"
     )
 
     def startup_payload(name):
@@ -3540,6 +3596,11 @@ def governance_assurance_contract_self_test(base):
         gate = root / SINGLE_GOVERNOR_GATE_REL
         gate.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / SINGLE_GOVERNOR_GATE_REL, gate)
+        for relative in GOVERNANCE_ASSURANCE_INPUT_DIGESTS:
+            source = REPO_ROOT / relative
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
         return root
 
     def contract_report(root):
@@ -3627,6 +3688,32 @@ dependencies = [
         ok = False
         print(
             f"governance assurance clean contract failed: {clean_report.violations}",
+            file=sys.stderr,
+        )
+
+    cold = copy_fixture("governance-assurance-empty-cargo-cache")
+    cold_cache = base / "governance-assurance-empty-cargo-home"
+    (cold_cache / "registry").mkdir(parents=True)
+    (cold_cache / "git").mkdir()
+    cold_report = Report()
+    cold_result = execute_single_governor_gate(
+        cold,
+        cold_report,
+        mutation_probe=True,
+        cache_source=cold_cache,
+    )
+    cold_output = "" if cold_result is None else cold_result.stdout + cold_result.stderr
+    if (
+        cold_result is None
+        or cold_result.returncode == 0
+        or "controlled primary-package compile failed" not in cold_output
+        or "offline mode" not in cold_output
+        or "governance-assurance-gate-failed" not in cold_report.codes()
+    ):
+        ok = False
+        print(
+            "an empty unhydrated Cargo cache did not fail closed before the protected "
+            f"compiler proof: result={cold_result}; report={cold_report.violations}",
             file=sys.stderr,
         )
 
@@ -3895,7 +3982,7 @@ pub extern "Rust" fn release_authority_extern(
         "governance-assurance-git-dependency-macro-include"
     )
     workbench_root = git_dependency_escape / "crates/swarm-runtime-workbench"
-    (workbench_root / "capability_forge.txt").write_text("""
+    capability_forge = """
 use std::sync::Arc;
 use swarm_runtime::containment::ContainmentSweep;
 
@@ -3908,15 +3995,62 @@ pub fn install_assurance_escape(
     std::mem::forget(raw);
     sweep.with_governance_authority(authority)
 }
-""")
-    workbench_lib = workbench_root / "src/lib.rs"
-    workbench_lib.write_text(workbench_lib.read_text() + """
+"""
+    macro_loader = """
 
 macro_rules! load_assurance_escape {
     ($loader:ident, $path:literal) => { $loader!($path); };
 }
 load_assurance_escape!(include, "../capability_forge.txt");
+"""
+    (workbench_root / "capability_forge.txt").write_text(capability_forge)
+    workbench_lib = workbench_root / "src/lib.rs"
+    workbench_lib.write_text(workbench_lib.read_text() + macro_loader)
+
+    compiler_repo = base / "governance-assurance-git-compiler-control"
+    runtime_stub = compiler_repo / "crates/swarm-runtime"
+    workbench_stub = compiler_repo / "crates/swarm-runtime-workbench"
+    (runtime_stub / "src").mkdir(parents=True)
+    (workbench_stub / "src").mkdir(parents=True)
+    (compiler_repo / "Cargo.toml").write_text("""
+[workspace]
+members = ["crates/swarm-runtime", "crates/swarm-runtime-workbench"]
+resolver = "2"
 """)
+    (runtime_stub / "Cargo.toml").write_text("""
+[package]
+name = "swarm-runtime"
+version = "0.1.0"
+edition = "2024"
+""")
+    (runtime_stub / "src/lib.rs").write_text("""
+pub mod containment {
+    pub struct GovernanceAuthority {
+        _policy: std::sync::Arc<()>,
+    }
+
+    pub struct ContainmentSweep;
+
+    impl ContainmentSweep {
+        pub fn with_governance_authority(self, _authority: GovernanceAuthority) -> Self {
+            self
+        }
+    }
+}
+""")
+    (workbench_stub / "Cargo.toml").write_text("""
+[package]
+name = "swarm-runtime-workbench"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+swarm-runtime = { path = "../swarm-runtime" }
+""")
+    (workbench_stub / "capability_forge.txt").write_text(capability_forge)
+    (workbench_stub / "src/lib.rs").write_text(
+        "#![forbid(unsafe_code)]\n" + macro_loader
+    )
     git_environment = sanitized_runtime_environment()
     git_commands = (
         ["/usr/bin/git", "init", "--quiet"],
@@ -3932,7 +4066,7 @@ load_assurance_escape!(include, "../capability_forge.txt");
     for command in git_commands:
         git_result = subprocess.run(
             command,
-            cwd=git_dependency_escape,
+            cwd=compiler_repo,
             env=git_environment,
             text=True,
             stdout=subprocess.PIPE,
@@ -3942,7 +4076,7 @@ load_assurance_escape!(include, "../capability_forge.txt");
             break
     revision = subprocess.run(
         ["/usr/bin/git", "rev-parse", "HEAD"],
-        cwd=git_dependency_escape,
+        cwd=compiler_repo,
         env=git_environment,
         text=True,
         stdout=subprocess.PIPE,
@@ -3951,7 +4085,7 @@ load_assurance_escape!(include, "../capability_forge.txt");
     consumer = base / "governance-assurance-external-git-consumer"
     (consumer / "src").mkdir(parents=True)
     if revision is not None and revision.returncode == 0:
-        git_url = git_dependency_escape.resolve().as_uri()
+        git_url = compiler_repo.resolve().as_uri()
         rev = revision.stdout.strip()
         (consumer / "Cargo.toml").write_text(f"""
 [package]
@@ -3984,6 +4118,42 @@ pub fn install_from_dependency(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        lock_document = (
+            tomllib.loads((consumer / "Cargo.lock").read_text())
+            if lock.returncode == 0 else {}
+        )
+        expected_git_suffix = f"#{rev}"
+        lock_sources_are_exact = all(
+            package.get("source", "").startswith(f"git+{git_url}?rev={rev}")
+            and package.get("source", "").endswith(expected_git_suffix)
+            and "checksum" not in package
+            for package in lock_document.get("package", [])
+            if package.get("name") != "governance-assurance-external-consumer"
+        ) and {
+            package.get("name") for package in lock_document.get("package", [])
+        } == {
+            "governance-assurance-external-consumer",
+            "swarm-runtime",
+            "swarm-runtime-workbench",
+        }
+        lock_digest = (
+            hashlib.sha256((consumer / "Cargo.lock").read_bytes()).hexdigest()
+            if lock.returncode == 0 else None
+        )
+        fetched = run_cargo(
+            ["fetch", "--locked"],
+            cwd=consumer,
+            target_dir=REPO_ROOT / "target/assurance-governance-git-consumer",
+            audit=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ) if lock.returncode == 0 and lock_sources_are_exact else lock
+        lock_stayed_exact = (
+            lock_digest is not None
+            and hashlib.sha256((consumer / "Cargo.lock").read_bytes()).hexdigest()
+                == lock_digest
+        )
         RUSTC_AUDIT_LOG.unlink(missing_ok=True)
         compiled = run_cargo(
             ["check", "--locked", "--offline", "--release"],
@@ -3992,10 +4162,13 @@ pub fn install_from_dependency(
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-        ) if lock.returncode == 0 else lock
+        ) if fetched.returncode == 0 and lock_stayed_exact else fetched
     else:
         lock = revision
+        fetched = revision
         compiled = revision
+        lock_sources_are_exact = False
+        lock_stayed_exact = False
     audit_records = []
     if RUSTC_AUDIT_LOG.is_file():
         for line in RUSTC_AUDIT_LOG.read_text().splitlines():
@@ -4020,6 +4193,10 @@ pub fn install_from_dependency(
         or revision.returncode
         or lock is None
         or lock.returncode
+        or fetched is None
+        or fetched.returncode
+        or not lock_sources_are_exact
+        or not lock_stayed_exact
         or compiled is None
         or compiled.returncode
         or not workbench_was_dependency_capped
@@ -4035,6 +4212,7 @@ pub fn install_from_dependency(
             "regular-file/direct-gate boundary: "
             f"git={None if revision is None else revision.returncode}; "
             f"lock={None if lock is None else lock.returncode}; "
+            f"fetch={None if fetched is None else fetched.returncode}; "
             f"compile={None if compiled is None else compiled.returncode}:"
             f"{'' if compiled is None else compiled.stderr[-3000:]}; "
             f"cap_lints={workbench_was_dependency_capped}; "
@@ -4094,7 +4272,7 @@ pub fn install_from_dependency(
             file=sys.stderr,
         )
 
-    return ok, 13
+    return ok, 14
 
 
 def dependency_execution_self_test(base):
@@ -4806,10 +4984,20 @@ preflight = Report()
 validate_toolchain_identity(REPO_ROOT, preflight)
 configure_sanitized_cargo_boundary(preflight)
 validate_cargo_execution_boundary(REPO_ROOT, preflight)
+validate_governance_assurance_identity(REPO_ROOT, preflight)
+validate_resolution_identity(REPO_ROOT, preflight)
 if preflight.violations:
     for code, message in preflight.violations:
         print(f"[{code}] {message}", file=sys.stderr)
     raise SystemExit("check-negative-registry refused compiler-affecting execution overrides before building its checker")
+hydrate_locked_workspace_cache(preflight)
+if preflight.violations:
+    for code, message in preflight.violations:
+        print(f"[{code}] {message}", file=sys.stderr)
+    raise SystemExit(
+        "check-negative-registry could not hydrate its empty Cargo cache from the "
+        "exact tracked locked/checksummed resolution"
+    )
 ast_target_dir = REPO_ROOT / "target/assurance-tools"
 ast_build = run_cargo(
     [

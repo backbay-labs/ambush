@@ -105,6 +105,18 @@ if [[ "$SINGLE_GOVERNOR_MUTATION_PROBE" != "0" \
   echo "SWARM_SINGLE_GOVERNOR_MUTATION_PROBE must be 0 or 1" >&2
   exit 1
 fi
+SINGLE_GOVERNOR_CACHE_SOURCE="$HOME/.cargo"
+if [[ "${SWARM_NEGATIVE_REGISTRY_PROTECTED:-0}" == "1" ]]; then
+  SINGLE_GOVERNOR_CACHE_SOURCE="${SWARM_SINGLE_GOVERNOR_CACHE_SOURCE:-}"
+  if [[ -z "$SINGLE_GOVERNOR_CACHE_SOURCE" \
+    || ! -d "$SINGLE_GOVERNOR_CACHE_SOURCE" ]]; then
+    echo "protected single-governor gate requires a gate-owned Cargo cache source" >&2
+    exit 1
+  fi
+  SINGLE_GOVERNOR_CACHE_SOURCE="$(
+    cd -- "$SINGLE_GOVERNOR_CACHE_SOURCE" && pwd -P
+  )"
+fi
 
 SCAN_PATHS=(
   "crates/swarm-governance/src"
@@ -114,7 +126,7 @@ SCAN_PATHS=(
 
 # The five collection-of-keys shapes. Kept as one alternation so the fixture and
 # the real scan cannot drift apart.
-KEY_COLLECTION_RE='(BTreeMap|HashMap|BTreeSet|HashSet)<[^>]*SigningKey|Vec<[^>]*SigningKey|\[[[:space:]]*SigningKey[[:space:]]*;|&\[[[:space:]]*SigningKey[[:space:]]*\]'
+KEY_COLLECTION_RE='(BTreeMap|HashMap|BTreeSet|HashSet)<[^>]*SigningKey|Vec<[^>]*SigningKey|[[][[:space:]]*SigningKey[[:space:]]*;|&[[][[:space:]]*SigningKey[[:space:]]*[]]'
 
 # Scan one file, printing `path:line:text` for every violation outside a
 # `#[cfg(test)]` region.
@@ -174,7 +186,8 @@ scan_governance_capability_inventory() {
   local inventory_mode="${2:-fixture}"
   "$SINGLE_GOVERNOR_PYTHON" -I - \
     "$source_root" "$inventory_mode" "$SINGLE_GOVERNOR_CARGO" \
-    "$ROOT_DIR/target/single-governor-source-inventory" <<'PY'
+    "$ROOT_DIR/target/single-governor-source-inventory" \
+    "$SINGLE_GOVERNOR_CACHE_SOURCE" <<'PY'
 import hashlib
 import json
 import os
@@ -193,6 +206,7 @@ force_dep_info = inventory_mode == "strict-force-depinfo"
 privacy_only = inventory_mode == "privacy"
 cargo = pathlib.Path(sys.argv[3])
 assurance_target = pathlib.Path(sys.argv[4])
+cache_source = pathlib.Path(sys.argv[5])
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
 EXPECTED_ROOT_MANIFEST_DIGEST = "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b"
 EXPECTED_ROOT_LOCK_DIGEST = "8afebe30e5aa8eeab54476b4607d568aa8ada2831475a028b427fe992283fe50"
@@ -293,7 +307,7 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (2, "f3345ca1525686353fb3dfccef2df4ae9b561b1b8c1dae065f285d01b3fe1b61"),
     "swarm-runtime":
-        (127, "4030777baafb8788b7ba53641e5cdde357cec3e5871640a34cce801f6f5717ff"),
+        (127, "7d5d5b2852c1c675f825a0ffbfe22432fd7fead08122beb3f47fc708c1cb417b"),
     "swarm-ingest-runtime":
         (14, "058ccc0dfa06a4d13d3edb22a534ee2fd142f8d764545d948fe0573e325d2a41"),
     "swarm-runtime-http":
@@ -1503,6 +1517,8 @@ def repo_inputs_from_dep_info(path: pathlib.Path) -> set[pathlib.Path]:
 
 def validate_compiler_source_inventory() -> None:
     global failed
+    if failed and not force_dep_info:
+        return
     target_dir = assurance_target.resolve()
     cargo_home = target_dir / "cargo-home"
     if cargo_home.is_symlink():
@@ -1510,9 +1526,8 @@ def validate_compiler_source_inventory() -> None:
     elif cargo_home.exists():
         shutil.rmtree(cargo_home)
     cargo_home.mkdir(parents=True)
-    account_cargo_home = pathlib.Path.home() / ".cargo"
     for name in ("registry", "git"):
-        source = account_cargo_home / name
+        source = cache_source / name
         destination = cargo_home / name
         if source.is_dir():
             destination.symlink_to(source, target_is_directory=True)
@@ -1668,6 +1683,18 @@ trap 'rm -rf "$FIXTURE_DIR"' EXIT
 fixture_failures=0
 fixture_adversarial_cases=0
 fixture_clean_controls=0
+
+printf '%s\n' 'let keys: &[SigningKey];' > "$FIXTURE_DIR/portable-awk-ere.rs"
+portable_awk_output="$(
+  scan_file "$FIXTURE_DIR/portable-awk-ere.rs" \
+    2>"$FIXTURE_DIR/portable-awk-ere.stderr"
+)"
+if [[ -s "$FIXTURE_DIR/portable-awk-ere.stderr" \
+  || "$portable_awk_output" != *'let keys: &[SigningKey];' ]]; then
+  echo "FIXTURE FAILURE: the signing-key ERE is not warning-free and equivalent on GNU/BSD awk" >&2
+  sed -n '1,20p' "$FIXTURE_DIR/portable-awk-ere.stderr" >&2
+  fixture_failures=$((fixture_failures + 1))
+fi
 
 plant() {
   local name="$1"
@@ -1915,6 +1942,25 @@ plant_compiler_input_fixture() {
   printf '%s\n' "$fixture_root"
 }
 
+prepare_source_cargo_home() {
+  local source_cargo_home="$ROOT_DIR/target/single-governor-source-inventory/cargo-home"
+  mkdir -p "$source_cargo_home"
+  local cache_name
+  for cache_name in registry git; do
+    if [[ -d "$SINGLE_GOVERNOR_CACHE_SOURCE/$cache_name" \
+      && ! -e "$source_cargo_home/$cache_name" \
+      && ! -L "$source_cargo_home/$cache_name" ]]; then
+      ln -s \
+        "$SINGLE_GOVERNOR_CACHE_SOURCE/$cache_name" \
+        "$source_cargo_home/$cache_name"
+    elif [[ ! -e "$source_cargo_home/$cache_name" \
+      && ! -L "$source_cargo_home/$cache_name" ]]; then
+      mkdir "$source_cargo_home/$cache_name"
+    fi
+  done
+  printf '%s\n' "$source_cargo_home"
+}
+
 write_unsafe_compiler_input() {
   local path="$1"
   local cfg_attribute="${2:-}"
@@ -1962,15 +2008,8 @@ expect_compiler_input_builds() {
     return
   fi
   local source_target="$ROOT_DIR/target/single-governor-source-inventory"
-  local source_cargo_home="$source_target/cargo-home"
-  mkdir -p "$source_cargo_home"
-  local cache_name
-  for cache_name in registry git; do
-    if [[ -d "$HOME/.cargo/$cache_name" \
-      && ! -e "$source_cargo_home/$cache_name" ]]; then
-      ln -s "$HOME/.cargo/$cache_name" "$source_cargo_home/$cache_name"
-    fi
-  done
+  local source_cargo_home
+  source_cargo_home="$(prepare_source_cargo_home)"
   if ! CARGO_HOME="$source_cargo_home" CARGO_TARGET_DIR="$source_target" \
     "$SINGLE_GOVERNOR_CARGO" "${cargo_args[@]}" \
     >"$FIXTURE_DIR/${name}.stdout" \
@@ -2032,19 +2071,29 @@ plant_capability_fixture missing_mint \
   'pub struct GovernancePolicy;
 pub struct GovernanceAuthority { policy: Arc<GovernancePolicy> }'
 
-CAPABILITY_UNCHECKED="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
-    pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }}"
-CAPABILITY_GENERIC_CONSTRUCTOR="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
+CAPABILITY_UNCHECKED="${CANONICAL_CAPABILITY}"$'\n''impl GovernanceAuthority {
+    pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }
+}'
+CAPABILITY_GENERIC_CONSTRUCTOR="${CANONICAL_CAPABILITY}"$'\n''impl GovernanceAuthority {
     pub fn unchecked<T: Into<Arc<GovernancePolicy>>>(policy: T) -> Self {
         Self { policy: policy.into() }
-    }}"
-CAPABILITY_HELPER_CONSTRUCTOR="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
+    }
+}'
+CAPABILITY_HELPER_CONSTRUCTOR="${CANONICAL_CAPABILITY}"$'\n''impl GovernanceAuthority {
     fn from_raw(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }
-    pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self::from_raw(policy) }}"
-CAPABILITY_SWAP_POLICY="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
-    pub fn swap_policy(&mut self, policy: Arc<GovernancePolicy>) { self.policy = policy; }}"
-CAPABILITY_RAW_GETTER="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
-    pub fn policy(&self) -> &GovernancePolicy { &self.policy }}"
+    pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self::from_raw(policy) }
+}'
+CAPABILITY_SWAP_POLICY="${CANONICAL_CAPABILITY}"$'\n''impl GovernanceAuthority {
+    pub fn swap_policy(&mut self, policy: Arc<GovernancePolicy>) { self.policy = policy; }
+}'
+CAPABILITY_RAW_GETTER="${CANONICAL_CAPABILITY}"$'\n''impl GovernanceAuthority {
+    pub fn policy(&self) -> &GovernancePolicy { &self.policy }
+}'
+
+if [[ "$CAPABILITY_GENERIC_CONSTRUCTOR" != *'Self { policy: policy.into() }'* ]]; then
+  echo "FIXTURE FAILURE: multiline capability fixtures still use non-portable Bash pattern replacement" >&2
+  fixture_failures=$((fixture_failures + 1))
+fi
 
 plant_capability_fixture unchecked_associated "$CAPABILITY_UNCHECKED"
 plant_capability_fixture generic_associated "$CAPABILITY_GENERIC_CONSTRUCTOR"
@@ -2459,7 +2508,9 @@ metadata_alias_validation=(check --locked --offline -p swarm-closure-escape)
 if [[ "${SWARM_NEGATIVE_REGISTRY_PROTECTED:-}" == "1" ]]; then
   metadata_alias_validation=(metadata --locked --offline --format-version 1)
 fi
-if ! CARGO_TARGET_DIR="$ROOT_DIR/target/single-governor-metadata-fixture" \
+source_cargo_home="$(prepare_source_cargo_home)"
+if ! CARGO_HOME="$source_cargo_home" \
+  CARGO_TARGET_DIR="$ROOT_DIR/target/single-governor-metadata-fixture" \
   "$SINGLE_GOVERNOR_CARGO" "${metadata_alias_validation[@]}" \
   --manifest-path "$metadata_alias/Cargo.toml" \
   >"$FIXTURE_DIR/metadata_alias.stdout" \
