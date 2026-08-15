@@ -103,9 +103,18 @@ rustc/Cargo release and commit identities. Every Cargo command runs with a fresh
 config-free gate-owned `CARGO_HOME`; repository and ancestor Cargo configuration
 is refused, active-host compiler/wrapper/flags/linker/runner overrides are
 rejected, and inactive-target, Python, and loader channels are neutralized. The
-Actions runner's step environment is the bootstrap trust root: it clears
-`BASH_ENV`, `ENV`, and the loader injection family before starting the step
-shell, which then launches an absolute `/bin/bash` through `/usr/bin/env -i`.
+dedicated `mapping-contract` and `negative-registry-contract` jobs use separate
+fresh Ubuntu runners with only
+a pinned credential-free checkout before each gate. The checked custom-shell
+template starts `/usr/bin/env -i` directly. There is no default Bash,
+repository-authored command, restored executable cache, `GITHUB_ENV`, or
+`GITHUB_PATH` writer in front of that launcher; the clean environment starts
+the absolute `/bin/bash` that reads the generated Actions script. Executable
+cases prove hostile `SHELLOPTS`, `BASHOPTS`, exported Bash functions, startup
+files, and a PATH-shadowed Bash cannot skip that script and require its exact
+completion marker rather than exit zero. Linux cases separately reproduce the
+zero-exit suppression caused by inherited `LD_TRACE_LOADED_OBJECTS` and
+`LD_DEBUG` before `env -i` can run.
 Only inside that clean parent-created boundary does the checker select an
 absolute system-path Python interpreter. Directly invoking the script from a
 process that already carries shell-startup or loader injection is intentionally

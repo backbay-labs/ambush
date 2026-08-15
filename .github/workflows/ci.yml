@@ -13,6 +13,41 @@ env:
   CARGO_TARGET_DIR: target/ci
 
 jobs:
+  # Phase 285 runs these gates on separate fresh hosted runners. Each job has
+  # only the pinned credential-free checkout before the gate, and its explicit
+  # custom shell makes /usr/bin/env the first child instead of a PATH-resolved
+  # default Bash. This prevents earlier repository commands, caches,
+  # GITHUB_ENV, or GITHUB_PATH from affecting either gate's bootstrap.
+  # Two warm local clean-launch runs of the 161-self-test registry gate took
+  # 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
+  # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. They are local
+  # observations, not a CI estimate; compiled actual-source mutations dominate.
+  mapping-contract:
+    name: mapping-contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Check the invariant map against the source markers
+        shell: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: tools/check-mapping.sh
+
+  negative-registry-contract:
+    name: negative-registry-contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Check every mapped invariant has a falsifying negative test
+        shell: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: tools/check-negative-registry.sh
+
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -173,80 +208,6 @@ jobs:
       # belongs in this job with the other fast static checks.
       - name: Check no production path holds a governor keyring
         run: bash tools/check-single-governor-key.sh
-
-      # MAPPING-05 / FALSIFY-04, phase 285. `docs/assurance/MAPPING.md` claims
-      # each fail-closed invariant is enforced by a named
-      # `crate::module::function`. A markdown table cannot go stale loudly:
-      # rename the function and the row still reads correctly, delete the guard
-      # and the row still reads correctly. Unchecked, the table is the
-      # documentation form of the defect .planning/STATE.md catalogues twelve
-      # times.
-      #
-      # The mapping gate gets the compiled Rust source inventory from Cargo's
-      # rustc dep-info, then lexically binds source markers to executable guard
-      # expressions. The negative-registry gate binds each row to the shared
-      # typed differential protocol and a built-in #[test] wrapper, validates
-      # the relevant manifest plus locked Cargo resolution, and directly runs
-      # each emitted test binary for exact inventory and passed/ignored counts.
-      # Direct artifact execution prevents a Cargo runner from fabricating
-      # libtest output. The gate also pins Cargo's canonical integration-test
-      # and production-library targets so a same-name explicit test cannot
-      # redirect execution, pins manifest/toolchain semantics, and forces an
-      # audited target compile through a config-free Cargo home and pinned
-      # compiler. Two warm runs of the 149-self-test gate took 290.50s and
-      # 116.72s wall clock (39.31/38.59s user, 17.15/15.90s sys) on Darwin
-      # 25.4.0 arm64 with rustc 1.97.1 (2026-08-15). Both began with no other
-      # Cargo process in this worktree, but system load remained 24-42 with
-      # unrelated system contention. These are explicitly
-      # contention-bound observations, not quiet measurements or a CI estimate;
-      # the stable 54.49-56.46s CPU cost is the more useful local datum. Compiled
-      # actual-source mutations dominate; timing remains cache- and
-      # machine-dependent.
-      #
-      # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
-      # and refuse to scan it if a fixture misbehaves. These workflow steps are
-      # present here; protected provenance is tracked separately in Phase 285
-      # acceptance because an Actions App identity plus job name is spoofable.
-      # A gate that has
-      # never been observed failing is not evidence; checked-in adversarial
-      # fixtures exercise unmapped/deleted entries, spoofed source, orphan
-      # modules, ignored tests and missing typed-protocol invocations on every
-      # run. The protocol proves the three registered operations execute over
-      # one typed probe; it cannot prove a handwritten mirror is otherwise a
-      # faithful copy of production.
-      #
-      # NOTE THE PATH. MAPPING-04/05 and FALSIFY-03/04 say `scripts/check-*.sh`.
-      # There is no `scripts/` directory in this repository and never has been;
-      # every gate is `tools/check-*.sh` and check-gates-wired.sh enumerates
-      # that directory. Phase 283 hit the same stale wording and recorded the
-      # same deviation.
-      - name: Check the invariant map against the source markers
-        run: bash tools/check-mapping.sh
-
-      # `!cancelled()` rather than chaining: the two gates are independent. A
-      # row whose function was renamed must not hide a row whose negative test
-      # was deleted, which is exactly the pairing that would let the map look
-      # maintained while the falsifiability behind it rotted.
-      - name: Check every mapped invariant has a falsifying negative test
-        if: ${{ !cancelled() }}
-        # These values are cleared by the Actions runner before it starts the
-        # step shell. That parent-created environment is the bootstrap trust
-        # root: a script cannot neutralize BASH_ENV or a dynamic-loader hook
-        # that executes before the script's first instruction.
-        env:
-          BASH_ENV: ""
-          ENV: ""
-          LD_AUDIT: ""
-          LD_PRELOAD: ""
-          LD_LIBRARY_PATH: ""
-          DYLD_INSERT_LIBRARIES: ""
-          DYLD_LIBRARY_PATH: ""
-          DYLD_FRAMEWORK_PATH: ""
-          DYLD_FALLBACK_LIBRARY_PATH: ""
-          DYLD_FALLBACK_FRAMEWORK_PATH: ""
-          DYLD_ROOT_PATH: ""
-          DYLD_IMAGE_SUFFIX: ""
-        run: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc tools/check-negative-registry.sh
 
   build:
     runs-on: ubuntu-latest

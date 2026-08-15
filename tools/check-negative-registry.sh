@@ -21,10 +21,12 @@
 # canonical source files; production libraries and the complete local
 # custom-build target inventory are also bound through Cargo metadata. The one
 # reviewed local build script is source- and manifest-digested, while all other
-# local custom-build targets are rejected. The supported CI entry point first
-# clears shell-startup and loader injection in the Actions-runner-created step
-# environment, then uses absolute env/bash paths and `env -i`. That parent
-# process is the bootstrap trust root: this script cannot sanitize code that
+# local custom-build targets are rejected. Each supported CI entry point has a
+# dedicated fresh Ubuntu runner and only a pinned credential-free checkout
+# before its gate. Its custom-shell template starts `/usr/bin/env -i` directly;
+# there is no default Bash, cache, repository command, GITHUB_ENV, or GITHUB_PATH
+# writer before it. The fresh runner is the bootstrap trust root: this script
+# cannot sanitize code that
 # executes before line one. Checker-owned semantic digests pin all four
 # crate manifests plus root execution-affecting tables. Those co-located digests
 # are tamper-evident against uncoordinated edits, not an external trust anchor.
@@ -257,23 +259,81 @@ def cargo_config_sources(root):
 
 BOOTSTRAP_ENVIRONMENT_NAMES = {
     "BASH_ENV",
+    "BASHOPTS",
     "ENV",
+    "SHELLOPTS",
 }
 WORKFLOW_LOADER_ENVIRONMENT_NAMES = {
     "LD_AUDIT",
+    "LD_ASSUME_KERNEL",
+    "LD_BIND_NOT",
+    "LD_BIND_NOW",
+    "LD_DEBUG",
+    "LD_DEBUG_OUTPUT",
+    "LD_DYNAMIC_WEAK",
+    "LD_HWCAP_MASK",
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
+    "LD_ORIGIN_PATH",
+    "LD_POINTER_GUARD",
+    "LD_PREFER_MAP_32BIT_EXEC",
+    "LD_PROFILE",
+    "LD_PROFILE_OUTPUT",
+    "LD_SHOW_AUXV",
+    "LD_TRACE_LOADED_OBJECTS",
+    "LD_USE_LOAD_BIAS",
+    "LD_VERBOSE",
+    "LD_WARN",
+    "GLIBC_TUNABLES",
+    "DYLD_ABORT_MULTIPLE_INITS",
+    "DYLD_DISABLE_DOFS",
+    "DYLD_FORCE_FLAT_NAMESPACE",
     "DYLD_INSERT_LIBRARIES",
     "DYLD_LIBRARY_PATH",
     "DYLD_FRAMEWORK_PATH",
     "DYLD_FALLBACK_LIBRARY_PATH",
     "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_NO_FIX_PREBINDING",
+    "DYLD_PRINT_APIS",
+    "DYLD_PRINT_BINDINGS",
+    "DYLD_PRINT_DOFS",
+    "DYLD_PRINT_ENV",
+    "DYLD_PRINT_INITIALIZERS",
+    "DYLD_PRINT_LIBRARIES",
+    "DYLD_PRINT_LIBRARIES_POST_LAUNCH",
+    "DYLD_PRINT_OPTS",
+    "DYLD_PRINT_REBASINGS",
+    "DYLD_PRINT_RPATHS",
+    "DYLD_PRINT_SEGMENTS",
+    "DYLD_PRINT_STATISTICS",
+    "DYLD_PRINT_STATISTICS_DETAILS",
     "DYLD_ROOT_PATH",
+    "DYLD_SHARED_CACHE_DIR",
+    "DYLD_SHARED_CACHE_DONT_VALIDATE",
+    "DYLD_SHARED_REGION",
     "DYLD_IMAGE_SUFFIX",
+    "DYLD_VERSIONED_FRAMEWORK_PATH",
+    "DYLD_VERSIONED_LIBRARY_PATH",
 }
-WORKFLOW_BOOTSTRAP_COMMAND = (
+WORKFLOW_BOOTSTRAP_SHELL = (
     "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "
-    "/bin/bash --noprofile --norc tools/check-negative-registry.sh"
+    "/bin/bash --noprofile --norc -e -o pipefail {0}"
+)
+PINNED_CHECKOUT = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+WORKFLOW_GATE_JOBS = {
+    "mapping-contract": (
+        "tools/check-mapping.sh",
+        "Check the invariant map against the source markers",
+    ),
+    "negative-registry-contract": (
+        "tools/check-negative-registry.sh",
+        "Check every mapped invariant has a falsifying negative test",
+    ),
+}
+WORKFLOW_GLOBAL_ENVIRONMENT = (
+    "env:\n"
+    "  CARGO_TERM_COLOR: always\n"
+    "  CARGO_TARGET_DIR: target/ci"
 )
 
 
@@ -282,6 +342,8 @@ def bootstrap_override_names(environment):
         name for name, value in environment.items()
         if value and (
             name in BOOTSTRAP_ENVIRONMENT_NAMES
+            or name in WORKFLOW_LOADER_ENVIRONMENT_NAMES
+            or name.startswith("BASH_FUNC_")
             or name.startswith("LD_")
             or name.startswith("DYLD_")
         )
@@ -295,30 +357,40 @@ def validate_workflow_bootstrap(root, report):
     except OSError as error:
         report.violation("dependency-bootstrap-workflow-read", str(error))
         return
-    start = text.find("      - name: Check every mapped invariant has a falsifying negative test\n")
-    if start < 0:
-        block = ""
-    else:
-        tail = text[start + 1:]
-        boundary = re.search(r"\n(?:      - name:|  [A-Za-z0-9_-]+:)", tail)
-        block = text[start:] if boundary is None else text[start:start + 1 + boundary.start()]
-    lines = block.splitlines()
-    environment_names = BOOTSTRAP_ENVIRONMENT_NAMES | WORKFLOW_LOADER_ENVIRONMENT_NAMES
     invalid = []
-    for name in sorted(environment_names):
-        bindings = [line for line in lines if line.startswith(f"          {name}:")]
-        if bindings != [f'          {name}: ""']:
-            invalid.append(f"{name}={bindings!r}")
-    run_lines = [line for line in lines if line.startswith("        run:")]
-    expected_run = f"        run: {WORKFLOW_BOOTSTRAP_COMMAND}"
-    if run_lines != [expected_run]:
-        invalid.append(f"run={run_lines!r}")
-    if lines.count("        env:") != 1:
-        invalid.append(f"env-count={lines.count('        env:')}")
-    if start < 0 or invalid:
+    jobs_marker = "jobs:\n"
+    prefix = text.split(jobs_marker, 1)[0] if jobs_marker in text else text
+    workflow_environments = [
+        match.group(0).rstrip()
+        for match in re.finditer(r"(?ms)^env:\n(?:  [^\n]+\n?)+", prefix)
+    ]
+    if workflow_environments != [WORKFLOW_GLOBAL_ENVIRONMENT]:
+        invalid.append(f"workflow-env={workflow_environments!r}")
+    for job, (command, step_name) in WORKFLOW_GATE_JOBS.items():
+        matches = list(re.finditer(
+            rf"(?ms)^  {re.escape(job)}:\n.*?(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            text,
+        ))
+        expected = (
+            f"  {job}:\n"
+            f"    name: {job}\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    steps:\n"
+            "      - name: Checkout the candidate without persisted credentials\n"
+            f"        uses: {PINNED_CHECKOUT}\n"
+            "        with:\n"
+            "          persist-credentials: false\n\n"
+            f"      - name: {step_name}\n"
+            f"        shell: {WORKFLOW_BOOTSTRAP_SHELL}\n"
+            f"        run: {command}"
+        )
+        actual = matches[0].group(0).rstrip() if len(matches) == 1 else ""
+        if actual != expected:
+            invalid.append(f"{job}-job={actual!r}")
+    if invalid:
         report.violation(
             "dependency-bootstrap-workflow-drift",
-            f"negative-registry workflow bootstrap is not the exact clean boundary: {invalid}",
+            f"mapping/negative-registry jobs are not the exact fresh-runner boundary: {invalid}",
         )
 
 
@@ -530,6 +602,8 @@ def sanitized_cargo_environment(
                 "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONINSPECT",
             }
             or name in BOOTSTRAP_ENVIRONMENT_NAMES
+            or name in WORKFLOW_LOADER_ENVIRONMENT_NAMES
+            or name.startswith("BASH_FUNC_")
             or name.startswith("LD_")
             or name.startswith("DYLD_")
         ):
@@ -569,6 +643,8 @@ def sanitized_runtime_environment(*, source_environment=None):
                 "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONINSPECT",
             }
             or name in BOOTSTRAP_ENVIRONMENT_NAMES
+            or name in WORKFLOW_LOADER_ENVIRONMENT_NAMES
+            or name.startswith("BASH_FUNC_")
             or name.startswith("LD_")
             or name.startswith("DYLD_")
         ):
@@ -2738,7 +2814,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 57 executable tests + 5 protocol-contract tests; 149 self-tests passed (3 clean controls, 146 adversarial)'\n"
+        "echo 'check-negative-registry OK: 57 executable tests + 5 protocol-contract tests; 161 self-tests passed (3 clean controls, 158 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -2772,7 +2848,7 @@ def bootstrap_boundary_self_test(base):
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
         "check-negative-registry OK: 57 executable tests + 5 protocol-contract tests; "
-        "149 self-tests passed (3 clean controls, 146 adversarial)"
+        "161 self-tests passed (3 clean controls, 158 adversarial)"
     )
 
     def startup_payload(name):
@@ -2833,32 +2909,137 @@ def bootstrap_boundary_self_test(base):
             file=sys.stderr,
         )
 
-    hostile_shell_environment = sanitized_runtime_environment()
-    hostile_shell_environment.update({
-        "BASH_ENV": str(bash_payload),
-        "ENV": str(env_payload),
-    })
-    bash_marker.unlink(missing_ok=True)
-    env_marker.unlink(missing_ok=True)
-    clean_child = subprocess.run(
+    completion_token = f"phase285-bootstrap-complete-{secrets.token_hex(12)}"
+    completion_marker = base / "supported-boundary-completed"
+    probe = base / "supported-boundary-probe.sh"
+    probe.write_text(
+        "#!/bin/bash\n"
+        "if [[ $- == *n* ]] || shopt -q extdebug; then exit 71; fi\n"
+        "if declare -F env >/dev/null || declare -F bash >/dev/null; then exit 72; fi\n"
+        "if [[ -n ${BASH_ENV-} || -n ${ENV-} ]]; then exit 73; fi\n"
+        f": > {json.dumps(str(completion_marker))}\n"
+        f"printf '%s\\n' {json.dumps(completion_token)}\n"
+    )
+
+    old_noexec_environment = sanitized_runtime_environment()
+    old_noexec_environment["SHELLOPTS"] = "noexec"
+    completion_marker.unlink(missing_ok=True)
+    old_noexec = subprocess.run(
         [
-            "/usr/bin/env", "-i", "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-            "/bin/bash", "--noprofile", "--norc", "-c",
-            'test -z "${BASH_ENV-}" && test -z "${ENV-}" && printf clean',
+            "/bin/bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+            "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "
+            f"/bin/bash --noprofile --norc -e -o pipefail {probe}",
         ],
-        env=hostile_shell_environment,
+        env=old_noexec_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if old_noexec.returncode or old_noexec.stdout or completion_marker.exists():
+        ok = False
+        print("old in-run env-i boundary did not reproduce the SHELLOPTS=noexec false green", file=sys.stderr)
+
+    loader_noexec_attacks = {}
+    if sys.platform.startswith("linux"):
+        loader_noexec_attacks = {
+            "LD_TRACE_LOADED_OBJECTS": "1",
+            "LD_DEBUG": "help",
+        }
+    for variable, value in loader_noexec_attacks.items():
+        completion_marker.unlink(missing_ok=True)
+        hostile_environment = sanitized_runtime_environment()
+        hostile_environment[variable] = value
+        loader_noexec = subprocess.run(
+            [
+                "/usr/bin/env", "-i", "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+                "/bin/bash", "--noprofile", "--norc", "-e", "-o", "pipefail",
+                str(probe),
+            ],
+            env=hostile_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if (
+            loader_noexec.returncode
+            or completion_token in loader_noexec.stdout
+            or completion_marker.exists()
+        ):
+            ok = False
+            print(
+                f"{variable} did not reproduce a zero-exit before /usr/bin/env entered:\n"
+                f"{(loader_noexec.stdout + loader_noexec.stderr)[-4000:]}",
+            file=sys.stderr,
+        )
+
+    fake_bash_root = base / "github-path-fake-bash"
+    fake_bash_root.mkdir()
+    fake_bash_marker = fake_bash_root / "invoked"
+    fake_bash = fake_bash_root / "bash"
+    fake_bash.write_text(
+        "#!/bin/sh\n"
+        f": > {json.dumps(str(fake_bash_marker))}\n"
+        f"printf '%s\\n' {json.dumps(fake_result)}\n"
+        "exit 0\n"
+    )
+    fake_bash.chmod(0o755)
+    github_path_environment = sanitized_runtime_environment()
+    github_path_environment["PATH"] = f"{fake_bash_root}:/usr/bin:/bin:/usr/sbin:/sbin"
+    default_bash_attack = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(probe)],
+        env=github_path_environment,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     if (
-        clean_child.returncode
-        or clean_child.stdout != "clean"
-        or bash_marker.exists()
-        or env_marker.exists()
+        default_bash_attack.returncode
+        or default_bash_attack.stdout.strip() != fake_result
+        or not fake_bash_marker.is_file()
+        or completion_marker.exists()
     ):
         ok = False
-        print("env -i did not establish a clean child-shell contract", file=sys.stderr)
+        print("GITHUB_PATH fake default Bash did not reproduce the pre-launch false green", file=sys.stderr)
+
+    supported_attacks = {
+        "clean-fresh-runner": {},
+        "shellopts-noexec": {"SHELLOPTS": "noexec"},
+        "bashopts-extdebug": {"BASHOPTS": "extdebug"},
+        "imported-functions": {
+            "BASH_FUNC_env%%": "() { printf 'fake env\\n'; exit 0; }",
+            "BASH_FUNC_bash%%": "() { printf 'fake bash\\n'; exit 0; }",
+        },
+        "startup-files": {"BASH_ENV": str(bash_payload), "ENV": str(env_payload)},
+        "github-path-fake-bash": {
+            "PATH": f"{fake_bash_root}:/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+    }
+    for name, hostile in supported_attacks.items():
+        completion_marker.unlink(missing_ok=True)
+        launcher_environment = sanitized_runtime_environment()
+        launcher_environment.update(hostile)
+        supported = subprocess.run(
+            [
+                "/usr/bin/env", "-i", "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+                "/bin/bash", "--noprofile", "--norc", "-e", "-o", "pipefail",
+                str(probe),
+            ],
+            env=launcher_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if (
+            supported.returncode
+            or supported.stdout.strip() != completion_token
+            or not completion_marker.is_file()
+        ):
+            ok = False
+            print(
+                f"supported custom-shell boundary failed {name} without exact completion:\n"
+                f"{(supported.stdout + supported.stderr)[-4000:]}",
+                file=sys.stderr,
+            )
 
     loader_root = base / "loader-prebootstrap"
     loader_root.mkdir()
@@ -2959,17 +3140,68 @@ def bootstrap_boundary_self_test(base):
     if clean_report.violations:
         ok = False
         print(f"workflow bootstrap clean fixture failed: {clean_report.violations}", file=sys.stderr)
-    workflow_path.write_text(
-        workflow_text
-        .replace('          BASH_ENV: ""\n', "", 1)
-        .replace(WORKFLOW_BOOTSTRAP_COMMAND, "bash tools/check-negative-registry.sh", 1)
-    )
-    drift_report = Report()
-    validate_workflow_bootstrap(workflow_root, drift_report)
-    if "dependency-bootstrap-workflow-drift" not in drift_report.codes():
-        ok = False
-        print("workflow bootstrap mutation was not rejected", file=sys.stderr)
-    return ok, 5
+
+    def mutate_workflow_job(job, old, new):
+        start = workflow_text.index(f"  {job}:\n")
+        boundary = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", workflow_text[start + 1:])
+        end = len(workflow_text) if boundary is None else start + 1 + boundary.start()
+        block = workflow_text[start:end]
+        if old not in block:
+            raise AssertionError(f"workflow mutation input missing from {job}: {old!r}")
+        return workflow_text[:start] + block.replace(old, new, 1) + workflow_text[end:]
+
+    workflow_mutations = {
+        "default-bash-before-env": workflow_text.replace(
+            f"        shell: {WORKFLOW_BOOTSTRAP_SHELL}",
+            "        shell: /bin/bash -e {0}",
+            1,
+        ),
+        "unpinned-checkout": workflow_text.replace(
+            f"uses: {PINNED_CHECKOUT}",
+            "uses: actions/checkout@v4",
+            1,
+        ),
+        "prior-github-path-writer": workflow_text.replace(
+            "    steps:\n      - name: Checkout the candidate without persisted credentials",
+            "    steps:\n      - name: Candidate-controlled PATH writer\n"
+            "        run: echo attacker >> $GITHUB_PATH\n\n"
+            "      - name: Checkout the candidate without persisted credentials",
+            1,
+        ),
+        "workflow-environment": workflow_text.replace(
+            "jobs:\n", "env:\n  BASH_ENV: attacker\n\njobs:\n", 1,
+        ),
+        "job-environment": workflow_text.replace(
+            "  negative-registry-contract:\n",
+            "  negative-registry-contract:\n    env:\n      LD_PRELOAD: attacker\n",
+            1,
+        ),
+        "step-environment": workflow_text.replace(
+            "      - name: Check every mapped invariant has a falsifying negative test\n",
+            "      - name: Check every mapped invariant has a falsifying negative test\n"
+            "        env:\n          BASH_ENV: attacker\n",
+            1,
+        ),
+        "negative-default-bash": mutate_workflow_job(
+            "negative-registry-contract",
+            f"        shell: {WORKFLOW_BOOTSTRAP_SHELL}",
+            "        shell: /bin/bash -e {0}",
+        ),
+        "negative-prior-github-path-writer": mutate_workflow_job(
+            "negative-registry-contract",
+            "    steps:\n",
+            "    steps:\n      - name: Candidate-controlled PATH writer\n"
+            "        run: echo attacker >> $GITHUB_PATH\n\n",
+        ),
+    }
+    for name, mutation in workflow_mutations.items():
+        workflow_path.write_text(mutation)
+        drift_report = Report()
+        validate_workflow_bootstrap(workflow_root, drift_report)
+        if "dependency-bootstrap-workflow-drift" not in drift_report.codes():
+            ok = False
+            print(f"workflow bootstrap mutation {name} was not rejected", file=sys.stderr)
+    return ok, 17 + len(loader_noexec_attacks)
 
 
 def target_environment_scope_self_test():

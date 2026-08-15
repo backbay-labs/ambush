@@ -25,10 +25,15 @@
 # overrides. Inactive-target overrides are stripped. External
 # Cargo homes are ignored: every Cargo command uses a recreated config-free
 # gate-owned home, pinned cargo/rustc, and a
-# gate-owned isolated-Python rustc wrapper. The supported workflow first clears
-# BASH_ENV/ENV and loader injection in the runner-created step environment,
-# then uses absolute env/bash with `env -i`; that parent is the bootstrap trust
-# root. Only inside it does the checker select an absolute system-path Python.
+# gate-owned isolated-Python rustc wrapper. Dedicated `mapping-contract` and
+# `negative-registry-contract` jobs
+# each start on a fresh Ubuntu runner with only a pinned credential-free
+# checkout before the gate. Their checked custom-shell templates start absolute
+# `env -i` directly before any Bash and launch absolute Bash themselves; that
+# fresh runner is the bootstrap trust root. Only inside it does the checker
+# select an absolute system-path Python. Completion-marker fixtures cover
+# SHELLOPTS/BASHOPTS/imported-function, startup-file, and PATH-shadow attacks;
+# Linux fixtures reproduce LD_TRACE_LOADED_OBJECTS/LD_DEBUG zero-exit suppression.
 # Direct hostile-environment invocation is reproduced as unsafe, not claimed
 # repaired by script-internal sanitization. The wrapper forces and audits one
 # exact test-mode compile per target, including crate name and canonical source

@@ -9,16 +9,37 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-python3 - "$ROOT_DIR" <<'PY'
+PHASE285_PYTHON=""
+for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  if [[ -x "$candidate" ]] \
+    && "$candidate" -I -c 'import sys, tomllib; raise SystemExit(sys.version_info < (3, 11))' \
+      >/dev/null 2>&1; then
+    PHASE285_PYTHON="$candidate"
+    break
+  fi
+done
+if [[ -z "$PHASE285_PYTHON" ]]; then
+  echo "check-mapping requires Python >= 3.11 at a pinned system path" >&2
+  exit 1
+fi
+
+"$PHASE285_PYTHON" -I - "$ROOT_DIR" <<'PY'
 from __future__ import annotations
 
+import os
 import pathlib
+import pwd
 import re
 import sys
 import tempfile
 import tomllib
 
 REPO_ROOT = pathlib.Path(sys.argv[1])
+ACCOUNT_HOME = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir)
+os.environ["HOME"] = str(ACCOUNT_HOME)
+os.environ["PATH"] = ":".join((
+    str(ACCOUNT_HOME / ".cargo/bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+))
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from assurance_source import (  # noqa: E402
     function_spans,

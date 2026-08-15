@@ -43,10 +43,16 @@ tables. Cargo metadata also binds the full local custom-build inventory; the one
 reviewed build-script manifest and source are digested and any added local
 custom-build target is refused. Every Cargo command uses a fresh config-free
 gate-owned `CARGO_HOME`, an exact pinned Cargo/rustc, a sanitized PATH, and no
-repository or ancestor Cargo config. The Actions runner's cleared step
-environment is the bootstrap trust root: it empties `BASH_ENV`, `ENV`, and the
-loader-injection family before starting the shell, then the step uses
-`/usr/bin/env -i` and absolute `/bin/bash`. Inside that boundary the checker
+repository or ancestor Cargo config. Dedicated `mapping-contract` and
+`negative-registry-contract` jobs each
+use a fresh Ubuntu runner with only a pinned credential-free checkout before
+the gate. Their checked custom-shell templates start `/usr/bin/env -i`
+directly, with no default Bash, repository command, cache, `GITHUB_ENV`, or
+`GITHUB_PATH` writer before it, followed by absolute `/bin/bash`. Exact
+completion-marker fixtures cover hostile `SHELLOPTS`, `BASHOPTS`, imported Bash
+functions, startup files, and PATH shadowing; Linux fixtures reproduce the
+`LD_TRACE_LOADED_OBJECTS` and `LD_DEBUG` zero-exit failure before `env -i`.
+Inside that fresh-runner boundary the checker
 selects an absolute system-path Python, and a gate-owned isolated-Python rustc wrapper forces and audits exactly one
 test-mode compile per registered target, binding the compiler, crate name,
 canonical source realpath, and source hash. The gate then invokes emitted test
