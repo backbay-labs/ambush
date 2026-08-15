@@ -2814,7 +2814,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 57 executable tests + 5 protocol-contract tests; 161 self-tests passed (3 clean controls, 158 adversarial)'\n"
+        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 161 self-tests passed (3 clean controls, 158 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -2847,7 +2847,7 @@ def bootstrap_boundary_self_test(base):
     ok = True
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
-        "check-negative-registry OK: 57 executable tests + 5 protocol-contract tests; "
+        "check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; "
         "161 self-tests passed (3 clean controls, 158 adversarial)"
     )
 

@@ -7,8 +7,9 @@ MAPPING-05 and FALSIFY-04 remain open until a provenance-distinct external
 required check protects the local gate result. The current organization is on
 GitHub Free, where an organization-owned pinned required workflow is
 unavailable. A dedicated external GitHub App check with its own integration ID
-is the viable Free-plan anchor; the existing Actions App plus `panic-contract`
-check name is not provenance and can be spoofed by another workflow.
+is the viable Free-plan anchor; the existing Actions App plus the local
+`mapping-contract` / `negative-registry-contract` contexts are not provenance
+and can be spoofed by another workflow.
 
 Supersedes nothing. Names invariants of the trusted computing base ADR 0009
 draws; adds no dependency edge to any TCB crate, so
