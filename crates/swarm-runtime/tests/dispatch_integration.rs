@@ -1931,14 +1931,12 @@ async fn failed_router_burns_owned_human_and_governance_admission() -> Result<()
 async fn governed_human_hold_and_consumption_survive_governance_restarts()
 -> Result<(), Box<dyn Error>> {
     let persistence_path = temp_jsonl_path("governed-human-restart");
-    let governance = Arc::new(GovernancePolicy::with_persistence(
+    let governance = Arc::new(GovernancePolicy::initialize_persistence(
         GovernancePolicyConfig::default(),
         &persistence_path,
-    )?);
-    governance.register_governor(
         AgentId::new("tom", "primary"),
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
-    )?;
+    )?);
     let (gate, evaluate_calls, issue_lease_calls) =
         CountingApprovalGate::require_human_with_ttl(60_000);
     let executor = RecordingExecutor::default();
@@ -1984,11 +1982,9 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
     let reloaded = Arc::new(GovernancePolicy::with_persistence(
         GovernancePolicyConfig::default(),
         &persistence_path,
-    )?);
-    reloaded.register_governor(
         AgentId::new("tom", "primary"),
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
-    )?;
+    )?);
     let resume = HumanApprovalResumeDispatcher::new(reloaded, router.clone());
     resume.resume(pack.clone()).await?;
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
@@ -1998,11 +1994,9 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
     let consumed_reload = Arc::new(GovernancePolicy::with_persistence(
         GovernancePolicyConfig::default(),
         &persistence_path,
-    )?);
-    consumed_reload.register_governor(
         AgentId::new("tom", "primary"),
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
-    )?;
+    )?);
     let replay = HumanApprovalResumeDispatcher::new(consumed_reload, router)
         .resume(pack)
         .await

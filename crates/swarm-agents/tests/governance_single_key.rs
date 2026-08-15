@@ -61,7 +61,9 @@ fn a_second_distinct_governor_signing_key_is_refused() {
     let error = policy
         .register_governor(AgentId::new("tom", "secondary"), key(4))
         .expect_err("a second, different signing key must be refused");
-    let GovernanceKeyError::SecondSigningKey { existing, offered } = error;
+    let GovernanceKeyError::SecondSigningKey { existing, offered } = error else {
+        panic!("expected a second-key error");
+    };
     assert_eq!(
         existing,
         AgentId::from_verifying_key(&key(3).verifying_key())
@@ -116,7 +118,9 @@ fn admitting_a_peer_governor_without_a_networked_transport_vetoes() {
     // returned Allow with a receipt claiming a 2-of-2 quorum that no second
     // process had taken part in.
     let policy = healthy_policy(6);
-    policy.register_peer_governor(&key(7).verifying_key());
+    policy
+        .register_peer_governor(&key(7).verifying_key())
+        .unwrap();
 
     let decision = policy.can_act(&block_egress());
     let GovernanceDecision::Veto {
@@ -248,12 +252,16 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
     ));
     let _ = std::fs::remove_file(&path);
 
-    let policy = GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path)
-        .expect("a fresh persistence path loads");
+    let policy = GovernancePolicy::initialize_persistence(
+        GovernancePolicyConfig::default(),
+        &path,
+        AgentId::new("tom", "primary"),
+        key(21),
+    )
+    .expect("a fresh persistence path initializes");
     policy
-        .register_governor(AgentId::new("tom", "primary"), key(21))
-        .expect("first key is accepted");
-    policy.register_peer_governor(&key(22).verifying_key());
+        .register_peer_governor(&key(22).verifying_key())
+        .unwrap();
     policy.observe_health(
         &AgentId::new("tom", "primary"),
         &[] as &[AgentHealthEntry],
@@ -264,11 +272,13 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
         GovernanceDecision::Veto { .. }
     ));
 
-    let reloaded = GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path)
-        .expect("the persisted state reloads");
-    reloaded
-        .register_governor(AgentId::new("tom", "primary"), key(21))
-        .expect("re-registering the same key after a reload is a no-op");
+    let reloaded = GovernancePolicy::with_persistence(
+        GovernancePolicyConfig::default(),
+        &path,
+        AgentId::new("tom", "primary"),
+        key(21),
+    )
+    .expect("the persisted state reloads");
     reloaded.observe_health(
         &AgentId::new("tom", "primary"),
         &[] as &[AgentHealthEntry],
@@ -282,6 +292,7 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
     );
 
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(GovernancePolicy::persistence_sequence_path(&path));
 }
 
 /// Records everything a round publishes. Accepts any committee, which is

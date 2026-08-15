@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::SigningKey;
@@ -259,19 +259,49 @@ fn persistence_path(label: &str) -> PathBuf {
     ))
 }
 
+fn initialize_persisted_policy(path: &PathBuf) -> GovernancePolicy {
+    GovernancePolicy::initialize_persistence(
+        GovernancePolicyConfig::default(),
+        path,
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&GOVERNOR_KEY),
+    )
+    .unwrap()
+}
+
+fn reload_persisted_policy(path: &PathBuf) -> GovernancePolicy {
+    GovernancePolicy::with_persistence(
+        GovernancePolicyConfig::default(),
+        path,
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&GOVERNOR_KEY),
+    )
+    .unwrap()
+}
+
+fn block_next_state_write(path: &Path) -> PathBuf {
+    let temp_path = path.with_extension(format!(
+        "{}.tmp-{}",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("state"),
+        std::process::id()
+    ));
+    fs::create_dir(&temp_path).unwrap();
+    temp_path
+}
+
+fn cleanup_persistence(path: &PathBuf) {
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(GovernancePolicy::persistence_sequence_path(path));
+}
+
 #[test]
 fn consumed_authorization_stays_consumed_after_restart() {
     let path = persistence_path("restart");
     let request = request();
     let receipt = {
-        let policy =
-            GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path).unwrap();
-        policy
-            .register_governor(
-                AgentId::new("tom", "primary"),
-                SigningKey::from_bytes(&GOVERNOR_KEY),
-            )
-            .unwrap();
+        let policy = initialize_persisted_policy(&path);
         let receipt = approval(&policy, &request);
         let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
         policy
@@ -279,37 +309,22 @@ fn consumed_authorization_stays_consumed_after_restart() {
             .unwrap();
         receipt
     };
-    let reloaded =
-        GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path).unwrap();
-    reloaded
-        .register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&GOVERNOR_KEY),
-        )
-        .unwrap();
+    let reloaded = reload_persisted_policy(&path);
     let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
     let error = reloaded
         .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
         .expect_err("restart must not make a consumed receipt replayable");
     assert!(error.contains("already consumed"));
-    let _ = fs::remove_file(path);
+    cleanup_persistence(&path);
 }
 
 #[test]
 fn issuance_and_consumption_refuse_persistence_failures() {
     let path = persistence_path("failure");
-    let policy =
-        GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path).unwrap();
-    policy
-        .register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&GOVERNOR_KEY),
-        )
-        .unwrap();
+    let policy = initialize_persisted_policy(&path);
     let request = request();
 
-    fs::remove_file(&path).unwrap();
-    fs::create_dir(&path).unwrap();
+    let blocker = block_next_state_write(&path);
     let GovernanceDecision::Veto {
         receipt: None,
         reason,
@@ -320,64 +335,78 @@ fn issuance_and_consumption_refuse_persistence_failures() {
     };
     assert!(reason.contains("pending-ledger persistence failed"));
 
-    fs::remove_dir(&path).unwrap();
+    fs::remove_dir(&blocker).unwrap();
     let receipt = approval(&policy, &request);
     let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
-    fs::remove_file(&path).unwrap();
-    fs::create_dir(&path).unwrap();
+    let blocker = block_next_state_write(&path);
     let error = policy
         .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 1)
         .expect_err("a consume persistence failure must refuse routing");
     assert!(error.contains("ledger persistence failed"));
 
-    fs::remove_dir(&path).unwrap();
+    fs::remove_dir(&blocker).unwrap();
     policy
         .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
         .expect("failed persistence must roll the pending entry back in memory");
-    let _ = fs::remove_file(path);
+    cleanup_persistence(&path);
+}
+
+#[test]
+fn state_committed_before_checkpoint_failure_recovers_conservatively_on_restart() {
+    let path = persistence_path("checkpoint-failure");
+    let policy = initialize_persisted_policy(&path);
+    let request = request();
+    let receipt = approval(&policy, &request);
+    let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
+    let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+    let blocker = block_next_state_write(&sequence_path);
+
+    let error = policy
+        .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 1)
+        .expect_err("checkpoint failure must refuse routing");
+    assert!(error.contains("ledger persistence failed"));
+    fs::remove_dir(blocker).unwrap();
+    drop(policy);
+
+    let reloaded = reload_persisted_policy(&path);
+    let error = reloaded
+        .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
+        .expect_err("the signed state written before the crash window stays consumed");
+    assert!(error.contains("already consumed"));
+    cleanup_persistence(&path);
 }
 
 #[test]
 fn human_hold_binding_and_consumption_refuse_persistence_failures() {
     let path = persistence_path("human-failure");
-    let policy =
-        GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path).unwrap();
-    policy
-        .register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&GOVERNOR_KEY),
-        )
-        .unwrap();
+    let policy = initialize_persisted_policy(&path);
     let request = request();
     let receipt = approval(&policy, &request);
     let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
     let decision =
         PolicyDecision::require_human_with_rule("test.require-human", "human review is required");
 
-    fs::remove_file(&path).unwrap();
-    fs::create_dir(&path).unwrap();
+    let blocker = block_next_state_write(&path);
     let error = policy
         .begin_human_authorization_hold(&request, &receipt, &decision, issued_at_ms + 1)
         .expect_err("a hold persistence failure must refuse the hold");
     assert!(error.contains("hold was not created because persistence failed"));
 
-    fs::remove_dir(&path).unwrap();
+    fs::remove_dir(&blocker).unwrap();
     let hold = policy
         .begin_human_authorization_hold(&request, &receipt, &decision, issued_at_ms + 2)
         .expect("the failed hold persistence must roll back in memory");
-    fs::remove_file(&path).unwrap();
-    fs::create_dir(&path).unwrap();
+    let blocker = block_next_state_write(&path);
     let error = policy
         .bind_human_approval_set(&hold.hold_id, "approval-set:test", "set-digest:test")
         .expect_err("a binding persistence failure must refuse the binding");
     assert!(error.contains("set was not bound because persistence failed"));
 
-    fs::remove_dir(&path).unwrap();
+    fs::remove_dir(&blocker).unwrap();
     policy
         .bind_human_approval_set(&hold.hold_id, "approval-set:test", "set-digest:test")
         .expect("the failed binding persistence must roll back in memory");
-    fs::remove_file(&path).unwrap();
-    fs::create_dir(&path).unwrap();
+    let blocker = block_next_state_write(&path);
     let error = policy
         .verify_and_consume_human_authorization(
             &hold.hold_id,
@@ -388,7 +417,7 @@ fn human_hold_binding_and_consumption_refuse_persistence_failures() {
         .expect_err("a consume persistence failure must refuse routing");
     assert!(error.contains("were not consumed because persistence failed"));
 
-    fs::remove_dir(&path).unwrap();
+    fs::remove_dir(&blocker).unwrap();
     assert!(
         policy
             .pending_human_authorization("approval-set:test")
@@ -403,5 +432,5 @@ fn human_hold_binding_and_consumption_refuse_persistence_failures() {
             issued_at_ms + 4,
         )
         .expect("failed persistence must roll both approvals back in memory");
-    let _ = fs::remove_file(path);
+    cleanup_persistence(&path);
 }

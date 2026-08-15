@@ -3681,18 +3681,14 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
     }];
 
     let governance = Arc::new(
-        GovernancePolicy::with_persistence(
+        GovernancePolicy::initialize_persistence(
             GovernancePolicyConfig::default(),
             root.join("governance-authorizations.json"),
-        )
-        .unwrap(),
-    );
-    governance
-        .register_governor(
             AgentId::new("tom", "governed-resume-e2e"),
             ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
         )
-        .unwrap();
+        .unwrap(),
+    );
     let runtime_events = RuntimeEventBroadcaster::new(32);
     let mut runtime_rx = runtime_events.subscribe();
     let state = IngestState::from_config(root.join("swarm.yaml"), config.clone())
@@ -3815,7 +3811,16 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
         .await
         .unwrap();
     let trusted_after_ms = swarm_runtime::runtime_events::now_ms();
-    assert_eq!(vote_response.status(), StatusCode::OK);
+    let vote_status = vote_response.status();
+    let vote_body = to_bytes(vote_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        vote_status,
+        StatusCode::OK,
+        "unexpected vote response: {}",
+        String::from_utf8_lossy(&vote_body)
+    );
 
     let receipt_packs = harness.list_receipt_packs().unwrap();
     assert_eq!(receipt_packs.packs.len(), 1);

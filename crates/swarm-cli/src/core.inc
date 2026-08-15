@@ -2932,6 +2932,13 @@ fn run_identity_rotate_command(
     args: &IdentityRotateArgs,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(args.role, IdentityRoleArg::Tom) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Tom identity rotation is disabled: governance persistence is signed by Tom/primary; use the documented offline governance rekey procedure instead of silently stranding signed state",
+        )
+        .into());
+    }
     let config = load_config(config_path)?;
     let key_store = FileAgentKeyStore::open(resolve_agent_key_dir(config_path, &config.identity))?;
     let registry_dir = resolve_identity_registry_dir(config_path, &config.identity);
@@ -5280,8 +5287,8 @@ mod tests {
         Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, QuickstartCommandReport,
         build_validate_report, evolution_mutation_signing_key, load_config,
         parse_review_artifact_ref_arg, render_init_template, resolve_quarantine_endpoint,
-        run_init_command, run_playbook_preview_command, run_quickstart_command,
-        run_readiness_command,
+        run_identity_rotate_command, run_init_command, run_playbook_preview_command,
+        run_quickstart_command, run_readiness_command,
     };
     use crate::config::write_debug_test_config_signature;
     use clap::Parser;
@@ -5458,7 +5465,21 @@ mod tests {
         let cli = Cli::parse_from([
             "swarmctl", "identity", "rotate", "--role", "tom", "--slot", "primary",
         ]);
-        assert!(matches!(cli.command, Command::Identity(_)));
+        let Command::Identity(identity) = cli.command else {
+            panic!("expected identity command");
+        };
+        let super::IdentityCommand::Rotate(args) = identity.command;
+        let error = run_identity_rotate_command(
+            std::path::Path::new("/path/that/must/not/be/read.yaml"),
+            &args,
+            false,
+        )
+        .expect_err("Tom rotation must fail before reading config or mutating key state");
+        assert!(
+            error
+                .to_string()
+                .contains("Tom identity rotation is disabled")
+        );
     }
 
     #[test]

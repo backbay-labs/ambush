@@ -401,7 +401,25 @@ The steady-state readiness and runtime-status surfaces now also include anti-tam
 - `/v2/api/runtime/status` carries the same `anti_tamper` report for operator-visible runtime status
 - when `anti_tamper.fail_closed_live_response` is enabled, only supported Linux live-response runtimes fail closed; unsupported platforms surface `status: unsupported` without creating a readiness bypass
 
-When multi-instance governance is active, `/healthz` and `/readyz` also expose a `governance` component that reports partition state, quorum counts, active contingency leases, and the latest reconciliation report marker. The partition-authority state is persisted under `data/governance-partition-state.json` relative to the repo or config root so restart and healing paths can reconcile redeemed versus unauthorized partition-era actions.
+When governance is active, `/healthz` and `/readyz` also expose a `governance` component that reports partition state, quorum counts, active contingency leases, and the latest reconciliation report marker. The complete authority state is persisted as a Tom/primary-signed envelope at `governance-partition-state.json` beside the configured `identity.agent_key_dir`, with an adjacent Tom/primary-signed `governance-partition-state.sequence.json` high-water checkpoint. This keeps both files on the same stable volume as the identity root in the shipped deployment.
+
+Startup derives the expected signer from the Tom/primary key loaded from the key store and admitted by the identity registry before it reads governance state. It never trusts an envelope signer or peer identity merely because the state file names it. Existing Tom keys require both files: unsigned legacy JSON, a missing or corrupt file, a wrong signer, or a state sequence older than its checkpoint aborts startup. A valid signed envelope one sequence or more ahead of a lagging checkpoint is the recoverable state-first/checkpoint-second crash case; startup advances the checkpoint. A checkpoint ahead of the envelope fails closed.
+
+Fresh automatic initialization is allowed only when the Tom key file is atomically created during the same bootstrap. `RegistryAdmission::Added` is insufficient because registry state is mutable: deleting a registry row while retaining an existing key cannot turn an existing installation into a fresh one.
+
+### Governance State Migration And Rekey
+
+Unsigned governance state is deliberately not upgraded in place. Stop every daemon using the state root, preserve the directory for audit, and run:
+
+```bash
+swarm-detect --config /path/to/swarm.yaml --reinitialize-governance-state
+```
+
+The command archives any prior envelope/checkpoint with a `.discarded-<timestamp>-<pid>` suffix and creates an empty state signed by the admitted Tom/primary key. It does not copy peer membership, active contingency leases, pending or consumed action authorizations, human-approval holds, partition activity, reconciliation reports, receipt counters, or chain hashes. Those authorities must be re-established after restart.
+
+Do not use `swarmctl identity rotate --role tom`: the command refuses Tom rotation because it cannot atomically re-sign governance history. A future Tom rekey flow must run offline, verify the old envelope against the old admitted key, bind old and new identities through an independently authenticated rotation procedure, and write a new envelope/checkpoint before changing the active key. Other role rotations retain their existing behavior.
+
+The signed checkpoint rejects forged raises, lowers, signer substitutions, and metadata edits, and detects replay of an older state envelope while the checkpoint remains current. It is not a hardware monotonic counter: an attacker able to roll back both signed files to a previously valid pair can evade this local check. Strong joint-file rollback resistance requires an external monotonic store or independently authenticated peer/operator anchor; the shipped local-only runtime claims neither.
 
 ### Config Signature Verification
 

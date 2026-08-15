@@ -97,6 +97,12 @@ pub struct PersistedAgentIdentity {
     pub signing_key: SigningKey,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentKeyLoadStatus {
+    Created,
+    Loaded,
+}
+
 impl PersistedAgentIdentity {
     fn from_signing_key(signing_key: SigningKey) -> Self {
         let id = AgentId::from_verifying_key(&signing_key.verifying_key());
@@ -186,19 +192,38 @@ impl FileAgentKeyStore {
         role: AgentRole,
         slot: &str,
     ) -> Result<PersistedAgentIdentity, AgentIdentityError> {
+        self.load_or_create_with_status(role, slot)
+            .map(|(identity, _status)| identity)
+    }
+
+    /// Load a stable role/slot key, reporting whether this call created it.
+    ///
+    /// Security-sensitive bootstrap code must not infer first initialization from
+    /// a mutable identity-registry row. A key that already existed before this call
+    /// is an existing installation even if its registry entry was deleted.
+    pub fn load_or_create_with_status(
+        &self,
+        role: AgentRole,
+        slot: &str,
+    ) -> Result<(PersistedAgentIdentity, AgentKeyLoadStatus), AgentIdentityError> {
         let path = self.key_path(role, slot);
         match fs::read(&path) {
-            Ok(bytes) => Self::decode_key(&path, &bytes),
+            Ok(bytes) => Self::decode_key(&path, &bytes)
+                .map(|identity| (identity, AgentKeyLoadStatus::Loaded)),
             Err(source) if source.kind() == ErrorKind::NotFound => {
                 let signing_key = SigningKey::generate(&mut OsRng);
                 if self.write_new_key(&path, &signing_key)? {
-                    Ok(PersistedAgentIdentity::from_signing_key(signing_key))
+                    Ok((
+                        PersistedAgentIdentity::from_signing_key(signing_key),
+                        AgentKeyLoadStatus::Created,
+                    ))
                 } else {
                     let bytes = fs::read(&path).map_err(|source| AgentIdentityError::Read {
                         path: path.clone(),
                         source,
                     })?;
                     Self::decode_key(&path, &bytes)
+                        .map(|identity| (identity, AgentKeyLoadStatus::Loaded))
                 }
             }
             Err(source) => Err(AgentIdentityError::Read { path, source }),
@@ -644,8 +669,8 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        FileAgentIdentityRegistry, FileAgentKeyStore, RegistryAdmission, resolve_agent_key_dir,
-        resolve_identity_registry_dir, verify_continuity_proof,
+        AgentKeyLoadStatus, FileAgentIdentityRegistry, FileAgentKeyStore, RegistryAdmission,
+        resolve_agent_key_dir, resolve_identity_registry_dir, verify_continuity_proof,
     };
     use ed25519_dalek::SigningKey;
     use rand_core::OsRng;
@@ -678,6 +703,22 @@ mod tests {
 
         assert_eq!(first.id, second.id);
         assert_eq!(first.signing_key.to_bytes(), second.signing_key.to_bytes());
+    }
+
+    #[test]
+    fn key_store_reports_creation_separately_from_loading_an_existing_key() {
+        let root = temp_root("load-status");
+        let store = FileAgentKeyStore::open(&root).unwrap();
+        let (created, created_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let (loaded, loaded_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+
+        assert_eq!(created_status, AgentKeyLoadStatus::Created);
+        assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
+        assert_eq!(created.id, loaded.id);
     }
 
     #[test]

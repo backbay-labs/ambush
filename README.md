@@ -257,7 +257,7 @@ gaps are declared rather than discovered.
 
 ---
 
-**More:** `swarmctl identity rotate` (per-role key rotation) &middot; `swarmctl evolution status`
+**More:** `swarmctl identity rotate` (non-Tom role key rotation; Tom governance rekey is offline) &middot; `swarmctl evolution status`
 (evolution lane state) &middot; `swarmctl canary-start` and `swarmctl promotion-start` (rollout
 gates) &middot; `swarmctl review-session-create` (operator review workbench) &middot;
 `deploy/helm/swarm-team-six` (cluster deployment with bundled NATS).

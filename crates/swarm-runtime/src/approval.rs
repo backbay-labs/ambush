@@ -1,3 +1,4 @@
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -10,7 +11,7 @@ use swarm_crypto::{
     CryptoError, DetachedSignature, Ed25519Signer, Keypair, canonical_json_bytes, sha256,
     sha256_hex, verify_detached_signature,
 };
-use swarm_spine::{SpineError, build_signed_envelope, now_rfc3339, verify_envelope};
+use swarm_spine::{SpineError, build_signed_envelope, verify_envelope};
 
 /// Approval vote persisted on a ledger entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1958,6 +1959,13 @@ fn build_vote_envelope_hash(
     signature: &DetachedSignature,
     timestamp_ms: i64,
 ) -> Result<String, ApprovalError> {
+    let published_at = DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
+        .ok_or_else(|| ApprovalError::InvalidReceiptPack {
+            reason: format!("approval vote timestamp `{timestamp_ms}` is out of range"),
+        })?
+        // Preserve the historical seconds-precision wire value while deriving it
+        // from the persisted vote timestamp instead of verification wall clock.
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
     let keypair = Keypair::from_seed(
         sha256(format!("approval-ledger-envelope:{}", ledger.ledger_id).as_bytes()).as_bytes(),
     );
@@ -1977,7 +1985,7 @@ fn build_vote_envelope_hash(
             "timestamp_ms": timestamp_ms,
             "signature": signature,
         }),
-        now_rfc3339(),
+        published_at,
     )?;
 
     if !verify_envelope(&envelope)? {
@@ -2256,6 +2264,45 @@ mod tests {
         assert_eq!(updated.report.entries.len(), 1);
         assert_eq!(updated.report.entries[0].voter_id, voter_id);
         assert_eq!(updated.report.entries[0].signature, signature);
+    }
+
+    #[test]
+    fn vote_envelope_hash_is_bound_to_the_persisted_vote_timestamp() {
+        let (voter_id, signer) = voter("stable-envelope-time");
+        let ledger = sample_ledger("approval-set:stable-envelope-time");
+        let entry_id = next_approval_ledger_entry_id(&ledger.ledger_id, 0);
+        let signature = signer.sign(
+            &vote_payload_bytes(&ledger.approval_set_id, &ledger.ledger_id, &voter_id).unwrap(),
+        );
+        let timestamp_ms = 1_700_000_000_300;
+
+        let actual =
+            build_vote_envelope_hash(&ledger, &entry_id, &voter_id, &signature, timestamp_ms)
+                .unwrap();
+        let keypair = Keypair::from_seed(
+            sha256(format!("approval-ledger-envelope:{}", ledger.ledger_id).as_bytes()).as_bytes(),
+        );
+        let expected = build_signed_envelope(
+            &keypair,
+            1,
+            None,
+            json!({
+                "type": "approval_vote",
+                "approval_set_id": ledger.approval_set_id,
+                "ledger_id": ledger.ledger_id,
+                "entry_id": entry_id,
+                "voter_id": voter_id,
+                "timestamp_ms": timestamp_ms,
+                "signature": signature,
+            }),
+            "2023-11-14T22:13:20Z".to_string(),
+        )
+        .unwrap()["envelope_hash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

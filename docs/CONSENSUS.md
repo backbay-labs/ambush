@@ -271,10 +271,15 @@ PKI or multi-tenant operator system.
 
 ## Identity Rotation And Verification
 
-Rotation is part of the active contract, not a manual side note.
+Rotation is part of the active contract for non-governor roles. Tom/primary is
+the signer of persisted governance authority and therefore has a stricter
+offline rekey boundary.
 
 - `swarmctl identity rotate` preserves continuity from the retired key to the
-  new key
+  new key for non-Tom roles
+- `swarmctl identity rotate --role tom` refuses before changing either the key
+  store or registry; see `docs/CONFIGURATION.md` for the required offline rekey
+  properties
 - registry state retains enough historical material to verify older receipts and
   deposits
 - governance and deposit validation fail closed for identities that are not
@@ -357,6 +362,14 @@ Operators should expect governance state in these surfaces:
 
 The platform and operator surfaces consume this governance data, but they do not
 change the underlying authorization semantics.
+
+Persisted governance authority is one Tom/primary-signed state envelope plus an
+adjacent Tom/primary-signed sequence checkpoint. The externally preloaded and admitted Tom key is
+the signer expectation; persisted peer governors are committee membership, not
+receipt-signing trust anchors. The shipped issuance path remains local-only.
+Rollback of only the envelope is detected against the checkpoint. Rolling back
+both local files together is outside the protection of this design and requires
+an external monotonic or independently authenticated anchor.
 
 ## Ingest, Bridge, Demo, And Raw Runtime Boundaries
 

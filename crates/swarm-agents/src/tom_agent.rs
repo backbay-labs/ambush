@@ -15,6 +15,9 @@ use swarm_consensus::{
 use swarm_core::agent::{
     AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
 };
+use swarm_core::signed_state::{
+    SIGNED_STATE_SCHEMA_VERSION, SignedStateEnvelope, SignedStateError, SignedStateExpectation,
+};
 use swarm_core::types::{AgentId, ResponseAction, SwarmAction};
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
 use swarm_policy::governance::{
@@ -38,6 +41,9 @@ const MAX_CONSUMED_AUTHORIZATIONS: usize = 1_024;
 const MAX_PENDING_HUMAN_AUTHORIZATIONS: usize = 1_024;
 const MAX_AUTHORIZATION_AGE_MS: i64 = 300_000;
 const MAX_AUTHORIZATION_FUTURE_SKEW_MS: i64 = 30_000;
+const GOVERNANCE_STATE_KIND: &str = "swarm.governance.policy-state.v1";
+const GOVERNANCE_CHECKPOINT_KIND: &str = "swarm.governance.policy-checkpoint.v1";
+const GOVERNANCE_STATE_STREAM: &str = "tom-primary";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContingencyLease {
@@ -335,6 +341,36 @@ impl LocalGovernorKey {
             issued_at_ms,
         )
     }
+
+    fn sign_persisted_state(
+        &self,
+        sequence: u64,
+        payload: PersistedGovernanceState,
+    ) -> Result<SignedStateEnvelope<PersistedGovernanceState>, SignedStateError> {
+        SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            self.consensus_agent_id.clone(),
+            sequence,
+            payload,
+            &self.signing_key,
+        )
+    }
+
+    fn sign_checkpoint(
+        &self,
+        sequence: u64,
+        payload: GovernanceSequenceCheckpoint,
+    ) -> Result<SignedStateEnvelope<GovernanceSequenceCheckpoint>, SignedStateError> {
+        SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            self.consensus_agent_id.clone(),
+            sequence,
+            payload,
+            &self.signing_key,
+        )
+    }
 }
 
 /// Refusal reasons for [`GovernancePolicy::register_governor`].
@@ -345,6 +381,9 @@ pub enum GovernanceKeyError {
          also hold `{offered}` (no process may hold more than one governor signing key)"
     )]
     SecondSigningKey { existing: AgentId, offered: AgentId },
+
+    #[error("governor key was not registered because persistence failed: {reason}")]
+    Persistence { reason: String },
 }
 
 #[derive(Debug)]
@@ -435,6 +474,8 @@ impl Default for GovernancePolicyConfig {
 #[derive(Debug, Clone)]
 struct GovernancePersistence {
     path: PathBuf,
+    sequence_path: PathBuf,
+    expected_signer_agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -446,8 +487,8 @@ struct PersistedGovernanceState {
     /// policy that knows about three peers refuses every destructive action
     /// (the shipped solo transport cannot serve a four-member committee), and
     /// one that has forgotten them is back to a committee of one and starts
-    /// authorizing again. `#[serde(default)]` so state files written before
-    /// this field existed still load.
+    /// authorizing again. The default supports signed schema evolution only;
+    /// legacy unsigned state is rejected before payload deserialization.
     #[serde(default)]
     peer_governors: BTreeSet<AgentId>,
     previous_commit_hash: String,
@@ -486,21 +527,9 @@ impl Default for PersistedGovernanceState {
     }
 }
 
-impl GovernancePersistence {
-    fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    fn load(&self) -> Result<PersistedGovernanceState, std::io::Error> {
-        if !self.path.exists() {
-            return Ok(PersistedGovernanceState::default());
-        }
-        let bytes = fs::read(&self.path)?;
-        serde_json::from_slice(&bytes).map_err(std::io::Error::other)
-    }
-
-    fn save(&self, state: &GovernanceState) -> Result<(), std::io::Error> {
-        let persisted = PersistedGovernanceState {
+impl PersistedGovernanceState {
+    fn from_runtime(state: &GovernanceState) -> Self {
+        Self {
             governing_agent_id: state.governing_agent_id.clone(),
             peer_governors: state.peer_governors.clone(),
             previous_commit_hash: state.previous_commit_hash.clone(),
@@ -514,18 +543,360 @@ impl GovernancePersistence {
             pending_human_authorizations: state.pending_human_authorizations.clone(),
             partition_activity: state.partition_activity.clone(),
             reconciliation_reports: state.reconciliation_reports.clone(),
-        };
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
         }
-        let tmp_path = self.path.with_extension("tmp");
-        fs::write(
-            &tmp_path,
-            serde_json::to_vec_pretty(&persisted).map_err(std::io::Error::other)?,
-        )?;
-        fs::rename(tmp_path, &self.path)?;
+    }
+
+    fn restore_into(self, state: &mut GovernanceState) {
+        state.governing_agent_id = self.governing_agent_id;
+        state.peer_governors = self.peer_governors;
+        state.previous_commit_hash = self.previous_commit_hash;
+        state.receipt_counter = self.receipt_counter;
+        state.partition_state = self.partition_state;
+        state.partition_started_at_ms = self.partition_started_at_ms;
+        state.last_transition_at_ms = self.last_transition_at_ms;
+        state.active_contingency_leases = self.active_contingency_leases;
+        state.pending_authorizations = self.pending_authorizations;
+        state.consumed_authorizations = self.consumed_authorizations;
+        state.pending_human_authorizations = self.pending_human_authorizations;
+        state.partition_activity = self.partition_activity;
+        state.reconciliation_reports = self.reconciliation_reports;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GovernanceSequenceCheckpoint {
+    accepted_sequence: u64,
+}
+
+#[derive(Debug)]
+struct LoadedGovernanceState {
+    payload: PersistedGovernanceState,
+    sequence: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GovernancePersistenceError {
+    #[error("governance state is missing at `{path}`; refusing implicit reinitialization")]
+    MissingState { path: PathBuf },
+
+    #[error("governance sequence checkpoint is missing at `{path}`")]
+    MissingSequence { path: PathBuf },
+
+    #[error(
+        "governance persistence already exists at `{state_path}` or `{sequence_path}`; refusing initialization"
+    )]
+    AlreadyInitialized {
+        state_path: PathBuf,
+        sequence_path: PathBuf,
+    },
+
+    #[error(
+        "legacy unsigned governance state at `{path}` is not trusted; run explicit offline reinitialization"
+    )]
+    LegacyUnsignedState { path: PathBuf },
+
+    #[error("failed to read governance state `{path}`: {source}")]
+    ReadState {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse signed governance state `{path}`: {source}")]
+    ParseState {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("failed to read governance sequence checkpoint `{path}`: {source}")]
+    ReadSequence {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse governance sequence checkpoint `{path}`: {source}")]
+    ParseSequence {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("governance sequence checkpoint `{path}` is invalid: {reason}")]
+    InvalidSequence { path: PathBuf, reason: String },
+
+    #[error("unsupported signed governance state schema version `{observed}`")]
+    UnsupportedSchema { observed: u32 },
+
+    #[error(transparent)]
+    SignedState(#[from] SignedStateError),
+
+    #[error("failed to write governance persistence `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("governance state cannot be persisted without the admitted local Tom key")]
+    MissingLocalSigner,
+}
+
+impl GovernancePersistence {
+    fn new(path: PathBuf, expected_signer_agent_id: AgentId) -> Self {
+        let sequence_path = path.with_extension("sequence.json");
+        Self {
+            path,
+            sequence_path,
+            expected_signer_agent_id,
+        }
+    }
+
+    fn load(
+        &self,
+        local: &LocalGovernorKey,
+    ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
+        if !self.path.exists() {
+            return Err(GovernancePersistenceError::MissingState {
+                path: self.path.clone(),
+            });
+        }
+        let bytes =
+            fs::read(&self.path).map_err(|source| GovernancePersistenceError::ReadState {
+                path: self.path.clone(),
+                source,
+            })?;
+        let shape: serde_json::Value = serde_json::from_slice(&bytes).map_err(|source| {
+            GovernancePersistenceError::ParseState {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
+        if shape.get("statement").is_none() || shape.get("signature").is_none() {
+            return Err(GovernancePersistenceError::LegacyUnsignedState {
+                path: self.path.clone(),
+            });
+        }
+        let envelope: SignedStateEnvelope<PersistedGovernanceState> = serde_json::from_value(shape)
+            .map_err(|source| GovernancePersistenceError::ParseState {
+                path: self.path.clone(),
+                source,
+            })?;
+
+        if !self.sequence_path.exists() {
+            return Err(GovernancePersistenceError::MissingSequence {
+                path: self.sequence_path.clone(),
+            });
+        }
+        let checkpoint_bytes = fs::read(&self.sequence_path).map_err(|source| {
+            GovernancePersistenceError::ReadSequence {
+                path: self.sequence_path.clone(),
+                source,
+            }
+        })?;
+        let checkpoint_envelope: SignedStateEnvelope<GovernanceSequenceCheckpoint> =
+            serde_json::from_slice(&checkpoint_bytes).map_err(|source| {
+                GovernancePersistenceError::ParseSequence {
+                    path: self.sequence_path.clone(),
+                    source,
+                }
+            })?;
+        let checkpoint = checkpoint_envelope.verify(SignedStateExpectation {
+            state_kind: GOVERNANCE_CHECKPOINT_KIND,
+            stream_id: GOVERNANCE_STATE_STREAM,
+            expected_signer_agent_id: Some(&self.expected_signer_agent_id),
+            accepted_sequence: None,
+        })?;
+        if checkpoint.schema_version != SIGNED_STATE_SCHEMA_VERSION {
+            return Err(GovernancePersistenceError::UnsupportedSchema {
+                observed: checkpoint.schema_version,
+            });
+        }
+        self.validate_checkpoint(&checkpoint.payload, checkpoint.sequence)?;
+
+        let verified = envelope.verify(SignedStateExpectation {
+            state_kind: GOVERNANCE_STATE_KIND,
+            stream_id: GOVERNANCE_STATE_STREAM,
+            expected_signer_agent_id: Some(&self.expected_signer_agent_id),
+            accepted_sequence: Some(checkpoint.payload.accepted_sequence),
+        })?;
+        if verified.schema_version != SIGNED_STATE_SCHEMA_VERSION {
+            return Err(GovernancePersistenceError::UnsupportedSchema {
+                observed: verified.schema_version,
+            });
+        }
+        if checkpoint.payload.accepted_sequence < verified.sequence {
+            // State is committed before its high-water checkpoint. A crash in
+            // that narrow window leaves a fully signed newer envelope, which is
+            // safe to accept and use to repair the lagging checkpoint.
+            self.write_checkpoint(verified.sequence, local)?;
+        }
+        Ok(LoadedGovernanceState {
+            payload: verified.payload,
+            sequence: verified.sequence,
+        })
+    }
+
+    fn initialize(&self, state: &GovernanceState) -> Result<(), GovernancePersistenceError> {
+        if self.path.exists() || self.sequence_path.exists() {
+            return Err(GovernancePersistenceError::AlreadyInitialized {
+                state_path: self.path.clone(),
+                sequence_path: self.sequence_path.clone(),
+            });
+        }
+        self.write_state_and_checkpoint(state, 1)
+    }
+
+    fn save(&self, state: &GovernanceState) -> Result<(), GovernancePersistenceError> {
+        let local = state
+            .local_governor
+            .as_ref()
+            .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
+        let loaded = self.load(local)?;
+        let next_sequence = loaded.sequence.checked_add(1).ok_or_else(|| {
+            GovernancePersistenceError::InvalidSequence {
+                path: self.sequence_path.clone(),
+                reason: "sequence overflow".to_string(),
+            }
+        })?;
+        self.write_state_and_checkpoint(state, next_sequence)
+    }
+
+    fn write_state_and_checkpoint(
+        &self,
+        state: &GovernanceState,
+        sequence: u64,
+    ) -> Result<(), GovernancePersistenceError> {
+        let local = state
+            .local_governor
+            .as_ref()
+            .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
+        if local.consensus_agent_id() != &self.expected_signer_agent_id {
+            return Err(GovernancePersistenceError::SignedState(
+                SignedStateError::SignerMismatch {
+                    state_kind: GOVERNANCE_STATE_KIND.to_string(),
+                    stream_id: GOVERNANCE_STATE_STREAM.to_string(),
+                    expected: self.expected_signer_agent_id.to_string(),
+                    actual: local.consensus_agent_id().to_string(),
+                },
+            ));
+        }
+        let envelope =
+            local.sign_persisted_state(sequence, PersistedGovernanceState::from_runtime(state))?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            GovernancePersistenceError::ParseState {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
+        write_atomic_synced(&self.path, &bytes)?;
+        self.write_checkpoint(sequence, local)
+    }
+
+    fn validate_checkpoint(
+        &self,
+        checkpoint: &GovernanceSequenceCheckpoint,
+        envelope_sequence: u64,
+    ) -> Result<(), GovernancePersistenceError> {
+        let invalid =
+            checkpoint.accepted_sequence == 0 || checkpoint.accepted_sequence != envelope_sequence;
+        if invalid {
+            return Err(GovernancePersistenceError::InvalidSequence {
+                path: self.sequence_path.clone(),
+                reason: "signed checkpoint payload does not match its envelope sequence"
+                    .to_string(),
+            });
+        }
         Ok(())
     }
+
+    fn write_checkpoint(
+        &self,
+        sequence: u64,
+        local: &LocalGovernorKey,
+    ) -> Result<(), GovernancePersistenceError> {
+        let checkpoint = GovernanceSequenceCheckpoint {
+            accepted_sequence: sequence,
+        };
+        let envelope = local.sign_checkpoint(sequence, checkpoint)?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            GovernancePersistenceError::ParseSequence {
+                path: self.sequence_path.clone(),
+                source,
+            }
+        })?;
+        write_atomic_synced(&self.sequence_path, &bytes)
+    }
+}
+
+fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), GovernancePersistenceError> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| GovernancePersistenceError::Write {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let tmp_path = path.with_extension(format!(
+        "{}.tmp-{}",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("state"),
+        std::process::id()
+    ));
+    match fs::symlink_metadata(&tmp_path) {
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            // A process crash may leave the exact per-process temp name behind.
+            // Removing the directory entry (including a symlink itself, never its
+            // target) lets a valid state-ahead/checkpoint-behind restart recover.
+            fs::remove_file(&tmp_path).map_err(|source| GovernancePersistenceError::Write {
+                path: tmp_path.clone(),
+                source,
+            })?;
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(GovernancePersistenceError::Write {
+                path: tmp_path.clone(),
+                source,
+            });
+        }
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&tmp_path)
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: tmp_path.clone(),
+            source,
+        })?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: tmp_path.clone(),
+            source,
+        })?;
+    fs::rename(&tmp_path, path).map_err(|source| GovernancePersistenceError::Write {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| GovernancePersistenceError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -569,11 +940,18 @@ impl GovernancePolicy {
     pub fn with_persistence(
         config: GovernancePolicyConfig,
         path: impl AsRef<Path>,
-    ) -> Result<Self, std::io::Error> {
-        let persistence = GovernancePersistence::new(path.as_ref().to_path_buf());
-        let persisted = persistence.load()?;
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+    ) -> Result<Self, GovernancePersistenceError> {
+        let local_governor = LocalGovernorKey::new(signing_key);
+        let persistence = GovernancePersistence::new(
+            path.as_ref().to_path_buf(),
+            local_governor.consensus_agent_id().clone(),
+        );
+        let loaded = persistence.load(&local_governor)?;
+        let persisted = loaded.payload;
         let mut state = GovernanceState {
-            governing_agent_id: persisted.governing_agent_id,
+            governing_agent_id: Some(governing_agent_id.clone()),
             peer_governors: persisted.peer_governors,
             previous_commit_hash: persisted.previous_commit_hash,
             receipt_counter: persisted.receipt_counter,
@@ -588,8 +966,13 @@ impl GovernancePolicy {
             reconciliation_reports: persisted.reconciliation_reports,
             ..Default::default()
         };
+        let consensus_agent_id = local_governor.consensus_agent_id().clone();
+        state
+            .display_governors
+            .insert(governing_agent_id, consensus_agent_id.clone());
+        state.peer_governors.remove(&consensus_agent_id);
+        state.local_governor = Some(local_governor);
         prune_authorization_ledgers(&mut state, now_ms());
-        persistence.save(&state)?;
         Ok(Self {
             state: Mutex::new(state),
             config,
@@ -598,13 +981,86 @@ impl GovernancePolicy {
         })
     }
 
+    /// Initialize a brand-new governance stream for a newly admitted Tom identity.
+    ///
+    /// Ordinary [`GovernancePolicy::with_persistence`] never creates missing state.
+    /// The daemon may call this only when it atomically created the Tom/primary key in
+    /// the same bootstrap. Registry admission is mutable and cannot authorize clean
+    /// initialization. A loaded key with deleted state must fail startup instead.
+    pub fn initialize_persistence(
+        config: GovernancePolicyConfig,
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+    ) -> Result<Self, GovernancePersistenceError> {
+        let local_governor = LocalGovernorKey::new(signing_key);
+        let persistence = GovernancePersistence::new(
+            path.as_ref().to_path_buf(),
+            local_governor.consensus_agent_id().clone(),
+        );
+        let mut display_governors = BTreeMap::new();
+        display_governors.insert(
+            governing_agent_id.clone(),
+            local_governor.consensus_agent_id().clone(),
+        );
+        let state = GovernanceState {
+            governing_agent_id: Some(governing_agent_id),
+            display_governors,
+            local_governor: Some(local_governor),
+            ..GovernanceState::default()
+        };
+        persistence.initialize(&state)?;
+        Ok(Self {
+            state: Mutex::new(state),
+            config,
+            persistence: Some(persistence),
+            transport: Arc::new(SoloGovernorTransport::new()),
+        })
+    }
+
+    /// Explicit offline recovery for unsigned, corrupt, or intentionally discarded
+    /// governance persistence. Existing files are archived and NONE of their peers,
+    /// leases, pending/consumed authorizations, human holds, or chain position is
+    /// copied into the new stream.
+    pub fn reinitialize_persistence(
+        config: GovernancePolicyConfig,
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+    ) -> Result<Self, GovernancePersistenceError> {
+        let path = path.as_ref().to_path_buf();
+        let sequence_path = path.with_extension("sequence.json");
+        let suffix = format!("discarded-{}-{}", now_ms(), std::process::id());
+        for existing in [&path, &sequence_path] {
+            if existing.exists() {
+                let archive = existing.with_extension(format!(
+                    "{}.{}",
+                    existing
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .unwrap_or("state"),
+                    suffix
+                ));
+                fs::rename(existing, &archive).map_err(|source| {
+                    GovernancePersistenceError::Write {
+                        path: archive,
+                        source,
+                    }
+                })?;
+            }
+        }
+        Self::initialize_persistence(config, path, governing_agent_id, signing_key)
+    }
+
+    pub fn persistence_sequence_path(path: impl AsRef<Path>) -> PathBuf {
+        path.as_ref().with_extension("sequence.json")
+    }
+
     /// Install THE local governor signing key.
     ///
-    /// Idempotent for the same key -- `governance_resilience_integration.rs`
-    /// re-registers the same identity after a persistence reload and must keep
-    /// working. A second, DIFFERENT key is refused: holding two means this
-    /// process could cast two committee members' votes, which is exactly the
-    /// property BFT-03 removes.
+    /// Idempotent for the same key. A second, DIFFERENT key is refused: holding
+    /// two means this process could cast two committee members' votes, which is
+    /// exactly the property BFT-03 removes.
     pub fn register_governor(
         &self,
         governing_agent_id: AgentId,
@@ -623,6 +1079,15 @@ impl GovernancePolicy {
                 offered: offered.consensus_agent_id().clone(),
             });
         }
+        if state.local_governor.is_some()
+            && state.governing_agent_id.as_ref() == Some(&governing_agent_id)
+        {
+            return Ok(());
+        }
+        let previous_governing_agent_id = state.governing_agent_id.clone();
+        let previous_display_governors = state.display_governors.clone();
+        let previous_peers = state.peer_governors.clone();
+        let had_local_governor = state.local_governor.is_some();
         state
             .governing_agent_id
             .get_or_insert(governing_agent_id.clone());
@@ -631,8 +1096,18 @@ impl GovernancePolicy {
             .display_governors
             .insert(governing_agent_id, consensus_agent_id.clone());
         state.peer_governors.remove(&consensus_agent_id);
-        state.local_governor = Some(offered);
-        self.persist_best_effort_locked(&state);
+        if !had_local_governor {
+            state.local_governor = Some(offered);
+        }
+        if let Err(reason) = self.persist_locked(&state) {
+            state.governing_agent_id = previous_governing_agent_id;
+            state.display_governors = previous_display_governors;
+            state.peer_governors = previous_peers;
+            if !had_local_governor {
+                state.local_governor = None;
+            }
+            return Err(GovernanceKeyError::Persistence { reason });
+        }
         Ok(())
     }
 
@@ -644,7 +1119,7 @@ impl GovernancePolicy {
     /// builds a committee of two, the shipped `SoloGovernorTransport` refuses
     /// it, and the decision is a Veto naming the missing networked transport
     /// rather than a receipt minted from keys this process should not have.
-    pub fn register_peer_governor(&self, peer: &VerifyingKey) {
+    pub fn register_peer_governor(&self, peer: &VerifyingKey) -> Result<(), String> {
         let consensus_agent_id = AgentId::from_verifying_key(peer);
         let mut state = self
             .state
@@ -655,10 +1130,21 @@ impl GovernancePolicy {
             .as_ref()
             .is_some_and(|local| local.consensus_agent_id() == &consensus_agent_id)
         {
-            return;
+            return Ok(());
         }
-        state.peer_governors.insert(consensus_agent_id);
-        self.persist_best_effort_locked(&state);
+        if state.local_governor.is_none() {
+            return Err("peer governor cannot be admitted without the local Tom key".to_string());
+        }
+        if !state.peer_governors.insert(consensus_agent_id.clone()) {
+            return Ok(());
+        }
+        if let Err(error) = self.persist_locked(&state) {
+            state.peer_governors.remove(&consensus_agent_id);
+            return Err(format!(
+                "peer governor was not admitted because persistence failed: {error}"
+            ));
+        }
+        Ok(())
     }
 
     pub fn observe_health(
@@ -671,6 +1157,11 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_persisted = PersistedGovernanceState::from_runtime(&state);
+        let previous_unhealthy_agents = state.unhealthy_agents.clone();
+        let previous_last_healthy_governors = state.last_healthy_governors;
+        let previous_last_quorum_threshold = state.last_quorum_threshold;
+        let previous_pending_events = state.pending_events.clone();
         state.governing_agent_id = Some(governing_agent_id.clone());
         state.unhealthy_agents = entries
             .iter()
@@ -744,7 +1235,24 @@ impl GovernancePolicy {
         if state.partition_state == PartitionState::Healthy {
             self.ensure_contingency_leases_locked(&mut state, observed_at_ms);
         }
-        self.persist_best_effort_locked(&state);
+        if let Err(error) = self.persist_locked(&state) {
+            previous_persisted.restore_into(&mut state);
+            state.unhealthy_agents = previous_unhealthy_agents;
+            state.last_healthy_governors = previous_last_healthy_governors;
+            state.last_quorum_threshold = previous_last_quorum_threshold;
+            state.pending_events = previous_pending_events;
+            let path = self
+                .persistence
+                .as_ref()
+                .map(|persistence| persistence.path.display().to_string())
+                .unwrap_or_else(|| "<memory>".to_string());
+            tracing::warn!(
+                reason = %error,
+                path = %path,
+                module = module_path!(),
+                "discarded an unpersisted governance health transition and contingency leases"
+            );
+        }
     }
 
     pub fn can_act(&self, request: &ActionRequest) -> GovernanceDecision {
@@ -1365,6 +1873,8 @@ impl GovernancePolicy {
             proposal_id: proposal_id_for_payload(&proposal_payload).ok()?,
             payload: proposal_payload,
         };
+        let previous_commit_hash = state.previous_commit_hash.clone();
+        let previous_receipt_counter = state.receipt_counter;
         match run_governance_round(
             &mut state,
             self.transport.as_ref(),
@@ -1372,7 +1882,19 @@ impl GovernancePolicy {
             GovernanceReceiptDecision::Approve,
             now_ms,
         ) {
-            Ok(receipt) => Some(receipt),
+            Ok(receipt) => {
+                if let Err(error) = self.persist_locked(&state) {
+                    state.previous_commit_hash = previous_commit_hash;
+                    state.receipt_counter = previous_receipt_counter;
+                    tracing::warn!(
+                        reason = %error,
+                        module = module_path!(),
+                        "containment release attestation was not issued because governance persistence failed"
+                    );
+                    return None;
+                }
+                Some(receipt)
+            }
             Err(error) => {
                 tracing::warn!(
                     reason = %error,
@@ -1408,31 +1930,21 @@ impl GovernancePolicy {
         self.persist_best_effort_locked(&state);
     }
 
-    /// The trust anchor: every governor this policy knows about, by the identity
-    /// derived from its PUBLIC key.
+    /// Receipt-verification anchors admitted locally in this process.
     ///
-    /// Exactly the membership `GovernanceState::committee` builds a round over --
-    /// the admitted peers plus the local governor -- which is the set that can
-    /// legitimately have signed a receipt on this chain. Peers were never held as
-    /// keys at all (`peer_governors: BTreeSet<AgentId>`), and the local governor's
-    /// entry is the `AgentId` `LocalGovernorKey::new` derived once from
-    /// `signing_key.verifying_key()`: the PUBLIC half, already printed in every
-    /// receipt this policy signs. The private half is not read here and cannot be --
-    /// `LocalGovernorKey` exposes no accessor returning a `SigningKey` (BFT-03).
-    ///
-    /// Empty when no governor is registered, and callers must refuse rather than
-    /// fall back to the key a receipt carries -- see
-    /// `ConsensusGovernanceReceipt::verify_signed_by`.
+    /// Persisted peers still influence committee size, so forgetting them cannot
+    /// collapse a fail-closed committee into solo authorization. They are NOT signer
+    /// trust anchors until an authenticated peer-admission protocol exists.
     pub fn governor_public_keys(&self) -> BTreeSet<AgentId> {
         let state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut keys = state.peer_governors.clone();
-        if let Some(local) = state.local_governor.as_ref() {
-            keys.insert(local.consensus_agent_id().clone());
-        }
-        keys
+        state
+            .local_governor
+            .iter()
+            .map(|local| local.consensus_agent_id().clone())
+            .collect()
     }
 
     pub fn status_report(&self) -> GovernanceStatusReport {
@@ -1852,7 +2364,10 @@ fn preview_matching_contingency_lease(
     state
         .active_contingency_leases
         .iter()
-        .find(|lease| lease.can_redeem(request, now_ms))
+        .find(|lease| {
+            lease.verify(&governor_public_keys_locked(state)).is_ok()
+                && lease.can_redeem(request, now_ms)
+        })
         .cloned()
 }
 
@@ -1867,11 +2382,11 @@ fn governance_request_subject_digest(request: &ActionRequest) -> Result<String, 
 }
 
 fn governor_public_keys_locked(state: &GovernanceState) -> BTreeSet<AgentId> {
-    let mut keys = state.peer_governors.clone();
-    if let Some(local) = state.local_governor.as_ref() {
-        keys.insert(local.consensus_agent_id().clone());
-    }
-    keys
+    state
+        .local_governor
+        .iter()
+        .map(|local| local.consensus_agent_id().clone())
+        .collect()
 }
 
 fn validate_pending_request_receipt_locked(
@@ -2178,17 +2693,125 @@ fn governance_runtime_event_record(event: GovernanceRuntimeEvent) -> GovernanceR
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        GovernanceDecision, GovernancePolicy, GovernancePolicyConfig, GovernanceRuntimeEvent,
-        PartitionState, TomAgent,
+        ConsumedGovernanceAuthorization, GOVERNANCE_CHECKPOINT_KIND, GOVERNANCE_STATE_KIND,
+        GOVERNANCE_STATE_STREAM, GovernanceDecision, GovernancePersistenceError, GovernancePolicy,
+        GovernancePolicyConfig, GovernanceRuntimeEvent, GovernanceSequenceCheckpoint,
+        PartitionState, PendingGovernanceAuthorization, PersistedGovernanceState, TomAgent,
     };
     use ed25519_dalek::SigningKey;
     use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use swarm_core::agent::{
         AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode,
     };
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
+    use swarm_core::{SignedStateEnvelope, SignedStateExpectation};
     use swarm_policy::ActionRequest;
+
+    fn persistence_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "swarm-governance-auth-{label}-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn initialize_signed_policy(path: &Path, key: &SigningKey) -> GovernancePolicy {
+        GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+        )
+        .unwrap()
+    }
+
+    fn read_envelope(path: &Path) -> SignedStateEnvelope<PersistedGovernanceState> {
+        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    }
+
+    fn write_envelope(path: &Path, envelope: &SignedStateEnvelope<PersistedGovernanceState>) {
+        fs::write(path, serde_json::to_vec_pretty(envelope).unwrap()).unwrap();
+    }
+
+    fn read_checkpoint(path: &Path) -> SignedStateEnvelope<GovernanceSequenceCheckpoint> {
+        serde_json::from_slice(
+            &fs::read(GovernancePolicy::persistence_sequence_path(path)).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn checkpoint_sequence(checkpoint: &SignedStateEnvelope<GovernanceSequenceCheckpoint>) -> u64 {
+        let payload: GovernanceSequenceCheckpoint =
+            serde_json::from_str(&checkpoint.statement.payload_json).unwrap();
+        assert_eq!(payload.accepted_sequence, checkpoint.sequence());
+        payload.accepted_sequence
+    }
+
+    fn write_checkpoint(
+        path: &Path,
+        checkpoint: &SignedStateEnvelope<GovernanceSequenceCheckpoint>,
+    ) {
+        fs::write(
+            GovernancePolicy::persistence_sequence_path(path),
+            serde_json::to_vec_pretty(checkpoint).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn load_signed_policy(
+        path: &Path,
+        key: &SigningKey,
+    ) -> Result<GovernancePolicy, GovernancePersistenceError> {
+        GovernancePolicy::with_persistence(
+            GovernancePolicyConfig::default(),
+            path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+        )
+    }
+
+    fn cleanup_persistence(path: &Path) {
+        let _ = fs::remove_file(path);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(path);
+        let _ = fs::remove_file(&sequence_path);
+        for original in [path, sequence_path.as_path()] {
+            let Some(parent) = original.parent() else {
+                continue;
+            };
+            let Some(prefix) = original.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if let Ok(entries) = fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    if entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with(&format!("{prefix}.discarded-")))
+                    {
+                        let _ = fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    }
+
+    fn block_atomic_write(path: &Path) -> PathBuf {
+        let blocker = path.with_extension(format!(
+            "{}.tmp-{}",
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or("state"),
+            std::process::id()
+        ));
+        fs::create_dir(&blocker).unwrap();
+        blocker
+    }
 
     fn request(action: ResponseAction) -> ActionRequest {
         ActionRequest {
@@ -2209,6 +2832,487 @@ mod tests {
             peer_findings: Vec::new(),
             agent_health,
         }
+    }
+
+    #[test]
+    fn genuine_signed_state_restarts_with_the_same_admitted_tom() {
+        let path = persistence_path("restart-control");
+        let key = SigningKey::from_bytes(&[81; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        policy.observe_health(
+            &AgentId::from_verifying_key(&key.verifying_key()),
+            &[],
+            super::now_ms(),
+        );
+        let before = policy.status_report();
+        drop(policy);
+
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert_eq!(
+            reloaded.status_report().partition_state,
+            before.partition_state
+        );
+        assert_eq!(
+            reloaded.status_report().active_contingency_leases,
+            before.active_contingency_leases
+        );
+        assert_eq!(
+            reloaded.governor_public_keys(),
+            [AgentId::from_verifying_key(&key.verifying_key())]
+                .into_iter()
+                .collect()
+        );
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn attacker_signed_peer_and_forged_leases_cannot_become_trust_anchors() {
+        let victim_path = persistence_path("forged-peer-victim");
+        let attacker_path = persistence_path("forged-peer-attacker");
+        let victim_key = SigningKey::from_bytes(&[82; 32]);
+        let attacker_key = SigningKey::from_bytes(&[83; 32]);
+        let victim = initialize_signed_policy(&victim_path, &victim_key);
+        victim.observe_health(
+            &AgentId::from_verifying_key(&victim_key.verifying_key()),
+            &[],
+            super::now_ms(),
+        );
+        let victim_sequence = read_envelope(&victim_path).sequence();
+
+        let attacker = initialize_signed_policy(&attacker_path, &attacker_key);
+        attacker.observe_health(
+            &AgentId::from_verifying_key(&attacker_key.verifying_key()),
+            &[],
+            super::now_ms(),
+        );
+        let mut forged_payload: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&attacker_path).statement.payload_json).unwrap();
+        forged_payload
+            .peer_governors
+            .insert(AgentId::from_verifying_key(&attacker_key.verifying_key()));
+        assert!(!forged_payload.active_contingency_leases.is_empty());
+        let forged = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&attacker_key.verifying_key()),
+            victim_sequence,
+            forged_payload,
+            &attacker_key,
+        )
+        .unwrap();
+        write_envelope(&victim_path, &forged);
+
+        let error = load_signed_policy(&victim_path, &victim_key)
+            .expect_err("an attacker-signed membership and lease set must fail startup");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::SignerMismatch { .. }
+            )
+        ));
+        cleanup_persistence(&victim_path);
+        cleanup_persistence(&attacker_path);
+    }
+
+    #[test]
+    fn attacker_resigned_authorization_ledgers_are_rejected_by_external_signer_binding() {
+        let path = persistence_path("forged-ledgers");
+        let victim_key = SigningKey::from_bytes(&[84; 32]);
+        let attacker_key = SigningKey::from_bytes(&[85; 32]);
+        let policy = initialize_signed_policy(&path, &victim_key);
+        drop(policy);
+        let envelope = read_envelope(&path);
+        let mut payload: PersistedGovernanceState =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        payload
+            .pending_authorizations
+            .push_back(PendingGovernanceAuthorization {
+                receipt_id: "forged-pending".to_string(),
+                subject_digest: "forged-subject".to_string(),
+                decision: swarm_consensus::GovernanceReceiptDecision::Approve,
+                issued_at_ms: super::now_ms(),
+            });
+        payload
+            .consumed_authorizations
+            .push_back(ConsumedGovernanceAuthorization {
+                receipt_id: "forged-consumed".to_string(),
+                subject_digest: "forged-subject".to_string(),
+                decision: swarm_consensus::GovernanceReceiptDecision::Approve,
+                consumed_at_ms: super::now_ms(),
+            });
+        payload.pending_human_authorizations.push_back(
+            swarm_policy::governance::GovernedHumanAuthorizationHold {
+                hold_id: "forged-hold".to_string(),
+                request: request(ResponseAction::BlockEgress {
+                    target: "203.0.113.240".to_string(),
+                }),
+                policy_decision: swarm_policy::PolicyDecision::require_human_with_rule(
+                    "forged", "forged",
+                ),
+                governance_receipt: json!({"forged": true}),
+                created_at_ms: super::now_ms(),
+                approval_set_id: Some("forged-set".to_string()),
+                approval_set_digest: Some("forged-digest".to_string()),
+            },
+        );
+        let forged = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&attacker_key.verifying_key()),
+            envelope.sequence(),
+            payload,
+            &attacker_key,
+        )
+        .unwrap();
+        write_envelope(&path, &forged);
+
+        assert!(matches!(
+            load_signed_policy(&path, &victim_key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::SignerMismatch { .. }
+            )
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn byte_tampering_of_signed_governance_state_is_rejected() {
+        let path = persistence_path("byte-tamper");
+        let key = SigningKey::from_bytes(&[86; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let mut envelope = read_envelope(&path);
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        payload["peer_governors"] = json!(["swarm:ed25519:attacker"]);
+        payload["pending_authorizations"] = json!([{"receipt_id":"injected"}]);
+        payload["consumed_authorizations"] = json!([{"receipt_id":"deleted"}]);
+        payload["pending_human_authorizations"] = json!([{"hold_id":"injected"}]);
+        envelope.statement.payload_json = serde_json::to_string(&payload).unwrap();
+        write_envelope(&path, &envelope);
+
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::InvalidSignature { .. }
+            )
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn trusted_older_envelope_cannot_delete_peers_and_collapse_committee() {
+        let path = persistence_path("peer-replay");
+        let key = SigningKey::from_bytes(&[87; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let before_peer = read_envelope(&path);
+        policy
+            .register_peer_governor(&SigningKey::from_bytes(&[88; 32]).verifying_key())
+            .unwrap();
+        assert!(read_envelope(&path).sequence() > before_peer.sequence());
+        write_envelope(&path, &before_peer);
+
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::ReplayDetected { .. }
+            )
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn governance_checkpoint_fail_closed_and_crash_recovery_cases_are_explicit() {
+        let path = persistence_path("checkpoint-cases");
+        let key = SigningKey::from_bytes(&[89; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let original_checkpoint = read_checkpoint(&path);
+        let original_state = fs::read(&path).unwrap();
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+
+        fs::remove_file(&sequence_path).unwrap();
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::MissingSequence { .. }
+        ));
+        write_checkpoint(&path, &original_checkpoint);
+
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::MissingState { .. }
+        ));
+        fs::write(&path, &original_state).unwrap();
+
+        let original_sequence = checkpoint_sequence(&original_checkpoint);
+        let higher_sequence = original_sequence + 1;
+        let trusted_high = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            higher_sequence,
+            GovernanceSequenceCheckpoint {
+                accepted_sequence: higher_sequence,
+            },
+            &key,
+        )
+        .unwrap();
+        write_checkpoint(&path, &trusted_high);
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::ReplayDetected { .. }
+            )
+        ));
+
+        let mut forged_high = original_checkpoint.clone();
+        forged_high.statement.sequence = higher_sequence;
+        forged_high.statement.payload_json = serde_json::to_string(&GovernanceSequenceCheckpoint {
+            accepted_sequence: higher_sequence,
+        })
+        .unwrap();
+        write_checkpoint(&path, &forged_high);
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::InvalidSignature { .. }
+            )
+        ));
+
+        let mut forged_metadata = original_checkpoint.clone();
+        forged_metadata.statement.stream_id = "attacker-stream".to_string();
+        write_checkpoint(&path, &forged_metadata);
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::StreamMismatch { .. }
+            )
+        ));
+
+        let attacker_key = SigningKey::from_bytes(&[90; 32]);
+        let attacker_checkpoint = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&attacker_key.verifying_key()),
+            higher_sequence,
+            GovernanceSequenceCheckpoint {
+                accepted_sequence: higher_sequence,
+            },
+            &attacker_key,
+        )
+        .unwrap();
+        write_checkpoint(&path, &attacker_checkpoint);
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::SignerMismatch { .. }
+            )
+        ));
+
+        let payload: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        let newer = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            higher_sequence,
+            payload,
+            &key,
+        )
+        .unwrap();
+        write_envelope(&path, &newer);
+        write_checkpoint(&path, &original_checkpoint);
+        load_signed_policy(&path, &key).expect("a valid newer state repairs a lagging checkpoint");
+        let repaired = read_checkpoint(&path);
+        assert_eq!(checkpoint_sequence(&repaired), higher_sequence);
+        repaired
+            .verify(SignedStateExpectation {
+                state_kind: GOVERNANCE_CHECKPOINT_KIND,
+                stream_id: GOVERNANCE_STATE_STREAM,
+                expected_signer_agent_id: Some(&AgentId::from_verifying_key(&key.verifying_key())),
+                accepted_sequence: Some(higher_sequence),
+            })
+            .expect("repaired checkpoint is signed by the externally expected Tom key");
+
+        let mut forged_low = repaired;
+        forged_low.statement.sequence = original_sequence;
+        forged_low.statement.payload_json = serde_json::to_string(&GovernanceSequenceCheckpoint {
+            accepted_sequence: original_sequence,
+        })
+        .unwrap();
+        write_checkpoint(&path, &forged_low);
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::InvalidSignature { .. }
+            )
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn unsigned_legacy_and_corrupt_state_require_explicit_reinitialization() {
+        let path = persistence_path("legacy");
+        let source_path = persistence_path("legacy-source");
+        let key = SigningKey::from_bytes(&[91; 32]);
+        let source = initialize_signed_policy(&source_path, &key);
+        source.observe_health(
+            &AgentId::from_verifying_key(&key.verifying_key()),
+            &[],
+            super::now_ms(),
+        );
+        drop(source);
+        let mut legacy: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&source_path).statement.payload_json).unwrap();
+        legacy.peer_governors.insert(AgentId::from_verifying_key(
+            &SigningKey::from_bytes(&[92; 32]).verifying_key(),
+        ));
+        legacy
+            .pending_authorizations
+            .push_back(PendingGovernanceAuthorization {
+                receipt_id: "legacy-pending".to_string(),
+                subject_digest: "legacy-subject".to_string(),
+                decision: swarm_consensus::GovernanceReceiptDecision::Approve,
+                issued_at_ms: super::now_ms(),
+            });
+        legacy
+            .consumed_authorizations
+            .push_back(ConsumedGovernanceAuthorization {
+                receipt_id: "legacy-consumed".to_string(),
+                subject_digest: "legacy-subject".to_string(),
+                decision: swarm_consensus::GovernanceReceiptDecision::Approve,
+                consumed_at_ms: super::now_ms(),
+            });
+        legacy.pending_human_authorizations.push_back(
+            swarm_policy::governance::GovernedHumanAuthorizationHold {
+                hold_id: "legacy-hold".to_string(),
+                request: request(ResponseAction::BlockEgress {
+                    target: "203.0.113.241".to_string(),
+                }),
+                policy_decision: swarm_policy::PolicyDecision::require_human_with_rule(
+                    "legacy", "legacy",
+                ),
+                governance_receipt: json!({"legacy": true}),
+                created_at_ms: super::now_ms(),
+                approval_set_id: Some("legacy-set".to_string()),
+                approval_set_digest: Some("legacy-digest".to_string()),
+            },
+        );
+        assert!(!legacy.active_contingency_leases.is_empty());
+        assert!(!legacy.pending_human_authorizations.is_empty());
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::LegacyUnsignedState { .. }
+        ));
+
+        let reinitialized = GovernancePolicy::reinitialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+        )
+        .expect("explicit offline reinitialization discards unsigned contents");
+        assert_eq!(reinitialized.status_report().total_governors, 1);
+        assert_eq!(reinitialized.status_report().active_contingency_leases, 0);
+        drop(reinitialized);
+        let reset: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert!(reset.peer_governors.is_empty());
+        assert!(reset.active_contingency_leases.is_empty());
+        assert!(reset.pending_authorizations.is_empty());
+        assert!(reset.consumed_authorizations.is_empty());
+        assert!(reset.pending_human_authorizations.is_empty());
+
+        fs::write(&path, b"{corrupt").unwrap();
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::ParseState { .. }
+        ));
+        cleanup_persistence(&path);
+        cleanup_persistence(&source_path);
+    }
+
+    #[test]
+    fn peers_never_become_trusted_signers_without_a_local_key() {
+        let policy = GovernancePolicy::default();
+        assert!(
+            policy
+                .register_peer_governor(&SigningKey::from_bytes(&[92; 32]).verifying_key())
+                .is_err()
+        );
+        assert!(policy.governor_public_keys().is_empty());
+    }
+
+    #[test]
+    fn contingency_lease_redemption_rolls_back_when_signed_persistence_fails() {
+        let path = persistence_path("lease-persistence-failure");
+        let key = SigningKey::from_bytes(&[93; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let base_ms = super::now_ms();
+        policy.observe_health(&governing_id, &[], base_ms);
+        policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            base_ms + 1,
+        );
+        let mut governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.93".to_string(),
+        });
+        let GovernanceDecision::Authorize {
+            contingency_lease: Some(lease),
+            ..
+        } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: partition has a signed local contingency lease");
+        };
+        governed_request.evidence = json!({"contingency_lease": lease});
+
+        let blocker = block_atomic_write(&path);
+        let error = policy
+            .authorize_partition_request(&governed_request, base_ms + 2)
+            .expect_err("an unpersisted lease redemption must not authorize execution");
+        assert!(error.contains("persistence failed"));
+        fs::remove_dir(blocker).unwrap();
+
+        policy
+            .authorize_partition_request(&governed_request, base_ms + 3)
+            .expect("failed persistence rolls the in-memory redemption back");
+        drop(policy);
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert!(
+            reloaded
+                .authorize_partition_request(&governed_request, base_ms + 4)
+                .is_err(),
+            "successful redemption remains consumed after restart"
+        );
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn contingency_lease_staging_is_discarded_when_signed_persistence_fails() {
+        let path = persistence_path("lease-staging-failure");
+        let key = SigningKey::from_bytes(&[94; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let blocker = block_atomic_write(&path);
+        policy.observe_health(
+            &AgentId::from_verifying_key(&key.verifying_key()),
+            &[],
+            super::now_ms(),
+        );
+        fs::remove_dir(blocker).unwrap();
+        assert_eq!(policy.status_report().active_contingency_leases, 0);
+        drop(policy);
+
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert_eq!(reloaded.status_report().active_contingency_leases, 0);
+        cleanup_persistence(&path);
     }
 
     #[test]
@@ -2335,83 +3439,25 @@ mod tests {
         ));
     }
 
-    // The partition branch of `can_act` authorizes off `active_contingency_leases`,
-    // which `with_persistence` rehydrates from disk before any governor registers.
-    // A restart whose Tom admission fails therefore reaches a keyless policy holding
-    // live leases: the refusal has to be checked ahead of the partition branch, not
-    // after it.
     #[test]
-    fn keyless_policy_reloaded_into_a_partition_refuses_persisted_leases() {
+    fn admitted_identity_with_missing_state_refuses_implicit_reinitialization() {
         let base_ms = super::now_ms();
         let path = std::env::temp_dir().join(format!(
-            "swarm-governance-keyless-{}-{base_ms}.json",
+            "swarm-governance-missing-{}-{base_ms}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
-        let config = GovernancePolicyConfig {
-            contingency_lease_ttl_ms: 600_000,
-            contingency_blast_radius_cap: 1,
-        };
-
-        let keyed = GovernancePolicy::with_persistence(config.clone(), &path).unwrap();
-        keyed
-            .register_governor(
-                AgentId::new("tom", "primary"),
-                SigningKey::from_bytes(&[19; 32]),
-            )
-            .expect("the policy holds no other governor key");
-        keyed.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
-        keyed.observe_health(
-            &AgentId::new("tom", "primary"),
-            &[AgentHealthEntry {
-                id: "tom-primary".to_string(),
-                role: AgentRole::Tom,
-                health: AgentHealth::Failed,
-            }],
-            base_ms + 1_000,
-        );
-        assert_eq!(
-            keyed.status_report().partition_state,
-            PartitionState::Partitioned
-        );
-        let action = ResponseAction::IsolateHost {
-            host_id: "host-77".to_string(),
-        };
-        assert!(
-            matches!(
-                keyed.can_act(&request(action.clone())),
-                GovernanceDecision::Authorize {
-                    contingency_lease: Some(_),
-                    ..
-                }
-            ),
-            "precondition: the keyed policy staged a redeemable lease before the restart"
-        );
-
-        // Restart with the same state file, Tom admission failing: no governor registers.
-        let keyless = GovernancePolicy::with_persistence(config, &path).unwrap();
-        assert_eq!(
-            keyless.status_report().partition_state,
-            PartitionState::Partitioned,
-            "precondition: the partition and its leases were rehydrated from disk"
-        );
-        assert_eq!(
-            keyless.status_report().active_contingency_leases,
-            ResponseAction::governed_action_kinds().len(),
-            "precondition: one live lease per destructive action kind survived the restart"
-        );
-
-        let decision = keyless.can_act(&request(action));
-        let _ = std::fs::remove_file(&path);
-        match decision {
-            GovernanceDecision::Veto { reason, .. } => assert!(
-                reason.contains("no governor signing key is registered"),
-                "veto reason should name the cause, got {reason}"
-            ),
-            other => {
-                panic!("expected a keyless policy to refuse a disk-rehydrated lease, got {other:?}")
-            }
-        }
+        let error = GovernancePolicy::with_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&SigningKey::from_bytes(&[19; 32]).verifying_key()),
+            SigningKey::from_bytes(&[19; 32]),
+        )
+        .expect_err("ordinary load must never replace deleted governance history");
+        assert!(matches!(
+            error,
+            super::GovernancePersistenceError::MissingState { .. }
+        ));
     }
 
     #[test]
