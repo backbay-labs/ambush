@@ -35,6 +35,9 @@ bash "$ROOT_DIR/tools/test-fixture-inventory.sh"
 
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
+STATE="$SCRATCH/state"
+GENERATED="$SCRATCH/generated"
+mkdir -p "$STATE" "$GENERATED"
 
 # The same enumeration `tools/regen-kitten-fixtures.sh` performs. Recomputed
 # here rather than inferred from the scratch directory so that a generator that
@@ -45,7 +48,7 @@ if ! git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   exit 1
 fi
 
-INVENTORY="$SCRATCH/fixtures.nul"
+INVENTORY="$STATE/fixtures.nul"
 fixture_inventory_write "$ROOT_DIR" "$INVENTORY"
 
 # `mapfile` is bash 4+; macOS ships 3.2 and this gate has to run locally too.
@@ -66,19 +69,19 @@ for relative in "${committed[@]}"; do
 done
 
 # Runs the generator over the same set. A schema-rejecting fixture fails here.
-bash "$ROOT_DIR/tools/regen-kitten-fixtures.sh" "$SCRATCH"
+bash "$ROOT_DIR/tools/regen-kitten-fixtures.sh" "$GENERATED"
 
 status=0
 for relative in "${committed[@]}"; do
   name="${relative#experiments/}"
-  regenerated="$SCRATCH/$name"
+  regenerated="$GENERATED/$name"
   if [ ! -f "$regenerated" ]; then
     echo "fixture not regenerated: $(fixture_display "$relative")" >&2
     status=1
     continue
   fi
-  diff_output="$SCRATCH/diff-output"
-  diff_error="$SCRATCH/diff-error"
+  diff_output="$STATE/diff-output"
+  diff_error="$STATE/diff-error"
   set +e
   diff -u \
     -L "expected $(fixture_display "$relative")" \
@@ -98,9 +101,23 @@ done
 
 # The other direction: a regeneration with no committed counterpart means the
 # two enumerations disagree, and the gate is no longer checking what ships.
-for regenerated in "$SCRATCH"/*.yaml "$SCRATCH"/*.yml; do
-  [ -e "$regenerated" ] || continue
-  name="${regenerated##*/}"
+OUTPUT_INVENTORY="$STATE/regenerated.nul"
+fixture_directory_inventory_write "$GENERATED" "$OUTPUT_INVENTORY"
+while IFS= read -r -d '' name; do
+  regenerated="$GENERATED/$name"
+  if [ -L "$regenerated" ] || [ ! -f "$regenerated" ]; then
+    echo "unexpected regenerated output entry (expected a direct regular YAML file): $(fixture_display "$name")" >&2
+    status=1
+    continue
+  fi
+  case "$name" in
+    *.yaml|*.yml) ;;
+    *)
+      echo "unexpected regenerated output entry (expected .yaml or .yml): $(fixture_display "$name")" >&2
+      status=1
+      continue
+      ;;
+  esac
   candidate="experiments/$name"
   found=0
   for relative in "${committed[@]}"; do
@@ -113,7 +130,7 @@ for regenerated in "$SCRATCH"/*.yaml "$SCRATCH"/*.yml; do
     echo "regenerated fixture is not committed: $(fixture_display "$candidate")" >&2
     status=1
   fi
-done
+done <"$OUTPUT_INVENTORY"
 
 if [ "$status" -ne 0 ]; then
   echo "run 'bash tools/regen-kitten-fixtures.sh' and commit the result" >&2

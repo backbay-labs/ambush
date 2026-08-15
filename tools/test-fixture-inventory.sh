@@ -154,6 +154,18 @@ for fixture in "${fixtures[@]}"; do
   fi
   cp "$fixture" "$output/${fixture#experiments/}"
 done
+case "${FAKE_OUTPUT_MUTATION:-}" in
+  hidden-extra)
+    : >"$output/.unexpected-extra.yaml"
+    ;;
+  nested-output)
+    mkdir -p "$output/nested"
+    : >"$output/nested/unexpected.yaml"
+    ;;
+  symlink-output)
+    ln -s normal.yaml "$output/unexpected-link.yaml"
+    ;;
+esac
 FAKE_CARGO
 chmod +x "$TEST_ROOT/fake-bin/cargo"
 
@@ -213,4 +225,40 @@ case "$red_output" in
     ;;
 esac
 
-echo "fixture inventory self-test: 9 cases passed (NUL inventory, ordering, direct-child scope, ASCII-only diagnostics, generator/freshness differential)"
+assert_output_mutation_rejected() {
+  local mutation="$1"
+  local expected_fragment="$2"
+  local output
+  local status
+
+  set +e
+  output="$({
+    FIXTURE_ARGUMENT_LOG="$argument_log" FAKE_OUTPUT_MUTATION="$mutation" PATH="$test_path" \
+      bash "$TEST_ROOT/tools/check-fixture-freshness.sh"
+  } 2>&1)"
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ]; then
+    echo "freshness differential accepted generated output mutation: $mutation" >&2
+    exit 1
+  fi
+  case "$output" in
+    *$'\n::error::'*)
+      echo "generated-output diagnostic emitted a forged workflow-command line" >&2
+      exit 1
+      ;;
+  esac
+  case "$output" in
+    *"$expected_fragment"*) ;;
+    *)
+      echo "freshness differential omitted the generated-output diagnostic for $mutation" >&2
+      exit 1
+      ;;
+  esac
+}
+
+assert_output_mutation_rejected hidden-extra 'experiments/.unexpected-extra.yaml'
+assert_output_mutation_rejected nested-output '"nested"'
+assert_output_mutation_rejected symlink-output '"unexpected-link.yaml"'
+
+echo "fixture inventory self-test: 12 cases passed (NUL inventory, ordering, direct-child scope, ASCII-only diagnostics, generator/freshness differential, exact regenerated set)"

@@ -22,6 +22,23 @@ fixture_inventory_write() {
       ' >"$destination"
 }
 
+fixture_directory_inventory_write() {
+  local directory="$1"
+  local destination="$2"
+
+  LC_ALL=C /usr/bin/perl -e '
+    use strict;
+    use warnings;
+    my $directory = shift @ARGV;
+    opendir(my $handle, $directory) or die "cannot enumerate generated fixture directory\n";
+    my @names = sort { $a cmp $b } grep { $_ ne "." && $_ ne ".." } readdir($handle);
+    closedir($handle) or die "cannot close generated fixture directory\n";
+    for my $name (@names) {
+      print $name, "\0";
+    }
+  ' "$directory" >"$destination"
+}
+
 fixture_display() {
   printf '%s' "$1" | LC_ALL=C /usr/bin/perl -e '
     use strict;
