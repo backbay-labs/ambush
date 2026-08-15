@@ -409,6 +409,9 @@ struct GovernanceState {
     partition_activity: Vec<PartitionActionRecord>,
     reconciliation_reports: Vec<PartitionReconciliationReport>,
     pending_events: VecDeque<GovernanceRuntimeEvent>,
+    /// Transient marker: the state envelope committed but its signed high-water
+    /// checkpoint did not. Never serialized into the state it describes.
+    checkpoint_lagging: Option<GovernanceCheckpointLag>,
 }
 
 impl GovernanceState {
@@ -452,6 +455,7 @@ impl Default for GovernanceState {
             partition_activity: Vec::new(),
             reconciliation_reports: Vec::new(),
             pending_events: VecDeque::new(),
+            checkpoint_lagging: None,
         }
     }
 }
@@ -478,9 +482,39 @@ struct GovernancePersistence {
     expected_signer_agent_id: AgentId,
 }
 
+#[derive(Debug)]
+enum GovernancePersistenceOutcome {
+    Committed,
+    /// The signed state envelope is the durable commit point. The checkpoint is
+    /// only a signed high-water anchor and did not advance after that commit.
+    StateCommittedCheckpointLagging {
+        sequence: u64,
+        reason: String,
+    },
+}
+
+#[derive(Debug)]
+enum AtomicWriteOutcome {
+    Synced,
+    /// The rename (the state commit point) succeeded, but syncing its parent
+    /// directory did not. Callers must treat the new file as committed in this
+    /// process even though crash durability is not yet proven.
+    RenamedDirectorySyncFailed(GovernancePersistenceError),
+}
+
+#[derive(Debug, Clone)]
+struct GovernanceCheckpointLag {
+    sequence: u64,
+    reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedGovernanceState {
     governing_agent_id: Option<AgentId>,
+    /// Display identity to consensus identity bindings used by health quorum
+    /// accounting. These are signed state because losing the mapping can turn a
+    /// failed governor into an apparently healthy one after restart.
+    display_governors: BTreeMap<AgentId, AgentId>,
     /// Admitted peer governors, by consensus identity. NEVER a key.
     ///
     /// Persisted because forgetting them is a FAIL-OPEN across restart: a
@@ -491,11 +525,15 @@ struct PersistedGovernanceState {
     /// legacy unsigned state is rejected before payload deserialization.
     #[serde(default)]
     peer_governors: BTreeSet<AgentId>,
+    /// The exact health observations that drive `can_act` vetoes.
+    unhealthy_agents: Vec<AgentHealthEntry>,
     previous_commit_hash: String,
     receipt_counter: u64,
     partition_state: PartitionState,
     partition_started_at_ms: Option<i64>,
     last_transition_at_ms: Option<i64>,
+    last_healthy_governors: usize,
+    last_quorum_threshold: usize,
     active_contingency_leases: Vec<ContingencyLease>,
     #[serde(default)]
     pending_authorizations: VecDeque<PendingGovernanceAuthorization>,
@@ -511,12 +549,16 @@ impl Default for PersistedGovernanceState {
     fn default() -> Self {
         Self {
             governing_agent_id: None,
+            display_governors: BTreeMap::new(),
             peer_governors: BTreeSet::new(),
+            unhealthy_agents: Vec::new(),
             previous_commit_hash: "governance-bootstrap".to_string(),
             receipt_counter: 0,
             partition_state: PartitionState::Healthy,
             partition_started_at_ms: None,
             last_transition_at_ms: None,
+            last_healthy_governors: 0,
+            last_quorum_threshold: 0,
             active_contingency_leases: Vec::new(),
             pending_authorizations: VecDeque::new(),
             consumed_authorizations: VecDeque::new(),
@@ -531,12 +573,16 @@ impl PersistedGovernanceState {
     fn from_runtime(state: &GovernanceState) -> Self {
         Self {
             governing_agent_id: state.governing_agent_id.clone(),
+            display_governors: state.display_governors.clone(),
             peer_governors: state.peer_governors.clone(),
+            unhealthy_agents: state.unhealthy_agents.clone(),
             previous_commit_hash: state.previous_commit_hash.clone(),
             receipt_counter: state.receipt_counter,
             partition_state: state.partition_state,
             partition_started_at_ms: state.partition_started_at_ms,
             last_transition_at_ms: state.last_transition_at_ms,
+            last_healthy_governors: state.last_healthy_governors,
+            last_quorum_threshold: state.last_quorum_threshold,
             active_contingency_leases: state.active_contingency_leases.clone(),
             pending_authorizations: state.pending_authorizations.clone(),
             consumed_authorizations: state.consumed_authorizations.clone(),
@@ -548,12 +594,16 @@ impl PersistedGovernanceState {
 
     fn restore_into(self, state: &mut GovernanceState) {
         state.governing_agent_id = self.governing_agent_id;
+        state.display_governors = self.display_governors;
         state.peer_governors = self.peer_governors;
+        state.unhealthy_agents = self.unhealthy_agents;
         state.previous_commit_hash = self.previous_commit_hash;
         state.receipt_counter = self.receipt_counter;
         state.partition_state = self.partition_state;
         state.partition_started_at_ms = self.partition_started_at_ms;
         state.last_transition_at_ms = self.last_transition_at_ms;
+        state.last_healthy_governors = self.last_healthy_governors;
+        state.last_quorum_threshold = self.last_quorum_threshold;
         state.active_contingency_leases = self.active_contingency_leases;
         state.pending_authorizations = self.pending_authorizations;
         state.consumed_authorizations = self.consumed_authorizations;
@@ -629,6 +679,9 @@ pub enum GovernancePersistenceError {
     #[error("unsupported signed governance state schema version `{observed}`")]
     UnsupportedSchema { observed: u32 },
 
+    #[error("signed governance identity binding is invalid: {reason}")]
+    InvalidIdentityBinding { reason: String },
+
     #[error(transparent)]
     SignedState(#[from] SignedStateError),
 
@@ -641,6 +694,12 @@ pub enum GovernancePersistenceError {
 
     #[error("governance state cannot be persisted without the admitted local Tom key")]
     MissingLocalSigner,
+
+    #[error("governance initialization did not establish both signed anchors: {reason}")]
+    IncompleteInitialization { reason: String },
+
+    #[error("explicit governance reinitialization failed: {reason}")]
+    ReinitializationFailed { reason: String },
 }
 
 impl GovernancePersistence {
@@ -745,10 +804,26 @@ impl GovernancePersistence {
                 sequence_path: self.sequence_path.clone(),
             });
         }
-        self.write_state_and_checkpoint(state, 1)
+        match self.write_state_and_checkpoint(state, 1)? {
+            GovernancePersistenceOutcome::Committed => Ok(()),
+            GovernancePersistenceOutcome::StateCommittedCheckpointLagging { reason, .. } => {
+                let rollback = self.rollback_incomplete_initialization();
+                Err(GovernancePersistenceError::IncompleteInitialization {
+                    reason: match rollback {
+                        Ok(()) => reason,
+                        Err(rollback_error) => {
+                            format!("{reason}; rollback also failed: {rollback_error}")
+                        }
+                    },
+                })
+            }
+        }
     }
 
-    fn save(&self, state: &GovernanceState) -> Result<(), GovernancePersistenceError> {
+    fn save(
+        &self,
+        state: &GovernanceState,
+    ) -> Result<GovernancePersistenceOutcome, GovernancePersistenceError> {
         let local = state
             .local_governor
             .as_ref()
@@ -767,7 +842,7 @@ impl GovernancePersistence {
         &self,
         state: &GovernanceState,
         sequence: u64,
-    ) -> Result<(), GovernancePersistenceError> {
+    ) -> Result<GovernancePersistenceOutcome, GovernancePersistenceError> {
         let local = state
             .local_governor
             .as_ref()
@@ -790,8 +865,66 @@ impl GovernancePersistence {
                 source,
             }
         })?;
-        write_atomic_synced(&self.path, &bytes)?;
-        self.write_checkpoint(sequence, local)
+        let state_directory_sync_error = match write_atomic_synced(&self.path, &bytes)? {
+            AtomicWriteOutcome::Synced => None,
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Some(error.to_string()),
+        };
+        match self.write_checkpoint(sequence, local) {
+            Ok(()) => Ok(GovernancePersistenceOutcome::Committed),
+            Err(error) => Ok(
+                GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                    sequence,
+                    reason: match state_directory_sync_error {
+                        Some(state_error) => format!(
+                            "state rename committed but directory sync failed: {state_error}; checkpoint failed: {error}"
+                        ),
+                        None => error.to_string(),
+                    },
+                },
+            ),
+        }
+    }
+
+    fn repair_checkpoint(
+        &self,
+        state: &GovernanceState,
+        lag: &GovernanceCheckpointLag,
+    ) -> Result<(), GovernancePersistenceError> {
+        let local = state
+            .local_governor
+            .as_ref()
+            .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
+        let loaded = self.load(local)?;
+        if loaded.sequence != lag.sequence
+            || serde_json::to_value(&loaded.payload).map_err(|source| {
+                GovernancePersistenceError::ParseState {
+                    path: self.path.clone(),
+                    source,
+                }
+            })? != serde_json::to_value(PersistedGovernanceState::from_runtime(state)).map_err(
+                |source| GovernancePersistenceError::ParseState {
+                    path: self.path.clone(),
+                    source,
+                },
+            )?
+        {
+            return Err(GovernancePersistenceError::InvalidSequence {
+                path: self.path.clone(),
+                reason: format!(
+                    "durable state at sequence {} does not match in-memory committed state at sequence {}",
+                    loaded.sequence, lag.sequence
+                ),
+            });
+        }
+        // `load` repairs a numerically lagging checkpoint. Rewrite even when
+        // the file already names this sequence: the original failure may have
+        // happened after checkpoint rename but before parent-directory sync.
+        self.write_checkpoint(lag.sequence, local)?;
+        Ok(())
+    }
+
+    fn rollback_incomplete_initialization(&self) -> Result<(), GovernancePersistenceError> {
+        remove_governance_stream_files(&self.path, &self.sequence_path)
     }
 
     fn validate_checkpoint(
@@ -826,11 +959,17 @@ impl GovernancePersistence {
                 source,
             }
         })?;
-        write_atomic_synced(&self.sequence_path, &bytes)
+        match write_atomic_synced(&self.sequence_path, &bytes)? {
+            AtomicWriteOutcome::Synced => Ok(()),
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Err(error),
+        }
     }
 }
 
-fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), GovernancePersistenceError> {
+fn write_atomic_synced(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<AtomicWriteOutcome, GovernancePersistenceError> {
     use std::io::Write;
 
     if let Some(parent) = path.parent() {
@@ -888,7 +1027,36 @@ fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), GovernancePersis
         path: path.to_path_buf(),
         source,
     })?;
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent()
+        && let Err(source) = fs::File::open(parent).and_then(|directory| directory.sync_all())
+    {
+        return Ok(AtomicWriteOutcome::RenamedDirectorySyncFailed(
+            GovernancePersistenceError::Write {
+                path: parent.to_path_buf(),
+                source,
+            },
+        ));
+    }
+    Ok(AtomicWriteOutcome::Synced)
+}
+
+fn remove_governance_stream_files(
+    state_path: &Path,
+    sequence_path: &Path,
+) -> Result<(), GovernancePersistenceError> {
+    for path in [state_path, sequence_path] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(GovernancePersistenceError::Write {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    }
+    if let Some(parent) = state_path.parent() {
         fs::File::open(parent)
             .and_then(|directory| directory.sync_all())
             .map_err(|source| GovernancePersistenceError::Write {
@@ -897,6 +1065,36 @@ fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), GovernancePersis
             })?;
     }
     Ok(())
+}
+
+fn restore_governance_archives(
+    archived: &[(PathBuf, PathBuf)],
+) -> Result<(), GovernancePersistenceError> {
+    for (original, archive) in archived.iter().rev() {
+        if !archive.exists() {
+            continue;
+        }
+        fs::rename(archive, original).map_err(|source| GovernancePersistenceError::Write {
+            path: original.clone(),
+            source,
+        })?;
+    }
+    if let Some((original, _)) = archived.first() {
+        sync_parent_directory(original)?;
+    }
+    Ok(())
+}
+
+fn sync_parent_directory(path: &Path) -> Result<(), GovernancePersistenceError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: parent.to_path_buf(),
+            source,
+        })
 }
 
 #[derive(Debug)]
@@ -950,14 +1148,29 @@ impl GovernancePolicy {
         );
         let loaded = persistence.load(&local_governor)?;
         let persisted = loaded.payload;
+        let consensus_agent_id = local_governor.consensus_agent_id().clone();
+        if persisted.governing_agent_id.as_ref() != Some(&governing_agent_id)
+            || persisted.display_governors.get(&governing_agent_id) != Some(&consensus_agent_id)
+        {
+            return Err(GovernancePersistenceError::InvalidIdentityBinding {
+                reason: format!(
+                    "persisted governor `{}` is not bound to admitted local signer `{}`",
+                    governing_agent_id, consensus_agent_id
+                ),
+            });
+        }
         let mut state = GovernanceState {
             governing_agent_id: Some(governing_agent_id.clone()),
+            display_governors: persisted.display_governors,
             peer_governors: persisted.peer_governors,
+            unhealthy_agents: persisted.unhealthy_agents,
             previous_commit_hash: persisted.previous_commit_hash,
             receipt_counter: persisted.receipt_counter,
             partition_state: persisted.partition_state,
             partition_started_at_ms: persisted.partition_started_at_ms,
             last_transition_at_ms: persisted.last_transition_at_ms,
+            last_healthy_governors: persisted.last_healthy_governors,
+            last_quorum_threshold: persisted.last_quorum_threshold,
             active_contingency_leases: persisted.active_contingency_leases,
             pending_authorizations: persisted.pending_authorizations,
             consumed_authorizations: persisted.consumed_authorizations,
@@ -966,10 +1179,6 @@ impl GovernancePolicy {
             reconciliation_reports: persisted.reconciliation_reports,
             ..Default::default()
         };
-        let consensus_agent_id = local_governor.consensus_agent_id().clone();
-        state
-            .display_governors
-            .insert(governing_agent_id, consensus_agent_id.clone());
         state.peer_governors.remove(&consensus_agent_id);
         state.local_governor = Some(local_governor);
         prune_authorization_ledgers(&mut state, now_ms());
@@ -1029,8 +1238,25 @@ impl GovernancePolicy {
         signing_key: SigningKey,
     ) -> Result<Self, GovernancePersistenceError> {
         let path = path.as_ref().to_path_buf();
-        let sequence_path = path.with_extension("sequence.json");
         let suffix = format!("discarded-{}-{}", now_ms(), std::process::id());
+        Self::reinitialize_persistence_with_suffix(
+            config,
+            path,
+            governing_agent_id,
+            signing_key,
+            &suffix,
+        )
+    }
+
+    fn reinitialize_persistence_with_suffix(
+        config: GovernancePolicyConfig,
+        path: PathBuf,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+        suffix: &str,
+    ) -> Result<Self, GovernancePersistenceError> {
+        let sequence_path = path.with_extension("sequence.json");
+        let mut archived: Vec<(PathBuf, PathBuf)> = Vec::new();
         for existing in [&path, &sequence_path] {
             if existing.exists() {
                 let archive = existing.with_extension(format!(
@@ -1041,15 +1267,63 @@ impl GovernancePolicy {
                         .unwrap_or("state"),
                     suffix
                 ));
-                fs::rename(existing, &archive).map_err(|source| {
-                    GovernancePersistenceError::Write {
-                        path: archive,
-                        source,
-                    }
-                })?;
+                if let Err(source) = fs::rename(existing, &archive) {
+                    let rollback = restore_governance_archives(&archived);
+                    return Err(GovernancePersistenceError::ReinitializationFailed {
+                        reason: match rollback {
+                            Ok(()) => format!(
+                                "could not archive `{}` as `{}`: {source}",
+                                existing.display(),
+                                archive.display()
+                            ),
+                            Err(rollback_error) => format!(
+                                "could not archive `{}` as `{}`: {source}; archive rollback also failed: {rollback_error}",
+                                existing.display(),
+                                archive.display()
+                            ),
+                        },
+                    });
+                }
+                archived.push((existing.to_path_buf(), archive));
             }
         }
-        Self::initialize_persistence(config, path, governing_agent_id, signing_key)
+        if !archived.is_empty()
+            && let Err(sync_error) = sync_parent_directory(&path)
+        {
+            let rollback_error = restore_governance_archives(&archived).err();
+            return Err(GovernancePersistenceError::ReinitializationFailed {
+                reason: format!(
+                    "archived prior files but could not sync the archive directory: {sync_error}{}",
+                    rollback_error
+                        .map(|rollback_error| format!(
+                            "; prior-state restore also failed: {rollback_error}"
+                        ))
+                        .unwrap_or_default()
+                ),
+            });
+        }
+        match Self::initialize_persistence(config, &path, governing_agent_id, signing_key) {
+            Ok(policy) => Ok(policy),
+            Err(error) => {
+                let cleanup_error = remove_governance_stream_files(&path, &sequence_path).err();
+                let rollback_error = restore_governance_archives(&archived).err();
+                Err(GovernancePersistenceError::ReinitializationFailed {
+                    reason: format!(
+                        "new signed stream initialization failed: {error}{}{}",
+                        cleanup_error
+                            .map(|cleanup_error| format!(
+                                "; partial new-stream cleanup failed: {cleanup_error}"
+                            ))
+                            .unwrap_or_default(),
+                        rollback_error
+                            .map(|rollback_error| format!(
+                                "; prior-state restore failed: {rollback_error}"
+                            ))
+                            .unwrap_or_default()
+                    ),
+                })
+            }
+        }
     }
 
     pub fn persistence_sequence_path(path: impl AsRef<Path>) -> PathBuf {
@@ -1099,14 +1373,26 @@ impl GovernancePolicy {
         if !had_local_governor {
             state.local_governor = Some(offered);
         }
-        if let Err(reason) = self.persist_locked(&state) {
-            state.governing_agent_id = previous_governing_agent_id;
-            state.display_governors = previous_display_governors;
-            state.peer_governors = previous_peers;
-            if !had_local_governor {
-                state.local_governor = None;
+        match self.persist_locked(&mut state) {
+            Err(reason) => {
+                state.governing_agent_id = previous_governing_agent_id;
+                state.display_governors = previous_display_governors;
+                state.peer_governors = previous_peers;
+                if !had_local_governor {
+                    state.local_governor = None;
+                }
+                return Err(GovernanceKeyError::Persistence { reason });
             }
-            return Err(GovernanceKeyError::Persistence { reason });
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => tracing::warn!(
+                sequence,
+                reason = %reason,
+                module = module_path!(),
+                "governor registration committed while its checkpoint remains lagging"
+            ),
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         Ok(())
     }
@@ -1138,11 +1424,23 @@ impl GovernancePolicy {
         if !state.peer_governors.insert(consensus_agent_id.clone()) {
             return Ok(());
         }
-        if let Err(error) = self.persist_locked(&state) {
-            state.peer_governors.remove(&consensus_agent_id);
-            return Err(format!(
-                "peer governor was not admitted because persistence failed: {error}"
-            ));
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                state.peer_governors.remove(&consensus_agent_id);
+                return Err(format!(
+                    "peer governor was not admitted because persistence failed: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => tracing::warn!(
+                sequence,
+                reason = %reason,
+                module = module_path!(),
+                "peer governor admission committed while its checkpoint remains lagging"
+            ),
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         Ok(())
     }
@@ -1162,6 +1460,20 @@ impl GovernancePolicy {
         let previous_last_healthy_governors = state.last_healthy_governors;
         let previous_last_quorum_threshold = state.last_quorum_threshold;
         let previous_pending_events = state.pending_events.clone();
+        if state.governing_agent_id.as_ref() != Some(governing_agent_id) {
+            if let Some(previous) = state.governing_agent_id.clone() {
+                state.display_governors.remove(&previous);
+            }
+            if let Some(consensus_agent_id) = state
+                .local_governor
+                .as_ref()
+                .map(|local| local.consensus_agent_id().clone())
+            {
+                state
+                    .display_governors
+                    .insert(governing_agent_id.clone(), consensus_agent_id);
+            }
+        }
         state.governing_agent_id = Some(governing_agent_id.clone());
         state.unhealthy_agents = entries
             .iter()
@@ -1235,23 +1547,35 @@ impl GovernancePolicy {
         if state.partition_state == PartitionState::Healthy {
             self.ensure_contingency_leases_locked(&mut state, observed_at_ms);
         }
-        if let Err(error) = self.persist_locked(&state) {
-            previous_persisted.restore_into(&mut state);
-            state.unhealthy_agents = previous_unhealthy_agents;
-            state.last_healthy_governors = previous_last_healthy_governors;
-            state.last_quorum_threshold = previous_last_quorum_threshold;
-            state.pending_events = previous_pending_events;
-            let path = self
-                .persistence
-                .as_ref()
-                .map(|persistence| persistence.path.display().to_string())
-                .unwrap_or_else(|| "<memory>".to_string());
-            tracing::warn!(
-                reason = %error,
-                path = %path,
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                previous_persisted.restore_into(&mut state);
+                state.unhealthy_agents = previous_unhealthy_agents;
+                state.last_healthy_governors = previous_last_healthy_governors;
+                state.last_quorum_threshold = previous_last_quorum_threshold;
+                state.pending_events = previous_pending_events;
+                let path = self
+                    .persistence
+                    .as_ref()
+                    .map(|persistence| persistence.path.display().to_string())
+                    .unwrap_or_else(|| "<memory>".to_string());
+                tracing::warn!(
+                    reason = %error,
+                    path = %path,
+                    module = module_path!(),
+                    "discarded an unpersisted governance health transition and contingency leases"
+                );
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => tracing::warn!(
+                sequence,
+                reason = %reason,
                 module = module_path!(),
-                "discarded an unpersisted governance health transition and contingency leases"
-            );
+                "governance health transition committed while its checkpoint remains lagging"
+            ),
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
     }
 
@@ -1279,6 +1603,18 @@ impl GovernancePolicy {
                     .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
                 reason: "blocked destructive action because no governor signing key is registered"
                     .to_string(),
+                receipt: None,
+            };
+        }
+        if let Err(error) = self.ensure_checkpoint_repaired_locked(&mut state) {
+            return GovernanceDecision::Veto {
+                governing_agent_id: state
+                    .governing_agent_id
+                    .clone()
+                    .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
+                reason: format!(
+                    "blocked destructive action until the signed governance checkpoint is repaired: {error}"
+                ),
                 receipt: None,
             };
         }
@@ -1406,14 +1742,25 @@ impl GovernancePolicy {
         };
         state.pending_authorizations.push_back(pending);
         prune_authorization_ledgers(state, issued_at_ms);
-        if let Err(error) = self.persist_locked(state) {
-            state.previous_commit_hash = previous_commit_hash;
-            state.receipt_counter = receipt_counter;
-            state.pending_authorizations = previous_pending;
-            state.consumed_authorizations = previous_consumed;
-            return Err(format!(
-                "governance authorization was not issued because pending-ledger persistence failed: {error}"
-            ));
+        match self.persist_locked(state) {
+            Err(error) => {
+                state.previous_commit_hash = previous_commit_hash;
+                state.receipt_counter = receipt_counter;
+                state.pending_authorizations = previous_pending;
+                state.consumed_authorizations = previous_consumed;
+                return Err(format!(
+                    "governance authorization was not issued because pending-ledger persistence failed before commit: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => {
+                return Err(format!(
+                    "governance authorization state committed at sequence {sequence}, but no receipt was issued because pending-ledger persistence failed to advance the checkpoint: {reason}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         Ok(receipt)
     }
@@ -1457,6 +1804,7 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_checkpoint_repaired_locked(&mut state)?;
         let (receipt, subject_digest, index) = validate_pending_request_receipt_locked(
             &state,
             request,
@@ -1477,12 +1825,23 @@ impl GovernancePolicy {
                 consumed_at_ms: now_ms,
             });
         prune_authorization_ledgers(&mut state, now_ms);
-        if let Err(error) = self.persist_locked(&state) {
-            state.pending_authorizations = previous_pending;
-            state.consumed_authorizations = previous_consumed;
-            return Err(format!(
-                "governance receipt was not consumed because ledger persistence failed: {error}"
-            ));
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                state.pending_authorizations = previous_pending;
+                state.consumed_authorizations = previous_consumed;
+                return Err(format!(
+                    "governance receipt was not consumed because ledger persistence failed before commit: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => {
+                return Err(format!(
+                    "governance receipt was consumed in signed state sequence {sequence}, but execution is refused because ledger persistence failed to advance the checkpoint: {reason}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         serde_json::to_value(receipt).map_err(|error| {
             format!("verified governance receipt could not be serialized: {error}")
@@ -1545,11 +1904,23 @@ impl GovernancePolicy {
         let previous = state.pending_human_authorizations.clone();
         state.pending_human_authorizations.push_back(hold.clone());
         prune_authorization_ledgers(&mut state, now_ms);
-        if let Err(error) = self.persist_locked(&state) {
-            state.pending_human_authorizations = previous;
-            return Err(format!(
-                "human authorization hold was not created because persistence failed: {error}"
-            ));
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                state.pending_human_authorizations = previous;
+                return Err(format!(
+                    "human authorization hold was not created because persistence failed before commit: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => tracing::warn!(
+                sequence,
+                reason = %reason,
+                module = module_path!(),
+                "human authorization hold committed while its checkpoint remains lagging"
+            ),
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         Ok(hold)
     }
@@ -1593,11 +1964,23 @@ impl GovernancePolicy {
         hold.approval_set_id = Some(approval_set_id.to_string());
         hold.approval_set_digest = Some(approval_set_digest.to_string());
         let bound = hold.clone();
-        if let Err(error) = self.persist_locked(&state) {
-            state.pending_human_authorizations = previous;
-            return Err(format!(
-                "human approval set was not bound because persistence failed: {error}"
-            ));
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                state.pending_human_authorizations = previous;
+                return Err(format!(
+                    "human approval set was not bound because persistence failed before commit: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => tracing::warn!(
+                sequence,
+                reason = %reason,
+                module = module_path!(),
+                "human approval binding committed while its checkpoint remains lagging"
+            ),
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         Ok(bound)
     }
@@ -1631,6 +2014,7 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_checkpoint_repaired_locked(&mut state)?;
         let Some(hold_index) = state
             .pending_human_authorizations
             .iter()
@@ -1671,13 +2055,24 @@ impl GovernancePolicy {
             });
         state.pending_human_authorizations.remove(hold_index);
         prune_authorization_ledgers(&mut state, now_ms);
-        if let Err(error) = self.persist_locked(&state) {
-            state.pending_authorizations = previous_pending;
-            state.consumed_authorizations = previous_consumed;
-            state.pending_human_authorizations = previous_holds;
-            return Err(format!(
-                "human and governance authorization were not consumed because persistence failed: {error}"
-            ));
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                state.pending_authorizations = previous_pending;
+                state.consumed_authorizations = previous_consumed;
+                state.pending_human_authorizations = previous_holds;
+                return Err(format!(
+                    "human and governance authorization were not consumed because persistence failed before commit: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => {
+                return Err(format!(
+                    "human and governance authorization were consumed in signed state sequence {sequence}, but execution is refused because checkpoint persistence failed: {reason}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         Ok(ConsumedGovernedHumanAuthorization {
             hold,
@@ -1709,6 +2104,7 @@ impl GovernancePolicy {
         if state.partition_state != PartitionState::Partitioned {
             return Ok(None);
         }
+        self.ensure_checkpoint_repaired_locked(&mut state)?;
 
         let lease_value = match request.evidence.get("contingency_lease").cloned() {
             Some(value) => value,
@@ -1722,7 +2118,7 @@ impl GovernancePolicy {
                     None,
                     now_ms,
                 );
-                self.persist_best_effort_locked(&state);
+                self.persist_best_effort_locked(&mut state);
                 return Err(reason);
             }
         };
@@ -1738,7 +2134,7 @@ impl GovernancePolicy {
                     None,
                     now_ms,
                 );
-                self.persist_best_effort_locked(&state);
+                self.persist_best_effort_locked(&mut state);
                 return Err(reason);
             }
         };
@@ -1751,7 +2147,7 @@ impl GovernancePolicy {
                 Some(lease.lease_id.clone()),
                 now_ms,
             );
-            self.persist_best_effort_locked(&state);
+            self.persist_best_effort_locked(&mut state);
             return Err(reason);
         }
         let Some(index) = state
@@ -1768,7 +2164,7 @@ impl GovernancePolicy {
                 None,
                 now_ms,
             );
-            self.persist_best_effort_locked(&state);
+            self.persist_best_effort_locked(&mut state);
             return Err(reason);
         };
         if state.active_contingency_leases[index] != lease {
@@ -1784,7 +2180,7 @@ impl GovernancePolicy {
                 None,
                 now_ms,
             );
-            self.persist_best_effort_locked(&state);
+            self.persist_best_effort_locked(&mut state);
             return Err(reason);
         }
         let previous_leases = state.active_contingency_leases.clone();
@@ -1807,7 +2203,7 @@ impl GovernancePolicy {
                     Some(lease_id),
                     now_ms,
                 );
-                self.persist_best_effort_locked(&state);
+                self.persist_best_effort_locked(&mut state);
                 return Err(reason);
             }
         };
@@ -1819,12 +2215,23 @@ impl GovernancePolicy {
             Some(redeemed.lease_id.clone()),
             now_ms,
         );
-        if let Err(error) = self.persist_locked(&state) {
-            state.active_contingency_leases = previous_leases;
-            state.partition_activity = previous_activity;
-            return Err(format!(
-                "contingency lease redemption was not authorized because persistence failed: {error}"
-            ));
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                state.active_contingency_leases = previous_leases;
+                state.partition_activity = previous_activity;
+                return Err(format!(
+                    "contingency lease redemption was not authorized because persistence failed before commit: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => {
+                return Err(format!(
+                    "contingency lease was redeemed in signed state sequence {sequence}, but execution is refused because checkpoint persistence failed: {reason}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::Committed) => {}
         }
         Ok(Some(redeemed))
     }
@@ -1860,6 +2267,14 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Err(error) = self.ensure_checkpoint_repaired_locked(&mut state) {
+            tracing::warn!(
+                reason = %error,
+                module = module_path!(),
+                "containment release attestation was refused until governance checkpoint repair"
+            );
+            return None;
+        }
         // Rebased onto BFT-03's single-key path. This used to read
         // `state.governors` and call `simulate_governance_commit` with the whole
         // keyring; both are gone, and the round now runs through the transport
@@ -1883,15 +2298,30 @@ impl GovernancePolicy {
             now_ms,
         ) {
             Ok(receipt) => {
-                if let Err(error) = self.persist_locked(&state) {
-                    state.previous_commit_hash = previous_commit_hash;
-                    state.receipt_counter = previous_receipt_counter;
-                    tracing::warn!(
-                        reason = %error,
-                        module = module_path!(),
-                        "containment release attestation was not issued because governance persistence failed"
-                    );
-                    return None;
+                match self.persist_locked(&mut state) {
+                    Err(error) => {
+                        state.previous_commit_hash = previous_commit_hash;
+                        state.receipt_counter = previous_receipt_counter;
+                        tracing::warn!(
+                            reason = %error,
+                            module = module_path!(),
+                            "containment release attestation was not issued because governance persistence failed before commit"
+                        );
+                        return None;
+                    }
+                    Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                        sequence,
+                        reason,
+                    }) => {
+                        tracing::warn!(
+                            sequence,
+                            reason = %reason,
+                            module = module_path!(),
+                            "containment release attestation committed, but was withheld while its checkpoint remains lagging"
+                        );
+                        return None;
+                    }
+                    Ok(GovernancePersistenceOutcome::Committed) => {}
                 }
                 Some(receipt)
             }
@@ -1927,7 +2357,7 @@ impl GovernancePolicy {
                 .map(str::to_string),
             now_ms,
         );
-        self.persist_best_effort_locked(&state);
+        self.persist_best_effort_locked(&mut state);
     }
 
     /// Receipt-verification anchors admitted locally in this process.
@@ -2059,27 +2489,68 @@ impl GovernancePolicy {
         });
     }
 
-    fn persist_locked(&self, state: &GovernanceState) -> Result<(), String> {
+    fn persist_locked(
+        &self,
+        state: &mut GovernanceState,
+    ) -> Result<GovernancePersistenceOutcome, String> {
         let Some(persistence) = &self.persistence else {
-            return Ok(());
+            state.checkpoint_lagging = None;
+            return Ok(GovernancePersistenceOutcome::Committed);
         };
-        persistence.save(state).map_err(|error| error.to_string())
+        let outcome = persistence.save(state).map_err(|error| error.to_string())?;
+        state.checkpoint_lagging = match &outcome {
+            GovernancePersistenceOutcome::Committed => None,
+            GovernancePersistenceOutcome::StateCommittedCheckpointLagging { sequence, reason } => {
+                Some(GovernanceCheckpointLag {
+                    sequence: *sequence,
+                    reason: reason.clone(),
+                })
+            }
+        };
+        Ok(outcome)
     }
 
-    fn persist_best_effort_locked(&self, state: &GovernanceState) {
-        if let Err(error) = self.persist_locked(state) {
-            let path = self
-                .persistence
-                .as_ref()
-                .map(|persistence| persistence.path.display().to_string())
-                .unwrap_or_else(|| "<memory>".to_string());
-            tracing::warn!(
-                reason = %error,
-                path = %path,
-                module = module_path!(),
-                "failed to persist governance policy state"
-            );
-        }
+    fn ensure_checkpoint_repaired_locked(&self, state: &mut GovernanceState) -> Result<(), String> {
+        let Some(lag) = state.checkpoint_lagging.clone() else {
+            return Ok(());
+        };
+        let Some(persistence) = &self.persistence else {
+            state.checkpoint_lagging = None;
+            return Ok(());
+        };
+        persistence.repair_checkpoint(state, &lag).map_err(|error| {
+            format!(
+                "signed governance state sequence {} is committed but its checkpoint remains lagging (initial failure: {}; repair failure: {error})",
+                lag.sequence, lag.reason
+            )
+        })?;
+        state.checkpoint_lagging = None;
+        Ok(())
+    }
+
+    fn persist_best_effort_locked(&self, state: &mut GovernanceState) {
+        let result = self.persist_locked(state);
+        let warning = match result {
+            Ok(GovernancePersistenceOutcome::Committed) => return,
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => {
+                format!("state sequence {sequence} committed but checkpoint is lagging: {reason}")
+            }
+            Err(error) => error,
+        };
+        let path = self
+            .persistence
+            .as_ref()
+            .map(|persistence| persistence.path.display().to_string())
+            .unwrap_or_else(|| "<memory>".to_string());
+        tracing::warn!(
+            reason = %warning,
+            path = %path,
+            module = module_path!(),
+            "governance policy persistence is not fully anchored"
+        );
     }
 }
 
@@ -2866,6 +3337,731 @@ mod tests {
     }
 
     #[test]
+    fn unhealthy_veto_and_health_inputs_survive_signed_restart() {
+        let path = persistence_path("unhealthy-restart-veto");
+        let key = SigningKey::from_bytes(&[101; 32]);
+        let governing_id = AgentId::new("tom", "primary");
+        let policy = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            governing_id.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        let observed_at_ms = super::now_ms();
+        policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: "whisker-primary".to_string(),
+                role: AgentRole::Whisker,
+                health: AgentHealth::Degraded,
+            }],
+            observed_at_ms,
+        );
+        let before = policy.status_report();
+        assert_eq!(before.partition_state, PartitionState::Degraded);
+        assert!(matches!(
+            policy.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.101".to_string(),
+            })),
+            GovernanceDecision::Veto { .. }
+        ));
+        drop(policy);
+
+        let reloaded = GovernancePolicy::with_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            governing_id,
+            key,
+        )
+        .unwrap();
+        assert!(matches!(
+            reloaded.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.102".to_string(),
+            })),
+            GovernanceDecision::Veto { .. }
+        ));
+        assert_eq!(reloaded.status_report(), before);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn health_partition_state_and_lease_semantics_are_restart_invariant() {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum DecisionClass {
+            Approve,
+            Veto,
+            ContingencyLease,
+        }
+
+        fn classify(decision: GovernanceDecision) -> DecisionClass {
+            match decision {
+                GovernanceDecision::Authorize {
+                    contingency_lease: Some(_),
+                    ..
+                } => DecisionClass::ContingencyLease,
+                GovernanceDecision::Authorize { .. } => DecisionClass::Approve,
+                GovernanceDecision::Veto { .. } => DecisionClass::Veto,
+                GovernanceDecision::NotRequired => panic!("test action requires governance"),
+            }
+        }
+
+        let base_ms = super::now_ms();
+        for (label, expected_state) in [
+            ("healthy", PartitionState::Healthy),
+            ("degraded", PartitionState::Degraded),
+            ("partitioned", PartitionState::Partitioned),
+            ("healing", PartitionState::Healing),
+        ] {
+            let path = persistence_path(label);
+            let key = SigningKey::from_bytes(&match expected_state {
+                PartitionState::Healthy => [102; 32],
+                PartitionState::Degraded => [103; 32],
+                PartitionState::Partitioned => [104; 32],
+                PartitionState::Healing => [105; 32],
+            });
+            let governing_id = AgentId::new("tom", "primary");
+            let policy = GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                governing_id.clone(),
+                key.clone(),
+            )
+            .unwrap();
+            policy.observe_health(&governing_id, &[], base_ms);
+            match expected_state {
+                PartitionState::Healthy => {}
+                PartitionState::Degraded => policy.observe_health(
+                    &governing_id,
+                    &[AgentHealthEntry {
+                        id: "whisker-primary".to_string(),
+                        role: AgentRole::Whisker,
+                        health: AgentHealth::Degraded,
+                    }],
+                    base_ms + 1,
+                ),
+                PartitionState::Partitioned | PartitionState::Healing => {
+                    policy.observe_health(
+                        &governing_id,
+                        &[AgentHealthEntry {
+                            id: governing_id.to_string(),
+                            role: AgentRole::Tom,
+                            health: AgentHealth::Failed,
+                        }],
+                        base_ms + 1,
+                    );
+                    if expected_state == PartitionState::Healing {
+                        policy.observe_health(&governing_id, &[], base_ms + 2);
+                    }
+                }
+            }
+            let before_status = policy.status_report();
+            assert_eq!(before_status.partition_state, expected_state);
+            let before_decision = classify(policy.can_act(&request(ResponseAction::IsolateHost {
+                host_id: format!("host-before-{label}"),
+            })));
+            drop(policy);
+
+            let reloaded = GovernancePolicy::with_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                governing_id,
+                key,
+            )
+            .unwrap();
+            assert_eq!(reloaded.status_report(), before_status, "{label}");
+            let after_decision =
+                classify(reloaded.can_act(&request(ResponseAction::IsolateHost {
+                    host_id: format!("host-after-{label}"),
+                })));
+            assert_eq!(after_decision, before_decision, "{label}");
+            cleanup_persistence(&path);
+        }
+    }
+
+    #[test]
+    fn committed_peer_health_and_issue_state_is_retained_until_checkpoint_repair() {
+        let peer_path = persistence_path("peer-checkpoint-lag");
+        let peer_key = SigningKey::from_bytes(&[106; 32]);
+        let peer_policy = initialize_signed_policy(&peer_path, &peer_key);
+        let peer = SigningKey::from_bytes(&[107; 32]);
+        let peer_id = AgentId::from_verifying_key(&peer.verifying_key());
+        let peer_checkpoint = GovernancePolicy::persistence_sequence_path(&peer_path);
+        let blocker = block_atomic_write(&peer_checkpoint);
+        peer_policy
+            .register_peer_governor(&peer.verifying_key())
+            .expect("peer admission is committed even when its checkpoint lags");
+        {
+            let state = peer_policy.state.lock().unwrap();
+            assert!(state.peer_governors.contains(&peer_id));
+            assert!(state.checkpoint_lagging.is_some());
+        }
+        let payload: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&peer_path).statement.payload_json).unwrap();
+        assert!(payload.peer_governors.contains(&peer_id));
+        fs::remove_dir(blocker).unwrap();
+        assert!(matches!(
+            peer_policy.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.106".to_string(),
+            })),
+            GovernanceDecision::Veto { .. }
+        ));
+        assert!(
+            peer_policy
+                .state
+                .lock()
+                .unwrap()
+                .checkpoint_lagging
+                .is_none()
+        );
+        drop(peer_policy);
+        let peer_reloaded = load_signed_policy(&peer_path, &peer_key).unwrap();
+        assert_eq!(peer_reloaded.status_report().total_governors, 2);
+        cleanup_persistence(&peer_path);
+
+        let health_path = persistence_path("health-checkpoint-lag");
+        let health_key = SigningKey::from_bytes(&[108; 32]);
+        let governing_id = AgentId::from_verifying_key(&health_key.verifying_key());
+        let health_policy = initialize_signed_policy(&health_path, &health_key);
+        health_policy.observe_health(&governing_id, &[], super::now_ms());
+        let health_checkpoint = GovernancePolicy::persistence_sequence_path(&health_path);
+        let blocker = block_atomic_write(&health_checkpoint);
+        health_policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: "whisker-primary".to_string(),
+                role: AgentRole::Whisker,
+                health: AgentHealth::Degraded,
+            }],
+            super::now_ms() + 1,
+        );
+        assert_eq!(
+            health_policy.status_report().partition_state,
+            PartitionState::Degraded
+        );
+        {
+            let state = health_policy.state.lock().unwrap();
+            assert_eq!(state.unhealthy_agents.len(), 1);
+            assert!(state.checkpoint_lagging.is_some());
+        }
+        assert!(matches!(
+            health_policy.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.108".to_string(),
+            })),
+            GovernanceDecision::Veto { receipt: None, .. }
+        ));
+        fs::remove_dir(blocker).unwrap();
+        assert!(matches!(
+            health_policy.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.109".to_string(),
+            })),
+            GovernanceDecision::Veto { .. }
+        ));
+        assert!(
+            health_policy
+                .state
+                .lock()
+                .unwrap()
+                .checkpoint_lagging
+                .is_none()
+        );
+        drop(health_policy);
+        let health_reloaded = load_signed_policy(&health_path, &health_key).unwrap();
+        assert_eq!(
+            health_reloaded.status_report().partition_state,
+            PartitionState::Degraded
+        );
+        cleanup_persistence(&health_path);
+
+        let issue_path = persistence_path("issue-checkpoint-lag");
+        let issue_key = SigningKey::from_bytes(&[109; 32]);
+        let issue_policy = initialize_signed_policy(&issue_path, &issue_key);
+        let issue_checkpoint = GovernancePolicy::persistence_sequence_path(&issue_path);
+        let blocker = block_atomic_write(&issue_checkpoint);
+        assert!(matches!(
+            issue_policy.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.110".to_string(),
+            })),
+            GovernanceDecision::Veto { receipt: None, .. }
+        ));
+        {
+            let state = issue_policy.state.lock().unwrap();
+            assert_eq!(state.pending_authorizations.len(), 1);
+            assert!(state.checkpoint_lagging.is_some());
+        }
+        fs::remove_dir(blocker).unwrap();
+        {
+            let mut state = issue_policy.state.lock().unwrap();
+            issue_policy
+                .ensure_checkpoint_repaired_locked(&mut state)
+                .unwrap();
+            assert_eq!(state.pending_authorizations.len(), 1);
+            assert!(state.checkpoint_lagging.is_none());
+        }
+        assert_eq!(
+            read_envelope(&issue_path).sequence(),
+            checkpoint_sequence(&read_checkpoint(&issue_path))
+        );
+        drop(issue_policy);
+        let issue_reloaded = load_signed_policy(&issue_path, &issue_key).unwrap();
+        assert_eq!(
+            issue_reloaded
+                .state
+                .lock()
+                .unwrap()
+                .pending_authorizations
+                .len(),
+            1
+        );
+        cleanup_persistence(&issue_path);
+    }
+
+    #[test]
+    fn incomplete_initialization_removes_unanchored_state() {
+        let path = persistence_path("incomplete-initialize");
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+        let key = SigningKey::from_bytes(&[110; 32]);
+        let error = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        )
+        .expect_err("initialization without both signed anchors must fail");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::IncompleteInitialization { .. }
+        ));
+        assert!(!path.exists());
+        assert!(!sequence_path.exists());
+        fs::remove_dir(blocker).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn offline_reinitialization_handles_missing_checkpoint_and_rolls_back_partial_failure() {
+        let missing_path = persistence_path("reinit-missing-checkpoint");
+        let missing_key = SigningKey::from_bytes(&[119; 32]);
+        let missing_policy = initialize_signed_policy(&missing_path, &missing_key);
+        missing_policy.observe_health(
+            &AgentId::from_verifying_key(&missing_key.verifying_key()),
+            &[AgentHealthEntry {
+                id: "whisker-primary".to_string(),
+                role: AgentRole::Whisker,
+                health: AgentHealth::Failed,
+            }],
+            super::now_ms(),
+        );
+        drop(missing_policy);
+        fs::remove_file(GovernancePolicy::persistence_sequence_path(&missing_path)).unwrap();
+        let reset = GovernancePolicy::reinitialize_persistence(
+            GovernancePolicyConfig::default(),
+            &missing_path,
+            AgentId::from_verifying_key(&missing_key.verifying_key()),
+            missing_key,
+        )
+        .expect("explicit offline recovery may replace state whose checkpoint is missing");
+        assert_eq!(
+            reset.status_report().partition_state,
+            PartitionState::Healthy
+        );
+        assert!(reset.state.lock().unwrap().unhealthy_agents.is_empty());
+        drop(reset);
+        cleanup_persistence(&missing_path);
+
+        let partial_path = persistence_path("reinit-partial-archive");
+        let partial_key = SigningKey::from_bytes(&[120; 32]);
+        let partial_policy = initialize_signed_policy(&partial_path, &partial_key);
+        drop(partial_policy);
+        let original_state = fs::read(&partial_path).unwrap();
+        let partial_sequence_path = GovernancePolicy::persistence_sequence_path(&partial_path);
+        let original_checkpoint = fs::read(&partial_sequence_path).unwrap();
+        let suffix = "discarded-partial-test";
+        let checkpoint_archive = partial_sequence_path.with_extension(format!(
+            "{}.{}",
+            partial_sequence_path.extension().unwrap().to_str().unwrap(),
+            suffix
+        ));
+        fs::create_dir(&checkpoint_archive).unwrap();
+        let error = GovernancePolicy::reinitialize_persistence_with_suffix(
+            GovernancePolicyConfig::default(),
+            partial_path.clone(),
+            AgentId::from_verifying_key(&partial_key.verifying_key()),
+            partial_key,
+            suffix,
+        )
+        .expect_err("a partial archive failure must restore the prior stream");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReinitializationFailed { .. }
+        ));
+        assert_eq!(fs::read(&partial_path).unwrap(), original_state);
+        assert_eq!(
+            fs::read(&partial_sequence_path).unwrap(),
+            original_checkpoint
+        );
+        let state_archive = partial_path.with_extension(format!(
+            "{}.{}",
+            partial_path.extension().unwrap().to_str().unwrap(),
+            suffix
+        ));
+        assert!(!state_archive.exists());
+        fs::remove_dir(checkpoint_archive).unwrap();
+        cleanup_persistence(&partial_path);
+
+        let init_fail_path = persistence_path("reinit-new-stream-failure");
+        let init_fail_key = SigningKey::from_bytes(&[121; 32]);
+        let init_fail_policy = initialize_signed_policy(&init_fail_path, &init_fail_key);
+        drop(init_fail_policy);
+        let original_state = fs::read(&init_fail_path).unwrap();
+        let init_fail_sequence_path = GovernancePolicy::persistence_sequence_path(&init_fail_path);
+        let original_checkpoint = fs::read(&init_fail_sequence_path).unwrap();
+        let blocker = block_atomic_write(&init_fail_path);
+        let error = GovernancePolicy::reinitialize_persistence_with_suffix(
+            GovernancePolicyConfig::default(),
+            init_fail_path.clone(),
+            AgentId::from_verifying_key(&init_fail_key.verifying_key()),
+            init_fail_key,
+            "discarded-init-failure-test",
+        )
+        .expect_err("a replacement initialization failure must restore the prior stream");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReinitializationFailed { .. }
+        ));
+        assert_eq!(fs::read(&init_fail_path).unwrap(), original_state);
+        assert_eq!(
+            fs::read(&init_fail_sequence_path).unwrap(),
+            original_checkpoint
+        );
+        fs::remove_dir(blocker).unwrap();
+        cleanup_persistence(&init_fail_path);
+    }
+
+    #[test]
+    fn committed_human_hold_binding_and_consume_do_not_roll_back_on_checkpoint_lag() {
+        let path = persistence_path("human-checkpoint-lag");
+        let key = SigningKey::from_bytes(&[111; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.111".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: healthy governance issues an approval");
+        };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let issued_at_ms = receipt.payload.issued_at_ms;
+        let decision = swarm_policy::PolicyDecision::require_human_with_rule(
+            "checkpoint-lag",
+            "human review required",
+        );
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+
+        let blocker = block_atomic_write(&sequence_path);
+        let hold = policy
+            .begin_human_authorization_hold(
+                &governed_request,
+                &receipt_value,
+                &decision,
+                issued_at_ms + 1,
+            )
+            .expect("the durable hold is reported as created");
+        assert_eq!(
+            policy
+                .state
+                .lock()
+                .unwrap()
+                .pending_human_authorizations
+                .len(),
+            1
+        );
+        fs::remove_dir(blocker).unwrap();
+        {
+            let mut state = policy.state.lock().unwrap();
+            policy
+                .ensure_checkpoint_repaired_locked(&mut state)
+                .unwrap();
+        }
+
+        let blocker = block_atomic_write(&sequence_path);
+        let bound = policy
+            .bind_human_approval_set(&hold.hold_id, "approval-set:111", "digest:111")
+            .expect("the durable binding is reported as bound");
+        assert_eq!(bound.approval_set_id.as_deref(), Some("approval-set:111"));
+        assert_eq!(
+            policy.state.lock().unwrap().pending_human_authorizations[0]
+                .approval_set_id
+                .as_deref(),
+            Some("approval-set:111")
+        );
+        fs::remove_dir(blocker).unwrap();
+        {
+            let mut state = policy.state.lock().unwrap();
+            policy
+                .ensure_checkpoint_repaired_locked(&mut state)
+                .unwrap();
+        }
+
+        let blocker = block_atomic_write(&sequence_path);
+        let error = policy
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                "approval-set:111",
+                "digest:111",
+                issued_at_ms + 2,
+            )
+            .expect_err("execution is refused while the committed consume checkpoint lags");
+        assert!(error.contains("consumed in signed state sequence"));
+        {
+            let state = policy.state.lock().unwrap();
+            assert!(state.pending_human_authorizations.is_empty());
+            assert!(
+                state
+                    .consumed_authorizations
+                    .iter()
+                    .any(|entry| entry.receipt_id == receipt.payload.receipt_id)
+            );
+            assert!(state.checkpoint_lagging.is_some());
+        }
+        fs::remove_dir(blocker).unwrap();
+        let error = policy
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                "approval-set:111",
+                "digest:111",
+                issued_at_ms + 3,
+            )
+            .expect_err("a committed consume cannot be retried into a second effect");
+        assert!(error.contains("was not found"));
+        assert!(policy.state.lock().unwrap().checkpoint_lagging.is_none());
+        drop(policy);
+
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        let state = reloaded.state.lock().unwrap();
+        assert!(state.pending_human_authorizations.is_empty());
+        assert!(
+            state
+                .consumed_authorizations
+                .iter()
+                .any(|entry| entry.receipt_id == receipt.payload.receipt_id)
+        );
+        drop(state);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn committed_lease_redemption_and_attestation_are_not_rolled_back_on_checkpoint_lag() {
+        let lease_path = persistence_path("redeem-checkpoint-lag");
+        let lease_key = SigningKey::from_bytes(&[112; 32]);
+        let lease_policy = initialize_signed_policy(&lease_path, &lease_key);
+        let governing_id = AgentId::from_verifying_key(&lease_key.verifying_key());
+        let base_ms = super::now_ms();
+        lease_policy.observe_health(&governing_id, &[], base_ms);
+        lease_policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            base_ms + 1,
+        );
+        let mut governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.112".to_string(),
+        });
+        let GovernanceDecision::Authorize {
+            contingency_lease: Some(lease),
+            ..
+        } = lease_policy.can_act(&governed_request)
+        else {
+            panic!("precondition: partition preview returns a contingency lease");
+        };
+        governed_request.evidence = json!({"contingency_lease": lease});
+        let lease_sequence_path = GovernancePolicy::persistence_sequence_path(&lease_path);
+        let blocker = block_atomic_write(&lease_sequence_path);
+        let error = lease_policy
+            .authorize_partition_request(&governed_request, base_ms + 2)
+            .expect_err("execution is refused while the committed redemption checkpoint lags");
+        assert!(error.contains("redeemed in signed state sequence"));
+        {
+            let state = lease_policy.state.lock().unwrap();
+            assert!(
+                state
+                    .active_contingency_leases
+                    .iter()
+                    .any(|lease| lease.redeemed_scopes == ["203.0.113.112"])
+            );
+            assert!(
+                state
+                    .partition_activity
+                    .iter()
+                    .any(|record| record.authorized)
+            );
+            assert!(state.checkpoint_lagging.is_some());
+        }
+        fs::remove_dir(blocker).unwrap();
+        assert!(
+            lease_policy
+                .authorize_partition_request(&governed_request, base_ms + 3)
+                .is_err()
+        );
+        assert!(
+            lease_policy
+                .state
+                .lock()
+                .unwrap()
+                .checkpoint_lagging
+                .is_none()
+        );
+        drop(lease_policy);
+        let lease_reloaded = load_signed_policy(&lease_path, &lease_key).unwrap();
+        assert!(
+            lease_reloaded
+                .state
+                .lock()
+                .unwrap()
+                .active_contingency_leases
+                .iter()
+                .any(|lease| lease.redeemed_scopes == ["203.0.113.112"])
+        );
+        cleanup_persistence(&lease_path);
+
+        let attest_path = persistence_path("attest-checkpoint-lag");
+        let attest_key = SigningKey::from_bytes(&[113; 32]);
+        let attest_policy = initialize_signed_policy(&attest_path, &attest_key);
+        let before_counter = attest_policy.state.lock().unwrap().receipt_counter;
+        let attest_sequence_path = GovernancePolicy::persistence_sequence_path(&attest_path);
+        let blocker = block_atomic_write(&attest_sequence_path);
+        assert!(
+            attest_policy
+                .attest_release(&json!({"release": "subject-113"}), base_ms + 4)
+                .is_none()
+        );
+        {
+            let state = attest_policy.state.lock().unwrap();
+            assert_eq!(state.receipt_counter, before_counter + 1);
+            assert!(state.checkpoint_lagging.is_some());
+        }
+        let payload: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&attest_path).statement.payload_json).unwrap();
+        assert_eq!(payload.receipt_counter, before_counter + 1);
+        fs::remove_dir(blocker).unwrap();
+        {
+            let mut state = attest_policy.state.lock().unwrap();
+            attest_policy
+                .ensure_checkpoint_repaired_locked(&mut state)
+                .unwrap();
+        }
+        drop(attest_policy);
+        assert_eq!(
+            load_signed_policy(&attest_path, &attest_key)
+                .unwrap()
+                .state
+                .lock()
+                .unwrap()
+                .receipt_counter,
+            before_counter + 1
+        );
+        cleanup_persistence(&attest_path);
+    }
+
+    #[test]
+    fn pre_state_write_failures_commit_neither_memory_nor_disk() {
+        let peer_path = persistence_path("peer-precommit-failure");
+        let peer_key = SigningKey::from_bytes(&[114; 32]);
+        let peer_policy = initialize_signed_policy(&peer_path, &peer_key);
+        let peer_sequence = read_envelope(&peer_path).sequence();
+        let peer = SigningKey::from_bytes(&[115; 32]);
+        let peer_id = AgentId::from_verifying_key(&peer.verifying_key());
+        let blocker = block_atomic_write(&peer_path);
+        assert!(
+            peer_policy
+                .register_peer_governor(&peer.verifying_key())
+                .is_err()
+        );
+        assert!(
+            !peer_policy
+                .state
+                .lock()
+                .unwrap()
+                .peer_governors
+                .contains(&peer_id)
+        );
+        assert_eq!(read_envelope(&peer_path).sequence(), peer_sequence);
+        fs::remove_dir(blocker).unwrap();
+        cleanup_persistence(&peer_path);
+
+        let health_path = persistence_path("health-precommit-failure");
+        let health_key = SigningKey::from_bytes(&[116; 32]);
+        let governing_id = AgentId::from_verifying_key(&health_key.verifying_key());
+        let health_policy = initialize_signed_policy(&health_path, &health_key);
+        health_policy.observe_health(&governing_id, &[], super::now_ms());
+        let before = health_policy.status_report();
+        let health_sequence = read_envelope(&health_path).sequence();
+        let blocker = block_atomic_write(&health_path);
+        health_policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: "whisker-primary".to_string(),
+                role: AgentRole::Whisker,
+                health: AgentHealth::Failed,
+            }],
+            super::now_ms() + 1,
+        );
+        assert_eq!(health_policy.status_report(), before);
+        assert!(
+            health_policy
+                .state
+                .lock()
+                .unwrap()
+                .unhealthy_agents
+                .is_empty()
+        );
+        assert_eq!(read_envelope(&health_path).sequence(), health_sequence);
+        fs::remove_dir(blocker).unwrap();
+        cleanup_persistence(&health_path);
+
+        let attest_path = persistence_path("attest-precommit-failure");
+        let attest_key = SigningKey::from_bytes(&[117; 32]);
+        let attest_policy = initialize_signed_policy(&attest_path, &attest_key);
+        let before_counter = attest_policy.state.lock().unwrap().receipt_counter;
+        let attest_sequence = read_envelope(&attest_path).sequence();
+        let blocker = block_atomic_write(&attest_path);
+        assert!(
+            attest_policy
+                .attest_release(&json!({"release": "precommit"}), super::now_ms())
+                .is_none()
+        );
+        assert_eq!(
+            attest_policy.state.lock().unwrap().receipt_counter,
+            before_counter
+        );
+        assert_eq!(read_envelope(&attest_path).sequence(), attest_sequence);
+        fs::remove_dir(blocker).unwrap();
+        cleanup_persistence(&attest_path);
+
+        let init_path = persistence_path("initialize-precommit-failure");
+        let init_key = SigningKey::from_bytes(&[118; 32]);
+        let blocker = block_atomic_write(&init_path);
+        assert!(matches!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &init_path,
+                AgentId::from_verifying_key(&init_key.verifying_key()),
+                init_key,
+            )
+            .unwrap_err(),
+            GovernancePersistenceError::Write { .. }
+        ));
+        assert!(!init_path.exists());
+        assert!(!GovernancePolicy::persistence_sequence_path(&init_path).exists());
+        fs::remove_dir(blocker).unwrap();
+        cleanup_persistence(&init_path);
+    }
+
+    #[test]
     fn attacker_signed_peer_and_forged_leases_cannot_become_trust_anchors() {
         let victim_path = persistence_path("forged-peer-victim");
         let attacker_path = persistence_path("forged-peer-attacker");
@@ -2985,6 +4181,10 @@ mod tests {
         let mut payload: serde_json::Value =
             serde_json::from_str(&envelope.statement.payload_json).unwrap();
         payload["peer_governors"] = json!(["swarm:ed25519:attacker"]);
+        payload["display_governors"] = json!({"tom-primary": "swarm:ed25519:attacker"});
+        payload["unhealthy_agents"] = json!([]);
+        payload["last_healthy_governors"] = json!(999);
+        payload["last_quorum_threshold"] = json!(0);
         payload["pending_authorizations"] = json!([{"receipt_id":"injected"}]);
         payload["consumed_authorizations"] = json!([{"receipt_id":"deleted"}]);
         payload["pending_human_authorizations"] = json!([{"hold_id":"injected"}]);
@@ -2995,6 +4195,87 @@ mod tests {
             load_signed_policy(&path, &key).unwrap_err(),
             GovernancePersistenceError::SignedState(
                 swarm_core::SignedStateError::InvalidSignature { .. }
+            )
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn signed_display_identity_substitution_is_rejected_against_bootstrap_identity() {
+        let path = persistence_path("display-identity-substitution");
+        let key = SigningKey::from_bytes(&[122; 32]);
+        let governing_id = AgentId::new("tom", "primary");
+        let policy = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            governing_id.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        drop(policy);
+        let envelope = read_envelope(&path);
+        let mut payload: PersistedGovernanceState =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        payload.display_governors.insert(
+            governing_id.clone(),
+            AgentId::from_verifying_key(&SigningKey::from_bytes(&[123; 32]).verifying_key()),
+        );
+        let substituted = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            envelope.sequence(),
+            payload,
+            &key,
+        )
+        .unwrap();
+        write_envelope(&path, &substituted);
+
+        assert!(matches!(
+            GovernancePolicy::with_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                governing_id,
+                key,
+            )
+            .unwrap_err(),
+            GovernancePersistenceError::InvalidIdentityBinding { .. }
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn earlier_signed_schema_without_health_inputs_fails_closed() {
+        let path = persistence_path("missing-signed-health-inputs");
+        let key = SigningKey::from_bytes(&[124; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let envelope = read_envelope(&path);
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        for field in [
+            "display_governors",
+            "unhealthy_agents",
+            "last_healthy_governors",
+            "last_quorum_threshold",
+        ] {
+            payload.as_object_mut().unwrap().remove(field);
+        }
+        let earlier_schema = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            envelope.sequence(),
+            payload,
+            &key,
+        )
+        .unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&earlier_schema).unwrap()).unwrap();
+
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::DecodePayload { .. }
             )
         ));
         cleanup_persistence(&path);

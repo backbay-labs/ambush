@@ -161,15 +161,25 @@ is the open half of BFT-04. Two consequences worth naming:
 ### Restart Safety Of A Round
 
 `PersistedGovernanceState` persists `previous_commit_hash`, the receipt counter,
-partition state, active leases, bounded pending and consumed authorization
-ledgers, and bounded exact-request human holds. It persists NO round state and
-NOT the governor key. A restart
+the display-to-consensus governor identity mapping, exact unhealthy-agent
+observations, the last healthy/quorum counts, partition state, active leases,
+bounded pending and consumed authorization ledgers, and bounded exact-request
+human holds. It persists NO round state and NOT the governor key. A restart
 mid-round therefore loses the round. A receipt issued before restart remains
 usable only if its pending entry was durably written; a consumed receipt remains
 refused after restart. A held request can resume only from its bound persisted
 approval set and pack while both approvals remain fresh. Governance LIVENESS is not restart-safe, and any claim of
 "restart-safe recovery" should be read as covering the persisted fields above
 and not the round.
+
+The signed state rename is the commit point. A checkpoint failure after that
+rename never rolls the in-memory authority state back. The policy records the
+lag, withholds newly issued receipts and external consume/redeem/attest effects,
+and repairs the signed checkpoint before another governed effect can proceed.
+Health, peer, and human-staging callers retain committed state rather than
+reporting that it was discarded. Initial creation has no older checkpoint to
+anchor recovery, so an incomplete first checkpoint rolls the new state file
+back and fails bootstrap.
 
 ## Approval And Receipt Lineage
 

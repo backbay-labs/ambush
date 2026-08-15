@@ -366,11 +366,16 @@ fn state_committed_before_checkpoint_failure_recovers_conservatively_on_restart(
         .expect_err("checkpoint failure must refuse routing");
     assert!(error.contains("ledger persistence failed"));
     fs::remove_dir(blocker).unwrap();
+
+    let error = policy
+        .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
+        .expect_err("the committed consume must not become executable on retry");
+    assert!(error.contains("already consumed"));
     drop(policy);
 
     let reloaded = reload_persisted_policy(&path);
     let error = reloaded
-        .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
+        .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 3)
         .expect_err("the signed state written before the crash window stays consumed");
     assert!(error.contains("already consumed"));
     cleanup_persistence(&path);
