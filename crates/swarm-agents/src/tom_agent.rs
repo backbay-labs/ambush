@@ -607,6 +607,7 @@ enum GovernanceLockOpenMode {
     Existing,
     Initialize,
     Reinitialize,
+    Migrate,
 }
 
 #[derive(Debug)]
@@ -636,6 +637,7 @@ struct GovernanceCheckpointLag {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PersistedGovernanceState {
     lock_binding: GovernanceLockBinding,
     governing_agent_id: Option<AgentId>,
@@ -744,6 +746,7 @@ impl PersistedGovernanceState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GovernanceSequenceCheckpoint {
     accepted_sequence: u64,
     lock_binding: GovernanceLockBinding,
@@ -761,6 +764,28 @@ struct LoadedGovernanceState {
 struct GovernanceStateVersion {
     sequence: u64,
     digest: String,
+}
+
+/// Result of an explicit offline permanent-lock migration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GovernanceLockMigrationReport {
+    pub state_path: PathBuf,
+    pub previous_state_sequence: u64,
+    pub previous_checkpoint_sequence: u64,
+    pub migrated_sequence: u64,
+    pub resumed_state_commit: bool,
+    pub already_migrated: bool,
+}
+
+#[derive(Debug)]
+struct VerifiedGovernanceMigrationAnchors {
+    state_bytes: Vec<u8>,
+    checkpoint_bytes: Vec<u8>,
+    state_payload: serde_json::Value,
+    state_binding: Option<GovernanceLockBinding>,
+    state_sequence: u64,
+    checkpoint_binding: Option<GovernanceLockBinding>,
+    checkpoint_sequence: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -903,6 +928,17 @@ pub enum GovernancePersistenceError {
     #[error("signed governance identity binding is invalid: {reason}")]
     InvalidIdentityBinding { reason: String },
 
+    #[error("governance migration input `{path}` is invalid: {reason}")]
+    InvalidMigrationInput { path: PathBuf, reason: String },
+
+    #[error("governance migration anchors changed while acquiring `{path}`; refusing rewrite")]
+    MigrationAnchorsChanged { path: PathBuf },
+
+    #[error(
+        "governance migration state committed at sequence {sequence}, but checkpoint advancement is incomplete: {reason}"
+    )]
+    MigrationCheckpointLagging { sequence: u64, reason: String },
+
     #[error(transparent)]
     SignedState(#[from] SignedStateError),
 
@@ -921,6 +957,248 @@ pub enum GovernancePersistenceError {
 
     #[error("explicit governance reinitialization failed: {reason}")]
     ReinitializationFailed { reason: String },
+}
+
+fn read_migration_anchor(
+    path: &Path,
+    state_anchor: bool,
+) -> Result<Vec<u8>, GovernancePersistenceError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| {
+        if state_anchor {
+            GovernancePersistenceError::ReadState {
+                path: path.to_path_buf(),
+                source,
+            }
+        } else {
+            GovernancePersistenceError::ReadSequence {
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: "anchor must be a regular non-symlink file".to_string(),
+        });
+    }
+    fs::read(path).map_err(|source| {
+        if state_anchor {
+            GovernancePersistenceError::ReadState {
+                path: path.to_path_buf(),
+                source,
+            }
+        } else {
+            GovernancePersistenceError::ReadSequence {
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })
+}
+
+fn decode_migration_state_payload(
+    path: &Path,
+    payload: &serde_json::Value,
+) -> Result<(PersistedGovernanceState, Option<GovernanceLockBinding>), GovernancePersistenceError> {
+    let mut unsigned_shape = payload.clone();
+    let object = unsigned_shape.as_object_mut().ok_or_else(|| {
+        GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: "signed state payload is not a JSON object".to_string(),
+        }
+    })?;
+    let binding = object
+        .remove("lock_binding")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: format!("signed state lock binding is invalid: {error}"),
+        })?;
+    let mut typed_shape = unsigned_shape.clone();
+    let unbound = serde_json::to_value(GovernanceLockBinding::unbound()).map_err(|error| {
+        GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: format!("lock binding could not be normalized: {error}"),
+        }
+    })?;
+    let Some(typed_object) = typed_shape.as_object_mut() else {
+        return Err(GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: "signed state payload is not a JSON object".to_string(),
+        });
+    };
+    typed_object.insert("lock_binding".to_string(), unbound);
+    let typed: PersistedGovernanceState = serde_json::from_value(typed_shape).map_err(|error| {
+        GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: format!(
+                "state is not the exact supported pre-lock/current security schema: {error}"
+            ),
+        }
+    })?;
+    let mut round_trip = serde_json::to_value(&typed).map_err(|error| {
+        GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: format!("state schema could not be normalized: {error}"),
+        }
+    })?;
+    let Some(round_trip_object) = round_trip.as_object_mut() else {
+        return Err(GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: "normalized state is not a JSON object".to_string(),
+        });
+    };
+    round_trip_object.remove("lock_binding");
+    if round_trip != unsigned_shape {
+        return Err(GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: "state omits required security fields or uses unsupported defaults".to_string(),
+        });
+    }
+    Ok((typed, binding))
+}
+
+fn decode_migration_checkpoint_payload(
+    path: &Path,
+    payload: &serde_json::Value,
+    envelope_sequence: u64,
+) -> Result<Option<GovernanceLockBinding>, GovernancePersistenceError> {
+    let mut unsigned_shape = payload.clone();
+    let object = unsigned_shape.as_object_mut().ok_or_else(|| {
+        GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: "signed checkpoint payload is not a JSON object".to_string(),
+        }
+    })?;
+    let binding = object
+        .remove("lock_binding")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: format!("signed checkpoint lock binding is invalid: {error}"),
+        })?;
+    let accepted_sequence = unsigned_shape
+        .get("accepted_sequence")
+        .and_then(serde_json::Value::as_u64);
+    if unsigned_shape
+        .as_object()
+        .is_none_or(|object| object.len() != 1)
+        || accepted_sequence != Some(envelope_sequence)
+        || envelope_sequence == 0
+    {
+        return Err(GovernancePersistenceError::InvalidSequence {
+            path: path.to_path_buf(),
+            reason: "signed migration checkpoint must contain only an accepted_sequence matching its positive envelope sequence"
+                .to_string(),
+        });
+    }
+    Ok(binding)
+}
+
+fn verify_governance_migration_anchors(
+    path: &Path,
+    governing_agent_id: &AgentId,
+    expected_signer_agent_id: &AgentId,
+) -> Result<VerifiedGovernanceMigrationAnchors, GovernancePersistenceError> {
+    let sequence_path = path.with_extension("sequence.json");
+    let state_bytes = read_migration_anchor(path, true)?;
+    let state_shape: serde_json::Value =
+        serde_json::from_slice(&state_bytes).map_err(|source| {
+            GovernancePersistenceError::ParseState {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    if state_shape.get("statement").is_none() || state_shape.get("signature").is_none() {
+        return Err(GovernancePersistenceError::LegacyUnsignedState {
+            path: path.to_path_buf(),
+        });
+    }
+    let state_envelope: SignedStateEnvelope<serde_json::Value> =
+        serde_json::from_value(state_shape).map_err(|source| {
+            GovernancePersistenceError::ParseState {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+
+    let checkpoint_bytes = read_migration_anchor(&sequence_path, false)?;
+    let checkpoint_envelope: SignedStateEnvelope<serde_json::Value> =
+        serde_json::from_slice(&checkpoint_bytes).map_err(|source| {
+            GovernancePersistenceError::ParseSequence {
+                path: sequence_path.clone(),
+                source,
+            }
+        })?;
+    let checkpoint = checkpoint_envelope.verify(SignedStateExpectation {
+        state_kind: GOVERNANCE_CHECKPOINT_KIND,
+        stream_id: GOVERNANCE_STATE_STREAM,
+        expected_signer_agent_id: Some(expected_signer_agent_id),
+        accepted_sequence: None,
+    })?;
+    if checkpoint.schema_version != SIGNED_STATE_SCHEMA_VERSION {
+        return Err(GovernancePersistenceError::UnsupportedSchema {
+            observed: checkpoint.schema_version,
+        });
+    }
+    let checkpoint_binding = decode_migration_checkpoint_payload(
+        &sequence_path,
+        &checkpoint.payload,
+        checkpoint.sequence,
+    )?;
+
+    let state = state_envelope.verify(SignedStateExpectation {
+        state_kind: GOVERNANCE_STATE_KIND,
+        stream_id: GOVERNANCE_STATE_STREAM,
+        expected_signer_agent_id: Some(expected_signer_agent_id),
+        accepted_sequence: Some(checkpoint.sequence),
+    })?;
+    if state.schema_version != SIGNED_STATE_SCHEMA_VERSION {
+        return Err(GovernancePersistenceError::UnsupportedSchema {
+            observed: state.schema_version,
+        });
+    }
+    if state.sequence == 0 {
+        return Err(GovernancePersistenceError::InvalidSequence {
+            path: path.to_path_buf(),
+            reason: "signed governance state sequence must be positive".to_string(),
+        });
+    }
+    let (typed_state, state_binding) = decode_migration_state_payload(path, &state.payload)?;
+    if typed_state.governing_agent_id.as_ref() != Some(governing_agent_id)
+        || typed_state.display_governors.get(governing_agent_id) != Some(expected_signer_agent_id)
+    {
+        return Err(GovernancePersistenceError::InvalidIdentityBinding {
+            reason: format!(
+                "persisted governor `{governing_agent_id}` is not bound to admitted local signer `{expected_signer_agent_id}`"
+            ),
+        });
+    }
+    if state_binding.is_none() && checkpoint_binding.is_some() {
+        return Err(GovernancePersistenceError::InvalidMigrationInput {
+            path: sequence_path,
+            reason: "checkpoint is lock-bound while its state predecessor is unbound".to_string(),
+        });
+    }
+    if state.sequence == checkpoint.sequence && state_binding != checkpoint_binding {
+        return Err(GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: "state and checkpoint at the same sequence have divergent lock bindings"
+                .to_string(),
+        });
+    }
+    Ok(VerifiedGovernanceMigrationAnchors {
+        state_bytes,
+        checkpoint_bytes,
+        state_payload: state.payload,
+        state_binding,
+        state_sequence: state.sequence,
+        checkpoint_binding,
+        checkpoint_sequence: checkpoint.sequence,
+    })
 }
 
 fn ensure_lock_identity_supported() -> Result<(), GovernancePersistenceError> {
@@ -1280,13 +1558,15 @@ impl GovernancePersistence {
         };
         let initialize_empty_stream =
             open_mode == GovernanceLockOpenMode::Initialize && anchors_absent;
-        if initialize_empty_stream && let Some(parent) = lock_path.parent() {
+        let explicit_migration = open_mode == GovernanceLockOpenMode::Migrate;
+        let may_create_lock = initialize_empty_stream || explicit_migration;
+        if may_create_lock && let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent).map_err(|source| GovernancePersistenceError::OpenLock {
                 path: lock_path.clone(),
                 source,
             })?;
         }
-        preflight_governance_lock_path(&lock_path, initialize_empty_stream)?;
+        preflight_governance_lock_path(&lock_path, may_create_lock)?;
         let mut existing_options = OpenOptions::new();
         existing_options.read(true).write(true).truncate(false);
         #[cfg(unix)]
@@ -1296,7 +1576,7 @@ impl GovernancePersistence {
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
-        let (mut lock_file, created) = if initialize_empty_stream {
+        let (mut lock_file, created) = if may_create_lock {
             let mut create_options = OpenOptions::new();
             create_options
                 .read(true)
@@ -1370,7 +1650,9 @@ impl GovernancePersistence {
         } else {
             match read_governance_lock_record(&lock_path, &lock_file) {
                 Ok(record) => {
-                    if open_mode == GovernanceLockOpenMode::Initialize && anchors_absent {
+                    if (open_mode == GovernanceLockOpenMode::Initialize && anchors_absent)
+                        || explicit_migration
+                    {
                         // A prior fresh initialization may have created and
                         // fsynced the record but failed syncing its parent.
                         // Rewrite the exact valid record and sync the parent
@@ -1399,6 +1681,16 @@ impl GovernancePersistence {
                     write_governance_lock_record(&lock_path, &mut lock_file, &record, false)?;
                     record
                 }
+                Err(GovernancePersistenceError::InvalidLockRecord { .. }) if explicit_migration => {
+                    // Only the explicit offline migration path may replace a
+                    // partial/corrupt lock beside signed anchors. Those anchors
+                    // were authenticated before this lock was opened and are
+                    // re-read unchanged while it is held before either is
+                    // rewritten.
+                    let record = new_governance_lock_record();
+                    write_governance_lock_record(&lock_path, &mut lock_file, &record, true)?;
+                    record
+                }
                 Err(error) => return Err(error),
             }
         };
@@ -1414,6 +1706,182 @@ impl GovernancePersistence {
             #[cfg(test)]
             test_pre_write_barrier: Mutex::new(None),
         })
+    }
+
+    fn migrate_lock_binding(
+        &self,
+        governing_agent_id: &AgentId,
+        signing_key: &SigningKey,
+        before_lock: &VerifiedGovernanceMigrationAnchors,
+    ) -> Result<GovernanceLockMigrationReport, GovernancePersistenceError> {
+        self.verify_lock_path()?;
+        let under_lock = verify_governance_migration_anchors(
+            &self.path,
+            governing_agent_id,
+            &self.expected_signer_agent_id,
+        )?;
+        if under_lock.state_bytes != before_lock.state_bytes
+            || under_lock.checkpoint_bytes != before_lock.checkpoint_bytes
+        {
+            return Err(GovernancePersistenceError::MigrationAnchorsChanged {
+                path: self.path.clone(),
+            });
+        }
+        let signer_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        if signer_agent_id != self.expected_signer_agent_id {
+            return Err(GovernancePersistenceError::SignedState(
+                SignedStateError::SignerMismatch {
+                    state_kind: GOVERNANCE_STATE_KIND.to_string(),
+                    stream_id: GOVERNANCE_STATE_STREAM.to_string(),
+                    expected: self.expected_signer_agent_id.to_string(),
+                    actual: signer_agent_id.to_string(),
+                },
+            ));
+        }
+
+        let previous_state_sequence = under_lock.state_sequence;
+        let previous_checkpoint_sequence = under_lock.checkpoint_sequence;
+        if under_lock.state_binding.as_ref() == Some(&self.lock_binding) {
+            if under_lock.checkpoint_binding.as_ref() == Some(&self.lock_binding)
+                && under_lock.checkpoint_sequence == under_lock.state_sequence
+            {
+                let local = LocalGovernorKey::new(signing_key.clone());
+                self.load(&local)?;
+                return Ok(GovernanceLockMigrationReport {
+                    state_path: self.path.clone(),
+                    previous_state_sequence,
+                    previous_checkpoint_sequence,
+                    migrated_sequence: under_lock.state_sequence,
+                    resumed_state_commit: false,
+                    already_migrated: true,
+                });
+            }
+            if under_lock.checkpoint_sequence >= under_lock.state_sequence {
+                return Err(GovernancePersistenceError::InvalidSequence {
+                    path: self.sequence_path.clone(),
+                    reason: "a migrated state may resume only from a strictly older checkpoint"
+                        .to_string(),
+                });
+            }
+            self.write_migration_checkpoint(under_lock.state_sequence, signing_key)
+                .map_err(
+                    |error| GovernancePersistenceError::MigrationCheckpointLagging {
+                        sequence: under_lock.state_sequence,
+                        reason: error.to_string(),
+                    },
+                )?;
+            let local = LocalGovernorKey::new(signing_key.clone());
+            self.load(&local)?;
+            return Ok(GovernanceLockMigrationReport {
+                state_path: self.path.clone(),
+                previous_state_sequence,
+                previous_checkpoint_sequence,
+                migrated_sequence: under_lock.state_sequence,
+                resumed_state_commit: true,
+                already_migrated: false,
+            });
+        }
+
+        let migrated_sequence = under_lock.state_sequence.checked_add(1).ok_or_else(|| {
+            GovernancePersistenceError::InvalidSequence {
+                path: self.path.clone(),
+                reason: "governance migration sequence overflow".to_string(),
+            }
+        })?;
+        let mut migrated_payload = under_lock.state_payload;
+        let Some(payload_object) = migrated_payload.as_object_mut() else {
+            return Err(GovernancePersistenceError::InvalidMigrationInput {
+                path: self.path.clone(),
+                reason: "signed state payload is not a JSON object".to_string(),
+            });
+        };
+        payload_object.insert(
+            "lock_binding".to_string(),
+            serde_json::to_value(&self.lock_binding).map_err(|error| {
+                GovernancePersistenceError::InvalidMigrationInput {
+                    path: self.path.clone(),
+                    reason: format!("new lock binding could not be encoded: {error}"),
+                }
+            })?,
+        );
+        let envelope = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            self.expected_signer_agent_id.clone(),
+            migrated_sequence,
+            migrated_payload,
+            signing_key,
+        )?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            GovernancePersistenceError::ParseState {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
+        self.verify_lock_path()?;
+        let state_directory_sync_error = match write_atomic_synced(&self.path, &bytes)? {
+            AtomicWriteOutcome::Synced => None,
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Some(error.to_string()),
+        };
+        if let Err(error) = self.verify_lock_path() {
+            return Err(GovernancePersistenceError::MigrationCheckpointLagging {
+                sequence: migrated_sequence,
+                reason: error.to_string(),
+            });
+        }
+        if let Err(error) = self.write_migration_checkpoint(migrated_sequence, signing_key) {
+            return Err(GovernancePersistenceError::MigrationCheckpointLagging {
+                sequence: migrated_sequence,
+                reason: match state_directory_sync_error {
+                    Some(state_error) => format!(
+                        "state rename committed but directory sync failed: {state_error}; checkpoint failed: {error}"
+                    ),
+                    None => error.to_string(),
+                },
+            });
+        }
+        let local = LocalGovernorKey::new(signing_key.clone());
+        self.load(&local)?;
+        Ok(GovernanceLockMigrationReport {
+            state_path: self.path.clone(),
+            previous_state_sequence,
+            previous_checkpoint_sequence,
+            migrated_sequence,
+            resumed_state_commit: false,
+            already_migrated: false,
+        })
+    }
+
+    fn write_migration_checkpoint(
+        &self,
+        sequence: u64,
+        signing_key: &SigningKey,
+    ) -> Result<(), GovernancePersistenceError> {
+        self.verify_lock_path()?;
+        let checkpoint = GovernanceSequenceCheckpoint {
+            accepted_sequence: sequence,
+            lock_binding: self.lock_binding.clone(),
+        };
+        let envelope = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            self.expected_signer_agent_id.clone(),
+            sequence,
+            checkpoint,
+            signing_key,
+        )?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            GovernancePersistenceError::ParseSequence {
+                path: self.sequence_path.clone(),
+                source,
+            }
+        })?;
+        let outcome = write_atomic_synced(&self.sequence_path, &bytes)?;
+        self.verify_lock_path()?;
+        match outcome {
+            AtomicWriteOutcome::Synced => Ok(()),
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Err(error),
+        }
     }
 
     #[cfg(test)]
@@ -2079,6 +2547,36 @@ impl GovernancePolicy {
             persistence: Some(persistence),
             transport: Arc::new(SoloGovernorTransport::new()),
         })
+    }
+
+    /// Explicit OFFLINE migration for a signed governance stream that predates
+    /// permanent lock binding, or for a verified state-preserving PVC restore.
+    ///
+    /// The caller must derive `signing_key` and `governing_agent_id` from the
+    /// already-admitted local Tom/primary identity and must prove all daemon
+    /// processes are stopped. This method authenticates both existing anchors
+    /// before it may create a lock, acquires the new permanent lock, re-reads
+    /// the unchanged anchors under that lock, and advances the state/checkpoint
+    /// sequence while changing no state payload member except `lock_binding`.
+    /// Ordinary startup deliberately never invokes this path.
+    pub fn migrate_persistence_lock(
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+    ) -> Result<GovernanceLockMigrationReport, GovernancePersistenceError> {
+        let path = path.as_ref().to_path_buf();
+        let expected_signer_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        let before_lock = verify_governance_migration_anchors(
+            &path,
+            &governing_agent_id,
+            &expected_signer_agent_id,
+        )?;
+        let persistence = GovernancePersistence::new(
+            path,
+            expected_signer_agent_id,
+            GovernanceLockOpenMode::Migrate,
+        )?;
+        persistence.migrate_lock_binding(&governing_agent_id, &signing_key, &before_lock)
     }
 
     /// Explicit offline recovery for unsigned, corrupt, or intentionally discarded
@@ -4189,6 +4687,58 @@ mod tests {
         .unwrap();
     }
 
+    fn rewrite_as_signed_pre_lock_stream(
+        path: &Path,
+        key: &SigningKey,
+    ) -> (serde_json::Value, u64) {
+        let signer = AgentId::from_verifying_key(&key.verifying_key());
+        let state = read_envelope(path);
+        let mut state_payload: serde_json::Value =
+            serde_json::from_str(&state.statement.payload_json).unwrap();
+        state_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("lock_binding");
+        let legacy_state = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            signer.clone(),
+            state.sequence(),
+            state_payload.clone(),
+            key,
+        )
+        .unwrap();
+        fs::write(path, serde_json::to_vec_pretty(&legacy_state).unwrap()).unwrap();
+
+        let checkpoint = read_checkpoint(path);
+        let checkpoint_payload = json!({"accepted_sequence": checkpoint.sequence()});
+        let legacy_checkpoint = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            signer,
+            checkpoint.sequence(),
+            checkpoint_payload,
+            key,
+        )
+        .unwrap();
+        fs::write(
+            GovernancePolicy::persistence_sequence_path(path),
+            serde_json::to_vec_pretty(&legacy_checkpoint).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(GovernancePolicy::persistence_lock_path(path)).unwrap();
+        (state_payload, state.sequence())
+    }
+
+    fn state_payload_without_lock(path: &Path) -> serde_json::Value {
+        let envelope: SignedStateEnvelope<serde_json::Value> =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        payload.as_object_mut().unwrap().remove("lock_binding");
+        payload
+    }
+
     fn load_signed_policy(
         path: &Path,
         key: &SigningKey,
@@ -4474,6 +5024,395 @@ mod tests {
         .expect("explicit offline reinitialization establishes the current lock binding");
         drop(reset);
         cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn explicit_offline_migration_preserves_pre_lock_signed_authority_and_advances_sequence() {
+        let path = persistence_path("offline-lock-migration");
+        let key = SigningKey::from_bytes(&[151; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let observed_at_ms = super::now_ms();
+        policy.observe_health(&governing_id, &[], observed_at_ms);
+        drop(policy);
+
+        let original = read_envelope(&path);
+        let mut payload: PersistedGovernanceState =
+            serde_json::from_str(&original.statement.payload_json).unwrap();
+        payload
+            .pending_authorizations
+            .push_back(PendingGovernanceAuthorization {
+                receipt_id: "migration-pending".to_string(),
+                subject_digest: "migration-subject".to_string(),
+                decision: swarm_consensus::GovernanceReceiptDecision::Approve,
+                issued_at_ms: observed_at_ms,
+            });
+        payload
+            .consumed_authorizations
+            .push_back(ConsumedGovernanceAuthorization {
+                receipt_id: "migration-consumed".to_string(),
+                subject_digest: "migration-consumed-subject".to_string(),
+                decision: swarm_consensus::GovernanceReceiptDecision::Veto,
+                consumed_at_ms: observed_at_ms,
+            });
+        payload.pending_human_authorizations.push_back(
+            swarm_policy::governance::GovernedHumanAuthorizationHold {
+                hold_id: "migration-human-hold".to_string(),
+                request: request(ResponseAction::BlockEgress {
+                    target: "203.0.113.151".to_string(),
+                }),
+                policy_decision: swarm_policy::PolicyDecision::require_human_with_rule(
+                    "migration-review",
+                    "preserve the signed hold",
+                ),
+                governance_receipt: json!({
+                    "payload": {"receipt_id": "migration-pending"},
+                    "signed_fixture": true
+                }),
+                created_at_ms: observed_at_ms,
+                approval_set_id: Some("migration-approval-set".to_string()),
+                approval_set_digest: Some("migration-approval-digest".to_string()),
+            },
+        );
+        assert!(!payload.active_contingency_leases.is_empty());
+        let enriched = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            governing_id.clone(),
+            original.sequence(),
+            payload,
+            &key,
+        )
+        .unwrap();
+        write_envelope(&path, &enriched);
+        let (authority_payload, previous_sequence) = rewrite_as_signed_pre_lock_stream(&path, &key);
+
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::MissingLock { .. }
+        ));
+        let report =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id, key.clone()).unwrap();
+        assert_eq!(report.previous_state_sequence, previous_sequence);
+        assert_eq!(report.migrated_sequence, previous_sequence + 1);
+        assert!(!report.resumed_state_commit);
+        assert!(!report.already_migrated);
+        assert_eq!(state_payload_without_lock(&path), authority_payload);
+        assert_eq!(read_envelope(&path).sequence(), previous_sequence + 1);
+        assert_eq!(read_checkpoint(&path).sequence(), previous_sequence + 1);
+
+        let restarted = load_signed_policy(&path, &key).unwrap();
+        let state = restarted.state.lock().unwrap();
+        assert_eq!(state.pending_authorizations.len(), 1);
+        assert_eq!(state.consumed_authorizations.len(), 1);
+        assert_eq!(state.pending_human_authorizations.len(), 1);
+        assert!(!state.active_contingency_leases.is_empty());
+        drop(state);
+        drop(restarted);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pvc_restore_rebinds_signed_state_without_clearing_authority() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source_path = persistence_path("pvc-source");
+        let restored_path = persistence_path("pvc-restored");
+        let key = SigningKey::from_bytes(&[152; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let source = initialize_signed_policy(&source_path, &key);
+        source.observe_health(&governing_id, &[], super::now_ms());
+        drop(source);
+        let original_sequence = read_envelope(&source_path).sequence();
+        let authority_payload = state_payload_without_lock(&source_path);
+        fs::copy(&source_path, &restored_path).unwrap();
+        fs::copy(
+            GovernancePolicy::persistence_sequence_path(&source_path),
+            GovernancePolicy::persistence_sequence_path(&restored_path),
+        )
+        .unwrap();
+        let restored_lock = GovernancePolicy::persistence_lock_path(&restored_path);
+        fs::copy(
+            GovernancePolicy::persistence_lock_path(&source_path),
+            &restored_lock,
+        )
+        .unwrap();
+        fs::set_permissions(&restored_lock, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(matches!(
+            load_signed_policy(&restored_path, &key).unwrap_err(),
+            GovernancePersistenceError::LockBindingMismatch { .. }
+        ));
+        let report =
+            GovernancePolicy::migrate_persistence_lock(&restored_path, governing_id, key.clone())
+                .unwrap();
+        assert_eq!(report.migrated_sequence, original_sequence + 1);
+        assert_eq!(
+            state_payload_without_lock(&restored_path),
+            authority_payload
+        );
+        drop(load_signed_policy(&restored_path, &key).unwrap());
+        assert_eq!(read_envelope(&source_path).sequence(), original_sequence);
+        cleanup_persistence(&source_path);
+        cleanup_persistence(&restored_path);
+    }
+
+    #[test]
+    fn migration_checkpoint_failure_resumes_the_committed_state_without_second_increment() {
+        let path = persistence_path("migration-checkpoint-retry");
+        let key = SigningKey::from_bytes(&[153; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let (authority_payload, previous_sequence) = rewrite_as_signed_pre_lock_stream(&path, &key);
+        let checkpoint_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&checkpoint_path);
+        let error =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id.clone(), key.clone())
+                .unwrap_err();
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::MigrationCheckpointLagging {
+                sequence,
+                ..
+            } if sequence == previous_sequence + 1
+        ));
+        assert_eq!(read_envelope(&path).sequence(), previous_sequence + 1);
+        assert_eq!(read_checkpoint(&path).sequence(), previous_sequence);
+        assert_eq!(state_payload_without_lock(&path), authority_payload);
+        fs::remove_dir(blocker).unwrap();
+
+        let resumed =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id.clone(), key.clone())
+                .unwrap();
+        assert!(resumed.resumed_state_commit);
+        assert_eq!(resumed.migrated_sequence, previous_sequence + 1);
+        assert_eq!(read_checkpoint(&path).sequence(), previous_sequence + 1);
+        let idempotent =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id, key).unwrap();
+        assert!(idempotent.already_migrated);
+        assert_eq!(idempotent.migrated_sequence, previous_sequence + 1);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn migration_rejects_wrong_signer_checkpoint_ahead_and_active_owner_without_rewriting() {
+        let wrong_path = persistence_path("migration-wrong-signer");
+        let key = SigningKey::from_bytes(&[154; 32]);
+        let attacker = SigningKey::from_bytes(&[155; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&wrong_path, &key);
+        drop(policy);
+        let (_, sequence) = rewrite_as_signed_pre_lock_stream(&wrong_path, &key);
+        let state: SignedStateEnvelope<serde_json::Value> =
+            serde_json::from_slice(&fs::read(&wrong_path).unwrap()).unwrap();
+        let attacker_state = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&attacker.verifying_key()),
+            sequence,
+            serde_json::from_str::<serde_json::Value>(&state.statement.payload_json).unwrap(),
+            &attacker,
+        )
+        .unwrap();
+        fs::write(
+            &wrong_path,
+            serde_json::to_vec_pretty(&attacker_state).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            GovernancePolicy::migrate_persistence_lock(
+                &wrong_path,
+                governing_id.clone(),
+                key.clone()
+            )
+            .is_err()
+        );
+        assert!(!GovernancePolicy::persistence_lock_path(&wrong_path).exists());
+        cleanup_persistence(&wrong_path);
+
+        let ahead_path = persistence_path("migration-checkpoint-ahead");
+        let policy = initialize_signed_policy(&ahead_path, &key);
+        drop(policy);
+        let (_, sequence) = rewrite_as_signed_pre_lock_stream(&ahead_path, &key);
+        let ahead_checkpoint = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            governing_id.clone(),
+            sequence + 1,
+            json!({"accepted_sequence": sequence + 1}),
+            &key,
+        )
+        .unwrap();
+        fs::write(
+            GovernancePolicy::persistence_sequence_path(&ahead_path),
+            serde_json::to_vec_pretty(&ahead_checkpoint).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            GovernancePolicy::migrate_persistence_lock(
+                &ahead_path,
+                governing_id.clone(),
+                key.clone()
+            )
+            .is_err()
+        );
+        assert!(!GovernancePolicy::persistence_lock_path(&ahead_path).exists());
+        cleanup_persistence(&ahead_path);
+
+        let active_path = persistence_path("migration-active-owner");
+        let active = initialize_signed_policy(&active_path, &key);
+        let state_before = fs::read(&active_path).unwrap();
+        let checkpoint_before =
+            fs::read(GovernancePolicy::persistence_sequence_path(&active_path)).unwrap();
+        assert!(matches!(
+            GovernancePolicy::migrate_persistence_lock(&active_path, governing_id, key)
+                .unwrap_err(),
+            GovernancePersistenceError::StateLocked { .. }
+        ));
+        assert_eq!(fs::read(&active_path).unwrap(), state_before);
+        assert_eq!(
+            fs::read(GovernancePolicy::persistence_sequence_path(&active_path)).unwrap(),
+            checkpoint_before
+        );
+        drop(active);
+        cleanup_persistence(&active_path);
+    }
+
+    #[test]
+    fn migration_rejects_unsigned_corrupt_and_incomplete_signed_schemas_without_lock_residue() {
+        let key = SigningKey::from_bytes(&[156; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+
+        let unsigned_path = persistence_path("migration-unsigned");
+        let policy = initialize_signed_policy(&unsigned_path, &key);
+        drop(policy);
+        fs::remove_file(GovernancePolicy::persistence_lock_path(&unsigned_path)).unwrap();
+        fs::write(&unsigned_path, b"{\"peer_governors\":[]}").unwrap();
+        assert!(matches!(
+            GovernancePolicy::migrate_persistence_lock(
+                &unsigned_path,
+                governing_id.clone(),
+                key.clone()
+            )
+            .unwrap_err(),
+            GovernancePersistenceError::LegacyUnsignedState { .. }
+        ));
+        assert!(!GovernancePolicy::persistence_lock_path(&unsigned_path).exists());
+        cleanup_persistence(&unsigned_path);
+
+        let corrupt_path = persistence_path("migration-corrupt");
+        let policy = initialize_signed_policy(&corrupt_path, &key);
+        drop(policy);
+        fs::remove_file(GovernancePolicy::persistence_lock_path(&corrupt_path)).unwrap();
+        fs::write(&corrupt_path, b"{not-json").unwrap();
+        assert!(matches!(
+            GovernancePolicy::migrate_persistence_lock(
+                &corrupt_path,
+                governing_id.clone(),
+                key.clone()
+            )
+            .unwrap_err(),
+            GovernancePersistenceError::ParseState { .. }
+        ));
+        assert!(!GovernancePolicy::persistence_lock_path(&corrupt_path).exists());
+        cleanup_persistence(&corrupt_path);
+
+        let old_schema_path = persistence_path("migration-old-health-schema");
+        let policy = initialize_signed_policy(&old_schema_path, &key);
+        drop(policy);
+        let (mut payload, sequence) = rewrite_as_signed_pre_lock_stream(&old_schema_path, &key);
+        payload.as_object_mut().unwrap().remove("unhealthy_agents");
+        let incomplete = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            governing_id.clone(),
+            sequence,
+            payload,
+            &key,
+        )
+        .unwrap();
+        fs::write(
+            &old_schema_path,
+            serde_json::to_vec_pretty(&incomplete).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            GovernancePolicy::migrate_persistence_lock(&old_schema_path, governing_id, key)
+                .unwrap_err(),
+            GovernancePersistenceError::InvalidMigrationInput { .. }
+        ));
+        assert!(!GovernancePolicy::persistence_lock_path(&old_schema_path).exists());
+        cleanup_persistence(&old_schema_path);
+    }
+
+    #[test]
+    fn migration_retries_a_durable_lock_only_failure_without_rotating_authority() {
+        let path = persistence_path("migration-lock-only-retry");
+        let key = SigningKey::from_bytes(&[157; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let (authority_payload, previous_sequence) = rewrite_as_signed_pre_lock_stream(&path, &key);
+
+        super::fail_next_governance_lock_parent_sync();
+        assert!(matches!(
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id.clone(), key.clone())
+                .unwrap_err(),
+            GovernancePersistenceError::WriteLockRecord { .. }
+        ));
+        assert!(GovernancePolicy::persistence_lock_path(&path).exists());
+        assert_eq!(read_envelope(&path).sequence(), previous_sequence);
+        assert_eq!(state_payload_without_lock(&path), authority_payload);
+
+        let report = GovernancePolicy::migrate_persistence_lock(&path, governing_id, key).unwrap();
+        assert_eq!(report.migrated_sequence, previous_sequence + 1);
+        assert_eq!(state_payload_without_lock(&path), authority_payload);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_recovers_a_partial_lock_record_only_after_anchor_authentication() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = persistence_path("migration-partial-lock-retry");
+        let key = SigningKey::from_bytes(&[159; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let (authority_payload, previous_sequence) = rewrite_as_signed_pre_lock_stream(&path, &key);
+        let lock_path = GovernancePolicy::persistence_lock_path(&path);
+        fs::write(&lock_path, b"partial").unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let report =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id.clone(), key.clone())
+                .unwrap();
+        assert_eq!(report.migrated_sequence, previous_sequence + 1);
+        assert_eq!(state_payload_without_lock(&path), authority_payload);
+        drop(load_signed_policy(&path, &key).unwrap());
+
+        // The same partial lock beside an unauthenticated state is never
+        // regenerated into a usable authority stream.
+        let invalid_path = persistence_path("migration-partial-lock-invalid-anchors");
+        fs::copy(&path, &invalid_path).unwrap();
+        fs::copy(
+            GovernancePolicy::persistence_sequence_path(&path),
+            GovernancePolicy::persistence_sequence_path(&invalid_path),
+        )
+        .unwrap();
+        let invalid_lock_path = GovernancePolicy::persistence_lock_path(&invalid_path);
+        fs::write(&invalid_lock_path, b"partial").unwrap();
+        fs::set_permissions(&invalid_lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&invalid_path, b"not signed state").unwrap();
+        assert!(
+            GovernancePolicy::migrate_persistence_lock(&invalid_path, governing_id, key).is_err()
+        );
+        assert_eq!(fs::read(&invalid_lock_path).unwrap(), b"partial");
+        cleanup_persistence(&path);
+        cleanup_persistence(&invalid_path);
     }
 
     #[test]

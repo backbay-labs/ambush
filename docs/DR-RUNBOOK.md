@@ -106,7 +106,25 @@ test -s "$RENDERED"
 
 1. Keep the runtime Deployment scaled to zero.
 2. Restore the runtime PVC snapshot in place or restore it to the claim that will be mounted at `/var/lib/swarm`.
-3. Re-apply the release from the same chart and values if the Deployment or ConfigMap was recreated:
+3. Before any daemon starts, mount the restored claim, the same signed config,
+   and the same identity material into one maintenance container from the release
+   image. Authenticate and, when required, rebind the restored governance stream:
+
+```bash
+swarmctl --config /etc/swarm/config.yaml identity migrate-governance-lock \
+  --confirm-offline \
+  --state-path /var/lib/swarm/governance-partition-state.json
+```
+
+   This command is idempotent when the signed binding still matches. A copied
+   claim or an upgrade from the pre-lock signed schema advances the signed state
+   and checkpoint once without clearing membership, health, leases, action
+   ledgers, or human holds. It refuses unsigned/corrupt/wrong-signer input,
+   checkpoint-ahead rollback, a missing Tom key or admission, and an active
+   permanent-lock owner. Keep the Deployment at zero on any refusal; do not
+   create an empty lock. A state-committed/checkpoint-lagging error is a
+   conservative recoverable state: rerun the same command before startup.
+4. Re-apply the release from the same chart and values if the Deployment or ConfigMap was recreated:
 
 ```bash
 helm upgrade --install "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$VALUES"
@@ -114,7 +132,7 @@ kubectl -n "$NAMESPACE" scale deploy/"$RELEASE"-swarm-team-six --replicas=1
 kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-swarm-team-six
 ```
 
-4. Re-establish the port-forward and verify readiness:
+5. Re-establish the port-forward and verify readiness:
 
 ```bash
 curl -sf http://127.0.0.1:9090/startupz | jq .
@@ -122,7 +140,9 @@ curl -sf http://127.0.0.1:9090/readyz | jq .
 curl -sf http://127.0.0.1:9090/healthz | jq .
 ```
 
-Success condition: the runtime returns to ready state without changing the rendered config or rewriting the declared state-root contract.
+Success condition: the migration report names the expected state path and a
+single authenticated sequence, then the runtime returns to ready state without
+changing the rendered config or rewriting the declared state-root contract.
 
 ## 5. Helm Upgrade And Rollback Drill
 

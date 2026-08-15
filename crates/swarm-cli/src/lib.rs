@@ -40,6 +40,10 @@ pub mod governance_prep {
     pub use swarm_evolution::governance_prep::*;
 }
 
+pub mod governance_migration {
+    pub use swarm_runtime_http::governance_migration::*;
+}
+
 pub mod mutation {
     pub use swarm_runtime::mutation::*;
 }

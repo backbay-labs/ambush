@@ -38,6 +38,7 @@ use crate::evolution::{
     render_evolution_proposal_list,
 };
 use crate::evolution_status::{DefaultEvolutionStatusHarness, render_evolution_status};
+use crate::governance_migration::{GovernanceLockMigrationReport, GovernancePolicy};
 use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, render_evolution_governance_packet_set,
     render_evolution_governance_packet_set_list, render_evolution_portfolio_history,
@@ -499,6 +500,9 @@ struct PlaybookPreviewArgs {
 #[derive(Debug, Subcommand)]
 enum IdentityCommand {
     Rotate(IdentityRotateArgs),
+    /// Rebind an authenticated governance stream to permanent local lock
+    /// metadata. All swarm-detect processes must be stopped first.
+    MigrateGovernanceLock(IdentityMigrateGovernanceLockArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -538,6 +542,18 @@ struct IdentityRotateArgs {
 
     #[arg(long)]
     active_until_ms: Option<i64>,
+}
+
+#[derive(Debug, Args)]
+struct IdentityMigrateGovernanceLockArgs {
+    /// Assert that every process capable of opening this governance stream is
+    /// stopped. This cannot be inferred for pre-lock releases.
+    #[arg(long, action = clap::ArgAction::SetTrue, required = true)]
+    confirm_offline: bool,
+
+    /// Override the governance state path. Defaults beside the stable agent-key root.
+    #[arg(long)]
+    state_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -2629,6 +2645,18 @@ fn render_identity_rotate_report(report: &IdentityRotateCommandReport) -> String
     )
 }
 
+fn render_governance_lock_migration_report(report: &GovernanceLockMigrationReport) -> String {
+    format!(
+        "Migrated governance lock binding\nstate_path: {}\nprevious_state_sequence: {}\nprevious_checkpoint_sequence: {}\nmigrated_sequence: {}\nresumed_state_commit: {}\nalready_migrated: {}",
+        report.state_path.display(),
+        report.previous_state_sequence,
+        report.previous_checkpoint_sequence,
+        report.migrated_sequence,
+        report.resumed_state_commit,
+        report.already_migrated,
+    )
+}
+
 async fn run_validate_command(
     config_path: &std::path::Path,
     args: &ValidateArgs,
@@ -2924,7 +2952,56 @@ fn run_identity_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match &args.command {
         IdentityCommand::Rotate(args) => run_identity_rotate_command(config_path, args, json),
+        IdentityCommand::MigrateGovernanceLock(args) => {
+            run_identity_migrate_governance_lock_command(config_path, args, json)
+        }
     }
+}
+
+fn default_governance_state_path(
+    config_path: &std::path::Path,
+    identity: &swarm_core::config::IdentityConfig,
+) -> std::path::PathBuf {
+    let agent_key_dir = resolve_agent_key_dir(config_path, identity);
+    agent_key_dir
+        .parent()
+        .unwrap_or(agent_key_dir.as_path())
+        .join("governance-partition-state.json")
+}
+
+fn run_identity_migrate_governance_lock_command(
+    config_path: &std::path::Path,
+    args: &IdentityMigrateGovernanceLockArgs,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !args.confirm_offline {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "governance lock migration requires --confirm-offline after every swarm-detect process using the state root has stopped",
+        )
+        .into());
+    }
+    let config = load_config(config_path)?;
+    let key_store = FileAgentKeyStore::open(resolve_agent_key_dir(config_path, &config.identity))?;
+    let tom_identity = key_store.load_existing(AgentRole::Tom, "primary")?;
+    let registry_dir = resolve_identity_registry_dir(config_path, &config.identity);
+    let registry = FileAgentIdentityRegistry::open(registry_dir)?;
+    registry.verify_admitted_persisted_identity(AgentRole::Tom, "primary", &tom_identity)?;
+    let state_path = args
+        .state_path
+        .clone()
+        .unwrap_or_else(|| default_governance_state_path(config_path, &config.identity));
+    let report = GovernancePolicy::migrate_persistence_lock(
+        state_path,
+        tom_identity.id,
+        tom_identity.signing_key,
+    )?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", render_governance_lock_migration_report(&report));
+    }
+    Ok(())
 }
 
 fn run_identity_rotate_command(
@@ -5287,16 +5364,18 @@ mod tests {
         Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, QuickstartCommandReport,
         build_validate_report, evolution_mutation_signing_key, load_config,
         parse_review_artifact_ref_arg, render_init_template, resolve_quarantine_endpoint,
-        run_identity_rotate_command, run_init_command, run_playbook_preview_command,
-        run_quickstart_command, run_readiness_command,
+        run_identity_migrate_governance_lock_command, run_identity_rotate_command,
+        run_init_command, run_playbook_preview_command, run_quickstart_command,
+        run_readiness_command,
     };
     use crate::config::write_debug_test_config_signature;
     use clap::Parser;
+    use ed25519_dalek::SigningKey;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
-    use swarm_core::agent::SwarmMode;
+    use swarm_core::agent::{AgentRole, SwarmMode};
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::Severity;
 
@@ -5468,7 +5547,9 @@ mod tests {
         let Command::Identity(identity) = cli.command else {
             panic!("expected identity command");
         };
-        let super::IdentityCommand::Rotate(args) = identity.command;
+        let super::IdentityCommand::Rotate(args) = identity.command else {
+            panic!("expected identity rotation command");
+        };
         let error = run_identity_rotate_command(
             std::path::Path::new("/path/that/must/not/be/read.yaml"),
             &args,
@@ -5480,6 +5561,100 @@ mod tests {
                 .to_string()
                 .contains("Tom identity rotation is disabled")
         );
+    }
+
+    #[test]
+    fn governance_lock_migration_requires_explicit_offline_confirmation() {
+        assert!(Cli::try_parse_from(["swarmctl", "identity", "migrate-governance-lock",]).is_err());
+        let cli = Cli::parse_from([
+            "swarmctl",
+            "identity",
+            "migrate-governance-lock",
+            "--confirm-offline",
+            "--state-path",
+            "/var/lib/swarm/governance-partition-state.json",
+        ]);
+        let Command::Identity(identity) = cli.command else {
+            panic!("expected identity command");
+        };
+        let super::IdentityCommand::MigrateGovernanceLock(args) = identity.command else {
+            panic!("expected governance lock migration command");
+        };
+        assert!(args.confirm_offline);
+        assert_eq!(
+            args.state_path.as_deref(),
+            Some(std::path::Path::new(
+                "/var/lib/swarm/governance-partition-state.json"
+            ))
+        );
+
+        let no_confirmation = super::IdentityMigrateGovernanceLockArgs {
+            confirm_offline: false,
+            state_path: None,
+        };
+        let error = run_identity_migrate_governance_lock_command(
+            std::path::Path::new("/path/that/must/not/be/read.yaml"),
+            &no_confirmation,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires --confirm-offline"));
+    }
+
+    #[test]
+    fn governance_lock_migration_command_uses_only_the_admitted_existing_tom_key() {
+        let root = unique_temp_dir("governance-lock-migration");
+        let config_path = root.join("config.yaml");
+        fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
+        let config = load_config(&config_path).unwrap();
+        let key_store = crate::agent_identity::FileAgentKeyStore::open(
+            crate::agent_identity::resolve_agent_key_dir(&config_path, &config.identity),
+        )
+        .unwrap();
+        let key = SigningKey::from_bytes(&[158; 32]);
+        let identity = key_store.replace(AgentRole::Tom, "primary", &key).unwrap();
+        let registry = crate::agent_identity::FileAgentIdentityRegistry::open(
+            crate::agent_identity::resolve_identity_registry_dir(&config_path, &config.identity),
+        )
+        .unwrap();
+        registry
+            .admit_persisted_identity(AgentRole::Tom, "primary", &identity, 1)
+            .unwrap();
+
+        let source_path = root.join("source-governance.json");
+        let restored_path = root.join("restored-governance.json");
+        let source = crate::governance_migration::GovernancePolicy::initialize_persistence(
+            crate::governance_migration::GovernancePolicyConfig::default(),
+            &source_path,
+            identity.id.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        drop(source);
+        fs::copy(&source_path, &restored_path).unwrap();
+        fs::copy(
+            crate::governance_migration::GovernancePolicy::persistence_sequence_path(&source_path),
+            crate::governance_migration::GovernancePolicy::persistence_sequence_path(
+                &restored_path,
+            ),
+        )
+        .unwrap();
+        let args = super::IdentityMigrateGovernanceLockArgs {
+            confirm_offline: true,
+            state_path: Some(restored_path.clone()),
+        };
+        run_identity_migrate_governance_lock_command(&config_path, &args, true).unwrap();
+        drop(
+            crate::governance_migration::GovernancePolicy::with_persistence(
+                crate::governance_migration::GovernancePolicyConfig::default(),
+                &restored_path,
+                identity.id,
+                key,
+            )
+            .unwrap(),
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -32,6 +32,9 @@ pub enum AgentIdentityError {
         source: std::io::Error,
     },
 
+    #[error("agent key is missing at `{path}`; refusing implicit creation")]
+    MissingKey { path: PathBuf },
+
     #[error("failed to write agent key `{path}`: {source}")]
     Write {
         path: PathBuf,
@@ -277,6 +280,30 @@ impl FileAgentKeyStore {
             .map(|(identity, _status)| identity)
     }
 
+    /// Load a role/slot key without creating replacement identity material.
+    ///
+    /// Offline recovery and migration paths must use this method: creating a
+    /// key while attempting to authenticate an existing signed stream would
+    /// manufacture an unrelated signer and obscure the real recovery failure.
+    pub fn load_existing(
+        &self,
+        role: AgentRole,
+        slot: &str,
+    ) -> Result<PersistedAgentIdentity, AgentIdentityError> {
+        let path = self.key_path(role, slot);
+        let bytes = fs::read(&path).map_err(|source| {
+            if source.kind() == ErrorKind::NotFound {
+                AgentIdentityError::MissingKey { path: path.clone() }
+            } else {
+                AgentIdentityError::Read {
+                    path: path.clone(),
+                    source,
+                }
+            }
+        })?;
+        Self::decode_key(&path, &bytes)
+    }
+
     /// Load a stable role/slot key, reporting whether this call created it.
     ///
     /// Security-sensitive bootstrap code must not infer first initialization from
@@ -484,6 +511,43 @@ impl FileAgentIdentityRegistry {
             .into_iter()
             .map(|entry| entry.agent_id)
             .collect())
+    }
+
+    /// Verify an exact active role/slot identity without refreshing or adding
+    /// registry state.
+    pub fn verify_admitted_persisted_identity(
+        &self,
+        role: AgentRole,
+        slot: &str,
+        identity: &PersistedAgentIdentity,
+    ) -> Result<(), AgentIdentityError> {
+        let slot = sanitize_slot(slot);
+        let derived = PersistedAgentIdentity::from_signing_key(identity.signing_key.clone());
+        if derived.id != identity.id {
+            return Err(AgentIdentityError::DerivedIdentityMismatch {
+                role,
+                slot,
+                derived: derived.id.0,
+                recorded: identity.id.0.clone(),
+            });
+        }
+        let snapshot = self.load_snapshot()?;
+        let Some(active) = snapshot
+            .active
+            .iter()
+            .find(|entry| entry.role == role && entry.slot == slot)
+        else {
+            return Err(AgentIdentityError::MissingActiveIdentity { role, slot });
+        };
+        let expected_public_key = hex::encode(identity.signing_key.verifying_key().to_bytes());
+        if active.agent_id != identity.id || active.public_key_hex != expected_public_key {
+            return Err(AgentIdentityError::UnregisteredIdentity {
+                role,
+                slot,
+                agent_id: identity.id.0.clone(),
+            });
+        }
+        Ok(())
     }
 
     pub fn admit_persisted_identity(
@@ -1054,6 +1118,42 @@ mod tests {
             created.signing_key.to_bytes(),
             loaded.signing_key.to_bytes()
         );
+    }
+
+    #[test]
+    fn recovery_identity_lookup_is_read_only_and_requires_exact_admission() {
+        let root = temp_root("read-only-recovery");
+        let key_root = root.join("keys");
+        let store = FileAgentKeyStore::open(&key_root).unwrap();
+        assert!(matches!(
+            store.load_existing(AgentRole::Tom, "primary").unwrap_err(),
+            super::AgentIdentityError::MissingKey { .. }
+        ));
+        assert!(!key_root.join("tom-primary.ed25519").exists());
+
+        let identity = store.load_or_create(AgentRole::Tom, "primary").unwrap();
+        let loaded = store.load_existing(AgentRole::Tom, "primary").unwrap();
+        assert_eq!(loaded.id, identity.id);
+        assert_eq!(
+            loaded.signing_key.to_bytes(),
+            identity.signing_key.to_bytes()
+        );
+
+        let registry = FileAgentIdentityRegistry::open(root.join("registry")).unwrap();
+        assert!(matches!(
+            registry
+                .verify_admitted_persisted_identity(AgentRole::Tom, "primary", &loaded)
+                .unwrap_err(),
+            super::AgentIdentityError::MissingActiveIdentity { .. }
+        ));
+        registry
+            .admit_persisted_identity(AgentRole::Tom, "primary", &loaded, 1_000)
+            .unwrap();
+        let before = fs::read(registry.registry_path.clone()).unwrap();
+        registry
+            .verify_admitted_persisted_identity(AgentRole::Tom, "primary", &loaded)
+            .unwrap();
+        assert_eq!(fs::read(registry.registry_path.clone()).unwrap(), before);
     }
 
     #[test]

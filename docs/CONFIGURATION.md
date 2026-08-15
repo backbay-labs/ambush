@@ -411,7 +411,28 @@ Fresh automatic initialization is allowed only when the Tom key file is atomical
 
 ### Governance State Migration And Rekey
 
-Unsigned governance state is deliberately not upgraded in place. Stop every daemon using the state root, preserve the directory for audit, and run:
+Ordinary daemon startup and `--reinitialize-governance-state` never create a
+missing permanent governance lock beside existing anchors. For an upgrade from
+the immediately preceding signed schema, or a PVC restore whose copied lock has
+a different device/inode, stop every process using the state root and run:
+
+```bash
+swarmctl --config /path/to/swarm.yaml identity migrate-governance-lock \
+  --confirm-offline \
+  --state-path /var/lib/swarm/governance-partition-state.json
+```
+
+The command loads (but never creates) the Tom/primary key, verifies its exact
+active registry admission, authenticates the old state and checkpoint, then
+creates/reuses and fsyncs the permanent lock. It re-signs the unchanged authority
+payload with only the new lock binding at state sequence `N+1`, then writes the
+checkpoint at `N+1`. Lock-only and state-first/checkpoint-second failures are
+safe to retry; a completed retry is idempotent. Unsigned, corrupt, wrong-signer,
+checkpoint-ahead, unknown-field, and older signed payloads that omit health or
+authorization inputs fail closed. A pre-lock daemon cannot advertise an advisory
+owner, so `--confirm-offline` is a real operator assertion, not cosmetic syntax.
+
+Unsigned governance state is deliberately not upgraded in place. Stop every daemon using the state root, preserve the directory for audit, restore the trusted permanent lock if necessary, and run:
 
 ```bash
 swarm-detect --config /path/to/swarm.yaml --reinitialize-governance-state

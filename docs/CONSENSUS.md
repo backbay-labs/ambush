@@ -218,21 +218,46 @@ Fresh initialization creates, fsyncs, and parent-directory-syncs the lock record
 before signing either anchor. A retry after a parent-sync failure re-fsyncs the
 same valid generation rather than minting another stream. Moving, restoring, or
 snapshotting the files onto a different device/inode fails with a typed binding
-mismatch. Recovery is explicit offline reinitialization with every process
-stopped; it archives/discards the old membership, health, leases, holds, and
-authorization ledgers and signs the current permanent binding. Signed payloads
-from the earlier schema that omit the binding fail closed and require that same
-offline migration. Ordinary startup never performs this migration.
+mismatch. Recovery is explicit and offline with every process stopped.
+State-preserving recovery is the explicit offline migration described
+below. It authenticates both existing anchors with the externally admitted
+Tom/primary key, creates or reuses durable lock metadata, changes only the lock
+binding, and advances the state/checkpoint sequence. Signed payloads from the
+immediately preceding schema that omit only the binding fail closed at ordinary
+startup and are accepted only by that migration. Earlier signed schemas that
+omit health, identity, committee, or authorization inputs remain unsupported
+because defaulting those fields could fail open. Ordinary startup never performs
+this migration.
 
 A missing permanent lock cannot be repaired by `with_persistence` or
-`reinitialize_persistence`. Stop every process first. Restore a trusted lock
-record backup beside the stream, then run explicit offline reinitialization so
-the admitted Tom key discards the old authority state and signs the restored
-record's current device/inode binding. If no trusted lock record exists, archive
-the state and checkpoint and perform a full operator-approved Tom identity-root
-reset (key, registry admission, and governance stream) so daemon bootstrap
-creates a new identity and a new lock exactly once. Creating an empty lock or
-calling ordinary startup is not recovery.
+`reinitialize_persistence`. Stop every process first and run the explicit
+state-preserving command with the same config, stable key root, identity
+registry, and state volume:
+
+```bash
+swarmctl --config /etc/swarm/config.yaml identity migrate-governance-lock \
+  --confirm-offline \
+  --state-path /var/lib/swarm/governance-partition-state.json
+```
+
+The command loads an existing key without creating one, requires an exact active
+Tom/primary registry record, verifies both signed anchors before creating the
+lock, acquires the advisory lock, re-verifies unchanged bytes under the lock,
+then signs state at `N+1` before signing checkpoint `N+1`. A lock-only failure is
+retryable. A crash after the state commit leaves an older checkpoint; retry
+recognizes the state already bound to the held lock and advances only the
+checkpoint. A fully migrated retry is idempotent. Unsigned, corrupt,
+wrong-signer, checkpoint-ahead, or incompatible-schema input creates no trusted
+authority and fails closed. The command detects an active owner that implements
+the permanent-lock protocol; `--confirm-offline` is still mandatory because a
+pre-lock release has no advisory owner to detect.
+
+If authenticated anchors are unavailable, archive the entire state root and
+follow the destructive identity-root reset procedure; do not fabricate an empty
+lock. Destructive reset discards membership, health, leases, holds,
+authorization ledgers, and chain position. Rolling back both valid signed
+anchors together remains outside local detection and requires an external
+monotonic or independently authenticated anchor.
 
 ## Approval And Receipt Lineage
 
@@ -468,6 +493,11 @@ required to fail closed:
   and pass that exact identity and key. Legacy unsigned state must be explicitly
   reinitialized offline; persisted envelope fields never supply the trust
   anchor.
+- `GovernancePolicy::migrate_persistence_lock(path, admitted_tom_agent_id,
+  tom_signing_key)` is the only state-preserving missing/rebound-lock path. It
+  accepts the exact immediately preceding signed payload schema or the current
+  schema, advances the signed sequence, and requires an externally admitted
+  signer. There is no overload that trusts an envelope signer or creates a key.
 - `ContingencyLease::verify()` is now
   `verify(&trusted_governor_identities)`. Callers must pass identities from the
   admitted authority, normally `GovernanceAuthority::governor_public_keys()`;

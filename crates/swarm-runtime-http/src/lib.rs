@@ -70,6 +70,15 @@ pub(crate) use swarm_runtime::{
 pub(crate) use swarm_evolution::{evidence, governance_prep, operator_maintenance, portfolio};
 pub(crate) use swarm_runtime_workbench::review_workbench;
 
+/// Narrow facade used by the shared CLI source for the explicit offline
+/// governance-lock migration command.
+pub mod governance_migration {
+    pub use swarm_agents::tom_agent::{
+        GovernanceLockMigrationReport, GovernancePersistenceError, GovernancePolicy,
+        GovernancePolicyConfig,
+    };
+}
+
 pub mod cli;
 pub mod http;
 pub mod operator_http;
