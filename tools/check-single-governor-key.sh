@@ -30,7 +30,10 @@
 #     A lexical scan for a COLLECTION of `SigningKey` in the three source paths that
 #     make up the governance signing path, plus a production-source inventory
 #     requiring one concrete opaque `GovernanceAuthority` handle, its private
-#     policy field and authenticated mint, and no trait/backend/generic installer.
+#     policy field and authenticated mint. The authority inventory pins the full
+#     canonical inherent impl, allowlists every inherent method signature, and
+#     rejects every other impl, construction, raw-policy exposure, trait/backend,
+#     alias, re-export, macro API and generic installer path.
 #
 # WHAT THIS SCRIPT COVERS
 #   `crates/swarm-governance/src/`, `crates/swarm-consensus/src/` and
@@ -63,10 +66,10 @@
 #   Three sweeps in this repository's history declared a search complete by
 #   grepping identifier names and all three were wrong. So this script runs a
 #   FIXTURE on every invocation, before it scans the real tree: it plants each
-#   of the five forbidden shapes into a temporary file, runs the SAME scanner
-#   over it, and fails if any of them is not caught. It also plants a clean
-#   control that must pass, and a `#[cfg(test)]`-guarded keyring that must be
-#   IGNORED -- without that control the scanner could be "catching" everything
+#   forbidden keyring shape and capability escape into a temporary source tree,
+#   runs the SAME scanners over it, and fails if any mutation is not caught. It
+#   also plants clean controls that must pass, including a `#[cfg(test)]`-guarded
+#   keyring -- without those controls the scanners could be "catching" everything
 #   by matching unconditionally.
 set -euo pipefail
 
@@ -138,13 +141,71 @@ scan_paths() {
 # that a downstream Fake cannot implement, construct, or install the handle.
 scan_governance_capability_inventory() {
   local source_root="$1"
-  python3 - "$source_root" <<'PY'
+  local inventory_mode="${2:-fixture}"
+  python3 - "$source_root" "$inventory_mode" <<'PY'
+import hashlib
 import pathlib
 import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
+strict_digest = sys.argv[2] == "strict"
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
+EXPECTED_AUTHORITY_IMPL_DIGEST = "8da26c153a0436586d711477061eeeceee911e66752ac17952397b14631e57e5"
+
+ALLOWED_AUTHORITY_METHODS = {
+    "same_policy": "pubfnsame_policy(&self,other:&Self)->bool",
+    "identity": "pubfnidentity(&self)->GovernanceAuthorityIdentity",
+    "authorize_partition_request": (
+        "pubfnauthorize_partition_request(&self,request:&ActionRequest,now_ms:i64)"
+        "->Result<Option<serde_json::Value>,String>"
+    ),
+    "verify_and_consume_action_authorization": (
+        "pubfnverify_and_consume_action_authorization(&self,request:&ActionRequest,"
+        "receipt:&serde_json::Value,now_ms:i64)->Result<serde_json::Value,String>"
+    ),
+    "verify_and_consume_veto": (
+        "pubfnverify_and_consume_veto(&self,request:&ActionRequest,"
+        "receipt:&serde_json::Value,now_ms:i64)->Result<serde_json::Value,String>"
+    ),
+    "begin_human_authorization_hold": (
+        "pubfnbegin_human_authorization_hold(&self,request:&ActionRequest,"
+        "receipt:&serde_json::Value,policy_decision:&PolicyDecision,now_ms:i64)"
+        "->Result<GovernedHumanAuthorizationHold,String>"
+    ),
+    "bind_human_approval_set": (
+        "pubfnbind_human_approval_set(&self,hold_id:&str,approval_set_id:&str,"
+        "approval_set_digest:&str)->Result<GovernedHumanAuthorizationHold,String>"
+    ),
+    "pending_human_authorization": (
+        "pubfnpending_human_authorization(&self,approval_set_id:&str)"
+        "->Result<GovernedHumanAuthorizationHold,String>"
+    ),
+    "verify_and_consume_human_authorization": (
+        "pubfnverify_and_consume_human_authorization(&self,hold_id:&str,"
+        "approval_set_id:&str,approval_set_digest:&str,now_ms:i64)"
+        "->Result<ConsumedGovernedHumanAuthorization,String>"
+    ),
+    "is_partitioned": "pubfnis_partitioned(&self)->bool",
+    "note_partition_veto": (
+        "pubfnnote_partition_veto(&self,request:&ActionRequest,reason:&str,now_ms:i64)"
+    ),
+    "drain_runtime_events": (
+        "pubfndrain_runtime_events(&self)->Vec<GovernanceRuntimeEventRecord>"
+    ),
+    "status_report": "pubfnstatus_report(&self)->GovernanceStatusReport",
+    "attest_release": (
+        "pubfnattest_release(&self,subject:&serde_json::Value,now_ms:i64)"
+        "->Option<serde_json::Value>"
+    ),
+    "governor_public_keys": (
+        "pubfngovernor_public_keys(&self)->BTreeSet<AgentId>"
+    ),
+}
+EXPECTED_MINT_HEADER = (
+    "pubfnauthority(self:&Arc<Self>)"
+    "->Result<GovernanceAuthority,GovernanceAuthorityError>"
+)
 
 def production_source(raw: str) -> str:
     out = []
@@ -201,14 +262,90 @@ def production_source(raw: str) -> str:
         index += 1
     return "".join(out)
 
+def canonical_tokens(value: str) -> str:
+    value = re.sub(r",\s*\)", ")", value)
+    return re.sub(r"\s+", "", value)
+
+def matching_brace(source: str, opening: int) -> int:
+    depth = 0
+    for index in range(opening, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise ValueError("unclosed Rust item")
+
+def authority_impls(path: pathlib.Path, source: str):
+    items = []
+    pattern = re.compile(
+        r"\bimpl\b(?P<header>[^{};]*\bGovernanceAuthority\b[^{};]*)\{",
+        re.DOTALL,
+    )
+    for match in pattern.finditer(source):
+        opening = match.end() - 1
+        try:
+            closing = matching_brace(source, opening)
+        except ValueError as error:
+            print(
+                f"governance capability inventory: {path}: {error}",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        items.append((canonical_tokens("impl" + match.group("header")), match.start(), closing + 1))
+    return items
+
+def inherent_method_headers(source: str):
+    opening = source.find("{")
+    if opening < 0:
+        return []
+    depth = 0
+    depths = [0] * (len(source) + 1)
+    for index, char in enumerate(source):
+        depths[index] = depth
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+    methods = []
+    for match in re.finditer(r"\bfn\s+(?P<name>[A-Za-z_]\w*)", source):
+        if depths[match.start()] != 1:
+            continue
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        body_open = source.find("{", match.end())
+        if body_open < 0 or depths[body_open] != 1:
+            raise ValueError(f"method `{match.group('name')}` has no top-level body")
+        header = canonical_tokens(source[line_start:body_open])
+        methods.append((match.group("name"), header))
+    return methods
+
+def public_function_headers(source: str):
+    headers = []
+    pattern = re.compile(
+        r"\bpub\s+(?:(?:const|async|unsafe)\s+)*fn\s+[A-Za-z_]\w*",
+        re.DOTALL,
+    )
+    for match in pattern.finditer(source):
+        terminators = [position for position in (
+            source.find("{", match.end()),
+            source.find(";", match.end()),
+        ) if position >= 0]
+        if not terminators:
+            continue
+        end = min(terminators)
+        headers.append(canonical_tokens(source[match.start():end]))
+    return headers
+
 source_files = sorted((root / "crates").glob("*/src/**/*.rs"))
 if not source_files:
     print("no shipped Rust source found for governance capability inventory", file=sys.stderr)
     raise SystemExit(2)
-sources = {
-    path.relative_to(root): production_source(path.read_text(encoding="utf-8"))
+raw_sources = {
+    path.relative_to(root): path.read_text(encoding="utf-8")
     for path in source_files
 }
+sources = {path: production_source(raw) for path, raw in raw_sources.items()}
 failed = False
 
 def reject(label: str, pattern: str) -> None:
@@ -235,6 +372,7 @@ if declarations != [canonical]:
 
 canonical_source = sources.get(canonical, "")
 if not re.search(
+    r"#\s*\[\s*derive\s*\(\s*Clone\s*\)\s*\]\s*"
     r"\bpub\s+struct\s+GovernanceAuthority\s*\{\s*"
     r"policy\s*:\s*Arc\s*<\s*GovernancePolicy\s*>\s*,?\s*\}",
     canonical_source,
@@ -246,6 +384,59 @@ if not re.search(
         file=sys.stderr,
     )
     failed = True
+
+impl_items = [
+    (path, header, start, end)
+    for path, source in sources.items()
+    for header, start, end in authority_impls(path, source)
+]
+allowed_impls = {
+    (canonical, "implstd::fmt::DebugforGovernanceAuthority"),
+    (canonical, "implGovernanceAuthority"),
+}
+observed_impls = {(path, header) for path, header, _start, _end in impl_items}
+if observed_impls != allowed_impls or len(impl_items) != len(allowed_impls):
+    rendered = ", ".join(f"{path}:{header}" for path, header, _start, _end in impl_items) or "none"
+    print(
+        "governance capability inventory: authority impl inventory drifted; "
+        f"found {rendered}",
+        file=sys.stderr,
+    )
+    failed = True
+
+main_impls = [
+    (start, end)
+    for path, header, start, end in impl_items
+    if path == canonical and header == "implGovernanceAuthority"
+]
+if len(main_impls) == 1:
+    start, end = main_impls[0]
+    main_impl = canonical_source[start:end]
+    try:
+        methods = inherent_method_headers(main_impl)
+    except ValueError as error:
+        print(f"governance capability inventory: {error}", file=sys.stderr)
+        failed = True
+        methods = []
+    observed_methods = dict(methods)
+    if len(observed_methods) != len(methods) or observed_methods != ALLOWED_AUTHORITY_METHODS:
+        rendered = ", ".join(f"{name}={header}" for name, header in methods) or "none"
+        print(
+            "governance capability inventory: public inherent authority method "
+            f"allowlist drifted; found {rendered}",
+            file=sys.stderr,
+        )
+        failed = True
+    if strict_digest:
+        raw_item = raw_sources[canonical][start:end]
+        actual_digest = hashlib.sha256(canonical_tokens(raw_item).encode()).hexdigest()
+        if actual_digest != EXPECTED_AUTHORITY_IMPL_DIGEST:
+            print(
+                "governance capability inventory: canonical GovernanceAuthority impl "
+                f"digest {actual_digest} != pinned {EXPECTED_AUTHORITY_IMPL_DIGEST}",
+                file=sys.stderr,
+            )
+            failed = True
 
 mint_pattern = (
     r"\bpub\s+fn\s+authority\s*\(\s*self\s*:\s*&\s*Arc\s*<\s*Self\s*>\s*\)"
@@ -259,16 +450,58 @@ if len(re.findall(mint_pattern, canonical_source, re.DOTALL)) != 1:
     )
     failed = True
 
+construction_sites = [
+    (path, match.start())
+    for path, source in sources.items()
+    for match in re.finditer(r"\bGovernanceAuthority\s*\{\s*policy\s*:", source)
+]
+if len(construction_sites) != 2 or any(path != canonical for path, _ in construction_sites):
+    rendered = ", ".join(f"{path}:{source.count(chr(10), 0, offset) + 1}" for path, offset in construction_sites for source in [sources[path]]) or "none"
+    print(
+        "governance capability inventory: expected only the canonical private-field struct "
+        f"and authenticated mint construction; found {rendered}",
+        file=sys.stderr,
+    )
+    failed = True
+
+for path, source in sources.items():
+    for header in public_function_headers(source):
+        return_type = header.split("->", 1)[1] if "->" in header else ""
+        owned_return_type = re.sub(
+            r"&(?:'[A-Za-z_]\w*)?(?:mut)?(?:[A-Za-z_]\w*::)*GovernanceAuthority\b",
+            "",
+            return_type,
+        )
+        if re.search(r"\bGovernanceAuthority\b", owned_return_type) and header != EXPECTED_MINT_HEADER:
+            print(
+                "governance capability inventory: public function can return a governance "
+                f"authority outside the authenticated mint: {path}:{header}",
+                file=sys.stderr,
+            )
+            failed = True
+        if (
+            re.search(r"\bGovernanceAuthority\b", header)
+            and re.search(r"\bGovernancePolicy\b", header)
+            and header != EXPECTED_MINT_HEADER
+        ):
+            print(
+                "governance capability inventory: public function exposes or accepts both "
+                f"raw policy and authority: {path}:{header}",
+                file=sys.stderr,
+            )
+            failed = True
+
 reject("backend trait is forbidden", r"\btrait\s+GovernanceAuthority\b")
 reject("legacy governance seal is forbidden", r"\bSealedGovernanceAuthority\b")
 reject("trait-object governance backend is forbidden", r"\bdyn\s+GovernanceAuthority\b")
 reject(
-    "GovernanceAuthority trait implementation is forbidden",
-    r"\bimpl\b(?:\s*<[^>{};]*>)?\s+(?:[A-Za-z_]\w*::)*GovernanceAuthority\s+for\b",
+    "GovernanceAuthority alias is forbidden",
+    r"\btype\s+[A-Za-z_]\w*\s*=\s*(?:[A-Za-z_]\w*::)*GovernanceAuthority\b",
 )
 reject(
-    "GovernanceAuthority Deref/AsRef exposure is forbidden",
-    r"\bimpl\b(?:\s*<[^>{};]*>)?\s+(?:Deref|AsRef\s*<\s*GovernancePolicy\s*>)\s+for\s+GovernanceAuthority\b",
+    "GovernanceAuthority renamed re-export is forbidden",
+    r"\b(?:pub(?:\s*\([^)]*\))?\s+)?use\s+[^;]*"
+    r"\bGovernanceAuthority\s+as\s+[A-Za-z_]\w*",
 )
 reject(
     "generic governance installer is forbidden",
@@ -276,9 +509,18 @@ reject(
     r"\bwith_governance_authority\s*\([^)]*(?:impl\s+Into|T\s*:\s*Into)\s*<\s*GovernanceAuthority",
 )
 reject(
-    "public raw-policy authority constructor is forbidden",
-    r"\bimpl\s+GovernanceAuthority\s*\{(?:(?!\n\s*impl\b).)*"
-    r"\bpub\s+fn\s+(?:new|from_policy|from_backend)\b",
+    "macro-generated governance authority API is forbidden",
+    r"\bmacro_rules\s*!\s*[A-Za-z_]\w*[^;]*\bGovernanceAuthority\b|"
+    r"\b[A-Za-z_]\w*\s*!\s*[({][^;{}]*\bGovernanceAuthority\b",
+)
+reject(
+    "public GovernanceAuthority static/constant is forbidden",
+    r"\bpub\s+(?:static|const)\s+[A-Za-z_]\w*\s*:\s*(?:[A-Za-z_]\w*::)*GovernanceAuthority\b",
+)
+reject(
+    "Default/Deserialize raw construction derive is forbidden",
+    r"#\s*\[\s*derive\s*\([^\]]*\b(?:Default|Deserialize)\b[^\]]*\)\s*\]\s*"
+    r"pub\s+struct\s+GovernanceAuthority\b",
 )
 raise SystemExit(1 if failed else 0)
 PY
@@ -290,6 +532,8 @@ FIXTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/swarm-single-governor-key.XXXXXX")"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
 fixture_failures=0
+fixture_adversarial_cases=0
+fixture_clean_controls=0
 
 plant() {
   local name="$1"
@@ -301,6 +545,7 @@ expect_caught() {
   local name="$1"
   local description="$2"
   local hits
+  fixture_adversarial_cases=$((fixture_adversarial_cases + 1))
   hits="$(scan_file "$FIXTURE_DIR/$name.rs" | wc -l | tr -d ' ')"
   if [ "$hits" -eq 0 ]; then
     echo "FIXTURE FAILURE: the scanner did not catch $description ($name.rs)" >&2
@@ -312,6 +557,7 @@ expect_clean() {
   local name="$1"
   local description="$2"
   local hits
+  fixture_clean_controls=$((fixture_clean_controls + 1))
   hits="$(scan_file "$FIXTURE_DIR/$name.rs" || true)"
   if [ -n "$hits" ]; then
     echo "FIXTURE FAILURE: the scanner flagged $description ($name.rs):" >&2
@@ -373,17 +619,77 @@ expect_clean test_region "a keyring inside a #[cfg(test)] region"
 expect_clean prose "a keyring named only in whole-line comments"
 
 CANONICAL_CAPABILITY='pub struct GovernancePolicy;
+#[derive(Clone)]
 pub struct GovernanceAuthority {
     policy: Arc<GovernancePolicy>,
 }
 pub struct GovernanceAuthorityError;
+impl std::fmt::Debug for GovernanceAuthority {
+    fn fmt(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        todo!()
+    }
+}
 impl GovernancePolicy {
     pub fn authority(self: &Arc<Self>) -> Result<GovernanceAuthority, GovernanceAuthorityError> {
-        todo!()
+        Ok(GovernanceAuthority { policy: Arc::clone(self) })
     }
 }
 impl GovernanceAuthority {
     pub fn same_policy(&self, other: &Self) -> bool { todo!() }
+    pub fn identity(&self) -> GovernanceAuthorityIdentity { todo!() }
+    pub fn authorize_partition_request(
+        &self,
+        request: &ActionRequest,
+        now_ms: i64,
+    ) -> Result<Option<serde_json::Value>, String> { todo!() }
+    pub fn verify_and_consume_action_authorization(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String> { todo!() }
+    pub fn verify_and_consume_veto(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String> { todo!() }
+    pub fn begin_human_authorization_hold(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        policy_decision: &PolicyDecision,
+        now_ms: i64,
+    ) -> Result<GovernedHumanAuthorizationHold, String> { todo!() }
+    pub fn bind_human_approval_set(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> { todo!() }
+    pub fn pending_human_authorization(
+        &self,
+        approval_set_id: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> { todo!() }
+    pub fn verify_and_consume_human_authorization(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+        now_ms: i64,
+    ) -> Result<ConsumedGovernedHumanAuthorization, String> { todo!() }
+    pub fn is_partitioned(&self) -> bool { todo!() }
+    pub fn note_partition_veto(&self, request: &ActionRequest, reason: &str, now_ms: i64) {
+        todo!()
+    }
+    pub fn drain_runtime_events(&self) -> Vec<GovernanceRuntimeEventRecord> { todo!() }
+    pub fn status_report(&self) -> GovernanceStatusReport { todo!() }
+    pub fn attest_release(
+        &self,
+        subject: &serde_json::Value,
+        now_ms: i64,
+    ) -> Option<serde_json::Value> { todo!() }
+    pub fn governor_public_keys(&self) -> BTreeSet<AgentId> { todo!() }
 }'
 
 plant_capability_fixture() {
@@ -399,6 +705,7 @@ plant_capability_fixture() {
 expect_capability_clean() {
   local name="$1"
   local description="$2"
+  fixture_clean_controls=$((fixture_clean_controls + 1))
   if ! scan_governance_capability_inventory "$FIXTURE_DIR/capability-$name"; then
     echo "FIXTURE FAILURE: the capability inventory rejected $description" >&2
     fixture_failures=$((fixture_failures + 1))
@@ -408,6 +715,7 @@ expect_capability_clean() {
 expect_capability_rejected() {
   local name="$1"
   local description="$2"
+  fixture_adversarial_cases=$((fixture_adversarial_cases + 1))
   if scan_governance_capability_inventory "$FIXTURE_DIR/capability-$name" >/dev/null 2>&1; then
     echo "FIXTURE FAILURE: the capability inventory accepted $description" >&2
     fixture_failures=$((fixture_failures + 1))
@@ -442,6 +750,103 @@ plant_capability_fixture missing_mint \
   'pub struct GovernancePolicy;
 pub struct GovernanceAuthority { policy: Arc<GovernancePolicy> }'
 
+CAPABILITY_UNCHECKED="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
+    pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }}"
+CAPABILITY_GENERIC_CONSTRUCTOR="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
+    pub fn unchecked<T: Into<Arc<GovernancePolicy>>>(policy: T) -> Self {
+        Self { policy: policy.into() }
+    }}"
+CAPABILITY_HELPER_CONSTRUCTOR="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
+    fn from_raw(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }
+    pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self::from_raw(policy) }}"
+CAPABILITY_SWAP_POLICY="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
+    pub fn swap_policy(&mut self, policy: Arc<GovernancePolicy>) { self.policy = policy; }}"
+CAPABILITY_RAW_GETTER="${CANONICAL_CAPABILITY/impl GovernanceAuthority \{/impl GovernanceAuthority \{
+    pub fn policy(&self) -> &GovernancePolicy { &self.policy }}"
+
+plant_capability_fixture unchecked_associated "$CAPABILITY_UNCHECKED"
+plant_capability_fixture generic_associated "$CAPABILITY_GENERIC_CONSTRUCTOR"
+plant_capability_fixture helper_constructor "$CAPABILITY_HELPER_CONSTRUCTOR"
+plant_capability_fixture swap_policy "$CAPABILITY_SWAP_POLICY"
+plant_capability_fixture raw_policy_getter "$CAPABILITY_RAW_GETTER"
+plant_capability_fixture alias_constructor "$CANONICAL_CAPABILITY" \
+  'pub type AuthorityAlias = GovernanceAuthority;
+   pub fn unchecked(policy: Arc<GovernancePolicy>) -> AuthorityAlias {
+       GovernanceAuthority { policy }
+   }'
+plant_capability_fixture private_alias_inherent "$CANONICAL_CAPABILITY" \
+  'type AuthorityAlias = GovernanceAuthority;
+   impl AuthorityAlias {
+       pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }
+   }'
+plant_capability_fixture private_use_alias_inherent "$CANONICAL_CAPABILITY" \
+  'use crate::GovernanceAuthority as AuthorityAlias;
+   impl AuthorityAlias {
+       pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }
+   }'
+plant_capability_fixture macro_constructor "$CANONICAL_CAPABILITY" \
+  'macro_rules! mint_unchecked {
+       () => {
+           pub fn unchecked(policy: Arc<GovernancePolicy>) -> GovernanceAuthority {
+               GovernanceAuthority { policy }
+           }
+       };
+   }
+   mint_unchecked!();'
+plant_capability_fixture from_raw "$CANONICAL_CAPABILITY" \
+  'impl From<Arc<GovernancePolicy>> for GovernanceAuthority {
+       fn from(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }
+   }'
+plant_capability_fixture try_from_raw "$CANONICAL_CAPABILITY" \
+  'impl TryFrom<Arc<GovernancePolicy>> for GovernanceAuthority {
+       type Error = GovernanceAuthorityError;
+       fn try_from(policy: Arc<GovernancePolicy>) -> Result<Self, Self::Error> {
+           Ok(Self { policy })
+       }
+   }'
+plant_capability_fixture default_impl "$CANONICAL_CAPABILITY" \
+  'impl Default for GovernanceAuthority {
+       fn default() -> Self { todo!() }
+   }'
+plant_capability_fixture as_ref "$CANONICAL_CAPABILITY" \
+  'impl AsRef<GovernancePolicy> for GovernanceAuthority {
+       fn as_ref(&self) -> &GovernancePolicy { &self.policy }
+   }'
+plant_capability_fixture as_mut "$CANONICAL_CAPABILITY" \
+  'impl AsMut<GovernancePolicy> for GovernanceAuthority {
+       fn as_mut(&mut self) -> &mut GovernancePolicy { Arc::make_mut(&mut self.policy) }
+   }'
+plant_capability_fixture borrow "$CANONICAL_CAPABILITY" \
+  'impl std::borrow::Borrow<GovernancePolicy> for GovernanceAuthority {
+       fn borrow(&self) -> &GovernancePolicy { &self.policy }
+   }'
+plant_capability_fixture manual_clone "$CANONICAL_CAPABILITY" \
+  'impl Clone for GovernanceAuthority {
+       fn clone(&self) -> Self { Self { policy: Arc::clone(&self.policy) } }
+   }'
+plant_capability_fixture deserialize_impl "$CANONICAL_CAPABILITY" \
+  'impl Deserialize for GovernanceAuthority {
+       fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> { todo!() }
+   }'
+plant_capability_fixture derive_default \
+  "${CANONICAL_CAPABILITY/\#\[derive\(Clone\)\]/#[derive(Clone, Default)]}"
+plant_capability_fixture derive_deserialize \
+  "${CANONICAL_CAPABILITY/\#\[derive\(Clone\)\]/#[derive(Clone, Deserialize)]}"
+plant_capability_fixture type_alias "$CANONICAL_CAPABILITY" \
+  'pub type AlternateAuthority = GovernanceAuthority;'
+plant_capability_fixture renamed_reexport "$CANONICAL_CAPABILITY" \
+  'pub use crate::{GovernanceAuthority as AlternateAuthority, GovernancePolicy};'
+plant_capability_fixture free_constructor "$CANONICAL_CAPABILITY" \
+  'pub fn unchecked(policy: Arc<GovernancePolicy>) -> GovernanceAuthority {
+       GovernanceAuthority { policy }
+   }'
+plant_capability_fixture free_policy_accessor "$CANONICAL_CAPABILITY" \
+  'pub fn raw_policy(authority: &GovernanceAuthority) -> &GovernancePolicy {
+       &authority.policy
+   }'
+plant_capability_fixture public_static "$CANONICAL_CAPABILITY" \
+  'pub static AUTHORITY: GovernanceAuthority = todo!();'
+
 expect_capability_clean control "the canonical opaque authority and authenticated mint"
 expect_capability_rejected second_handle "a second shipped concrete handle"
 expect_capability_rejected backend_trait "a reintroduced public backend trait"
@@ -455,6 +860,30 @@ expect_capability_rejected public_field "the handle's inner policy field became 
 expect_capability_rejected public_constructor "a public raw-policy handle constructor"
 expect_capability_rejected deref "a Deref exposure of the inner policy"
 expect_capability_rejected missing_mint "the authenticated persisted-policy mint was removed"
+expect_capability_rejected unchecked_associated "an arbitrary-name raw-policy associated constructor"
+expect_capability_rejected generic_associated "a generic raw-policy associated constructor"
+expect_capability_rejected helper_constructor "a helper-mediated raw-policy associated constructor"
+expect_capability_rejected swap_policy "a public raw-policy replacement method"
+expect_capability_rejected raw_policy_getter "a public raw-policy getter"
+expect_capability_rejected alias_constructor "an alias-returning free constructor"
+expect_capability_rejected private_alias_inherent "a private type-alias inherent constructor"
+expect_capability_rejected private_use_alias_inherent "a private use-alias inherent constructor"
+expect_capability_rejected macro_constructor "a macro-generated free constructor"
+expect_capability_rejected from_raw "a From<Arc<GovernancePolicy>> implementation"
+expect_capability_rejected try_from_raw "a TryFrom<Arc<GovernancePolicy>> implementation"
+expect_capability_rejected default_impl "a manual Default implementation"
+expect_capability_rejected as_ref "an AsRef<GovernancePolicy> exposure"
+expect_capability_rejected as_mut "an AsMut<GovernancePolicy> exposure"
+expect_capability_rejected borrow "a Borrow<GovernancePolicy> exposure"
+expect_capability_rejected manual_clone "a second manual Clone construction path"
+expect_capability_rejected deserialize_impl "a manual Deserialize construction path"
+expect_capability_rejected derive_default "a derived Default construction path"
+expect_capability_rejected derive_deserialize "a derived Deserialize construction path"
+expect_capability_rejected type_alias "a public authority type alias"
+expect_capability_rejected renamed_reexport "a renamed authority re-export"
+expect_capability_rejected free_constructor "a public free function returning an authority"
+expect_capability_rejected free_policy_accessor "a public free raw-policy accessor"
+expect_capability_rejected public_static "a public static authority value"
 
 if [ "$fixture_failures" -ne 0 ]; then
   echo "" >&2
@@ -483,8 +912,10 @@ if [ -n "$violations" ]; then
   exit 1
 fi
 
-scan_governance_capability_inventory "$ROOT_DIR"
+scan_governance_capability_inventory "$ROOT_DIR" strict
 
-echo "single-governor-key gate: 22 fixture cases behaved as documented; no key" \
+fixture_cases=$((fixture_adversarial_cases + fixture_clean_controls))
+echo "single-governor-key gate: $fixture_cases fixture cases behaved as documented" \
+     "($fixture_adversarial_cases adversarial, $fixture_clean_controls controls); no key" \
      "collection on the governance signing path; shipped governance authority" \
      "is one opaque concrete handle with an authenticated mint (${SCAN_PATHS[*]})"

@@ -27,7 +27,7 @@
 # there is no default Bash, cache, repository command, GITHUB_ENV, or GITHUB_PATH
 # writer before it. The fresh runner is the bootstrap trust root: this script
 # cannot sanitize code that
-# executes before line one. Checker-owned semantic digests pin all four
+# executes before line one. Checker-owned semantic digests pin all five
 # crate manifests plus root execution-affecting tables. Those co-located digests
 # are tamper-evident against uncoordinated edits, not an external trust anchor.
 # Mirror fidelity beyond the registered probe remains a reviewed limitation.
@@ -123,17 +123,32 @@ PINNED_RESOLUTION = {
     "tokio-macros": ("2.7.0", CRATES_IO_SOURCE, "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"),
 }
 PRODUCTION_PACKAGES = {
+    "swarm-governance": ("crates/swarm-governance/Cargo.toml", "swarm_governance"),
     "swarm-policy": ("crates/swarm-policy/Cargo.toml", "swarm_policy"),
     "swarm-response": ("crates/swarm-response/Cargo.toml", "swarm_response"),
     "swarm-runtime": ("crates/swarm-runtime/Cargo.toml", "swarm_runtime"),
     "swarm-spine": ("crates/swarm-spine/Cargo.toml", "swarm_spine"),
 }
 EXPECTED_CRATE_MANIFEST_DIGESTS = {
+    "crates/swarm-governance/Cargo.toml": "d43ae97906033262f9bc8dc52d8534252b2b7c52e16edff803539020b5d3646d",
     "crates/swarm-policy/Cargo.toml": "29ef642b8ba57958db7b202ebedb237d8b5bab1cb17b88d9e0e7ce56f9604520",
     "crates/swarm-response/Cargo.toml": "55d970d2348d4366791f1cb2e46df04872e33892af451c3919f67c45dd736760",
     "crates/swarm-runtime/Cargo.toml": "9e71810643aef57970036390c66e2e973231cff2b0b3e10490b7fb810ca84b0a",
     "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
 }
+GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
+    "tools/check-single-governor-key.sh": "1fccfde1711ae3da773463544ef8cf8bab2b655a4e2d5bf0e375a088ba42b9dd",
+    "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
+    "crates/swarm-governance/src/lib.rs": "b71f19cee2bee9e643d2bcf3919c3d10e4210148a159e27e5a42263ddb50b3b7",
+}
+SINGLE_GOVERNOR_GATE_REL = "tools/check-single-governor-key.sh"
+SINGLE_GOVERNOR_GATE_OUTPUT = (
+    "single-governor-key gate: 46 fixture cases behaved as documented "
+    "(42 adversarial, 4 controls); no key collection on the governance signing "
+    "path; shipped governance authority is one opaque concrete handle with an "
+    "authenticated mint (crates/swarm-governance/src crates/swarm-consensus/src "
+    "crates/swarm-policy/src)"
+)
 EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "5d426b63b3f2a34e0aecd2157a3e5f68afb780bd62446b5f528ee747c3c86903"
 ALLOWED_LOCAL_CUSTOM_BUILD = {
     "swarm-ingest-tetragon": {
@@ -775,6 +790,52 @@ def validate_registered_build_script_path(root, relative, report):
         )
 
 
+def validate_governance_assurance_identity(root, report):
+    for relative, expected in GOVERNANCE_ASSURANCE_INPUT_DIGESTS.items():
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            report.violation(
+                "governance-assurance-input-identity",
+                f"{relative} must be the exact regular-file governance assurance input",
+            )
+            continue
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            report.violation(
+                "governance-assurance-input-drift",
+                f"{relative} digest is {actual}, expected {expected}",
+            )
+    validate_registered_build_script_path(
+        root,
+        "crates/swarm-governance/Cargo.toml",
+        report,
+    )
+
+
+def execute_single_governor_gate(root, report):
+    gate = (root / SINGLE_GOVERNOR_GATE_REL).resolve()
+    try:
+        result = subprocess.run(
+            ["/bin/bash", "--noprofile", "--norc", str(gate)],
+            cwd=root,
+            env=sanitized_runtime_environment(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        report.violation("governance-assurance-gate-failed", str(error))
+        return
+    if result.returncode or result.stdout.strip() != SINGLE_GOVERNOR_GATE_OUTPUT:
+        report.violation(
+            "governance-assurance-gate-failed",
+            "the exact single-governor gate did not produce its pinned semantic verdict: "
+            f"exit={result.returncode}, stdout={result.stdout[-2000:]!r}, "
+            f"stderr={result.stderr[-2000:]!r}",
+        )
+
+
 def validate_dependency_manifests(root, report):
     root_manifest = parse_toml(root / "Cargo.toml", report, "dependency-manifest-read")
     validate_root_manifest_semantic_identity(root_manifest, report)
@@ -796,6 +857,10 @@ def validate_dependency_manifests(root, report):
             )
 
     required_by_crate = {
+        "swarm-governance": {
+            "dependencies": {"async-trait", "serde", "serde_json"},
+            "dev-dependencies": {"tokio"},
+        },
         "swarm-policy": {"dependencies": {"serde", "serde_json"}, "dev-dependencies": {"serde_json"}},
         "swarm-response": {"dependencies": {"async-trait", "serde", "serde_json", "tokio"}},
         "swarm-runtime": {"dependencies": {"async-trait", "serde", "serde_json", "tokio"}},
@@ -1046,6 +1111,7 @@ def validate_metadata_test_targets(root, metadata_packages, resolved_ids, report
 def validate_execution_dependencies(root, report):
     validate_toolchain_identity(root, report)
     validate_workflow_bootstrap(root, report)
+    validate_governance_assurance_identity(root, report)
     validate_dependency_manifests(root, report)
     validate_cargo_execution_boundary(root, report)
     validate_resolution_identity(root, report)
@@ -1153,6 +1219,8 @@ def execution_input_snapshot(root, registered):
         "Cargo.toml",
         "Cargo.lock",
         "rust-toolchain.toml",
+        *GOVERNANCE_ASSURANCE_INPUT_DIGESTS,
+        "crates/swarm-governance/build.rs",
         *(entry["manifest"] for entry in ALLOWED_LOCAL_CUSTOM_BUILD.values()),
         *(entry["script"] for entry in ALLOWED_LOCAL_CUSTOM_BUILD.values()),
         ".cargo/config",
@@ -1261,6 +1329,8 @@ def run_checks(root, minimum=12, execute_tests=False):
     initial_execution_inputs = execution_input_snapshot(root, registered) if execute_tests else None
     if execute_tests and root.resolve() == REPO_ROOT.resolve():
         validate_execution_dependencies(root, report)
+        if not report.violations:
+            execute_single_governor_gate(root, report)
     if document.get("schema_version") != 5:
         report.violation("registry-schema-version", "negative registry must use schema_version = 5")
     if not mapped: report.violation("no-rows", "mapping parsed to zero rows")
@@ -2816,7 +2886,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 165 self-tests passed (3 clean controls, 162 adversarial)'\n"
+        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 169 self-tests passed (3 clean controls, 166 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -2850,7 +2920,7 @@ def bootstrap_boundary_self_test(base):
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
         "check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; "
-        "165 self-tests passed (3 clean controls, 162 adversarial)"
+        "169 self-tests passed (3 clean controls, 166 adversarial)"
     )
 
     def startup_payload(name):
@@ -3356,6 +3426,131 @@ def transitive_build_script_self_test(base):
     return ok, 2
 
 
+def governance_assurance_contract_self_test(base):
+    ok = True
+
+    def copy_fixture(name):
+        root = base / name
+        for crate_name in ("swarm-governance", "swarm-consensus", "swarm-policy"):
+            source = REPO_ROOT / "crates" / crate_name / "src"
+            destination = root / "crates" / crate_name / "src"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, destination)
+        governance_manifest = root / "crates/swarm-governance/Cargo.toml"
+        shutil.copy2(REPO_ROOT / "crates/swarm-governance/Cargo.toml", governance_manifest)
+        gate = root / SINGLE_GOVERNOR_GATE_REL
+        gate.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / SINGLE_GOVERNOR_GATE_REL, gate)
+        return root
+
+    def contract_report(root):
+        report = Report()
+        validate_governance_assurance_identity(root, report)
+        relative = "crates/swarm-governance/Cargo.toml"
+        document = parse_toml(root / relative, report, "dependency-manifest-read")
+        if document.get("package", {}).get("name") != "swarm-governance":
+            report.violation(
+                "dependency-manifest-identity",
+                f"{relative} package name is not `swarm-governance`",
+            )
+        validate_manifest_semantic_identity(relative, document, report)
+        validate_registered_manifest_test_shape(relative, document, report)
+        if not report.violations:
+            execute_single_governor_gate(root, report)
+        return report
+
+    clean = copy_fixture("governance-assurance-clean")
+    clean_report = contract_report(clean)
+    if clean_report.violations:
+        ok = False
+        print(
+            f"governance assurance clean contract failed: {clean_report.violations}",
+            file=sys.stderr,
+        )
+
+    unchecked = copy_fixture("governance-assurance-unchecked-constructor")
+    authority_source = unchecked / "crates/swarm-governance/src/lib.rs"
+    source = authority_source.read_text()
+    marker = "impl GovernanceAuthority {\n"
+    if source.count(marker) != 1:
+        ok = False
+        print("unchecked constructor mutation lost its exact impl marker", file=sys.stderr)
+    else:
+        authority_source.write_text(source.replace(
+            marker,
+            marker
+            + "    pub fn unchecked(policy: Arc<GovernancePolicy>) -> Self { Self { policy } }\n",
+            1,
+        ))
+        report = contract_report(unchecked)
+        direct_gate_report = Report()
+        execute_single_governor_gate(unchecked, direct_gate_report)
+        if (
+            "governance-assurance-input-drift" not in report.codes()
+            or "governance-assurance-gate-failed" not in direct_gate_report.codes()
+        ):
+            ok = False
+            print(
+                "unchecked constructor did not fail both protected input identity "
+                f"and the exact authority gate: {report.violations}; "
+                f"{direct_gate_report.violations}",
+                file=sys.stderr,
+            )
+
+    weakened = copy_fixture("governance-assurance-weakened-script")
+    weakened_gate = weakened / SINGLE_GOVERNOR_GATE_REL
+    weakened_gate.write_text(
+        "#!/usr/bin/env bash\n"
+        + f"printf '%s\\n' {json.dumps(SINGLE_GOVERNOR_GATE_OUTPUT)}\n"
+    )
+    weakened_report = contract_report(weakened)
+    fabricated_verdict = Report()
+    execute_single_governor_gate(weakened, fabricated_verdict)
+    if (
+        "governance-assurance-input-drift" not in weakened_report.codes()
+        or fabricated_verdict.violations
+    ):
+        ok = False
+        print(
+            "coherently weakened single-governor script was not rejected by its "
+            f"protected identity: {weakened_report.violations}; "
+            f"fabricated verdict={fabricated_verdict.violations}",
+            file=sys.stderr,
+        )
+
+    redirected = copy_fixture("governance-assurance-source-redirect")
+    redirected_manifest = redirected / "crates/swarm-governance/Cargo.toml"
+    redirected_manifest.write_text(
+        redirected_manifest.read_text()
+        + '\n[lib]\npath = "src/redirected.rs"\n'
+    )
+    (redirected / "crates/swarm-governance/src/redirected.rs").write_text("")
+    redirected_report = contract_report(redirected)
+    required_redirect_codes = {
+        "governance-assurance-input-drift",
+        "dependency-manifest-semantic-drift",
+        "dependency-manifest-library-override",
+    }
+    if not required_redirect_codes.issubset(redirected_report.codes()):
+        ok = False
+        print(
+            f"governance source redirect was not rejected: {redirected_report.violations}",
+            file=sys.stderr,
+        )
+
+    build_escape = copy_fixture("governance-assurance-build-script")
+    (build_escape / "crates/swarm-governance/build.rs").write_text("fn main() {}\n")
+    build_report = contract_report(build_escape)
+    if "dependency-manifest-build-script" not in build_report.codes():
+        ok = False
+        print(
+            f"governance build.rs escape was not rejected: {build_report.violations}",
+            file=sys.stderr,
+        )
+
+    return ok, 4
+
+
 def dependency_execution_self_test(base):
     ok = True
     target_dir = REPO_ROOT / "target/assurance-dependency-selftest"
@@ -3677,11 +3872,13 @@ fn body_must_run() {}
     bootstrap_ok, bootstrap_mutations = bootstrap_boundary_self_test(base)
     target_environment_ok, target_environment_mutations = target_environment_scope_self_test()
     transitive_ok, transitive_mutations = transitive_build_script_self_test(base)
+    governance_ok, governance_mutations = governance_assurance_contract_self_test(base)
     return (
         ok and isolation_ok and python_ok and bootstrap_ok
-        and target_environment_ok and transitive_ok,
+        and target_environment_ok and transitive_ok and governance_ok,
         4 + isolation_mutations + python_mutations
-        + bootstrap_mutations + target_environment_mutations + transitive_mutations,
+        + bootstrap_mutations + target_environment_mutations + transitive_mutations
+        + governance_mutations,
     )
 
 

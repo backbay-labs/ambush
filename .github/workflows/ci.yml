@@ -21,8 +21,10 @@ jobs:
   # Two warm local clean-launch runs of the preceding 161-self-test registry gate
   # took 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
   # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. The current gate adds four
-  # lexical workflow-name mutations. These are local observations, not a CI
-  # estimate; compiled actual-source mutations dominate.
+  # lexical workflow-name mutations and four governance-assurance mutations; it
+  # also executes the exact 46-case single-governor gate inside the protected
+  # contract. These are local observations, not a CI estimate; compiled
+  # actual-source mutations dominate.
   mapping-contract:
     name: mapping-contract (${{ github.sha }})
     runs-on: ubuntu-24.04
@@ -203,7 +205,7 @@ jobs:
       # nothing here closes.
       #
       # It runs a FIXTURE on every invocation before it touches the real tree:
-      # eighteen planted violations that must be caught and four controls that
+      # forty-two planted violations that must be caught and four controls that
       # must not be, including a keyring inside `#[cfg(test)]` and one named only in
       # a comment. Three identifier-grep sweeps in this repository's history
       # declared themselves complete and were wrong; a grep that has never been
