@@ -318,13 +318,13 @@ The active partition contract is:
 | State | Destructive response | Observability | Recovery expectation |
 | --- | --- | --- | --- |
 | `healthy` | Allowed through normal receipt-backed governance | Full health and runtime visibility | Stage bounded contingency leases for later emergency use |
-| `degraded` | Still allowed if quorum remains available | Full visibility, degraded state reported | Repair unhealthy governors before the system trends into partition |
+| `degraded` | Denied with a signed governance veto while any unhealthy agent remains | Full visibility, degraded state reported | Repair unhealthy agents and confirm a healthy signed state before retrying |
 | `partitioned` | Denied unless a valid staged contingency lease authorizes the exact action | Full visibility remains available | Persist every authorized and unauthorized partition-era attempt |
 | `healing` | Normal quorum is back, but partition-era activity is being reconciled | Full visibility plus reconciliation markers | Review reconciliation output before treating the incident as closed |
 
 This rule is intentional:
 
-- destructive authority fails closed when quorum disappears
+- destructive authority fails closed while any agent is unhealthy or quorum is unavailable
 - health, metrics, and operator visibility remain available
 - contingency leases are narrow emergency exceptions
 - healing is a first-class state, not an implicit return to healthy

@@ -422,6 +422,31 @@ impl GovernanceState {
             .saturating_add(usize::from(self.local_governor.is_some()))
     }
 
+    /// Resolve unhealthy runtime identities to the consensus identities that
+    /// define committee membership. The runtime may report the local Tom by its
+    /// display identity or its key-derived consensus identity; both are one
+    /// governor. Peers have only admitted consensus identities.
+    fn unhealthy_governor_ids(&self, entries: &[AgentHealthEntry]) -> BTreeSet<AgentId> {
+        entries
+            .iter()
+            .filter(|entry| entry.role == AgentRole::Tom && entry.health != AgentHealth::Healthy)
+            .filter_map(|entry| {
+                let observed_id = AgentId(entry.id.clone());
+                self.display_governors
+                    .get(&observed_id)
+                    .cloned()
+                    .or_else(|| {
+                        (self
+                            .display_governors
+                            .values()
+                            .any(|consensus_id| consensus_id == &observed_id)
+                            || self.peer_governors.contains(&observed_id))
+                        .then_some(observed_id)
+                    })
+            })
+            .collect()
+    }
+
     /// The committee for a round, by consensus identity. Contains no keys.
     fn committee(&self) -> Result<ConsensusCommittee, ConsensusError> {
         let mut members = self.peer_governors.iter().cloned().collect::<Vec<_>>();
@@ -1481,15 +1506,7 @@ impl GovernancePolicy {
             .cloned()
             .collect();
         let total_governors = state.display_governors.len().max(state.governor_count());
-        let unhealthy_governors = entries
-            .iter()
-            .filter(|entry| {
-                entry.health != AgentHealth::Healthy
-                    && state
-                        .display_governors
-                        .contains_key(&AgentId(entry.id.clone()))
-            })
-            .count();
+        let unhealthy_governors = state.unhealthy_governor_ids(entries).len();
         let healthy_governors = total_governors.saturating_sub(unhealthy_governors);
         let quorum_threshold = governance_quorum_threshold(total_governors);
         state.last_healthy_governors = healthy_governors;
@@ -3351,15 +3368,27 @@ mod tests {
         let observed_at_ms = super::now_ms();
         policy.observe_health(
             &governing_id,
-            &[AgentHealthEntry {
-                id: "whisker-primary".to_string(),
-                role: AgentRole::Whisker,
-                health: AgentHealth::Degraded,
-            }],
+            &[
+                AgentHealthEntry {
+                    id: "whisker-primary".to_string(),
+                    role: AgentRole::Whisker,
+                    health: AgentHealth::Degraded,
+                },
+                AgentHealthEntry {
+                    // Even an exact string collision cannot turn a non-governor
+                    // health entry into a committee member.
+                    id: governing_id.to_string(),
+                    role: AgentRole::Whisker,
+                    health: AgentHealth::Failed,
+                },
+            ],
             observed_at_ms,
         );
         let before = policy.status_report();
         assert_eq!(before.partition_state, PartitionState::Degraded);
+        assert_eq!(before.total_governors, 1);
+        assert_eq!(before.healthy_governors, 1);
+        assert_eq!(before.quorum_threshold, 1);
         assert!(matches!(
             policy.can_act(&request(ResponseAction::BlockEgress {
                 target: "203.0.113.101".to_string(),
@@ -3457,9 +3486,22 @@ mod tests {
             }
             let before_status = policy.status_report();
             assert_eq!(before_status.partition_state, expected_state);
+            assert_eq!(before_status.total_governors, 1, "{label}");
+            assert_eq!(before_status.quorum_threshold, 1, "{label}");
+            assert_eq!(
+                before_status.healthy_governors,
+                usize::from(expected_state != PartitionState::Partitioned),
+                "{label}"
+            );
             let before_decision = classify(policy.can_act(&request(ResponseAction::IsolateHost {
                 host_id: format!("host-before-{label}"),
             })));
+            let expected_decision = match expected_state {
+                PartitionState::Healthy | PartitionState::Healing => DecisionClass::Approve,
+                PartitionState::Degraded => DecisionClass::Veto,
+                PartitionState::Partitioned => DecisionClass::ContingencyLease,
+            };
+            assert_eq!(before_decision, expected_decision, "{label}");
             drop(policy);
 
             let reloaded = GovernancePolicy::with_persistence(
@@ -3477,6 +3519,243 @@ mod tests {
             assert_eq!(after_decision, before_decision, "{label}");
             cleanup_persistence(&path);
         }
+    }
+
+    #[test]
+    fn local_display_and_consensus_health_ids_each_reduce_quorum_across_restart() {
+        for (label, seed, report_by_consensus_id) in [
+            ("local-display-health", 121, false),
+            ("local-consensus-health", 122, true),
+        ] {
+            let path = persistence_path(label);
+            let key = SigningKey::from_bytes(&[seed; 32]);
+            let governing_id = AgentId::new("tom", "primary");
+            let consensus_id = AgentId::from_verifying_key(&key.verifying_key());
+            let policy = GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                governing_id.clone(),
+                key.clone(),
+            )
+            .unwrap();
+            let base_ms = super::now_ms();
+            policy.observe_health(&governing_id, &[], base_ms);
+            assert_eq!(
+                policy.status_report().partition_state,
+                PartitionState::Healthy
+            );
+            policy.observe_health(
+                &governing_id,
+                &[AgentHealthEntry {
+                    id: if report_by_consensus_id {
+                        consensus_id.to_string()
+                    } else {
+                        governing_id.to_string()
+                    },
+                    role: AgentRole::Tom,
+                    health: AgentHealth::Failed,
+                }],
+                base_ms + 1,
+            );
+
+            let before = policy.status_report();
+            assert_eq!(before.total_governors, 1, "{label}");
+            assert_eq!(before.healthy_governors, 0, "{label}");
+            assert_eq!(before.quorum_threshold, 1, "{label}");
+            assert_eq!(
+                before.partition_state,
+                PartitionState::Partitioned,
+                "{label}"
+            );
+            assert!(matches!(
+                policy.can_act(&request(ResponseAction::BlockEgress {
+                    target: format!("{label}-before"),
+                })),
+                GovernanceDecision::Authorize {
+                    contingency_lease: Some(_),
+                    ..
+                }
+            ));
+            drop(policy);
+
+            let reloaded = GovernancePolicy::with_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                governing_id,
+                key,
+            )
+            .unwrap();
+            assert_eq!(reloaded.status_report(), before, "{label}");
+            assert!(matches!(
+                reloaded.can_act(&request(ResponseAction::BlockEgress {
+                    target: format!("{label}-after"),
+                })),
+                GovernanceDecision::Authorize {
+                    contingency_lease: Some(_),
+                    ..
+                }
+            ));
+            cleanup_persistence(&path);
+        }
+    }
+
+    #[test]
+    fn duplicate_governor_aliases_and_non_governors_do_not_inflate_unhealthy_count() {
+        let path = persistence_path("mixed-governor-health-aliases");
+        let key = SigningKey::from_bytes(&[123; 32]);
+        let governing_id = AgentId::new("tom", "primary");
+        let local_consensus_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            governing_id.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        let base_ms = super::now_ms();
+        policy.observe_health(&governing_id, &[], base_ms);
+        let peer_keys = [
+            SigningKey::from_bytes(&[129; 32]),
+            SigningKey::from_bytes(&[130; 32]),
+            SigningKey::from_bytes(&[131; 32]),
+        ];
+        for peer in &peer_keys {
+            policy
+                .register_peer_governor(&peer.verifying_key())
+                .unwrap();
+        }
+        let failed_peer_id = AgentId::from_verifying_key(&peer_keys[0].verifying_key());
+        policy.observe_health(
+            &governing_id,
+            &[
+                AgentHealthEntry {
+                    id: governing_id.to_string(),
+                    role: AgentRole::Tom,
+                    health: AgentHealth::Failed,
+                },
+                AgentHealthEntry {
+                    id: local_consensus_id.to_string(),
+                    role: AgentRole::Tom,
+                    health: AgentHealth::Failed,
+                },
+                AgentHealthEntry {
+                    id: failed_peer_id.to_string(),
+                    role: AgentRole::Tom,
+                    health: AgentHealth::Failed,
+                },
+                AgentHealthEntry {
+                    id: "whisker-unrelated".to_string(),
+                    role: AgentRole::Whisker,
+                    health: AgentHealth::Failed,
+                },
+            ],
+            base_ms + 1,
+        );
+
+        let before = policy.status_report();
+        assert_eq!(before.total_governors, 4);
+        assert_eq!(before.healthy_governors, 2);
+        assert_eq!(before.quorum_threshold, 3);
+        assert_eq!(before.partition_state, PartitionState::Partitioned);
+        assert!(matches!(
+            policy.can_act(&request(ResponseAction::BlockEgress {
+                target: "mixed-aliases-before".to_string(),
+            })),
+            GovernanceDecision::Authorize {
+                contingency_lease: Some(_),
+                ..
+            }
+        ));
+        drop(policy);
+
+        let reloaded = GovernancePolicy::with_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            governing_id,
+            key,
+        )
+        .unwrap();
+        assert_eq!(reloaded.status_report(), before);
+        assert!(matches!(
+            reloaded.can_act(&request(ResponseAction::BlockEgress {
+                target: "mixed-aliases-after".to_string(),
+            })),
+            GovernanceDecision::Authorize {
+                contingency_lease: Some(_),
+                ..
+            }
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn failed_peer_consensus_identities_reduce_quorum_before_and_after_restart() {
+        let path = persistence_path("peer-consensus-health-restart");
+        let key = SigningKey::from_bytes(&[125; 32]);
+        let governing_id = AgentId::new("tom", "primary");
+        let policy = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            governing_id.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        let base_ms = super::now_ms();
+        policy.observe_health(&governing_id, &[], base_ms);
+        let peer_keys = [
+            SigningKey::from_bytes(&[126; 32]),
+            SigningKey::from_bytes(&[127; 32]),
+            SigningKey::from_bytes(&[128; 32]),
+        ];
+        for peer in &peer_keys {
+            policy
+                .register_peer_governor(&peer.verifying_key())
+                .unwrap();
+        }
+        let failed_peers = peer_keys
+            .iter()
+            .map(|peer| AgentHealthEntry {
+                id: AgentId::from_verifying_key(&peer.verifying_key()).to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            })
+            .collect::<Vec<_>>();
+        policy.observe_health(&governing_id, &failed_peers, base_ms + 1);
+
+        let before = policy.status_report();
+        assert_eq!(before.total_governors, 4);
+        assert_eq!(before.healthy_governors, 1);
+        assert_eq!(before.quorum_threshold, 3);
+        assert_eq!(before.partition_state, PartitionState::Partitioned);
+        assert!(matches!(
+            policy.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.125".to_string(),
+            })),
+            GovernanceDecision::Authorize {
+                contingency_lease: Some(_),
+                ..
+            }
+        ));
+        drop(policy);
+
+        let reloaded = GovernancePolicy::with_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            governing_id,
+            key,
+        )
+        .unwrap();
+        assert_eq!(reloaded.status_report(), before);
+        assert!(matches!(
+            reloaded.can_act(&request(ResponseAction::BlockEgress {
+                target: "203.0.113.126".to_string(),
+            })),
+            GovernanceDecision::Authorize {
+                contingency_lease: Some(_),
+                ..
+            }
+        ));
+        cleanup_persistence(&path);
     }
 
     #[test]

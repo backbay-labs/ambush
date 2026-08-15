@@ -273,61 +273,55 @@ impl FileAgentKeyStore {
         path: &Path,
         signing_key: &SigningKey,
     ) -> Result<bool, AgentIdentityError> {
+        self.write_new_key_with_sync(path, signing_key, fs::File::sync_all, |parent| {
+            fs::File::open(parent).and_then(|directory| directory.sync_all())
+        })
+    }
+
+    fn write_new_key_with_sync<FileSync, ParentSync>(
+        &self,
+        path: &Path,
+        signing_key: &SigningKey,
+        sync_file: FileSync,
+        sync_parent: ParentSync,
+    ) -> Result<bool, AgentIdentityError>
+    where
+        FileSync: FnOnce(&fs::File) -> std::io::Result<()>,
+        ParentSync: FnOnce(&Path) -> std::io::Result<()>,
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::fs::OpenOptions;
-            use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
-
-            let mut file = match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)
-            {
-                Ok(file) => file,
-                Err(source) if source.kind() == ErrorKind::AlreadyExists => {
-                    return Ok(false);
-                }
-                Err(source) => {
-                    return Err(AgentIdentityError::Write {
-                        path: path.to_path_buf(),
-                        source,
-                    });
-                }
-            };
-            file.write_all(&signing_key.to_bytes()).map_err(|source| {
-                AgentIdentityError::Write {
+            options.mode(0o600);
+        }
+        let mut file = match options.open(path) {
+            Ok(file) => file,
+            Err(source) if source.kind() == ErrorKind::AlreadyExists => return Ok(false),
+            Err(source) => {
+                return Err(AgentIdentityError::Write {
                     path: path.to_path_buf(),
                     source,
-                }
+                });
+            }
+        };
+        file.write_all(&signing_key.to_bytes())
+            .and_then(|()| sync_file(&file))
+            .map_err(|source| AgentIdentityError::Write {
+                path: path.to_path_buf(),
+                source,
             })?;
-            Ok(true)
-        }
-
-        #[cfg(not(unix))]
-        {
-            use std::fs::OpenOptions;
-            use std::io::Write;
-
-            let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
-                Ok(file) => file,
-                Err(source) if source.kind() == ErrorKind::AlreadyExists => return Ok(false),
-                Err(source) => {
-                    return Err(AgentIdentityError::Write {
-                        path: path.to_path_buf(),
-                        source,
-                    });
-                }
-            };
-            file.write_all(&signing_key.to_bytes()).map_err(|source| {
-                AgentIdentityError::Write {
-                    path: path.to_path_buf(),
-                    source,
-                }
+        if let Some(parent) = path.parent() {
+            sync_parent(parent).map_err(|source| AgentIdentityError::Write {
+                path: parent.to_path_buf(),
+                source,
             })?;
-            Ok(true)
         }
+        Ok(true)
     }
 }
 
@@ -712,6 +706,16 @@ mod tests {
         let (created, created_status) = store
             .load_or_create_with_status(AgentRole::Tom, "primary")
             .unwrap();
+        let key_path = root.join("tom-primary.ed25519");
+        assert_eq!(fs::read(&key_path).unwrap(), created.signing_key.to_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         let (loaded, loaded_status) = store
             .load_or_create_with_status(AgentRole::Tom, "primary")
             .unwrap();
@@ -719,6 +723,56 @@ mod tests {
         assert_eq!(created_status, AgentKeyLoadStatus::Created);
         assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
         assert_eq!(created.id, loaded.id);
+        assert_eq!(
+            created.signing_key.to_bytes(),
+            loaded.signing_key.to_bytes()
+        );
+    }
+
+    #[test]
+    fn key_store_sync_failures_leave_an_existing_key_that_cannot_be_recreated() {
+        for (slot, fail_file_sync) in [("file-sync-failure", true), ("dir-sync-failure", false)] {
+            let root = temp_root(slot);
+            let store = FileAgentKeyStore::open(&root).unwrap();
+            let path = store.key_path(AgentRole::Tom, slot);
+            let signing_key = SigningKey::generate(&mut OsRng);
+            let result = store.write_new_key_with_sync(
+                &path,
+                &signing_key,
+                |file| {
+                    if fail_file_sync {
+                        Err(std::io::Error::other("injected file sync failure"))
+                    } else {
+                        file.sync_all()
+                    }
+                },
+                |_| Err(std::io::Error::other("injected parent sync failure")),
+            );
+
+            assert!(matches!(
+                result,
+                Err(super::AgentIdentityError::Write { .. })
+            ));
+            assert_eq!(fs::read(&path).unwrap(), signing_key.to_bytes());
+            let (loaded, status) = store
+                .load_or_create_with_status(AgentRole::Tom, slot)
+                .unwrap();
+            assert_eq!(status, AgentKeyLoadStatus::Loaded);
+            assert_eq!(loaded.signing_key.to_bytes(), signing_key.to_bytes());
+        }
+    }
+
+    #[test]
+    fn key_store_create_new_race_never_replaces_an_existing_key() {
+        let root = temp_root("create-new-race");
+        let store = FileAgentKeyStore::open(&root).unwrap();
+        let path = store.key_path(AgentRole::Tom, "primary");
+        let winner = SigningKey::generate(&mut OsRng);
+        let loser = SigningKey::generate(&mut OsRng);
+
+        assert!(store.write_new_key(&path, &winner).unwrap());
+        assert!(!store.write_new_key(&path, &loser).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), winner.to_bytes());
     }
 
     #[test]
