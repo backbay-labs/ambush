@@ -185,12 +185,54 @@ One persisted governance stream has exactly one live process owner. Startup,
 initialization, and explicit reinitialization acquire an exclusive OS advisory
 lock beside the stream and retain its file handle for the full policy lifetime;
 the existence of the lock file is not ownership and no stale-lockfile timeout is
-used. A second process receives a typed startup refusal. Every mutation also
+used. The lock inode is permanent stream metadata: its `0600` record contains a
+random 256-bit generation ID, and both the signed state and signed checkpoint
+bind that generation together with the lock's filesystem device and inode. A
+second process receives a typed startup refusal. Every mutation also
 compares the caller's verified predecessor sequence and signed-statement digest
 with durable state under that lock before writing. This CAS is defense in depth
 against a stale in-process snapshot: it cannot borrow the latest sequence and
 overwrite newer authorization state. Writers outside this lock protocol are not
 a supported coordination model.
+
+On the shipped Linux path and the macOS development path, the lock must be a
+regular, non-symlink file. The policy binds the held handle to its filesystem
+device, inode, and held-file generation record and rechecks all three before and
+after state loads, transaction checks, state commits, and checkpoint commits.
+Ordinary load and explicit reinitialization open the permanent lock without
+`create`; a missing lock never becomes a fresh authority epoch implicitly. A
+copied or replacement lock has a different signed binding and therefore cannot
+load the existing stream. If a displaced owner crosses its final pre-write check,
+its post-write check refuses the effect and the envelope remains bound to the
+dead inode, so it cannot restart under the replacement path.
+Persisted governance-stream startup is intentionally supported only on the
+shipped Linux and macOS Unix path until an equivalent Windows file-identity
+binding exists; persisted configuration on any other platform fails closed at
+startup. The non-persisted in-memory policy is unaffected.
+An active privileged host adversary can still make the stream unavailable by
+deleting or replacing its files. The binding prevents that availability attack
+from creating a second valid writer; it does not claim to make a path check and
+rename one kernel-atomic operation.
+
+Fresh initialization creates, fsyncs, and parent-directory-syncs the lock record
+before signing either anchor. A retry after a parent-sync failure re-fsyncs the
+same valid generation rather than minting another stream. Moving, restoring, or
+snapshotting the files onto a different device/inode fails with a typed binding
+mismatch. Recovery is explicit offline reinitialization with every process
+stopped; it archives/discards the old membership, health, leases, holds, and
+authorization ledgers and signs the current permanent binding. Signed payloads
+from the earlier schema that omit the binding fail closed and require that same
+offline migration. Ordinary startup never performs this migration.
+
+A missing permanent lock cannot be repaired by `with_persistence` or
+`reinitialize_persistence`. Stop every process first. Restore a trusted lock
+record backup beside the stream, then run explicit offline reinitialization so
+the admitted Tom key discards the old authority state and signs the restored
+record's current device/inode binding. If no trusted lock record exists, archive
+the state and checkpoint and perform a full operator-approved Tom identity-root
+reset (key, registry admission, and governance stream) so daemon bootstrap
+creates a new identity and a new lock exactly once. Creating an empty lock or
+calling ordinary startup is not recovery.
 
 ## Approval And Receipt Lineage
 
@@ -274,10 +316,12 @@ Every runtime-owned agent identity follows the same admission path:
 
 - keys persist under `identity.agent_key_dir`
 - on the shipped Linux release path and macOS development path, a newly created
-  key root is synced through every parent directory up to the filesystem root,
-  and each new key is synced with the key root before creation is reported;
-  sync failure aborts startup, every ancestor is retried on the next open, and
-  existing key bytes are loaded rather than creating another identity
+  key-root chain is recorded up to its nearest existing directory anchor, only
+  the parents that anchor newly created entries are synced, and an existing root
+  triggers no ancestor sync; sync failure aborts startup and best-effort removes
+  only empty directories created by that attempt so retry repeats the durability
+  sequence; each new key is still synced with the key root before creation is
+  reported, and existing key bytes are loaded rather than creating another identity
 - stable identities are derived from the Ed25519 public key
 - registry snapshots and continuity proofs persist under
   `identity.registry_dir`

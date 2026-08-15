@@ -111,6 +111,7 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
         policy.status_report().partition_state,
         PartitionState::Healthy
     );
+    drop(policy);
 
     let reloaded = GovernancePolicy::with_persistence(
         config,
@@ -123,7 +124,9 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
     assert_eq!(status.partition_state, PartitionState::Healthy);
     assert_eq!(status.unauthorized_partition_actions, 0);
     assert!(status.last_reconciliation_report_id.is_some());
+    drop(reloaded);
 
     let _ = fs::remove_file(&path);
     let _ = fs::remove_file(GovernancePolicy::persistence_sequence_path(&path));
+    let _ = fs::remove_file(GovernancePolicy::persistence_lock_path(&path));
 }

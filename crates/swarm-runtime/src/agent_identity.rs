@@ -199,15 +199,54 @@ impl FileAgentKeyStore {
         ParentSync: FnMut(&Path) -> std::io::Result<()>,
     {
         let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(&root).map_err(|source| AgentIdentityError::CreateDir {
-            path: root.clone(),
-            source,
-        })?;
-        for parent in key_root_parent_chain(&root) {
-            sync_parent(&parent).map_err(|source| AgentIdentityError::SyncKeyRootParent {
-                path: parent,
-                source,
-            })?;
+        let missing = missing_key_root_directories(&root)?;
+        let mut created = Vec::with_capacity(missing.len());
+        for directory in missing.iter().rev() {
+            match fs::create_dir(directory) {
+                Ok(()) => created.push(directory.clone()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let metadata = fs::symlink_metadata(directory).map_err(|source| {
+                        AgentIdentityError::CreateDir {
+                            path: directory.clone(),
+                            source,
+                        }
+                    })?;
+                    if !metadata.file_type().is_dir() {
+                        best_effort_remove_empty_key_directories(&created);
+                        return Err(AgentIdentityError::CreateDir {
+                            path: directory.clone(),
+                            source: std::io::Error::new(
+                                std::io::ErrorKind::AlreadyExists,
+                                "key-store path component is not a directory",
+                            ),
+                        });
+                    }
+                }
+                Err(source) => {
+                    best_effort_remove_empty_key_directories(&created);
+                    return Err(AgentIdentityError::CreateDir {
+                        path: directory.clone(),
+                        source,
+                    });
+                }
+            }
+        }
+        for directory in created.iter().rev() {
+            let parent =
+                normalized_parent(directory).ok_or_else(|| AgentIdentityError::CreateDir {
+                    path: directory.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "new key-store directory has no existing parent anchor",
+                    ),
+                })?;
+            if let Err(source) = sync_parent(&parent) {
+                best_effort_remove_empty_key_directories(&created);
+                return Err(AgentIdentityError::SyncKeyRootParent {
+                    path: parent,
+                    source,
+                });
+            }
         }
         Ok(Self { root })
     }
@@ -350,18 +389,56 @@ impl FileAgentKeyStore {
     }
 }
 
-fn key_root_parent_chain(root: &Path) -> Vec<PathBuf> {
-    let mut parents = Vec::new();
-    let mut current = root.parent();
-    while let Some(parent) = current {
-        if parent.as_os_str().is_empty() {
-            parents.push(PathBuf::from("."));
-            break;
+fn missing_key_root_directories(root: &Path) -> Result<Vec<PathBuf>, AgentIdentityError> {
+    let mut missing = Vec::new();
+    let mut current = root.to_path_buf();
+    loop {
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_dir() => return Ok(missing),
+            Ok(_) => {
+                return Err(AgentIdentityError::CreateDir {
+                    path: current,
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "key-store path component is not a directory",
+                    ),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(current.clone());
+                current =
+                    normalized_parent(&current).ok_or_else(|| AgentIdentityError::CreateDir {
+                        path: root.to_path_buf(),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "key-store path has no existing directory anchor",
+                        ),
+                    })?;
+            }
+            Err(source) => {
+                return Err(AgentIdentityError::CreateDir {
+                    path: current,
+                    source,
+                });
+            }
         }
-        parents.push(parent.to_path_buf());
-        current = parent.parent();
     }
-    parents
+}
+
+fn normalized_parent(path: &Path) -> Option<PathBuf> {
+    path.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            parent.to_path_buf()
+        }
+    })
+}
+
+fn best_effort_remove_empty_key_directories(created_shallow_to_deep: &[PathBuf]) {
+    for directory in created_shallow_to_deep.iter().rev() {
+        let _ = fs::remove_dir(directory);
+    }
 }
 
 pub struct FileAgentIdentityRegistry {
@@ -708,7 +785,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use rand_core::OsRng;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use swarm_core::agent::AgentRole;
     use swarm_core::config::IdentityConfig;
 
@@ -753,9 +830,18 @@ mod tests {
             error,
             super::AgentIdentityError::SyncKeyRootParent { .. }
         ));
-        assert!(root.is_dir(), "create_dir_all completed before sync failed");
+        assert!(
+            !root.exists(),
+            "failed durability must remove only the newly created empty root"
+        );
 
-        let store = FileAgentKeyStore::open(&root).unwrap();
+        let retry_attempt = std::cell::RefCell::new(Vec::new());
+        let store = FileAgentKeyStore::open_with_parent_sync(&root, |synced| {
+            retry_attempt.borrow_mut().push(synced.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(retry_attempt.into_inner(), vec![parent]);
         let (created, created_status) = store
             .load_or_create_with_status(AgentRole::Tom, "primary")
             .unwrap();
@@ -772,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn key_store_open_syncs_every_ancestor_of_a_nested_new_root() {
+    fn key_store_open_syncs_only_the_new_ancestor_chain() {
         let anchor = temp_root("open-nested-parent-sync");
         let first = anchor.join("first");
         let second = first.join("second");
@@ -800,7 +886,11 @@ mod tests {
             failed_attempt.into_inner(),
             vec![second.clone(), first.clone()]
         );
-        assert!(root.is_dir(), "create_dir_all completed before sync failed");
+        assert!(anchor.is_dir());
+        assert!(
+            !first.exists(),
+            "failed durability removes the newly created empty chain for retry"
+        );
 
         let retry_attempt = std::cell::RefCell::new(Vec::new());
         let store = FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
@@ -809,14 +899,10 @@ mod tests {
         })
         .unwrap();
         let retry_attempt = retry_attempt.into_inner();
-        let expected_retry = second
-            .ancestors()
-            .map(Path::to_path_buf)
-            .collect::<Vec<_>>();
-        assert_eq!(retry_attempt, expected_retry);
         assert_eq!(
-            retry_attempt.get(..3),
-            Some([second, first, anchor].as_slice())
+            retry_attempt,
+            vec![second, first, anchor],
+            "only parents anchoring newly created directory entries are synced"
         );
 
         let (created, created_status) = store
@@ -829,6 +915,23 @@ mod tests {
         assert_eq!(created_status, AgentKeyLoadStatus::Created);
         assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
         assert_eq!(created.id, loaded.id);
+    }
+
+    #[test]
+    fn key_store_open_syncs_no_ancestors_for_an_existing_root() {
+        let root = temp_root("open-existing-root-no-sync");
+        let sync_attempts = std::cell::RefCell::new(Vec::new());
+        let store = FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            sync_attempts.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(sync_attempts.into_inner().is_empty());
+
+        let (_, status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(status, AgentKeyLoadStatus::Created);
     }
 
     #[test]

@@ -1990,6 +1990,7 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    drop(resume);
 
     let consumed_reload = Arc::new(GovernancePolicy::with_persistence(
         GovernancePolicyConfig::default(),

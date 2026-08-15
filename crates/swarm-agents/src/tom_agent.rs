@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,6 +45,9 @@ const MAX_AUTHORIZATION_FUTURE_SKEW_MS: i64 = 30_000;
 const GOVERNANCE_STATE_KIND: &str = "swarm.governance.policy-state.v1";
 const GOVERNANCE_CHECKPOINT_KIND: &str = "swarm.governance.policy-checkpoint.v1";
 const GOVERNANCE_STATE_STREAM: &str = "tom-primary";
+const GOVERNANCE_LOCK_RECORD_SCHEMA_VERSION: u32 = 1;
+const GOVERNANCE_LOCK_GENERATION_BYTES: usize = 32;
+const MAX_GOVERNANCE_LOCK_RECORD_BYTES: u64 = 4_096;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContingencyLease {
@@ -539,12 +543,70 @@ impl Default for GovernancePolicyConfig {
 struct GovernancePersistence {
     path: PathBuf,
     sequence_path: PathBuf,
-    _lock_path: PathBuf,
+    lock_path: PathBuf,
+    lock_binding: GovernanceLockBinding,
     expected_signer_agent_id: AgentId,
     /// Exclusive OS advisory lock held for the full policy lifetime. The lock
     /// file may remain after exit; ownership comes only from this live handle,
     /// never from file existence.
-    _lock_file: fs::File,
+    lock_file: fs::File,
+    #[cfg(test)]
+    test_pre_write_barrier: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GovernanceLockIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(not(unix))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GovernanceLockIdentity;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GovernanceLockBinding {
+    device: u64,
+    inode: u64,
+    generation_id: String,
+}
+
+impl GovernanceLockBinding {
+    fn unbound() -> Self {
+        Self {
+            device: 0,
+            inode: 0,
+            generation_id: String::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn identity(&self) -> GovernanceLockIdentity {
+        GovernanceLockIdentity {
+            device: self.device,
+            inode: self.inode,
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn identity(&self) -> GovernanceLockIdentity {
+        GovernanceLockIdentity
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GovernanceLockRecord {
+    schema_version: u32,
+    generation_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GovernanceLockOpenMode {
+    Existing,
+    Initialize,
+    Reinitialize,
 }
 
 #[derive(Debug)]
@@ -575,6 +637,7 @@ struct GovernanceCheckpointLag {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedGovernanceState {
+    lock_binding: GovernanceLockBinding,
     governing_agent_id: Option<AgentId>,
     /// Display identity to consensus identity bindings used by health quorum
     /// accounting. These are signed state because losing the mapping can turn a
@@ -613,6 +676,7 @@ struct PersistedGovernanceState {
 impl Default for PersistedGovernanceState {
     fn default() -> Self {
         Self {
+            lock_binding: GovernanceLockBinding::unbound(),
             governing_agent_id: None,
             display_governors: BTreeMap::new(),
             peer_governors: BTreeSet::new(),
@@ -637,6 +701,7 @@ impl Default for PersistedGovernanceState {
 impl PersistedGovernanceState {
     fn from_runtime(state: &GovernanceState) -> Self {
         Self {
+            lock_binding: GovernanceLockBinding::unbound(),
             governing_agent_id: state.governing_agent_id.clone(),
             display_governors: state.display_governors.clone(),
             peer_governors: state.peer_governors.clone(),
@@ -681,6 +746,7 @@ impl PersistedGovernanceState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct GovernanceSequenceCheckpoint {
     accepted_sequence: u64,
+    lock_binding: GovernanceLockBinding,
 }
 
 #[derive(Debug)]
@@ -705,6 +771,60 @@ pub enum GovernancePersistenceError {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("failed to inspect governance state lock `{path}`: {source}")]
+    InspectLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("governance state lock `{path}` must be a regular non-symlink file")]
+    InvalidLockFileType { path: PathBuf },
+
+    #[error("governance state lock is missing at `{path}`; refusing implicit replacement")]
+    MissingLock { path: PathBuf },
+
+    #[error("governance state lock record `{path}` is invalid: {reason}")]
+    InvalidLockRecord { path: PathBuf, reason: String },
+
+    #[error("failed to read governance state lock record `{path}`: {source}")]
+    ReadLockRecord {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to persist governance state lock record `{path}`: {source}")]
+    WriteLockRecord {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "governance state lock path identity changed for `{path}`: held {expected}, observed {observed}; refusing persistence"
+    )]
+    LockIdentityChanged {
+        path: PathBuf,
+        expected: String,
+        observed: String,
+    },
+
+    #[error(
+        "signed {artifact} lock binding does not match the externally held governance lock `{path}`: expected {expected}, observed {observed}"
+    )]
+    LockBindingMismatch {
+        path: PathBuf,
+        artifact: &'static str,
+        expected: String,
+        observed: String,
+    },
+
+    #[error(
+        "governance state persistence is unavailable on `{platform}` because secure lock-file identity checks are unsupported"
+    )]
+    UnsupportedLockIdentityPlatform { platform: &'static str },
 
     #[error("governance state lock `{path}` is held by another process")]
     StateLocked { path: PathBuf },
@@ -803,29 +923,404 @@ pub enum GovernancePersistenceError {
     ReinitializationFailed { reason: String },
 }
 
+fn ensure_lock_identity_supported() -> Result<(), GovernancePersistenceError> {
+    #[cfg(unix)]
+    {
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        Err(
+            GovernancePersistenceError::UnsupportedLockIdentityPlatform {
+                platform: std::env::consts::OS,
+            },
+        )
+    }
+}
+
+fn preflight_governance_lock_path(
+    path: &Path,
+    allow_missing: bool,
+) -> Result<(), GovernancePersistenceError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(()),
+        Ok(_) => Err(GovernancePersistenceError::InvalidLockFileType {
+            path: path.to_path_buf(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && allow_missing => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(GovernancePersistenceError::MissingLock {
+                path: path.to_path_buf(),
+            })
+        }
+        Err(source) => Err(GovernancePersistenceError::InspectLock {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn governance_lock_identity(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<GovernanceLockIdentity, GovernancePersistenceError> {
+    if !metadata.file_type().is_file() {
+        return Err(GovernancePersistenceError::InvalidLockFileType {
+            path: path.to_path_buf(),
+        });
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(GovernanceLockIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        Err(
+            GovernancePersistenceError::UnsupportedLockIdentityPlatform {
+                platform: std::env::consts::OS,
+            },
+        )
+    }
+}
+
+fn governance_lock_identity_description(identity: GovernanceLockIdentity) -> String {
+    #[cfg(unix)]
+    {
+        format!("device {}, inode {}", identity.device, identity.inode)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = identity;
+        "unsupported platform identity".to_string()
+    }
+}
+
+fn governance_lock_binding_description(binding: &GovernanceLockBinding) -> String {
+    format!(
+        "device {}, inode {}, generation {}",
+        binding.device, binding.inode, binding.generation_id
+    )
+}
+
+fn new_governance_lock_record() -> GovernanceLockRecord {
+    let mut generation = [0_u8; GOVERNANCE_LOCK_GENERATION_BYTES];
+    OsRng.fill_bytes(&mut generation);
+    GovernanceLockRecord {
+        schema_version: GOVERNANCE_LOCK_RECORD_SCHEMA_VERSION,
+        generation_id: hex::encode(generation),
+    }
+}
+
+#[cfg(unix)]
+fn read_governance_lock_record(
+    path: &Path,
+    lock_file: &fs::File,
+) -> Result<GovernanceLockRecord, GovernancePersistenceError> {
+    use std::os::unix::fs::FileExt;
+
+    let length = lock_file
+        .metadata()
+        .map_err(|source| GovernancePersistenceError::ReadLockRecord {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    if length == 0 || length > MAX_GOVERNANCE_LOCK_RECORD_BYTES {
+        return Err(GovernancePersistenceError::InvalidLockRecord {
+            path: path.to_path_buf(),
+            reason: format!(
+                "record length {length} is outside 1..={MAX_GOVERNANCE_LOCK_RECORD_BYTES} bytes"
+            ),
+        });
+    }
+    let mut bytes = vec![0_u8; length as usize];
+    let mut offset = 0_usize;
+    while offset < bytes.len() {
+        let read = lock_file
+            .read_at(&mut bytes[offset..], offset as u64)
+            .map_err(|source| GovernancePersistenceError::ReadLockRecord {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if read == 0 {
+            return Err(GovernancePersistenceError::InvalidLockRecord {
+                path: path.to_path_buf(),
+                reason: "record ended before its reported file length".to_string(),
+            });
+        }
+        offset += read;
+    }
+    let record: GovernanceLockRecord = serde_json::from_slice(&bytes).map_err(|error| {
+        GovernancePersistenceError::InvalidLockRecord {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        }
+    })?;
+    if record.schema_version != GOVERNANCE_LOCK_RECORD_SCHEMA_VERSION {
+        return Err(GovernancePersistenceError::InvalidLockRecord {
+            path: path.to_path_buf(),
+            reason: format!("unsupported schema version {}", record.schema_version),
+        });
+    }
+    let decoded = hex::decode(&record.generation_id).map_err(|error| {
+        GovernancePersistenceError::InvalidLockRecord {
+            path: path.to_path_buf(),
+            reason: format!("generation ID is not hexadecimal: {error}"),
+        }
+    })?;
+    if decoded.len() != GOVERNANCE_LOCK_GENERATION_BYTES {
+        return Err(GovernancePersistenceError::InvalidLockRecord {
+            path: path.to_path_buf(),
+            reason: format!(
+                "generation ID is {} bytes, expected {GOVERNANCE_LOCK_GENERATION_BYTES}",
+                decoded.len()
+            ),
+        });
+    }
+    Ok(record)
+}
+
+#[cfg(not(unix))]
+fn read_governance_lock_record(
+    path: &Path,
+    _lock_file: &fs::File,
+) -> Result<GovernanceLockRecord, GovernancePersistenceError> {
+    Err(
+        GovernancePersistenceError::UnsupportedLockIdentityPlatform {
+            platform: std::env::consts::OS,
+        },
+    )
+}
+
+fn write_governance_lock_record(
+    path: &Path,
+    lock_file: &mut fs::File,
+    record: &GovernanceLockRecord,
+    sync_parent: bool,
+) -> Result<(), GovernancePersistenceError> {
+    let bytes = serde_json::to_vec(record).map_err(|error| {
+        GovernancePersistenceError::InvalidLockRecord {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        }
+    })?;
+    lock_file
+        .set_len(0)
+        .and_then(|()| lock_file.seek(SeekFrom::Start(0)).map(|_| ()))
+        .and_then(|()| lock_file.write_all(&bytes))
+        .and_then(|()| lock_file.sync_all())
+        .map_err(|source| GovernancePersistenceError::WriteLockRecord {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if sync_parent {
+        sync_governance_lock_parent(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_GOVERNANCE_LOCK_PARENT_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn fail_next_governance_lock_parent_sync() {
+    FAIL_NEXT_GOVERNANCE_LOCK_PARENT_SYNC.with(|flag| flag.set(true));
+}
+
+fn sync_governance_lock_parent(path: &Path) -> Result<(), GovernancePersistenceError> {
+    #[cfg(test)]
+    if FAIL_NEXT_GOVERNANCE_LOCK_PARENT_SYNC.with(|flag| flag.replace(false)) {
+        return Err(GovernancePersistenceError::WriteLockRecord {
+            path: path.to_path_buf(),
+            source: std::io::Error::other("injected governance lock parent sync failure"),
+        });
+    }
+    sync_parent_directory(path).map_err(|error| GovernancePersistenceError::WriteLockRecord {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(error.to_string()),
+    })
+}
+
+fn governance_lock_binding(
+    identity: GovernanceLockIdentity,
+    record: GovernanceLockRecord,
+) -> GovernanceLockBinding {
+    #[cfg(unix)]
+    {
+        GovernanceLockBinding {
+            device: identity.device,
+            inode: identity.inode,
+            generation_id: record.generation_id,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (identity, record);
+        GovernanceLockBinding::unbound()
+    }
+}
+
+fn lock_identity_changed(
+    path: &Path,
+    expected: GovernanceLockIdentity,
+    observed: String,
+) -> GovernancePersistenceError {
+    GovernancePersistenceError::LockIdentityChanged {
+        path: path.to_path_buf(),
+        expected: governance_lock_identity_description(expected),
+        observed,
+    }
+}
+
+fn verify_governance_lock_path(
+    path: &Path,
+    lock_file: &fs::File,
+    expected: &GovernanceLockBinding,
+) -> Result<(), GovernancePersistenceError> {
+    let expected_identity = expected.identity();
+    let held_metadata =
+        lock_file
+            .metadata()
+            .map_err(|source| GovernancePersistenceError::InspectLock {
+                path: path.to_path_buf(),
+                source,
+            })?;
+    let held = governance_lock_identity(path, &held_metadata)?;
+    if held != expected_identity {
+        return Err(lock_identity_changed(
+            path,
+            expected_identity,
+            governance_lock_identity_description(held),
+        ));
+    }
+
+    let named_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(lock_identity_changed(
+                path,
+                expected_identity,
+                "missing".to_string(),
+            ));
+        }
+        Err(source) => {
+            return Err(GovernancePersistenceError::InspectLock {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if !named_metadata.file_type().is_file() {
+        return Err(lock_identity_changed(
+            path,
+            expected_identity,
+            "nonregular or symlink".to_string(),
+        ));
+    }
+    let named = governance_lock_identity(path, &named_metadata)?;
+    if named != expected_identity {
+        return Err(lock_identity_changed(
+            path,
+            expected_identity,
+            governance_lock_identity_description(named),
+        ));
+    }
+    let record = read_governance_lock_record(path, lock_file)?;
+    if record.generation_id != expected.generation_id {
+        return Err(GovernancePersistenceError::LockBindingMismatch {
+            path: path.to_path_buf(),
+            artifact: "held lock record",
+            expected: governance_lock_binding_description(expected),
+            observed: governance_lock_binding_description(&governance_lock_binding(held, record)),
+        });
+    }
+    Ok(())
+}
+
 impl GovernancePersistence {
     fn new(
         path: PathBuf,
         expected_signer_agent_id: AgentId,
+        open_mode: GovernanceLockOpenMode,
     ) -> Result<Self, GovernancePersistenceError> {
+        ensure_lock_identity_supported()?;
         let sequence_path = path.with_extension("sequence.json");
         let lock_path = path.with_extension("lock");
-        if let Some(parent) = lock_path.parent() {
+        if open_mode == GovernanceLockOpenMode::Initialize
+            && let Some(parent) = lock_path.parent()
+        {
             fs::create_dir_all(parent).map_err(|source| GovernancePersistenceError::OpenLock {
                 path: lock_path.clone(),
                 source,
             })?;
         }
-        let lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|source| GovernancePersistenceError::OpenLock {
-                path: lock_path.clone(),
-                source,
+        preflight_governance_lock_path(
+            &lock_path,
+            open_mode == GovernanceLockOpenMode::Initialize,
+        )?;
+        let mut existing_options = OpenOptions::new();
+        existing_options.read(true).write(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            existing_options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let (mut lock_file, created) = if open_mode == GovernanceLockOpenMode::Initialize {
+            let mut create_options = OpenOptions::new();
+            create_options
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .truncate(false);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                create_options
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            }
+            match create_options.open(&lock_path) {
+                Ok(file) => (file, true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+                    existing_options.open(&lock_path).map_err(|source| {
+                        GovernancePersistenceError::OpenLock {
+                            path: lock_path.clone(),
+                            source,
+                        }
+                    })?,
+                    false,
+                ),
+                Err(source) => {
+                    return Err(GovernancePersistenceError::OpenLock {
+                        path: lock_path.clone(),
+                        source,
+                    });
+                }
+            }
+        } else {
+            let file = existing_options.open(&lock_path).map_err(|source| {
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    GovernancePersistenceError::MissingLock {
+                        path: lock_path.clone(),
+                    }
+                } else {
+                    GovernancePersistenceError::OpenLock {
+                        path: lock_path.clone(),
+                        source,
+                    }
+                }
             })?;
+            (file, false)
+        };
         match lock_file.try_lock() {
             Ok(()) => {}
             Err(fs::TryLockError::WouldBlock) => {
@@ -833,17 +1328,58 @@ impl GovernancePersistence {
             }
             Err(fs::TryLockError::Error(source)) => {
                 return Err(GovernancePersistenceError::LockState {
-                    path: lock_path,
+                    path: lock_path.clone(),
                     source,
                 });
             }
         }
+        let lock_metadata =
+            lock_file
+                .metadata()
+                .map_err(|source| GovernancePersistenceError::InspectLock {
+                    path: lock_path.clone(),
+                    source,
+                })?;
+        let lock_identity = governance_lock_identity(&lock_path, &lock_metadata)?;
+        let lock_record = if created {
+            let record = new_governance_lock_record();
+            write_governance_lock_record(&lock_path, &mut lock_file, &record, true)?;
+            record
+        } else {
+            match read_governance_lock_record(&lock_path, &lock_file) {
+                Ok(record) => record,
+                Err(GovernancePersistenceError::InvalidLockRecord { .. })
+                    if open_mode == GovernanceLockOpenMode::Reinitialize =>
+                {
+                    let record = new_governance_lock_record();
+                    write_governance_lock_record(&lock_path, &mut lock_file, &record, false)?;
+                    record
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        if !created
+            && open_mode == GovernanceLockOpenMode::Initialize
+            && !path.exists()
+            && !sequence_path.exists()
+        {
+            // A prior fresh initialization may have created and fsynced the
+            // record but failed syncing its parent. Rewriting the exact valid
+            // record and syncing the parent makes that durable before either
+            // signed anchor is created; it never rotates the generation.
+            write_governance_lock_record(&lock_path, &mut lock_file, &lock_record, true)?;
+        }
+        let lock_binding = governance_lock_binding(lock_identity, lock_record);
+        verify_governance_lock_path(&lock_path, &lock_file, &lock_binding)?;
         Ok(Self {
             path,
             sequence_path,
-            _lock_path: lock_path,
+            lock_path,
+            lock_binding,
             expected_signer_agent_id,
-            _lock_file: lock_file,
+            lock_file,
+            #[cfg(test)]
+            test_pre_write_barrier: Mutex::new(None),
         })
     }
 
@@ -852,10 +1388,41 @@ impl GovernancePersistence {
         Ok(Self {
             path: self.path.clone(),
             sequence_path: self.sequence_path.clone(),
-            _lock_path: self._lock_path.clone(),
+            lock_path: self.lock_path.clone(),
+            lock_binding: self.lock_binding.clone(),
             expected_signer_agent_id: self.expected_signer_agent_id.clone(),
-            _lock_file: self._lock_file.try_clone()?,
+            lock_file: self.lock_file.try_clone()?,
+            test_pre_write_barrier: Mutex::new(None),
         })
+    }
+
+    #[cfg(test)]
+    fn install_pre_write_barrier(&self) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+        let reached = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        *self
+            .test_pre_write_barrier
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((Arc::clone(&reached), Arc::clone(&resume)));
+        (reached, resume)
+    }
+
+    #[cfg(test)]
+    fn pause_after_pre_write_verification(&self) {
+        let barrier = self
+            .test_pre_write_barrier
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some((reached, resume)) = barrier {
+            reached.wait();
+            resume.wait();
+        }
+    }
+
+    fn verify_lock_path(&self) -> Result<(), GovernancePersistenceError> {
+        verify_governance_lock_path(&self.lock_path, &self.lock_file, &self.lock_binding)
     }
 
     fn load(
@@ -877,6 +1444,7 @@ impl GovernancePersistence {
         local: &LocalGovernorKey,
         repair_checkpoint: bool,
     ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
+        self.verify_lock_path()?;
         if !self.path.exists() {
             return Err(GovernancePersistenceError::MissingState {
                 path: self.path.clone(),
@@ -934,6 +1502,7 @@ impl GovernancePersistence {
                 observed: checkpoint.schema_version,
             });
         }
+        self.validate_signed_lock_binding(&checkpoint.payload.lock_binding, "checkpoint")?;
         self.validate_checkpoint(&checkpoint.payload, checkpoint.sequence)?;
 
         let verified = envelope.verify(SignedStateExpectation {
@@ -947,12 +1516,14 @@ impl GovernancePersistence {
                 observed: verified.schema_version,
             });
         }
+        self.validate_signed_lock_binding(&verified.payload.lock_binding, "state")?;
         if repair_checkpoint && checkpoint.payload.accepted_sequence < verified.sequence {
             // State is committed before its high-water checkpoint. A crash in
             // that narrow window leaves a fully signed newer envelope, which is
             // safe to accept and use to repair the lagging checkpoint.
             self.write_checkpoint(verified.sequence, local)?;
         }
+        self.verify_lock_path()?;
         Ok(LoadedGovernanceState {
             payload: verified.payload,
             sequence: verified.sequence,
@@ -965,6 +1536,7 @@ impl GovernancePersistence {
         &self,
         state: &GovernanceState,
     ) -> Result<GovernanceStateVersion, GovernancePersistenceError> {
+        self.verify_lock_path()?;
         if self.path.exists() || self.sequence_path.exists() {
             return Err(GovernancePersistenceError::AlreadyInitialized {
                 state_path: self.path.clone(),
@@ -1041,8 +1613,9 @@ impl GovernancePersistence {
                 },
             ));
         }
-        let envelope =
-            local.sign_persisted_state(sequence, PersistedGovernanceState::from_runtime(state))?;
+        let mut persisted = PersistedGovernanceState::from_runtime(state);
+        persisted.lock_binding = self.lock_binding.clone();
+        let envelope = local.sign_persisted_state(sequence, persisted)?;
         let digest = signed_governance_envelope_digest(&envelope, &self.path)?;
         let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
             GovernancePersistenceError::ParseState {
@@ -1050,11 +1623,15 @@ impl GovernancePersistence {
                 source,
             }
         })?;
+        self.verify_lock_path()?;
+        #[cfg(test)]
+        self.pause_after_pre_write_verification();
         let state_directory_sync_error = match write_atomic_synced(&self.path, &bytes)? {
             AtomicWriteOutcome::Synced => None,
             AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Some(error.to_string()),
         };
-        let outcome = match self.write_checkpoint(sequence, local) {
+        let lock_after_state = self.verify_lock_path();
+        let outcome = match lock_after_state.and_then(|()| self.write_checkpoint(sequence, local)) {
             Ok(()) => GovernancePersistenceOutcome::Committed,
             Err(error) => GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
                 sequence,
@@ -1086,12 +1663,16 @@ impl GovernancePersistence {
                     path: self.path.clone(),
                     source,
                 }
-            })? != serde_json::to_value(PersistedGovernanceState::from_runtime(state)).map_err(
-                |source| GovernancePersistenceError::ParseState {
-                    path: self.path.clone(),
-                    source,
-                },
-            )?
+            })? != {
+                let mut persisted = PersistedGovernanceState::from_runtime(state);
+                persisted.lock_binding = self.lock_binding.clone();
+                serde_json::to_value(persisted).map_err(|source| {
+                    GovernancePersistenceError::ParseState {
+                        path: self.path.clone(),
+                        source,
+                    }
+                })?
+            }
         {
             return Err(GovernancePersistenceError::InvalidSequence {
                 path: self.path.clone(),
@@ -1109,7 +1690,7 @@ impl GovernancePersistence {
     }
 
     fn rollback_incomplete_initialization(&self) -> Result<(), GovernancePersistenceError> {
-        remove_governance_stream_files(&self.path, &self.sequence_path)
+        remove_governance_stream_files(self, &self.path, &self.sequence_path)
     }
 
     fn validate_checkpoint(
@@ -1129,13 +1710,31 @@ impl GovernancePersistence {
         Ok(())
     }
 
+    fn validate_signed_lock_binding(
+        &self,
+        observed: &GovernanceLockBinding,
+        artifact: &'static str,
+    ) -> Result<(), GovernancePersistenceError> {
+        if observed != &self.lock_binding {
+            return Err(GovernancePersistenceError::LockBindingMismatch {
+                path: self.lock_path.clone(),
+                artifact,
+                expected: governance_lock_binding_description(&self.lock_binding),
+                observed: governance_lock_binding_description(observed),
+            });
+        }
+        Ok(())
+    }
+
     fn write_checkpoint(
         &self,
         sequence: u64,
         local: &LocalGovernorKey,
     ) -> Result<(), GovernancePersistenceError> {
+        self.verify_lock_path()?;
         let checkpoint = GovernanceSequenceCheckpoint {
             accepted_sequence: sequence,
+            lock_binding: self.lock_binding.clone(),
         };
         let envelope = local.sign_checkpoint(sequence, checkpoint)?;
         let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
@@ -1144,7 +1743,9 @@ impl GovernancePersistence {
                 source,
             }
         })?;
-        match write_atomic_synced(&self.sequence_path, &bytes)? {
+        let outcome = write_atomic_synced(&self.sequence_path, &bytes)?;
+        self.verify_lock_path()?;
+        match outcome {
             AtomicWriteOutcome::Synced => Ok(()),
             AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Err(error),
         }
@@ -1239,10 +1840,12 @@ fn write_atomic_synced(
 }
 
 fn remove_governance_stream_files(
+    persistence: &GovernancePersistence,
     state_path: &Path,
     sequence_path: &Path,
 ) -> Result<(), GovernancePersistenceError> {
     for path in [state_path, sequence_path] {
+        persistence.verify_lock_path()?;
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1253,6 +1856,7 @@ fn remove_governance_stream_files(
                 });
             }
         }
+        persistence.verify_lock_path()?;
     }
     if let Some(parent) = state_path.parent() {
         fs::File::open(parent)
@@ -1266,16 +1870,19 @@ fn remove_governance_stream_files(
 }
 
 fn restore_governance_archives(
+    persistence: &GovernancePersistence,
     archived: &[(PathBuf, PathBuf)],
 ) -> Result<(), GovernancePersistenceError> {
     for (original, archive) in archived.iter().rev() {
         if !archive.exists() {
             continue;
         }
+        persistence.verify_lock_path()?;
         fs::rename(archive, original).map_err(|source| GovernancePersistenceError::Write {
             path: original.clone(),
             source,
         })?;
+        persistence.verify_lock_path()?;
     }
     if let Some((original, _)) = archived.first() {
         sync_parent_directory(original)?;
@@ -1343,6 +1950,7 @@ impl GovernancePolicy {
         let persistence = GovernancePersistence::new(
             path.as_ref().to_path_buf(),
             local_governor.consensus_agent_id().clone(),
+            GovernanceLockOpenMode::Existing,
         )?;
         Self::with_locked_persistence(config, persistence, governing_agent_id, local_governor)
     }
@@ -1416,6 +2024,7 @@ impl GovernancePolicy {
         let persistence = GovernancePersistence::new(
             path.as_ref().to_path_buf(),
             local_governor.consensus_agent_id().clone(),
+            GovernanceLockOpenMode::Initialize,
         )?;
         let mut display_governors = BTreeMap::new();
         display_governors.insert(
@@ -1468,8 +2077,11 @@ impl GovernancePolicy {
         suffix: &str,
     ) -> Result<Self, GovernancePersistenceError> {
         let local_governor = LocalGovernorKey::new(signing_key);
-        let persistence =
-            GovernancePersistence::new(path.clone(), local_governor.consensus_agent_id().clone())?;
+        let persistence = GovernancePersistence::new(
+            path.clone(),
+            local_governor.consensus_agent_id().clone(),
+            GovernanceLockOpenMode::Reinitialize,
+        )?;
         let sequence_path = path.with_extension("sequence.json");
         let mut archived: Vec<(PathBuf, PathBuf)> = Vec::new();
         for existing in [&path, &sequence_path] {
@@ -1482,8 +2094,9 @@ impl GovernancePolicy {
                         .unwrap_or("state"),
                     suffix
                 ));
+                persistence.verify_lock_path()?;
                 if let Err(source) = fs::rename(existing, &archive) {
-                    let rollback = restore_governance_archives(&archived);
+                    let rollback = restore_governance_archives(&persistence, &archived);
                     return Err(GovernancePersistenceError::ReinitializationFailed {
                         reason: match rollback {
                             Ok(()) => format!(
@@ -1500,22 +2113,25 @@ impl GovernancePolicy {
                     });
                 }
                 archived.push((existing.to_path_buf(), archive));
+                persistence.verify_lock_path()?;
             }
         }
-        if !archived.is_empty()
-            && let Err(sync_error) = sync_parent_directory(&path)
-        {
-            let rollback_error = restore_governance_archives(&archived).err();
-            return Err(GovernancePersistenceError::ReinitializationFailed {
-                reason: format!(
-                    "archived prior files but could not sync the archive directory: {sync_error}{}",
-                    rollback_error
-                        .map(|rollback_error| format!(
-                            "; prior-state restore also failed: {rollback_error}"
-                        ))
-                        .unwrap_or_default()
-                ),
-            });
+        if !archived.is_empty() {
+            persistence.verify_lock_path()?;
+            if let Err(sync_error) = sync_parent_directory(&path) {
+                let rollback_error = restore_governance_archives(&persistence, &archived).err();
+                return Err(GovernancePersistenceError::ReinitializationFailed {
+                    reason: format!(
+                        "archived prior files but could not sync the archive directory: {sync_error}{}",
+                        rollback_error
+                            .map(|rollback_error| format!(
+                                "; prior-state restore also failed: {rollback_error}"
+                            ))
+                            .unwrap_or_default()
+                    ),
+                });
+            }
+            persistence.verify_lock_path()?;
         }
         let mut display_governors = BTreeMap::new();
         display_governors.insert(
@@ -1540,8 +2156,9 @@ impl GovernancePolicy {
                 })
             }
             Err(error) => {
-                let cleanup_error = remove_governance_stream_files(&path, &sequence_path).err();
-                let rollback_error = restore_governance_archives(&archived).err();
+                let cleanup_error =
+                    remove_governance_stream_files(&persistence, &path, &sequence_path).err();
+                let rollback_error = restore_governance_archives(&persistence, &archived).err();
                 Err(GovernancePersistenceError::ReinitializationFailed {
                     reason: format!(
                         "new signed stream initialization failed: {error}{}{}",
@@ -3463,10 +4080,10 @@ fn governance_runtime_event_record(event: GovernanceRuntimeEvent) -> GovernanceR
 mod tests {
     use super::{
         ConsumedGovernanceAuthorization, GOVERNANCE_CHECKPOINT_KIND, GOVERNANCE_STATE_KIND,
-        GOVERNANCE_STATE_STREAM, GovernanceDecision, GovernancePersistenceError, GovernancePolicy,
-        GovernancePolicyConfig, GovernanceRuntimeEvent, GovernanceSequenceCheckpoint,
-        LocalGovernorKey, PartitionState, PendingGovernanceAuthorization, PersistedGovernanceState,
-        TomAgent,
+        GOVERNANCE_STATE_STREAM, GovernanceDecision, GovernanceLockRecord,
+        GovernancePersistenceError, GovernancePolicy, GovernancePolicyConfig,
+        GovernanceRuntimeEvent, GovernanceSequenceCheckpoint, LocalGovernorKey, PartitionState,
+        PendingGovernanceAuthorization, PersistedGovernanceState, TomAgent,
     };
     use ed25519_dalek::SigningKey;
     use serde_json::json;
@@ -3478,7 +4095,12 @@ mod tests {
     };
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
     use swarm_core::{SignedStateEnvelope, SignedStateExpectation};
+    use swarm_crypto::Ed25519Signer;
     use swarm_policy::ActionRequest;
+    use swarm_runtime::approval::{
+        DefaultApprovalHarness, ThresholdRule, approval_set_digest, build_receipt_pack,
+        evaluate_verdict, verify_governed_human_receipt_pack,
+    };
 
     fn persistence_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -3591,6 +4213,17 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn replace_lock_with_copied_record(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let lock_path = GovernancePolicy::persistence_lock_path(path);
+        let record = fs::read(&lock_path).unwrap();
+        fs::remove_file(&lock_path).unwrap();
+        fs::write(&lock_path, record).unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     fn block_atomic_write(path: &Path) -> PathBuf {
         let blocker = path.with_extension(format!(
             "{}.tmp-{}",
@@ -3652,6 +4285,161 @@ mod tests {
                 .into_iter()
                 .collect()
         );
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_lock_record_is_0600_durable_metadata_signed_by_both_anchors() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let path = persistence_path("fresh-lock-binding");
+        let key = SigningKey::from_bytes(&[142; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let lock_path = GovernancePolicy::persistence_lock_path(&path);
+        let lock_metadata = fs::symlink_metadata(&lock_path).unwrap();
+        assert!(lock_metadata.file_type().is_file());
+        assert_eq!(lock_metadata.permissions().mode() & 0o777, 0o600);
+        let record: GovernanceLockRecord =
+            serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+        assert_eq!(
+            record.schema_version,
+            super::GOVERNANCE_LOCK_RECORD_SCHEMA_VERSION
+        );
+        assert_eq!(
+            hex::decode(&record.generation_id).unwrap().len(),
+            super::GOVERNANCE_LOCK_GENERATION_BYTES
+        );
+        let state: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        let checkpoint: GovernanceSequenceCheckpoint =
+            serde_json::from_str(&read_checkpoint(&path).statement.payload_json).unwrap();
+        for binding in [&state.lock_binding, &checkpoint.lock_binding] {
+            assert_eq!(binding.device, lock_metadata.dev());
+            assert_eq!(binding.inode, lock_metadata.ino());
+            assert_eq!(binding.generation_id, record.generation_id);
+        }
+        assert_eq!(state.lock_binding, checkpoint.lock_binding);
+        drop(policy);
+
+        let reloaded = load_signed_policy(&path, &key)
+            .expect("restart on the same permanent lock inode preserves the stream binding");
+        drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_load_rejects_corrupt_and_copied_lock_records() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let key = SigningKey::from_bytes(&[143; 32]);
+        let corrupt_path = persistence_path("corrupt-lock-record");
+        let corrupt = initialize_signed_policy(&corrupt_path, &key);
+        drop(corrupt);
+        fs::write(
+            GovernancePolicy::persistence_lock_path(&corrupt_path),
+            b"not a governance lock record",
+        )
+        .unwrap();
+        let Err(error) = load_signed_policy(&corrupt_path, &key) else {
+            panic!("a corrupt permanent lock record loaded an authority stream");
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::InvalidLockRecord { .. }
+        ));
+        cleanup_persistence(&corrupt_path);
+
+        let source_path = persistence_path("copied-lock-source");
+        let copied_path = persistence_path("copied-lock-target");
+        let source = initialize_signed_policy(&source_path, &key);
+        drop(source);
+        fs::copy(&source_path, &copied_path).unwrap();
+        fs::copy(
+            GovernancePolicy::persistence_sequence_path(&source_path),
+            GovernancePolicy::persistence_sequence_path(&copied_path),
+        )
+        .unwrap();
+        let copied_lock = GovernancePolicy::persistence_lock_path(&copied_path);
+        fs::copy(
+            GovernancePolicy::persistence_lock_path(&source_path),
+            &copied_lock,
+        )
+        .unwrap();
+        fs::set_permissions(&copied_lock, fs::Permissions::from_mode(0o600)).unwrap();
+        let Err(error) = load_signed_policy(&copied_path, &key) else {
+            panic!("a copied stream loaded on a different lock inode");
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::LockBindingMismatch { .. }
+        ));
+        cleanup_persistence(&source_path);
+        cleanup_persistence(&copied_path);
+    }
+
+    #[test]
+    fn signed_payloads_without_the_permanent_lock_binding_fail_closed() {
+        let path = persistence_path("missing-signed-lock-binding");
+        let key = SigningKey::from_bytes(&[144; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let signer = AgentId::from_verifying_key(&key.verifying_key());
+        let original_state = read_envelope(&path);
+        let mut state_payload: serde_json::Value =
+            serde_json::from_str(&original_state.statement.payload_json).unwrap();
+        state_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("lock_binding");
+        let legacy_state = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            signer.clone(),
+            original_state.sequence(),
+            state_payload,
+            &key,
+        )
+        .unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&legacy_state).unwrap()).unwrap();
+        let error = load_signed_policy(&path, &key)
+            .expect_err("a trusted old payload without lock binding must not load");
+        assert!(error.to_string().contains("lock_binding"), "{error}");
+        write_envelope(&path, &original_state);
+
+        let original_checkpoint = read_checkpoint(&path);
+        let mut checkpoint_payload: serde_json::Value =
+            serde_json::from_str(&original_checkpoint.statement.payload_json).unwrap();
+        checkpoint_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("lock_binding");
+        let legacy_checkpoint = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            signer,
+            original_checkpoint.sequence(),
+            checkpoint_payload,
+            &key,
+        )
+        .unwrap();
+        fs::write(
+            GovernancePolicy::persistence_sequence_path(&path),
+            serde_json::to_vec_pretty(&legacy_checkpoint).unwrap(),
+        )
+        .unwrap();
+        let error = load_signed_policy(&path, &key)
+            .expect_err("a trusted old checkpoint without lock binding must not load");
+        assert!(error.to_string().contains("lock_binding"), "{error}");
+        let reset = GovernancePolicy::reinitialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        )
+        .expect("explicit offline reinitialization establishes the current lock binding");
+        drop(reset);
         cleanup_persistence(&path);
     }
 
@@ -4175,6 +4963,583 @@ mod tests {
         cleanup_persistence(&path);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn unlinking_the_live_lock_cannot_create_two_governance_writers() {
+        const CHILD_PATH_ENV: &str = "SWARM_TEST_GOVERNANCE_SAME_RECEIPT_CHILD_PATH";
+        const CHILD_RECEIPT_ENV: &str = "SWARM_TEST_GOVERNANCE_SAME_RECEIPT_PATH";
+        const CHILD_RESULT_ENV: &str = "SWARM_TEST_GOVERNANCE_SAME_RECEIPT_RESULT";
+        let key = SigningKey::from_bytes(&[133; 32]);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.133".to_string(),
+        });
+        if let Some(path) = std::env::var_os(CHILD_PATH_ENV) {
+            let receipt_path = PathBuf::from(std::env::var_os(CHILD_RECEIPT_ENV).unwrap());
+            let result_path = PathBuf::from(std::env::var_os(CHILD_RESULT_ENV).unwrap());
+            let result = match load_signed_policy(Path::new(&path), &key) {
+                Ok(policy) => {
+                    let receipt: serde_json::Value =
+                        serde_json::from_slice(&fs::read(receipt_path).unwrap()).unwrap();
+                    let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
+                    match policy.verify_and_consume_action_authorization(
+                        &governed_request,
+                        &receipt,
+                        issued_at_ms + 1,
+                    ) {
+                        Ok(_) => "consume_ok".to_string(),
+                        Err(error) => format!("consume_error:{error}"),
+                    }
+                }
+                Err(error) => format!("load_error:{error}"),
+            };
+            fs::write(result_path, result).unwrap();
+            return;
+        }
+
+        let path = persistence_path("unlinked-lock-second-writer");
+        let receipt_path = path.with_extension("same-receipt.json");
+        let result_path = path.with_extension("same-receipt-result");
+        let first = initialize_signed_policy(&path, &key);
+        let GovernanceDecision::Authorize { receipt, .. } = first.can_act(&governed_request) else {
+            panic!("precondition: the first owner issues a pending authorization");
+        };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        fs::write(&receipt_path, serde_json::to_vec(&receipt_value).unwrap()).unwrap();
+        let sequence_before_consume = read_envelope(&path).sequence();
+        replace_lock_with_copied_record(&path);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tom_agent::tests::unlinking_the_live_lock_cannot_create_two_governance_writers")
+            .arg("--nocapture")
+            .env(CHILD_PATH_ENV, &path)
+            .env(CHILD_RECEIPT_ENV, &receipt_path)
+            .env(CHILD_RESULT_ENV, &result_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "same-receipt child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let child_result = fs::read_to_string(&result_path).unwrap();
+        assert!(
+            child_result.starts_with("load_error:") && child_result.contains("lock binding"),
+            "replacement subprocess obtained same-receipt authority: {child_result}"
+        );
+
+        let error = first
+            .verify_and_consume_action_authorization(
+                &governed_request,
+                &receipt_value,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .expect_err("the owner of the unlinked lock inode must lose write authority");
+        assert!(error.contains("lock path identity changed"), "{error}");
+        assert_eq!(
+            read_envelope(&path).sequence(),
+            sequence_before_consume,
+            "the displaced owner must refuse before committing the consumption"
+        );
+
+        drop(first);
+        let Err(error) = load_signed_policy(&path, &key) else {
+            panic!("the pending receipt restarted on the replacement lock inode");
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::LockBindingMismatch { .. }
+        ));
+        let _ = fs::remove_file(receipt_path);
+        let _ = fs::remove_file(result_path);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_stream_load_and_reinitialize_never_recreate_a_missing_lock() {
+        let key = SigningKey::from_bytes(&[139; 32]);
+        for (label, reinitialize) in [("load", false), ("reinitialize", true)] {
+            let path = persistence_path(&format!("missing-existing-lock-{label}"));
+            let policy = initialize_signed_policy(&path, &key);
+            drop(policy);
+            let lock_path = GovernancePolicy::persistence_lock_path(&path);
+            fs::remove_file(&lock_path).unwrap();
+
+            let result = if reinitialize {
+                GovernancePolicy::reinitialize_persistence(
+                    GovernancePolicyConfig::default(),
+                    &path,
+                    AgentId::from_verifying_key(&key.verifying_key()),
+                    key.clone(),
+                )
+            } else {
+                load_signed_policy(&path, &key)
+            };
+            let Err(error) = result else {
+                panic!("{label} silently recreated a deleted permanent stream lock");
+            };
+            assert!(error.to_string().contains("lock"), "{error}");
+            assert!(
+                !lock_path.exists(),
+                "{label} must leave the missing lock absent for operator recovery"
+            );
+            cleanup_persistence(&path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_inode_cannot_resurrect_a_consumed_action_after_stale_overwrite() {
+        const CHILD_PATH_ENV: &str = "SWARM_TEST_GOVERNANCE_ACTION_RACE_CHILD_PATH";
+        const CHILD_RECEIPT_ENV: &str = "SWARM_TEST_GOVERNANCE_ACTION_RACE_RECEIPT_PATH";
+        const CHILD_RESULT_ENV: &str = "SWARM_TEST_GOVERNANCE_ACTION_RACE_RESULT_PATH";
+        let key = SigningKey::from_bytes(&[140; 32]);
+        let child_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.141".to_string(),
+        });
+        if let Some(path) = std::env::var_os(CHILD_PATH_ENV) {
+            let receipt_path = PathBuf::from(std::env::var_os(CHILD_RECEIPT_ENV).unwrap());
+            let result_path = PathBuf::from(std::env::var_os(CHILD_RESULT_ENV).unwrap());
+            let result = match load_signed_policy(Path::new(&path), &key) {
+                Ok(policy) => {
+                    let receipt: serde_json::Value =
+                        serde_json::from_slice(&fs::read(receipt_path).unwrap()).unwrap();
+                    match policy.verify_and_consume_action_authorization(
+                        &child_request,
+                        &receipt,
+                        super::now_ms(),
+                    ) {
+                        Ok(_) => "mutation_ok".to_string(),
+                        Err(error) => format!("mutation_error:{error}"),
+                    }
+                }
+                Err(error) => format!("load_error:{error}"),
+            };
+            fs::write(result_path, result).unwrap();
+            return;
+        }
+
+        let path = persistence_path("replacement-action-stale-overwrite");
+        let receipt_path = path.with_extension("child-receipt.json");
+        let result_path = path.with_extension("child-result");
+        let policy = initialize_signed_policy(&path, &key);
+        let parent_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.140".to_string(),
+        });
+        let GovernanceDecision::Authorize {
+            receipt: parent_receipt,
+            ..
+        } = policy.can_act(&parent_request)
+        else {
+            panic!("precondition: parent authorization was not issued");
+        };
+        let GovernanceDecision::Authorize {
+            receipt: child_receipt,
+            ..
+        } = policy.can_act(&child_request)
+        else {
+            panic!("precondition: child authorization was not issued");
+        };
+        let parent_receipt_value = serde_json::to_value(&parent_receipt).unwrap();
+        fs::write(
+            &receipt_path,
+            serde_json::to_vec(&serde_json::to_value(&child_receipt).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let (pre_write_reached, resume_parent_write) = policy
+            .persistence
+            .as_ref()
+            .unwrap()
+            .install_pre_write_barrier();
+
+        std::thread::scope(|scope| {
+            let parent_consume = scope.spawn(|| {
+                policy.verify_and_consume_action_authorization(
+                    &parent_request,
+                    &parent_receipt_value,
+                    parent_receipt.payload.issued_at_ms + 1,
+                )
+            });
+            pre_write_reached.wait();
+            replace_lock_with_copied_record(&path);
+
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(
+                    "tom_agent::tests::replacement_inode_cannot_resurrect_a_consumed_action_after_stale_overwrite",
+                )
+                .arg("--nocapture")
+                .env(CHILD_PATH_ENV, &path)
+                .env(CHILD_RECEIPT_ENV, &receipt_path)
+                .env(CHILD_RESULT_ENV, &result_path)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "replacement child failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let child_result = fs::read_to_string(&result_path).unwrap();
+            resume_parent_write.wait();
+            let parent_result = parent_consume.join().unwrap();
+            assert!(
+                parent_result.is_err(),
+                "the displaced parent must receive no execution admission"
+            );
+            assert!(
+                child_result.starts_with("load_error:") && child_result.contains("lock binding"),
+                "replacement inode admitted the child mutation: {child_result}"
+            );
+        });
+
+        drop(policy);
+        let Err(error) = load_signed_policy(&path, &key) else {
+            panic!("a stream signed for the displaced inode restarted on its replacement");
+        };
+        assert!(error.to_string().contains("lock binding"), "{error}");
+        let _ = fs::remove_file(receipt_path);
+        let _ = fs::remove_file(result_path);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_inode_admits_neither_side_of_a_human_one_shot() {
+        const CHILD_PATH_ENV: &str = "SWARM_TEST_GOVERNANCE_HUMAN_RACE_CHILD_PATH";
+        const CHILD_HOLD_ENV: &str = "SWARM_TEST_GOVERNANCE_HUMAN_RACE_HOLD";
+        const CHILD_SET_ENV: &str = "SWARM_TEST_GOVERNANCE_HUMAN_RACE_SET";
+        const CHILD_DIGEST_ENV: &str = "SWARM_TEST_GOVERNANCE_HUMAN_RACE_DIGEST";
+        const CHILD_NOW_ENV: &str = "SWARM_TEST_GOVERNANCE_HUMAN_RACE_NOW";
+        const CHILD_RESULT_ENV: &str = "SWARM_TEST_GOVERNANCE_HUMAN_RACE_RESULT";
+        let key = SigningKey::from_bytes(&[141; 32]);
+        if let Some(path) = std::env::var_os(CHILD_PATH_ENV) {
+            let hold_id = std::env::var(CHILD_HOLD_ENV).unwrap();
+            let set_id = std::env::var(CHILD_SET_ENV).unwrap();
+            let set_digest = std::env::var(CHILD_DIGEST_ENV).unwrap();
+            let now_ms = std::env::var(CHILD_NOW_ENV).unwrap().parse().unwrap();
+            let result_path = PathBuf::from(std::env::var_os(CHILD_RESULT_ENV).unwrap());
+            let result = match load_signed_policy(Path::new(&path), &key) {
+                Ok(policy) => match policy.verify_and_consume_human_authorization(
+                    &hold_id,
+                    &set_id,
+                    &set_digest,
+                    now_ms,
+                ) {
+                    Ok(_) => "consume_ok".to_string(),
+                    Err(error) => format!("consume_error:{error}"),
+                },
+                Err(error) => format!("load_error:{error}"),
+            };
+            fs::write(result_path, result).unwrap();
+            return;
+        }
+
+        let path = persistence_path("replacement-human-one-shot");
+        let approval_root = path.with_extension("approval-fixture");
+        let result_path = path.with_extension("human-child-result");
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.142".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: governance authorization was not issued");
+        };
+        let decision = swarm_policy::PolicyDecision::require_human_with_rule(
+            "replacement-human-one-shot",
+            "human review required",
+        );
+        let hold = policy
+            .begin_human_authorization_hold(
+                &governed_request,
+                &serde_json::to_value(&receipt).unwrap(),
+                &decision,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .unwrap();
+        let approval_harness = DefaultApprovalHarness::from_path(
+            approval_root.join("config"),
+            approval_root.join("verdicts"),
+            approval_root.join("packs"),
+            approval_root.join("sets"),
+            approval_root.join("ledgers"),
+        )
+        .unwrap();
+        let voter = Ed25519Signer::from_secret_material("replacement-human-voter");
+        let voter_id = format!("swarm:ed25519:{}", voter.public_key_hex());
+        let set_record = approval_harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::Unanimous,
+                &hold.approval_evidence_ref(),
+            )
+            .unwrap();
+        approval_harness
+            .append_vote(&set_record.set_id, &voter_id, &voter)
+            .unwrap();
+        let set = approval_harness
+            .load_approval_set(&set_record.set_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        let ledger_id = approval_harness
+            .list_ledgers(Some(&set.set_id))
+            .unwrap()
+            .ledgers[0]
+            .ledger_id
+            .clone();
+        let ledger = approval_harness
+            .load_ledger(&ledger_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        let evaluated_at_ms = super::now_ms();
+        let verdict = evaluate_verdict(&set, &ledger, evaluated_at_ms).unwrap();
+        let pack_signer = Ed25519Signer::from_secret_material("replacement-human-pack");
+        let pack = build_receipt_pack(
+            &set,
+            &ledger,
+            &verdict,
+            vec![hold.approval_evidence_ref()],
+            &pack_signer,
+            "replacement-human-pack",
+            evaluated_at_ms + 1,
+        )
+        .unwrap();
+        let set_digest = approval_set_digest(&set).unwrap();
+        let bound_hold = policy
+            .bind_human_approval_set(&hold.hold_id, &set.set_id, &set_digest)
+            .unwrap();
+        verify_governed_human_receipt_pack(
+            &pack,
+            bound_hold.approval_set_id.as_deref().unwrap(),
+            bound_hold.approval_set_digest.as_deref().unwrap(),
+            &bound_hold.approval_evidence_ref(),
+            bound_hold.created_at_ms,
+            pack.created_at_ms + 1,
+        )
+        .expect("precondition: a genuine signed approval pack matches the exact persisted hold");
+
+        let consume_at_ms = pack.created_at_ms + 1;
+        let (pre_write_reached, resume_parent_write) = policy
+            .persistence
+            .as_ref()
+            .unwrap()
+            .install_pre_write_barrier();
+        std::thread::scope(|scope| {
+            let parent_consume = scope.spawn(|| {
+                policy.verify_and_consume_human_authorization(
+                    &hold.hold_id,
+                    &set.set_id,
+                    &set_digest,
+                    consume_at_ms,
+                )
+            });
+            pre_write_reached.wait();
+            replace_lock_with_copied_record(&path);
+            resume_parent_write.wait();
+            let error = parent_consume
+                .join()
+                .unwrap()
+                .expect_err("the displaced owner must not obtain human execution authority");
+            assert!(error.contains("lock path identity changed"), "{error}");
+        });
+
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tom_agent::tests::replacement_inode_admits_neither_side_of_a_human_one_shot")
+            .arg("--nocapture")
+            .env(CHILD_PATH_ENV, &path)
+            .env(CHILD_HOLD_ENV, &hold.hold_id)
+            .env(CHILD_SET_ENV, &set.set_id)
+            .env(CHILD_DIGEST_ENV, &set_digest)
+            .env(CHILD_NOW_ENV, consume_at_ms.to_string())
+            .env(CHILD_RESULT_ENV, &result_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "human replacement child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let child_result = fs::read_to_string(&result_path).unwrap();
+        assert!(
+            child_result.starts_with("load_error:") && child_result.contains("lock binding"),
+            "replacement subprocess obtained human one-shot authority: {child_result}"
+        );
+        drop(policy);
+
+        let Err(error) = load_signed_policy(&path, &key) else {
+            panic!("pending human authority restarted on a replacement lock inode");
+        };
+        assert!(error.to_string().contains("lock binding"), "{error}");
+        let _ = fs::remove_file(result_path);
+        cleanup_persistence(&path);
+        fs::remove_dir_all(approval_root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unlinked_lock_race_admits_neither_displaced_nor_replacement_process() {
+        const CHILD_PATH_ENV: &str = "SWARM_TEST_GOVERNANCE_REPLACED_LOCK_CHILD_PATH";
+        const CHILD_READY_ENV: &str = "SWARM_TEST_GOVERNANCE_REPLACED_LOCK_READY_PATH";
+        const CHILD_GO_ENV: &str = "SWARM_TEST_GOVERNANCE_REPLACED_LOCK_GO_PATH";
+        let key = SigningKey::from_bytes(&[136; 32]);
+        let child_peer = SigningKey::from_bytes(&[138; 32]);
+        if let Some(path) = std::env::var_os(CHILD_PATH_ENV) {
+            let ready_path = PathBuf::from(std::env::var_os(CHILD_READY_ENV).unwrap());
+            let go_path = PathBuf::from(std::env::var_os(CHILD_GO_ENV).unwrap());
+            let policy = match load_signed_policy(Path::new(&path), &key) {
+                Ok(policy) => policy,
+                Err(error) => {
+                    fs::write(&ready_path, format!("load_error:{error}")).unwrap();
+                    return;
+                }
+            };
+            fs::write(&ready_path, b"ready").unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !go_path.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "parent did not release the synchronized mutation race"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            policy
+                .register_peer_governor(&child_peer.verifying_key())
+                .expect("replacement lock owner commits its distinct peer admission");
+            return;
+        }
+
+        let path = persistence_path("unlinked-lock-subprocess-race");
+        let ready_path = path.with_extension("race-ready");
+        let go_path = path.with_extension("race-go");
+        let parent_peer = SigningKey::from_bytes(&[137; 32]);
+        let parent = initialize_signed_policy(&path, &key);
+        let initial_sequence = read_envelope(&path).sequence();
+        replace_lock_with_copied_record(&path);
+
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(
+                "tom_agent::tests::unlinked_lock_race_admits_neither_displaced_nor_replacement_process",
+            )
+            .arg("--nocapture")
+            .env(CHILD_PATH_ENV, &path)
+            .env(CHILD_READY_ENV, &ready_path)
+            .env(CHILD_GO_ENV, &go_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready_path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "replacement child did not acquire the new lock inode"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        fs::write(&go_path, b"go").unwrap();
+        let error = parent
+            .register_peer_governor(&parent_peer.verifying_key())
+            .expect_err("the displaced parent must fail its synchronized mutation before write");
+        assert!(error.contains("lock path identity changed"), "{error}");
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "replacement child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let child_result = fs::read_to_string(&ready_path).unwrap();
+        assert!(
+            child_result.starts_with("load_error:") && child_result.contains("lock binding"),
+            "replacement child reached peer admission: {child_result}"
+        );
+
+        assert_eq!(read_envelope(&path).sequence(), initial_sequence);
+        let durable: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert!(durable.peer_governors.is_empty());
+
+        drop(parent);
+        let Err(error) = load_signed_policy(&path, &key) else {
+            panic!("the stream restarted on its replacement lock inode");
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::LockBindingMismatch { .. }
+        ));
+        let _ = fs::remove_file(ready_path);
+        let _ = fs::remove_file(go_path);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn governance_lock_path_rejects_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let path = persistence_path("symlink-lock-path");
+        let key = SigningKey::from_bytes(&[134; 32]);
+        let lock_path = GovernancePolicy::persistence_lock_path(&path);
+        let symlink_target = lock_path.with_extension("lock-target");
+        fs::write(&symlink_target, b"not a governance lock").unwrap();
+        symlink(&symlink_target, &lock_path).unwrap();
+
+        let error = match GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        ) {
+            Ok(policy) => {
+                drop(policy);
+                cleanup_persistence(&path);
+                let _ = fs::remove_file(&symlink_target);
+                panic!("a symlink was accepted as the governance lock path");
+            }
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("regular non-symlink"), "{error}");
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(symlink_target);
+    }
+
+    #[test]
+    fn governance_lock_path_rejects_a_nonregular_file() {
+        let path = persistence_path("nonregular-lock-path");
+        let key = SigningKey::from_bytes(&[135; 32]);
+        let lock_path = GovernancePolicy::persistence_lock_path(&path);
+        fs::create_dir(&lock_path).unwrap();
+
+        let error = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        )
+        .expect_err("a directory was accepted as the governance lock path");
+        assert!(error.to_string().contains("regular non-symlink"), "{error}");
+
+        fs::remove_dir(lock_path).unwrap();
+        cleanup_persistence(&path);
+    }
+
     #[test]
     fn separate_process_cannot_open_a_live_governance_state_lock() {
         const CHILD_PATH_ENV: &str = "SWARM_TEST_GOVERNANCE_LOCK_CHILD_PATH";
@@ -4692,7 +6057,7 @@ mod tests {
             GovernancePolicyConfig::default(),
             &path,
             AgentId::from_verifying_key(&key.verifying_key()),
-            key,
+            key.clone(),
         )
         .expect_err("initialization without both signed anchors must fail");
         assert!(matches!(
@@ -4701,7 +6066,56 @@ mod tests {
         ));
         assert!(!path.exists());
         assert!(!sequence_path.exists());
+        let lock_path = GovernancePolicy::persistence_lock_path(&path);
+        let lock_record_before_retry = fs::read(&lock_path).unwrap();
         fs::remove_dir(blocker).unwrap();
+        let retry = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        )
+        .expect("retry reuses the valid durable lock record left by partial initialization");
+        assert_eq!(fs::read(lock_path).unwrap(), lock_record_before_retry);
+        drop(retry);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn initialization_retry_resyncs_a_precreated_lock_record_before_signing_state() {
+        let path = persistence_path("lock-parent-sync-retry");
+        let key = SigningKey::from_bytes(&[145; 32]);
+        super::fail_next_governance_lock_parent_sync();
+        let error = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+        )
+        .expect_err("injected lock-parent durability failure must abort before signed state");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::WriteLockRecord { .. }
+        ));
+        assert!(!path.exists());
+        assert!(!GovernancePolicy::persistence_sequence_path(&path).exists());
+        let lock_path = GovernancePolicy::persistence_lock_path(&path);
+        let record_before_retry = fs::read(&lock_path).unwrap();
+        let parsed: GovernanceLockRecord = serde_json::from_slice(&record_before_retry).unwrap();
+        assert_eq!(
+            hex::decode(parsed.generation_id).unwrap().len(),
+            super::GOVERNANCE_LOCK_GENERATION_BYTES
+        );
+
+        let retry = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        )
+        .expect("retry durably reuses the exact precreated lock generation");
+        assert_eq!(fs::read(lock_path).unwrap(), record_before_retry);
+        drop(retry);
         cleanup_persistence(&path);
     }
 
@@ -5416,6 +6830,8 @@ mod tests {
         fs::write(&path, &original_state).unwrap();
 
         let original_sequence = checkpoint_sequence(&original_checkpoint);
+        let original_checkpoint_payload: GovernanceSequenceCheckpoint =
+            serde_json::from_str(&original_checkpoint.statement.payload_json).unwrap();
         let higher_sequence = original_sequence + 1;
         let trusted_high = SignedStateEnvelope::sign(
             GOVERNANCE_CHECKPOINT_KIND,
@@ -5424,6 +6840,7 @@ mod tests {
             higher_sequence,
             GovernanceSequenceCheckpoint {
                 accepted_sequence: higher_sequence,
+                lock_binding: original_checkpoint_payload.lock_binding.clone(),
             },
             &key,
         )
@@ -5440,6 +6857,7 @@ mod tests {
         forged_high.statement.sequence = higher_sequence;
         forged_high.statement.payload_json = serde_json::to_string(&GovernanceSequenceCheckpoint {
             accepted_sequence: higher_sequence,
+            lock_binding: original_checkpoint_payload.lock_binding.clone(),
         })
         .unwrap();
         write_checkpoint(&path, &forged_high);
@@ -5468,6 +6886,7 @@ mod tests {
             higher_sequence,
             GovernanceSequenceCheckpoint {
                 accepted_sequence: higher_sequence,
+                lock_binding: original_checkpoint_payload.lock_binding.clone(),
             },
             &attacker_key,
         )
@@ -5509,6 +6928,7 @@ mod tests {
         forged_low.statement.sequence = original_sequence;
         forged_low.statement.payload_json = serde_json::to_string(&GovernanceSequenceCheckpoint {
             accepted_sequence: original_sequence,
+            lock_binding: original_checkpoint_payload.lock_binding,
         })
         .unwrap();
         write_checkpoint(&path, &forged_low);
@@ -5572,6 +6992,11 @@ mod tests {
         assert!(!legacy.active_contingency_leases.is_empty());
         assert!(!legacy.pending_human_authorizations.is_empty());
         fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        fs::copy(
+            GovernancePolicy::persistence_lock_path(&source_path),
+            GovernancePolicy::persistence_lock_path(&path),
+        )
+        .unwrap();
         assert!(matches!(
             load_signed_policy(&path, &key).unwrap_err(),
             GovernancePersistenceError::LegacyUnsignedState { .. }
@@ -5826,8 +7251,9 @@ mod tests {
         .expect_err("ordinary load must never replace deleted governance history");
         assert!(matches!(
             error,
-            super::GovernancePersistenceError::MissingState { .. }
+            super::GovernancePersistenceError::MissingLock { .. }
         ));
+        assert!(!GovernancePolicy::persistence_lock_path(&path).exists());
     }
 
     #[test]
