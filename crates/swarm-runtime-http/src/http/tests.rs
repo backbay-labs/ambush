@@ -10,7 +10,8 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
-use axum::routing::post;
+use axum::response::IntoResponse;
+use axum::routing::{any, post};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
@@ -85,6 +86,7 @@ use swarm_runtime::evolution::{
     EvolutionProposalReviewState,
 };
 use swarm_runtime_workbench::review_workbench::DefaultReviewWorkbenchHarness;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -529,27 +531,40 @@ async fn spawn_approval_resume_capture_server() -> (
 
 #[derive(Clone)]
 struct ApprovalRedirectState {
+    status: StatusCode,
     location: String,
-    authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+    source_authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+    relative_target_authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
 }
 
 async fn approval_redirect_handler(
     State(state): State<ApprovalRedirectState>,
     headers: HeaderMap,
 ) -> (StatusCode, [(axum::http::HeaderName, String); 1]) {
-    state.authorizations.lock().await.push(
+    state.source_authorizations.lock().await.push(
         headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string),
     );
-    (
-        StatusCode::TEMPORARY_REDIRECT,
-        [(header::LOCATION, state.location)],
-    )
+    (state.status, [(header::LOCATION, state.location)])
+}
+
+async fn relative_redirect_target_handler(
+    State(state): State<ApprovalRedirectState>,
+    headers: HeaderMap,
+) -> StatusCode {
+    state.relative_target_authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    StatusCode::OK
 }
 
 async fn spawn_approval_redirect_server(
+    status: StatusCode,
     location: String,
 ) -> (
     String,
@@ -558,11 +573,14 @@ async fn spawn_approval_redirect_server(
     tokio::task::JoinHandle<()>,
 ) {
     let state = ApprovalRedirectState {
+        status,
         location,
-        authorizations: Arc::new(AsyncMutex::new(Vec::new())),
+        source_authorizations: Arc::new(AsyncMutex::new(Vec::new())),
+        relative_target_authorizations: Arc::new(AsyncMutex::new(Vec::new())),
     };
     let app = Router::new()
-        .route("/{*path}", post(approval_redirect_handler))
+        .route("/source/{*path}", post(approval_redirect_handler))
+        .route("/relative-target", any(relative_redirect_target_handler))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -573,7 +591,132 @@ async fn spawn_approval_redirect_server(
         });
         let _ = server.await;
     });
-    (format!("http://{address}"), state, shutdown_tx, handle)
+    (
+        format!("http://{address}/source"),
+        state,
+        shutdown_tx,
+        handle,
+    )
+}
+
+#[derive(Clone, Default)]
+struct AbsoluteRedirectTargetState {
+    authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+}
+
+async fn absolute_redirect_target_handler(
+    State(state): State<AbsoluteRedirectTargetState>,
+    headers: HeaderMap,
+) -> StatusCode {
+    state.authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    StatusCode::OK
+}
+
+async fn spawn_absolute_redirect_target_server() -> (
+    String,
+    AbsoluteRedirectTargetState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = AbsoluteRedirectTargetState::default();
+    let app = Router::new()
+        .route("/absolute-target", any(absolute_redirect_target_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (
+        format!("http://{address}/absolute-target"),
+        state,
+        shutdown_tx,
+        handle,
+    )
+}
+
+fn pending_governed_human_hold(case: &str, approval_set_id: &str) -> GovernancePolicy {
+    let governance = GovernancePolicy::default();
+    governance
+        .register_governor(
+            AgentId::new("tom", &format!("callback-{case}")),
+            ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
+        )
+        .unwrap();
+    let request = ActionRequest {
+        hunt_id: HuntId(format!("hunt-callback-{case}")),
+        requested_by: AgentId::new("pounce", &format!("callback-{case}")),
+        action: ResponseAction::BlockEgress {
+            target: "203.0.113.77".to_string(),
+        },
+        severity: Severity::Critical,
+        evidence: json!({"signal": case}),
+    };
+    let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
+        panic!("configured governance must issue the exact pending authorization");
+    };
+    let receipt = serde_json::to_value(receipt).unwrap();
+    let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
+    let hold = governance
+        .begin_human_authorization_hold(
+            &request,
+            &receipt,
+            &PolicyDecision::require_human_with_rule(
+                "test.callback-refusal",
+                "human approval is required",
+            ),
+            issued_at_ms,
+        )
+        .unwrap();
+    governance
+        .bind_human_approval_set(
+            &hold.hold_id,
+            approval_set_id,
+            &format!("approval-set-digest:{case}"),
+        )
+        .unwrap();
+    governance
+}
+
+async fn spawn_streaming_callback_error_server()
+-> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0_u8; 16 * 1024];
+        let _ = stream.read(&mut request).await.unwrap();
+        stream
+            .write_all(
+                b"HTTP/1.1 503 Service Unavailable\r\n\
+                  Content-Type: text/plain\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  Connection: keep-alive\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let mut chunk = b"UPSTREAM_SECRET_DO_NOT_ECHO:".to_vec();
+        chunk.resize(64 * 1024, b'x');
+        stream
+            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+            .await
+            .unwrap();
+        stream.write_all(&chunk).await.unwrap();
+        stream.write_all(b"\r\n").await.unwrap();
+        stream.flush().await.unwrap();
+        let _ = shutdown_rx.await;
+    });
+    (format!("http://{address}"), shutdown_tx, handle)
 }
 
 #[tokio::test]
@@ -623,85 +766,148 @@ async fn governed_approval_callback_bypasses_even_an_explicit_proxy() {
 }
 
 #[tokio::test]
-async fn governed_approval_callback_refuses_redirect_without_consuming_held_action() {
-    const APPROVAL_SET_ID: &str = "approval-set:redirect-refusal";
+async fn validated_callback_url_is_trimmed_before_storage_and_use() {
+    const TOKEN_ENV: &str = "SWARM_OPERATOR_TRIMMED_CALLBACK_TOKEN";
+    let _token_env = ScopedTestEnv::set(TOKEN_ENV, "trimmed-callback-token");
     let (target_url, target, target_shutdown, target_server) =
         spawn_approval_resume_capture_server().await;
-    let redirect_location =
-        format!("{target_url}/v1/governance/approvals/{APPROVAL_SET_ID}/resume");
-    let (redirect_url, redirect, redirect_shutdown, redirect_server) =
-        spawn_approval_redirect_server(redirect_location).await;
+    let mut config = operator_config();
+    config.operator.runtime_base_url = format!(" \t{target_url}\n ");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
 
-    let governance = GovernancePolicy::default();
-    governance
-        .register_governor(
-            AgentId::new("tom", "redirect-refusal"),
-            ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
-        )
-        .unwrap();
-    let request = ActionRequest {
-        hunt_id: HuntId("hunt-redirect-refusal".to_string()),
-        requested_by: AgentId::new("pounce", "redirect-refusal"),
-        action: ResponseAction::BlockEgress {
-            target: "203.0.113.77".to_string(),
-        },
-        severity: Severity::Critical,
-        evidence: json!({"signal": "redirect-refusal"}),
-    };
-    let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
-        panic!("configured governance must issue the exact pending authorization");
-    };
-    let receipt = serde_json::to_value(receipt).unwrap();
-    let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
-    let hold = governance
-        .begin_human_authorization_hold(
-            &request,
-            &receipt,
-            &PolicyDecision::require_human_with_rule(
-                "test.redirect-refusal",
-                "human approval is required",
-            ),
-            issued_at_ms,
-        )
-        .unwrap();
-    governance
-        .bind_human_approval_set(&hold.hold_id, APPROVAL_SET_ID, "approval-set-digest")
-        .unwrap();
+    let surface = LocalOperatorSurface::from_config("inline", config)
+        .expect("outer whitespace around a valid loopback URL must be accepted");
+    assert_eq!(
+        surface.state.runtime_base_url, target_url,
+        "the surface must store exactly the trimmed URL that validation accepted"
+    );
+    let result = resume_governed_approval(
+        &surface.state.callback_client,
+        &surface.state.runtime_base_url,
+        "approval-set:trimmed-url",
+        "receipt-pack:trimmed-url",
+        "Bearer trimmed-url-secret",
+    )
+    .await;
+    assert!(result.is_ok(), "the trimmed callback URL must be routable");
+    assert_eq!(
+        target.requests.lock().await[0].0,
+        "/v1/governance/approvals/approval-set:trimmed-url/resume"
+    );
 
+    let _ = target_shutdown.send(());
+    let _ = target_server.await;
+}
+
+#[tokio::test]
+async fn callback_error_does_not_read_or_echo_streamed_upstream_body() {
+    const APPROVAL_SET_ID: &str = "approval-set:streamed-error";
+    const UPSTREAM_SECRET: &str = "UPSTREAM_SECRET_DO_NOT_ECHO";
+    let governance = pending_governed_human_hold("streamed-error", APPROVAL_SET_ID);
+    let (runtime_url, shutdown_tx, server) = spawn_streaming_callback_error_server().await;
     let client = build_operator_callback_client(reqwest::Client::builder()).unwrap();
-    resume_governed_approval(
-        &client,
-        &redirect_url,
-        APPROVAL_SET_ID,
-        "receipt-pack:redirect-refusal",
-        "Bearer redirect-secret",
+
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        resume_governed_approval(
+            &client,
+            &runtime_url,
+            APPROVAL_SET_ID,
+            "receipt-pack:streamed-error",
+            "Bearer callback-secret",
+        ),
     )
     .await
-    .expect_err("a 3xx callback must fail closed instead of forwarding the bearer");
-
-    assert_eq!(
-        redirect.authorizations.lock().await.as_slice(),
-        [Some("Bearer redirect-secret".to_string())]
-    );
+    .expect("non-success handling must return after headers without draining the body")
+    .expect_err("the streamed 503 must fail closed");
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let diagnostic = to_bytes(response.into_body(), 1_024).await.unwrap();
+    let diagnostic = String::from_utf8(diagnostic.to_vec()).unwrap();
+    assert!(diagnostic.contains("503"));
+    assert!(!diagnostic.contains(UPSTREAM_SECRET));
     assert!(
-        target.requests.lock().await.is_empty(),
-        "the redirect target must receive no governed-resume request"
-    );
-    assert!(
-        target.authorizations.lock().await.is_empty(),
-        "the redirect target must receive no bearer"
+        diagnostic.len() < 512,
+        "upstream bodies must not make callback diagnostics unbounded"
     );
     assert!(
         governance
             .pending_human_authorization(APPROVAL_SET_ID)
             .is_ok(),
-        "a failed callback must leave governance and the human hold pending"
+        "an upstream error must leave the held authorization pending"
     );
 
-    let _ = redirect_shutdown.send(());
-    let _ = target_shutdown.send(());
-    let _ = redirect_server.await;
-    let _ = target_server.await;
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn governed_approval_callback_refuses_every_redirect_without_consuming_held_action() {
+    for (status_name, status) in [
+        ("301", StatusCode::MOVED_PERMANENTLY),
+        ("302", StatusCode::FOUND),
+        ("303", StatusCode::SEE_OTHER),
+        ("307", StatusCode::TEMPORARY_REDIRECT),
+        ("308", StatusCode::PERMANENT_REDIRECT),
+    ] {
+        for destination_kind in ["relative-same-origin", "absolute-cross-origin"] {
+            let (absolute_url, absolute_target, target_shutdown, target_server) =
+                spawn_absolute_redirect_target_server().await;
+            let location = if destination_kind == "relative-same-origin" {
+                "/relative-target".to_string()
+            } else {
+                absolute_url
+            };
+            let (redirect_url, redirect, redirect_shutdown, redirect_server) =
+                spawn_approval_redirect_server(status, location).await;
+            let case = format!("{status_name}-{destination_kind}");
+            let approval_set_id = format!("approval-set:{case}");
+            let governance = pending_governed_human_hold(&case, &approval_set_id);
+            let client = build_operator_callback_client(reqwest::Client::builder()).unwrap();
+
+            let result = resume_governed_approval(
+                &client,
+                &redirect_url,
+                &approval_set_id,
+                "receipt-pack:redirect-refusal",
+                "Bearer redirect-secret",
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "{status_name} {destination_kind} redirect must fail closed"
+            );
+            assert_eq!(
+                redirect.source_authorizations.lock().await.as_slice(),
+                [Some("Bearer redirect-secret".to_string())],
+                "the configured source did not receive the initial {case} callback"
+            );
+            assert!(
+                redirect
+                    .relative_target_authorizations
+                    .lock()
+                    .await
+                    .is_empty(),
+                "{case} followed a relative redirect"
+            );
+            assert!(
+                absolute_target.authorizations.lock().await.is_empty(),
+                "{case} contacted an absolute redirect target"
+            );
+            assert!(
+                governance
+                    .pending_human_authorization(&approval_set_id)
+                    .is_ok(),
+                "{case} consumed the held authorization"
+            );
+
+            let _ = redirect_shutdown.send(());
+            let _ = target_shutdown.send(());
+            let _ = redirect_server.await;
+            let _ = target_server.await;
+        }
+    }
 }
 
 fn notification_operator_config(target_url: String, dead_letter_path: String) -> SwarmConfig {

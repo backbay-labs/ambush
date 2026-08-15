@@ -237,16 +237,7 @@ pub(super) async fn resume_governed_approval(
                 "failed to resume governed approval `{approval_set_id}`: {error}"
             ))
         })?;
-    if response.status().is_success() {
-        return Ok(());
-    }
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    Err(OperatorApiError::bad_gateway(format!(
-        "runtime governed-resume endpoint returned {} for approval `{approval_set_id}`: {}",
-        status.as_u16(),
-        body
-    )))
+    require_callback_success(response, "governed-resume")
 }
 
 async fn resume_demo_approval(
@@ -270,14 +261,19 @@ async fn resume_demo_approval(
                 "failed to resume demo approval `{approval_set_id}`: {error}"
             ))
         })?;
-    if response.status().is_success() {
+    require_callback_success(response, "demo-resume")
+}
+
+fn require_callback_success(
+    response: reqwest::Response,
+    endpoint: &'static str,
+) -> Result<(), OperatorApiError> {
+    let status = response.status();
+    if status.is_success() {
         return Ok(());
     }
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
     Err(OperatorApiError::bad_gateway(format!(
-        "runtime resume endpoint returned {} for approval `{approval_set_id}`: {}",
-        status.as_u16(),
-        body
+        "runtime {endpoint} endpoint returned HTTP {}",
+        status.as_u16()
     )))
 }

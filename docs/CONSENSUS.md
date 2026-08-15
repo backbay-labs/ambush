@@ -383,6 +383,9 @@ The governed-resume callback is a bearer-bearing internal hop. Its configured
 `operator_surface.runtime_base_url` is fully validated even when callers use a
 public `LocalOperatorSurface` config constructor, and its dedicated client
 ignores process proxies, refuses redirects, and applies a bounded timeout.
+The surface stores the trimmed URL that validation accepted. A non-success
+callback diagnostic contains only the HTTP status; the upstream response body
+is never read or echoed.
 A refused redirect never contacts its target and leaves the exact
 governance/human hold pending. Other transport failures can be ambiguous after
 delivery, so operators inspect the persisted hold before retrying; durable

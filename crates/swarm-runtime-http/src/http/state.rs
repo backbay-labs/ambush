@@ -165,7 +165,7 @@ impl LocalOperatorSurface {
 
     fn from_config_with_paths(
         config_path: impl Into<PathBuf>,
-        config: SwarmConfig,
+        mut config: SwarmConfig,
         paths: Option<OperatorSurfacePaths>,
     ) -> Result<Self, OperatorHttpError> {
         let config_path = config_path.into();
@@ -175,6 +175,7 @@ impl LocalOperatorSurface {
                 source_name: config_path.display().to_string(),
                 source,
             })?;
+        config.operator.runtime_base_url = config.operator.runtime_base_url.trim().to_string();
         if !config.operator.enabled {
             return Err(OperatorHttpError::Disabled);
         }
