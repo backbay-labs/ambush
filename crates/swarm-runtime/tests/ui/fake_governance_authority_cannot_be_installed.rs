@@ -25,7 +25,8 @@ fn install_human_resume(fake: Fake, router: Arc<dyn RequestResponseRouter>) {
 }
 
 fn pass_release_verifier(receipt: &RollbackReceipt, fake: &Fake) {
-    let _result = verify_release_attestation(receipt, Some(fake));
+    let authority: &swarm_governance::GovernanceAuthority = fake;
+    let _result = verify_release_attestation(receipt, Some(authority));
 }
 
 fn main() {}
