@@ -261,4 +261,50 @@ assert_output_mutation_rejected hidden-extra 'experiments/.unexpected-extra.yaml
 assert_output_mutation_rejected nested-output '"nested"'
 assert_output_mutation_rejected symlink-output '"unexpected-link.yaml"'
 
-echo "fixture inventory self-test: 12 cases passed (NUL inventory, ordering, direct-child scope, ASCII-only diagnostics, generator/freshness differential, exact regenerated set)"
+assert_source_type_rejected() {
+  local expected_fragment="$1"
+  local output
+  local status
+
+  set +e
+  output="$({
+    FIXTURE_ARGUMENT_LOG="$argument_log" PATH="$test_path" \
+      bash "$TEST_ROOT/tools/check-fixture-freshness.sh"
+  } 2>&1)"
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ]; then
+    echo "freshness differential accepted a non-regular source fixture" >&2
+    exit 1
+  fi
+  case "$output" in
+    *$'\n::error::'*)
+      echo "source-type diagnostic emitted a forged workflow-command line" >&2
+      exit 1
+      ;;
+  esac
+  case "$output" in
+    *"$expected_fragment"*) ;;
+    *)
+      echo "freshness differential omitted the non-regular source diagnostic" >&2
+      exit 1
+      ;;
+  esac
+}
+
+source_symlink=$'experiments/linked\n::error::source.yaml'
+ln -s normal.yaml "$TEST_ROOT/$source_symlink"
+git -C "$TEST_ROOT" add -- "$source_symlink"
+assert_source_type_rejected 'linked\n::error::source.yaml'
+git -C "$TEST_ROOT" rm -q -f -- "$source_symlink"
+
+source_fifo=$'experiments/pipe\n::error::source.yml'
+: >"$TEST_ROOT/$source_fifo"
+git -C "$TEST_ROOT" add -- "$source_fifo"
+rm -f -- "$TEST_ROOT/$source_fifo"
+mkfifo "$TEST_ROOT/$source_fifo"
+assert_source_type_rejected 'pipe\n::error::source.yml'
+rm -f -- "$TEST_ROOT/$source_fifo"
+git -C "$TEST_ROOT" rm -q -f --cached -- "$source_fifo"
+
+echo "fixture inventory self-test: 14 cases passed (NUL inventory, ordering, direct regular source scope, ASCII-only diagnostics, generator/freshness differential, exact regenerated set)"

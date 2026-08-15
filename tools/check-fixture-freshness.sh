@@ -54,7 +54,7 @@ fixture_inventory_write "$ROOT_DIR" "$INVENTORY"
 # `mapfile` is bash 4+; macOS ships 3.2 and this gate has to run locally too.
 committed=()
 while IFS= read -r -d '' fixture; do
-  fixture_require_direct_path "$fixture"
+  fixture_require_regular_source "$ROOT_DIR" "$fixture"
   committed+=("$fixture")
 done <"$INVENTORY"
 

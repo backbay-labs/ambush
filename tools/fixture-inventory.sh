@@ -87,3 +87,20 @@ fixture_require_direct_path() {
       ;;
   esac
 }
+
+fixture_require_regular_source() {
+  local root="$1"
+  local path="$2"
+
+  fixture_require_direct_path "$path" || return 1
+  if ! LC_ALL=C /usr/bin/perl -e '
+    use strict;
+    use warnings;
+    my ($root, $path) = @ARGV;
+    my $full_path = "$root/$path";
+    exit((lstat($full_path) && -f _) ? 0 : 1);
+  ' "$root" "$path"; then
+    echo "experiment fixture must be a direct regular file: $(fixture_display "$path")" >&2
+    return 1
+  fi
+}
