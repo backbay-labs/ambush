@@ -10,7 +10,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.79 Assurance Foundation` is active. Phase 284 is complete; phase 285 has seven of nine requirements satisfied on local integration commit `c59ead0`, while MAPPING-05 and FALSIFY-04 remain open pending external protected-required-check acceptance. Phases 286-287 are not started. `v1.77 Integration Proof` and `v1.78 Runtime Decomposition And TCB Boundary` are complete; `v1.74 Structural Integrity` remains deferred.
+`v1.79 Assurance Foundation` is active. Phase 284 is complete; phase 285 has seven of nine requirements satisfied on the current v1.79 integration branch, while MAPPING-05 and FALSIFY-04 remain open pending external protected-required-check acceptance. Phases 286-287 are not started. `v1.77 Integration Proof` and `v1.78 Runtime Decomposition And TCB Boundary` are complete; `v1.74 Structural Integrity` remains deferred.
 
 **Goal:**
 - Make the fail-closed claim auditable through deterministic fixtures, an enforced invariant/assumption map, negative falsifiability, deterministic simulation, fuzzing, Loom, and supply-chain gates.
@@ -38,7 +38,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.77` and `v1.78` are complete as scoped. `v1.79` is active at phase 285: local integration commit `c59ead0` satisfies MAPPING-01 through MAPPING-04 and FALSIFY-01 through FALSIFY-03, but workflow wiring is not evidence that either job is a protected required check. MAPPING-05 and FALSIFY-04 therefore remain open, and phases 286-287 remain not started. The shipped milestones from the v1.52-v1.77 period cover Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, learned-state integrity, operator packaging, external-signal ingestion, and the CrowdStrike/Splunk integration proof. `v1.78` adds the verification-gate, module-boundary, crate-extraction, and TCB enforcement foundation. `v1.74` remains deferred.
+`v1.77` and `v1.78` are complete as scoped. `v1.79` is active at phase 285: the current integration branch satisfies MAPPING-01 through MAPPING-04 and FALSIFY-01 through FALSIFY-03, but workflow wiring is not evidence that either job is a protected required check. MAPPING-05 and FALSIFY-04 therefore remain open, and phases 286-287 remain not started. The shipped milestones from the v1.52-v1.77 period cover Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, learned-state integrity, operator packaging, external-signal ingestion, and the CrowdStrike/Splunk integration proof. `v1.78` adds the verification-gate, module-boundary, crate-extraction, and TCB enforcement foundation. `v1.74` remains deferred.
 
 **What is now real:**
 - The live runtime can detect, investigate, correlate, rehearse, review, and export signed evidence through one Rust-first operator workflow.

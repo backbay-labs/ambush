@@ -1133,7 +1133,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Convert fail-closed from a README assertion into an auditable table linking each invariant to the exact function enforcing it and the assumption beneath it, with broken variants proving each check actually fires.
 **Requirements:** MAPPING-01, MAPPING-02, MAPPING-03, MAPPING-04, MAPPING-05, FALSIFY-01, FALSIFY-02, FALSIFY-03, FALSIFY-04
 **Depends on:** Phase 284
-**Status:** 7/9 requirements delivered. MAPPING-05 and FALSIFY-04 remain externally blocked on a provenance-distinct protected check: the Free organization cannot pin an organization-owned required workflow, and the existing Actions App/check name is spoofable, so the Free-plan path is a dedicated external GitHub App check with a separate integration ID. The mapping decision is ADR 0012, avoiding the trust ADR 0011 collision; combined trust/security re-derivation remains integration work.
+**Status:** 7/9 requirements delivered. MAPPING-05 and FALSIFY-04 remain externally blocked on a provenance-distinct protected check: the Free organization cannot pin an organization-owned required workflow, and the existing Actions App/check name is spoofable, so the Free-plan path is a dedicated external GitHub App check with a separate integration ID. The mapping decision is ADR 0012, avoiding the trust ADR 0011 collision; the current integration branch includes the combined trust/security re-derivation.
 **Plans:** TBD
 **Success Criteria**:
 1. `docs/assurance/assumptions.toml` parses and enumerates at least 8 named assumptions, each with an owner and dependent invariants.
@@ -1934,7 +1934,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 
 ---
 *Active milestone: v1.79 Assurance Foundation.*
-*v1.79 status: Phase 284 complete; phase 285 is 7/9 satisfied on local integration commit c59ead0, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started.*
+*v1.79 status: Phase 284 complete; phase 285 is 7/9 satisfied on the current v1.79 integration branch, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started.*
 *v1.77 and v1.78 complete: phases 276-279 shipped 2026-04-13; phases 280-283 completed as scoped by 2026-08-13.*
 *v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83.*
 *v1.80 through v1.87 queued: 32 phases (288-319) defined 2026-08-10.*
