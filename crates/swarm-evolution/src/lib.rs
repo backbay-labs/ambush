@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Evolution-lane workflows extracted from the runtime composition root.
 //!
 //! # What this crate owns (SPLIT-04, phase 282)

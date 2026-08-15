@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde_json::json;

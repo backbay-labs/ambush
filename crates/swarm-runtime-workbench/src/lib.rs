@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Operator review workbench for the Ambush runtime: review sessions, capsules,
 //! delegation packets, promotion-readiness reports and maintenance handoffs.
 //!

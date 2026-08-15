@@ -21,8 +21,8 @@ jobs:
   # Two warm local clean-launch runs of the preceding 161-self-test registry gate
   # took 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
   # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. The current gate adds four
-  # lexical workflow-name mutations and six governance-assurance mutations; it
-  # also executes the exact 58-case single-governor gate inside the protected
+  # lexical workflow-name mutations and ten governance-assurance mutations; it
+  # also executes the exact 75-case single-governor gate inside the protected
   # contract. These are local observations, not a CI estimate; compiled
   # actual-source mutations dominate.
   mapping-contract:

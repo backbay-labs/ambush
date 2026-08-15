@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Swarm agent role implementations.
 //!
 //! Each module here is one autonomous role that the composition root schedules

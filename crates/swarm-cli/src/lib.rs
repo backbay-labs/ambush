@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 //! Extracted CLI surface that still delegates into the runtime-owned service APIs.
 
 pub mod agent_identity {

@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 //! Rust-first runtime orchestration for Ambush.
 //!
 //! This crate is the intended composition root for the production runtime:

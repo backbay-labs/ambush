@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 //! Transport crate for the Ambush runtime: the authenticated operator HTTP
 //! surface and the TLS-capable server loop that carries it.
 //!

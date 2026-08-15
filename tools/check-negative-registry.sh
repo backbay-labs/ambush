@@ -137,14 +137,50 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
 }
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
-    "tools/check-single-governor-key.sh": "b479db26558891a3b5d32927d41ec041ae00a4126378d1f632e452ac38f2ee10",
+    "tools/check-single-governor-key.sh": "52600f5f4cde1e3d552602c80615cdfc63ad2651ef0fe23b7735da7c351dbd97",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
+    "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
+    "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
+    "crates/swarm-runtime-http/Cargo.toml": "890644cbb2cd57bed43de30491b60d1fef5b8e64038520d5249af531a292b88f",
+    "crates/swarm-agents/Cargo.toml": "531cb9064f0d5e5143dac6cf56312ec88180e17a0feba3a4eeb2e7b2b169d67a",
+    "crates/swarm-evolution/Cargo.toml": "0fca9be1e6d92ad2acdd70fa1b06994bd6a28fd16381c3b42b0255f427f4887c",
+    "crates/swarm-runtime-workbench/Cargo.toml": "eab3a2b0578a2366e26604a69ca649ba03ce032d3fc45696876ae222573d24ce",
+    "crates/swarm-cli/Cargo.toml": "0593667747de0b4cd7792170f2c6bfa8fb0a5051767dca97ede20fad44a23dfe",
     "crates/swarm-governance/src/lib.rs": "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896",
+    "crates/swarm-runtime/src/containment.rs": "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
+    "crates/swarm-runtime/src/dispatcher.rs": "de7ad808ff477c7d1432b47360f4139e9ddaa5d5449a4fa5d21e28b5e86c8c8e",
+    "crates/swarm-ingest-runtime/src/ingest/mod.rs": "33a272f43e892f47816eb6fe183f41d9afda86b3093b5258da0c7c6e8a3c7c47",
+    "crates/swarm-runtime-http/src/bin/swarm_detect.rs": "51f81097ef4e5ba17f9a3757e8e413118f36572f9c844fef20729d4532da9a10",
+}
+GOVERNANCE_ASSURANCE_CLOSURE_CRATES = (
+    "swarm-governance",
+    "swarm-runtime",
+    "swarm-ingest-runtime",
+    "swarm-runtime-http",
+    "swarm-agents",
+    "swarm-evolution",
+    "swarm-runtime-workbench",
+    "swarm-cli",
+)
+GOVERNANCE_ASSURANCE_TARGET_ROOTS = {
+    "crates/swarm-governance/src/lib.rs",
+    "crates/swarm-runtime/src/lib.rs",
+    "crates/swarm-runtime/src/bin/generate_adversary_emulation_report.rs",
+    "crates/swarm-runtime/src/bin/swarm_debug_attest.rs",
+    "crates/swarm-ingest-runtime/src/lib.rs",
+    "crates/swarm-ingest-runtime/src/bin/generate_platform_openapi.rs",
+    "crates/swarm-runtime-http/src/lib.rs",
+    "crates/swarm-runtime-http/src/bin/swarm_detect.rs",
+    "crates/swarm-runtime-http/src/bin/swarmctl.rs",
+    "crates/swarm-agents/src/lib.rs",
+    "crates/swarm-evolution/src/lib.rs",
+    "crates/swarm-runtime-workbench/src/lib.rs",
+    "crates/swarm-cli/src/lib.rs",
 }
 SINGLE_GOVERNOR_GATE_REL = "tools/check-single-governor-key.sh"
 SINGLE_GOVERNOR_GATE_OUTPUT = (
-    "single-governor-key gate: 58 fixture cases behaved as documented "
-    "(52 adversarial, 6 controls); no key collection on the governance signing "
+    "single-governor-key gate: 75 fixture cases behaved as documented "
+    "(65 adversarial, 10 controls); no key collection on the governance signing "
     "path; shipped governance authority is one opaque concrete handle with an "
     "authenticated mint (crates/swarm-governance/src crates/swarm-consensus/src "
     "crates/swarm-policy/src)"
@@ -1210,6 +1246,11 @@ def registered_source_cache(root, registered):
 
 
 def execution_input_snapshot(root, registered):
+    governance_closure_sources = {
+        str(path.relative_to(root))
+        for crate_name in GOVERNANCE_ASSURANCE_CLOSURE_CRATES
+        for path in (root / "crates" / crate_name / "src").rglob("*.rs")
+    }
     relative_paths = {
         MAPPING_REL,
         REGISTRY_REL,
@@ -1220,7 +1261,12 @@ def execution_input_snapshot(root, registered):
         "Cargo.lock",
         "rust-toolchain.toml",
         *GOVERNANCE_ASSURANCE_INPUT_DIGESTS,
-        "crates/swarm-governance/build.rs",
+        *GOVERNANCE_ASSURANCE_TARGET_ROOTS,
+        *governance_closure_sources,
+        *(
+            f"crates/{crate_name}/build.rs"
+            for crate_name in GOVERNANCE_ASSURANCE_CLOSURE_CRATES
+        ),
         *(entry["manifest"] for entry in ALLOWED_LOCAL_CUSTOM_BUILD.values()),
         *(entry["script"] for entry in ALLOWED_LOCAL_CUSTOM_BUILD.values()),
         ".cargo/config",
@@ -2886,7 +2932,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 171 self-tests passed (3 clean controls, 168 adversarial)'\n"
+        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 175 self-tests passed (3 clean controls, 172 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -2920,7 +2966,7 @@ def bootstrap_boundary_self_test(base):
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
         "check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; "
-        "171 self-tests passed (3 clean controls, 168 adversarial)"
+        "175 self-tests passed (3 clean controls, 172 adversarial)"
     )
 
     def startup_payload(name):
@@ -3431,20 +3477,20 @@ def governance_assurance_contract_self_test(base):
 
     def copy_fixture(name):
         root = base / name
-        for crate_name in (
-            "swarm-governance",
-            "swarm-consensus",
-            "swarm-policy",
-            "swarm-ingest-runtime",
-            "swarm-runtime",
-            "swarm-runtime-http",
-        ):
+        for crate_name in GOVERNANCE_ASSURANCE_CLOSURE_CRATES:
             source = REPO_ROOT / "crates" / crate_name / "src"
             destination = root / "crates" / crate_name / "src"
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source, destination)
-        governance_manifest = root / "crates/swarm-governance/Cargo.toml"
-        shutil.copy2(REPO_ROOT / "crates/swarm-governance/Cargo.toml", governance_manifest)
+            shutil.copy2(
+                REPO_ROOT / "crates" / crate_name / "Cargo.toml",
+                root / "crates" / crate_name / "Cargo.toml",
+            )
+        for crate_name in ("swarm-consensus", "swarm-policy"):
+            source = REPO_ROOT / "crates" / crate_name / "src"
+            destination = root / "crates" / crate_name / "src"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, destination)
         gate = root / SINGLE_GOVERNOR_GATE_REL
         gate.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / SINGLE_GOVERNOR_GATE_REL, gate)
@@ -3562,6 +3608,112 @@ pub fn mint_alternate(policy: Arc<GovernancePolicy>) -> AlternateAuthority {
             file=sys.stderr,
         )
 
+    inferred_forge = copy_fixture("governance-assurance-inferred-runtime-forge")
+    runtime_root = inferred_forge / "crates/swarm-runtime/src"
+    runtime_lib = runtime_root / "lib.rs"
+    runtime_lib.write_text(runtime_lib.read_text() + "\npub(crate) mod inferred_authority_forge;\n")
+    (runtime_root / "inferred_authority_forge.rs").write_text("""
+use std::sync::Arc;
+
+use swarm_governance::GovernancePolicy;
+
+use crate::containment::ContainmentSweep;
+
+pub fn install(policy: Arc<GovernancePolicy>, sweep: ContainmentSweep) -> ContainmentSweep {
+    let value = unsafe { std::mem::transmute_copy(&policy) };
+    std::mem::forget(policy);
+    sweep.with_governance_authority(value)
+}
+""")
+    inferred_report = contract_report(inferred_forge)
+    if "governance-assurance-gate-failed" not in inferred_report.codes():
+        ok = False
+        print(
+            "type-inferred downstream transmute_copy did not fail the full protected gate: "
+            f"{inferred_report.violations}",
+            file=sys.stderr,
+        )
+
+    erased_getter = copy_fixture("governance-assurance-erased-any-getter")
+    containment_source = erased_getter / "crates/swarm-runtime/src/containment.rs"
+    containment_source.write_text(containment_source.read_text() + """
+
+pub trait ExposeErasedAuthority {
+    fn authority_any(&self) -> Option<&dyn std::any::Any>;
+}
+
+impl ExposeErasedAuthority for ContainmentSweep {
+    fn authority_any(&self) -> Option<&dyn std::any::Any> {
+        self.governance
+            .as_ref()
+            .map(|value| value as &dyn std::any::Any)
+    }
+}
+""")
+    erased_report = contract_report(erased_getter)
+    erased_gate_report = Report()
+    execute_single_governor_gate(erased_getter, erased_gate_report)
+    if (
+        "governance-assurance-input-drift" not in erased_report.codes()
+        or "governance-assurance-gate-failed" not in erased_gate_report.codes()
+    ):
+        ok = False
+        print(
+            "safe Any getter did not fail both protected field-owner identity and the exact gate: "
+            f"{erased_report.violations}; {erased_gate_report.violations}",
+            file=sys.stderr,
+        )
+
+    trait_default = copy_fixture("governance-assurance-trait-default-clone")
+    containment_source = trait_default / "crates/swarm-runtime/src/containment.rs"
+    containment_source.write_text(containment_source.read_text() + """
+
+pub trait ReleaseAuthorityLeak {
+    fn release_authority(sweep: &ContainmentSweep) -> Option<GovernanceAuthority> {
+        sweep.governance.clone()
+    }
+}
+
+impl ReleaseAuthorityLeak for () {}
+""")
+    trait_default_report = contract_report(trait_default)
+    trait_default_gate_report = Report()
+    execute_single_governor_gate(trait_default, trait_default_gate_report)
+    if (
+        "governance-assurance-input-drift" not in trait_default_report.codes()
+        or "governance-assurance-gate-failed" not in trait_default_gate_report.codes()
+    ):
+        ok = False
+        print(
+            "public trait default authority clone did not fail both protected identity and gate: "
+            f"{trait_default_report.violations}; {trait_default_gate_report.violations}",
+            file=sys.stderr,
+        )
+
+    extern_clone = copy_fixture("governance-assurance-extern-clone")
+    containment_source = extern_clone / "crates/swarm-runtime/src/containment.rs"
+    containment_source.write_text(containment_source.read_text() + """
+
+pub extern "Rust" fn release_authority_extern(
+    sweep: &ContainmentSweep,
+) -> Option<GovernanceAuthority> {
+    sweep.governance.clone()
+}
+""")
+    extern_report = contract_report(extern_clone)
+    extern_gate_report = Report()
+    execute_single_governor_gate(extern_clone, extern_gate_report)
+    if (
+        "governance-assurance-input-drift" not in extern_report.codes()
+        or "governance-assurance-gate-failed" not in extern_gate_report.codes()
+    ):
+        ok = False
+        print(
+            "extern Rust authority clone did not fail both protected identity and gate: "
+            f"{extern_report.violations}; {extern_gate_report.violations}",
+            file=sys.stderr,
+        )
+
     weakened = copy_fixture("governance-assurance-weakened-script")
     weakened_gate = weakened / SINGLE_GOVERNOR_GATE_REL
     weakened_gate.write_text(
@@ -3613,7 +3765,7 @@ pub fn mint_alternate(policy: Arc<GovernancePolicy>) -> AlternateAuthority {
             file=sys.stderr,
         )
 
-    return ok, 6
+    return ok, 10
 
 
 def dependency_execution_self_test(base):
