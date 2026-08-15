@@ -100,6 +100,16 @@
 #   proves on every run that the FIRST locked metadata invocation refuses stale
 #   resolution and leaves the lock bytes unchanged.
 #
+# WHY THE SCANNERS ARE EXACT-PINNED
+#   Their CLI is part of this gate's policy contract. cargo-deny 0.20.0 moved
+#   `--config` from the `check` subcommand to the root command; an unpinned hosted
+#   install selected 0.20.2 while local validation used 0.19.4, so the helper scan
+#   failed in CI before checking anything. This gate deliberately stays on the
+#   measured 0.19.4 semantics until an explicit upgrade changes the invocation,
+#   executable evidence, and documentation together. cargo-audit is likewise
+#   pinned to the measured 0.22.0 contract whose lack of a locked mode requires
+#   the byte-snapshot guard below. A missing or mismatched tool fails immediately.
+#
 # WHY `-D advisory-not-detected`, `-D unmatched-skip`, AND `-D unnecessary-skip`
 #   All three are warnings by default, and a warning does not change the exit code:
 #   with an ignore entry added for a real advisory against a crate this workspace
@@ -156,11 +166,133 @@
 #   added.
 set -euo pipefail
 
+# The nominal gate never sets this. Version fixtures symlink this script under
+# the scanner names so their subprocess output is deterministic and dependency-
+# free; any other basename refuses to act as a fake.
+if [ "${SUPPLY_CHAIN_TOOL_VERSION_FAKE:-0}" = "1" ]; then
+  case "${0##*/}" in
+    cargo-deny)
+      printf 'cargo-deny %s\n' "${SUPPLY_CHAIN_FAKE_CARGO_DENY_VERSION:?}"
+      ;;
+    cargo-audit)
+      printf 'cargo-audit %s\n' "${SUPPLY_CHAIN_FAKE_CARGO_AUDIT_VERSION:?}"
+      ;;
+    *)
+      echo "::error::tool-version fake invoked under unexpected basename ${0##*/}" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+REQUIRED_CARGO_DENY_VERSION="0.19.4"
+REQUIRED_CARGO_AUDIT_VERSION="0.22.0"
+
+require_exact_tool_version() {
+  local executable="$1"
+  local expected="$2"
+  local actual
+
+  if ! command -v "$executable" >/dev/null; then
+    echo "::error::$executable $expected is required but is not installed" >&2
+    return 1
+  fi
+  if ! actual="$("$executable" --version 2>&1)"; then
+    echo "::error::failed to read $executable version: $actual" >&2
+    return 1
+  fi
+  if [ "$actual" != "$executable $expected" ]; then
+    echo "::error::$executable version mismatch: expected $expected, got '$actual'" >&2
+    return 1
+  fi
+}
+
+validate_tool_version_contract() {
+  if [ -n "${CARGO_DENY_VERSION:-}" ] && \
+    [ "$CARGO_DENY_VERSION" != "$REQUIRED_CARGO_DENY_VERSION" ]; then
+    echo "::error::workflow cargo-deny pin $CARGO_DENY_VERSION disagrees with gate pin $REQUIRED_CARGO_DENY_VERSION" >&2
+    return 1
+  fi
+  if [ -n "${CARGO_AUDIT_VERSION:-}" ] && \
+    [ "$CARGO_AUDIT_VERSION" != "$REQUIRED_CARGO_AUDIT_VERSION" ]; then
+    echo "::error::workflow cargo-audit pin $CARGO_AUDIT_VERSION disagrees with gate pin $REQUIRED_CARGO_AUDIT_VERSION" >&2
+    return 1
+  fi
+  require_exact_tool_version cargo-deny "$REQUIRED_CARGO_DENY_VERSION" || return 1
+  require_exact_tool_version cargo-audit "$REQUIRED_CARGO_AUDIT_VERSION" || return 1
+}
+
+# Non-vacuity fixtures for the contract above. Exact reported versions must pass;
+# both workflow-pin drift and binary-reported drift must fail in isolated
+# subprocesses before any dependency scan is allowed to begin.
+VERSION_FIXTURE_BIN="$WORK_DIR/tool-version-fixture-bin"
+mkdir -p "$VERSION_FIXTURE_BIN"
+ln -s "$ROOT_DIR/tools/check-supply-chain.sh" "$VERSION_FIXTURE_BIN/cargo-deny"
+ln -s "$ROOT_DIR/tools/check-supply-chain.sh" "$VERSION_FIXTURE_BIN/cargo-audit"
+
+if ! (
+  export PATH="$VERSION_FIXTURE_BIN:$PATH"
+  export SUPPLY_CHAIN_TOOL_VERSION_FAKE=1
+  export SUPPLY_CHAIN_FAKE_CARGO_DENY_VERSION="$REQUIRED_CARGO_DENY_VERSION"
+  export SUPPLY_CHAIN_FAKE_CARGO_AUDIT_VERSION="$REQUIRED_CARGO_AUDIT_VERSION"
+  export CARGO_DENY_VERSION="$REQUIRED_CARGO_DENY_VERSION"
+  export CARGO_AUDIT_VERSION="$REQUIRED_CARGO_AUDIT_VERSION"
+  validate_tool_version_contract
+) >"$WORK_DIR/tool-version-exact.stdout" 2>"$WORK_DIR/tool-version-exact.stderr"; then
+  sed -n '1,20p' "$WORK_DIR/tool-version-exact.stderr" >&2
+  echo "::error::exact scanner-version control was rejected" >&2
+  exit 1
+fi
+
+if (
+  export PATH="$VERSION_FIXTURE_BIN:$PATH"
+  export SUPPLY_CHAIN_TOOL_VERSION_FAKE=1
+  export SUPPLY_CHAIN_FAKE_CARGO_DENY_VERSION="$REQUIRED_CARGO_DENY_VERSION"
+  export SUPPLY_CHAIN_FAKE_CARGO_AUDIT_VERSION="$REQUIRED_CARGO_AUDIT_VERSION"
+  export CARGO_DENY_VERSION="0.20.2"
+  export CARGO_AUDIT_VERSION="$REQUIRED_CARGO_AUDIT_VERSION"
+  validate_tool_version_contract
+) >"$WORK_DIR/tool-version-env-drift.stdout" 2>"$WORK_DIR/tool-version-env-drift.stderr"; then
+  echo "::error::workflow scanner-version drift fixture unexpectedly passed" >&2
+  exit 1
+fi
+if ! grep -Fq 'workflow cargo-deny pin 0.20.2 disagrees with gate pin 0.19.4' \
+  "$WORK_DIR/tool-version-env-drift.stderr"; then
+  sed -n '1,20p' "$WORK_DIR/tool-version-env-drift.stderr" >&2
+  echo "::error::workflow scanner-version drift failed for the wrong reason" >&2
+  exit 1
+fi
+
+if (
+  export PATH="$VERSION_FIXTURE_BIN:$PATH"
+  export SUPPLY_CHAIN_TOOL_VERSION_FAKE=1
+  export SUPPLY_CHAIN_FAKE_CARGO_DENY_VERSION="0.20.2"
+  export SUPPLY_CHAIN_FAKE_CARGO_AUDIT_VERSION="$REQUIRED_CARGO_AUDIT_VERSION"
+  export CARGO_DENY_VERSION="$REQUIRED_CARGO_DENY_VERSION"
+  export CARGO_AUDIT_VERSION="$REQUIRED_CARGO_AUDIT_VERSION"
+  validate_tool_version_contract
+) >"$WORK_DIR/tool-version-binary-drift.stdout" 2>"$WORK_DIR/tool-version-binary-drift.stderr"; then
+  echo "::error::binary-reported scanner-version drift fixture unexpectedly passed" >&2
+  exit 1
+fi
+if ! grep -Fq "cargo-deny version mismatch: expected 0.19.4, got 'cargo-deny 0.20.2'" \
+  "$WORK_DIR/tool-version-binary-drift.stderr"; then
+  sed -n '1,20p' "$WORK_DIR/tool-version-binary-drift.stderr" >&2
+  echo "::error::binary scanner-version drift failed for the wrong reason" >&2
+  exit 1
+fi
+echo "tool version fixtures ok: exact pins accepted, env and binary drift refused"
+
+if ! validate_tool_version_contract; then
+  exit 1
+fi
+echo "supply-chain tools ok: cargo-deny $REQUIRED_CARGO_DENY_VERSION, cargo-audit $REQUIRED_CARGO_AUDIT_VERSION"
 
 ASSURANCE_HELPER_DIR="$ROOT_DIR/tools/negative-registry-ast"
 ASSURANCE_HELPER_MANIFEST="$ASSURANCE_HELPER_DIR/Cargo.toml"

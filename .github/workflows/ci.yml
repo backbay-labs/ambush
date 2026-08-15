@@ -236,14 +236,6 @@ jobs:
           restore-keys: |
             cargo-home-${{ runner.os }}-
 
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -251,8 +243,6 @@ jobs:
         run: cargo build --workspace --all-targets
 
   clippy:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -290,8 +280,6 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -413,8 +401,6 @@ jobs:
   # the correct failure -- silently not compiling the solver is what this job
   # exists to end.
   solver-z3:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -493,8 +479,6 @@ jobs:
         run: bash tools/check-fixture-freshness.sh
 
   platform-contract:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -547,8 +531,6 @@ jobs:
         run: bash tools/check-platform-openapi.sh
 
   proof-surfaces:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -618,8 +600,6 @@ jobs:
         run: bash tools/check-worktree-clean.sh "the proof-surface run"
 
   jetstream:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -655,8 +635,6 @@ jobs:
         run: bash tools/with-nats-jetstream.sh cargo test -p swarm-pheromone --test jetstream --test multi_instance -- --ignored
 
   benchmark:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -703,6 +681,9 @@ jobs:
 
   supply-chain:
     runs-on: ubuntu-latest
+    env:
+      CARGO_DENY_VERSION: "0.19.4"
+      CARGO_AUDIT_VERSION: "0.22.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -718,18 +699,26 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        run: command -v cargo-deny >/dev/null || cargo install cargo-deny --locked
+        run: |
+          if [ "$(cargo-deny --version 2>/dev/null || true)" != "cargo-deny ${CARGO_DENY_VERSION}" ]; then
+            cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked --force
+          fi
+          cargo-deny --version
 
       - name: Install cargo-audit
-        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+        run: |
+          if [ "$(cargo-audit --version 2>/dev/null || true)" != "cargo-audit ${CARGO_AUDIT_VERSION}" ]; then
+            cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
+          fi
+          cargo-audit --version
 
       - name: Run supply-chain checks
         run: bash tools/check-supply-chain.sh

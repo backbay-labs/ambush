@@ -64,7 +64,7 @@ bash tools/check-fixture-freshness.sh
 bash tools/check-platform-openapi.sh      # needs `uv` on PATH and outbound network (PyPI)
 bash tools/check-stigmergic-feedback-benchmark.sh
 bash tools/check-adversary-emulation-coverage.sh
-bash tools/check-supply-chain.sh          # needs cargo-deny and cargo-audit installed
+bash tools/check-supply-chain.sh          # needs cargo-deny 0.19.4 and cargo-audit 0.22.0
 bash tools/check-hot-path-regression.sh   # Criterion; the slowest of these by a wide margin
 ```
 
