@@ -6,15 +6,13 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write
-  attestations: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  CARGO_CYCLONEDX_VERSION: "0.5.9"
 
 jobs:
   changelog:
@@ -51,22 +49,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-release-${{ runner.os }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-release-${{ runner.os }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-cyclonedx
-        run: command -v cargo-cyclonedx >/dev/null || cargo install cargo-cyclonedx --locked
+        run: |
+          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked --force
+          test "$(cargo cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${CARGO_CYCLONEDX_VERSION}"
 
       - name: Generate workspace SBOM
         run: bash tools/generate-sbom.sh artifacts/sbom
@@ -88,16 +85,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-release-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-release-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -129,6 +123,11 @@ jobs:
       - sbom
       - release-hardening
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       image_ref: ${{ steps.image-ref.outputs.value }}
@@ -200,6 +199,8 @@ jobs:
       - sbom
       - publish-container
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download changelog artifact
         uses: actions/download-artifact@v4

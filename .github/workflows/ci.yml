@@ -365,10 +365,10 @@ jobs:
   # than needing libz3-dev or a source build. Measured in this worktree: a cold
   # `cargo check -p swarm-runtime --features z3 --all-targets` finished in 58s and
   # the test run in 1m06s. The download is a network fetch at build time; it is
-  # cached with the other build artifacts by the same key the sibling jobs use.
-  # If GitHub releases ever becomes unreachable this job fails loudly, which is
-  # the correct failure -- silently not compiling the solver is what this job
-  # exists to end.
+  # not preserved: this lane restores registry/git sources only, then uses a cold,
+  # uncached target directory and downloads the solver again. If GitHub releases
+  # ever becomes unreachable this job fails loudly, which is the correct failure
+  # -- silently not compiling the solver is what this job exists to end.
   solver-z3:
     runs-on: ubuntu-latest
     steps:

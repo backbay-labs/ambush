@@ -113,16 +113,18 @@
 # WHY THE CARGO CACHE EXCLUDES INSTALLED EXECUTABLES
 #   A version string is not executable provenance. GitHub Actions cache entries
 #   are reachable from other runs in the same repository scope, so restoring
-#   ~/.cargo/bin could put an attacker-controlled cargo-deny or cargo-audit ahead
-#   of the toolchain. A planted executable can print the pinned version and then
-#   false-green the scan. Cargo's .crates.toml and .crates2.json install records
-#   are excluded with the binaries; every cache retains only downloaded registry
-#   and git sources. Every key and restore prefix uses the rotated
+#   ~/.cargo/bin could put an attacker-controlled cargo-deny, cargo-audit, or
+#   cargo-cyclonedx ahead of the toolchain. A planted executable can print the
+#   pinned version and then false-green a scan or emit a false release SBOM.
+#   Cargo's .crates.toml and .crates2.json install records are excluded with the
+#   binaries; every cache in every tracked workflow retains only downloaded
+#   registry and git sources. Every key and restore prefix uses the rotated
 #   cargo-home-sources-v1 namespace, because changing only `path:` would not stop
 #   a legacy cache archive from extracting the paths it recorded when created.
-#   CI then rebuilds both exact scanner versions unconditionally with
-#   `cargo install --locked --force`, and this gate checks that entire workflow
-#   contract plus mutations that try to restore each bypass.
+#   CI and release rebuild all three exact tools unconditionally with
+#   `cargo install --locked --force`. The release's validation jobs also inherit
+#   only `contents: read`; write permissions exist solely on the two jobs that
+#   publish. This gate checks that whole contract plus mutations for every bypass.
 #
 # WHY `-D advisory-not-detected`, `-D unmatched-skip`, AND `-D unnecessary-skip`
 #   All three are warnings by default, and a warning does not change the exit code:
@@ -207,6 +209,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 REQUIRED_CARGO_DENY_VERSION="0.19.4"
 REQUIRED_CARGO_AUDIT_VERSION="0.22.0"
+REQUIRED_CARGO_CYCLONEDX_VERSION="0.5.9"
 
 require_exact_tool_version() {
   local executable="$1"
@@ -309,17 +312,38 @@ fi
 echo "supply-chain tools ok: cargo-deny $REQUIRED_CARGO_DENY_VERSION, cargo-audit $REQUIRED_CARGO_AUDIT_VERSION"
 
 # Keep executable provenance separate from downloaded-source reuse. This parser
-# intentionally validates every actions/cache block in the workflow, not merely
-# the supply job: a poisoned cargo executable restored by any lane is still a
-# poisoned executable. The mutations make the negative contract executable.
-python3 - "$ROOT_DIR/.github/workflows/ci.yml" <<'PY'
+# asks git for every tracked workflow rather than maintaining another file list.
+# Every actions/cache use must be a source-only Cargo cache, and release jobs are
+# held to their exact least-privilege token and tool-install contracts. The
+# mutations make every negative branch executable.
+python3 - "$ROOT_DIR" "$REQUIRED_CARGO_CYCLONEDX_VERSION" <<'PY'
 import pathlib
 import re
+import subprocess
 import sys
 
-workflow_path = pathlib.Path(sys.argv[1])
-workflow = workflow_path.read_text(encoding="utf-8")
+root = pathlib.Path(sys.argv[1])
+cyclonedx_version = sys.argv[2]
+tracked = subprocess.run(
+    ["git", "-C", str(root), "ls-files", "--", ".github/workflows"],
+    check=True,
+    stdout=subprocess.PIPE,
+    text=True,
+).stdout.splitlines()
+workflow_names = sorted(
+    name
+    for name in tracked
+    if pathlib.PurePosixPath(name).parent == pathlib.PurePosixPath(".github/workflows")
+    and pathlib.PurePosixPath(name).suffix == ".yml"
+)
+if not workflow_names:
+    raise SystemExit("git reported no tracked .github/workflows/*.yml files")
+workflows = {
+    name: (root / name).read_text(encoding="utf-8") for name in workflow_names
+}
 
+ci_name = ".github/workflows/ci.yml"
+release_name = ".github/workflows/release.yml"
 allowed_paths = [
     "~/.cargo/registry/index/",
     "~/.cargo/registry/cache/",
@@ -343,150 +367,466 @@ audit_install = """      - name: Install cargo-audit
           cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
           cargo-audit --version
 """
+cyclonedx_install = f"""      - name: Install cargo-cyclonedx
+        run: |
+          cargo install cargo-cyclonedx --version "${{CARGO_CYCLONEDX_VERSION}}" --locked --force
+          test "$(cargo cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${{CARGO_CYCLONEDX_VERSION}}"
+"""
+cyclonedx_pin = f'  CARGO_CYCLONEDX_VERSION: "{cyclonedx_version}"\n'
+top_permissions = """permissions:
+  contents: read
+"""
+publish_permissions = """    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+"""
+github_release_permissions = """    permissions:
+      contents: write
+"""
 
 
-def workflow_contract_problems(text: str) -> list[str]:
-    problems: list[str] = []
-
-    for forbidden in forbidden_paths:
-        if forbidden in text:
-            problems.append(f"forbidden Cargo cache path is present: {forbidden}")
-
-    action_count = len(re.findall(r"uses: actions/cache@", text))
-    blocks = re.findall(
-        r"(?ms)^      - name: Cache cargo home\n.*?(?=^      - name:|\Z)",
+def job_body(text: str, job: str) -> str | None:
+    match = re.search(
+        rf"(?ms)^  {re.escape(job)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
         text,
     )
-    if not blocks:
-        problems.append("workflow contains no Cargo source cache blocks")
-    if action_count != len(blocks):
-        problems.append(
-            "every actions/cache use must be a validated Cache cargo home block "
-            f"(actions={action_count}, validated={len(blocks)})"
-        )
+    return None if match is None else match.group("body")
 
-    for index, block in enumerate(blocks, start=1):
-        path_match = re.search(
-            r"(?m)^          path: \|\n"
-            r"(?P<paths>(?:            \S.*\n)+)"
-            r"^          key: ",
-            block,
-        )
-        if path_match is None:
-            problems.append(f"Cargo cache block {index} has no parseable path list")
-        else:
-            paths = [line.strip() for line in path_match.group("paths").splitlines()]
-            if paths != allowed_paths:
-                problems.append(
-                    f"Cargo cache block {index} paths are not the exact source-only set: {paths!r}"
-                )
 
-        key_match = re.search(r"(?m)^          key: (.+)$", block)
-        if key_match is None or not key_match.group(1).startswith(namespace):
-            actual = key_match.group(1) if key_match else "<missing>"
+def permission_blocks(body: str) -> list[str]:
+    return re.findall(r"(?m)^    permissions:\n(?:      \S.*\n)+", body)
+
+
+def workflow_contract_problems(documents: dict[str, str]) -> list[str]:
+    problems: list[str] = []
+    if sorted(documents) != workflow_names:
+        problems.append("validator input no longer equals git's tracked workflow inventory")
+
+    for name, text in sorted(documents.items()):
+        for forbidden in forbidden_paths:
+            if forbidden in text:
+                problems.append(f"{name}: forbidden Cargo cache path is present: {forbidden}")
+
+        action_count = len(re.findall(r"uses: actions/cache@", text))
+        blocks = re.findall(
+            r"(?ms)^      - name: Cache cargo home\n.*?(?=^      - name:|\Z)",
+            text,
+        )
+        if action_count != len(blocks):
             problems.append(
-                f"Cargo cache block {index} key is outside {namespace!r}: {actual}"
+                f"{name}: every actions/cache use must be a validated Cache cargo home "
+                f"block (actions={action_count}, validated={len(blocks)})"
             )
 
-        restore_match = re.search(
-            r"(?m)^          restore-keys: \|\n(?P<keys>(?:            \S.*\n)+)",
-            block,
-        )
-        if restore_match is None:
-            problems.append(f"Cargo cache block {index} has no parseable restore prefix")
-        else:
-            restore_keys = [
-                line.strip() for line in restore_match.group("keys").splitlines()
-            ]
-            if not restore_keys or any(
-                not key.startswith(namespace) for key in restore_keys
-            ):
-                problems.append(
-                    f"Cargo cache block {index} has legacy restore prefix: {restore_keys!r}"
-                )
+        for index, block in enumerate(blocks, start=1):
+            label = f"{name}: Cargo cache block {index}"
+            path_match = re.search(
+                r"(?m)^          path: \|\n"
+                r"(?P<paths>(?:            \S.*\n)+)"
+                r"^          key: ",
+                block,
+            )
+            if path_match is None:
+                problems.append(f"{label} has no parseable path list")
+            else:
+                paths = [line.strip() for line in path_match.group("paths").splitlines()]
+                if paths != allowed_paths:
+                    problems.append(
+                        f"{label} paths are not the exact source-only set: {paths!r}"
+                    )
 
-    supply_match = re.search(
-        r"(?ms)^  supply-chain:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
-        text,
-    )
-    if supply_match is None:
-        problems.append("workflow has no parseable supply-chain job")
+            key_match = re.search(r"(?m)^          key: (.+)$", block)
+            if key_match is None or not key_match.group(1).startswith(namespace):
+                actual = key_match.group(1) if key_match else "<missing>"
+                problems.append(f"{label} key is outside {namespace!r}: {actual}")
+
+            restore_match = re.search(
+                r"(?m)^          restore-keys: \|\n(?P<keys>(?:            \S.*\n)+)",
+                block,
+            )
+            if restore_match is None:
+                problems.append(f"{label} has no parseable restore prefix")
+            else:
+                restore_keys = [
+                    line.strip() for line in restore_match.group("keys").splitlines()
+                ]
+                if not restore_keys or any(
+                    not key.startswith(namespace) for key in restore_keys
+                ):
+                    problems.append(f"{label} has legacy restore prefix: {restore_keys!r}")
+
+    ci = documents.get(ci_name, "")
+    supply_job = job_body(ci, "supply-chain")
+    if supply_job is None:
+        problems.append(f"{ci_name}: workflow has no parseable supply-chain job")
         supply_job = ""
-    else:
-        supply_job = supply_match.group("body")
-
     if supply_job.count(deny_install) != 1:
         problems.append(
-            "cargo-deny must be installed exactly once, unconditionally, with --locked --force"
+            f"{ci_name}: cargo-deny must be installed exactly once, unconditionally, "
+            "with --locked --force"
         )
     if supply_job.count(audit_install) != 1:
         problems.append(
-            "cargo-audit must be installed exactly once, unconditionally, with --locked --force"
+            f"{ci_name}: cargo-audit must be installed exactly once, unconditionally, "
+            "with --locked --force"
+        )
+
+    release = documents.get(release_name, "")
+    sbom_job = job_body(release, "sbom")
+    if sbom_job is None:
+        problems.append(f"{release_name}: workflow has no parseable sbom job")
+        sbom_job = ""
+    if release.count(cyclonedx_pin) != 1:
+        problems.append(
+            f"{release_name}: cargo-cyclonedx pin must be exactly {cyclonedx_version}"
+        )
+    if sbom_job.count(cyclonedx_install) != 1:
+        problems.append(
+            f"{release_name}: cargo-cyclonedx must be installed exactly once, "
+            "unconditionally, with --locked --force and exact version verification"
+        )
+
+    permission_count = len(re.findall(r"(?m)^ *permissions:$", release))
+    if release.count(top_permissions) != 1 or permission_count != 3:
+        problems.append(
+            f"{release_name}: top-level permissions must be exactly contents: read "
+            "with exactly two job overrides"
+        )
+    publish_job = job_body(release, "publish-container") or ""
+    if permission_blocks(publish_job) != [publish_permissions]:
+        problems.append(
+            f"{release_name}: publish-container permissions must be exactly "
+            "contents:read, packages:write, id-token:write, attestations:write"
+        )
+    github_release_job = job_body(release, "github-release") or ""
+    if permission_blocks(github_release_job) != [github_release_permissions]:
+        problems.append(
+            f"{release_name}: github-release permissions must be exactly contents:write"
         )
 
     return problems
 
 
-def require_valid(label: str, text: str) -> None:
-    problems = workflow_contract_problems(text)
+def replaced(
+    documents: dict[str, str], name: str, old: str, new: str, label: str
+) -> dict[str, str]:
+    text = documents[name]
+    mutated = text.replace(old, new, 1)
+    if mutated == text:
+        raise SystemExit(f"could not construct {label}")
+    result = dict(documents)
+    result[name] = mutated
+    return result
+
+
+def require_valid(label: str, documents: dict[str, str]) -> None:
+    problems = workflow_contract_problems(documents)
     if problems:
         raise SystemExit(f"{label} unexpectedly failed: {'; '.join(problems)}")
 
 
-def require_invalid(label: str, text: str, expected: str) -> None:
-    problems = workflow_contract_problems(text)
-    matching = [problem for problem in problems if expected in problem]
-    if not matching:
+def require_invalid(
+    label: str, documents: dict[str, str], expected: list[str]
+) -> None:
+    problems = workflow_contract_problems(documents)
+    missing = [item for item in expected if not any(item in problem for problem in problems)]
+    if missing:
         rendered = "; ".join(problems) if problems else "no problems"
-        raise SystemExit(f"{label} unexpectedly passed or failed vacuously: {rendered}")
-    print(f"workflow mutation refused: {label}: {matching[0]}")
+        raise SystemExit(
+            f"{label} unexpectedly passed or failed vacuously; missing {missing!r}: {rendered}"
+        )
+    matched = [problem for problem in problems if any(item in problem for item in expected)]
+    print(f"workflow mutation refused: {label}: {'; '.join(matched)}")
 
 
-require_valid("checked-in workflow", workflow)
+require_valid("checked-in workflows", workflows)
 
-for forbidden in forbidden_paths:
-    mutated = workflow.replace(
-        "            ~/.cargo/registry/index/\n",
-        f"            {forbidden}\n            ~/.cargo/registry/index/\n",
-        1,
+cache_workflows = [
+    name for name, text in sorted(workflows.items()) if "uses: actions/cache@" in text
+]
+if not cache_workflows:
+    raise SystemExit("tracked workflow inventory contains no actions/cache use")
+for name in cache_workflows:
+    for forbidden in forbidden_paths:
+        mutated = replaced(
+            workflows,
+            name,
+            "            ~/.cargo/registry/index/\n",
+            f"            {forbidden}\n            ~/.cargo/registry/index/\n",
+            f"{name} forbidden-path mutation {forbidden}",
+        )
+        require_invalid(
+            f"{name} forbidden-path mutation {forbidden}",
+            mutated,
+            [f"{name}: forbidden Cargo cache path is present: {forbidden}"],
+        )
+
+    legacy_key = replaced(
+        workflows, name, namespace, "cargo-home-", f"{name} legacy cache-key mutation"
     )
-    if mutated == workflow:
-        raise SystemExit(f"could not construct forbidden-path mutation for {forbidden}")
+    require_invalid(f"{name} legacy cache-key mutation", legacy_key, ["key is outside"])
+
+    legacy_restore = replaced(
+        workflows,
+        name,
+        f"            {namespace}",
+        "            cargo-home-",
+        f"{name} legacy restore-prefix mutation",
+    )
     require_invalid(
-        f"forbidden-path mutation {forbidden}",
-        mutated,
-        f"forbidden Cargo cache path is present: {forbidden}",
+        f"{name} legacy restore-prefix mutation",
+        legacy_restore,
+        ["legacy restore prefix"],
     )
 
-legacy_key = workflow.replace(namespace, "cargo-home-", 1)
-if legacy_key == workflow:
-    raise SystemExit("could not construct legacy cache-key mutation")
-require_invalid("legacy cache-key mutation", legacy_key, "key is outside")
+    target_cache = replaced(
+        workflows,
+        name,
+        "            ~/.cargo/registry/index/\n",
+        "            target/ci\n            ~/.cargo/registry/index/\n",
+        f"{name} target-cache mutation",
+    )
+    require_invalid(
+        f"{name} target-cache mutation", target_cache, ["not the exact source-only set"]
+    )
 
-restore_marker = f"            {namespace}"
-legacy_restore = workflow.replace(restore_marker, "            cargo-home-", 1)
-if legacy_restore == workflow:
-    raise SystemExit("could not construct legacy restore-prefix mutation")
-require_invalid("legacy restore-prefix mutation", legacy_restore, "legacy restore prefix")
+    renamed_cache = replaced(
+        workflows,
+        name,
+        "      - name: Cache cargo home\n",
+        "      - name: Cache build tools\n",
+        f"{name} unvalidated-cache-name mutation",
+    )
+    require_invalid(
+        f"{name} unvalidated-cache-name mutation",
+        renamed_cache,
+        ["every actions/cache use must be a validated Cache cargo home block"],
+    )
 
-conditional_install = workflow.replace(
-    "      - name: Install cargo-deny\n        run: |\n",
-    "      - name: Install cargo-deny\n        if: success()\n        run: |\n",
-    1,
+for tool in ("cargo-deny", "cargo-audit"):
+    conditional = replaced(
+        workflows,
+        ci_name,
+        f"      - name: Install {tool}\n        run: |\n",
+        f"      - name: Install {tool}\n        if: success()\n        run: |\n",
+        f"conditional {tool} install mutation",
+    )
+    require_invalid(
+        f"conditional {tool} install mutation",
+        conditional,
+        [f"{tool} must be installed exactly once, unconditionally"],
+    )
+
+conditional_cyclonedx = replaced(
+    workflows,
+    release_name,
+    "      - name: Install cargo-cyclonedx\n        run: |\n",
+    "      - name: Install cargo-cyclonedx\n        if: success()\n        run: |\n",
+    "conditional cargo-cyclonedx install mutation",
 )
-if conditional_install == workflow:
-    raise SystemExit("could not construct conditional scanner-install mutation")
 require_invalid(
-    "conditional scanner-install mutation",
-    conditional_install,
-    "cargo-deny must be installed exactly once, unconditionally",
+    "conditional cargo-cyclonedx install mutation",
+    conditional_cyclonedx,
+    ["cargo-cyclonedx must be installed exactly once, unconditionally"],
 )
+
+cyclonedx_drift = replaced(
+    workflows,
+    release_name,
+    cyclonedx_pin,
+    '  CARGO_CYCLONEDX_VERSION: "0.5.8"\n',
+    "cargo-cyclonedx pin drift mutation",
+)
+require_invalid(
+    "cargo-cyclonedx pin drift mutation",
+    cyclonedx_drift,
+    [f"cargo-cyclonedx pin must be exactly {cyclonedx_version}"],
+)
+
+fake_cached_release = replaced(
+    workflows,
+    release_name,
+    "            ~/.cargo/registry/index/\n",
+    "            ~/.cargo/bin/\n            ~/.cargo/registry/index/\n",
+    "fake cached cargo-cyclonedx path mutation",
+)
+fake_cached_release = replaced(
+    fake_cached_release,
+    release_name,
+    cyclonedx_install,
+    """      - name: Install cargo-cyclonedx
+        run: command -v cargo-cyclonedx >/dev/null || cargo install cargo-cyclonedx --locked
+""",
+    "fake cached cargo-cyclonedx conditional-trust mutation",
+)
+require_invalid(
+    "fake cached cargo-cyclonedx false-SBOM mutation",
+    fake_cached_release,
+    [
+        "forbidden Cargo cache path is present: ~/.cargo/bin/",
+        "cargo-cyclonedx must be installed exactly once, unconditionally",
+    ],
+)
+
+permission_mutations = [
+    (
+        "top-level write permission mutation",
+        top_permissions,
+        "permissions:\n  contents: write\n",
+        "top-level permissions must be exactly contents: read",
+    ),
+    (
+        "validation-job write permission mutation",
+        "  sbom:\n    runs-on: ubuntu-latest\n",
+        "  sbom:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n",
+        "top-level permissions must be exactly contents: read",
+    ),
+    (
+        "publish permission removal mutation",
+        "      attestations: write\n",
+        "      attestations: read\n",
+        "publish-container permissions must be exactly",
+    ),
+    (
+        "github-release ambient permission mutation",
+        github_release_permissions,
+        "    permissions:\n      contents: write\n      packages: write\n",
+        "github-release permissions must be exactly contents:write",
+    ),
+]
+for label, old, new, expected in permission_mutations:
+    mutated = replaced(workflows, release_name, old, new, label)
+    require_invalid(label, mutated, [expected])
 
 print(
-    "workflow cache fixtures ok: source-only rotated caches and unconditional "
-    "scanner installs enforced"
+    f"workflow contract fixtures ok: {len(workflow_names)} tracked workflow(s), "
+    f"{sum(len(re.findall(r'uses: actions/cache@', text)) for text in workflows.values())} "
+    "source-only caches, exact tool installs, and least-privilege release permissions"
 )
 PY
+
+# A cached fake can report the exact reviewed version while writing a syntactically
+# valid but empty object as the release SBOM. The workflow contract above prevents
+# that executable from being restored or trusted; the generator independently
+# rejects its output. The additional parser fixtures close duplicate-key and
+# Python-json nonstandard-number acceptance rather than assuming json.loads is
+# strict by default.
+VALID_SBOM_DIR="$WORK_DIR/valid-sbom"
+mkdir -p "$VALID_SBOM_DIR"
+cat >"$VALID_SBOM_DIR/valid.cdx.json" <<'JSON'
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:00000000-0000-4000-8000-000000000001",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "bom-ref": "fixture@1.0.0",
+      "name": "fixture",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "dependency@2.0.0",
+      "name": "dependency",
+      "version": "2.0.0"
+    }
+  ],
+  "dependencies": [
+    {"ref": "fixture@1.0.0", "dependsOn": ["dependency@2.0.0"]},
+    {"ref": "dependency@2.0.0", "dependsOn": []}
+  ]
+}
+JSON
+if ! bash "$ROOT_DIR/tools/generate-sbom.sh" --validate-dir "$VALID_SBOM_DIR" \
+  >"$WORK_DIR/valid-sbom.stdout" 2>"$WORK_DIR/valid-sbom.stderr"; then
+  sed -n '1,20p' "$WORK_DIR/valid-sbom.stderr" >&2
+  echo "::error::valid CycloneDX 1.5 control was rejected" >&2
+  exit 1
+fi
+
+expect_sbom_rejection() {
+  local label="$1"
+  local directory="$2"
+  local expected="$3"
+
+  if bash "$ROOT_DIR/tools/generate-sbom.sh" --validate-dir "$directory" \
+    >"$WORK_DIR/$label.stdout" 2>"$WORK_DIR/$label.stderr"; then
+    echo "::error::$label SBOM mutation unexpectedly passed" >&2
+    exit 1
+  fi
+  if ! grep -Fq "$expected" "$WORK_DIR/$label.stderr"; then
+    sed -n '1,20p' "$WORK_DIR/$label.stderr" >&2
+    echo "::error::$label SBOM mutation failed for the wrong reason" >&2
+    exit 1
+  fi
+  printf 'SBOM mutation refused: %s: %s\n' "$label" "$expected"
+}
+
+FAKE_CYCLONEDX_BIN="$WORK_DIR/fake-cyclonedx-bin"
+FAKE_SBOM_DIR="$WORK_DIR/fake-cyclonedx-sbom"
+mkdir -p "$FAKE_CYCLONEDX_BIN" "$FAKE_SBOM_DIR"
+cat >"$FAKE_CYCLONEDX_BIN/cargo-cyclonedx" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "cyclonedx" ]]; then
+  echo "unexpected fake cargo-cyclonedx invocation: $*" >&2
+  exit 2
+fi
+shift
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'cargo-cyclonedx-cyclonedx %s\n' "${SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION:?}"
+  exit 0
+fi
+printf '{}\n' >"${SUPPLY_CHAIN_FAKE_SBOM_PATH:?}"
+SH
+chmod +x "$FAKE_CYCLONEDX_BIN/cargo-cyclonedx"
+
+fake_cyclonedx_version="$(
+  PATH="$FAKE_CYCLONEDX_BIN:$PATH" \
+    SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
+    cargo cyclonedx --version
+)"
+if [[ "$fake_cyclonedx_version" != \
+  "cargo-cyclonedx-cyclonedx $REQUIRED_CARGO_CYCLONEDX_VERSION" ]]; then
+  echo "::error::fake cargo-cyclonedx did not reproduce exact-version spoof" >&2
+  exit 1
+fi
+if ! PATH="$FAKE_CYCLONEDX_BIN:$PATH" \
+  SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
+  SUPPLY_CHAIN_FAKE_SBOM_PATH="$FAKE_SBOM_DIR/fake.cdx.json" \
+  cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --quiet; then
+  echo "::error::fake cargo-cyclonedx failed before constructing false SBOM evidence" >&2
+  exit 1
+fi
+expect_sbom_rejection \
+  "fake-cyclonedx-empty-object" "$FAKE_SBOM_DIR" "bomFormat must equal 'CycloneDX'"
+
+DUPLICATE_SBOM_DIR="$WORK_DIR/duplicate-key-sbom"
+NAN_SBOM_DIR="$WORK_DIR/nan-sbom"
+INFINITY_SBOM_DIR="$WORK_DIR/infinity-sbom"
+JUNK_SBOM_DIR="$WORK_DIR/junk-sbom"
+mkdir -p "$DUPLICATE_SBOM_DIR" "$NAN_SBOM_DIR" "$INFINITY_SBOM_DIR" "$JUNK_SBOM_DIR"
+printf '%s\n' \
+  '{"bomFormat":"CycloneDX","bomFormat":"CycloneDX"}' \
+  >"$DUPLICATE_SBOM_DIR/duplicate.cdx.json"
+printf '%s\n' '{"bomFormat":NaN}' >"$NAN_SBOM_DIR/nan.cdx.json"
+printf '%s\n' '{"bomFormat":Infinity}' >"$INFINITY_SBOM_DIR/infinity.cdx.json"
+printf '%s\n' 'not-json' >"$JUNK_SBOM_DIR/junk.cdx.json"
+expect_sbom_rejection \
+  "duplicate-key" "$DUPLICATE_SBOM_DIR" "duplicate object key 'bomFormat'"
+expect_sbom_rejection \
+  "nan-constant" "$NAN_SBOM_DIR" "non-standard JSON constant NaN"
+expect_sbom_rejection \
+  "infinity-constant" "$INFINITY_SBOM_DIR" "non-standard JSON constant Infinity"
+expect_sbom_rejection \
+  "non-json-junk" "$JUNK_SBOM_DIR" "not valid UTF-8 JSON"
+echo "SBOM validation fixtures ok: real shape control accepted; spoofed and malformed JSON refused"
 
 ASSURANCE_HELPER_DIR="$ROOT_DIR/tools/negative-registry-ast"
 ASSURANCE_HELPER_MANIFEST="$ASSURANCE_HELPER_DIR/Cargo.toml"
