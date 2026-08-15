@@ -243,10 +243,11 @@ fn release_subject_id(receipt: &RollbackReceipt) -> Result<String, swarm_crypto:
 /// point; `GovernancePolicy::can_act` takes the same posture with an empty
 /// keyring (b4bf119).
 ///
-/// PASS THE AUTHORITY THAT ATTESTED. On the release path that is
-/// `ContainmentSweep::governance()`, the one authority the sweep signs with, so
-/// the anchor and the signer come from the same object rather than from two
-/// configurations that could drift.
+/// VERIFY THROUGH THE SWEEP THAT ATTESTED. On the release path callers use
+/// [`ContainmentSweep::verify_release_attestation`], which verifies against the
+/// private authority the sweep signs with. The anchor and signer therefore come
+/// from the same object rather than from two configurations that could drift,
+/// without exposing a cloneable authority handle.
 ///
 /// STILL NOT CHECKED: chain linkage. Nothing here follows
 /// `previous_commit_hash` back to a known commit, so a governor's own key can
@@ -582,22 +583,21 @@ impl ContainmentSweep {
         self.store.open_leases()
     }
 
-    /// The authority this sweep attests releases with -- and therefore the one a
-    /// verifier must anchor to.
+    /// Verify a release against the same private authority that attested it.
     ///
-    /// Public so the operator route can hand it to [`verify_release_attestation`]
-    /// rather than building a second trust anchor from configuration. Two anchors
-    /// for one chain is how a verifier ends up checking against a governor set the
-    /// signer never belonged to and reporting the mismatch as tampering, or worse,
-    /// the other way round.
-    pub fn governance(&self) -> Option<&GovernanceAuthority> {
-        self.governance.as_ref()
+    /// This is deliberately the only public release-verification seam. Returning
+    /// or borrowing the authority would let a caller clone the capability and
+    /// invoke unrelated authorization operations.
+    pub fn verify_release_attestation(
+        &self,
+        receipt: &RollbackReceipt,
+    ) -> Result<ConsensusGovernanceReceipt, ReleaseAttestationError> {
+        verify_release_attestation(receipt, self.governance.as_ref())
     }
 
     /// Process-local identity of the configured authority, for composition checks.
     ///
-    /// Unlike [`Self::governance`], this is observational only and cannot be used to
-    /// invoke an authorization method.
+    /// This is observational only and cannot invoke an authorization method.
     pub fn governance_authority_identity(
         &self,
     ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
@@ -617,7 +617,7 @@ impl ContainmentSweep {
             lease_id,
             RollbackTrigger::Manual,
             now_ms,
-            self.governance(),
+            self.governance.as_ref(),
         )
         .await
     }
@@ -652,7 +652,7 @@ impl ContainmentSweep {
                 lease.lease_id(),
                 RollbackTrigger::Expiry,
                 now_ms,
-                self.governance(),
+                self.governance.as_ref(),
             )
             .await
             {

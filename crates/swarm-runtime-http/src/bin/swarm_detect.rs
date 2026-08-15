@@ -1620,13 +1620,6 @@ mod tests {
             state.human_resume_governance_authority_identity(),
             Some(expected_identity)
         );
-        assert!(
-            sweep
-                .governance()
-                .expect("shipped release verifier has a trust anchor")
-                .same_policy(&authority),
-        );
-
         drop(state);
         drop(dispatcher);
         drop(sweep);

@@ -41,7 +41,7 @@ const REGISTERED_SOURCE_SEMANTIC_SHA256: [(&str, &str); 4] = [
     ),
     (
         "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs",
-        "7a4f49105a180f9fdbe732d0a9061b7d03fa818a62b7dfde21b2d74738a5e5e4",
+        "d2c74d06fa733806330980efc95f08734562a20009197de1fa1dfe3f69ab822e",
     ),
     (
         "crates/swarm-spine/tests/negative_envelope_and_chain.rs",

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Authenticated governance persistence, consensus authority, and the Tom role.
 //!
 //! ## Owns

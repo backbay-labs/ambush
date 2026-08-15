@@ -137,14 +137,14 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
 }
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
-    "tools/check-single-governor-key.sh": "1fccfde1711ae3da773463544ef8cf8bab2b655a4e2d5bf0e375a088ba42b9dd",
+    "tools/check-single-governor-key.sh": "b479db26558891a3b5d32927d41ec041ae00a4126378d1f632e452ac38f2ee10",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
-    "crates/swarm-governance/src/lib.rs": "b71f19cee2bee9e643d2bcf3919c3d10e4210148a159e27e5a42263ddb50b3b7",
+    "crates/swarm-governance/src/lib.rs": "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896",
 }
 SINGLE_GOVERNOR_GATE_REL = "tools/check-single-governor-key.sh"
 SINGLE_GOVERNOR_GATE_OUTPUT = (
-    "single-governor-key gate: 46 fixture cases behaved as documented "
-    "(42 adversarial, 4 controls); no key collection on the governance signing "
+    "single-governor-key gate: 58 fixture cases behaved as documented "
+    "(52 adversarial, 6 controls); no key collection on the governance signing "
     "path; shipped governance authority is one opaque concrete handle with an "
     "authenticated mint (crates/swarm-governance/src crates/swarm-consensus/src "
     "crates/swarm-policy/src)"
@@ -2886,7 +2886,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 169 self-tests passed (3 clean controls, 166 adversarial)'\n"
+        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 171 self-tests passed (3 clean controls, 168 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -2920,7 +2920,7 @@ def bootstrap_boundary_self_test(base):
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
         "check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; "
-        "169 self-tests passed (3 clean controls, 166 adversarial)"
+        "171 self-tests passed (3 clean controls, 168 adversarial)"
     )
 
     def startup_payload(name):
@@ -3431,7 +3431,14 @@ def governance_assurance_contract_self_test(base):
 
     def copy_fixture(name):
         root = base / name
-        for crate_name in ("swarm-governance", "swarm-consensus", "swarm-policy"):
+        for crate_name in (
+            "swarm-governance",
+            "swarm-consensus",
+            "swarm-policy",
+            "swarm-ingest-runtime",
+            "swarm-runtime",
+            "swarm-runtime-http",
+        ):
             source = REPO_ROOT / "crates" / crate_name / "src"
             destination = root / "crates" / crate_name / "src"
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -3497,6 +3504,64 @@ def governance_assurance_contract_self_test(base):
                 file=sys.stderr,
             )
 
+    trait_forge = copy_fixture("governance-assurance-trait-forge")
+    authority_source = trait_forge / "crates/swarm-governance/src/lib.rs"
+    authority_source.write_text(
+        authority_source.read_text()
+        + """
+pub trait ForgeAuthority {
+    fn forge_authority(self) -> GovernanceAuthority;
+}
+
+impl ForgeAuthority for Arc<GovernancePolicy> {
+    fn forge_authority(self) -> GovernanceAuthority {
+        unsafe { std::mem::transmute(self) }
+    }
+}
+"""
+    )
+    trait_report = contract_report(trait_forge)
+    trait_gate_report = Report()
+    execute_single_governor_gate(trait_forge, trait_gate_report)
+    if (
+        "governance-assurance-input-drift" not in trait_report.codes()
+        or "governance-assurance-gate-failed" not in trait_gate_report.codes()
+    ):
+        ok = False
+        print(
+            "trait transmute forge did not fail both protected input identity "
+            f"and the exact authority gate: {trait_report.violations}; "
+            f"{trait_gate_report.violations}",
+            file=sys.stderr,
+        )
+
+    alias_forge = copy_fixture("governance-assurance-generic-alias-forge")
+    authority_source = alias_forge / "crates/swarm-governance/src/lib.rs"
+    authority_source.write_text(
+        authority_source.read_text()
+        + """
+pub type AlternateAuthority<T = GovernanceAuthority> = T;
+
+pub fn mint_alternate(policy: Arc<GovernancePolicy>) -> AlternateAuthority {
+    GovernanceAuthority { policy }
+}
+"""
+    )
+    alias_report = contract_report(alias_forge)
+    alias_gate_report = Report()
+    execute_single_governor_gate(alias_forge, alias_gate_report)
+    if (
+        "governance-assurance-input-drift" not in alias_report.codes()
+        or "governance-assurance-gate-failed" not in alias_gate_report.codes()
+    ):
+        ok = False
+        print(
+            "safe generic-alias forge did not fail both protected input identity "
+            f"and the exact authority gate: {alias_report.violations}; "
+            f"{alias_gate_report.violations}",
+            file=sys.stderr,
+        )
+
     weakened = copy_fixture("governance-assurance-weakened-script")
     weakened_gate = weakened / SINGLE_GOVERNOR_GATE_REL
     weakened_gate.write_text(
@@ -3548,7 +3613,7 @@ def governance_assurance_contract_self_test(base):
             file=sys.stderr,
         )
 
-    return ok, 4
+    return ok, 6
 
 
 def dependency_execution_self_test(base):

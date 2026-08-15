@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use swarm_consensus::{
     ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
     GovernanceReceiptDecision,
@@ -1030,14 +1030,14 @@ impl Drop for GovernanceAnchor {
     }
 }
 
+static GOVERNANCE_ANCHOR_NONCE: AtomicU64 = AtomicU64::new(0);
+
 fn governance_anchor() -> GovernanceAnchor {
+    let nonce = GOVERNANCE_ANCHOR_NONCE.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
         "swarm-negative-runtime-governance-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos()
+        nonce,
     ));
     let signing_key = SigningKey::from_bytes(&[41; 32]);
     let policy = Arc::new(

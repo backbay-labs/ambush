@@ -4255,9 +4255,13 @@ mod qrt_04 {
             .unwrap();
         assert_eq!(manual_receipt.trigger, RollbackTrigger::Manual);
         assert_eq!(ttl_receipt.trigger, RollbackTrigger::Expiry);
-        verify_release_attestation(manual_receipt, harness.sweep.governance())
+        harness
+            .sweep
+            .verify_release_attestation(manual_receipt)
             .expect("manual release should verify");
-        verify_release_attestation(ttl_receipt, harness.sweep.governance())
+        harness
+            .sweep
+            .verify_release_attestation(ttl_receipt)
             .expect("ttl release should verify");
 
         // 6. MANUAL AND AUTOMATIC RELEASE DID NOT DIVERGE. Everything a
@@ -4309,7 +4313,9 @@ mod qrt_04 {
             60_000,
         );
         let receipt = harness.sweep.release("lease-tamper", 2_000).await.unwrap();
-        verify_release_attestation(&receipt, harness.sweep.governance())
+        harness
+            .sweep
+            .verify_release_attestation(&receipt)
             .expect("the untampered receipt must verify");
 
         // (a) MUTATE THE BODY. An auditor reading `fully_reversed` acts on it,
@@ -4319,7 +4325,10 @@ mod qrt_04 {
         //     what catches it.
         let mut rewritten = receipt.clone();
         rewritten.steps[0].status = RollbackStepStatus::Failed;
-        let error = verify_release_attestation(&rewritten, harness.sweep.governance()).unwrap_err();
+        let error = harness
+            .sweep
+            .verify_release_attestation(&rewritten)
+            .unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::SubjectMismatch { .. }),
             "expected a subject mismatch, got {error:?}"
@@ -4347,7 +4356,7 @@ mod qrt_04 {
             mutate(&mut tampered);
             assert!(
                 matches!(
-                    verify_release_attestation(&tampered, harness.sweep.governance()),
+                    harness.sweep.verify_release_attestation(&tampered),
                     Err(ReleaseAttestationError::SubjectMismatch { .. })
                 ),
                 "a mutated receipt must not verify: {tampered:?}"
@@ -4361,7 +4370,10 @@ mod qrt_04 {
         let mut attestation = attestation_of(&receipt);
         attestation.payload.issued_at_ms += 1;
         forged.governance_attestation = Some(serde_json::to_value(&attestation).unwrap());
-        let error = verify_release_attestation(&forged, harness.sweep.governance()).unwrap_err();
+        let error = harness
+            .sweep
+            .verify_release_attestation(&forged)
+            .unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::Signature { .. }),
             "expected a signature failure, got {error:?}"
@@ -4371,7 +4383,10 @@ mod qrt_04 {
         //     would be reporting success over a region it never inspected.
         let mut stripped = receipt.clone();
         stripped.governance_attestation = None;
-        let error = verify_release_attestation(&stripped, harness.sweep.governance()).unwrap_err();
+        let error = harness
+            .sweep
+            .verify_release_attestation(&stripped)
+            .unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::Unattested { .. }),
             "expected an unattested refusal, got {error:?}"
@@ -4395,7 +4410,7 @@ mod qrt_04 {
             .expect("the lifted signature is genuine, which is the point");
         assert!(
             matches!(
-                verify_release_attestation(&lifted, harness.sweep.governance()),
+                harness.sweep.verify_release_attestation(&lifted),
                 Err(ReleaseAttestationError::SubjectMismatch { .. })
             ),
             "a genuine signature over a different release must not verify this one"
@@ -4464,7 +4479,9 @@ mod qrt_04 {
             60_000,
         );
         let receipt = harness.sweep.release("lease-forge", 2_000).await.unwrap();
-        verify_release_attestation(&receipt, harness.sweep.governance())
+        harness
+            .sweep
+            .verify_release_attestation(&receipt)
             .expect("the genuine receipt must verify");
 
         // The lie an auditor would act on: a release that did NOT restore the
@@ -4485,7 +4502,9 @@ mod qrt_04 {
             .verify()
             .expect("the forged signature is internally consistent, which is the point");
 
-        let error = verify_release_attestation(&forged, harness.sweep.governance())
+        let error = harness
+            .sweep
+            .verify_release_attestation(&forged)
             .expect_err("a receipt re-attested by an unknown key must be refused");
         assert!(
             matches!(error, ReleaseAttestationError::UntrustedSigner { .. }),
