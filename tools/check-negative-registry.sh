@@ -10,20 +10,17 @@
 # shared synchronous driver. The gate binds the relevant Cargo manifests and
 # lock resolution, compiles with --locked, then invokes each emitted test binary
 # directly so Cargo runner configuration cannot fabricate discovery/execution
-# output. Those
-# co-located digests are tamper-evident against uncoordinated edits, not an
-# external trust anchor. Mirror fidelity beyond the registered probe remains a
-# reviewed limitation.
+# output. Compiler, flags, target, and runner environment overrides are refused.
+# Registered integration targets must remain Cargo-auto-discovered from their
+# canonical source files; production libraries and custom-build absence are
+# also bound through Cargo metadata. Checker-owned semantic digests pin all four
+# crate manifests plus root execution-affecting tables. Those co-located digests
+# are tamper-evident against uncoordinated edits, not an external trust anchor.
+# Mirror fidelity beyond the registered probe remains a reviewed limitation.
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
-
-AST_TARGET_DIR="$ROOT_DIR/target/assurance-tools"
-cargo build --quiet --locked \
-  --manifest-path "$ROOT_DIR/tools/negative-registry-ast/Cargo.toml" \
-  --target-dir "$AST_TARGET_DIR"
-export NEGATIVE_REGISTRY_AST="$AST_TARGET_DIR/debug/negative-registry-ast"
 
 python3 - "$ROOT_DIR" <<'PY'
 from __future__ import annotations
@@ -31,6 +28,7 @@ from __future__ import annotations
 import pathlib
 import re
 import os
+import hashlib
 import json
 import shutil
 import subprocess
@@ -39,6 +37,7 @@ import tempfile
 import tomllib
 
 REPO_ROOT = pathlib.Path(sys.argv[1])
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from assurance_source import (  # noqa: E402
     enum_variant_defined,
@@ -82,6 +81,20 @@ PRODUCTION_PACKAGES = {
     "swarm-response": ("crates/swarm-response/Cargo.toml", "swarm_response"),
     "swarm-runtime": ("crates/swarm-runtime/Cargo.toml", "swarm_runtime"),
     "swarm-spine": ("crates/swarm-spine/Cargo.toml", "swarm_spine"),
+}
+EXPECTED_CRATE_MANIFEST_DIGESTS = {
+    "crates/swarm-policy/Cargo.toml": "29ef642b8ba57958db7b202ebedb237d8b5bab1cb17b88d9e0e7ce56f9604520",
+    "crates/swarm-response/Cargo.toml": "55d970d2348d4366791f1cb2e46df04872e33892af451c3919f67c45dd736760",
+    "crates/swarm-runtime/Cargo.toml": "ff747aa6587977bfe2062514da81793e8c7061911dea057bf2202f53ff8618d0",
+    "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
+}
+EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "850c5b414153abdfeb575d00bd3afe25f1564833da6ecae383c38cc5868473cd"
+REGISTERED_TARGETS = {
+    ("swarm-policy", "negative_policy_gates"): "crates/swarm-policy/tests/negative_policy_gates.rs",
+    ("swarm-response", "negative_containment_and_rollback"): "crates/swarm-response/tests/negative_containment_and_rollback.rs",
+    ("swarm-runtime", "negative_runtime_fail_closed"): "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs",
+    ("swarm-spine", "negative_envelope_and_chain"): "crates/swarm-spine/tests/negative_envelope_and_chain.rs",
+    (CONTRACT_CRATE, CONTRACT_TARGET): CONTRACT_REL,
 }
 ROW = re.compile(
     r"^\|\s*`(?P<invariant>[A-Z0-9][A-Z0-9-]*)`\s*"
@@ -144,8 +157,90 @@ def parse_toml(path, report, code):
         return {}
 
 
+def canonical_toml_digest(document):
+    canonical = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def root_execution_manifest(document):
+    return {
+        name: document[name]
+        for name in ("workspace", "profile", "target", "patch", "replace")
+        if name in document
+    }
+
+
+def validate_manifest_semantic_identity(relative, document, report):
+    expected = EXPECTED_CRATE_MANIFEST_DIGESTS.get(relative)
+    if expected is None:
+        report.violation(
+            "dependency-manifest-semantic-baseline-missing",
+            f"{relative} has no checker-owned semantic baseline",
+        )
+        return
+    actual = canonical_toml_digest(document)
+    if actual != expected:
+        report.violation(
+            "dependency-manifest-semantic-drift",
+            f"{relative} semantic digest is {actual}, expected {expected}",
+        )
+
+
+def validate_root_manifest_semantic_identity(document, report):
+    actual = canonical_toml_digest(root_execution_manifest(document))
+    if actual != EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST:
+        report.violation(
+            "dependency-root-manifest-semantic-drift",
+            f"Cargo.toml execution semantic digest is {actual}, expected {EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST}",
+        )
+
+
+def validate_registered_manifest_test_shape(relative, document, report):
+    package_table = document.get("package", {})
+    if package_table.get("version") != {"workspace": True} or package_table.get("edition") != {"workspace": True}:
+        report.violation(
+            "dependency-manifest-identity",
+            f"{relative} must inherit package version and edition from the workspace",
+        )
+    if package_table.get("autotests") is False:
+        report.violation(
+            "dependency-manifest-autotests-disabled",
+            f"{relative} disables automatic integration-test discovery",
+        )
+    if document.get("test") is not None:
+        report.violation(
+            "dependency-manifest-explicit-test",
+            f"{relative} defines explicit [[test]] targets; registered tests must use canonical auto-discovery",
+        )
+    if package_table.get("build") is not None or document.get("build-dependencies") is not None:
+        report.violation(
+            "dependency-manifest-build-script",
+            f"{relative} adds a build script or build dependencies to a registered target crate",
+        )
+    if document.get("lib") is not None:
+        report.violation(
+            "dependency-manifest-library-override",
+            f"{relative} overrides the canonical auto-discovered library target",
+        )
+
+
+def validate_registered_build_script_path(root, relative, report):
+    build_script = (root / relative).parent / "build.rs"
+    if build_script.exists():
+        report.violation(
+            "dependency-manifest-build-script",
+            f"{relative} has an auto-discovered build.rs",
+        )
+
+
 def validate_dependency_manifests(root, report):
     root_manifest = parse_toml(root / "Cargo.toml", report, "dependency-manifest-read")
+    validate_root_manifest_semantic_identity(root_manifest, report)
     if "patch" in root_manifest or "replace" in root_manifest:
         report.violation("dependency-manifest-substitution", "root Cargo.toml may not define [patch] or [replace]")
     workspace = root_manifest.get("workspace", {})
@@ -176,6 +271,9 @@ def validate_dependency_manifests(root, report):
             report.violation("dependency-manifest-substitution", f"{relative} may not define [patch] or [replace]")
         if document.get("package", {}).get("name") != package:
             report.violation("dependency-manifest-identity", f"{relative} package name is not `{package}`")
+        validate_manifest_semantic_identity(relative, document, report)
+        validate_registered_manifest_test_shape(relative, document, report)
+        validate_registered_build_script_path(root, relative, report)
         for section, names in sections.items():
             values = document.get(section, {})
             for name in names:
@@ -186,22 +284,129 @@ def validate_dependency_manifests(root, report):
                     )
 
 
-def validate_cargo_execution_boundary(root, report, *, check_environment=True):
+def validate_cargo_execution_boundary(root, report, *, check_environment=True, environment=None):
     for relative in (".cargo/config", ".cargo/config.toml"):
         if (root / relative).exists():
             report.violation("dependency-cargo-config", f"repository-local {relative} may alter compiler or runner identity")
     if check_environment:
+        environment = os.environ if environment is None else environment
         forbidden = {
+            "RUSTC",
+            "RUSTDOC",
+            "RUSTFLAGS",
+            "RUSTDOCFLAGS",
             "RUSTC_WRAPPER",
             "RUSTC_WORKSPACE_WRAPPER",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_ENCODED_RUSTDOCFLAGS",
+            "CARGO_BUILD_RUSTC",
+            "CARGO_BUILD_RUSTDOC",
+            "CARGO_BUILD_RUSTFLAGS",
+            "CARGO_BUILD_RUSTDOCFLAGS",
             "CARGO_BUILD_RUSTC_WRAPPER",
+            "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+            "CARGO_BUILD_TARGET",
         }
         configured = sorted(
-            name for name, value in os.environ.items()
-            if value and (name in forbidden or re.fullmatch(r"CARGO_TARGET_[A-Z0-9_]+_RUNNER", name))
+            name for name, value in environment.items()
+            if value and (
+                name in forbidden
+                or re.fullmatch(
+                    r"CARGO_TARGET_[A-Z0-9_]+_(?:RUNNER|RUSTFLAGS|RUSTDOCFLAGS)",
+                    name,
+                )
+            )
         )
+        if "RUSTC" not in configured:
+            version = subprocess.run(
+                ["rustc", "-vV"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            host = next(
+                (
+                    line.removeprefix("host: ")
+                    for line in version.stdout.splitlines()
+                    if line.startswith("host: ")
+                ),
+                "",
+            )
+            if version.returncode or not host:
+                report.violation(
+                    "dependency-rustc-identity-unavailable",
+                    f"could not resolve native rustc host identity: {version.stderr[-1000:]}",
+                )
+            else:
+                active_linker = "CARGO_TARGET_" + re.sub(r"[^A-Za-z0-9]", "_", host).upper() + "_LINKER"
+                if environment.get(active_linker):
+                    configured.append(active_linker)
+                    configured.sort()
         if configured:
-            report.violation("dependency-execution-environment", f"compiler/runner override environment is set: {configured}")
+            report.violation(
+                "dependency-execution-environment",
+                f"compiler, target, flags, or runner override environment is set: {configured}",
+            )
+
+
+def validate_production_metadata_targets(
+    root,
+    metadata_packages,
+    resolved_ids,
+    report,
+    production_packages=PRODUCTION_PACKAGES,
+):
+    for name, (relative, lib_name) in production_packages.items():
+        package_root = (root / relative).parent.resolve()
+        expected_manifest = str((root / relative).resolve())
+        expected_id = f"path+{package_root.as_uri()}#0.1.0"
+        matching = [package for package in metadata_packages if package.get("name") == name]
+        actual = [
+            (
+                package.get("version"),
+                package.get("source"),
+                package.get("manifest_path"),
+                package.get("id"),
+            )
+            for package in matching
+        ]
+        expected_package = [("0.1.0", None, expected_manifest, expected_id)]
+        if actual != expected_package or matching[0].get("id") not in resolved_ids:
+            report.violation(
+                "dependency-production-package-identity",
+                f"resolved `{name}` identity is {actual!r}, expected {expected_package!r}",
+            )
+            continue
+
+        targets = matching[0].get("targets", [])
+        library_targets = [target for target in targets if "lib" in target.get("kind", [])]
+        expected_library = {
+            "name": lib_name,
+            "kind": ["lib"],
+            "crate_types": ["lib"],
+            "src_path": str((package_root / "src/lib.rs").resolve()),
+            "edition": "2024",
+            "doc": True,
+            "doctest": True,
+            "test": True,
+        }
+        actual_library = [] if len(library_targets) != 1 else [
+            {field: library_targets[0].get(field) for field in expected_library}
+        ]
+        if actual_library != [expected_library]:
+            report.violation(
+                "dependency-production-target-identity",
+                f"resolved `{name}/{lib_name}` library target is {actual_library!r}, expected {[expected_library]!r}",
+            )
+        custom_builds = [
+            target.get("name") for target in targets
+            if "custom-build" in target.get("kind", [])
+        ]
+        if custom_builds:
+            report.violation(
+                "dependency-custom-build-target",
+                f"resolved `{name}` has unexpected custom-build targets {custom_builds!r}",
+            )
 
 
 def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, production_packages=True):
@@ -242,28 +447,46 @@ def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, pr
                 f"resolved `{name}` identity is {identities!r}, expected {[(version, source)]!r}",
             )
     if production_packages:
-        for name, (relative, lib_name) in PRODUCTION_PACKAGES.items():
-            expected_manifest = str((root / relative).resolve())
-            matching = [package for package in metadata_packages if package.get("name") == name]
-            actual = [
-                (package.get("version"), package.get("source"), package.get("manifest_path"))
-                for package in matching
-            ]
-            if actual != [("0.1.0", None, expected_manifest)] or matching[0].get("id") not in resolved_ids:
-                report.violation(
-                    "dependency-production-package-identity",
-                    f"resolved `{name}` identity is {actual!r}",
-                )
-                continue
-            libraries = [
-                target.get("name") for target in matching[0].get("targets", [])
-                if "lib" in target.get("kind", [])
-            ]
-            if libraries != [lib_name]:
-                report.violation(
-                    "dependency-production-target-identity",
-                    f"resolved `{name}` library targets are {libraries!r}, expected {[lib_name]!r}",
-                )
+        validate_production_metadata_targets(root, metadata_packages, resolved_ids, report)
+        validate_metadata_test_targets(root, metadata_packages, resolved_ids, report)
+
+
+def expected_test_target(root, relative):
+    return {
+        "kind": ["test"],
+        "crate_types": ["bin"],
+        "src_path": str((root / relative).resolve()),
+        "edition": "2024",
+        "doc": False,
+        "doctest": False,
+        "test": True,
+    }
+
+
+def validate_metadata_test_targets(root, metadata_packages, resolved_ids, report, targets=REGISTERED_TARGETS):
+    for (package_name, target_name), relative in targets.items():
+        packages = [package for package in metadata_packages if package.get("name") == package_name]
+        matching = [] if len(packages) != 1 else [
+            target for target in packages[0].get("targets", []) if target.get("name") == target_name
+        ]
+        expected = expected_test_target(root, relative)
+        actual = [] if len(matching) != 1 else [
+            {field: matching[0].get(field) for field in expected}
+        ]
+        if (
+            len(packages) != 1
+            or packages[0].get("id") not in resolved_ids
+            or (
+                package_name in PRODUCTION_PACKAGES
+                and packages[0].get("id")
+                != f"path+{((root / PRODUCTION_PACKAGES[package_name][0]).parent.resolve()).as_uri()}#0.1.0"
+            )
+            or actual != [expected]
+        ):
+            report.violation(
+                "dependency-test-target-identity",
+                f"resolved `{package_name}/{target_name}` target is {actual!r}, expected {[expected]!r}",
+            )
 
 
 def validate_execution_dependencies(root, report):
@@ -272,7 +495,7 @@ def validate_execution_dependencies(root, report):
     validate_resolution_identity(root, report)
 
 
-def compiled_test_binary(root, crate, target, report, code):
+def compiled_test_binary(root, crate, target, report, code, expected_source=None, expected_package_id=None):
     result = subprocess.run(
         [
             "cargo", "test", "--locked", "-p", crate, "--test", target,
@@ -286,6 +509,12 @@ def compiled_test_binary(root, crate, target, report, code):
     if result.returncode:
         report.violation(code, f"{crate}/{target} compilation failed:\n{result.stderr[-4000:]}")
         return None
+    expected_source = expected_source or REGISTERED_TARGETS.get((crate, target))
+    expected_target = expected_test_target(root, expected_source) if expected_source else None
+    if expected_package_id is None and crate in PRODUCTION_PACKAGES:
+        package_manifest, _lib_name = PRODUCTION_PACKAGES[crate]
+        package_root = (root / package_manifest).parent.resolve()
+        expected_package_id = f"path+{package_root.as_uri()}#0.1.0"
     executables = []
     for line in result.stdout.splitlines():
         try:
@@ -293,10 +522,15 @@ def compiled_test_binary(root, crate, target, report, code):
         except json.JSONDecodeError:
             continue
         target_data = message.get("target", {})
+        target_identity = None if expected_target is None else {
+            field: target_data.get(field) for field in expected_target
+        }
         if (
             message.get("reason") == "compiler-artifact"
             and target_data.get("name") == target
             and "test" in target_data.get("kind", [])
+            and (expected_target is None or target_identity == expected_target)
+            and (expected_package_id is None or message.get("package_id") == expected_package_id)
             and message.get("profile", {}).get("test") is True
             and message.get("executable")
         ):
@@ -316,6 +550,35 @@ def registered_source_cache(root, registered):
             raw = path.read_text(encoding="utf-8", errors="replace")
             cached[relative] = (raw, sanitize_rust(raw)[0])
     return cached
+
+
+def execution_input_snapshot(root, registered):
+    relative_paths = {
+        MAPPING_REL,
+        REGISTRY_REL,
+        UNIVERSE_REL,
+        PROTOCOL_REL,
+        CONTRACT_REL,
+        "Cargo.toml",
+        "Cargo.lock",
+        ".cargo/config",
+        ".cargo/config.toml",
+        *(entry.get("test_file", "") for entry in registered),
+        *(relative for relative, _lib_name in PRODUCTION_PACKAGES.values()),
+        *(
+            str(pathlib.PurePosixPath(relative).parent / "src/lib.rs")
+            for relative, _lib_name in PRODUCTION_PACKAGES.values()
+        ),
+        *(
+            str(pathlib.PurePosixPath(relative).parent / "build.rs")
+            for relative, _lib_name in PRODUCTION_PACKAGES.values()
+        ),
+    }
+    snapshot = {}
+    for relative in sorted(relative_paths):
+        path = root / relative
+        snapshot[relative] = path.read_bytes() if path.is_file() else None
+    return snapshot
 
 
 def run_ast_checks(root, registered, report, source_cache):
@@ -400,6 +663,7 @@ def run_checks(root, minimum=12, execute_tests=False):
     report = Report(); mapped = rows(root, report)
     document = registry_document(root, report); registered = document.get("entry", [])
     source_cache = registered_source_cache(root, registered)
+    initial_execution_inputs = execution_input_snapshot(root, registered) if execute_tests else None
     if execute_tests and root.resolve() == REPO_ROOT.resolve():
         validate_execution_dependencies(root, report)
     if document.get("schema_version") != 5:
@@ -565,6 +829,16 @@ def run_checks(root, minimum=12, execute_tests=False):
                 expected = {"passed": len(CONTRACT_TESTS), "failed": 0, "ignored": 0, "measured": 0, "filtered": 0}
                 if result.returncode or summary != expected:
                     report.violation("protocol-contract-execution-failed", f"protocol contract did not prove exact {expected}: {summary}\n{(result.stdout + result.stderr)[-4000:]}")
+        final_execution_inputs = execution_input_snapshot(root, registered)
+        if final_execution_inputs != initial_execution_inputs:
+            changed = sorted(
+                path for path in set(initial_execution_inputs) | set(final_execution_inputs)
+                if initial_execution_inputs.get(path) != final_execution_inputs.get(path)
+            )
+            report.violation(
+                "entry-execution-input-drift",
+                f"registered source/manifest inputs changed across compilation and execution: {changed}",
+            )
     return report
 
 
@@ -951,11 +1225,14 @@ def registered_source_mutation_self_test(base):
     def contract_text(root, entry_overrides=None):
         entry_overrides = entry_overrides or {}
         lines = []
+        source_cache = {}
         for original in registered:
             entry = {**original, **entry_overrides.get(original["invariant"], {})}
             relative = entry["test_file"]
-            raw = (root / relative).read_text()
-            clean, _ = sanitize_rust(raw)
+            if relative not in source_cache:
+                raw = (root / relative).read_text()
+                source_cache[relative] = sanitize_rust(raw)[0]
+            clean = source_cache[relative]
             test = test_function(clean, entry["test_fn"])
             macro_path = "negative_protocol::assert_registered_negative_case"
             edge = entry["edge_validation"]
@@ -1738,7 +2015,475 @@ else:
             f"{direct_report.violations} {'' if direct is None else (direct.stdout + direct.stderr)[-4000:]}",
             file=sys.stderr,
         )
-    return ok, 2
+
+    rustc_root = base / "rustc_source_substitution"
+    rustc_victim = rustc_root / "victim"
+    (rustc_victim / "tests").mkdir(parents=True)
+    (rustc_root / "Cargo.toml").write_text('''
+[workspace]
+members = ["victim"]
+resolver = "2"
+''')
+    (rustc_victim / "Cargo.toml").write_text('''
+[package]
+name = "rustc-source-substitution-victim"
+version = "0.0.0"
+edition = "2021"
+''')
+    (rustc_victim / "tests/registered.rs").write_text('''
+#[test]
+fn body_must_run() {
+    panic!("the registered source must reach rustc");
+}
+''')
+    fabricated_source = rustc_victim / "tests/fabricated.rs"
+    fabricated_source.write_text('''
+#[test]
+fn body_must_run() {}
+''')
+    real_rustc = shutil.which("rustc")
+    fake_rustc = rustc_root / "fake-rustc.py"
+    fake_rustc.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "arguments = list(sys.argv[1:])\n"
+        f"fabricated = {str(fabricated_source)!r}\n"
+        "arguments = [fabricated if value.endswith('tests/registered.rs') else value for value in arguments]\n"
+        f"real_rustc = {real_rustc!r}\n"
+        "os.execv(real_rustc, [real_rustc, *arguments])\n"
+    )
+    fake_rustc.chmod(0o755)
+    rustc_environment = {
+        **os.environ,
+        "RUSTC": str(fake_rustc),
+        "CARGO_TARGET_DIR": str(REPO_ROOT / "target/assurance-rustc-env-selftest"),
+    }
+    lock = subprocess.run(
+        ["cargo", "generate-lockfile"], cwd=rustc_root, env=rustc_environment,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    bypass = subprocess.run(
+        ["cargo", "test", "--locked", "-p", "rustc-source-substitution-victim", "--test", "registered"],
+        cwd=rustc_root, env=rustc_environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) if lock.returncode == 0 else lock
+    expected_summary = {"passed": 1, "failed": 0, "ignored": 0, "measured": 0, "filtered": 0}
+    if bypass.returncode or run_summary(bypass.stdout) != expected_summary:
+        ok = False
+        print(f"fake RUSTC red fixture did not substitute the registered source:\n{(bypass.stdout + bypass.stderr)[-4000:]}", file=sys.stderr)
+    rustc_report = Report()
+    validate_cargo_execution_boundary(
+        rustc_root,
+        rustc_report,
+        environment={"RUSTC": str(fake_rustc)},
+    )
+    if "dependency-execution-environment" not in rustc_report.codes():
+        ok = False
+        print(f"fake RUSTC environment was not rejected: {rustc_report.violations}", file=sys.stderr)
+
+    flags_root = base / "encoded_rustflags_cfg_substitution"
+    flags_victim = flags_root / "victim"
+    (flags_victim / "tests").mkdir(parents=True)
+    (flags_root / "Cargo.toml").write_text('''
+[workspace]
+members = ["victim"]
+resolver = "2"
+''')
+    (flags_victim / "Cargo.toml").write_text('''
+[package]
+name = "encoded-rustflags-victim"
+version = "0.0.0"
+edition = "2021"
+''')
+    (flags_victim / "tests/registered.rs").write_text('''
+#[cfg(not(phase285_erase_registered))]
+#[test]
+fn body_must_run() {
+    panic!("the unmodified cfg must execute this body");
+}
+
+#[cfg(phase285_erase_registered)]
+#[test]
+fn body_must_run() {}
+''')
+    flags_environment = {
+        **os.environ,
+        "CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fphase285_erase_registered",
+        "CARGO_TARGET_DIR": str(REPO_ROOT / "target/assurance-rustflags-env-selftest"),
+    }
+    lock = subprocess.run(
+        ["cargo", "generate-lockfile"], cwd=flags_root, env=flags_environment,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    bypass = subprocess.run(
+        ["cargo", "test", "--locked", "-p", "encoded-rustflags-victim", "--test", "registered"],
+        cwd=flags_root, env=flags_environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) if lock.returncode == 0 else lock
+    if bypass.returncode or run_summary(bypass.stdout) != expected_summary:
+        ok = False
+        print(f"encoded rustflags red fixture did not select the empty cfg body:\n{(bypass.stdout + bypass.stderr)[-4000:]}", file=sys.stderr)
+    flags_report = Report()
+    validate_cargo_execution_boundary(
+        flags_root,
+        flags_report,
+        environment={"CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fphase285_erase_registered"},
+    )
+    if "dependency-execution-environment" not in flags_report.codes():
+        ok = False
+        print(f"encoded rustflags environment was not rejected: {flags_report.violations}", file=sys.stderr)
+    return ok, 4
+
+
+def target_override_self_test(base):
+    ok = True
+    target_dir = REPO_ROOT / "target/assurance-target-override-selftest"
+    registered = entries(REPO_ROOT, Report())
+    target_names = {
+        (pathlib.PurePosixPath(entry["test_file"]).parts[1], pathlib.PurePosixPath(entry["test_file"]).stem)
+        for entry in registered
+    }
+
+    for package, target in sorted(target_names):
+        root = base / f"manifest_override_{package}"
+        relative, _lib_name = PRODUCTION_PACKAGES[package]
+        manifest = root / relative
+        manifest.parent.mkdir(parents=True)
+        source = (REPO_ROOT / relative).read_text()
+        source = source.replace(
+            f'name = "{package}"',
+            f'name = "{package}"\nautotests = false',
+            1,
+        ) + f'\n[[test]]\nname = "{target}"\npath = "tests/fabricated.rs"\nharness = false\n'
+        manifest.write_text(source)
+        report = Report()
+        validate_registered_manifest_test_shape(relative, tomllib.loads(source), report)
+        required = {"dependency-manifest-autotests-disabled", "dependency-manifest-explicit-test"}
+        if not required.issubset(report.codes()):
+            ok = False
+            print(f"{package} target-override manifest was not rejected: {report.violations}", file=sys.stderr)
+
+    runtime_relative, runtime_lib_name = PRODUCTION_PACKAGES["swarm-runtime"]
+    runtime_manifest_source = (REPO_ROOT / runtime_relative).read_text()
+
+    harness_source = runtime_manifest_source + '''
+[[test]]
+name = "negative_runtime_fail_closed"
+path = "tests/fabricated.rs"
+harness = false
+'''
+    harness_report = Report()
+    validate_registered_manifest_test_shape(
+        runtime_relative,
+        tomllib.loads(harness_source),
+        harness_report,
+    )
+    if "dependency-manifest-explicit-test" not in harness_report.codes():
+        ok = False
+        print(f"harness=false target was not rejected: {harness_report.violations}", file=sys.stderr)
+
+    path_dependency_source = runtime_manifest_source + '''
+[dev-dependencies.phase285-build-hook]
+path = "../../phase285-build-hook"
+'''
+    path_dependency_report = Report()
+    validate_manifest_semantic_identity(
+        runtime_relative,
+        tomllib.loads(path_dependency_source),
+        path_dependency_report,
+    )
+    if "dependency-manifest-semantic-drift" not in path_dependency_report.codes():
+        ok = False
+        print(f"extra path dev-dependency was not rejected: {path_dependency_report.violations}", file=sys.stderr)
+
+    build_hook_root = base / "path_dev_dependency_build_hook"
+    build_hook_victim = build_hook_root / "victim"
+    build_hook = build_hook_root / "build-hook"
+    (build_hook_victim / "tests").mkdir(parents=True)
+    (build_hook / "src").mkdir(parents=True)
+    (build_hook_root / "Cargo.toml").write_text('''
+[workspace]
+members = ["victim", "build-hook"]
+resolver = "2"
+''')
+    (build_hook_victim / "Cargo.toml").write_text('''
+[package]
+name = "path-dev-dependency-victim"
+version = "0.0.0"
+edition = "2021"
+
+[dev-dependencies]
+phase285-build-hook = { path = "../build-hook" }
+''')
+    (build_hook_victim / "tests/registered.rs").write_text('''
+#[test]
+fn registered_test() {}
+''')
+    (build_hook / "Cargo.toml").write_text('''
+[package]
+name = "phase285-build-hook"
+version = "0.0.0"
+edition = "2021"
+''')
+    (build_hook / "src/lib.rs").write_text("")
+    (build_hook / "build.rs").write_text('''
+fn main() {
+    let marker = std::env::var("PHASE285_BUILD_MARKER").expect("marker path");
+    std::fs::write(marker, "executed").expect("write build marker");
+}
+''')
+    build_marker = build_hook_root / "build-script-executed"
+    build_marker.unlink(missing_ok=True)
+    build_hook_environment = {
+        **os.environ,
+        "PHASE285_BUILD_MARKER": str(build_marker),
+        "CARGO_TARGET_DIR": str(REPO_ROOT / "target/assurance-manifest-env-selftest"),
+    }
+    lock = subprocess.run(
+        ["cargo", "generate-lockfile"], cwd=build_hook_root, env=build_hook_environment,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    bypass = subprocess.run(
+        ["cargo", "test", "--locked", "-p", "path-dev-dependency-victim", "--test", "registered"],
+        cwd=build_hook_root, env=build_hook_environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) if lock.returncode == 0 else lock
+    if bypass.returncode or not build_marker.is_file():
+        ok = False
+        print(f"path dev-dependency red fixture did not execute its build script:\n{(bypass.stdout + bypass.stderr)[-4000:]}", file=sys.stderr)
+
+    feature_source = runtime_manifest_source.replace(
+        "default = []",
+        'default = ["z3"]',
+        1,
+    )
+    feature_report = Report()
+    validate_manifest_semantic_identity(
+        runtime_relative,
+        tomllib.loads(feature_source),
+        feature_report,
+    )
+    if feature_source == runtime_manifest_source or "dependency-manifest-semantic-drift" not in feature_report.codes():
+        ok = False
+        print(f"default-feature drift was not rejected: {feature_report.violations}", file=sys.stderr)
+
+    root_manifest_source = (REPO_ROOT / "Cargo.toml").read_text()
+    root_profile_source = root_manifest_source.replace(
+        'panic = "abort"',
+        'panic = "unwind"',
+        1,
+    )
+    root_profile_report = Report()
+    validate_root_manifest_semantic_identity(
+        tomllib.loads(root_profile_source),
+        root_profile_report,
+    )
+    if (
+        root_profile_source == root_manifest_source
+        or "dependency-root-manifest-semantic-drift" not in root_profile_report.codes()
+    ):
+        ok = False
+        print(f"root execution-profile drift was not rejected: {root_profile_report.violations}", file=sys.stderr)
+
+    def metadata_for_manifest(fixture_name, manifest_source, extra_files):
+        fixture_root = base / fixture_name
+        fixture_crate = fixture_root / "crates/swarm-runtime"
+        (fixture_crate / "src").mkdir(parents=True)
+        (fixture_root / "Cargo.toml").write_text('''
+[workspace]
+members = ["crates/swarm-runtime"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+''')
+        (fixture_crate / "Cargo.toml").write_text(manifest_source)
+        (fixture_crate / "src/lib.rs").write_text("")
+        for relative, contents in extra_files.items():
+            destination = fixture_crate / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(contents)
+        result = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1"],
+            cwd=fixture_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode:
+            return fixture_root, None, result.stderr
+        return fixture_root, json.loads(result.stdout), ""
+
+    canonical_runtime_manifest = '''
+[package]
+name = "swarm-runtime"
+version.workspace = true
+edition.workspace = true
+'''
+    library_root, library_metadata, library_error = metadata_for_manifest(
+        "production_library_override",
+        canonical_runtime_manifest + '''
+[lib]
+path = "src/fabricated.rs"
+crate-type = ["rlib"]
+''',
+        {"src/fabricated.rs": ""},
+    )
+    library_report = Report()
+    if library_metadata is None:
+        ok = False
+        print(f"production library override metadata failed:\n{library_error[-4000:]}", file=sys.stderr)
+    else:
+        validate_registered_manifest_test_shape(
+            runtime_relative,
+            tomllib.loads((library_root / runtime_relative).read_text()),
+            library_report,
+        )
+        validate_production_metadata_targets(
+            library_root,
+            library_metadata["packages"],
+            {node["id"] for node in library_metadata["resolve"]["nodes"]},
+            library_report,
+            {"swarm-runtime": (runtime_relative, runtime_lib_name)},
+        )
+        required = {
+            "dependency-manifest-library-override",
+            "dependency-production-target-identity",
+        }
+        if not required.issubset(library_report.codes()):
+            ok = False
+            print(f"production library redirect/crate-type was not rejected: {library_report.violations}", file=sys.stderr)
+
+    build_root, build_metadata, build_error = metadata_for_manifest(
+        "production_custom_build",
+        canonical_runtime_manifest.replace(
+            'edition.workspace = true',
+            'edition.workspace = true\nbuild = "build.rs"',
+        ) + '''
+[build-dependencies]
+''',
+        {"build.rs": "fn main() {}\n"},
+    )
+    build_report = Report()
+    if build_metadata is None:
+        ok = False
+        print(f"production custom-build metadata failed:\n{build_error[-4000:]}", file=sys.stderr)
+    else:
+        validate_registered_manifest_test_shape(
+            runtime_relative,
+            tomllib.loads((build_root / runtime_relative).read_text()),
+            build_report,
+        )
+        validate_registered_build_script_path(build_root, runtime_relative, build_report)
+        validate_production_metadata_targets(
+            build_root,
+            build_metadata["packages"],
+            {node["id"] for node in build_metadata["resolve"]["nodes"]},
+            build_report,
+            {"swarm-runtime": (runtime_relative, runtime_lib_name)},
+        )
+        required = {"dependency-manifest-build-script", "dependency-custom-build-target"}
+        if not required.issubset(build_report.codes()):
+            ok = False
+            print(f"production custom-build was not rejected: {build_report.violations}", file=sys.stderr)
+
+    for package, target in sorted(target_names):
+        root = base / f"full_target_override_{package}"
+        relative, _lib_name = PRODUCTION_PACKAGES[package]
+        crate = (root / relative).parent
+        (crate / "src").mkdir(parents=True)
+        (crate / "tests").mkdir()
+        (root / "Cargo.toml").write_text(f'''
+[workspace]
+members = ["{pathlib.PurePosixPath(relative).parent}"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+''')
+        (crate / "Cargo.toml").write_text(f'''
+[package]
+name = "{package}"
+version.workspace = true
+edition.workspace = true
+autotests = false
+
+[[test]]
+name = "{target}"
+path = "tests/fabricated.rs"
+''')
+        (crate / "src/lib.rs").write_text("")
+        registered_names = sorted(
+            entry["test_fn"]
+            for entry in registered
+            if entry["test_file"] == REGISTERED_TARGETS[(package, target)]
+        )
+        (crate / "tests/fabricated.rs").write_text(
+            "\n".join(f"#[test]\nfn {name}() {{}}" for name in registered_names) + "\n"
+        )
+        original = root / REGISTERED_TARGETS[(package, target)]
+        original.write_text("compile_error!(\"the canonical registered source was not selected\");\n")
+        environment = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
+        lock = subprocess.run(
+            ["cargo", "generate-lockfile"], cwd=root, env=environment,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        bypass = subprocess.run(
+            ["cargo", "test", "--locked", "-p", package, "--test", target],
+            cwd=root, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ) if lock.returncode == 0 else lock
+        expected_summary = {
+            "passed": len(registered_names), "failed": 0, "ignored": 0,
+            "measured": 0, "filtered": 0,
+        }
+        if not registered_names or bypass.returncode or run_summary(bypass.stdout) != expected_summary:
+            ok = False
+            print(
+                f"{package} target-override red fixture did not fabricate "
+                f"{len(registered_names)} passes:\n{(bypass.stdout + bypass.stderr)[-4000:]}",
+                file=sys.stderr,
+            )
+
+        metadata = subprocess.run(
+            ["cargo", "metadata", "--locked", "--format-version", "1"],
+            cwd=root, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        metadata_report = Report()
+        if metadata.returncode:
+            ok = False
+            print(f"{package} target-override metadata failed:\n{metadata.stderr[-4000:]}", file=sys.stderr)
+        else:
+            document = json.loads(metadata.stdout)
+            validate_metadata_test_targets(
+                root,
+                document["packages"],
+                {node["id"] for node in document["resolve"]["nodes"]},
+                metadata_report,
+                {(package, target): REGISTERED_TARGETS[(package, target)]},
+            )
+            if "dependency-test-target-identity" not in metadata_report.codes():
+                ok = False
+                print(f"{package} target-override metadata was accepted: {metadata_report.violations}", file=sys.stderr)
+
+        artifact_report = Report()
+        executable = compiled_test_binary(
+            root,
+            package,
+            target,
+            artifact_report,
+            "target-override-artifact-identity",
+            expected_source=REGISTERED_TARGETS[(package, target)],
+            expected_package_id=f"path+{crate.resolve().as_uri()}#0.1.0",
+        )
+        if executable is not None or "target-override-artifact-identity" not in artifact_report.codes():
+            ok = False
+            print(f"{package} target-override artifact was accepted: {artifact_report.violations}", file=sys.stderr)
+    return ok, len(target_names) * 2 + 6
 
 
 def self_test():
@@ -1763,9 +2508,32 @@ def self_test():
         protocol_ok, protocol_mutations = protocol_mutation_self_test(base)
         source_ok, source_mutations = registered_source_mutation_self_test(base)
         dependency_ok, dependency_mutations = dependency_execution_self_test(base)
-        ok = ok and protocol_ok and source_ok and dependency_ok
-    return ok, protocol_mutations + source_mutations + dependency_mutations
+        target_ok, target_mutations = target_override_self_test(base)
+        ok = ok and protocol_ok and source_ok and dependency_ok and target_ok
+    return ok, protocol_mutations + source_mutations + dependency_mutations + target_mutations
 
+
+preflight = Report()
+validate_cargo_execution_boundary(REPO_ROOT, preflight)
+if preflight.violations:
+    for code, message in preflight.violations:
+        print(f"[{code}] {message}", file=sys.stderr)
+    raise SystemExit("check-negative-registry refused compiler-affecting execution overrides before building its checker")
+ast_target_dir = REPO_ROOT / "target/assurance-tools"
+ast_build = subprocess.run(
+    [
+        "cargo", "build", "--quiet", "--locked",
+        "--manifest-path", str(REPO_ROOT / "tools/negative-registry-ast/Cargo.toml"),
+        "--target-dir", str(ast_target_dir),
+    ],
+    cwd=REPO_ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+if ast_build.returncode:
+    raise SystemExit(f"negative registry AST checker build failed:\n{ast_build.stderr[-4000:]}")
+os.environ["NEGATIVE_REGISTRY_AST"] = str(ast_target_dir / "debug/negative-registry-ast")
 
 self_test_ok, protocol_mutations = self_test()
 if not self_test_ok: raise SystemExit("check-negative-registry self-test failed")

@@ -189,12 +189,15 @@ jobs:
       # the relevant manifest plus locked Cargo resolution, and directly runs
       # each emitted test binary for exact inventory and passed/ignored counts.
       # Direct artifact execution prevents a Cargo runner from fabricating
-      # libtest output. Two sequential warm runs of the 105-self-test gate took
-      # 140.73s and 161.14s wall clock (116.02/119.36s user, 7.68/7.67s sys) on
-      # Darwin 26.4 arm64 with rustc 1.97.1 (2026-08-15). No other cargo/rustc
-      # process was active, but host load was 44-83, so these are deliberately
-      # not described as quiet or as a CI estimate. Compiled actual-source
-      # mutations dominate; timing remains cache- and machine-dependent.
+      # libtest output. The gate also pins Cargo's canonical integration-test
+      # and production-library targets so a same-name explicit test cannot
+      # redirect execution, pins manifest semantics, and rejects compiler/flags
+      # overrides. Two sequential warm runs of the 121-self-test gate took
+      # 62.32s and 195.02s wall clock (32.82/33.50s user, 8.98/9.65s sys)
+      # on Darwin 25.4.0 arm64 with rustc 1.97.1 (2026-08-15). Host load was
+      # 35-53, so these are contention-bound observations, not quiet
+      # measurements or a CI estimate. Compiled actual-source mutations
+      # dominate; timing remains cache- and machine-dependent.
       #
       # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
       # and refuse to scan it if a fixture misbehaves. These workflow steps are

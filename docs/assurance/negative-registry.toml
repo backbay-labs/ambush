@@ -17,9 +17,15 @@
 # the shared synchronous driver places an entry/completion sentinel outside the
 # polled future. The gate binds the relevant workspace/crate manifest fields and
 # exact Cargo.lock/metadata identities (including the proc-macro packages),
-# rejects repository-local Cargo configuration and runner/compiler-wrapper
-# environment overrides, compiles with `--locked`, and invokes each emitted
-# test binary directly rather than trusting Cargo-runner output.
+# requires canonical Cargo-auto-discovered integration and production-library
+# source paths, rejects explicit test overrides, custom builds, repository-local
+# Cargo configuration, and compiler/rustdoc/flags/target/wrapper/runner
+# environment overrides. Checker-owned semantic digests cover the complete four
+# crate manifests and root execution-affecting TOML tables. It compiles with
+# `--locked`, binds emitted artifacts to the expected package and source, invokes
+# each test binary directly rather than trusting Cargo-runner output, and rejects
+# execution-input drift across compilation. Environment rejection precedes
+# compilation of the gate's own Rust-syntax checker.
 # This does not prove a handwritten mirror faithful beyond the registered probe;
 # that broader fidelity remains a review duty.
 

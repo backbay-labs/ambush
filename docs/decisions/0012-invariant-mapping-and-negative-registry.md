@@ -90,11 +90,28 @@ decorative tokens, nonexistent modules/types, and production-shaped
 `.evaluate`/`black_box`/unrelated-assertion spoofs are adversarial self-test
 cases. The gate binds relevant workspace/crate manifest fields and the exact
 Cargo.lock/metadata identities of the runtime, serialization, and proc-macro
-dependencies, then compiles every target with `--locked`. It invokes each emitted
-test binary directly for exact `--list` set equality and exact passed counts with
-zero failed or ignored, so a Cargo runner cannot fabricate execution evidence.
-An executable fixture also proves a local fake `tokio-macros` can erase an async
-test body and that the dependency boundary rejects the substituted resolution.
+dependencies. It requires Cargo's canonical auto-discovered integration-test
+targets, rejects `autotests = false`, explicit or harness-disabled test targets,
+library overrides, and custom build scripts, and pins production libraries plus
+registered tests to their exact package and canonical source path in Cargo
+metadata. Checker-owned semantic digests pin the complete parsed TOML of the
+four registered crate manifests and the root manifest's workspace, profile,
+target, patch, and replacement tables, so an extra path dependency or feature
+change is an explicit checker update rather than an unobserved build-input
+change. It then compiles every target with `--locked`, associates the emitted
+artifact with that exact package/source identity, and rechecks the source and
+manifest inputs after compilation. It invokes each test binary directly for
+exact `--list` set equality and exact passed counts with zero failed or ignored,
+so a Cargo runner cannot fabricate execution evidence. Executable fixtures prove
+a local fake `tokio-macros` can erase an async test body, a same-name explicit
+test target can redirect all registered names to empty bodies, a fake `RUSTC`
+can substitute a different source file, and encoded rustflags can select an
+empty cfg-gated body. Another fixture proves an added path dev-dependency's
+build script executes before the registered target. The dependency boundary
+rejects those substitutions, default-feature drift, and compiler, rustdoc,
+flags, target, wrapper, active native-linker, and runner environment overrides.
+That environment preflight runs before the gate compiles its own Rust-syntax
+checker, so the checker is not built under an override it is meant to reject.
 
 The protocol itself has a separate compiled five-test contract target. Its
 success case uses typed counters and role capture to prove exactly one real,
