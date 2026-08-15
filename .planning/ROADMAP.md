@@ -1891,7 +1891,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 | 280. Verification Gate Repair | v1.78 | 4/4 | Complete | 2026-08-11 |
 | 281. core.inc Elimination | v1.78 | 2/3 | Complete | 2026-08-11 |
 | 282. Crate Extraction From swarm-runtime | v1.78 | 0/6 closed | Code merged 2026-08-13 (0a09358), complete as scoped; all six SPLIT checkboxes still open, remainder re-derived 2026-08-13 (task #14, `.planning/PHASE-282-REMAINDER.md`) | 2026-08-13 |
-| 283. TCB Boundary And Layering Enforcement | v1.78 | 0/TBD | Not started | - |
+| 283. TCB Boundary And Layering Enforcement | v1.78 | 4/4 requirements | Complete | 2026-08-13 |
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
 | 285. Assumption Registry And Invariant Mapping | v1.79 | 7/9 requirements | Local mapping/falsifiability complete; MAPPING-05/FALSIFY-04 await protected-required-check repository settings | 2026-08-14 |
 | 286. Deterministic Simulation Testing | v1.79 | 0/TBD | Not started | - |
@@ -1928,14 +1928,14 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 | 317. Fleet Blast Radius And Tenant Isolation | v1.87 | 0/TBD | Not started | - |
 | 318. Fleet Operational Maturity | v1.87 | 0/TBD | Not started | - |
 | 319. Signed Release Supply Chain | v1.87 | 0/TBD | Not started | - |
-| 320. Reversible Quarantine Execution | v1.78.1 | 2/4 | In progress | - |
-| 321. BFT Correctness Repair | v1.78.1 | 2/5 | In progress | - |
-| 322. Promotion Solver Gate | v1.78.1 | 0/TBD | Not started | - |
+| 320. Reversible Quarantine Execution | v1.78.1 | 4/4 requirements | Complete | 2026-08-14 |
+| 321. BFT Correctness Repair | v1.78.1 | Partial by scope | BFT-01/02/05 complete; substrate exchange and networked round deferred to v1.83 | 2026-08-14 |
+| 322. Promotion Solver Gate | v1.78.1 | 5/5 requirements | Complete | 2026-08-13 |
 
 ---
-*Active milestone: v1.77 Integration Proof*
-*v1.77 status: All phases complete (268-279 shipped 2026-04-13).*
-*v1.76 complete: Archived after finishing phases 272-275 on 2026-04-13.*
-*v1.78 through v1.87 queued: 40 phases (280-319) defined 2026-08-10.*
-*v1.78.1 queued: phases 320-322 defined 2026-08-10.*
+*Active milestone: v1.79 Assurance Foundation.*
+*v1.79 status: Phase 284 complete; phase 285 is 7/9 satisfied on local integration commit c59ead0, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started.*
+*v1.77 and v1.78 complete: phases 276-279 shipped 2026-04-13; phases 280-283 completed as scoped by 2026-08-13.*
+*v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83.*
+*v1.80 through v1.87 queued: 32 phases (288-319) defined 2026-08-10.*
 *v1.74 deferred: Run `/gsd:plan-phase 264` when structural-integrity work is reactivated.*

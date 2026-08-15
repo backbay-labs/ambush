@@ -2,12 +2,12 @@
 
 ## Latest Completed Milestone
 
-### v1.76 External Signal Ingestion
-**Executable phases:** 272-275
+### v1.78 Runtime Decomposition And TCB Boundary
+**Executable phases:** 280-283
 **Status:** Complete
-**Shipped:** 2026-04-13
-**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
-**Progress:** Phases 272-275 complete
+**Shipped:** 2026-08-13
+**Goal:** Green the verification gates, eliminate the core.inc pattern, split the 97,709-LOC swarm-runtime crate, and name and enforce a trusted computing base.
+**Progress:** Phases 280-283 complete as scoped; phase 282's explicitly measured remainder remains recorded rather than silently claimed
 
 ## Active Milestone
 
@@ -16,7 +16,7 @@
 **Status:** Active
 **Started:** 2026-08-14
 **Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
-**Progress:** Phase 284 complete; phase 285 active; phases 286-287 not started
+**Progress:** Phase 284 complete; phase 285 has 7/9 requirements satisfied on local integration commit c59ead0, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
 
 ## Queued Milestones
 
@@ -24,19 +24,7 @@
 **Executable phases:** 264-267
 **Status:** Deferred
 **Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
-**Progress:** Phases 264-267 remain defined; deferred while v1.76 executes
-
-### v1.76 External Signal Ingestion
-**Executable phases:** 272-275
-**Status:** Queued
-**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
-**Progress:** Phases 272-275 defined; ready to activate after v1.75 completes
-
-### v1.78 Runtime Decomposition And TCB Boundary
-**Executable phases:** 280-283
-**Status:** Queued
-**Goal:** Green the verification gates, eliminate the core.inc pattern, split the 97,709-LOC swarm-runtime crate, and name and enforce a trusted computing base.
-**Progress:** Phases 280-283 defined 2026-08-10; ready to activate in sequence
+**Progress:** Phases 264-267 remain defined and explicitly deferred
 
 ### v1.80 Red Swarm
 **Executable phases:** 288-291
@@ -85,12 +73,6 @@
 **Status:** Queued
 **Goal:** Scale to a multi-instance fleet with fleet-wide blast-radius control, tenant isolation, measured capacity, and enforced release provenance.
 **Progress:** Phases 316-319 defined 2026-08-10; ready to activate in sequence
-
-### v1.77 Integration Proof
-**Executable phases:** 276-279
-**Status:** Queued
-**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
-**Progress:** Phases 276-279 defined; ready to activate after v1.76 completes
 
 ## History
 

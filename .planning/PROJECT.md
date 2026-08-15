@@ -10,34 +10,35 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.77 Integration Proof` active with phases 276-279 complete. `v1.74 Structural Integrity` deferred.
+`v1.79 Assurance Foundation` is active. Phase 284 is complete; phase 285 has seven of nine requirements satisfied on local integration commit `c59ead0`, while MAPPING-05 and FALSIFY-04 remain open pending external protected-required-check acceptance. Phases 286-287 are not started. `v1.77 Integration Proof` and `v1.78 Runtime Decomposition And TCB Boundary` are complete; `v1.74 Structural Integrity` remains deferred.
 
 **Goal:**
-- Prove one real EDR adapter, one real SIEM adapter, and one compose-backed detect-to-respond-to-deliver loop on the shipped runtime.
+- Make the fail-closed claim auditable through deterministic fixtures, an enforced invariant/assumption map, negative falsifiability, deterministic simulation, fuzzing, Loom, and supply-chain gates.
 
 **Delivered:**
-- `v1.76` closed the external-signal loop with bounded STIX/TAXII ingestion, runtime threat-intel enrichment, CloudTrail and Kubernetes audit bridge normalization, and cloud-detector proof through the signed runtime path.
-- The next milestone can now assume a broader signal base and focus on proving outbound integration rather than adding more ingest breadth first.
+- `v1.77` shipped the CrowdStrike RTR and Splunk HEC adapters plus the compose-backed integration proof.
+- `v1.78` shipped phases 280-283 as scoped: verification-gate repair, `core.inc` elimination, measured crate extraction, and an enforced TCB boundary. Phase 282's measured remainder remains explicit.
+- `v1.79` phase 284 removed fixture drift and repository-writing test behavior. The phase-285 implementation and workflow evidence is local only until the external required-check settings are verified.
 - `v1.74` remains deferred rather than lost; the structural-integrity phases stay available for later re-activation.
 
 **Supporting foundation:**
 - `v1.75` packaged the runtime for first external operator use with validated Docker, Helm, quickstart, and adversary-emulation proof surfaces.
 - `v1.76` broadened the runtime signal base with external threat intelligence and cloud audit telemetry on the shared ingest and detector paths.
-- `v1.72` added a checked-in OpenAPI contract plus generated Python client proof, which remains relevant for the upcoming integration-architecture validation work.
+- `v1.77` proved the outbound EDR/SIEM integration lane, and `v1.78` established the verification and trust-boundary foundation that v1.79 audits.
 
-## Current Milestone: v1.77 Integration Proof
+## Current Milestone: v1.79 Assurance Foundation
 
-**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic wrappers with tested adapters and a compose-backed deployment proof.
+**Goal:** Make Ambush's fail-closed claim checkable rather than asserted, with each enforced invariant tied to explicit assumptions and a falsifiable negative test before broader simulation and concurrency work begins.
 
 **Target features:**
-- A `CrowdStrikeRtrAdapter` that executes bounded host isolation, process kill, and file quarantine actions through the shipped response lane
-- A `SplunkHecAdapter` that delivers detection findings with CIM-aligned mapping, batching, and bounded resilience
-- A repo-owned Docker Compose proof showing detect -> respond -> deliver with mocked CrowdStrike RTR and Splunk HEC dependencies
-- One integration architecture validation pass that checks health, metrics, and audit surfaces on the deployed compose stack
+- Deterministic, isolated fixtures and a freshness gate — complete in phase 284
+- An enforced assumption registry, invariant map, and negative-falsifiability registry — seven of nine phase-285 requirements satisfied locally; two external acceptance gates remain open
+- Seeded deterministic fault injection over the real authorization and response path — phase 286, not started
+- Fuzz, Loom, and dated supply-chain policy gates — phase 287, not started
 
 ## Current State
 
-`v1.77` is complete but remains the active milestone because `v1.78` is not defined yet. The repo has now completed the contiguous milestone run from `v1.52` through `v1.77`, covering Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, large-file decomposition, runtime/evolution crate-boundary cleanup, config and service monolith decomposition, learned-state integrity signing, secret zeroization, release-build hardening, restart-free bearer lifecycle handling, shipped HTTP request throttling, multi-detector evolution breadth, command-line deobfuscation hardening, telemetry-source breadth across Windows Event Log, Sysmon, and auditd, hardened CI plus repo-owned versioned release automation, a machine-readable platform API contract with generated client proof plus inbound SOAR verdict sync and lineage, stigmergic feedback plus baseline-resistance proof, operator packaging with deployment docs plus quickstart validation, external-signal ingestion across TAXII plus cloud audit telemetry, and one repo-owned end-to-end integration proof spanning CrowdStrike RTR plus Splunk HEC mocks. `v1.74` structural-integrity work remains deferred while the next milestone is prepared.
+`v1.77` and `v1.78` are complete as scoped. `v1.79` is active at phase 285: local integration commit `c59ead0` satisfies MAPPING-01 through MAPPING-04 and FALSIFY-01 through FALSIFY-03, but workflow wiring is not evidence that either job is a protected required check. MAPPING-05 and FALSIFY-04 therefore remain open, and phases 286-287 remain not started. The shipped milestones from the v1.52-v1.77 period cover Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, learned-state integrity, operator packaging, external-signal ingestion, and the CrowdStrike/Splunk integration proof. `v1.78` adds the verification-gate, module-boundary, crate-extraction, and TCB enforcement foundation. `v1.74` remains deferred.
 
 **What is now real:**
 - The live runtime can detect, investigate, correlate, rehearse, review, and export signed evidence through one Rust-first operator workflow.
@@ -276,4 +277,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-13 after defining v1.77 Integration Proof*
+*Last updated: 2026-08-15 after activating v1.79 and separating local phase-285 evidence from external acceptance*

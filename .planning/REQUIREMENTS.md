@@ -744,21 +744,21 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### EDR Response Adapter
 
-- [ ] **EDRINT-01**: A `CrowdStrikeRtrAdapter` implements the existing `ResponseExecutor` trait and translates `ResponseAction` variants (isolate host, kill process, quarantine file) into CrowdStrike Real Time Response API calls with OAuth2 service-to-service authentication, session management, and response status tracking
-- [ ] **EDRINT-02**: The CrowdStrike adapter inherits the existing `ResilientExecutor` retry, `CircuitBreakerState` circuit-breaker, and dead-letter journaling behaviors without duplicating resilience logic
-- [ ] **EDRINT-03**: An integration test suite validates the CrowdStrike adapter against a repo-owned mock RTR API server covering session creation, command execution, result retrieval, and error/timeout handling without requiring live CrowdStrike credentials
+- [x] **EDRINT-01**: A `CrowdStrikeRtrAdapter` implements the existing `ResponseExecutor` trait and translates `ResponseAction` variants (isolate host, kill process, quarantine file) into CrowdStrike Real Time Response API calls with OAuth2 service-to-service authentication, session management, and response status tracking
+- [x] **EDRINT-02**: The CrowdStrike adapter inherits the existing `ResilientExecutor` retry, `CircuitBreakerState` circuit-breaker, and dead-letter journaling behaviors without duplicating resilience logic
+- [x] **EDRINT-03**: An integration test suite validates the CrowdStrike adapter against a repo-owned mock RTR API server covering session creation, command execution, result retrieval, and error/timeout handling without requiring live CrowdStrike credentials
 
 #### SIEM Delivery Adapter
 
-- [ ] **SIEMINT-01**: A `SplunkHecAdapter` implements the existing `ResponseExecutor` trait and delivers `DetectionFinding` payloads to Splunk HTTP Event Collector with configurable index, source, sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication via `@secret:` resolution
-- [ ] **SIEMINT-02**: The Splunk adapter batches findings within a configurable flush interval and max batch size, inherits `ResilientExecutor` retry and circuit-breaker behavior, and exposes delivery metrics (events sent, bytes delivered, errors, latency) on the existing `/metrics` surface
-- [ ] **SIEMINT-03**: An integration test suite validates the Splunk adapter against a repo-owned mock HEC endpoint covering batch delivery, CIM field mapping, authentication, and error/backpressure handling
+- [x] **SIEMINT-01**: A `SplunkHecAdapter` implements the existing `ResponseExecutor` trait and delivers `DetectionFinding` payloads to Splunk HTTP Event Collector with configurable index, source, sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication via `@secret:` resolution
+- [x] **SIEMINT-02**: The Splunk adapter batches findings within a configurable flush interval and max batch size, inherits `ResilientExecutor` retry and circuit-breaker behavior, and exposes delivery metrics (events sent, bytes delivered, errors, latency) on the existing `/metrics` surface
+- [x] **SIEMINT-03**: An integration test suite validates the Splunk adapter against a repo-owned mock HEC endpoint covering batch delivery, CIM field mapping, authentication, and error/backpressure handling
 
 #### End-to-End Deployment Proof
 
-- [ ] **E2EPROOF-01**: A repo-owned Docker Compose stack provisions the runtime with CrowdStrike RTR adapter (mocked), Splunk HEC adapter (mocked), and one telemetry source bridge, proving the full detect -> respond -> deliver loop with observable finding delivery and response receipt generation
-- [ ] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
-- [ ] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
+- [x] **E2EPROOF-01**: A repo-owned Docker Compose stack provisions the runtime with CrowdStrike RTR adapter (mocked), Splunk HEC adapter (mocked), and one telemetry source bridge, proving the full detect -> respond -> deliver loop with observable finding delivery and response receipt generation
+- [x] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
+- [x] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
 
 ### Runtime Decomposition And TCB Boundary (v1.78)
 
@@ -1683,9 +1683,9 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.75 complete: 10 requirements satisfied across phases 268-271
 - v1.76 complete: 9 requirements satisfied across phases 272-275
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
-- v1.78 in progress: 17 requirements across phases 280-283 (GATEFIX-01-04 Satisfied 2026-08-11; TCBOUND-01-04 Satisfied 2026-08-13) (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
-- v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
-- v1.79 queued: 25 requirements across phases 284-287 (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
+- v1.78 complete as scoped: phases 280-283 shipped; GATEFIX-01-04 and TCBOUND-01-04 are satisfied, while phase 282's measured SPLIT remainder remains explicit rather than silently claimed
+- v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83 rather than claimed
+- v1.79 active: phase 284 complete; phase 285 is 7/9 satisfied on local integration commit c59ead0, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
 - v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
@@ -1697,4 +1697,4 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-08-10 - Merged v1.75-v1.77 completion from feat/milestones-v1.74-v1.77; v1.78-v1.87 requirements mapped to phases 280-322*
+*Last updated: 2026-08-15 - Activated v1.79 and separated local phase-285 delivery from external required-check acceptance*
