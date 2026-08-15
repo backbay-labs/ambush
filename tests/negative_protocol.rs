@@ -8,8 +8,11 @@
 //!
 //! The assertion macros own the production call itself. Call sites provide an
 //! exact function path and argument expressions, followed by a narrow inline
-//! projection of that call's result. The registry gate parses those invocations
-//! as Rust syntax and pins both the production path and projection AST.
+//! projection of that call's result. The registry gate parses and locally
+//! digests the complete protocol and registered test AST, including the
+//! production path, setup, mirror roles, and denial/permission predicates.
+//! Those co-located digests expose uncoordinated drift; they are not external
+//! provenance and do not resist a coherent edit of the checker and its inputs.
 
 use core::fmt::Debug;
 use core::future::Future;

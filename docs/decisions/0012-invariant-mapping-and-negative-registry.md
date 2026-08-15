@@ -3,8 +3,12 @@
 ## Status
 
 Accepted on 2026-08-14 for the repository-local Phase 285 implementation.
-MAPPING-05 and FALSIFY-04 remain open until repository settings make the wired
-workflow job a protected required check.
+MAPPING-05 and FALSIFY-04 remain open until a provenance-distinct external
+required check protects the local gate result. The current organization is on
+GitHub Free, where an organization-owned pinned required workflow is
+unavailable. A dedicated external GitHub App check with its own integration ID
+is the viable Free-plan anchor; the existing Actions App plus `panic-contract`
+check name is not provenance and can be spoofed by another workflow.
 
 Supersedes nothing. Names invariants of the trusted computing base ADR 0009
 draws; adds no dependency edge to any TCB crate, so
@@ -52,12 +56,13 @@ function body. It requires one
 `// INVARIANT: <NAME>` marker immediately before an executable decision inside
 that exact function, and fails on any production marker with no row.
 
-The immutable `docs/assurance/universe.toml` baseline freezes the exact required
+The checked-in `docs/assurance/universe.toml` ratchet records the exact required
 invariant and omission IDs/counts, requires the sets to be disjoint, partitions
 each ID onto exactly one named surface, and requires production paths to match
-that surface. Coordinated deletion of a row, marker, assumption dependency and
-registry entry therefore still fails against the baseline. The same checker
-resolves `docs/assurance/omissions.toml`. An excluded surface
+that surface. Deleting a row, marker, assumption dependency, or registry entry
+without updating the ratchet fails locally. The ratchet and checker are
+co-located, however: a coherent edit of both can change the universe. The same
+checker resolves `docs/assurance/omissions.toml`. An excluded surface
 must name a real function plus an owner, reason, and clearing condition. The
 adversarial fixtures prove that comments, strings, wrong-function markers and
 markers parked above non-guard statements cannot satisfy it.
@@ -73,12 +78,12 @@ function that does not exist, a test function carrying no adjacent `#[test]` or
 `#[tokio::test]` attribute, an ignored or conditionally disabled test, or a body
 that does not invoke exactly one shared typed differential protocol. The shared
 macro owns the real production invocation. A focused `syn` checker requires the
-canonical fully-qualified macro path and pins the named case, production entry,
-argument/projection AST, call mode, and `Mutation::None`/
-`Mutation::BrokenVariant` identities to a checker-owned baseline.
-For guards reached through a public API, the registry separately names the
-internal `production_fn`, public `production_entry`, and an explicit indirect
-reachability reason. Comments, strings, locally shadowed macros,
+canonical fully-qualified macro path and locally digests the complete registered
+test function: case identity, setup, mutation roles, production path and
+arguments, result normalization, mirror operations, and denial/permission
+predicates. Mapped markers and adapters name the same public production entry;
+the only indirect entries are two Serde conversions explicitly classified as
+reviewed boundaries. Comments, strings, locally shadowed macros,
 decorative tokens, nonexistent modules/types, and production-shaped
 `.evaluate`/`black_box`/unrelated-assertion spoofs are adversarial self-test
 cases. For each of the four targets, Cargo `--list` discovery must equal the
@@ -91,22 +96,21 @@ success case uses typed counters and role capture to prove exactly one real,
 one mirror(None), and one mirror(BrokenVariant) call. Four `#[should_panic]`
 cases prove real/control mismatch, a permitting real operation, a denying
 broken operation, and swapped role identities are rejected. The gate copies
-the actual `tests/negative_protocol.rs` and actual contract into a temporary
-crate, then applies thirteen source mutations: no-op and `if false` execution,
-each omitted operation, swapped mirror roles, and removed, inverted, or vacuous
-assertions. Every mutation must compile and fail the contract tests.
+the actual `tests/negative_protocol.rs`, contract, and registered sources into
+temporary crates and mutates them. No-op/conditional execution, omitted or
+swapped roles, identity-selective returns, forced mirror mutations, and
+constant/ignored/swapped/vacuous predicates must all make the gate fail.
 
-The Rust-syntax checker rejects dead closures and branches around the invocation,
-renamed production methods, aliases, globs, re-exports, local shadows, and
-normalizers that ignore or replace the production result. Its immutable
-expected-binding file is itself authenticated by a digest embedded in checker
-code, so coordinated edits to test source, registry, universe, and the expected
-file fail. A public entry may reach a private mapped guard indirectly: twelve
-such edges are traversed mechanically from compiled source, while the two serde
-deserialization boundaries are explicitly identified for review rather than
-misrepresented as direct calls. The checker pins what production expression is
-executed, while the broader fidelity of each handwritten mirror remains a
-reviewed limitation.
+The Rust-syntax checker rejects caller control flow around the invocation, dead
+closures, renamed production methods, aliases, globs, re-exports, local shadows,
+and normalizers that ignore or replace the production result. It also digests
+the complete shared protocol implementation, so identity-conditional early
+returns and skipped roles are caught by the local check. The expected-binding
+file and protocol digests are embedded in checker code; that makes ordinary
+source or baseline drift visible, including coordinated edits that do not also
+change the checker. It does not authenticate the checker: a coherent change to
+the checker plus all inputs can pass. The broader fidelity of each handwritten
+mirror remains a reviewed limitation.
 
 The shared typed protocol makes each test do three things over one probe input:
 
@@ -161,9 +165,12 @@ directory — a gate placed in `scripts/` would be invisible to the gate that
 checks gates are wired. The requirement wording is stale; phase 283 hit the same
 thing and recorded the same deviation.
 
-Workflow wiring is not branch protection. Both scripts are invoked by
-`.github/workflows/ci.yml`, but MAPPING-05 and FALSIFY-04 remain open until
-repository settings make the containing job a protected required check.
+Workflow wiring is not branch protection or provenance. Both scripts are
+invoked by `.github/workflows/ci.yml`, but another workflow can present the same
+Actions App identity and `panic-contract` check name. MAPPING-05 and FALSIFY-04
+remain open until a dedicated external GitHub App check with a distinct
+integration ID is protected (or the organization upgrades and an admin-owned
+required workflow is pinned).
 
 ## What this buys, stated narrowly
 

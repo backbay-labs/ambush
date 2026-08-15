@@ -693,6 +693,14 @@ def looks_like_executable_guard(line: str) -> bool:
         return True
     if re.match(r"(?:return\s+)?(?:Err|Ok)\s*\(", stripped):
         return True
+    # A public entry may bind a private decision result or return a delegated
+    # Result as its tail expression. The exact containing function is checked
+    # separately, so accept only unmistakable call expressions here rather
+    # than arbitrary declarations.
+    if re.match(r"let\b[^=]*=\s*(?:Self::|self\.|crate::|[A-Z][A-Za-z0-9_]*::)", stripped):
+        return "(" in stripped
+    if re.match(r"(?:Self::|self\.|crate::)", stripped):
+        return "(" in stripped
     # A Result-propagating call is an executable refusal decision even though
     # Rust spells it with `?` rather than an `if`.
     return "?" in stripped

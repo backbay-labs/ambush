@@ -8,12 +8,15 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
-    Attribute, Block, Expr, ExprClosure, Ident, ImplItem, Item, ItemFn, ItemMod, Macro, Meta, Pat,
-    Path as SynPath, Result as SynResult, Stmt, Token, Type, braced, parenthesized,
+    Attribute, Expr, ExprClosure, Ident, Item, ItemFn, ItemMod, Macro, Meta, Pat, Path as SynPath,
+    Result as SynResult, Stmt, Token, Type, braced, parenthesized,
 };
 
 const EXPECTED: &str = include_str!("expected-bindings.tsv");
-const EXPECTED_SHA256: &str = "0e3b222e79e16a45fe6922f2717a5c14696102f60bc56cb6920aa8ee513d2871";
+const EXPECTED_SHA256: &str = "18c4aba7aa8ce06ed7479f6798feba9bd97e9939a8d3d5134b41dc6598bbea9d";
+const PROTOCOL_SOURCE: &str = "tests/negative_protocol.rs";
+const PROTOCOL_SEMANTIC_SHA256: &str =
+    "eb6ab292e42dabe4472fdbf7ff498e07ea1a3d4617994b4098532633bd871d5f";
 const SYNC_MACRO: &str = "negative_protocol::assert_registered_negative_case";
 const ASYNC_MACRO: &str = "negative_protocol::assert_registered_async_negative_case";
 const RESERVED: [&str; 3] = [
@@ -46,11 +49,6 @@ struct ContractRow {
     broken_variant: String,
     macro_path: String,
     edge_validation: String,
-    edge_source: PathBuf,
-    edge_entry_type: String,
-    edge_entry_fn: String,
-    edge_guard_type: String,
-    edge_guard_fn: String,
 }
 
 #[derive(Clone, Debug)]
@@ -64,7 +62,7 @@ struct ExpectedRow {
     production_entry: String,
     broken_variant: String,
     macro_path: String,
-    invocation_digest: String,
+    semantic_digest: String,
     edge_validation: String,
 }
 
@@ -107,9 +105,9 @@ fn parse_contract(path: &Path) -> Result<Vec<ContractRow>, String> {
             continue;
         }
         let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() != 15 {
+        if fields.len() != 10 {
             return Err(format!(
-                "{}:{}: expected 15 tab fields",
+                "{}:{}: expected 10 tab fields",
                 path.display(),
                 index + 1
             ));
@@ -125,11 +123,6 @@ fn parse_contract(path: &Path) -> Result<Vec<ContractRow>, String> {
             broken_variant: fields[7].to_owned(),
             macro_path: fields[8].to_owned(),
             edge_validation: fields[9].to_owned(),
-            edge_source: PathBuf::from(fields[10]),
-            edge_entry_type: fields[11].to_owned(),
-            edge_entry_fn: fields[12].to_owned(),
-            edge_guard_type: fields[13].to_owned(),
-            edge_guard_fn: fields[14].to_owned(),
         });
     }
     Ok(rows)
@@ -164,7 +157,7 @@ fn parse_expected() -> Result<BTreeMap<String, ExpectedRow>, String> {
             production_entry: fields[6].to_owned(),
             broken_variant: fields[7].to_owned(),
             macro_path: fields[8].to_owned(),
-            invocation_digest: fields[9].to_owned(),
+            semantic_digest: fields[9].to_owned(),
             edge_validation: fields[10].to_owned(),
         };
         if rows.insert(row.invariant.clone(), row).is_some() {
@@ -334,12 +327,12 @@ struct ScalarInvocation {
     _outcome: Type,
     real_probe: Ident,
     production: SynPath,
-    arguments: Punctuated<Expr, Token![,]>,
+    _arguments: Punctuated<Expr, Token![,]>,
     call: Ident,
     normalize: ExprClosure,
-    _mirror: ExprClosure,
-    _denied: ExprClosure,
-    _permitted: ExprClosure,
+    mirror: ExprClosure,
+    denied: ExprClosure,
+    permitted: ExprClosure,
 }
 
 impl Parse for ScalarInvocation {
@@ -414,12 +407,12 @@ impl Parse for ScalarInvocation {
             _outcome: outcome,
             real_probe,
             production,
-            arguments,
+            _arguments: arguments,
             call,
             normalize,
-            _mirror: mirror,
-            _denied: denied,
-            _permitted: permitted,
+            mirror,
+            denied,
+            permitted,
         })
     }
 }
@@ -435,13 +428,13 @@ struct BatchInvocation {
     _outcome: Type,
     real_probe: Ident,
     production: SynPath,
-    arguments: Punctuated<Expr, Token![,]>,
+    _arguments: Punctuated<Expr, Token![,]>,
     item: Ident,
     iterator: Expr,
     normalize: ExprClosure,
-    _mirror: ExprClosure,
-    _denied: ExprClosure,
-    _permitted: ExprClosure,
+    mirror: ExprClosure,
+    denied: ExprClosure,
+    permitted: ExprClosure,
 }
 
 impl Parse for BatchInvocation {
@@ -518,13 +511,13 @@ impl Parse for BatchInvocation {
             _outcome: outcome,
             real_probe,
             production,
-            arguments,
+            _arguments: arguments,
             item,
             iterator,
             normalize,
-            _mirror: mirror,
-            _denied: denied,
-            _permitted: permitted,
+            mirror,
+            denied,
+            permitted,
         })
     }
 }
@@ -535,7 +528,79 @@ struct ParsedInvocation {
     control: String,
     broken: String,
     production: String,
-    digest: String,
+}
+
+fn closure_identifiers(closure: &ExprClosure) -> Option<Vec<String>> {
+    closure
+        .inputs
+        .iter()
+        .map(|input| match input {
+            Pat::Ident(value) => Some(value.ident.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn expression_uses_identifier(expression: &Expr, expected: &str) -> bool {
+    fn tokens_use_identifier(tokens: &proc_macro2::TokenStream, expected: &str) -> bool {
+        tokens.clone().into_iter().any(|token| match token {
+            proc_macro2::TokenTree::Ident(value) => value == expected,
+            proc_macro2::TokenTree::Group(value) => {
+                tokens_use_identifier(&value.stream(), expected)
+            }
+            _ => false,
+        })
+    }
+
+    struct IdentUse<'a> {
+        expected: &'a str,
+        used: bool,
+    }
+    impl<'ast> Visit<'ast> for IdentUse<'_> {
+        fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+            if expression.path.is_ident(self.expected) {
+                self.used = true;
+            }
+            visit::visit_expr_path(self, expression);
+        }
+
+        fn visit_macro(&mut self, value: &'ast Macro) {
+            if tokens_use_identifier(&value.tokens, self.expected) {
+                self.used = true;
+            }
+            visit::visit_macro(self, value);
+        }
+    }
+    let mut visitor = IdentUse {
+        expected,
+        used: false,
+    };
+    visitor.visit_expr(expression);
+    visitor.used
+}
+
+fn mirror_bindings_are_live(closure: &ExprClosure) -> bool {
+    let Some(inputs) = closure_identifiers(closure) else {
+        return false;
+    };
+    if inputs.len() != 3 {
+        return false;
+    }
+    inputs.iter().enumerate().all(|(index, input)| {
+        if index == 2 && input.starts_with('_') {
+            return false;
+        }
+        input.starts_with('_') || expression_uses_identifier(&closure.body, input)
+    })
+}
+
+fn predicate_binding_is_live(closure: &ExprClosure) -> bool {
+    let Some(inputs) = closure_identifiers(closure) else {
+        return false;
+    };
+    inputs.len() == 1
+        && !inputs[0].starts_with('_')
+        && expression_uses_identifier(&closure.body, &inputs[0])
 }
 
 fn one_closure_input(closure: &ExprClosure, expected: &str) -> bool {
@@ -602,20 +667,21 @@ fn parse_invocation(mac: &Macro, expected_macro: &str) -> Result<ParsedInvocatio
                 "batch iterator `{iterator}` is not exact probe.iter()"
             ));
         }
+        let mirror_live = mirror_bindings_are_live(&value.mirror);
+        let denied_live = predicate_binding_is_live(&value.denied);
+        let permitted_live = predicate_binding_is_live(&value.permitted);
+        if !mirror_live || !denied_live || !permitted_live {
+            return Err(format!(
+                "batch semantic bindings are not live (mirror={mirror_live}, denied={denied_live}, permitted={permitted_live})"
+            ));
+        }
         let production = path_string(&value.production);
-        let material = format!(
-            "batch|{production}|{}|{}|{}",
-            canonical(&value.arguments),
-            iterator,
-            canonical(&value.normalize)
-        );
         Ok(ParsedInvocation {
             case: value.case.to_string(),
             mutation: canonical(&value._mutation),
             control: path_string(&value._control),
             broken: path_string(&value._broken),
             production,
-            digest: digest(&material),
         })
     } else {
         let value: ScalarInvocation =
@@ -633,19 +699,21 @@ fn parse_invocation(mac: &Macro, expected_macro: &str) -> Result<ParsedInvocatio
         if call != expected_call {
             return Err(format!("call kind `{call}` != `{expected_call}`"));
         }
+        let mirror_live = mirror_bindings_are_live(&value.mirror);
+        let denied_live = predicate_binding_is_live(&value.denied);
+        let permitted_live = predicate_binding_is_live(&value.permitted);
+        if !mirror_live || !denied_live || !permitted_live {
+            return Err(format!(
+                "semantic bindings are not live (mirror={mirror_live}, denied={denied_live}, permitted={permitted_live})"
+            ));
+        }
         let production = path_string(&value.production);
-        let material = format!(
-            "scalar|{production}|{call}|{}|{}",
-            canonical(&value.arguments),
-            canonical(&value.normalize)
-        );
         Ok(ParsedInvocation {
             case: value.case.to_string(),
             mutation: canonical(&value._mutation),
             control: path_string(&value._control),
             broken: path_string(&value._broken),
             production,
-            digest: digest(&material),
         })
     }
 }
@@ -654,6 +722,15 @@ fn direct_test_macro<'a>(
     function: &'a ItemFn,
     expected_path: &str,
 ) -> Result<&'a Macro, Violation> {
+    if !function.sig.inputs.is_empty() || !matches!(function.sig.output, syn::ReturnType::Default) {
+        return Err(Violation::new(
+            "ast-macro-placement",
+            format!(
+                "{} registered test must have no parameters or return type",
+                function.sig.ident
+            ),
+        ));
+    }
     let mut visitor = MacroVisitor::default();
     visitor.visit_block(&function.block);
     if visitor.paths != [expected_path] {
@@ -691,14 +768,15 @@ fn direct_test_macro<'a>(
             matches!(statement, Stmt::Macro(value) if path_string(&value.mac.path) == expected_path)
         })
         .expect("the direct macro inventory was checked above");
-    if function.block.stmts[..macro_index]
-        .iter()
-        .any(statement_unconditionally_exits)
-    {
+    let mut exits = EarlyExitVisitor::default();
+    for statement in &function.block.stmts[..macro_index] {
+        exits.visit_stmt(statement);
+    }
+    if exits.found {
         return Err(Violation::new(
             "ast-macro-placement",
             format!(
-                "{} canonical macro follows an unconditional exit",
+                "{} setup can return before the canonical macro",
                 function.sig.ident
             ),
         ));
@@ -706,193 +784,40 @@ fn direct_test_macro<'a>(
     Ok(direct[0])
 }
 
-fn statement_unconditionally_exits(statement: &Stmt) -> bool {
-    match statement {
-        Stmt::Expr(Expr::Return(_), _) => true,
-        Stmt::Expr(Expr::Macro(value), _) => {
-            value.mac.path.segments.last().is_some_and(|segment| {
-                matches!(
-                    segment.ident.to_string().as_str(),
-                    "panic" | "todo" | "unreachable"
-                )
-            })
-        }
-        Stmt::Macro(value) => value.mac.path.segments.last().is_some_and(|segment| {
+#[derive(Default)]
+struct EarlyExitVisitor {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for EarlyExitVisitor {
+    fn visit_expr_return(&mut self, _expression: &'ast syn::ExprReturn) {
+        self.found = true;
+    }
+
+    fn visit_expr_try(&mut self, _expression: &'ast syn::ExprTry) {
+        self.found = true;
+    }
+
+    fn visit_macro(&mut self, value: &'ast Macro) {
+        if value.path.segments.last().is_some_and(|segment| {
             matches!(
                 segment.ident.to_string().as_str(),
                 "panic" | "todo" | "unreachable"
             )
-        }),
-        _ => false,
-    }
-}
-
-fn collect_functions<'a>(items: &'a [Item], functions: &mut Vec<(String, String, &'a Block)>) {
-    for item in items {
-        match item {
-            Item::Fn(function) => functions.push((
-                "-".to_owned(),
-                function.sig.ident.to_string(),
-                &function.block,
-            )),
-            Item::Impl(implementation) => {
-                let type_name = match implementation.self_ty.as_ref() {
-                    Type::Path(path) => path
-                        .path
-                        .segments
-                        .last()
-                        .map(|segment| segment.ident.to_string())
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                };
-                for member in &implementation.items {
-                    if let ImplItem::Fn(function) = member {
-                        functions.push((
-                            type_name.clone(),
-                            function.sig.ident.to_string(),
-                            &function.block,
-                        ));
-                    }
-                }
-            }
-            Item::Mod(module) => {
-                if let Some((_, nested)) = &module.content {
-                    collect_functions(nested, functions);
-                }
-            }
-            _ => {}
+        }) {
+            self.found = true;
+            return;
         }
-    }
-}
-
-struct GuardCallVisitor<'a> {
-    guard_type: &'a str,
-    guard_fn: &'a str,
-    inactive: usize,
-    calls: usize,
-}
-
-impl<'ast> Visit<'ast> for GuardCallVisitor<'_> {
-    fn visit_expr_call(&mut self, expression: &'ast syn::ExprCall) {
-        if self.inactive == 0
-            && let Expr::Path(path) = expression.func.as_ref()
-            && path
-                .path
-                .segments
-                .last()
-                .is_some_and(|segment| segment.ident == self.guard_fn)
-        {
-            let identity = path_string(&path.path);
-            if self.guard_type == "-"
-                || identity
-                    .split("::")
-                    .any(|segment| segment == self.guard_type || segment == "Self")
-                || path.path.segments.len() == 1
-            {
-                self.calls += 1;
-            }
-        }
-        visit::visit_expr_call(self, expression);
+        visit::visit_macro(self, value);
     }
 
-    fn visit_expr_method_call(&mut self, expression: &'ast syn::ExprMethodCall) {
-        if self.inactive == 0 && expression.method == self.guard_fn {
-            self.calls += 1;
-        }
-        visit::visit_expr_method_call(self, expression);
+    fn visit_expr_closure(&mut self, _expression: &'ast ExprClosure) {
+        // A return inside a closure exits that closure, not the registered test.
     }
 
-    fn visit_expr_closure(&mut self, expression: &'ast ExprClosure) {
-        self.inactive += 1;
-        visit::visit_expr_closure(self, expression);
-        self.inactive -= 1;
+    fn visit_expr_async(&mut self, _expression: &'ast syn::ExprAsync) {
+        // A return inside an async block exits its future, not the test function.
     }
-
-    fn visit_expr_async(&mut self, expression: &'ast syn::ExprAsync) {
-        self.inactive += 1;
-        visit::visit_expr_async(self, expression);
-        self.inactive -= 1;
-    }
-
-    fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
-        if matches!(expression.cond.as_ref(), Expr::Lit(value) if matches!(value.lit, syn::Lit::Bool(ref flag) if !flag.value))
-        {
-            self.visit_expr(expression.cond.as_ref());
-            self.inactive += 1;
-            self.visit_block(&expression.then_branch);
-            self.inactive -= 1;
-            if let Some((_, branch)) = &expression.else_branch {
-                self.visit_expr(branch);
-            }
-        } else {
-            visit::visit_expr_if(self, expression);
-        }
-    }
-}
-
-fn validate_mechanical_edge(row: &ContractRow) -> Option<Violation> {
-    if row.edge_validation != "mechanical" {
-        return None;
-    }
-    let source = match fs::read_to_string(&row.edge_source) {
-        Ok(value) => value,
-        Err(error) => {
-            return Some(Violation::new(
-                "ast-edge-source",
-                format!("{}: {error}", row.edge_source.display()),
-            ));
-        }
-    };
-    let file = match syn::parse_file(&source) {
-        Ok(value) => value,
-        Err(error) => {
-            return Some(Violation::new(
-                "ast-edge-source",
-                format!("{}: {error}", row.edge_source.display()),
-            ));
-        }
-    };
-    let mut functions = Vec::new();
-    collect_functions(&file.items, &mut functions);
-    let candidates = functions
-        .into_iter()
-        .filter(|(type_name, function, _)| {
-            type_name == &row.edge_entry_type && function == &row.edge_entry_fn
-        })
-        .collect::<Vec<_>>();
-    if candidates.len() != 1 {
-        return Some(Violation::new(
-            "ast-edge-entry",
-            format!(
-                "{} has {} `{}`::`{}` entry bodies",
-                row.invariant,
-                candidates.len(),
-                row.edge_entry_type,
-                row.edge_entry_fn
-            ),
-        ));
-    }
-    let mut visitor = GuardCallVisitor {
-        guard_type: &row.edge_guard_type,
-        guard_fn: &row.edge_guard_fn,
-        inactive: 0,
-        calls: 0,
-    };
-    visitor.visit_block(candidates[0].2);
-    if visitor.calls == 0 {
-        return Some(Violation::new(
-            "ast-edge-missing",
-            format!(
-                "{} entry `{}`::`{}` has no live AST call edge to `{}`::`{}`",
-                row.invariant,
-                row.edge_entry_type,
-                row.edge_entry_fn,
-                row.edge_guard_type,
-                row.edge_guard_fn
-            ),
-        ));
-    }
-    None
 }
 
 fn validate_normalizer_helpers() -> Vec<Violation> {
@@ -945,6 +870,38 @@ fn validate_normalizer_helpers() -> Vec<Violation> {
         }
     }
     violations
+}
+
+fn validate_protocol_semantics() -> Option<Violation> {
+    let source = match fs::read_to_string(PROTOCOL_SOURCE) {
+        Ok(value) => value,
+        Err(error) => {
+            return Some(Violation::new(
+                "ast-protocol-semantic-drift",
+                format!("{PROTOCOL_SOURCE}: {error}"),
+            ));
+        }
+    };
+    let file = match syn::parse_file(&source) {
+        Ok(value) => value,
+        Err(error) => {
+            return Some(Violation::new(
+                "ast-protocol-semantic-drift",
+                format!("{PROTOCOL_SOURCE}: {error}"),
+            ));
+        }
+    };
+    let actual = digest(&canonical(&file));
+    if actual == PROTOCOL_SEMANTIC_SHA256 {
+        None
+    } else {
+        Some(Violation::new(
+            "ast-protocol-semantic-drift",
+            format!(
+                "{PROTOCOL_SOURCE} semantic digest `{actual}` != pinned `{PROTOCOL_SEMANTIC_SHA256}`"
+            ),
+        ))
+    }
 }
 
 fn validate_row(
@@ -1065,7 +1022,7 @@ fn validate_row(
                     row.production_entry.clone(),
                     row.broken_variant.clone(),
                     row.macro_path.clone(),
-                    parsed.digest.clone(),
+                    digest(&canonical(tests[0])),
                     row.edge_validation.clone(),
                 ];
                 let wanted = [
@@ -1077,7 +1034,7 @@ fn validate_row(
                     value.production_entry.clone(),
                     value.broken_variant.clone(),
                     value.macro_path.clone(),
-                    value.invocation_digest.clone(),
+                    value.semantic_digest.clone(),
                     value.edge_validation.clone(),
                 ];
                 if actual != wanted {
@@ -1091,9 +1048,6 @@ fn validate_row(
                 }
             }
         }
-    }
-    if let Some(edge) = validate_mechanical_edge(row) {
-        violations.push(edge);
     }
     violations
 }
@@ -1110,7 +1064,7 @@ fn emitted_row(row: &ContractRow) -> Result<String, String> {
         })
         .ok_or_else(|| "test missing".to_owned())?;
     let mac = direct_test_macro(function, &row.macro_path).map_err(|error| error.message)?;
-    let parsed = parse_invocation(mac, &row.macro_path)?;
+    let _parsed = parse_invocation(mac, &row.macro_path)?;
     Ok([
         row.invariant.clone(),
         row.file.to_string_lossy().to_string(),
@@ -1121,7 +1075,7 @@ fn emitted_row(row: &ContractRow) -> Result<String, String> {
         row.production_entry.clone(),
         row.broken_variant.clone(),
         row.macro_path.clone(),
-        parsed.digest,
+        digest(&canonical(function)),
         row.edge_validation.clone(),
     ]
     .join("\t"))
@@ -1175,6 +1129,9 @@ fn main() {
             ));
         }
         violations.extend(validate_normalizer_helpers());
+        if let Some(protocol) = validate_protocol_semantics() {
+            violations.push(protocol);
+        }
     }
     for row in &rows {
         violations.extend(validate_row(row, strict, &expected));

@@ -319,13 +319,11 @@ impl RollbackReceipt {
     }
 
     fn derive_status(steps: &[RollbackStepOutcome], mode: ExecutionMode) -> ResponseStatus {
-        // INVARIANT: RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS
         if steps.is_empty() {
             return ResponseStatus::Failed;
         }
         if steps.iter().all(|step| step.status.restored()) {
             ResponseStatus::Executed
-        // INVARIANT: RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS
         } else if steps
             .iter()
             .all(|step| step.status == RollbackStepStatus::Simulated)
@@ -340,7 +338,6 @@ impl RollbackReceipt {
             // sandbox). Reporting that as success would put a false claim in the
             // durable record, so the mode gates the arm.
             ResponseStatus::Simulated
-        // INVARIANT: RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS
         } else {
             // Anything left is a containment still partly or wholly in effect.
             // `indicates_success()` is false for `Failed`, so every caller that
@@ -358,6 +355,9 @@ impl RollbackReceipt {
         completed_at_ms: i64,
         steps: Vec<RollbackStepOutcome>,
     ) -> Self {
+        // INVARIANT: RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS
+        // INVARIANT: RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS
+        // INVARIANT: RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS
         let status = Self::derive_status(&steps, mode);
         let reversed = steps.iter().filter(|step| step.status.restored()).count();
         Self {
@@ -406,7 +406,6 @@ pub trait RollbackExecutor: Send + Sync + std::fmt::Debug {
 /// Refuse a plan with no steps. A containment whose plan has no steps cannot be
 /// proven reversible, so no executor may emit a receipt about it.
 fn require_steps(lease: &ContainmentLease, mode: ExecutionMode) -> Result<(), ResponseError> {
-    // INVARIANT: RESPONSE-ROLLBACK-REQUIRES-STEPS
     if lease.rollback().steps.is_empty() {
         return Err(ResponseError::unavailable(
             lease.action_kind(),
@@ -439,6 +438,7 @@ impl RollbackExecutor for SandboxRollbackExecutor {
         mode: ExecutionMode,
         completed_at_ms: i64,
     ) -> Result<RollbackReceipt, ResponseError> {
+        // INVARIANT: RESPONSE-ROLLBACK-REQUIRES-STEPS
         require_steps(lease, mode)?;
 
         let steps = lease

@@ -335,7 +335,6 @@ struct ContainmentState {
 
 impl ContainmentState {
     fn open_lease(&mut self, lease: &ContainmentLease) -> Result<(), ContainmentStoreError> {
-        // INVARIANT: RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED
         if self
             .open
             .iter()
@@ -350,7 +349,6 @@ impl ContainmentState {
     }
 
     fn close(&mut self, receipt: &RollbackReceipt) -> Result<(), ContainmentStoreError> {
-        // INVARIANT: RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED
         let Some(index) = self
             .open
             .iter()
@@ -388,6 +386,7 @@ impl MemoryContainmentLeaseStore {
 
 impl ContainmentLeaseStore for MemoryContainmentLeaseStore {
     fn open_lease(&self, lease: &ContainmentLease) -> Result<(), ContainmentStoreError> {
+        // INVARIANT: RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED
         self.locked().open_lease(lease)
     }
 
@@ -409,6 +408,7 @@ impl ContainmentLeaseStore for MemoryContainmentLeaseStore {
     }
 
     fn close(&self, receipt: &RollbackReceipt) -> Result<(), ContainmentStoreError> {
+        // INVARIANT: RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED
         self.locked().close(receipt)
     }
 }

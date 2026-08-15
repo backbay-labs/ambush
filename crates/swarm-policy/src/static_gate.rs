@@ -35,14 +35,12 @@ impl StaticApprovalGate {
     }
 
     pub(crate) fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
-        // INVARIANT: POLICY-NULL-EVIDENCE-REFUSED
         if request.evidence.is_null() {
             return Err(ApprovalError::InvalidRequest(
                 "evidence bundle must not be null".to_string(),
             ));
         }
 
-        // INVARIANT: POLICY-ACTION-TARGETS-NONEMPTY
         match &request.action {
             ResponseAction::BlockEgress { target } if target.trim().is_empty() => {
                 return Err(ApprovalError::InvalidRequest(
@@ -198,7 +196,6 @@ impl StaticApprovalGate {
         let mut windows = self.lock_windows();
         let window = windows.entry(scope.clone()).or_default();
         Self::prune_window(window, context.now_ms);
-        // INVARIANT: POLICY-SCOPE-RATE-LIMIT
         if window.len() >= self.max_actions_per_scope_per_minute {
             return Some(PolicyDecision::deny_with_rule(
                 "static.scope_rate_limit",
@@ -254,6 +251,8 @@ impl ApprovalGate for StaticApprovalGate {
         request: &ActionRequest,
         context: &ApprovalContext,
     ) -> Result<PolicyDecision, ApprovalError> {
+        // INVARIANT: POLICY-NULL-EVIDENCE-REFUSED
+        // INVARIANT: POLICY-ACTION-TARGETS-NONEMPTY
         self.validate_request(request)?;
 
         // INVARIANT: POLICY-DESTRUCTIVE-MIN-SEVERITY
@@ -274,6 +273,7 @@ impl ApprovalGate for StaticApprovalGate {
             ));
         }
 
+        // INVARIANT: POLICY-SCOPE-RATE-LIMIT
         if let Some(decision) = self.scope_rate_limit_decision(request, context) {
             return Ok(decision);
         }

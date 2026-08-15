@@ -2,10 +2,11 @@
 # Phase-285 negative-registry gate. Each test must invoke the repository's
 # shared typed protocol, which owns an exact production call plus
 # mirror(None)/mirror(Broken) execution over one typed probe. A focused syn
-# checker binds the direct macro invocation, production path, arguments and
-# result projection to a checker-owned baseline; Cargo discovery and execution
-# independently prove the registered tests run. Mirror fidelity beyond the
-# registered probe remains a reviewed limitation.
+# checker binds the entire registered test and shared protocol AST to local
+# digests; Cargo discovery and execution independently prove the registered
+# tests run. Those co-located digests are tamper-evident against uncoordinated
+# edits, not an external trust anchor. Mirror fidelity beyond the registered
+# probe remains a reviewed limitation.
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -129,19 +130,6 @@ def run_ast_checks(root, registered, report):
             else "negative_protocol::assert_registered_negative_case"
         )
         edge_validation = str(entry.get("edge_validation", ""))
-        edge_source = edge_entry_type = edge_entry_fn = edge_guard_type = edge_guard_fn = "-"
-        if edge_validation == "mechanical":
-            resolved = resolve_function(root, str(entry.get("production_entry", "")))
-            if isinstance(resolved, str):
-                report.violation("ast-edge-entry", f"entry `{entry.get('invariant', '')}`: {resolved}")
-                continue
-            edge_path, edge_span = resolved
-            edge_source = str(edge_path.relative_to(root))
-            edge_entry_type = edge_span.type_name or "-"
-            edge_entry_fn = edge_span.name
-            guard_parts = str(entry.get("production_fn", "")).split("::")
-            edge_guard_fn = guard_parts[-1]
-            edge_guard_type = guard_parts[-2] if len(guard_parts) >= 2 and guard_parts[-2][:1].isupper() else "-"
         fields = [
             str(entry.get("invariant", "")),
             relative,
@@ -153,11 +141,6 @@ def run_ast_checks(root, registered, report):
             str(entry.get("broken_variant", "")),
             macro_path,
             edge_validation,
-            edge_source,
-            edge_entry_type,
-            edge_entry_fn,
-            edge_guard_type,
-            edge_guard_fn,
         ]
         if any("\t" in field or "\n" in field for field in fields):
             report.violation("ast-contract-field", f"entry `{fields[0]}` has a non-scalar AST contract field")
@@ -249,11 +232,11 @@ def run_checks(root, minimum=12, execute_tests=False):
             report.violation("entry-direct-path-drift", f"entry `{invariant}` says direct but production_fn != production_entry")
         if reachability == "indirect" and production == production_entry:
             report.violation("entry-indirect-path-vacuous", f"entry `{invariant}` says indirect but names the same internal and entry paths")
-        expected_edge = "direct" if reachability == "direct" else (
-            "reviewed-boundary" if production_entry == "serde_json::from_value" else "mechanical"
-        )
+        expected_edge = "direct" if reachability == "direct" else "reviewed-boundary"
         if edge_validation != expected_edge:
             report.violation("entry-edge-validation-drift", f"entry `{invariant}` edge_validation `{edge_validation}` != `{expected_edge}`")
+        if reachability == "indirect" and production_entry != "serde_json::from_value":
+            report.violation("entry-indirect-unreviewed", f"entry `{invariant}` has an indirect boundary outside the explicit serde boundary")
         if edge_validation == "reviewed-boundary" and not str(entry.get("edge_review_reason", "")).strip():
             report.violation("entry-edge-review-reason-empty", f"entry `{invariant}` reviewed boundary has no reason")
         for field in ("permits", "observed_when_neutralized"):
@@ -572,8 +555,9 @@ def protocol_mutation_self_test(base):
     command = ["cargo", "test", "--test", CONTRACT_TARGET]
     environment = {**os.environ, "CARGO_TARGET_DIR": str(root / "target")}
 
-    def run(source):
+    def run(source, contract_source=contract):
         protocol_path.write_text(source)
+        (tests / "negative_protocol_contract.rs").write_text(contract_source)
         return subprocess.run(
             command,
             cwd=root,
@@ -656,7 +640,54 @@ def protocol_mutation_self_test(base):
         if result.returncode == 0 or "test result: FAILED" not in output:
             ok = False
             print(f"actual protocol mutation {name} did not produce a compiled test failure:\n{output[-4000:]}", file=sys.stderr)
-    return ok, len(mutations)
+
+    mirror = "mirror: |state, probe, mutation| state.mirror(probe, mutation),"
+    denied = "denied: |outcome| outcome == &ContractOutcome::Denied,"
+    permitted = "permitted: |outcome| outcome == &ContractOutcome::Permitted,"
+    contract_mutations = {
+        "contract_mirror_forced_none": contract.replace(
+            mirror,
+            "mirror: |state, probe, _mutation| state.mirror(probe, ContractMutation::None),",
+            1,
+        ),
+        "contract_mirror_forced_broken": contract.replace(
+            mirror,
+            "mirror: |state, probe, _mutation| state.mirror(probe, ContractMutation::Broken),",
+            1,
+        ),
+        "contract_denied_constant_true": contract.replace(
+            denied, "denied: |_outcome| true,", 1
+        ),
+        "contract_permitted_constant_true": contract.replace(
+            permitted, "permitted: |_outcome| true,", 1
+        ),
+        "contract_predicates_swapped": contract.replace(
+            denied, "denied: |outcome| outcome == &ContractOutcome::Permitted,", 1
+        ).replace(
+            permitted, "permitted: |outcome| outcome == &ContractOutcome::Denied,", 1
+        ),
+        "contract_denied_vacuous_true": contract.replace(
+            denied,
+            "denied: |outcome| outcome == &ContractOutcome::Denied || true,",
+            1,
+        ),
+        "contract_permitted_vacuous_false": contract.replace(
+            permitted,
+            "permitted: |outcome| outcome == &ContractOutcome::Permitted && false,",
+            1,
+        ),
+    }
+    for name, mutated_contract in contract_mutations.items():
+        if mutated_contract == contract:
+            ok = False
+            print(f"actual contract mutation {name}: replacement did not match", file=sys.stderr)
+            continue
+        result = run(protocol, mutated_contract)
+        output = result.stdout + result.stderr
+        if result.returncode == 0 or "test result: FAILED" not in output:
+            ok = False
+            print(f"actual contract mutation {name} did not produce a compiled test failure:\n{output[-4000:]}", file=sys.stderr)
+    return ok, len(mutations) + len(contract_mutations)
 
 
 def registered_source_mutation_self_test(base):
@@ -667,6 +698,9 @@ def registered_source_mutation_self_test(base):
         destination = clean_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / relative, destination)
+    protocol_destination = clean_root / PROTOCOL_REL
+    protocol_destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO_ROOT / PROTOCOL_REL, protocol_destination)
 
     def contract_text(root, entry_overrides=None):
         entry_overrides = entry_overrides or {}
@@ -684,26 +718,10 @@ def registered_source_mutation_self_test(base):
                 else "negative_protocol::assert_registered_negative_case"
             )
             edge = entry["edge_validation"]
-            extra = ["-"] * 5
-            if edge == "mechanical":
-                # Preserve the real edge metadata while mutating the registry-bound
-                # entry identity; the strict AST baseline must reject that drift.
-                resolved = resolve_function(REPO_ROOT, original["production_entry"])
-                if isinstance(resolved, str):
-                    raise AssertionError(resolved)
-                edge_path, edge_span = resolved
-                parts = entry["production_fn"].split("::")
-                extra = [
-                    str(edge_path.resolve()),
-                    edge_span.type_name or "-",
-                    edge_span.name,
-                    parts[-2] if parts[-2][:1].isupper() else "-",
-                    parts[-1],
-                ]
             lines.append("\t".join([
                 entry["invariant"], relative, entry["test_fn"], entry["case_type"],
                 entry["real_adapter"], entry["production_fn"], entry["production_entry"],
-                entry["broken_variant"], macro_path, edge, *extra,
+                entry["broken_variant"], macro_path, edge,
             ]))
         return "\n".join(lines) + "\n"
 
@@ -735,10 +753,67 @@ def registered_source_mutation_self_test(base):
         suffix = " }" if keyword == "if-false" else " };"
         return source[:start] + prefix + source[start:closing + 1] + suffix + source[closing + 1:]
 
+    def wrap_first_async(source):
+        marker = "negative_protocol::assert_registered_async_negative_case!"
+        start = source.index(marker)
+        clean, _ = sanitize_rust(source)
+        opening = clean.index("{", start)
+        closing = matching_brace(clean, opening)
+        if closing is None:
+            raise AssertionError("registered async macro has no closing brace")
+        return (
+            source[:start]
+            + "async { "
+            + source[start:closing + 1]
+            + " }.await;"
+            + source[closing + 1:]
+        )
+
     def replace_after(source, marker, old, new):
         start = source.index(marker)
         replacement = source[start:].replace(old, new, 1)
         return source[:start] + replacement
+
+    def mutate_deploy_decoy(source, replacements):
+        case_start = source.index("case: POLICY_DEPLOY_DECOY_MIN_SEVERITY")
+        start = source.rfind("negative_protocol::assert_registered_negative_case!", 0, case_start)
+        clean, _ = sanitize_rust(source)
+        opening = clean.index("{", start)
+        closing = matching_brace(clean, opening)
+        if closing is None:
+            raise AssertionError("reviewer bypass macro has no closing brace")
+        prefix, invocation, suffix = source[:start], source[start:closing + 1], source[closing + 1:]
+        for old, new in replacements:
+            if invocation.count(old) != 1:
+                raise AssertionError(f"reviewer bypass replacement `{old}` is not exact")
+            invocation = invocation.replace(old, new, 1)
+        return prefix + invocation + suffix
+
+    deploy_mirror = "MirroredStaticGate::from_config(config, mutation)"
+    deploy_denied = 'denied: |value| value == "Deny/static.deploy_decoy_min_severity"'
+    deploy_permitted = 'permitted: |value| value == "Allow/static.default_allow"'
+
+    def deploy_decoy_full_gate_bypass(source):
+        return mutate_deploy_decoy(source, (
+            (deploy_mirror,
+             "MirroredStaticGate::from_config(config, StaticMutation::None)"),
+            (deploy_denied, "denied: |_value| true"),
+            (deploy_permitted, "permitted: |_value| true"),
+        ))
+
+    def deploy_decoy_coordinated_bypass(source):
+        return mutate_deploy_decoy(source, (
+            (deploy_mirror,
+             "MirroredStaticGate::from_config(config, { let _ = mutation; StaticMutation::None })"),
+            (deploy_denied, "denied: |value| { let _ = value; true }"),
+            (deploy_permitted, "permitted: |value| { let _ = value; true }"),
+        ))
+
+    def inject_protocol_executor(source, statement):
+        marker = '{\n    assert!(!C::INVARIANT.is_empty(), "case invariant identity is empty");'
+        if source.count(marker) != 1:
+            raise AssertionError("shared protocol executor marker is not exact")
+        return source.replace(marker, "{\n    " + statement + "\n    assert!(!C::INVARIANT.is_empty(), \"case invariant identity is empty\");", 1)
 
     policy = "crates/swarm-policy/tests/negative_policy_gates.rs"
     runtime = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -750,6 +825,109 @@ def registered_source_mutation_self_test(base):
             "    return;\n    negative_protocol::assert_registered_negative_case! {",
             1,
         ), "ast-macro-placement", None),
+        "if_true_return": (policy, lambda value: value.replace(
+            "    negative_protocol::assert_registered_negative_case! {",
+            "    if true { return; }\n    negative_protocol::assert_registered_negative_case! {",
+            1,
+        ), "ast-macro-placement", None),
+        "match_return": (policy, lambda value: value.replace(
+            "    negative_protocol::assert_registered_negative_case! {",
+            "    match () { () => return }\n    negative_protocol::assert_registered_negative_case! {",
+            1,
+        ), "ast-macro-placement", None),
+        "loop_return": (policy, lambda value: value.replace(
+            "    negative_protocol::assert_registered_negative_case! {",
+            "    loop { return; }\n    negative_protocol::assert_registered_negative_case! {",
+            1,
+        ), "ast-macro-placement", None),
+        "block_return": (policy, lambda value: value.replace(
+            "    negative_protocol::assert_registered_negative_case! {",
+            "    { return; }\n    negative_protocol::assert_registered_negative_case! {",
+            1,
+        ), "ast-macro-placement", None),
+        "question_mark_return": (policy, lambda value: value.replace(
+            "fn broken_empty_ruleset_arm_permits_the_action_the_real_gate_fails_closed_on() {",
+            "fn broken_empty_ruleset_arm_permits_the_action_the_real_gate_fails_closed_on() -> Result<(), ()> {\n    Ok::<(), ()>(())?;",
+            1,
+        ), "ast-macro-placement", None),
+        "async_block_wrapper": (
+            runtime,
+            wrap_first_async,
+            "ast-macro-placement",
+            None,
+        ),
+        "protocol_identity_prefix_bypass": (
+            PROTOCOL_REL,
+            lambda value: inject_protocol_executor(
+                value,
+                'if !C::INVARIANT.starts_with("PROTOCOL_") { return case; }',
+            ),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
+        "protocol_explicit_production_id_bypass": (
+            PROTOCOL_REL,
+            lambda value: inject_protocol_executor(
+                value,
+                'if matches!(C::INVARIANT, "POLICY_DEPLOY_DECOY_MIN_SEVERITY" | "SPINE_CHAIN_SEQ_MONOTONIC") { return case; }',
+            ),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
+        "protocol_inverse_contract_set_bypass": (
+            PROTOCOL_REL,
+            lambda value: inject_protocol_executor(
+                value,
+                'if C::INVARIANT != "PROTOCOL_CONTRACT" { return case; }',
+            ),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
+        "protocol_type_name_bypass": (
+            PROTOCOL_REL,
+            lambda value: inject_protocol_executor(
+                value,
+                'if !std::any::type_name::<C>().contains("PROTOCOL_CONTRACT") { return case; }',
+            ),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
+        "protocol_unconditional_early_return": (
+            PROTOCOL_REL,
+            lambda value: inject_protocol_executor(value, "return case;"),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
+        "protocol_real_role_skipped": (
+            PROTOCOL_REL,
+            lambda value: value.replace(
+                "let real = case.real(&probe).await;",
+                "let real = case.mirror(&probe, C::CONTROL).await;",
+                1,
+            ),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
+        "protocol_control_role_skipped": (
+            PROTOCOL_REL,
+            lambda value: value.replace(
+                "let control = case.mirror(&probe, C::CONTROL).await;",
+                "let control = case.real(&probe).await;",
+                1,
+            ),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
+        "protocol_broken_role_skipped": (
+            PROTOCOL_REL,
+            lambda value: value.replace(
+                "let broken = case.mirror(&probe, C::BROKEN).await;",
+                "let broken = case.mirror(&probe, C::CONTROL).await;",
+                1,
+            ),
+            "ast-protocol-semantic-drift",
+            None,
+        ),
         "sync_alias_shadow": (policy, lambda value: value.replace(
             "mod negative_protocol;",
             "mod negative_protocol;\nuse negative_protocol::assert_registered_negative_case as canonical_case;\nmacro_rules! assert_registered_negative_case { ($($tokens:tt)*) => {{ if false { canonical_case! { $($tokens)* } } }}; }",
@@ -773,6 +951,81 @@ def registered_source_mutation_self_test(base):
             "fn outcome(result: &Result<PolicyDecision, ApprovalError>) -> String { let _ = result; return \"Deny/fabricated\".to_string();",
             1,
         ), "ast-normalizer-helper", None),
+        "reviewer_deploy_decoy_full_gate_bypass": (
+            policy,
+            deploy_decoy_full_gate_bypass,
+            "ast-invocation-parse",
+            None,
+        ),
+        "mirror_forced_none": (
+            policy,
+            lambda value: mutate_deploy_decoy(value, ((
+                deploy_mirror,
+                "MirroredStaticGate::from_config(config, StaticMutation::None)",
+            ),)),
+            "ast-invocation-parse",
+            None,
+        ),
+        "mirror_forced_broken": (
+            policy,
+            lambda value: mutate_deploy_decoy(value, ((
+                deploy_mirror,
+                "MirroredStaticGate::from_config(config, StaticMutation::SkipDeployDecoyMinimum)",
+            ),)),
+            "ast-invocation-parse",
+            None,
+        ),
+        "denied_predicate_constant_true": (
+            policy,
+            lambda value: mutate_deploy_decoy(
+                value, ((deploy_denied, "denied: |_value| true"),)
+            ),
+            "ast-invocation-parse",
+            None,
+        ),
+        "permitted_predicate_constant_false": (
+            policy,
+            lambda value: mutate_deploy_decoy(
+                value, ((deploy_permitted, "permitted: |_value| false"),)
+            ),
+            "ast-invocation-parse",
+            None,
+        ),
+        "predicate_input_semantically_ignored": (
+            policy,
+            lambda value: mutate_deploy_decoy(
+                value, ((deploy_denied, "denied: |value| { let _ = value; true }"),)
+            ),
+            "ast-expected-binding-drift",
+            None,
+        ),
+        "predicates_swapped": (
+            policy,
+            lambda value: mutate_deploy_decoy(value, (
+                (deploy_denied, 'denied: |value| value == "Allow/static.default_allow"'),
+                (deploy_permitted, 'permitted: |value| value == "Deny/static.deploy_decoy_min_severity"'),
+            )),
+            "ast-expected-binding-drift",
+            None,
+        ),
+        "denied_predicate_vacuous_true": (
+            policy,
+            lambda value: mutate_deploy_decoy(value, ((
+                deploy_denied,
+                'denied: |value| value == "Deny/static.deploy_decoy_min_severity" || true',
+            ),)),
+            "ast-expected-binding-drift",
+            None,
+        ),
+        "permitted_predicate_vacuous_false": (
+            policy,
+            lambda value: mutate_deploy_decoy(value, ((
+                deploy_permitted,
+                'permitted: |value| value == "Allow/static.default_allow" && false',
+            ),)),
+            "ast-expected-binding-drift",
+            None,
+        ),
         "renamed_mirror_entry": (
             policy,
             lambda value: replace_after(
@@ -784,7 +1037,7 @@ def registered_source_mutation_self_test(base):
             "ast-expected-binding-drift",
             None,
         ),
-        "coordinated_indirect_entry_substitution": (
+        "coordinated_production_entry_substitution": (
             policy,
             lambda value: replace_after(
                 value,
@@ -820,30 +1073,44 @@ def registered_source_mutation_self_test(base):
         ignore=shutil.ignore_patterns("target"),
     )
     policy_path = coordinated / policy
-    policy_path.write_text(replace_after(
-        policy_path.read_text(),
-        "case: POLICY_NULL_EVIDENCE_REFUSED",
-        "production: swarm_policy::static_gate::StaticApprovalGate::evaluate",
-        "production: MirroredStaticGate::evaluate",
-    ))
+    policy_path.write_text(deploy_decoy_coordinated_bypass(policy_path.read_text()))
     docs = coordinated / "docs/assurance"
     docs.mkdir(parents=True)
     shutil.copy2(REPO_ROOT / REGISTRY_REL, docs / "negative-registry.toml")
     shutil.copy2(REPO_ROOT / UNIVERSE_REL, docs / "universe.toml")
-    for path in (docs / "negative-registry.toml", docs / "universe.toml", helper / "src/expected-bindings.tsv"):
-        path.write_text(path.read_text().replace(
-            "swarm_policy::static_gate::StaticApprovalGate::evaluate",
-            "MirroredStaticGate::evaluate",
-            1,
-        ))
-    overrides = {"POLICY-NULL-EVIDENCE-REFUSED": {
-        "production_entry": "MirroredStaticGate::evaluate",
-    }}
+    registry_path = docs / "negative-registry.toml"
+    registry_path.write_text(registry_path.read_text().replace(
+        'observed_when_neutralized = "Neutralizing SkipDeployDecoyMinimum changes the broken verdict from Allow to Deny."',
+        'observed_when_neutralized = "Coordinated attack claims the vacuous differential is valid."',
+        1,
+    ))
+    universe_path = docs / "universe.toml"
+    universe_path.write_text(
+        universe_path.read_text() + "\n# coordinated semantic-baseline attack\n"
+    )
     contract = coordinated / "contract.tsv"
-    contract.write_text(contract_text(coordinated, overrides))
+    contract.write_text(contract_text(coordinated))
+    cargo_command = [
+        "cargo", "run", "--quiet", "--manifest-path", str(helper / "Cargo.toml"),
+        "--target-dir", str(REPO_ROOT / "target/assurance-tools-selftest"), "--",
+    ]
+    emitted = subprocess.run(
+        [*cargo_command, "--emit", str(contract)],
+        cwd=coordinated,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if emitted.returncode:
+        print(f"coordinated semantic baseline emit failed:\n{emitted.stderr[-4000:]}", file=sys.stderr)
+        return False, len(mutations) + 1
+    expected_path = helper / "src/expected-bindings.tsv"
+    comments = "\n".join(
+        line for line in expected_path.read_text().splitlines() if line.startswith("#")
+    )
+    expected_path.write_text(comments + "\n" + emitted.stdout)
     result = subprocess.run(
-        ["cargo", "run", "--quiet", "--manifest-path", str(helper / "Cargo.toml"),
-         "--target-dir", str(REPO_ROOT / "target/assurance-tools-selftest"), "--", "--check", str(contract)],
+        [*cargo_command, "--check", str(contract)],
         cwd=coordinated,
         text=True,
         stdout=subprocess.PIPE,
@@ -851,7 +1118,7 @@ def registered_source_mutation_self_test(base):
     )
     if result.returncode == 0 or "[ast-expected-parse]" not in result.stderr:
         ok = False
-        print(f"coordinated baseline mutation bypassed pinned digest:\n{result.stderr[-4000:]}", file=sys.stderr)
+        print(f"coordinated semantic baseline mutation bypassed pinned digest:\n{result.stderr[-4000:]}", file=sys.stderr)
     return ok, len(mutations) + 1
 
 

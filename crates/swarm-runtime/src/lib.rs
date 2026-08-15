@@ -872,7 +872,6 @@ impl<P, E> SwarmRuntime<P, E> {
             return Ok(None);
         }
 
-        // INVARIANT: RUNTIME-CONTAINMENT-NEEDS-STORE
         let Some(binding) = self.containment.as_ref() else {
             return Err(RuntimeError::ContainmentRefused {
                 action: request.action.kind(),
@@ -885,7 +884,6 @@ impl<P, E> SwarmRuntime<P, E> {
 
         // The same derivation the operator-facing rehearsal uses, so the plan on
         // the lease is the plan a human was shown.
-        // INVARIANT: RUNTIME-CONTAINMENT-PREVIEW-REQUIRED
         let preview = crate::service::preview::build_rehearsal_preview(
             request,
             &format!("containment-lease:{}", request.hunt_id.0),
@@ -1043,11 +1041,14 @@ where
 
         // Before `execute`, so a containment that cannot be leased never
         // reaches a host.
+        // INVARIANT: RUNTIME-CONTAINMENT-NEEDS-STORE
+        // INVARIANT: RUNTIME-CONTAINMENT-PREVIEW-REQUIRED
         let prepared_containment =
             self.prepare_containment(request, context, self.execution_mode())?;
 
         // INVARIANT: RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION
         let lease = self.policy.issue_lease(request, context)?;
+        // INVARIANT: RUNTIME-EXPIRED-LEASE-REFUSED
         ensure_active_lease(&lease, context.now_ms)?;
         // INVARIANT: RUNTIME-ADAPTER-ERROR-NOT-SUCCESS
         let receipt = self
@@ -1562,7 +1563,6 @@ fn ensure_active_lease(
     lease: &swarm_policy::CapabilityLease,
     now_ms: i64,
 ) -> Result<(), ApprovalError> {
-    // INVARIANT: RUNTIME-EXPIRED-LEASE-REFUSED
     if lease.expires_at_ms <= now_ms {
         return Err(ApprovalError::Denied(
             "capability lease expired".to_string(),

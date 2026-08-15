@@ -23,12 +23,15 @@ control denial and the broken operation permits. A separate compiled contract
 proves one call per role plus those assertion semantics, and the gate mutates the
 actual shared protocol to prove no-op, omitted/swapped-role, and removed or
 inverted-assertion variants fail. The shared macro owns the exact public
-production-entry invocation. A Rust-syntax checker pins its function path,
-argument and result-projection AST, call mode, and direct call-site shape to a
-checker-owned baseline; it also rejects alternate imports, aliases, re-exports,
-and shadow definitions of the reserved protocol module or macros. Indirect
-entry-to-private-guard reachability is either checked as a concrete call edge or
-identified as a narrow reviewed boundary. This does not mechanically prove
+production-entry invocation. A Rust-syntax checker digests the complete
+registered test function and shared protocol AST, including setup, operation
+roles, result normalization, and denial/permission predicates; it also rejects
+alternate imports, aliases, re-exports, and shadow definitions of the reserved
+protocol module or macros. Mapped markers and real adapters name the same
+public entry, except for two Serde conversion boundaries explicitly identified
+for review. The local digests detect uncoordinated drift but are co-located with
+the checker: they do not provide external provenance and cannot resist a
+coherent edit of all local inputs. This also does not mechanically prove
 handwritten-mirror fidelity beyond the registered probe. The reproduced
 neutralization output is stored with the row in
 [`negative-registry.toml`](negative-registry.toml); no claim is made that old
@@ -46,35 +49,35 @@ row would make the blast-radius registry false.
 | `POLICY-RULE-TIME-WINDOW` | `swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-OS-CLOCK`, `ASSUME-STATEFUL-GATE-DETERMINISM` | A matching rule outside its configured UTC window. |
 | `POLICY-RULE-AGENT-RATE-LIMIT` | `swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-OS-CLOCK`, `ASSUME-STATEFUL-GATE-DETERMINISM` | The first matching-rule request beyond that agent's one-minute budget. |
 | `POLICY-CONFIGURED-DENY-RULE` | `swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-STATEFUL-GATE-DETERMINISM` | A request matched by an explicit configured Deny rule. |
-| `POLICY-NULL-EVIDENCE-REFUSED` | `swarm_policy::static_gate::StaticApprovalGate::validate_request` | `ASSUME-STATEFUL-GATE-DETERMINISM` | A JSON-null evidence bundle. |
-| `POLICY-ACTION-TARGETS-NONEMPTY` | `swarm_policy::static_gate::StaticApprovalGate::validate_request` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Empty or whitespace-only addressable fields for every response action variant. |
+| `POLICY-NULL-EVIDENCE-REFUSED` | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `ASSUME-STATEFUL-GATE-DETERMINISM` | A JSON-null evidence bundle. |
+| `POLICY-ACTION-TARGETS-NONEMPTY` | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Empty or whitespace-only addressable fields for every response action variant. |
 | `POLICY-DESTRUCTIVE-MIN-SEVERITY` | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-STATEFUL-GATE-DETERMINISM` | A Low-severity destructive action. |
 | `POLICY-DEPLOY-DECOY-MIN-SEVERITY` | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-STATEFUL-GATE-DETERMINISM` | A Low-severity decoy deployment. |
-| `POLICY-SCOPE-RATE-LIMIT` | `swarm_policy::static_gate::StaticApprovalGate::scope_rate_limit_decision` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-OS-CLOCK`, `ASSUME-STATEFUL-GATE-DETERMINISM` | The first action beyond one scope's one-minute budget. |
+| `POLICY-SCOPE-RATE-LIMIT` | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-OS-CLOCK`, `ASSUME-STATEFUL-GATE-DETERMINISM` | The first action beyond one scope's one-minute budget. |
 | `POLICY-DESTRUCTIVE-HUMAN-GATE` | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-STATEFUL-GATE-DETERMINISM` | Immediate execution of a destructive action at or above the human threshold. |
 | `RESPONSE-TTL-STRICTLY-POSITIVE` | `swarm_response::containment::ContainmentTtl::from_config_ms` | `ASSUME-CONFIG-INTEGRITY` | A zero or negative containment lifetime. |
 | `RESPONSE-LEASE-BOUNDED` | `swarm_response::containment::ContainmentLease::open` | `ASSUME-OS-CLOCK` | An expiry not strictly after issuance, including saturating-add overflow. |
 | `RESPONSE-STORED-LEASE-SCHEMA-KNOWN` | `swarm_response::containment::ContainmentLease::try_from` | `ASSUME-KEYSTORE-ATOMICITY` | A stored lease from an unknown wire schema. |
 | `RESPONSE-STORED-LEASE-BOUNDED` | `swarm_response::containment::ContainmentLease::try_from` | `ASSUME-KEYSTORE-ATOMICITY`, `ASSUME-OS-CLOCK` | A stored lease whose expiry is not after issuance. |
-| `RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED` | `swarm_response::containment::ContainmentState::open_lease` | `ASSUME-KEYSTORE-ATOMICITY` | Opening one in-memory lease identifier twice. |
-| `RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED` | `swarm_response::containment::ContainmentState::close` | `ASSUME-KEYSTORE-ATOMICITY` | Closing an in-memory lease that is not open. |
+| `RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED` | `swarm_response::containment::MemoryContainmentLeaseStore::open_lease` | `ASSUME-KEYSTORE-ATOMICITY` | Opening one in-memory lease identifier twice. |
+| `RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED` | `swarm_response::containment::MemoryContainmentLeaseStore::close` | `ASSUME-KEYSTORE-ATOMICITY` | Closing an in-memory lease that is not open. |
 | `RESPONSE-FILE-DUPLICATE-LEASE-REFUSED` | `swarm_response::containment::FileContainmentLeaseStore::open_lease` | `ASSUME-KEYSTORE-ATOMICITY` | Persisting a second open lease under one identifier. |
 | `RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED` | `swarm_response::containment::FileContainmentLeaseStore::close` | `ASSUME-KEYSTORE-ATOMICITY` | Persisting a close receipt for a lease that is not open. |
 | `RESPONSE-IRREVERSIBLE-INVERSE-REFUSED` | `swarm_response::rollback::resolve_inverse` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Treating a fresh user session as the inverse of a terminated session. |
 | `RESPONSE-UNMAPPED-INVERSE-REFUSED` | `swarm_response::rollback::resolve_inverse` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | A step/action pair with no addressable inverse, instead of inventing an operation. |
-| `RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS` | `swarm_response::rollback::RollbackReceipt::derive_status` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Vacuous success for a rollback with zero step outcomes. |
-| `RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS` | `swarm_response::rollback::RollbackReceipt::derive_status` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Success for an Enforced rollback whose steps were only simulated. |
-| `RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS` | `swarm_response::rollback::RollbackReceipt::derive_status` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Success for failed, unsupported, irreversible, or mixed rollback outcomes. |
-| `RESPONSE-ROLLBACK-REQUIRES-STEPS` | `swarm_response::rollback::require_steps` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Running an executor against an empty inverse plan. |
+| `RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS` | `swarm_response::rollback::RollbackReceipt::from_steps` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Vacuous success for a rollback with zero step outcomes. |
+| `RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS` | `swarm_response::rollback::RollbackReceipt::from_steps` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Success for an Enforced rollback whose steps were only simulated. |
+| `RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS` | `swarm_response::rollback::RollbackReceipt::from_steps` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Success for failed, unsupported, irreversible, or mixed rollback outcomes. |
+| `RESPONSE-ROLLBACK-REQUIRES-STEPS` | `swarm_response::rollback::SandboxRollbackExecutor::rollback` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Running an executor against an empty inverse plan. |
 | `RESPONSE-SANDBOX-NEVER-REVERSES` | `swarm_response::rollback::SandboxRollbackExecutor::rollback` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | A Reversed step from an executor with no transport. |
 | `RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Treating a policy evaluation error as Allow. |
 | `RUNTIME-DENY-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after a Deny verdict. |
 | `RUNTIME-HUMAN-GATE-BLOCKS-LIVE` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after RequireHuman in LiveResponse mode. |
 | `RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after the guard pipeline rejects. |
-| `RUNTIME-CONTAINMENT-NEEDS-STORE` | `swarm_runtime::SwarmRuntime::prepare_containment` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-KEYSTORE-ATOMICITY` | Enforced containment when no lease store can bound or undo it. |
-| `RUNTIME-CONTAINMENT-PREVIEW-REQUIRED` | `swarm_runtime::SwarmRuntime::prepare_containment` | `ASSUME-CONFIG-INTEGRITY` | Enforced containment when its blast radius and inverse plan cannot be derived. |
+| `RUNTIME-CONTAINMENT-NEEDS-STORE` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-CONFIG-INTEGRITY`, `ASSUME-KEYSTORE-ATOMICITY` | Enforced containment when no lease store can bound or undo it. |
+| `RUNTIME-CONTAINMENT-PREVIEW-REQUIRED` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-CONFIG-INTEGRITY` | Enforced containment when its blast radius and inverse plan cannot be derived. |
 | `RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-STATEFUL-GATE-DETERMINISM` | Executor dispatch after capability-lease issuance fails. |
-| `RUNTIME-EXPIRED-LEASE-REFUSED` | `swarm_runtime::ensure_active_lease` | `ASSUME-OS-CLOCK`, `ASSUME-STATEFUL-GATE-DETERMINISM` | Execution at or after capability expiry. |
+| `RUNTIME-EXPIRED-LEASE-REFUSED` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-OS-CLOCK`, `ASSUME-STATEFUL-GATE-DETERMINISM` | Execution at or after capability expiry. |
 | `RUNTIME-ADAPTER-ERROR-NOT-SUCCESS` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Converting a response-adapter error into a success receipt. |
 | `RUNTIME-FAILED-RECEIPT-NOT-SUCCESS` | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR` | Returning a non-success response receipt as successful execution. |
 | `RUNTIME-RELEASE-ATTESTATION-REQUIRED` | `swarm_runtime::containment::verify_release_attestation` | `ASSUME-ED25519` | A rollback release with no governance attestation. |
@@ -109,6 +112,9 @@ integration is also absent here and will add its own rows after rebase.
 
 All negative tests are single-process. They do not prove concurrency, crash
 recovery, distributed JetStream failover, repository branch protection, or
-hosted CI. The workflow invokes both gates, but whether the named job is a
-protected required check is repository-setting state and remains an external
-acceptance item.
+hosted CI. The workflow invokes both gates, but its `panic-contract` name and
+Actions App identity are not provenance: another workflow can spoof both. On
+the current Free organization plan, the remaining protected enforcement needs
+a dedicated external GitHub App check with a separate integration ID (or an
+organization-plan upgrade plus an admin-owned required workflow). That external
+acceptance item is intentionally not claimed by this branch.

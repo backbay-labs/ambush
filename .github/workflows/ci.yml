@@ -188,13 +188,15 @@ jobs:
       # typed differential protocol, requires exact Cargo --list set equality,
       # and executes all four registered targets with exact passed/ignored
       # summary counts. Two quiet, isolated warm runs of the negative-registry
-      # gate took 54.46s and 58.88s wall clock on Darwin arm64 with rustc 1.97.1
-      # (2026-08-14); CI timing is cache- and machine-dependent.
+      # gate took 164.98s and 173.67s wall clock on Darwin arm64 with rustc
+      # 1.97.1 (2026-08-14). The actual-source mutation crates dominate this
+      # cost; CI timing remains cache- and machine-dependent.
       #
       # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
       # and refuse to scan it if a fixture misbehaves. These workflow steps are
-      # present here; protected-required-check status is repository setting
-      # state and is tracked separately in Phase 285 acceptance. A gate that has
+      # present here; protected provenance is tracked separately in Phase 285
+      # acceptance because an Actions App identity plus job name is spoofable.
+      # A gate that has
       # never been observed failing is not evidence; checked-in adversarial
       # fixtures exercise unmapped/deleted entries, spoofed source, orphan
       # modules, ignored tests and missing typed-protocol invocations on every
