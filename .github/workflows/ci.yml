@@ -191,13 +191,17 @@ jobs:
       # Direct artifact execution prevents a Cargo runner from fabricating
       # libtest output. The gate also pins Cargo's canonical integration-test
       # and production-library targets so a same-name explicit test cannot
-      # redirect execution, pins manifest semantics, and rejects compiler/flags
-      # overrides. Two sequential warm runs of the 121-self-test gate took
-      # 62.32s and 195.02s wall clock (32.82/33.50s user, 8.98/9.65s sys)
-      # on Darwin 25.4.0 arm64 with rustc 1.97.1 (2026-08-15). Host load was
-      # 35-53, so these are contention-bound observations, not quiet
-      # measurements or a CI estimate. Compiled actual-source mutations
-      # dominate; timing remains cache- and machine-dependent.
+      # redirect execution, pins manifest/toolchain semantics, and forces an
+      # audited target compile through a config-free Cargo home and pinned
+      # compiler. Two warm runs of the 139-self-test gate took 225.83s and
+      # 90.46s wall clock (38.24/38.89s user, 16.49/16.42s sys) on Darwin
+      # 25.4.0 arm64 with rustc 1.97.1 (2026-08-15). Both began with no other
+      # Cargo process in this worktree, but system load was 44-55 and another
+      # worktree started compiling during measurement. These are explicitly
+      # contention-bound observations, not quiet measurements or a CI estimate;
+      # the stable ~55s CPU cost is the more useful local datum. Compiled
+      # actual-source mutations dominate; timing remains cache- and
+      # machine-dependent.
       #
       # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
       # and refuse to scan it if a fixture misbehaves. These workflow steps are

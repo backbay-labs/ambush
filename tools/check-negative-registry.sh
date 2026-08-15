@@ -8,9 +8,14 @@
 # including imports and helper/wrapper bodies. Registered cases use only the
 # compiler's built-in #[test] attribute, and a wrapper sentinel surrounds the
 # shared synchronous driver. The gate binds the relevant Cargo manifests and
-# lock resolution, compiles with --locked, then invokes each emitted test binary
-# directly so Cargo runner configuration cannot fabricate discovery/execution
-# output. Compiler, flags, target, and runner environment overrides are refused.
+# lock resolution and pinned rust-toolchain semantics. Every Cargo subprocess
+# uses a fresh config-free CARGO_HOME plus an exact pinned cargo/rustc, while a
+# gate-owned isolated-Python RUSTC_WRAPPER audits one forced test compilation's
+# crate name, test mode, canonical source path, and source hash per target. The
+# gate invokes each emitted test binary directly under a sanitized environment,
+# so Cargo runner/config and process/module-injection settings cannot fabricate
+# discovery/execution output. Compiler, flags, target, and runner environment
+# overrides are refused.
 # Registered integration targets must remain Cargo-auto-discovered from their
 # canonical source files; production libraries and custom-build absence are
 # also bound through Cargo metadata. Checker-owned semantic digests pin all four
@@ -22,14 +27,17 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-python3 - "$ROOT_DIR" <<'PY'
+python3 -I - "$ROOT_DIR" <<'PY'
 from __future__ import annotations
 
 import pathlib
+import pwd
 import re
 import os
 import hashlib
+import importlib.util
 import json
+import secrets
 import shutil
 import subprocess
 import sys
@@ -38,16 +46,21 @@ import tomllib
 
 REPO_ROOT = pathlib.Path(sys.argv[1])
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(REPO_ROOT / "tools"))
-from assurance_source import (  # noqa: E402
-    enum_variant_defined,
-    function_attributes,
-    function_has_conditional_owner,
-    matching_brace,
-    resolve_function,
-    sanitize_rust,
-    test_function,
+assurance_spec = importlib.util.spec_from_file_location(
+    "assurance_source", REPO_ROOT / "tools/assurance_source.py",
 )
+if assurance_spec is None or assurance_spec.loader is None:
+    raise SystemExit("cannot load the exact assurance_source.py")
+assurance_source = importlib.util.module_from_spec(assurance_spec)
+sys.modules["assurance_source"] = assurance_source
+assurance_spec.loader.exec_module(assurance_source)
+enum_variant_defined = assurance_source.enum_variant_defined
+function_attributes = assurance_source.function_attributes
+function_has_conditional_owner = assurance_source.function_has_conditional_owner
+matching_brace = assurance_source.matching_brace
+resolve_function = assurance_source.resolve_function
+sanitize_rust = assurance_source.sanitize_rust
+test_function = assurance_source.test_function
 
 MAPPING_REL = "docs/assurance/MAPPING.md"
 REGISTRY_REL = "docs/assurance/negative-registry.toml"
@@ -89,6 +102,21 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
 }
 EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "850c5b414153abdfeb575d00bd3afe25f1564833da6ecae383c38cc5868473cd"
+PINNED_TOOLCHAIN = {
+    "toolchain": {
+        "channel": "1.97.1",
+        "components": ["clippy", "rustfmt"],
+    },
+}
+PINNED_RUST_VERSION = "1.97.1"
+PINNED_RUSTC_COMMIT = "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+PINNED_CARGO_COMMIT = "c980f4866141969fab6254a680546a277789d6f0"
+SANITIZED_CARGO_HOME = None
+PINNED_CARGO = None
+PINNED_RUSTC = None
+RUSTC_AUDIT_WRAPPER = None
+RUSTC_AUDIT_PROGRAM = None
+RUSTC_AUDIT_LOG = None
 REGISTERED_TARGETS = {
     ("swarm-policy", "negative_policy_gates"): "crates/swarm-policy/tests/negative_policy_gates.rs",
     ("swarm-response", "negative_containment_and_rollback"): "crates/swarm-response/tests/negative_containment_and_rollback.rs",
@@ -165,6 +193,269 @@ def canonical_toml_digest(document):
         ensure_ascii=True,
     ).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def validate_toolchain_identity(root, report):
+    document = parse_toml(root / "rust-toolchain.toml", report, "dependency-toolchain-read")
+    if document != PINNED_TOOLCHAIN:
+        report.violation(
+            "dependency-toolchain-drift",
+            f"rust-toolchain.toml semantics are {document!r}, expected {PINNED_TOOLCHAIN!r}",
+        )
+
+
+def cargo_config_sources(root):
+    sources = []
+    for directory in (root.resolve(), *root.resolve().parents):
+        for name in ("config", "config.toml"):
+            candidate = directory / ".cargo" / name
+            if candidate.exists() or candidate.is_symlink():
+                sources.append(candidate)
+    return sources
+
+
+def cargo_override_names(environment):
+    forbidden = {
+        "RUSTC",
+        "RUSTDOC",
+        "RUSTFLAGS",
+        "RUSTDOCFLAGS",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTC_BOOTSTRAP",
+        "RUSTUP_HOME",
+        "CC",
+        "CXX",
+        "AR",
+        "LD",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_ENCODED_RUSTDOCFLAGS",
+        "CARGO_BUILD_RUSTC",
+        "CARGO_BUILD_RUSTDOC",
+        "CARGO_BUILD_RUSTFLAGS",
+        "CARGO_BUILD_RUSTDOCFLAGS",
+        "CARGO_BUILD_RUSTC_WRAPPER",
+        "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_BUILD_TARGET",
+    }
+    configured = []
+    for name, value in environment.items():
+        if not value:
+            continue
+        if name == "RUSTUP_TOOLCHAIN":
+            if value != PINNED_RUST_VERSION:
+                configured.append(name)
+            continue
+        if (
+            name in forbidden
+            or re.fullmatch(
+                r"CARGO_TARGET_[A-Z0-9_]+_(?:LINKER|RUNNER|RUSTFLAGS|RUSTDOCFLAGS)",
+                name,
+            )
+            or re.fullmatch(r"CARGO_(?:REGISTRIES|CREDENTIAL)_[A-Z0-9_]+", name)
+            or re.fullmatch(r"(?:CC|CXX|AR|RANLIB)_[A-Za-z0-9_-]+", name)
+        ):
+            configured.append(name)
+    return sorted(configured)
+
+
+def resolve_pinned_toolchain(report):
+    account_home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir)
+    rustup = account_home / ".cargo/bin/rustup"
+    if not rustup.is_file():
+        report.violation(
+            "dependency-toolchain-unavailable",
+            f"account-owned rustup is absent at {rustup}",
+        )
+        return None, None
+    environment = {
+        "HOME": str(account_home),
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+    }
+
+    resolved = {}
+    for tool in ("cargo", "rustc"):
+        result = subprocess.run(
+            [str(rustup), "which", "--toolchain", PINNED_RUST_VERSION, tool],
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        path = pathlib.Path(result.stdout.strip()).resolve() if result.returncode == 0 else None
+        if result.returncode or path is None or not path.is_file():
+            report.violation(
+                "dependency-toolchain-unavailable",
+                f"could not resolve pinned {tool}: {result.stderr[-1000:]}",
+            )
+        else:
+            resolved[tool] = path
+    if len(resolved) != 2:
+        return None, None
+
+    rustc_version = subprocess.run(
+        [str(resolved["rustc"]), "-vV"],
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    cargo_version = subprocess.run(
+        [str(resolved["cargo"]), "-vV"],
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    rustc_expected = (
+        rustc_version.returncode == 0
+        and f"release: {PINNED_RUST_VERSION}" in rustc_version.stdout
+        and f"commit-hash: {PINNED_RUSTC_COMMIT}" in rustc_version.stdout
+    )
+    cargo_expected = (
+        cargo_version.returncode == 0
+        and f"release: {PINNED_RUST_VERSION}" in cargo_version.stdout
+        and f"commit-hash: {PINNED_CARGO_COMMIT}" in cargo_version.stdout
+    )
+    if not rustc_expected or not cargo_expected:
+        report.violation(
+            "dependency-toolchain-binary-drift",
+            "resolved cargo/rustc do not match the pinned release and commit identities",
+        )
+        return None, None
+    return resolved["cargo"], resolved["rustc"]
+
+
+def configure_sanitized_cargo_boundary(report):
+    global SANITIZED_CARGO_HOME, PINNED_CARGO, PINNED_RUSTC
+    global RUSTC_AUDIT_WRAPPER, RUSTC_AUDIT_PROGRAM, RUSTC_AUDIT_LOG
+    PINNED_CARGO, PINNED_RUSTC = resolve_pinned_toolchain(report)
+    if PINNED_CARGO is None or PINNED_RUSTC is None:
+        return
+    assurance_target = REPO_ROOT / "target/phase285-negative-registry"
+    assurance_target.mkdir(parents=True, exist_ok=True)
+    SANITIZED_CARGO_HOME = assurance_target / "cargo-home"
+    if SANITIZED_CARGO_HOME.is_symlink():
+        SANITIZED_CARGO_HOME.unlink()
+    elif SANITIZED_CARGO_HOME.exists():
+        shutil.rmtree(SANITIZED_CARGO_HOME)
+    SANITIZED_CARGO_HOME.mkdir()
+    account_home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir)
+    trusted_cache = account_home / ".cargo"
+    for name in ("registry", "git"):
+        source = trusted_cache / name
+        destination = SANITIZED_CARGO_HOME / name
+        if source.is_dir():
+            destination.symlink_to(source, target_is_directory=True)
+        else:
+            destination.mkdir()
+    RUSTC_AUDIT_LOG = SANITIZED_CARGO_HOME / "rustc-audit.jsonl"
+    RUSTC_AUDIT_PROGRAM = assurance_target / "rustc-audit.py"
+    RUSTC_AUDIT_WRAPPER = assurance_target / "rustc-audit.sh"
+    RUSTC_AUDIT_PROGRAM.write_text(
+        "import hashlib, json, os, pathlib, sys\n"
+        f"pinned = pathlib.Path({str(PINNED_RUSTC)!r}).resolve()\n"
+        "compiler = pathlib.Path(sys.argv[1]).resolve()\n"
+        "if compiler != pinned:\n"
+        "    raise SystemExit(f'unexpected rustc: {compiler}, expected {pinned}')\n"
+        "arguments = sys.argv[2:]\n"
+        "sources = []\n"
+        "for argument in arguments:\n"
+        "    candidate = pathlib.Path(argument)\n"
+        "    if argument.endswith('.rs') and candidate.is_file():\n"
+        "        source = candidate.resolve()\n"
+        "        sources.append({'path': str(source), 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()})\n"
+        "crate_name = arguments[arguments.index('--crate-name') + 1] if '--crate-name' in arguments else None\n"
+        "record = {'compiler': str(compiler), 'sources': sources, 'crate_name': crate_name, 'test': '--test' in arguments}\n"
+        "with open(os.environ['PHASE285_RUSTC_AUDIT_LOG'], 'a', encoding='utf-8') as audit:\n"
+        "    audit.write(json.dumps(record, sort_keys=True) + '\\n')\n"
+        "os.execv(str(pinned), [str(pinned), *arguments])\n"
+    )
+    RUSTC_AUDIT_WRAPPER.write_text(
+        "#!/bin/sh\n"
+        f"exec {json.dumps(sys.executable)} -I {json.dumps(str(RUSTC_AUDIT_PROGRAM))} \"$@\"\n"
+    )
+    RUSTC_AUDIT_WRAPPER.chmod(0o755)
+
+
+def sanitized_cargo_environment(*, target_dir=None, extra=None, audit=True):
+    if SANITIZED_CARGO_HOME is None or PINNED_RUSTC is None:
+        raise RuntimeError("sanitized Cargo boundary is not configured")
+    environment = dict(os.environ)
+    for name in list(environment):
+        if (
+            name in cargo_override_names({name: environment[name]})
+            or name in {
+                "CARGO_HOME", "CARGO_TARGET_DIR", "RUSTUP_TOOLCHAIN",
+                "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONINSPECT",
+                "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+                "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+            }
+        ):
+            environment.pop(name, None)
+    environment.update({
+        "HOME": pwd.getpwuid(os.getuid()).pw_dir,
+        "CARGO_HOME": str(SANITIZED_CARGO_HOME),
+        "CARGO_TARGET_DIR": str(
+            pathlib.Path(target_dir).resolve()
+            if target_dir is not None
+            else (REPO_ROOT / "target/phase285-negative-registry/build").resolve()
+        ),
+        "RUSTUP_TOOLCHAIN": PINNED_RUST_VERSION,
+        "RUSTC": str(PINNED_RUSTC),
+        "PATH": ":".join((str(PINNED_RUSTC.parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin")),
+    })
+    if audit:
+        environment.update({
+            "RUSTC_WRAPPER": str(RUSTC_AUDIT_WRAPPER),
+            "PHASE285_RUSTC_AUDIT_LOG": str(RUSTC_AUDIT_LOG),
+        })
+    if extra:
+        environment.update(extra)
+    return environment
+
+
+def sanitized_runtime_environment():
+    environment = dict(os.environ)
+    for name in list(environment):
+        if (
+            name in cargo_override_names({name: environment[name]})
+            or name.startswith("CARGO_")
+            or name.startswith("RUSTUP_")
+            or name in {
+                "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONINSPECT",
+                "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+                "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+            }
+        ):
+            environment.pop(name, None)
+    environment.update({
+        "HOME": pwd.getpwuid(os.getuid()).pw_dir,
+        "PATH": ":".join((str(PINNED_RUSTC.parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin")),
+    })
+    return environment
+
+
+def run_cargo(arguments, *, cwd, target_dir=None, extra_environment=None, audit=True, **kwargs):
+    config_sources = cargo_config_sources(pathlib.Path(cwd))
+    if config_sources:
+        return subprocess.CompletedProcess(
+            [str(PINNED_CARGO), *arguments],
+            125,
+            stdout="",
+            stderr=f"refused Cargo config sources: {[str(path) for path in config_sources]}",
+        )
+    return subprocess.run(
+        [str(PINNED_CARGO), *arguments],
+        cwd=cwd,
+        env=sanitized_cargo_environment(
+            target_dir=target_dir,
+            extra=extra_environment,
+            audit=audit,
+        ),
+        **kwargs,
+    )
 
 
 def root_execution_manifest(document):
@@ -285,63 +576,14 @@ def validate_dependency_manifests(root, report):
 
 
 def validate_cargo_execution_boundary(root, report, *, check_environment=True, environment=None):
-    for relative in (".cargo/config", ".cargo/config.toml"):
-        if (root / relative).exists():
-            report.violation("dependency-cargo-config", f"repository-local {relative} may alter compiler or runner identity")
+    for source in cargo_config_sources(root):
+        report.violation(
+            "dependency-cargo-config",
+            f"Cargo config source {source} may alter compiler or runner identity",
+        )
     if check_environment:
         environment = os.environ if environment is None else environment
-        forbidden = {
-            "RUSTC",
-            "RUSTDOC",
-            "RUSTFLAGS",
-            "RUSTDOCFLAGS",
-            "RUSTC_WRAPPER",
-            "RUSTC_WORKSPACE_WRAPPER",
-            "CARGO_ENCODED_RUSTFLAGS",
-            "CARGO_ENCODED_RUSTDOCFLAGS",
-            "CARGO_BUILD_RUSTC",
-            "CARGO_BUILD_RUSTDOC",
-            "CARGO_BUILD_RUSTFLAGS",
-            "CARGO_BUILD_RUSTDOCFLAGS",
-            "CARGO_BUILD_RUSTC_WRAPPER",
-            "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
-            "CARGO_BUILD_TARGET",
-        }
-        configured = sorted(
-            name for name, value in environment.items()
-            if value and (
-                name in forbidden
-                or re.fullmatch(
-                    r"CARGO_TARGET_[A-Z0-9_]+_(?:RUNNER|RUSTFLAGS|RUSTDOCFLAGS)",
-                    name,
-                )
-            )
-        )
-        if "RUSTC" not in configured:
-            version = subprocess.run(
-                ["rustc", "-vV"],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            host = next(
-                (
-                    line.removeprefix("host: ")
-                    for line in version.stdout.splitlines()
-                    if line.startswith("host: ")
-                ),
-                "",
-            )
-            if version.returncode or not host:
-                report.violation(
-                    "dependency-rustc-identity-unavailable",
-                    f"could not resolve native rustc host identity: {version.stderr[-1000:]}",
-                )
-            else:
-                active_linker = "CARGO_TARGET_" + re.sub(r"[^A-Za-z0-9]", "_", host).upper() + "_LINKER"
-                if environment.get(active_linker):
-                    configured.append(active_linker)
-                    configured.sort()
+        configured = cargo_override_names(environment)
         if configured:
             report.violation(
                 "dependency-execution-environment",
@@ -418,8 +660,8 @@ def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, pr
         if actual != [identity]:
             report.violation("dependency-lock-identity", f"Cargo.lock `{name}` identity is {actual!r}, expected {[identity]!r}")
 
-    metadata_result = subprocess.run(
-        ["cargo", "metadata", "--locked", "--format-version", "1"],
+    metadata_result = run_cargo(
+        ["metadata", "--locked", "--format-version", "1"],
         cwd=root,
         text=True,
         stdout=subprocess.PIPE,
@@ -490,17 +732,28 @@ def validate_metadata_test_targets(root, metadata_packages, resolved_ids, report
 
 
 def validate_execution_dependencies(root, report):
+    validate_toolchain_identity(root, report)
     validate_dependency_manifests(root, report)
     validate_cargo_execution_boundary(root, report)
     validate_resolution_identity(root, report)
 
 
 def compiled_test_binary(root, crate, target, report, code, expected_source=None, expected_package_id=None):
-    result = subprocess.run(
-        [
-            "cargo", "test", "--locked", "-p", crate, "--test", target,
+    production_audit = root.resolve() == REPO_ROOT.resolve()
+    if production_audit:
+        RUSTC_AUDIT_LOG.unlink(missing_ok=True)
+        nonce = secrets.token_hex(12)
+        command = [
+            "rustc", "--locked", "-p", crate, "--test", target,
+            "--message-format=json", "--", "-C", f"metadata=phase285_assurance_audit_{nonce}",
+        ]
+    else:
+        command = [
+            "test", "--locked", "-p", crate, "--test", target,
             "--no-run", "--message-format=json",
-        ],
+        ]
+    result = run_cargo(
+        command,
         cwd=root,
         text=True,
         stdout=subprocess.PIPE,
@@ -510,6 +763,31 @@ def compiled_test_binary(root, crate, target, report, code, expected_source=None
         report.violation(code, f"{crate}/{target} compilation failed:\n{result.stderr[-4000:]}")
         return None
     expected_source = expected_source or REGISTERED_TARGETS.get((crate, target))
+    if production_audit:
+        source_path = (root / expected_source).resolve()
+        expected_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        try:
+            audit_records = [
+                json.loads(line) for line in RUSTC_AUDIT_LOG.read_text().splitlines()
+                if line.strip()
+            ]
+        except (OSError, json.JSONDecodeError) as error:
+            report.violation(code, f"{crate}/{target} compiler audit is unreadable: {error}")
+            return None
+        expected_crate_name = target.replace("-", "_")
+        matching_audits = [
+            record for record in audit_records
+            if record.get("compiler") == str(PINNED_RUSTC)
+            and record.get("crate_name") == expected_crate_name
+            and record.get("test") is True
+            and record.get("sources") == [{"path": str(source_path), "sha256": expected_digest}]
+        ]
+        if len(matching_audits) != 1:
+            report.violation(
+                code,
+                f"{crate}/{target} has {len(matching_audits)} exact audited test compilations; expected one",
+            )
+            return None
     expected_target = expected_test_target(root, expected_source) if expected_source else None
     if expected_package_id is None and crate in PRODUCTION_PACKAGES:
         package_manifest, _lib_name = PRODUCTION_PACKAGES[crate]
@@ -561,6 +839,7 @@ def execution_input_snapshot(root, registered):
         CONTRACT_REL,
         "Cargo.toml",
         "Cargo.lock",
+        "rust-toolchain.toml",
         ".cargo/config",
         ".cargo/config.toml",
         *(entry.get("test_file", "") for entry in registered),
@@ -642,6 +921,7 @@ def run_ast_checks(root, registered, report, source_cache):
         result = subprocess.run(
             [os.environ["NEGATIVE_REGISTRY_AST"], mode, str(contract_path)],
             cwd=root,
+            env=sanitized_runtime_environment(),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -779,6 +1059,7 @@ def run_checks(root, minimum=12, execute_tests=False):
                 continue
             discovery = subprocess.run(
                 [str(executable), "--list"],
+                env=sanitized_runtime_environment(),
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -792,6 +1073,7 @@ def run_checks(root, minimum=12, execute_tests=False):
                 continue
             result = subprocess.run(
                 [str(executable)],
+                env=sanitized_runtime_environment(),
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -810,6 +1092,7 @@ def run_checks(root, minimum=12, execute_tests=False):
         else:
             discovery = subprocess.run(
                 [str(executable), "--list"],
+                env=sanitized_runtime_environment(),
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -821,6 +1104,7 @@ def run_checks(root, minimum=12, execute_tests=False):
             else:
                 result = subprocess.run(
                     [str(executable)],
+                    env=sanitized_runtime_environment(),
                     text=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1058,11 +1342,10 @@ def protocol_mutation_self_test(base):
     protocol = (REPO_ROOT / PROTOCOL_REL).read_text()
     (tests / "negative_protocol_contract.rs").write_text(contract)
 
-    environment = {**os.environ, "CARGO_TARGET_DIR": str(root / "target")}
-    generated = subprocess.run(
-        ["cargo", "generate-lockfile"],
+    generated = run_cargo(
+        ["generate-lockfile"],
         cwd=root,
-        env=environment,
+        target_dir=root / "target",
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1070,15 +1353,15 @@ def protocol_mutation_self_test(base):
     if generated.returncode:
         print(f"protocol self-test lock generation failed:\n{generated.stderr[-4000:]}", file=sys.stderr)
         return False, 0
-    command = ["cargo", "test", "--locked", "--test", CONTRACT_TARGET]
+    command = ["test", "--locked", "--test", CONTRACT_TARGET]
 
     def run(source, contract_source=contract):
         protocol_path.write_text(source)
         (tests / "negative_protocol_contract.rs").write_text(contract_source)
-        return subprocess.run(
+        return run_cargo(
             command,
             cwd=root,
-            env=environment,
+            target_dir=root / "target",
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1249,6 +1532,7 @@ def registered_source_mutation_self_test(base):
         return subprocess.run(
             [binary or os.environ["NEGATIVE_REGISTRY_AST"], "--check", str(contract)],
             cwd=root,
+            env=sanitized_runtime_environment(),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1793,10 +2077,10 @@ fn fabricated_policy_result() -> bool {
     contract = coordinated / "contract.tsv"
     contract.write_text(contract_text(coordinated))
     cargo_command = [
-        "cargo", "run", "--quiet", "--locked", "--manifest-path", str(helper / "Cargo.toml"),
+        "run", "--quiet", "--locked", "--manifest-path", str(helper / "Cargo.toml"),
         "--target-dir", str(REPO_ROOT / "target/assurance-tools-selftest"), "--",
     ]
-    emitted = subprocess.run(
+    emitted = run_cargo(
         [*cargo_command, "--emit", str(contract)],
         cwd=coordinated,
         text=True,
@@ -1811,7 +2095,7 @@ fn fabricated_policy_result() -> bool {
         line for line in expected_path.read_text().splitlines() if line.startswith("#")
     )
     expected_path.write_text(comments + "\n" + emitted.stdout)
-    result = subprocess.run(
+    result = run_cargo(
         [*cargo_command, "--check", str(contract)],
         cwd=coordinated,
         text=True,
@@ -1822,6 +2106,394 @@ fn fabricated_policy_result() -> bool {
         ok = False
         print(f"coordinated semantic baseline mutation bypassed pinned digest:\n{result.stderr[-4000:]}", file=sys.stderr)
     return ok, len(mutations) + 1
+
+
+def cargo_config_isolation_self_test(base):
+    ok = True
+    root = base / "external_cargo_home_full_gate"
+    hostile_home = base / "attacker-cargo-home"
+    hostile_home.mkdir()
+    registered = entries(REPO_ROOT, Report())
+    by_target = {}
+    for entry in registered:
+        relative = entry["test_file"]
+        package = pathlib.PurePosixPath(relative).parts[1]
+        target = pathlib.PurePosixPath(relative).stem
+        by_target.setdefault((package, target, relative), set()).add(entry["test_fn"])
+    by_target[(CONTRACT_CRATE, CONTRACT_TARGET, CONTRACT_REL)] = set(CONTRACT_TESTS)
+    packages = sorted({package for package, _target, _relative in by_target})
+    (root / "Cargo.toml").parent.mkdir(parents=True, exist_ok=True)
+    (root / "Cargo.toml").write_text(
+        "[workspace]\nresolver = \"2\"\nmembers = ["
+        + ", ".join(json.dumps(f"crates/{package}") for package in packages)
+        + "]\n"
+    )
+    substitutions = {}
+    for package in packages:
+        crate = root / "crates" / package
+        (crate / "src").mkdir(parents=True)
+        (crate / "src/lib.rs").write_text("")
+        (crate / "Cargo.toml").write_text(
+            f'[package]\nname = "{package}"\nversion = "0.0.0"\nedition = "2024"\n'
+        )
+    for (_package, target, relative), names in sorted(by_target.items()):
+        canonical = root / relative
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_text(
+            "\n".join(
+                f'#[test]\nfn {name}() {{ panic!("canonical body must execute"); }}'
+                for name in sorted(names)
+            ) + "\n"
+        )
+        fabricated = canonical.with_name(f"{target}_fabricated.rs")
+        fabricated.write_text(
+            "\n".join(f"#[test]\nfn {name}() {{}}" for name in sorted(names)) + "\n"
+        )
+        substitutions[str(canonical.resolve())] = str(fabricated.resolve())
+
+    wrapper = root / "fake-rustc-wrapper.py"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, shutil, sys\n"
+        f"substitutions = {substitutions!r}\n"
+        "compiler_value = sys.argv[1]\n"
+        "compiler = str(pathlib.Path(compiler_value).resolve()) if '/' in compiler_value else shutil.which(compiler_value)\n"
+        "if not compiler:\n"
+        "    raise SystemExit(f'compiler not found: {compiler_value}')\n"
+        "arguments = []\n"
+        "for value in sys.argv[2:]:\n"
+        "    candidate = pathlib.Path(value)\n"
+        "    resolved = str(candidate.resolve()) if value.endswith('.rs') and candidate.is_file() else value\n"
+        "    arguments.append(substitutions.get(resolved, value))\n"
+        "os.execv(compiler, [compiler, *arguments])\n"
+    )
+    wrapper.chmod(0o755)
+    (hostile_home / "config.toml").write_text(
+        "[build]\nrustc-wrapper = " + json.dumps(str(wrapper.resolve())) + "\n"
+    )
+    raw_target = REPO_ROOT / "target/assurance-external-cargo-home-red"
+    raw_environment = sanitized_cargo_environment(target_dir=raw_target, audit=False)
+    raw_environment["CARGO_HOME"] = str(hostile_home)
+    lock = subprocess.run(
+        [str(PINNED_CARGO), "generate-lockfile"], cwd=root, env=raw_environment,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if lock.returncode:
+        ok = False
+        print(f"external CARGO_HOME exact red lock failed:\n{lock.stderr[-4000:]}", file=sys.stderr)
+    else:
+        for (package, target, _relative), names in sorted(by_target.items()):
+            bypass = subprocess.run(
+                [str(PINNED_CARGO), "test", "--locked", "-p", package, "--test", target],
+                cwd=root, env=raw_environment, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            expected = {
+                "passed": len(names), "failed": 0, "ignored": 0,
+                "measured": 0, "filtered": 0,
+            }
+            if bypass.returncode or run_summary(bypass.stdout) != expected:
+                ok = False
+                print(
+                    f"external CARGO_HOME exact red did not fabricate {package}/{target}:\n"
+                    f"{(bypass.stdout + bypass.stderr)[-4000:]}",
+                    file=sys.stderr,
+                )
+
+    safe_target = REPO_ROOT / "target/assurance-external-cargo-home-safe"
+    for package, target, _relative in sorted(by_target):
+        protected = run_cargo(
+            ["test", "--locked", "-p", package, "--test", target],
+            cwd=root, target_dir=safe_target, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if protected.returncode == 0:
+            ok = False
+            print(f"sanitized CARGO_HOME accepted substituted {package}/{target}", file=sys.stderr)
+
+    # A relative wrapper is resolved from the build cwd and is equally hostile.
+    relative_home = base / "relative-attacker-cargo-home"
+    relative_home.mkdir()
+    relative_wrapper = relative_home / "relative-wrapper.py"
+    shutil.copy2(wrapper, relative_wrapper)
+    relative_wrapper.chmod(0o755)
+    (relative_home / "config.toml").write_text('[build]\nrustc-wrapper = "relative-wrapper.py"\n')
+    relative_environment = sanitized_cargo_environment(
+        target_dir=REPO_ROOT / "target/assurance-relative-cargo-home-red", audit=False,
+    )
+    relative_environment["CARGO_HOME"] = str(relative_home)
+    relative_environment["PATH"] = f"{relative_home}:{relative_environment['PATH']}"
+    package, target, _relative = sorted(by_target)[0]
+    relative = subprocess.run(
+        [str(PINNED_CARGO), "test", "--locked", "-p", package, "--test", target],
+        cwd=root, env=relative_environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    relative_names = by_target[(package, target, REGISTERED_TARGETS[(package, target)])]
+    relative_expected = {
+        "passed": len(relative_names), "failed": 0, "ignored": 0,
+        "measured": 0, "filtered": 0,
+    }
+    if relative.returncode or run_summary(relative.stdout) != relative_expected:
+        ok = False
+        print(
+            f"relative CARGO_HOME wrapper red did not fabricate a pass:\n"
+            f"{(relative.stdout + relative.stderr)[-4000:]}",
+            file=sys.stderr,
+        )
+
+    def external_config_run(name, config, run_target, *, expect_pass):
+        config_home = base / f"executable-attacker-home-{name}"
+        config_home.mkdir()
+        (config_home / "config.toml").write_text(config)
+        environment = sanitized_cargo_environment(
+            target_dir=REPO_ROOT / f"target/assurance-cargo-config-{name}-red",
+            audit=False,
+        )
+        environment["CARGO_HOME"] = str(config_home)
+        environment.pop("RUSTC", None)
+        result = subprocess.run(
+            [str(PINNED_CARGO), "test", "--locked", "-p", package, "--test", run_target],
+            cwd=root, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if expect_pass and result.returncode:
+            print(
+                f"external CARGO_HOME {name} red did not fabricate/alter execution:\n"
+                f"{(result.stdout + result.stderr)[-4000:]}",
+                file=sys.stderr,
+            )
+            return False
+        return True
+
+    direct_rustc = root / "fake-build-rustc.py"
+    direct_rustc.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys\n"
+        f"substitutions = {substitutions!r}\n"
+        "arguments = []\n"
+        "for value in sys.argv[1:]:\n"
+        "    candidate = pathlib.Path(value)\n"
+        "    resolved = str(candidate.resolve()) if value.endswith('.rs') and candidate.is_file() else value\n"
+        "    arguments.append(substitutions.get(resolved, value))\n"
+        f"compiler = {str(PINNED_RUSTC)!r}\n"
+        "os.execv(compiler, [compiler, *arguments])\n"
+    )
+    direct_rustc.chmod(0o755)
+    if not external_config_run(
+        "build-rustc",
+        f'[build]\nrustc = {json.dumps(str(direct_rustc.resolve()))}\n',
+        target,
+        expect_pass=True,
+    ):
+        ok = False
+
+    if not external_config_run(
+        "workspace-wrapper",
+        f'[build]\nrustc-workspace-wrapper = {json.dumps(str(wrapper.resolve()))}\n',
+        target,
+        expect_pass=True,
+    ):
+        ok = False
+
+    flags_target = "cargo_config_rustflags_probe"
+    flags_source = root / f"crates/{package}/tests/{flags_target}.rs"
+    flags_source.write_text('''
+#[cfg(not(phase285_erase_registered))]
+#[test]
+fn body_must_run() { panic!("rustflags must not select an alternate body"); }
+
+#[cfg(phase285_erase_registered)]
+#[test]
+fn body_must_run() {}
+''')
+    if not external_config_run(
+        "rustflags",
+        '[build]\nrustflags = ["--cfg", "phase285_erase_registered"]\n'
+        'rustdocflags = ["--cfg", "phase285_erase_registered"]\n',
+        flags_target,
+        expect_pass=True,
+    ):
+        ok = False
+
+    runner = root / "fake-config-runner.py"
+    runner.write_text(
+        "print('running 1 test')\n"
+        "print('test body_must_run ... ok')\n"
+        "print()\n"
+        "print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;')\n"
+    )
+    if not external_config_run(
+        "target-runner",
+        f"[target.'cfg(all())']\nrunner = [{json.dumps(sys.executable)}, {json.dumps(str(runner.resolve()))}]\n",
+        flags_target,
+        expect_pass=True,
+    ):
+        ok = False
+
+    linker_target = "cargo_config_linker_probe"
+    (root / f"crates/{package}/tests/{linker_target}.rs").write_text(
+        "#[test]\nfn linker_probe() {}\n"
+    )
+    linker_marker = root / "attacker-linker-executed"
+    linker = root / "fake-linker.py"
+    linker.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys\n"
+        f"pathlib.Path({str(linker_marker)!r}).write_text('executed')\n"
+        "os.execv('/usr/bin/cc', ['/usr/bin/cc', *sys.argv[1:]])\n"
+    )
+    linker.chmod(0o755)
+    if not external_config_run(
+        "target-linker",
+        f"[target.'cfg(all())']\nlinker = {json.dumps(str(linker.resolve()))}\n",
+        linker_target,
+        expect_pass=True,
+    ) or not linker_marker.is_file():
+        ok = False
+        print("external CARGO_HOME target linker red did not execute", file=sys.stderr)
+
+    # The same sources must behave canonically through the gate-owned home.
+    for name, run_target, should_fail in (
+        ("build-rustc", target, True),
+        ("workspace-wrapper", target, True),
+        ("rustflags", flags_target, True),
+        ("target-runner", flags_target, True),
+        ("target-linker", linker_target, False),
+    ):
+        if name == "target-linker":
+            linker_marker.unlink(missing_ok=True)
+        result = run_cargo(
+            ["test", "--locked", "-p", package, "--test", run_target],
+            cwd=root,
+            target_dir=REPO_ROOT / f"target/assurance-cargo-config-{name}-safe",
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if (should_fail and result.returncode == 0) or (not should_fail and result.returncode != 0):
+            ok = False
+            print(f"sanitized CARGO_HOME did not restore canonical {name} behavior", file=sys.stderr)
+        if name == "target-linker" and linker_marker.exists():
+            ok = False
+            print("sanitized CARGO_HOME still executed the attacker linker", file=sys.stderr)
+
+    # Every compiler/process-bearing Cargo config family is excluded because none
+    # of the attacker home is copied into the internally created Cargo home.
+    config_variants = {
+        "build-rustc": f'[build]\nrustc = {json.dumps(str(wrapper.resolve()))}\n',
+        "workspace-wrapper": f'[build]\nrustc-workspace-wrapper = {json.dumps(str(wrapper.resolve()))}\n',
+        "rustflags": '[build]\nrustflags = ["--cfg", "phase285_erase_registered"]\nrustdocflags = ["--cfg", "phase285_erase_registered"]\n',
+        "target-linker": f'[target.\'cfg(all())\']\nlinker = {json.dumps(str(wrapper.resolve()))}\n',
+        "target-runner": f'[target.\'cfg(all())\']\nrunner = ["{sys.executable}", {json.dumps(str(wrapper.resolve()))}]\n',
+        "credentials": '[registry]\nglobal-credential-providers = ["cargo:token-from-stdout echo attacker"]\n',
+    }
+    for name, contents in config_variants.items():
+        variant_home = base / f"attacker-home-{name}"
+        variant_home.mkdir()
+        (variant_home / "config.toml").write_text(contents)
+        hostile_environment = dict(os.environ)
+        hostile_environment.update({
+            "HOME": str(variant_home),
+            "PATH": str(variant_home),
+            "CARGO_HOME": str(variant_home),
+        })
+        protected_environment = sanitized_cargo_environment()
+        if (
+            protected_environment["CARGO_HOME"] == str(variant_home)
+            or protected_environment["HOME"] == str(variant_home)
+            or protected_environment["PATH"] == str(variant_home)
+            or (SANITIZED_CARGO_HOME / "config.toml").exists()
+            or (SANITIZED_CARGO_HOME / "config").exists()
+        ):
+            ok = False
+            print(f"sanitized boundary retained hostile {name} config/environment", file=sys.stderr)
+
+    ancestor = base / "ancestor-config" / "nested" / "workspace"
+    ancestor.mkdir(parents=True)
+    (ancestor.parent.parent / ".cargo").mkdir()
+    (ancestor.parent.parent / ".cargo/config.toml").write_text("[build]\nrustflags = []\n")
+    ancestor_report = Report()
+    validate_cargo_execution_boundary(ancestor, ancestor_report, check_environment=False)
+    refused = run_cargo(
+        ["metadata", "--format-version", "1"], cwd=ancestor,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if "dependency-cargo-config" not in ancestor_report.codes() or refused.returncode != 125:
+        ok = False
+        print("ancestor Cargo config source was not refused", file=sys.stderr)
+
+    toolchain_root = base / "toolchain-redirection"
+    toolchain_root.mkdir()
+    (toolchain_root / "rust-toolchain.toml").write_text('[toolchain]\npath = "attacker-toolchain"\n')
+    toolchain_report = Report()
+    validate_toolchain_identity(toolchain_root, toolchain_report)
+    if "dependency-toolchain-drift" not in toolchain_report.codes():
+        ok = False
+        print("rust-toolchain path redirection was not rejected", file=sys.stderr)
+    return ok, 15
+
+
+def python_isolation_self_test(base):
+    ok = True
+    shadow_root = base / "python-module-shadow"
+    python_path = base / "pythonpath-shadow"
+    shadow_root.mkdir()
+    python_path.mkdir()
+    (shadow_root / "hashlib.py").write_text("raise SystemExit(73)\n")
+    (python_path / "tomllib.py").write_text("raise SystemExit(74)\n")
+
+    raw_root = subprocess.run(
+        [sys.executable, "-c", "import hashlib"],
+        cwd=shadow_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    isolated_root = subprocess.run(
+        [sys.executable, "-I", "-c", "import hashlib; hashlib.sha256(b'x').hexdigest()"],
+        cwd=shadow_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if raw_root.returncode != 73 or isolated_root.returncode:
+        ok = False
+        print("isolated Python did not defeat a cwd stdlib-module shadow", file=sys.stderr)
+
+    raw_path_environment = dict(os.environ)
+    raw_path_environment["PYTHONPATH"] = str(python_path)
+    raw_path = subprocess.run(
+        [sys.executable, "-c", "import tomllib"],
+        env=raw_path_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    isolated_path = subprocess.run(
+        [sys.executable, "-I", "-c", "import tomllib; tomllib.loads('x = 1')"],
+        env=raw_path_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if raw_path.returncode != 74 or isolated_path.returncode:
+        ok = False
+        print("isolated Python did not defeat a PYTHONPATH stdlib-module shadow", file=sys.stderr)
+
+    RUSTC_AUDIT_LOG.unlink(missing_ok=True)
+    wrapper_environment = sanitized_cargo_environment(audit=True)
+    wrapper_environment["PYTHONPATH"] = str(python_path)
+    wrapper = subprocess.run(
+        [str(RUSTC_AUDIT_WRAPPER), str(PINNED_RUSTC), "-vV"],
+        cwd=shadow_root,
+        env=wrapper_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if wrapper.returncode or f"release: {PINNED_RUST_VERSION}" not in wrapper.stdout:
+        ok = False
+        print(f"isolated rustc audit wrapper was shadowed:\n{wrapper.stderr[-4000:]}", file=sys.stderr)
+    return ok, 3
 
 
 def dependency_execution_self_test(base):
@@ -1920,14 +2592,13 @@ async fn erased_async_body() {
     panic!("the registered body must execute");
 }
 ''')
-    environment = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
-    lock = subprocess.run(
-        ["cargo", "generate-lockfile"], cwd=fake_root, env=environment,
+    lock = run_cargo(
+        ["generate-lockfile"], cwd=fake_root, target_dir=target_dir,
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    bypass = subprocess.run(
-        ["cargo", "test", "--locked", "-p", "victim", "--test", "registered"],
-        cwd=fake_root, env=environment, text=True,
+    bypass = run_cargo(
+        ["test", "--locked", "-p", "victim", "--test", "registered"],
+        cwd=fake_root, target_dir=target_dir, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ) if lock.returncode == 0 else lock
     if bypass.returncode or run_summary(bypass.stdout) != {
@@ -1981,13 +2652,13 @@ else:
     (runner_root / ".cargo/config.toml").write_text(
         "[target.'cfg(all())']\nrunner = [\"python3\", " + json.dumps(str(runner)) + "]\n"
     )
-    runner_environment = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
+    runner_environment = sanitized_cargo_environment(target_dir=target_dir, audit=False)
     lock = subprocess.run(
-        ["cargo", "generate-lockfile"], cwd=runner_root, env=runner_environment,
+        [str(PINNED_CARGO), "generate-lockfile"], cwd=runner_root, env=runner_environment,
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     spoof = subprocess.run(
-        ["cargo", "test", "--locked", "-p", "victim", "--test", "registered"],
+        [str(PINNED_CARGO), "test", "--locked", "-p", "victim", "--test", "registered"],
         cwd=runner_root, env=runner_environment, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ) if lock.returncode == 0 else lock
@@ -2008,10 +2679,14 @@ else:
     direct = subprocess.run(
         [str(executable)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ) if executable is not None else None
-    if direct_report.violations or direct is None or direct.returncode == 0:
+    if (
+        "runner-fixture-compile" not in direct_report.codes()
+        or executable is not None
+        or direct is not None
+    ):
         ok = False
         print(
-            f"direct test-binary execution did not defeat the runner spoof: "
+            f"sanitized compiler did not refuse the discovered runner config: "
             f"{direct_report.violations} {'' if direct is None else (direct.stdout + direct.stderr)[-4000:]}",
             file=sys.stderr,
         )
@@ -2041,7 +2716,7 @@ fn body_must_run() {
 #[test]
 fn body_must_run() {}
 ''')
-    real_rustc = shutil.which("rustc")
+    real_rustc = str(PINNED_RUSTC)
     fake_rustc = rustc_root / "fake-rustc.py"
     fake_rustc.write_text(
         "#!/usr/bin/env python3\n"
@@ -2055,16 +2730,18 @@ fn body_must_run() {}
     )
     fake_rustc.chmod(0o755)
     rustc_environment = {
-        **os.environ,
+        **sanitized_cargo_environment(
+            target_dir=REPO_ROOT / "target/assurance-rustc-env-selftest",
+            audit=False,
+        ),
         "RUSTC": str(fake_rustc),
-        "CARGO_TARGET_DIR": str(REPO_ROOT / "target/assurance-rustc-env-selftest"),
     }
     lock = subprocess.run(
-        ["cargo", "generate-lockfile"], cwd=rustc_root, env=rustc_environment,
+        [str(PINNED_CARGO), "generate-lockfile"], cwd=rustc_root, env=rustc_environment,
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     bypass = subprocess.run(
-        ["cargo", "test", "--locked", "-p", "rustc-source-substitution-victim", "--test", "registered"],
+        [str(PINNED_CARGO), "test", "--locked", "-p", "rustc-source-substitution-victim", "--test", "registered"],
         cwd=rustc_root, env=rustc_environment, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ) if lock.returncode == 0 else lock
@@ -2108,16 +2785,18 @@ fn body_must_run() {
 fn body_must_run() {}
 ''')
     flags_environment = {
-        **os.environ,
+        **sanitized_cargo_environment(
+            target_dir=REPO_ROOT / "target/assurance-rustflags-env-selftest",
+            audit=False,
+        ),
         "CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fphase285_erase_registered",
-        "CARGO_TARGET_DIR": str(REPO_ROOT / "target/assurance-rustflags-env-selftest"),
     }
     lock = subprocess.run(
-        ["cargo", "generate-lockfile"], cwd=flags_root, env=flags_environment,
+        [str(PINNED_CARGO), "generate-lockfile"], cwd=flags_root, env=flags_environment,
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     bypass = subprocess.run(
-        ["cargo", "test", "--locked", "-p", "encoded-rustflags-victim", "--test", "registered"],
+        [str(PINNED_CARGO), "test", "--locked", "-p", "encoded-rustflags-victim", "--test", "registered"],
         cwd=flags_root, env=flags_environment, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ) if lock.returncode == 0 else lock
@@ -2133,7 +2812,9 @@ fn body_must_run() {}
     if "dependency-execution-environment" not in flags_report.codes():
         ok = False
         print(f"encoded rustflags environment was not rejected: {flags_report.violations}", file=sys.stderr)
-    return ok, 4
+    isolation_ok, isolation_mutations = cargo_config_isolation_self_test(base)
+    python_ok, python_mutations = python_isolation_self_test(base)
+    return ok and isolation_ok and python_ok, 4 + isolation_mutations + python_mutations
 
 
 def target_override_self_test(base):
@@ -2235,18 +2916,16 @@ fn main() {
 ''')
     build_marker = build_hook_root / "build-script-executed"
     build_marker.unlink(missing_ok=True)
-    build_hook_environment = {
-        **os.environ,
-        "PHASE285_BUILD_MARKER": str(build_marker),
-        "CARGO_TARGET_DIR": str(REPO_ROOT / "target/assurance-manifest-env-selftest"),
-    }
-    lock = subprocess.run(
-        ["cargo", "generate-lockfile"], cwd=build_hook_root, env=build_hook_environment,
+    build_target = REPO_ROOT / "target/assurance-manifest-env-selftest"
+    lock = run_cargo(
+        ["generate-lockfile"], cwd=build_hook_root, target_dir=build_target,
+        extra_environment={"PHASE285_BUILD_MARKER": str(build_marker)},
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    bypass = subprocess.run(
-        ["cargo", "test", "--locked", "-p", "path-dev-dependency-victim", "--test", "registered"],
-        cwd=build_hook_root, env=build_hook_environment, text=True,
+    bypass = run_cargo(
+        ["test", "--locked", "-p", "path-dev-dependency-victim", "--test", "registered"],
+        cwd=build_hook_root, target_dir=build_target,
+        extra_environment={"PHASE285_BUILD_MARKER": str(build_marker)}, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ) if lock.returncode == 0 else lock
     if bypass.returncode or not build_marker.is_file():
@@ -2305,8 +2984,8 @@ edition = "2024"
             destination = fixture_crate / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(contents)
-        result = subprocess.run(
-            ["cargo", "metadata", "--format-version", "1"],
+        result = run_cargo(
+            ["metadata", "--format-version", "1"],
             cwd=fixture_root,
             text=True,
             stdout=subprocess.PIPE,
@@ -2426,14 +3105,13 @@ path = "tests/fabricated.rs"
         )
         original = root / REGISTERED_TARGETS[(package, target)]
         original.write_text("compile_error!(\"the canonical registered source was not selected\");\n")
-        environment = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
-        lock = subprocess.run(
-            ["cargo", "generate-lockfile"], cwd=root, env=environment,
+        lock = run_cargo(
+            ["generate-lockfile"], cwd=root, target_dir=target_dir,
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        bypass = subprocess.run(
-            ["cargo", "test", "--locked", "-p", package, "--test", target],
-            cwd=root, env=environment, text=True,
+        bypass = run_cargo(
+            ["test", "--locked", "-p", package, "--test", target],
+            cwd=root, target_dir=target_dir, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         ) if lock.returncode == 0 else lock
         expected_summary = {
@@ -2448,9 +3126,9 @@ path = "tests/fabricated.rs"
                 file=sys.stderr,
             )
 
-        metadata = subprocess.run(
-            ["cargo", "metadata", "--locked", "--format-version", "1"],
-            cwd=root, env=environment, text=True,
+        metadata = run_cargo(
+            ["metadata", "--locked", "--format-version", "1"],
+            cwd=root, target_dir=target_dir, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         metadata_report = Report()
@@ -2514,15 +3192,17 @@ def self_test():
 
 
 preflight = Report()
+validate_toolchain_identity(REPO_ROOT, preflight)
 validate_cargo_execution_boundary(REPO_ROOT, preflight)
+configure_sanitized_cargo_boundary(preflight)
 if preflight.violations:
     for code, message in preflight.violations:
         print(f"[{code}] {message}", file=sys.stderr)
     raise SystemExit("check-negative-registry refused compiler-affecting execution overrides before building its checker")
 ast_target_dir = REPO_ROOT / "target/assurance-tools"
-ast_build = subprocess.run(
+ast_build = run_cargo(
     [
-        "cargo", "build", "--quiet", "--locked",
+        "build", "--quiet", "--locked",
         "--manifest-path", str(REPO_ROOT / "tools/negative-registry-ast/Cargo.toml"),
         "--target-dir", str(ast_target_dir),
     ],

@@ -34,17 +34,21 @@ name the same public entry, except for two Serde conversion boundaries
 explicitly identified for review. Registered wrappers use only built-in
 `#[test]`; a source-digested entry/completion sentinel surrounds the synchronous
 driver. The gate validates the relevant manifest fields and exact
-Cargo.lock/metadata identities, including canonical auto-discovered integration
-test source paths and production `src/lib.rs` targets, and rejects explicit test
-overrides or custom build scripts. Checker-owned semantic digests cover the
-complete parsed TOML of all four registered crate manifests and the root
-workspace/profile/target/substitution tables. It compiles with `--locked`, binds
-each compiler artifact to the expected package and source path, invokes emitted
-test binaries directly so a Cargo runner cannot forge discovery or pass counts,
-and rechecks its execution inputs after compilation. Compiler, rustdoc, flags,
-target, wrapper, and runner environment overrides are rejected rather than
-trusted as part of the proof; that rejection happens before the gate compiles
-its own Rust-syntax checker.
+Cargo.lock/metadata identities, pinned `rust-toolchain.toml` semantics, canonical
+auto-discovered integration-test source paths, and production `src/lib.rs`
+targets, and rejects explicit test overrides or custom build scripts.
+Checker-owned semantic digests cover the complete parsed TOML of all four
+registered crate manifests and the root workspace/profile/target/substitution
+tables. Every Cargo command uses a fresh config-free gate-owned `CARGO_HOME`, an
+exact pinned Cargo/rustc, a sanitized PATH, and no repository or ancestor Cargo
+config. A gate-owned isolated-Python rustc wrapper forces and audits exactly one
+test-mode compile per registered target, binding the compiler, crate name,
+canonical source realpath, and source hash. The gate then invokes emitted test
+binaries directly under a sanitized runtime environment so a Cargo runner,
+loader setting, or Python-module injection cannot forge discovery or pass
+counts, and it rechecks execution inputs after compilation. Compiler, rustdoc,
+flags, target, wrapper, runner, and Python environment overrides are rejected or
+neutralized before the gate compiles its own Rust-syntax checker.
 The local digests detect uncoordinated drift but are co-located with the checker:
 they do not provide external provenance and cannot resist a coherent edit of
 all local inputs. This also does not mechanically prove
