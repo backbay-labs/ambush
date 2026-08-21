@@ -1,0 +1,132 @@
+schema_version: 1
+scenario_id: ambiguous-cross-telemetry-v1
+class: training_attack
+seed_time_ms: 1700000000000
+hypothesis_ids:
+  - hypothesis:credential-compromise
+  - hypothesis:authorized-automation
+events:
+  - event_id: event:process:support
+    evidence_id: evidence:process:support
+    source_family: process
+    logical_time_ms: 1700000000100
+    signal_kind: unsigned_parent_child_execution
+    supports: [hypothesis:credential-compromise]
+    refutes: [hypothesis:authorized-automation]
+    entity_ids: [node:process:runner-a, node:event:seed-a]
+    relation_ids: [edge:credential-used-by-process]
+  - event_id: event:process:refute
+    evidence_id: evidence:process:refute
+    source_family: process
+    logical_time_ms: 1700000000200
+    signal_kind: approved_automation_signature
+    supports: [hypothesis:authorized-automation]
+    refutes: [hypothesis:credential-compromise]
+    entity_ids: [node:process:runner-a]
+    relation_ids: []
+  - event_id: event:identity:support
+    evidence_id: evidence:identity:support
+    source_family: identity
+    logical_time_ms: 1700000000300
+    signal_kind: anomalous_role_assumption
+    supports: [hypothesis:credential-compromise]
+    refutes: [hypothesis:authorized-automation]
+    entity_ids: [node:actor:principal-a, node:credential:role-a]
+    relation_ids: [edge:principal-assumed-role]
+  - event_id: event:identity:refute
+    evidence_id: evidence:identity:refute
+    source_family: identity
+    logical_time_ms: 1700000000400
+    signal_kind: approved_change_window
+    supports: [hypothesis:authorized-automation]
+    refutes: [hypothesis:credential-compromise]
+    entity_ids: [node:actor:principal-a]
+    relation_ids: []
+  - event_id: event:kubernetes:support
+    evidence_id: evidence:kubernetes:support
+    source_family: kubernetes
+    logical_time_ms: 1700000000500
+    signal_kind: privileged_workload_creation
+    supports: [hypothesis:credential-compromise]
+    refutes: [hypothesis:authorized-automation]
+    entity_ids: [node:asset:workload-a, node:credential:role-a]
+    relation_ids: [edge:role-created-workload]
+  - event_id: event:kubernetes:refute
+    evidence_id: evidence:kubernetes:refute
+    source_family: kubernetes
+    logical_time_ms: 1700000000600
+    signal_kind: deployment_controller_annotation
+    supports: [hypothesis:authorized-automation]
+    refutes: [hypothesis:credential-compromise]
+    entity_ids: [node:asset:workload-a]
+    relation_ids: []
+  - event_id: event:cloudtrail:support
+    evidence_id: evidence:cloudtrail:support
+    source_family: cloudtrail
+    logical_time_ms: 1700000000700
+    signal_kind: role_used_from_new_source
+    supports: [hypothesis:credential-compromise]
+    refutes: [hypothesis:authorized-automation]
+    entity_ids: [node:actor:principal-a, node:credential:role-a]
+    relation_ids: [edge:principal-assumed-role]
+  - event_id: event:cloudtrail:refute
+    evidence_id: evidence:cloudtrail:refute
+    source_family: cloudtrail
+    logical_time_ms: 1700000000800
+    signal_kind: change_ticket_tag_present
+    supports: [hypothesis:authorized-automation]
+    refutes: [hypothesis:credential-compromise]
+    entity_ids: [node:credential:role-a]
+    relation_ids: []
+  - event_id: event:network:support
+    evidence_id: evidence:network:support
+    source_family: network
+    logical_time_ms: 1700000000900
+    signal_kind: rare_egress_destination
+    supports: [hypothesis:credential-compromise]
+    refutes: [hypothesis:authorized-automation]
+    entity_ids: [node:asset:workload-a]
+    relation_ids: [edge:workload-contacted-destination]
+  - event_id: event:network:refute
+    evidence_id: evidence:network:refute
+    source_family: network
+    logical_time_ms: 1700000001000
+    signal_kind: documented_vendor_endpoint
+    supports: [hypothesis:authorized-automation]
+    refutes: [hypothesis:credential-compromise]
+    entity_ids: [node:asset:workload-a]
+    relation_ids: []
+  - event_id: event:threat-intelligence:support
+    evidence_id: evidence:threat-intelligence:support
+    source_family: threat_intelligence
+    logical_time_ms: 1700000001100
+    signal_kind: active_campaign_indicator_match
+    supports: [hypothesis:credential-compromise]
+    refutes: [hypothesis:authorized-automation]
+    entity_ids: [node:actor:principal-a]
+    relation_ids: [edge:indicator-matched-destination]
+  - event_id: event:threat-intelligence:refute
+    evidence_id: evidence:threat-intelligence:refute
+    source_family: threat_intelligence
+    logical_time_ms: 1700000001200
+    signal_kind: indicator_revoked_as_false_positive
+    supports: [hypothesis:authorized-automation]
+    refutes: [hypothesis:credential-compromise]
+    entity_ids: [node:actor:principal-a]
+    relation_ids: []
+expected_kill_chain:
+  - stage_id: stage:initial-access
+    status: observed
+    evidence_ids: [evidence:identity:support]
+  - stage_id: stage:execution
+    status: observed
+    evidence_ids: [evidence:process:support]
+  - stage_id: stage:credential-access
+    status: observed
+    evidence_ids: [evidence:cloudtrail:support]
+  - stage_id: stage:lateral-movement
+    status: observed
+    evidence_ids: [evidence:kubernetes:support]
+  - stage_id: stage:command-and-control
+    status: observed
+    evidence_ids: [evidence:network:support, evidence:threat-intelligence:support]

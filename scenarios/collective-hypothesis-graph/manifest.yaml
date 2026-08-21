@@ -1,0 +1,195 @@
+schema_version: 1
+corpus_id: collective-hypothesis-graph-v1
+corpus_version: 1
+seed: 286001
+logical_clock:
+  origin_ms: 1700000000000
+  tick_ms: 100
+training_fixture: scenarios/collective-hypothesis-graph/ambiguous-cross-telemetry.yaml
+withheld_fixture: scenarios/collective-hypothesis-graph/withheld-kill-chain.yaml
+source_contracts:
+  - family: process
+    corroborating_evidence_id: evidence:process:support
+    conflicting_evidence_id: evidence:process:refute
+  - family: identity
+    corroborating_evidence_id: evidence:identity:support
+    conflicting_evidence_id: evidence:identity:refute
+  - family: kubernetes
+    corroborating_evidence_id: evidence:kubernetes:support
+    conflicting_evidence_id: evidence:kubernetes:refute
+  - family: cloudtrail
+    corroborating_evidence_id: evidence:cloudtrail:support
+    conflicting_evidence_id: evidence:cloudtrail:refute
+  - family: network
+    corroborating_evidence_id: evidence:network:support
+    conflicting_evidence_id: evidence:network:refute
+  - family: threat_intelligence
+    corroborating_evidence_id: evidence:threat-intelligence:support
+    conflicting_evidence_id: evidence:threat-intelligence:refute
+truth:
+  hypothesis_ids:
+    - hypothesis:credential-compromise
+    - hypothesis:authorized-automation
+  selected_hypothesis_id: hypothesis:credential-compromise
+  node_ids:
+    - node:actor:principal-a
+    - node:asset:workload-a
+    - node:credential:role-a
+    - node:process:runner-a
+    - node:event:seed-a
+  causal_edge_ids:
+    - edge:credential-used-by-process
+    - edge:process-spawned-network-client
+    - edge:principal-assumed-role
+    - edge:role-created-workload
+    - edge:workload-contacted-destination
+    - edge:indicator-matched-destination
+  kill_chain_stage_ids:
+    - stage:initial-access
+    - stage:execution
+    - stage:credential-access
+    - stage:lateral-movement
+    - stage:command-and-control
+  required_evidence_ids:
+    - evidence:process:support
+    - evidence:identity:support
+    - evidence:kubernetes:support
+    - evidence:cloudtrail:support
+    - evidence:network:support
+    - evidence:threat-intelligence:support
+    - evidence:withheld:initial-access
+    - evidence:withheld:execution
+    - evidence:withheld:credential-access
+    - evidence:withheld:command-and-control
+controls:
+  single_agent:
+    lane_id: single-agent-control
+    max_investigators: 1
+    adaptive_task_allocation: false
+    corpus_digest_ref: collective-hypothesis-graph-v1
+  collective:
+    lane_id: collective-reasoning
+    max_investigators: 3
+    adaptive_task_allocation: true
+    corpus_digest_ref: collective-hypothesis-graph-v1
+limits:
+  max_nodes: 256
+  max_edges: 512
+  max_evidence_bytes: 1048576
+  max_tasks: 128
+  max_virtual_ms: 60000
+  max_work_units: 10000
+metrics:
+  denominators:
+    adjudicated_cases: 2
+    attack_chain_stages: 5
+    causal_edges: 6
+    logical_tasks: 100
+    evidence_claims: 16
+  thresholds:
+    min_hypothesis_time_reduction_bps: 2000
+    min_attack_chain_recall_gain_bps: 1000
+    max_false_causal_edge_rate_bps: 1000
+    max_duplicate_work_rate_bps: 500
+    min_evidence_coverage_bps: 9000
+task_identities:
+    - task:edge:000
+    - task:edge:001
+    - task:edge:002
+    - task:edge:003
+    - task:edge:004
+    - task:edge:005
+    - task:edge:006
+    - task:edge:007
+    - task:edge:008
+    - task:edge:009
+    - task:edge:010
+    - task:edge:011
+    - task:edge:012
+    - task:edge:013
+    - task:edge:014
+    - task:edge:015
+    - task:edge:016
+    - task:edge:017
+    - task:edge:018
+    - task:edge:019
+    - task:edge:020
+    - task:edge:021
+    - task:edge:022
+    - task:edge:023
+    - task:edge:024
+    - task:edge:025
+    - task:edge:026
+    - task:edge:027
+    - task:edge:028
+    - task:edge:029
+    - task:edge:030
+    - task:edge:031
+    - task:edge:032
+    - task:edge:033
+    - task:edge:034
+    - task:edge:035
+    - task:edge:036
+    - task:edge:037
+    - task:edge:038
+    - task:edge:039
+    - task:edge:040
+    - task:edge:041
+    - task:edge:042
+    - task:edge:043
+    - task:edge:044
+    - task:edge:045
+    - task:edge:046
+    - task:edge:047
+    - task:edge:048
+    - task:edge:049
+    - task:edge:050
+    - task:edge:051
+    - task:edge:052
+    - task:edge:053
+    - task:edge:054
+    - task:edge:055
+    - task:edge:056
+    - task:edge:057
+    - task:edge:058
+    - task:edge:059
+    - task:edge:060
+    - task:edge:061
+    - task:edge:062
+    - task:edge:063
+    - task:edge:064
+    - task:edge:065
+    - task:edge:066
+    - task:edge:067
+    - task:edge:068
+    - task:edge:069
+    - task:edge:070
+    - task:edge:071
+    - task:edge:072
+    - task:edge:073
+    - task:edge:074
+    - task:edge:075
+    - task:edge:076
+    - task:edge:077
+    - task:edge:078
+    - task:edge:079
+    - task:edge:080
+    - task:edge:081
+    - task:edge:082
+    - task:edge:083
+    - task:edge:084
+    - task:edge:085
+    - task:edge:086
+    - task:edge:087
+    - task:edge:088
+    - task:edge:089
+    - task:edge:090
+    - task:edge:091
+    - task:edge:092
+    - task:edge:093
+    - task:edge:094
+    - task:edge:095
+    - task:edge:096
+    - task:edge:097
+    - task:edge:098
+    - task:edge:099
