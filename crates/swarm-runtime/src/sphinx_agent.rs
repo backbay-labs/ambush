@@ -1598,29 +1598,44 @@ fn extract_entities(indicator: &Value) -> Vec<EntityObservation> {
         ("username", EntityKind::User),
         ("process_name", EntityKind::Process),
         ("parent_process_name", EntityKind::Process),
+        ("parent_process", EntityKind::Process),
         ("source_ip", EntityKind::IpAddress),
         ("destination_ip", EntityKind::IpAddress),
         ("remote_ip", EntityKind::IpAddress),
         ("ip_address", EntityKind::IpAddress),
     ];
 
-    for (field, kind) in candidates {
-        let Some(value) = indicator.get(field).and_then(Value::as_str) else {
-            continue;
-        };
-        let normalized = value.trim();
-        if normalized.is_empty() {
-            continue;
+    let mut collect_from_object = |object: &serde_json::Map<String, Value>| {
+        for (field, kind) in candidates {
+            let Some(value) = object.get(field).and_then(Value::as_str) else {
+                continue;
+            };
+            let normalized = value.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            let key = format!("{field}:{}", normalized.to_ascii_lowercase());
+            if !seen.insert(key) {
+                continue;
+            }
+            entities.push(EntityObservation {
+                kind,
+                role: field.to_string(),
+                value: normalized.to_string(),
+            });
         }
-        let key = format!("{field}:{}", normalized.to_ascii_lowercase());
-        if !seen.insert(key) {
-            continue;
-        }
-        entities.push(EntityObservation {
-            kind,
-            role: field.to_string(),
-            value: normalized.to_string(),
-        });
+    };
+
+    let Some(object) = indicator.as_object() else {
+        return entities;
+    };
+    collect_from_object(object);
+
+    // Detector deposits wrap finding context in one top-level `evidence`
+    // object. Inspect that one bounded layer only; arbitrary nested evidence is
+    // intentionally not traversed or promoted into graph entities.
+    if let Some(evidence) = object.get("evidence").and_then(Value::as_object) {
+        collect_from_object(evidence);
     }
     entities
 }
@@ -2125,7 +2140,7 @@ fn signed_memory_query_deposit(
 mod tests {
     use super::{
         DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
-        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, parse_memory_query,
+        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, extract_entities, parse_memory_query,
         signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
@@ -2383,6 +2398,84 @@ mod tests {
             peer_findings: Vec::new(),
             agent_health: Vec::new(),
         }
+    }
+
+    #[test]
+    fn extracts_entities_from_detector_deposit_evidence_shape() {
+        let indicator = serde_json::json!({
+            "event_id": "evt-detector-1",
+            "host_id": "host-1",
+            "source": "endpoint",
+            "evidence": {
+                "host_id": "host-1",
+                "parent_process": "winword.exe",
+                "process_name": "powershell.exe",
+                "user": "alice",
+                "source_ip": "10.0.0.5",
+                "destination_ip": "198.51.100.7",
+                "raw": {
+                    "process_name": "raw-process-must-not-promote",
+                    "user": "raw-user-must-not-promote",
+                    "source_ip": "192.0.2.10",
+                    "destination_ip": "192.0.2.11"
+                },
+                "secret": {
+                    "username": "secret-user-must-not-promote"
+                },
+                "nested": {
+                    "evidence": {
+                        "process_name": "too-deep-must-not-promote"
+                    }
+                }
+            }
+        });
+
+        let entities = extract_entities(&indicator);
+        let actual = entities
+            .iter()
+            .map(|entity| (entity.role.as_str(), entity.value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                ("host_id", "host-1"),
+                ("user", "alice"),
+                ("process_name", "powershell.exe"),
+                ("parent_process", "winword.exe"),
+                ("source_ip", "10.0.0.5"),
+                ("destination_ip", "198.51.100.7"),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_entity_extraction_ignores_malformed_evidence_and_is_bounded() {
+        for indicator in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!("not-an-indicator-object"),
+            serde_json::json!({ "evidence": null }),
+            serde_json::json!({ "evidence": [] }),
+            serde_json::json!({ "evidence": "not-an-object" }),
+        ] {
+            assert!(
+                extract_entities(&indicator).is_empty(),
+                "malformed indicator should not produce entities: {indicator}"
+            );
+        }
+
+        let indicator = serde_json::json!({
+            "evidence": {
+                "context": {
+                    "process_name": "nested-process-must-not-promote",
+                    "credentials": {
+                        "user": "nested-secret-must-not-promote"
+                    }
+                }
+            }
+        });
+        assert!(extract_entities(&indicator).is_empty());
     }
 
     #[test]
