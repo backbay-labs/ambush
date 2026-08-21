@@ -18,7 +18,7 @@ created: 2026-08-21
 | Property | Value |
 |----------|-------|
 | **Framework** | Rust libtest through `cargo test`; existing `proptest` for properties and `trybuild` for compile-boundary tests |
-| **Config file** | Workspace `Cargo.toml`; strict benchmark manifest to be added at `scenarios/collective-hypothesis-graph/manifest.yaml` in Wave 0 |
+| **Config file** | Workspace `Cargo.toml`; strict benchmark manifest exists at `scenarios/collective-hypothesis-graph/manifest.yaml` from GSD preflight |
 | **Quick run command** | `cargo test -p swarm-core hypothesis_graph --lib && cargo test -p swarm-spine hypothesis_graph --lib && cargo test -p swarm-runtime hypothesis_graph --lib` |
 | **Full suite command** | `cargo test --workspace --all-targets --locked && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo fmt --all -- --check` |
 | **Estimated runtime** | Quick checks under 90 seconds after warm compilation; full combined-tree gate approximately 4 minutes |
@@ -41,29 +41,29 @@ created: 2026-08-21
 | 286-00-01 | 00 | 1 | COG-02, COG-04, COG-05, COG-08 | sealed strict adjudicated oracle + pinned digests | `cargo test -p swarm-runtime --test collective_hypothesis_oracle benchmark_manifest_is_strict -- --exact` | ✅ | ✅ green |
 | 286-00-02 | 00 | 1 | COG-01..COG-07 | integration and authority-test infrastructure | `cargo test -p swarm-runtime --test negative_graph_response_boundary boundary_checker_rejects_broken_fixture -- --exact` | ✅ | ✅ green |
 | 286-00-03 | 00 | 1 | COG-01..COG-08 | exact gate infrastructure + adversarial self-test | `bash -n tools/check-collective-hypothesis-graph.sh && bash tools/check-collective-hypothesis-graph.sh --self-test` | ✅ | ✅ green |
-| 286-01-01 | 01 | 2 | COG-01, COG-04 | strict schema + property + negative | `cargo test -p swarm-core hypothesis_graph --lib` | ❌ W0 | ⬜ pending |
-| 286-01-02 | 01 | 2 | COG-02, COG-03, COG-05, COG-06, COG-07 | contract/state-machine unit | `cargo test -p swarm-core hypothesis_graph --lib` | ❌ W0 | ⬜ pending |
-| 286-01-03 | 01 | 2 | COG-01..COG-07 | fail-closed config | `cargo test -p swarm-core config::tests::hypothesis_graph --lib` | ❌ W0 | ⬜ pending |
-| 286-02-01 | 02 | 3 | COG-03, COG-08 | injected logical clock + scheduler perturbation | `cargo test -p swarm-runtime hypothesis_graph::clock --lib` | ❌ W0 | ⬜ pending |
-| 286-02-02 | 02 | 3 | COG-04 | adapter unit | `cargo test -p swarm-runtime hypothesis_graph::normalize --lib` | ❌ W0 | ⬜ pending |
-| 286-02-03 | 02 | 3 | COG-01, COG-04 | cross-source witness/conflict integration | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact cross_telemetry_fixture_preserves_conflicts --nocapture` | ❌ W0 | ⬜ pending |
-| 286-03-01 | 03 | 3 | COG-01, COG-03 | ledger state machine | `cargo test -p swarm-spine hypothesis_graph_store --lib` | ❌ W0 | ⬜ pending |
-| 286-03-02 | 03 | 3 | COG-03 | file CAS/restart/backend parity | `cargo test -p swarm-spine hypothesis_graph_store --lib` | ❌ W0 | ⬜ pending |
-| 286-03-03 | 03 | 3 | COG-07 | signed memory/privacy | `cargo test -p swarm-spine strategy_memory --lib` | ❌ W0 | ⬜ pending |
-| 286-04-01 | 04 | 4 | COG-02, COG-03 | reasoning state machine | `cargo test -p swarm-runtime hypothesis_graph::hypotheses --lib && cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact ambiguous_seed_retains_competing_hypotheses --nocapture` | ❌ W0 | ⬜ pending |
-| 286-04-02 | 04 | 4 | COG-05 | withheld-evidence integration | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact withheld_kill_chain_reports_missing_evidence --nocapture` | ❌ W0 | ⬜ pending |
-| 286-04-03 | 04 | 4 | COG-06 | simulation + negative authority boundary | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact containment_plan_is_simulation_only --nocapture && cargo test -p swarm-runtime --test negative_graph_response_boundary` | ❌ W0 | ⬜ pending |
-| 286-05-01 | 05 | 5 | COG-03 | real-agent ledger integration | `cargo test -p swarm-agents stalker_agent --lib && cargo test -p swarm-agents weaver_agent --lib` | ❌ W0 | ⬜ pending |
-| 286-05-02 | 05 | 5 | COG-03 | 100-task concurrency/restart | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact duplicate_claim_fixture_100 --nocapture` | ❌ W0 | ⬜ pending |
-| 286-05-03 | 05 | 5 | COG-07 | memory replay/prioritization | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact memory_replay_changes_priority_deterministically --nocapture` | ❌ W0 | ⬜ pending |
-| 286-06-01 | 06 | 6 | COG-01..COG-07 | enabled real-runtime end to end + disabled legacy-path regression | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact seed_signal_converges_through_real_runtime --nocapture && cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact disabled_hypothesis_graph_preserves_legacy_runtime --nocapture` | ❌ W0 | ⬜ pending |
-| 286-06-02 | 06 | 6 | COG-06 | full policy/governance/operator/receipt/dispatcher handoff + mutations | `cargo test -p swarm-runtime --test graph_authority_handoff -- --test-threads=1 && cargo test -p swarm-runtime --test negative_graph_response_boundary` | ❌ W0 | ⬜ pending |
-| 286-06-03 | 06 | 6 | COG-01, COG-05, COG-06 | authenticated additive operator integration + disabled byte-shape regression | `cargo test -p swarm-runtime-http hypothesis_graph --lib && cargo test -p swarm-runtime-http disabled_hypothesis_graph_preserves_existing_operator_shapes --lib` | ❌ W0 | ⬜ pending |
-| 286-06-04 | 06 | 6 | COG-01, COG-02, COG-05, COG-06, COG-07 | CLI parser/render | `cargo test -p swarm-cli hypothesis_graph --lib` | ❌ W0 | ⬜ pending |
-| 286-07-01 | 07 | 7 | COG-02, COG-04, COG-05, COG-08 | strict truth corpus | `cargo test -p swarm-runtime hypothesis_graph::benchmark::tests::manifest --lib` | ❌ W0 | ⬜ pending |
-| 286-07-02 | 07 | 7 | COG-03, COG-08 | deterministic paired benchmark + host-clock/scheduler perturbation | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact collective_reasoning_beats_single_agent_baseline --nocapture && cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact host_clock_and_scheduler_perturbation_do_not_change_verdict --nocapture` | ❌ W0 | ⬜ pending |
-| 286-07-03 | 07 | 7 | COG-01..COG-08 | exact mutation-controlled phase gate | `bash tools/check-collective-hypothesis-graph.sh` | ❌ W0 | ⬜ pending |
-| 286-07-04 | 07 | 7 | COG-01..COG-08 | independent P0/P1/P2 + goal-backward verification | `bash tools/check-collective-hypothesis-graph.sh && cargo test --workspace --all-targets --locked && cargo clippy --workspace --all-targets --all-features -- -D warnings` | ❌ W0 | ⬜ pending |
+| 286-01-01 | 01 | 2 | COG-01, COG-04 | strict schema + property + negative | `cargo test -p swarm-core hypothesis_graph --lib` | ⬜ not created | ⬜ pending |
+| 286-01-02 | 01 | 2 | COG-02, COG-03, COG-05, COG-06, COG-07 | contract/state-machine unit | `cargo test -p swarm-core hypothesis_graph --lib` | ⬜ not created | ⬜ pending |
+| 286-01-03 | 01 | 2 | COG-01..COG-07 | fail-closed config | `cargo test -p swarm-core config::tests::hypothesis_graph --lib` | ⬜ not created | ⬜ pending |
+| 286-02-01 | 02 | 3 | COG-03, COG-08 | injected logical clock + scheduler perturbation | `cargo test -p swarm-runtime hypothesis_graph::clock --lib` | ⬜ not created | ⬜ pending |
+| 286-02-02 | 02 | 3 | COG-04 | adapter unit | `cargo test -p swarm-runtime hypothesis_graph::normalize --lib` | ⬜ not created | ⬜ pending |
+| 286-02-03 | 02 | 3 | COG-01, COG-04 | cross-source witness/conflict integration | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact cross_telemetry_fixture_preserves_conflicts --nocapture` | ⬜ not created | ⬜ pending |
+| 286-03-01 | 03 | 3 | COG-01, COG-03 | ledger state machine | `cargo test -p swarm-spine hypothesis_graph_store --lib` | ⬜ not created | ⬜ pending |
+| 286-03-02 | 03 | 3 | COG-03 | file CAS/restart/backend parity | `cargo test -p swarm-spine hypothesis_graph_store --lib` | ⬜ not created | ⬜ pending |
+| 286-03-03 | 03 | 3 | COG-07 | signed memory/privacy | `cargo test -p swarm-spine strategy_memory --lib` | ⬜ not created | ⬜ pending |
+| 286-04-01 | 04 | 4 | COG-02, COG-03 | reasoning state machine | `cargo test -p swarm-runtime hypothesis_graph::hypotheses --lib && cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact ambiguous_seed_retains_competing_hypotheses --nocapture` | ⬜ not created | ⬜ pending |
+| 286-04-02 | 04 | 4 | COG-05 | withheld-evidence integration | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact withheld_kill_chain_reports_missing_evidence --nocapture` | ⬜ not created | ⬜ pending |
+| 286-04-03 | 04 | 4 | COG-06 | simulation + negative authority boundary | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact containment_plan_is_simulation_only --nocapture && cargo test -p swarm-runtime --test negative_graph_response_boundary` | ⬜ not created | ⬜ pending |
+| 286-05-01 | 05 | 5 | COG-03 | real-agent ledger integration | `cargo test -p swarm-agents stalker_agent --lib && cargo test -p swarm-agents weaver_agent --lib` | ⬜ not created | ⬜ pending |
+| 286-05-02 | 05 | 5 | COG-03 | 100-task concurrency/restart | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact duplicate_claim_fixture_100 --nocapture` | ⬜ not created | ⬜ pending |
+| 286-05-03 | 05 | 5 | COG-07 | memory replay/prioritization | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact memory_replay_changes_priority_deterministically --nocapture` | ⬜ not created | ⬜ pending |
+| 286-06-01 | 06 | 6 | COG-01..COG-07 | enabled real-runtime end to end + disabled legacy-path regression | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact seed_signal_converges_through_real_runtime --nocapture && cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact disabled_hypothesis_graph_preserves_legacy_runtime --nocapture` | ⬜ not created | ⬜ pending |
+| 286-06-02 | 06 | 6 | COG-06 | full policy/governance/operator/receipt/dispatcher handoff + mutations | `cargo test -p swarm-runtime --test graph_authority_handoff selected_simulation_requires_full_existing_authority_chain -- --exact --test-threads=1 && cargo test -p swarm-runtime --test negative_graph_response_boundary` | ⬜ not created | ⬜ pending |
+| 286-06-03 | 06 | 6 | COG-01, COG-05, COG-06 | authenticated additive operator integration + disabled byte-shape regression | `cargo test -p swarm-runtime-http hypothesis_graph --lib && cargo test -p swarm-runtime-http disabled_hypothesis_graph_preserves_existing_operator_shapes --lib` | ⬜ not created | ⬜ pending |
+| 286-06-04 | 06 | 6 | COG-01, COG-02, COG-05, COG-06, COG-07 | CLI parser/render | `cargo test -p swarm-cli hypothesis_graph --lib` | ⬜ not created | ⬜ pending |
+| 286-07-01 | 07 | 7 | COG-02, COG-04, COG-05, COG-08 | strict truth corpus | `cargo test -p swarm-runtime hypothesis_graph::benchmark::tests::manifest --lib` | ⬜ not created | ⬜ pending |
+| 286-07-02 | 07 | 7 | COG-03, COG-08 | deterministic paired benchmark + host-clock/scheduler perturbation | `cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact collective_reasoning_beats_single_agent_baseline --nocapture && cargo test -p swarm-runtime --test collective_hypothesis_graph -- --exact host_clock_and_scheduler_perturbation_do_not_change_verdict --nocapture` | ⬜ not created | ⬜ pending |
+| 286-07-03 | 07 | 7 | COG-01..COG-08 | exact mutation-controlled phase gate | `bash tools/check-collective-hypothesis-graph.sh` | ⬜ not created | ⬜ pending |
+| 286-07-04 | 07 | 7 | COG-01..COG-08 | independent P0/P1/P2 + goal-backward verification | `bash tools/check-collective-hypothesis-graph.sh && cargo test --workspace --all-targets --locked && cargo clippy --workspace --all-targets --all-features -- -D warnings` | ⬜ not created | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -100,13 +100,13 @@ All phase behaviors have automated verification. Operator-facing artifact readab
 
 ## Validation Sign-Off
 
-- [ ] All planned tasks have an automated verification command or an explicit Wave 0 dependency.
+- [x] All planned tasks have an automated verification command or an explicit GSD preflight dependency.
 - [ ] Sampling continuity: no three consecutive implementation tasks lack an automated check.
-- [ ] Wave 0 covers every missing test, fixture, and benchmark reference.
+- [x] GSD preflight covers every missing test, fixture, and benchmark reference it owns; later behavior artifacts have explicit plan ownership.
 - [ ] No watch-mode flags are used.
 - [ ] Deterministic verdicts exclude wall-clock measurements; wall-clock data is labeled observational.
 - [ ] Exact test execution is asserted so zero matched tests cannot pass the gate.
 - [ ] Targeted feedback latency is under 90 seconds.
 - [x] `nyquist_compliant: true` is set after the plan/checker aligned task IDs, dependencies, and commands.
 
-**Approval:** approved 2026-08-21; Wave 0 execution still pending
+**Approval:** approved 2026-08-21; GSD preflight complete, behavior execution pending
