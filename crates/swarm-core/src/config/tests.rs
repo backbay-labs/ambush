@@ -2,15 +2,15 @@ use super::{
     AuditConfig, AuditdBridgeConfig, BundleStoreConfig, CanaryConfig, CloudTrailBridgeConfig,
     CorrelationConfig, DeceptionConfig, DeceptionMonitoringConfig, DeceptionPlacementStrategy,
     DeceptionPlaybookConfig, DeceptionPlaybookEntry, EvolutionAssuranceCoverageOverrideConfig,
-    EvolutionConfig, EvolutionFitnessWeightsConfig, InvestigationConfig, JsonFileSourceConfig,
-    NotificationChannelConfig, OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig,
-    PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig,
-    PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
-    PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig, ResponsePlaybookBranch,
-    ResponsePlaybookCondition, ResponsePlaybookConfig, ResponsePlaybookRule,
-    RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings, SecretString, SentinelBridgeConfig,
-    SwarmConfig, SysmonBridgeConfig, TelemetryBridgeConfig, TelemetrySourceConfig,
-    TemporalEventWindowConfig, WindowsEventLogBridgeConfig,
+    EvolutionConfig, EvolutionFitnessWeightsConfig, HypothesisGraphConfig, InvestigationConfig,
+    JsonFileSourceConfig, NotificationChannelConfig, OperatorPrincipalConfig, OperatorScope,
+    OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig,
+    PlatformApiKeyConfig, PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig,
+    PolicyRuleDecision, PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig,
+    ResponsePlaybookBranch, ResponsePlaybookCondition, ResponsePlaybookConfig,
+    ResponsePlaybookRule, RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings, SecretString,
+    SentinelBridgeConfig, SwarmConfig, SysmonBridgeConfig, TelemetryBridgeConfig,
+    TelemetrySourceConfig, TemporalEventWindowConfig, WindowsEventLogBridgeConfig,
 };
 use crate::ThreatClass;
 use crate::agent::SwarmMode;
@@ -72,6 +72,7 @@ fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
             recent_decisions_limit: 20,
         },
         investigation: InvestigationConfig::default(),
+        hypothesis_graph: HypothesisGraphConfig::default(),
         correlation: CorrelationConfig::default(),
         canary: CanaryConfig::default(),
         promotion: PromotionConfig::default(),
@@ -83,6 +84,74 @@ fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
         operator: OperatorSurfaceConfig::default(),
         tls: None,
     }
+}
+
+#[test]
+fn hypothesis_graph_config_defaults_are_disabled_and_bounded() {
+    let config: HypothesisGraphConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(!config.enabled);
+    assert_eq!(config.max_nodes, 256);
+    assert_eq!(config.max_edges, 512);
+    assert_eq!(config.max_evidence_bytes, 1_048_576);
+    assert_eq!(config.max_lease_ms, 300_000);
+    assert_eq!(config.max_benchmark_work_units, 10_000);
+    assert!(config.resource_limits().validate().is_ok());
+}
+
+#[test]
+fn hypothesis_graph_config_unknown_fields_fail_closed() {
+    let result = serde_json::from_value::<HypothesisGraphConfig>(serde_json::json!({
+        "enabled": false,
+        "unexpected": true,
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn hypothesis_graph_config_rejects_zero_and_contradictory_limits() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_nodes = 0;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph`: invalid resource limit `max_nodes`: must be between 1 and 4096"
+    );
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_nodes = 64;
+    config.hypothesis_graph.max_edges = 1;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph`: invalid resource limit `max_edges`: must accommodate a spanning graph"
+    );
+}
+
+#[test]
+fn hypothesis_graph_config_round_trips_all_limits() {
+    let expected = HypothesisGraphConfig {
+        enabled: true,
+        max_nodes: 64,
+        max_edges: 128,
+        max_evidence_references_per_edge: 4,
+        max_hypotheses: 8,
+        max_contradictions: 16,
+        max_decisions: 16,
+        max_tasks: 64,
+        max_lease_ms: 60_000,
+        max_retries: 2,
+        max_memory_records: 32,
+        max_graph_depth: 16,
+        max_graph_fan_out: 8,
+        max_benchmark_work_units: 2_000,
+        ..HypothesisGraphConfig::default()
+    };
+    let encoded = serde_json::to_value(&expected).unwrap();
+    let decoded: HypothesisGraphConfig = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded, expected);
+    assert!(decoded.resource_limits().validate().is_ok());
 }
 
 #[test]

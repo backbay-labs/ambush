@@ -96,6 +96,62 @@ pub(super) const fn default_investigation_worker_count() -> usize {
     1
 }
 
+pub(super) const fn default_hypothesis_graph_max_nodes() -> usize {
+    256
+}
+
+pub(super) const fn default_hypothesis_graph_max_edges() -> usize {
+    512
+}
+
+pub(super) const fn default_hypothesis_graph_max_evidence_bytes() -> usize {
+    1_048_576
+}
+
+pub(super) const fn default_hypothesis_graph_max_evidence_references_per_edge() -> usize {
+    8
+}
+
+pub(super) const fn default_hypothesis_graph_max_hypotheses() -> usize {
+    16
+}
+
+pub(super) const fn default_hypothesis_graph_max_contradictions() -> usize {
+    64
+}
+
+pub(super) const fn default_hypothesis_graph_max_decisions() -> usize {
+    64
+}
+
+pub(super) const fn default_hypothesis_graph_max_tasks() -> usize {
+    128
+}
+
+pub(super) const fn default_hypothesis_graph_max_lease_ms() -> u64 {
+    300_000
+}
+
+pub(super) const fn default_hypothesis_graph_max_retries() -> u16 {
+    3
+}
+
+pub(super) const fn default_hypothesis_graph_max_memory_records() -> usize {
+    128
+}
+
+pub(super) const fn default_hypothesis_graph_max_depth() -> usize {
+    32
+}
+
+pub(super) const fn default_hypothesis_graph_max_fan_out() -> usize {
+    32
+}
+
+pub(super) const fn default_hypothesis_graph_max_benchmark_work_units() -> usize {
+    10_000
+}
+
 pub(super) const fn default_response_adapter_timeout_ms() -> u64 {
     5_000
 }

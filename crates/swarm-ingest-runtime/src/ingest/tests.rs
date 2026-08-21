@@ -167,6 +167,7 @@ fn test_config(strategy: &str) -> SwarmConfig {
             recent_decisions_limit: 20,
         },
         investigation: InvestigationConfig::default(),
+        hypothesis_graph: Default::default(),
         correlation: CorrelationConfig::default(),
         canary: CanaryConfig::default(),
         promotion: PromotionConfig::default(),

@@ -495,6 +495,13 @@ impl SwarmConfig {
             }
         }
 
+        if let Err(error) = self.hypothesis_graph.resource_limits().validate() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "hypothesis_graph",
+                reason: error.to_string(),
+            });
+        }
+
         if self.canary.enabled {
             if self.canary.slot_id.trim().is_empty() {
                 return Err(ConfigValidationError::InvalidField {

@@ -2509,6 +2509,25 @@ fn tracked_default_ruleset_still_loads_with_its_speed_weight() {
     config.validate().unwrap();
 }
 
+/// The signed curated ruleset predates collective graph configuration. Its
+/// omission must resolve to the complete fail-safe disabled shape without
+/// changing the attested ruleset bytes.
+#[test]
+fn tracked_default_ruleset_resolves_hypothesis_graph_to_disabled_defaults() {
+    let raw = std::fs::read_to_string(repo_root().join("rulesets/default.yaml")).unwrap();
+    assert!(
+        !raw.contains("hypothesis_graph:"),
+        "the signed curated ruleset must remain byte-for-byte unchanged"
+    );
+
+    let config = sample_config();
+    assert!(!config.hypothesis_graph.enabled);
+    assert_eq!(config.hypothesis_graph.max_nodes, 256);
+    assert_eq!(config.hypothesis_graph.max_edges, 512);
+    assert_eq!(config.hypothesis_graph.max_benchmark_work_units, 10_000);
+    config.validate().unwrap();
+}
+
 /// The curated ruleset OMITS `promotion.require_solver_result_for_promotion`, and
 /// must still resolve it to `true`.
 ///

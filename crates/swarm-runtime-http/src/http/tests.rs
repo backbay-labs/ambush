@@ -240,6 +240,7 @@ fn operator_config() -> SwarmConfig {
             bundle_store: BundleStoreConfig::Memory,
             ..InvestigationConfig::default()
         },
+        hypothesis_graph: Default::default(),
         correlation: CorrelationConfig {
             enabled: true,
             time_window_ms: 60_000,
