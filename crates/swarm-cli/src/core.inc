@@ -4282,12 +4282,16 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Command::CanaryStart(args) => {
-            let lookup = canary_harness.start_run(
+            // A direct CLI start has no durable queue-to-canary assurance
+            // lineage. Keep this production-capable entry point fail-closed;
+            // reviewed launches use `evolution-handoff-launch-canary`.
+            let lookup = canary_harness.start_run_with_assurance(
                 args.experiment,
                 &cli.verification_results_dir,
                 &args.verification_id,
                 &cli.shadow_results_dir,
                 &args.shadow_id,
+                None,
             )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);

@@ -61,6 +61,7 @@ pub(crate) fn validate_create_request(
 
 pub(crate) fn validate_autonomous_create_request(
     request: &EvolutionAutonomousMutationSpecCreateRequest,
+    max_variants_per_cycle: usize,
 ) -> Result<(), EvolutionMutationError> {
     if request.draft_id.trim().is_empty() {
         return Err(EvolutionMutationError::InvalidMutationSpecRequest {
@@ -80,6 +81,13 @@ pub(crate) fn validate_autonomous_create_request(
     if request.max_variants == 0 {
         return Err(EvolutionMutationError::InvalidMutationSpecRequest {
             reason: "max_variants must be greater than zero".to_string(),
+        });
+    }
+    if request.max_variants > max_variants_per_cycle {
+        return Err(EvolutionMutationError::InvalidMutationSpecRequest {
+            reason: format!(
+                "max_variants cannot exceed configured evolution.max_variants_per_cycle ({max_variants_per_cycle})"
+            ),
         });
     }
     Ok(())
@@ -163,6 +171,46 @@ pub(crate) fn apply_profile_overrides(
     }
 
     Ok(changes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn autonomous_request(max_variants: usize) -> EvolutionAutonomousMutationSpecCreateRequest {
+        EvolutionAutonomousMutationSpecCreateRequest {
+            draft_id: "draft:test".to_string(),
+            strategy_root: "strategy:test".to_string(),
+            rationale: "exercise the configured autonomous variant bound".to_string(),
+            max_variants,
+            base_experiment_path: None,
+            evasion_pressure: None,
+        }
+    }
+
+    #[test]
+    fn autonomous_variant_request_accepts_the_configured_bound() {
+        assert!(validate_autonomous_create_request(&autonomous_request(3), 3).is_ok());
+    }
+
+    #[test]
+    fn autonomous_variant_request_rejects_one_over_the_configured_bound() {
+        assert!(matches!(
+            validate_autonomous_create_request(&autonomous_request(4), 3),
+            Err(EvolutionMutationError::InvalidMutationSpecRequest { reason })
+                if reason.contains("max_variants")
+                    && reason.contains("evolution.max_variants_per_cycle")
+        ));
+    }
+
+    #[test]
+    fn autonomous_variant_request_rejects_pathologically_large_counts() {
+        assert!(matches!(
+            validate_autonomous_create_request(&autonomous_request(usize::MAX), 3),
+            Err(EvolutionMutationError::InvalidMutationSpecRequest { reason })
+                if reason.contains("max_variants")
+        ));
+    }
 }
 
 pub(crate) fn resolve_materialization_pressure_kind(

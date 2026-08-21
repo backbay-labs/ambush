@@ -168,7 +168,10 @@ impl DefaultEvolutionMutationHarness {
         population_results_dir: impl AsRef<Path>,
         request: EvolutionAutonomousMutationSpecCreateRequest,
     ) -> Result<EvolutionMutationSpecLookup, EvolutionMutationError> {
-        validate_autonomous_create_request(&request)?;
+        validate_autonomous_create_request(
+            &request,
+            drafting.config.evolution.max_variants_per_cycle,
+        )?;
         let created_at_ms = now_ms();
         let draft = drafting.load_draft(&request.draft_id)?.ok_or_else(|| {
             EvolutionDraftingError::DraftNotFound {

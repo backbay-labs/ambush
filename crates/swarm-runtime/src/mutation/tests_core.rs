@@ -737,7 +737,8 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
     let queue_dir = root.join("queue");
     let base_experiment = copy_experiment_fixture(&root, "office-control-autonomous");
 
-    let config = sample_config();
+    let mut config = sample_config();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)
@@ -1041,6 +1042,7 @@ async fn autonomous_mutation_spec_generates_behavioral_anomaly_variants() {
     let mut config = sample_config();
     config.detection.strategy = "behavioral_anomaly".to_string();
     config.detection.strategies.clear();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)
@@ -1331,6 +1333,7 @@ async fn autonomous_mutation_spec_generates_fileless_execution_variants() {
     let mut config = sample_config();
     config.detection.strategy = "fileless_execution".to_string();
     config.detection.strategies.clear();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)
@@ -1619,6 +1622,7 @@ async fn autonomous_mutation_spec_generates_dns_exfiltration_variants() {
     let mut config = sample_config();
     config.detection.strategy = "dns_exfiltration".to_string();
     config.detection.strategies.clear();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)

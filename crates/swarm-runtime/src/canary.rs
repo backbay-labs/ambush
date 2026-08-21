@@ -542,7 +542,38 @@ impl DefaultCanaryHarness {
         })
     }
 
+    /// Start a production-capable direct canary.
+    ///
+    /// Direct starts do not carry durable assurance lineage, so this method
+    /// fails closed. Reviewed rollout callers must use
+    /// [`Self::start_run_with_assurance`] with the verified summary from their
+    /// queue-to-canary handoff.
     pub fn start_run(
+        &self,
+        experiment_path: impl AsRef<Path>,
+        verification_results_dir: impl AsRef<Path>,
+        verification_id: &str,
+        shadow_results_dir: impl AsRef<Path>,
+        shadow_id: &str,
+    ) -> Result<CanaryRunLookup, CanaryError> {
+        self.start_run_internal(
+            experiment_path,
+            verification_results_dir,
+            verification_id,
+            shadow_results_dir,
+            shadow_id,
+            None,
+            true,
+        )
+    }
+
+    /// Start a canary from verified replay artifacts for an offline/test fixture.
+    ///
+    /// This path deliberately carries no assurance lineage and is therefore not
+    /// promotable: production promotion rejects the resulting canary artifact.
+    /// Production-capable callers must use [`Self::start_run`] or
+    /// [`Self::start_run_with_assurance`].
+    pub fn start_run_offline(
         &self,
         experiment_path: impl AsRef<Path>,
         verification_results_dir: impl AsRef<Path>,
@@ -1668,7 +1699,7 @@ mod tests {
             DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
                 .unwrap();
         let error = harness
-            .start_run(
+            .start_run_offline(
                 &experiment_path,
                 &verifications_dir,
                 &verification_id,
@@ -1711,7 +1742,7 @@ mod tests {
             DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
                 .unwrap();
         let error = harness
-            .start_run(
+            .start_run_offline(
                 &experiment_path,
                 &verifications_dir,
                 &verification_id,
@@ -1743,7 +1774,7 @@ mod tests {
             DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
                 .unwrap();
         let lookup = harness
-            .start_run(
+            .start_run_offline(
                 &experiment_path,
                 &verifications_dir,
                 &verification_id,
@@ -1765,6 +1796,36 @@ mod tests {
             lookup.report.assignment.candidate_strategy_id,
             "office_baseline_control"
         );
+    }
+
+    #[test]
+    fn direct_canary_start_fails_closed_without_assurance() {
+        let root = unique_temp_dir("start-without-assurance");
+        let results_dir = root.join("canaries");
+        let config = canary_config();
+        let manifest = experiment_manifest("control", control_candidate());
+        let experiment_path = write_experiment(&root, &manifest);
+        let (verifications_dir, shadows_dir, verification_id, shadow_id) =
+            persist_supporting_artifacts(&root, &manifest);
+
+        let harness =
+            DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
+                .unwrap();
+        let error = harness
+            .start_run(
+                &experiment_path,
+                &verifications_dir,
+                &verification_id,
+                &shadows_dir,
+                &shadow_id,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CanaryError::AssuranceNotSatisfied { reason }
+                if reason.contains("missing durable assurance lineage")
+        ));
     }
 
     #[test]
@@ -1846,7 +1907,7 @@ mod tests {
             DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
                 .unwrap();
         let started = harness
-            .start_run(
+            .start_run_offline(
                 &experiment_path,
                 &verifications_dir,
                 &verification_id,
@@ -1885,7 +1946,7 @@ mod tests {
             DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
                 .unwrap();
         let started = harness
-            .start_run(
+            .start_run_offline(
                 &experiment_path,
                 &verifications_dir,
                 &verification_id,
@@ -1933,7 +1994,7 @@ mod tests {
             DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
                 .unwrap();
         let started = harness
-            .start_run(
+            .start_run_offline(
                 &experiment_path,
                 &verifications_dir,
                 &verification_id,
@@ -2045,7 +2106,7 @@ mod tests {
         )
         .unwrap();
         let started = harness
-            .start_run(
+            .start_run_offline(
                 experiment_path,
                 verifications_dir,
                 verification_id,
