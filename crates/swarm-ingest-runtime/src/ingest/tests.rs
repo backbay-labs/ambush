@@ -185,21 +185,23 @@ fn test_config(strategy: &str) -> SwarmConfig {
 const TEST_PLATFORM_API_KEY: &str = "platform-read-secret";
 const TEST_PLATFORM_API_BEARER_TOKEN: &str = "platform-bearer-secret";
 const TEST_PLATFORM_API_BEARER_TOKEN_ENV: &str = "SWARM_PLATFORM_API_TEST_TOKEN";
+const TEST_PLATFORM_API_ROTATION_BEARER_TOKEN_ENV: &str = "SWARM_PLATFORM_API_ROTATION_TEST_TOKEN";
 
 fn enable_platform_api(config: &mut SwarmConfig) {
+    enable_platform_api_with_token_env(config, TEST_PLATFORM_API_BEARER_TOKEN_ENV);
+}
+
+fn enable_platform_api_with_token_env(config: &mut SwarmConfig, token_env: &str) {
     config.platform_api.keys = vec![PlatformApiKeyConfig {
         name: "test-reader".to_string(),
         key_hash: super::platform_api::platform_api_key_hash_hex(TEST_PLATFORM_API_KEY),
         scopes: vec![PlatformApiScope::Read],
     }];
     config.operator.auth.operator_id = "platform-api-test-operator".to_string();
-    config.operator.auth.token_env = TEST_PLATFORM_API_BEARER_TOKEN_ENV.to_string();
-    config.operator.auth.context_token_env = TEST_PLATFORM_API_BEARER_TOKEN_ENV.to_string();
+    config.operator.auth.token_env = token_env.to_string();
+    config.operator.auth.context_token_env = token_env.to_string();
     unsafe {
-        std::env::set_var(
-            TEST_PLATFORM_API_BEARER_TOKEN_ENV,
-            TEST_PLATFORM_API_BEARER_TOKEN,
-        );
+        std::env::set_var(token_env, TEST_PLATFORM_API_BEARER_TOKEN);
     }
 }
 
@@ -2001,7 +2003,10 @@ async fn governed_resume_fails_closed_when_persisted_pack_is_missing() {
 #[tokio::test]
 async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
     let mut config = test_config("suspicious_process_tree");
-    enable_platform_api(&mut config);
+    enable_platform_api_with_token_env(&mut config, TEST_PLATFORM_API_ROTATION_BEARER_TOKEN_ENV);
+    // This test mutates its bearer secret mid-flight. Keep that mutation out of
+    // the shared helper env so it cannot invalidate another platform API test
+    // running in parallel.
     let app = detect_http_router(
         IngestState::from_config(temp_path("platform-auth-rotation"), config).unwrap(),
     );
@@ -2019,7 +2024,7 @@ async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
 
     unsafe {
         std::env::set_var(
-            TEST_PLATFORM_API_BEARER_TOKEN_ENV,
+            TEST_PLATFORM_API_ROTATION_BEARER_TOKEN_ENV,
             "platform-bearer-rotated",
         );
     }
