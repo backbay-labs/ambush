@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::SwarmConfig;
 use swarm_whisker::SuspiciousProcessTreeProfile;
+use uuid::Uuid;
 
 /// Errors surfaced by the selection-pressure and proposal-draft workflows.
 #[derive(Debug, thiserror::Error)]
@@ -1651,12 +1652,17 @@ impl DefaultEvolutionDraftingHarness {
         };
         let applied_changes = apply_profile_overrides(&mut profile, &request)?;
         let created_at_ms = now_ms();
-        let experiment_name =
-            materialized_experiment_name(&draft.report.strategy_id, created_at_ms);
+        let materialization_nonce = Uuid::new_v4();
+        let experiment_name = materialized_experiment_name(
+            &draft.report.strategy_id,
+            created_at_ms,
+            materialization_nonce,
+        );
         let experiment_path = materialized_experiment_path(
             &base_experiment_path,
             &draft.report.strategy_id,
             created_at_ms,
+            materialization_nonce,
         );
         let manifest = DetectorExperimentManifest {
             name: experiment_name.clone(),
@@ -1699,7 +1705,11 @@ impl DefaultEvolutionDraftingHarness {
         })?;
 
         let report = EvolutionMaterializationReport {
-            materialization_id: materialization_id(&draft.report.draft_id, created_at_ms),
+            materialization_id: materialization_id(
+                &draft.report.draft_id,
+                created_at_ms,
+                materialization_nonce,
+            ),
             created_at_ms,
             draft_id: draft.report.draft_id.clone(),
             pressure_id: draft.report.pressure_id.clone(),
@@ -2675,11 +2685,16 @@ fn find_experiment_manifest_path(
     Ok(None)
 }
 
-fn materialized_experiment_name(strategy_id: &str, created_at_ms: i64) -> String {
+fn materialized_experiment_name(
+    strategy_id: &str,
+    created_at_ms: i64,
+    materialization_nonce: Uuid,
+) -> String {
     format!(
-        "draft_materialized_{}_{}",
+        "draft_materialized_{}_{}_{}",
         sanitize_id(strategy_id),
-        created_at_ms
+        created_at_ms,
+        materialization_nonce.simple()
     )
 }
 
@@ -2687,14 +2702,16 @@ fn materialized_experiment_path(
     base_experiment_path: &Path,
     strategy_id: &str,
     created_at_ms: i64,
+    materialization_nonce: Uuid,
 ) -> PathBuf {
     let parent = base_experiment_path
         .parent()
         .unwrap_or_else(|| Path::new("."));
     parent.join(format!(
-        "materialized-{}-{}.yaml",
+        "materialized-{}-{}-{}.yaml",
         sanitize_id(strategy_id),
-        created_at_ms
+        created_at_ms,
+        materialization_nonce.simple()
     ))
 }
 
@@ -2706,11 +2723,12 @@ fn experiment_id_for_manifest(manifest: &DetectorExperimentManifest) -> String {
     )
 }
 
-fn materialization_id(draft_id: &str, created_at_ms: i64) -> String {
+fn materialization_id(draft_id: &str, created_at_ms: i64, materialization_nonce: Uuid) -> String {
     format!(
-        "evolution_materialization:{}:{}",
+        "evolution_materialization:{}:{}:{}",
         sanitize_id(draft_id),
-        created_at_ms
+        created_at_ms,
+        materialization_nonce.simple()
     )
 }
 

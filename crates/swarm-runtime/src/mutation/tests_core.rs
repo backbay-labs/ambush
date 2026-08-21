@@ -807,6 +807,16 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
             ..EvolutionDraftMaterializationRequest::default()
         })
         .unwrap();
+    assert_ne!(
+        control_materialization.report.materialization_id,
+        crossover_materialization.report.materialization_id,
+        "back-to-back materializations of one draft must not alias"
+    );
+    assert_ne!(
+        control_materialization.report.experiment_path,
+        crossover_materialization.report.experiment_path,
+        "back-to-back materializations must not overwrite one experiment manifest"
+    );
 
     let population_store = FileEvolutionPopulationStore::open_signed(
         &population_dir,
