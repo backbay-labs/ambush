@@ -209,7 +209,7 @@ assurance_target = pathlib.Path(sys.argv[4])
 cache_source = pathlib.Path(sys.argv[5])
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
 EXPECTED_ROOT_MANIFEST_DIGEST = "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b"
-EXPECTED_ROOT_LOCK_DIGEST = "8afebe30e5aa8eeab54476b4607d568aa8ada2831475a028b427fe992283fe50"
+EXPECTED_ROOT_LOCK_DIGEST = "36d0fc55404cc6bcc9b1555d3a4b84e99e9de6a6a49eb86cf7def6624f9bd5e7"
 EXPECTED_WORKSPACE_PACKAGES = {
     "swarm-agents",
     "swarm-cli",

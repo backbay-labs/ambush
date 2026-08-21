@@ -12,7 +12,13 @@
 # uses a fresh config-free CARGO_HOME plus an exact pinned cargo/rustc, while a
 # gate-owned isolated-Python RUSTC_WRAPPER audits one forced test compilation's
 # crate name, test mode, canonical source path, and source hash per target. The
-# gate invokes each emitted test binary directly under a sanitized environment,
+# gate performs one controlled hydration phase, fetching each tracked,
+# locked/checksummed dependency domain into that empty home. It then forces
+# every later dependency-resolving Cargo command locked and offline, except for
+# one self-test that resolves a freshly constructed file:// Git repository in a
+# separate empty home, validates its exact local URL/revision-only lock, and
+# returns to offline mode before compiling. Emitted test binaries run directly
+# under a sanitized environment,
 # so Cargo runner/config and process/module-injection settings cannot fabricate
 # discovery/execution output. Active-host compiler, flags, target, and runner
 # environment overrides are refused; inactive-target overrides are stripped
@@ -138,12 +144,12 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 }
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b",
-    "Cargo.lock": "8afebe30e5aa8eeab54476b4607d568aa8ada2831475a028b427fe992283fe50",
+    "Cargo.lock": "36d0fc55404cc6bcc9b1555d3a4b84e99e9de6a6a49eb86cf7def6624f9bd5e7",
     ".github/workflows/ci.yml": "c635a85ed321c67dd040473dd330047d402a13be9ca492a6c12a4580b5bdf613",
     ".github/workflows/release.yml": "937af30a8bc982a73615ca49e1e48f4d64049e82a7a28113cd1c72c2110d8e51",
-    "tools/check-supply-chain.sh": "786dec65543867ab2d4f30c051f01db21e879da76dc6c93bdcfa1f11beb35ce1",
-    "tools/generate-sbom.sh": "bc0f22839b2a172b2effeb8edb998529ce3ffaac33ec9837bf2ad0f8b308add2",
-    "tools/check-single-governor-key.sh": "1e58e2677dd7eda765cd143a8bb571b6965984a00db740913231efd2616a3a21",
+    "tools/check-supply-chain.sh": "2cb7d7a7d1e34937b78bfa702c2006968ee358d7456bcc5917ecb1d4beb8fb20",
+    "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
+    "tools/check-single-governor-key.sh": "35d53e4451cd3906675442285307aedaeabae9c2aae27c16347e78b3711e9272",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -238,6 +244,8 @@ SANITIZED_CARGO_HOME = None
 PINNED_CARGO = None
 PINNED_RUSTC = None
 PINNED_HOST = None
+DEPENDENCY_CACHE_HYDRATED = False
+DEPENDENCY_FETCH_ACTIVE = False
 RUSTC_AUDIT_WRAPPER = None
 RUSTC_AUDIT_PROGRAM = None
 RUSTC_AUDIT_LOG = None
@@ -615,9 +623,12 @@ def resolve_pinned_toolchain(report):
 
 def configure_sanitized_cargo_boundary(report):
     global SANITIZED_CARGO_HOME, PINNED_CARGO, PINNED_RUSTC
+    global DEPENDENCY_CACHE_HYDRATED, DEPENDENCY_FETCH_ACTIVE
     global RUSTC_AUDIT_WRAPPER, RUSTC_AUDIT_PROGRAM, RUSTC_AUDIT_LOG
     global RUSTC_AUDIT_ARTIFACT_DIGESTS
     PINNED_CARGO, PINNED_RUSTC = resolve_pinned_toolchain(report)
+    DEPENDENCY_CACHE_HYDRATED = False
+    DEPENDENCY_FETCH_ACTIVE = False
     if PINNED_CARGO is None or PINNED_RUSTC is None:
         return
     assurance_target = REPO_ROOT / "target/phase285-negative-registry"
@@ -736,6 +747,38 @@ def sanitized_runtime_environment(*, source_environment=None):
 
 
 def run_cargo(arguments, *, cwd, target_dir=None, extra_environment=None, audit=True, **kwargs):
+    arguments = list(arguments)
+    command = arguments[0] if arguments else ""
+    dependency_commands = {"build", "check", "metadata", "run", "rustc", "test"}
+    if command in dependency_commands:
+        if not DEPENDENCY_CACHE_HYDRATED:
+            return subprocess.CompletedProcess(
+                [str(PINNED_CARGO), *arguments], 125, stdout="",
+                stderr="refused dependency-resolving Cargo before controlled cache hydration",
+            )
+        if "--locked" not in arguments:
+            arguments.insert(1, "--locked")
+        if "--offline" not in arguments:
+            arguments.insert(2, "--offline")
+    elif command == "generate-lockfile":
+        if not DEPENDENCY_CACHE_HYDRATED:
+            return subprocess.CompletedProcess(
+                [str(PINNED_CARGO), *arguments], 125, stdout="",
+                stderr="refused lock generation before controlled cache hydration",
+            )
+        if "--offline" not in arguments:
+            arguments.insert(1, "--offline")
+    elif command == "fetch":
+        if "--locked" not in arguments:
+            return subprocess.CompletedProcess(
+                [str(PINNED_CARGO), *arguments], 125, stdout="",
+                stderr="refused Cargo fetch without --locked",
+            )
+        if not DEPENDENCY_FETCH_ACTIVE and "--offline" not in arguments:
+            return subprocess.CompletedProcess(
+                [str(PINNED_CARGO), *arguments], 125, stdout="",
+                stderr="refused any network-capable Cargo fetch outside controlled hydration",
+            )
     config_sources = cargo_config_sources(pathlib.Path(cwd))
     if config_sources:
         return subprocess.CompletedProcess(
@@ -773,55 +816,89 @@ def run_cargo(arguments, *, cwd, target_dir=None, extra_environment=None, audit=
 
 
 def hydrate_locked_workspace_cache(report):
-    lock_path = REPO_ROOT / "Cargo.lock"
-    lock_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    global DEPENDENCY_CACHE_HYDRATED, DEPENDENCY_FETCH_ACTIVE
+    dependency_domains = (
+        (REPO_ROOT / "Cargo.toml", REPO_ROOT / "Cargo.lock"),
+        (
+            REPO_ROOT / "tools/negative-registry-ast/Cargo.toml",
+            REPO_ROOT / "tools/negative-registry-ast/Cargo.lock",
+        ),
+    )
+    lock_digests = {
+        lock_path: hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        for _manifest_path, lock_path in dependency_domains
+    }
     registered = registry_document(REPO_ROOT, report).get("entry", [])
     input_snapshot = execution_input_snapshot(REPO_ROOT, registered)
-    lock = parse_toml(lock_path, report, "dependency-lock-read")
     invalid_sources = []
-    for package in lock.get("package", []):
-        source = package.get("source")
-        if source is None:
-            continue
-        checksum = package.get("checksum")
-        if source != CRATES_IO_SOURCE or not isinstance(checksum, str) \
-                or re.fullmatch(r"[0-9a-f]{64}", checksum) is None:
-            invalid_sources.append((package.get("name"), package.get("version"), source, checksum))
+    for _manifest_path, lock_path in dependency_domains:
+        relative_lock = str(lock_path.relative_to(REPO_ROOT))
+        lock = parse_toml(lock_path, report, "dependency-lock-read")
+        for package in lock.get("package", []):
+            source = package.get("source")
+            if source is None:
+                continue
+            checksum = package.get("checksum")
+            if source != CRATES_IO_SOURCE or not isinstance(checksum, str) \
+                    or re.fullmatch(r"[0-9a-f]{64}", checksum) is None:
+                invalid_sources.append((
+                    relative_lock,
+                    package.get("name"),
+                    package.get("version"),
+                    source,
+                    checksum,
+                ))
     if invalid_sources:
         report.violation(
             "dependency-cache-source-unpinned",
-            f"Cargo.lock contains non-registry or non-checksummed sources: {invalid_sources}",
+            "a tracked dependency lock contains non-registry or non-checksummed "
+            f"sources: {invalid_sources}",
         )
         return
-    fetched = run_cargo(
-        [
-            "fetch", "--locked", "--target", PINNED_HOST,
-            "--manifest-path", str(REPO_ROOT / "Cargo.toml"),
-        ],
-        cwd=REPO_ROOT,
-        audit=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if fetched.returncode:
+    fetch_failures = []
+    DEPENDENCY_FETCH_ACTIVE = True
+    try:
+        for manifest_path, _lock_path in dependency_domains:
+            fetched = run_cargo(
+                [
+                    "fetch", "--locked",
+                    "--manifest-path", str(manifest_path),
+                ],
+                cwd=REPO_ROOT,
+                audit=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if fetched.returncode:
+                fetch_failures.append((
+                    str(manifest_path.relative_to(REPO_ROOT)),
+                    fetched.stderr[-4000:],
+                ))
+    finally:
+        DEPENDENCY_FETCH_ACTIVE = False
+    if fetch_failures:
         report.violation(
             "dependency-cache-hydration-failed",
             "could not hydrate the empty gate-owned Cargo cache exclusively from "
-            f"the tracked locked/checksummed resolution: {fetched.stderr[-4000:]}",
+            f"the tracked locked/checksummed resolutions: {fetch_failures}",
         )
-    current_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
-    if current_digest != lock_digest:
-        report.violation(
-            "dependency-cache-lock-mutated",
-            f"Cargo fetch changed Cargo.lock from {lock_digest} to {current_digest}",
-        )
+    for _manifest_path, lock_path in dependency_domains:
+        current_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        if current_digest != lock_digests[lock_path]:
+            report.violation(
+                "dependency-cache-lock-mutated",
+                f"Cargo fetch changed {lock_path.relative_to(REPO_ROOT)} from "
+                f"{lock_digests[lock_path]} to {current_digest}",
+            )
     current_snapshot = execution_input_snapshot(REPO_ROOT, registered)
     if current_snapshot != input_snapshot:
         report.violation(
             "dependency-cache-input-mutated",
             "Cargo fetch changed the exact protected execution-input snapshot",
         )
+    if not report.violations:
+        DEPENDENCY_CACHE_HYDRATED = True
 
 
 def audit_artifact_changes():
@@ -1168,7 +1245,7 @@ def validate_local_custom_build_targets(root, metadata_packages, report):
         )
 
 
-def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, production_packages=True):
+def validate_lock_resolution_identity(root, report, expected=PINNED_RESOLUTION):
     lock = parse_toml(root / "Cargo.lock", report, "dependency-lock-read")
     packages = lock.get("package", [])
     for name, identity in expected.items():
@@ -1177,8 +1254,11 @@ def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, pr
         if actual != [identity]:
             report.violation("dependency-lock-identity", f"Cargo.lock `{name}` identity is {actual!r}, expected {[identity]!r}")
 
+
+def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, production_packages=True):
+    validate_lock_resolution_identity(root, report, expected)
     metadata_result = run_cargo(
-        ["metadata", "--locked", "--format-version", "1"],
+        ["metadata", "--locked", "--offline", "--format-version", "1"],
         cwd=root,
         text=True,
         stdout=subprocess.PIPE,
@@ -4109,15 +4189,35 @@ pub fn install_from_dependency(
     install_assurance_escape(raw, sweep)
 }
 """)
-        lock = run_cargo(
-            ["generate-lockfile"],
-            cwd=consumer,
+        # Cargo's offline mode refuses even a file:// Git checkout that was
+        # created moments ago. Resolve this compiler-control fixture through a
+        # dedicated empty Cargo home, then prove the resulting lock contains
+        # only the exact local repository and revision before any protected
+        # compile. No registry or remote Git source is present in this manifest.
+        local_git_cargo_home = base / "governance-assurance-git-cargo-home"
+        local_git_cargo_home.mkdir()
+        local_git_environment = sanitized_cargo_environment(
             target_dir=REPO_ROOT / "target/assurance-governance-git-consumer",
             audit=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
         )
+        local_git_environment["CARGO_HOME"] = str(local_git_cargo_home)
+        local_git_config_sources = cargo_config_sources(consumer)
+        if local_git_config_sources:
+            lock = subprocess.CompletedProcess(
+                [str(PINNED_CARGO), "generate-lockfile"],
+                125,
+                stdout="",
+                stderr=f"refused Cargo config sources: {local_git_config_sources}",
+            )
+        else:
+            lock = subprocess.run(
+                [str(PINNED_CARGO), "generate-lockfile"],
+                cwd=consumer,
+                env=local_git_environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
         lock_document = (
             tomllib.loads((consumer / "Cargo.lock").read_text())
             if lock.returncode == 0 else {}
@@ -4141,9 +4241,10 @@ pub fn install_from_dependency(
             if lock.returncode == 0 else None
         )
         fetched = run_cargo(
-            ["fetch", "--locked"],
+            ["fetch", "--locked", "--offline"],
             cwd=consumer,
             target_dir=REPO_ROOT / "target/assurance-governance-git-consumer",
+            extra_environment={"CARGO_HOME": str(local_git_cargo_home)},
             audit=False,
             text=True,
             stdout=subprocess.PIPE,
@@ -4159,6 +4260,7 @@ pub fn install_from_dependency(
             ["check", "--locked", "--offline", "--release"],
             cwd=consumer,
             target_dir=REPO_ROOT / "target/assurance-governance-git-consumer",
+            extra_environment={"CARGO_HOME": str(local_git_cargo_home)},
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -4773,6 +4875,15 @@ edition = "2024"
             destination = fixture_crate / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(contents)
+        locked = run_cargo(
+            ["generate-lockfile"],
+            cwd=fixture_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if locked.returncode:
+            return fixture_root, None, locked.stderr
         result = run_cargo(
             ["metadata", "--format-version", "1"],
             cwd=fixture_root,
@@ -4953,6 +5064,122 @@ path = "tests/fabricated.rs"
     return ok, len(target_names) * 2 + 6
 
 
+def dependency_hydration_boundary_self_test(base):
+    global PINNED_CARGO, DEPENDENCY_CACHE_HYDRATED, DEPENDENCY_FETCH_ACTIVE
+
+    ok = True
+    original_cargo = PINNED_CARGO
+    original_hydrated = DEPENDENCY_CACHE_HYDRATED
+    original_fetch_active = DEPENDENCY_FETCH_ACTIVE
+    root = base / "dependency-hydration-boundary"
+    root.mkdir()
+    fake_cargo = root / "cargo"
+    marker = root / "cargo-arguments"
+    fake_cargo.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        ": \"${PHASE285_FAKE_CARGO_LOG:?}\"\n"
+        "printf '%s\\n' \"$@\" >\"$PHASE285_FAKE_CARGO_LOG\"\n"
+    )
+    fake_cargo.chmod(0o755)
+    execution = {
+        "audit": False,
+        "text": True,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "extra_environment": {"PHASE285_FAKE_CARGO_LOG": str(marker)},
+    }
+
+    def marker_arguments():
+        return marker.read_text().splitlines() if marker.is_file() else []
+
+    try:
+        PINNED_CARGO = fake_cargo
+        DEPENDENCY_CACHE_HYDRATED = False
+        DEPENDENCY_FETCH_ACTIVE = False
+
+        raw = subprocess.run(
+            [str(fake_cargo), "metadata", "--format-version", "1"],
+            cwd=root,
+            env={"PHASE285_FAKE_CARGO_LOG": str(marker)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        raw_arguments = marker_arguments()
+        marker.unlink(missing_ok=True)
+        refused_metadata = run_cargo(
+            ["metadata", "--format-version", "1"], cwd=root, **execution,
+        )
+        if (
+            raw.returncode
+            or raw_arguments != ["metadata", "--format-version", "1"]
+            or refused_metadata.returncode != 125
+            or "before controlled cache hydration" not in refused_metadata.stderr
+            or marker.exists()
+        ):
+            ok = False
+            print(
+                "dependency hydration differential did not prove raw metadata reachable "
+                "and guarded metadata refused before hydration",
+                file=sys.stderr,
+            )
+
+        unlocked_fetch = run_cargo(["fetch"], cwd=root, **execution)
+        if (
+            unlocked_fetch.returncode != 125
+            or "without --locked" not in unlocked_fetch.stderr
+            or marker.exists()
+        ):
+            ok = False
+            print("dependency hydration boundary accepted an unlocked fetch", file=sys.stderr)
+
+        uncontrolled_fetch = run_cargo(["fetch", "--locked"], cwd=root, **execution)
+        if (
+            uncontrolled_fetch.returncode != 125
+            or "outside controlled hydration" not in uncontrolled_fetch.stderr
+            or marker.exists()
+        ):
+            ok = False
+            print("dependency hydration boundary accepted an uncontrolled online fetch", file=sys.stderr)
+
+        DEPENDENCY_FETCH_ACTIVE = True
+        controlled_fetch = run_cargo(["fetch", "--locked"], cwd=root, **execution)
+        if controlled_fetch.returncode or marker_arguments() != ["fetch", "--locked"]:
+            ok = False
+            print("dependency hydration boundary rejected its single controlled fetch", file=sys.stderr)
+        marker.unlink(missing_ok=True)
+
+        DEPENDENCY_FETCH_ACTIVE = False
+        DEPENDENCY_CACHE_HYDRATED = True
+        offline_metadata = run_cargo(
+            ["metadata", "--format-version", "1"], cwd=root, **execution,
+        )
+        if offline_metadata.returncode or marker_arguments() != [
+            "metadata", "--locked", "--offline", "--format-version", "1",
+        ]:
+            ok = False
+            print("post-hydration metadata was not forced locked and offline", file=sys.stderr)
+        marker.unlink(missing_ok=True)
+
+        offline_lock = run_cargo(["generate-lockfile"], cwd=root, **execution)
+        if offline_lock.returncode or marker_arguments() != ["generate-lockfile", "--offline"]:
+            ok = False
+            print("post-hydration lock generation was not forced offline", file=sys.stderr)
+        marker.unlink(missing_ok=True)
+
+        offline_fetch = run_cargo(["fetch", "--locked", "--offline"], cwd=root, **execution)
+        if offline_fetch.returncode or marker_arguments() != ["fetch", "--locked", "--offline"]:
+            ok = False
+            print("post-hydration explicit offline fetch was not preserved", file=sys.stderr)
+    finally:
+        PINNED_CARGO = original_cargo
+        DEPENDENCY_CACHE_HYDRATED = original_hydrated
+        DEPENDENCY_FETCH_ACTIVE = original_fetch_active
+
+    return ok, 3
+
+
 def self_test():
     ok = True
     protocol_mutations = 0
@@ -4976,8 +5203,16 @@ def self_test():
         source_ok, source_mutations = registered_source_mutation_self_test(base)
         dependency_ok, dependency_mutations = dependency_execution_self_test(base)
         target_ok, target_mutations = target_override_self_test(base)
-        ok = ok and protocol_ok and source_ok and dependency_ok and target_ok
-    return ok, protocol_mutations + source_mutations + dependency_mutations + target_mutations
+        hydration_ok, hydration_mutations = dependency_hydration_boundary_self_test(base)
+        ok = (
+            ok and protocol_ok and source_ok and dependency_ok and target_ok
+            and hydration_ok
+        )
+    return (
+        ok,
+        protocol_mutations + source_mutations + dependency_mutations
+        + target_mutations + hydration_mutations,
+    )
 
 
 preflight = Report()
@@ -4985,7 +5220,8 @@ validate_toolchain_identity(REPO_ROOT, preflight)
 configure_sanitized_cargo_boundary(preflight)
 validate_cargo_execution_boundary(REPO_ROOT, preflight)
 validate_governance_assurance_identity(REPO_ROOT, preflight)
-validate_resolution_identity(REPO_ROOT, preflight)
+validate_dependency_manifests(REPO_ROOT, preflight)
+validate_lock_resolution_identity(REPO_ROOT, preflight)
 if preflight.violations:
     for code, message in preflight.violations:
         print(f"[{code}] {message}", file=sys.stderr)
@@ -4998,10 +5234,18 @@ if preflight.violations:
         "check-negative-registry could not hydrate its empty Cargo cache from the "
         "exact tracked locked/checksummed resolution"
     )
+validate_resolution_identity(REPO_ROOT, preflight)
+if preflight.violations:
+    for code, message in preflight.violations:
+        print(f"[{code}] {message}", file=sys.stderr)
+    raise SystemExit(
+        "check-negative-registry could not resolve exact metadata from its "
+        "hydrated offline Cargo cache"
+    )
 ast_target_dir = REPO_ROOT / "target/assurance-tools"
 ast_build = run_cargo(
     [
-        "build", "--quiet", "--locked",
+        "build", "--quiet", "--locked", "--offline",
         "--manifest-path", str(REPO_ROOT / "tools/negative-registry-ast/Cargo.toml"),
         "--target-dir", str(ast_target_dir),
     ],
