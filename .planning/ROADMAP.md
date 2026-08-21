@@ -1105,17 +1105,100 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 4. The promotion report prints the solver proof id and attestation hash, or an explicit no-solver-result line, for every run. MET 99733a0 by the second branch of the "or": every report carries `Solver result: <status> | required_for_promotion=<bool>` or the exact literal `Solver result: NO SOLVER RESULT RECORDED`. The proof id and attestation hash are NOT on the promotion report; they are on the proof artifact the lineage references.
 5. (Added with the posture decision.) The default posture is documented where an operator meets it, with a followable enable recipe, and the recipe is executed rather than described: `the_documented_recipe_produces_a_proof_that_promotes` reads the `custom_z3` query out of `docs/EVOLUTION.md` and runs it through a real z3, and the default-feature lane reads the same block. Editing the doc's query so it no longer proves fails the test (measured).
 
-### v1.79 Assurance Foundation
+### v1.79 Collective Cyber Reasoning
 
-**Goal:** Make Ambush's fail-closed claim checkable rather than asserted: green and isolate the test fixtures, map every invariant to its enforcing function and assumption, prove each mapping is falsifiable, and add deterministic-simulation, fuzz, and interleaving executors over the policy and response path.
-**Executable phases:** 284-287
+**Goal:** Make Ambush a collective reasoning system: construct competing typed causal theories from cross-telemetry, have agents acquire and falsify evidence through stigmergic task allocation, simulate containment, and turn measured outcomes into reusable strategy and herd memory. Phase 285 closes the useful assurance foundation under a truthful local+hosted evidence boundary; external GitHub App enforcement is explicitly deferred.
+**Executable phases:** 284-289
 
-- [x] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
-- [ ] **Phase 285: Assumption Registry And Invariant Mapping** - Implementation and workflow wiring are delivered; protected-required-check repository settings remain an external acceptance gate. (MAPPING-01..05, FALSIFY-01..04)
-- [ ] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
-- [ ] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
+- [x] **Phase 284: Fixture Determinism And Suite Health** - Keep the evidence substrate deterministic and isolated. (FIXTURE-01..04; historical prerequisite)
+- [x] **Phase 285: Assurance Foundation Closure** - Preserve local and hosted assurance evidence, negative controls, locked supply-chain evidence, and truthful status reporting; defer provenance-distinct external GitHub App enforcement. (ASSURE-01..06)
+- [ ] **Phase 286: Collective Hypothesis Graph** - Build a typed causal graph with competing hypotheses, role-based evidence claims, stigmergic task allocation, contradiction tracking, kill-chain reconstruction, ranked containment simulation, and strategy memory. (COG-01..08)
+- [ ] **Phase 287: Adversarial Co-evolution Arena** - Run bounded red campaigns and blue investigations through the real Ambush runtime, mutate evasions, synthesize candidates, and retain only measured improvements. (ARENA-01..08)
+- [ ] **Phase 288: Autonomous Detector And Response Synthesis** - Generate typed detector and response candidates, evaluate them against attacks and controls, and promote only fail-closed, operator-reviewed candidates. (SYNTH-01..06)
+- [ ] **Phase 289: Herd Memory** - Transfer signed, abstract attack strategy between swarms without raw telemetry, with corroboration, expiry, poisoning resistance, and withheld-campaign evaluation. (HERDMEM-01..06)
 
 ### Phase 284: Fixture Determinism And Suite Health
+
+**Goal:** Preserve the deterministic, isolated evidence substrate that the collective-reasoning phases consume.
+**Requirements:** FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04 (historical prerequisite)
+**Depends on:** v1.78 milestone complete
+**Status:** Complete 2026-08-11
+**Plans:** Existing completed phase plans
+**Success Criteria**:
+1. The fixture generator and freshness gate are deterministic and detect checked-in drift.
+2. Supported suite runs do not mutate the checkout.
+3. The clean baseline remains reproducible.
+
+### Phase 285: Assurance Foundation Closure
+
+**Goal:** Close the assurance foundation on a truthful local-plus-hosted evidence boundary while explicitly deferring provenance-distinct external GitHub App/repository protected-check enforcement.
+**Requirements:** ASSURE-01, ASSURE-02, ASSURE-03, ASSURE-04, ASSURE-05, ASSURE-06
+**Depends on:** Phase 284
+**Status:** Passed 2026-08-21 under revised scope
+**Plans:** Existing assurance implementation and hosted evidence; verification recorded in `285-assurance-foundation-closure/285-VERIFICATION.md`
+**Success Criteria**:
+1. Local combined-tree mapping, negative-registry, fixture, and locked-SBOM evidence are reproducible.
+2. Fresh hosted Linux evidence is commit-bound and credential-free.
+3. Status distinguishes wired, executed, passed, and protected-required; no protected GitHub App or release claim is made.
+4. No unresolved P0/P1/P2 finding remains in the scoped review.
+
+### Phase 286: Collective Hypothesis Graph
+
+**Goal:** Turn a seed signal into a shared, contestable causal incident model rather than a single irreversible classification.
+**Requirements:** COG-01, COG-02, COG-03, COG-04, COG-05, COG-06, COG-07, COG-08
+**Depends on:** Phase 285
+**Status:** Accepted and ready to plan
+**Plans:** TBD
+**Success Criteria**:
+1. A typed graph represents actors, assets, credentials, processes, and events plus confidence/provenance causal edges; competing hypotheses retain uncertainty and contradictions.
+2. Hunter, challenger, and falsifier agents claim leased unresolved edges without duplicate work, and process, identity, Kubernetes, CloudTrail, network, and threat-intelligence evidence normalize into the graph.
+3. Every kill-chain claim links to evidence; ranked containment simulations report predicted blast radius and reversibility without executing; strategy memory persists.
+4. The benchmark measures median time to correct causal hypothesis (>=20% gain over single-agent), attack-chain recall (+10 percentage points), false causal edges (<=10%), duplicate work (<=5%), and evidence coverage (>=90%).
+
+### Phase 287: Adversarial Co-evolution Arena
+
+**Goal:** Measure collective intelligence against bounded red campaigns and benign controls through the real Ambush runtime.
+**Requirements:** ARENA-01, ARENA-02, ARENA-03, ARENA-04, ARENA-05, ARENA-06, ARENA-07, ARENA-08
+**Depends on:** Phase 286
+**Status:** Accepted and ready to plan
+**Plans:** TBD
+**Success Criteria**:
+1. Red agents compose reusable multi-stage tactics in a deterministic sandbox; blue agents investigate and contain through real runtime boundaries; red cannot reach response authority.
+2. Red mutates evasions from observed blue behavior and blue generates detector/response candidates from escapes.
+3. Candidates compete on historical attacks, benign controls, counterexamples, and withheld campaigns.
+4. The benchmark measures time to containment (>=15% median improvement), containment blast radius (no median increase), at least one previously unseen evasion in three seeded runs, >=10% improvement over the single-agent baseline, and withheld-campaign performance no worse than 5%.
+
+### Phase 288: Autonomous Detector And Response Synthesis
+
+**Goal:** Generate and evaluate new defensive strategies from graph gaps and adversarial escapes, promoting only candidates that pass safety and evidence gates.
+**Requirements:** SYNTH-01, SYNTH-02, SYNTH-03, SYNTH-04, SYNTH-05, SYNTH-06
+**Depends on:** Phase 287
+**Status:** Accepted and ready to plan
+**Plans:** TBD
+**Success Criteria**:
+1. Detector candidates use the typed graph vocabulary and response candidates use a bounded policy library.
+2. Candidates are evaluated against historical attacks, benign controls, counterexamples, and withheld campaigns with differential, mutation, and metamorphic controls.
+3. Solver/approval lineage and operator review are required for promotion; fail-closed behavior rejects missing, stale, or contradictory evidence.
+4. At least one target metric improves by >=10% with no safety regression.
+
+### Phase 289: Herd Memory
+
+**Goal:** Transfer reusable attack abstractions between swarms without sharing raw telemetry, while resisting poisoning and preserving local epistemic control.
+**Requirements:** HERDMEM-01, HERDMEM-02, HERDMEM-03, HERDMEM-04, HERDMEM-05, HERDMEM-06
+**Depends on:** Phase 288
+**Status:** Accepted and ready to plan
+**Plans:** TBD
+**Success Criteria**:
+1. Memory records contain typed attack abstractions only, never raw telemetry, secrets, or host identifiers; signatures, provenance, expiry, and transformations are explicit.
+2. Local corroboration, revocation, retention, and deletion are enforced; retrieval may change task ordering but cannot directly authorize action.
+3. Poisoning and stale-memory controls are tested.
+4. Transfer improves time to correct hypothesis by >=20% or recall by >=10 percentage points without exceeding false-edge/duplicate ceilings, discovers a previously unseen evasion, and stays within 5% of baseline on withheld campaigns.
+
+### Historical v1.79 Assurance Foundation (retired 2026-08-21; not an acceptance set)
+
+The original DST/FUZZ/LOOM/SUPPLY sequence and its MAPPING/FALSIFY protected-check claim remain below as historical planning notes. They are not active or queued acceptance criteria; their useful assurance work is represented by ASSURE-01..06 above, and the deferred external GitHub App boundary is not silently counted as passed.
+
+### Historical Phase 284: Fixture Determinism And Suite Health
 
 **Goal:** NOTE (2026-08-11): the "7 tests fail against 161 checked-in fixtures" premise did NOT reproduce - e93d521 had already removed 137 of them and the grep returned 0 before this phase began. The real work was isolation, the generator, and the freshness gate. Test runs write into the repository. Every later assurance signal is unreadable until the baseline is green and isolated.
 **Requirements:** FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04
@@ -1128,7 +1211,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 3. `tools/check-fixture-freshness.sh` regenerates into a scratch directory, diffs against checked-in copies, fails on drift, and runs as a required CI step.
 4. A full suite run across all three supported commands (see phase 280 criterion 5) leaves `git status --porcelain` empty. Today each run mutates 10 tracked files; 24 of them live under `crates/swarm-cli/data/approval-*/`, which is already gitignored, so they must be untracked rather than ignored.
 
-### Phase 285: Assumption Registry And Invariant Mapping
+### Historical Phase 285: Assumption Registry And Invariant Mapping
 
 **Goal:** Convert fail-closed from a README assertion into an auditable table linking each invariant to the exact function enforcing it and the assumption beneath it, with broken variants proving each check actually fires.
 **Requirements:** MAPPING-01, MAPPING-02, MAPPING-03, MAPPING-04, MAPPING-05, FALSIFY-01, FALSIFY-02, FALSIFY-03, FALSIFY-04
@@ -1149,7 +1232,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
    Each registry row records its neutralization observation and binds the shared macro-owned call to an exact fully-qualified public production entry. The local checker digests each complete registered source file and the shared protocol AST, so imports, helper/wrapper bodies, setup, call arguments, normalization, mirror operations, and predicates are all within the checked source contract. Mapped markers and real adapters share that public entry; only two Serde conversions are explicitly reviewed boundaries. The protocol executes one real, mirror(None), and mirror(BrokenVariant) operation on one typed probe and asserts the real/control denial and broken permission differential. The co-located checker and digests are tamper-evident, not externally authenticated.
    WHAT IT CANNOT CHECK, STATED: a handwritten mirror is not mechanically proven faithful beyond the registered probe. The compiled differential, source mutations, exact production-expression binding, and review stand in for that broader proof.
 
-### Phase 286: Deterministic Simulation Testing
+### Historical Phase 286: Deterministic Simulation Testing
 
 **Goal:** Prove receipt-before-action ordering and no-double-dispatch hold under adversarial scheduling and mid-operation crashes, not only on the happy path.
 **Requirements:** DST-01, DST-02, DST-03, DST-04, DST-05, DST-06
@@ -1162,7 +1245,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 3. A 64-seed corpus runs on every PR and a 5,000-seed corpus nightly, naming the failing seed on any oracle violation.
 4. `SWARM_DST_SEED=<n>` reproduces one episode's exact fault plan, and MAPPING.md states the evidence boundary as single-process and single-substrate-instance.
 
-### Phase 287: Fuzz, Loom, And Supply-Chain Hardening
+### Historical Phase 287: Fuzz, Loom, And Supply-Chain Hardening
 
 **Goal:** Give the untrusted telemetry-parse boundary and the concurrent write paths executable adversarial coverage, and bring dependency policy to a dated, justified, deny-by-default shape.
 **Requirements:** FUZZ-01, FUZZ-02, FUZZ-03, FUZZ-04, LOOM-01, LOOM-02, LOOM-03, LOOM-04, SUPPLY-01, SUPPLY-02
@@ -1174,7 +1257,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 2. Loom harnesses over the pheromone and policy concurrent paths pass nightly with a documented preemption budget, labeled `bounded_abstract_model` in MAPPING.md.
 3. Every `deny.toml` ignore entry carries a date, blast-radius note, and clearing condition, enforced by `tools/check-supply-chain.sh`.
 4. The `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift apart.
-### v1.80 Red Swarm
+### Historical v1.80 Red Swarm (retired 2026-08-21; superseded by v1.79 arena)
 
 **Goal:** Land an adversary as a first-class, deterministic, catalog-bounded in-tree lane so detectors are scored against something that adapts generation over generation, with fitness measured on the existing evasion-coverage infrastructure and a bounded arms race running in CI.
 **Executable phases:** 288-291
@@ -1184,7 +1267,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 - [ ] **Phase 290: Bidirectional Co-Evolution And Convergence** - Close the loop against real detector outcomes with a bounded stopping rule. (COEVOLVE-01, COEVOLVE-02)
 - [ ] **Phase 291: CI Arms Race Gate And Structural Isolation** - Wire a real executed gate and enforce that the red lane can never reach response authority. (ARMSCI-01, ARMSCI-02)
 
-### Phase 288: Red Operator Genome And Target Graph
+### Historical Phase 288: Red Operator Genome And Target Graph
 
 **Goal:** `red_swarm.rs` today replays static suites verbatim. Give the red lane a bounded mutation engine that recombines catalogued techniques rather than inventing payload shapes, keeping the arms race classical and maintainable.
 **Requirements:** OPFOR-01, OPFOR-02, OPFOR-03, OPFOR-04
@@ -1197,7 +1280,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 3. A test fails if any generated step names a technique absent from the target graph.
 4. `swarmctl red-swarm plan` prints a `determinism` object with `rng_seed`, `virtual_clock_start_ms`, and `scheduler`, and no code path reads wall-clock for output bytes.
 
-### Phase 289: Attack Scoring, Stealth Budget And Pattern Memory
+### Historical Phase 289: Attack Scoring, Stealth Budget And Pattern Memory
 
 **Goal:** Turn plans into scored, resource-bounded telemetry so red cannot win by volume, and give each generation real memory of what the previous one survived.
 **Requirements:** ATKSCORE-01, ATKSCORE-02, ATKSCORE-03, ATKSCORE-04
@@ -1210,7 +1293,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 3. The pattern store round-trips: an unrecorded technique returns success rate 1.0, an always-detected technique returns 0.0.
 4. `swarmctl red-swarm score --json` prints `red_fitness`, `evasion_rate`, `stealth`, and `events_emitted` as top-level fields.
 
-### Phase 290: Bidirectional Co-Evolution And Convergence
+### Historical Phase 290: Bidirectional Co-Evolution And Convergence
 
 **Goal:** Make both sides actually move, measured against real detector runs rather than self-play estimates, and guarantee every campaign terminates.
 **Requirements:** COEVOLVE-01, COEVOLVE-02, COEVOLVE-03, COEVOLVE-04
@@ -1223,7 +1306,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 3. Over at least 4 generations, blue catch rate is non-decreasing on average and red technique weights measurably shift away from generation-zero favourites once recorded as caught.
 4. Two invocations at the same seed produce byte-identical campaign reports except for a generated-at timestamp.
 
-### Phase 291: CI Arms Race Gate And Structural Isolation
+### Historical Phase 291: CI Arms Race Gate And Structural Isolation
 
 **Goal:** Ship an executed gate rather than an attested one, and enforce structurally that the red lane generates telemetry and scores detectors without ever reaching response authority.
 **Requirements:** ARMSCI-01, ARMSCI-02, ARMSCI-03, ARMSCI-04, ARMSCI-05
@@ -1249,7 +1332,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 
 **Goal:** Chio's proof apparatus exists only because an IO-free decision surface exists. `can_act` currently reads the OS clock internally and the gates hold state in a mutex. This phase is the prerequisite for everything after it.
 **Requirements:** DCORE-01, DCORE-02, DCORE-03, DCORE-04, DCORE-05
-**Depends on:** v1.80 milestone complete
+**Depends on:** v1.79 milestone complete and v1.78.1 complete
 **Status:** Not started
 **Plans:** TBD
 **Success Criteria**:
@@ -1708,9 +1791,9 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **v1.77 execution order:** 276 -> 277 -> 278 -> 279
 **v1.78 execution order:** 280 -> 281 -> 282 -> 283
 **v1.78.1 execution order:** 320 -> 321 -> 322
-**v1.79 execution order:** 284 -> 285 -> 286 -> 287
-**v1.80 execution order:** 288 -> 289 -> 290 -> 291
-**v1.81 execution order:** 292 -> 293 -> 294 -> 295
+**v1.79 execution order:** 284 -> 285 -> 286 -> 287 -> 288 -> 289
+**v1.80 historical execution order:** 288 -> 289 -> 290 -> 291 (superseded; not an acceptance queue)
+**v1.81 execution order:** 292 -> 293 -> 294
 **v1.82 execution order:** 296 -> 297 -> 298 -> 299
 **v1.83 execution order:** 300 -> 301 -> 302 -> 303
 **v1.84 execution order:** 304 -> 305 -> 306 -> 307
@@ -1893,26 +1976,26 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 | 282. Crate Extraction From swarm-runtime | v1.78 | 0/6 closed | Code merged 2026-08-13 (0a09358), complete as scoped; all six SPLIT checkboxes still open, remainder re-derived 2026-08-13 (task #14, `.planning/PHASE-282-REMAINDER.md`) | 2026-08-13 |
 | 283. TCB Boundary And Layering Enforcement | v1.78 | 4/4 requirements | Complete | 2026-08-13 |
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
-| 285. Assumption Registry And Invariant Mapping | v1.79 | 7/9 requirements | Local mapping/falsifiability complete; MAPPING-05/FALSIFY-04 await protected-required-check repository settings | 2026-08-14 |
-| 286. Deterministic Simulation Testing | v1.79 | 0/TBD | Not started | - |
-| 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |
-| 288. Red Operator Genome And Target Graph | v1.80 | 0/TBD | Not started | - |
-| 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 0/TBD | Not started | - |
-| 290. Bidirectional Co-Evolution And Convergence | v1.80 | 0/TBD | Not started | - |
-| 291. CI Arms Race Gate And Structural Isolation | v1.80 | 0/TBD | Not started | - |
+| 285. Assurance Foundation Closure | v1.79 | 6/6 | Passed revised scope; external GitHub App enforcement deferred | 2026-08-21 |
+| 286. Collective Hypothesis Graph | v1.79 | 0/TBD | Accepted and ready to plan | - |
+| 287. Adversarial Co-evolution Arena | v1.79 | 0/TBD | Accepted and ready to plan | - |
+| 288. Autonomous Detector And Response Synthesis | v1.79 | 0/TBD | Accepted and ready to plan | - |
+| 289. Herd Memory | v1.79 | 0/TBD | Accepted and ready to plan | - |
+| 290. Bidirectional Co-Evolution And Convergence | v1.80 historical | 0/TBD | Superseded; historical only | - |
+| 291. CI Arms Race Gate And Structural Isolation | v1.80 historical | 0/TBD | Superseded; historical only | - |
 | 292. Pure Decision Core Extraction | v1.81 | 0/TBD | Not started | - |
 | 293. Kani Bounded Model Checking | v1.81 | 0/TBD | Not started | - |
 | 294. Named Safety Properties And Partition-Lease Model | v1.81 | 0/TBD | Not started | - |
-| 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
+| 295. Z3-Backed Promotion Gate | v1.81 historical | - | Superseded by 322 | - |
 | 296. Provenance Graph Substrate | v1.82 | 0/TBD | Not started | - |
 | 297. Kill-Chain Reconstruction | v1.82 | 0/TBD | Not started | - |
 | 298. Cross-Hunt Correlation | v1.82 | 0/TBD | Not started | - |
 | 299. Dependency-Aware Triage | v1.82 | 0/TBD | Not started | - |
-| 300. BFT Correctness Repair | v1.83 | - | Superseded by 321 | - |
+| 300. BFT Correctness Repair | v1.83 historical | - | Superseded by 321 | - |
 | 301. VRF Committee Selection | v1.83 | 0/TBD | Not started | - |
 | 302. Governance Key Rotation And Revocation | v1.83 | 0/TBD | Not started | - |
 | 303. Fail-Closed Contract Preservation | v1.83 | 0/TBD | Not started | - |
-| 304. Reversible Quarantine Execution | v1.84 | - | Superseded by 320 | - |
+| 304. Reversible Quarantine Execution | v1.84 historical | - | Superseded by 320 | - |
 | 305. Information-Flow Control | v1.84 | 0/TBD | Not started | - |
 | 306. Cross-Instance Immunity Sharing | v1.84 | 0/TBD | Not started | - |
 | 307. Adaptive Deception And Integration Proof | v1.84 | 0/TBD | Not started | - |
@@ -1933,9 +2016,9 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 | 322. Promotion Solver Gate | v1.78.1 | 5/5 requirements | Complete | 2026-08-13 |
 
 ---
-*Active milestone: v1.79 Assurance Foundation.*
-*v1.79 status: Phase 284 complete; phase 285 is 7/9 satisfied on the current v1.79 integration branch, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started.*
+*Active milestone: v1.79 Collective Cyber Reasoning.*
+*v1.79 status: Phases 284 and 285 are complete; Phase 285 passed under the revised local-plus-hosted scope with external GitHub App enforcement explicitly deferred; phases 286-289 are accepted and ready to plan.*
 *v1.77 and v1.78 complete: phases 276-279 shipped 2026-04-13; phases 280-283 completed as scoped by 2026-08-13.*
 *v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83.*
-*v1.80 through v1.87 queued: 32 phases (288-319) defined 2026-08-10.*
+*v1.80 Red Swarm is historical/superseded; v1.81-v1.87 retain their original queued phase numbering (292-319).*
 *v1.74 deferred: Run `/gsd:plan-phase 264` when structural-integrity work is reactivated.*

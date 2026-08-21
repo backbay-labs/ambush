@@ -10,35 +10,37 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.79 Assurance Foundation` is active. Phase 284 is complete; phase 285 has seven of nine requirements satisfied on the current v1.79 integration branch, while MAPPING-05 and FALSIFY-04 remain open pending external protected-required-check acceptance. Phases 286-287 are not started. `v1.77 Integration Proof` and `v1.78 Runtime Decomposition And TCB Boundary` are complete; `v1.74 Structural Integrity` remains deferred.
+`v1.79 Collective Cyber Reasoning` is active across phases 284-289. Phase 285 is passed under a revised assurance scope; the external provenance-distinct GitHub App enforcement path is explicitly deferred and is not claimed as a protected rule. `v1.77 Integration Proof`, `v1.78 Runtime Decomposition And TCB Boundary`, and v1.78.1 are complete as scoped; `v1.74 Structural Integrity` remains deferred.
 
 **Goal:**
-- Make the fail-closed claim auditable through deterministic fixtures, an enforced invariant/assumption map, negative falsifiability, deterministic simulation, fuzzing, Loom, and supply-chain gates.
+- Make the runtime construct, contest, and refine a shared causal theory of an attack, then use bounded red/blue pressure and privacy-preserving memory to improve the next investigation.
 
-**Delivered:**
-- `v1.77` shipped the CrowdStrike RTR and Splunk HEC adapters plus the compose-backed integration proof.
-- `v1.78` shipped phases 280-283 as scoped: verification-gate repair, `core.inc` elimination, measured crate extraction, and an enforced TCB boundary. Phase 282's measured remainder remains explicit.
-- `v1.79` phase 284 removed fixture drift and repository-writing test behavior. The phase-285 implementation and workflow evidence is local only until the external required-check settings are verified.
-- `v1.74` remains deferred rather than lost; the structural-integrity phases stay available for later re-activation.
+**Delivered foundation:**
+- `v1.78` and `v1.78.1` provide the decomposed runtime, TCB boundary, reversible containment, and no-proof-no-promotion posture on the shipped single-node lane.
+- Phase 284 provides isolated fixture generation and suite-health evidence.
+- Phase 285 closes local mapping, falsifiability, supply-chain, SBOM, and hosted-runner evidence. Local and hosted checks are useful evidence; they do not imply a protected GitHub App check.
+- `v1.74` remains deferred rather than lost; its structural-integrity phases stay available for later reactivation.
 
 **Supporting foundation:**
 - `v1.75` packaged the runtime for first external operator use with validated Docker, Helm, quickstart, and adversary-emulation proof surfaces.
 - `v1.76` broadened the runtime signal base with external threat intelligence and cloud audit telemetry on the shared ingest and detector paths.
 - `v1.77` proved the outbound EDR/SIEM integration lane, and `v1.78` established the verification and trust-boundary foundation that v1.79 audits.
 
-## Current Milestone: v1.79 Assurance Foundation
+## Current Milestone: v1.79 Collective Cyber Reasoning
 
-**Goal:** Make Ambush's fail-closed claim checkable rather than asserted, with each enforced invariant tied to explicit assumptions and a falsifiable negative test before broader simulation and concurrency work begins.
+**Goal:** Replace parallel detector output with collective epistemology: competing hypotheses, evidence acquisition, falsification, convergence, bounded containment planning, and durable learning.
 
-**Target features:**
-- Deterministic, isolated fixtures and a freshness gate — complete in phase 284
-- An enforced assumption registry, invariant map, and negative-falsifiability registry — seven of nine phase-285 requirements satisfied locally; two external acceptance gates remain open
-- Seeded deterministic fault injection over the real authorization and response path — phase 286, not started
-- Fuzz, Loom, and dated supply-chain policy gates — phase 287, not started
+**Acceptance shape:**
+- Every causal claim is typed, confidence-scored, contradiction-aware, and linked to source evidence.
+- Agents claim unresolved graph work through a stigmergic ledger without duplicate investigation.
+- Process, identity, Kubernetes, CloudTrail, network, and threat-intelligence signals share one normalized evidence model.
+- Red/blue episodes run through the real Ambush detector and policy boundaries in a bounded, non-destructive arena.
+- Synthesized detector/response candidates compete against historical attacks, benign controls, and counterexamples before any operator-reviewed promotion.
+- Herd memory transfers signed attack abstractions, never raw telemetry, and must improve withheld-campaign performance against the single-agent baseline.
 
 ## Current State
 
-`v1.77` and `v1.78` are complete as scoped. `v1.79` is active at phase 285: the current integration branch satisfies MAPPING-01 through MAPPING-04 and FALSIFY-01 through FALSIFY-03, but workflow wiring is not evidence that either job is a protected required check. MAPPING-05 and FALSIFY-04 therefore remain open, and phases 286-287 remain not started. The shipped milestones from the v1.52-v1.77 period cover Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, learned-state integrity, operator packaging, external-signal ingestion, and the CrowdStrike/Splunk integration proof. `v1.78` adds the verification-gate, module-boundary, crate-extraction, and TCB enforcement foundation. `v1.74` remains deferred.
+`v1.78` and `v1.78.1` are complete as scoped, and `v1.79` is now the active milestone. The repo has completed the prior integration, packaging, telemetry, response, governance, and assurance foundation work. The current gap is not another adapter or external check ceremony; it is a measurable shared reasoning loop. Phase 285's useful local and hosted evidence is retained, while the provenance-distinct GitHub App enforcement requirement is deferred until there is a real organizational enforcement need.
 
 **What is now real:**
 - The live runtime can detect, investigate, correlate, rehearse, review, and export signed evidence through one Rust-first operator workflow.
@@ -79,6 +81,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - Phases 108-111 completed canonical SIEM finding delivery, finding enrichment, rule-based notification routing, and replayable suppressed-alert queues.
 
 ## Requirements
+
+### Active v1.79 acceptance contract
+
+The canonical requirements live in `.planning/REQUIREMENTS.md`. The active slice is deliberately measurable and remains advisory/non-destructive until each gate is independently proven.
+
+- `ASSURE-01..06` — Phase 285 local and hosted assurance evidence, with no protected GitHub App claim.
+- `COG-01..08` — Phase 286 typed causal graph, competing hypotheses, evidence/task coordination, kill-chain reconstruction, containment ranking, persistent strategy memory, and five collective-reasoning metrics.
+- `ARENA-01..08` — Phase 287 bounded red/blue co-evolution through the real runtime, candidate competition, isolation, reproducibility, and five arena metrics.
+- `SYNTH-01..06` — Phase 288 detector and response candidate synthesis, differential/mutation controls, fail-closed review lineage, and quality/safety thresholds.
+- `HERDMEM-01..06` — Phase 289 privacy-preserving memory transfer, poisoning resistance, local corroboration, retention, and withheld-campaign improvement.
+
+The former `DST-*`, `FUZZ-*`, `LOOM-*`, `OPFOR-*`, `ATKSCORE-*`, `COEVOLVE-*`, and `ARMSCI-*` IDs remain in the historical record only; they are not active or queued acceptance gates.
 
 ### Validated
 
@@ -277,4 +291,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-08-15 after activating v1.79 and separating local phase-285 evidence from external acceptance*
+*Last updated: 2026-08-21 after resetting v1.79 around Collective Cyber Reasoning*

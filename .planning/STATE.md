@@ -1,42 +1,42 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.79
-milestone_name: Assurance Foundation
-current_phase: 285
-current_phase_name: Assumption Registry And Invariant Mapping
+milestone_name: Collective Cyber Reasoning
+current_phase: 286
+current_phase_name: Collective Hypothesis Graph
 current_plan: null
-status: active
-last_updated: "2026-08-15T00:00:00Z"
-last_activity: 2026-08-15
+status: ready_to_plan
+last_updated: "2026-08-21T00:00:00Z"
+last_activity: 2026-08-21
 progress:
-  total_phases: 4
-  completed_phases: 1
+  total_phases: 6
+  completed_phases: 2
   total_plans: 0
   completed_plans: 0
-  percent: 25
+  percent: 33
 ---
 
 # State
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-08-15)
+See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.79 Assurance Foundation` — keep phase 285 open until its two external required-check acceptance gates are verified; phases 286-287 remain not started.
+**Current focus:** `v1.79 Collective Cyber Reasoning` — complete the typed causal hypothesis graph, adversarial co-evolution loop, autonomous synthesis, and privacy-preserving herd memory on top of the shipped assurance substrate.
 
 ## Current Position
 
-**Current Phase:** 285
-**Current Phase Name:** Assumption Registry And Invariant Mapping
-**Total Phases:** 4 (284-287)
+**Current Phase:** 286 — Collective Hypothesis Graph (v1.79); Phase 285 is passed under its revised scope and Phase 284 is complete.
+**Current Phase Name:** Collective Hypothesis Graph
+**Total Phases:** 6 (284-289)
 **Current Plan:** None
 **Total Plans in Phase:** TBD
-**Status:** Active — phase 285 in progress with external acceptance open
-**Last Activity:** 2026-08-15
-**Last Activity Description:** Reconciled all authoritative planning sources to v1.79. The current integration branch satisfies seven of nine phase-285 requirements; MAPPING-05 and FALSIFY-04 remain open because protected-required-check repository settings have not been externally verified.
+**Status:** Ready to plan
+**Last Activity:** 2026-08-21
+**Last Activity Description:** Reset the active milestone around collective cyber reasoning. Phase 285 is closed as passed for local and hosted assurance evidence; provenance-distinct GitHub App enforcement is explicitly deferred and is not represented as a protected check.
 
-**Progress:** 25% — phase 284 complete; phase 285 is 7/9 satisfied on the current v1.79 integration branch with MAPPING-05 and FALSIFY-04 pending external acceptance; phases 286-287 not started.
+**Progress:** v1.79 phases 284/285 COMPLETE; phases 286-289 accepted and ready for planning. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only and no longer acceptance gates. The former v1.80 Red Swarm block is superseded; v1.81+ keeps the original queued phase numbering beginning at Phase 292.
 
 ## Memory
 
@@ -90,7 +90,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-15)
 - CORRECTION carried forward: INCFIX-01's rationale is half wrong. rustc, clippy AND rustfmt all follow `#[path]`; only rust-analyzer and `*.rs`-globbing LOC tools skip a `.inc`. Phase 281 criterion 3 is unsatisfiable as written and is marked superseded. Do not repeat the claim in 282/283.
 - OPEN, filed from phase 281's final review: a vacuous-verification bug in replay, proven pre-existing. `ReplayScenarioClass` derives `Default` with `#[default] Mixed` and `ReplayScenarioMetadata.class` is `#[serde(default)]`, while `verify_known_bad_coverage` requires `class == Adversarial` and `verify_false_positive_bound` filters on `scenario_is_benign`. A manifest omitting `class:` is exempt from BOTH invariants and passes vacuously.
 - Phase 284 COMPLETE 2026-08-11 (FIXTURE-01..04). The suite no longer writes into the repository: a full G1+G2 leaves all four drift assertions clean. Parallel phase work is now unblocked.
-- Phase 285 remains IN PROGRESS. The current v1.79 integration branch satisfies MAPPING-01..04 and FALSIFY-01..03 after independent review remediation. MAPPING-05 and FALSIFY-04 remain open: workflow wiring exists locally, but the repository's protected-required-check settings have not been externally verified or configured. Do not report phase 285 complete from local checks alone.
+- Historical Phase 285 note (superseded 2026-08-21): the earlier MAPPING/FALSIFY scope recorded local completion with external protected-required-check acceptance open. The reset closes Phase 285 as passed under ASSURE-01..06's revised local-plus-hosted evidence boundary; the external GitHub App enforcement claim remains explicitly deferred.
 - The kitten_agent flake was NOT prior-run state. `Option::unwrap_or` evaluates eagerly, so `load_source_seed` scanned every manifest under `experiments/` even when given an override, racing four `mutation::tests_autonomous` tests that write transient files there. 11 failures in 107 runs.
 - The CI drift gate now carries four assertions; the fourth (no empty directories anywhere) is unscoped and is what catches leaks the path-scoped checks miss.
 - CORRECTED 2026-08-13: phase 320 is 0/4, not 2/4. 4d03543 shipped TYPES ONLY — `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt'` returns only `swarm-response/src/lib.rs` (the re-export) and `swarm-response/src/rollback.rs` (definitions plus their `#[cfg(test)]` tests). Zero production code constructs a lease. `SandboxRollbackExecutor::rollback` never branches on `ResponseRollbackStepKind` and performs no side effect. The roadmap's own "highest-blast-radius gap" — containment with no undo — is fully open. See task #19.
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-15)
 
 **Session Continuity**
 
-Last Date: 2026-08-15 — resumed
-Stopped At: Finishing Phase 285 security integration and obtaining external acceptance for MAPPING-05 and FALSIFY-04; phase 285 remains in progress.
+Last Date: 2026-08-21 — reset
+Stopped At: Phase 285 scope closure and transition to the collective-reasoning milestone.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: None — active `.planning/phases` contains 98 PLAN files and all 98 have matching SUMMARY files; queued future plan files are not execution checkpoints.
 Interrupted agent: None — `init resume` reports no interrupted GSD agent.
 
 ## Next Command
 
-Keep phase 285 open. Verify or configure the repository's protected required checks for the workflow jobs that execute `tools/check-mapping.sh` and `tools/check-negative-registry.sh`; only external evidence may close MAPPING-05 and FALSIFY-04. Do not begin phase 286 on the basis of local workflow wiring alone.
+Plan Phase 286, Collective Hypothesis Graph. The plan must define the typed graph schema, competing-hypothesis and contradiction semantics, role/task claim protocol, cross-telemetry normalization, kill-chain evidence lineage, containment simulation boundary, and the benchmark harness for the first five collective-intelligence metrics. Do not reopen the deferred GitHub App check or resurrect the retired DST/FUZZ/LOOM and Red Swarm acceptance IDs.

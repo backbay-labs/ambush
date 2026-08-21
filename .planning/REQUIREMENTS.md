@@ -813,7 +813,62 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [x] **TCBOUND-04**: The layering script additionally fails if `swarm-policy` or `swarm-response` gains a dependency on the memory or correlation modules, converting v1.82's advisory-lane boundary from a runtime integration test into a build-time guarantee; a deliberately-broken fixture proves the check fires rather than passing vacuously.
   MEASURED 2026-08-13. The memory and correlation modules were located rather than assumed: `crates/swarm-runtime/src/sphinx_agent.rs` (`KnowledgeGraph*`, gated by `memory.enabled`) and `crates/swarm-runtime/src/correlation.rs` (`CorrelationEngine`, gated by `correlation.enabled`), both hosted by `swarm-runtime`. The rule is stated over the HOSTING CRATE, which is strictly stronger than a module rule while the modules stay there — with `swarm-runtime` out of the manifest, `use swarm_runtime::correlation::CorrelationEngine` is a compile error — and the two-line registry that aims it raises `LAYERING-VACUITY[guard]` if a registered module path stops existing, so the lane cannot move out from under the rule silently (fixture case 10).
   THE FIXTURE IS EXECUTABLE AND RUNS ON EVERY INVOCATION. It generates a real miniature cargo workspace (real crate names; stub path crates literally named `axum`/`clap`/`hyper`/`reqwest`, so no registry and no network), runs real `cargo metadata` over it, and runs the SAME rule engine with the SAME policy and baseline, unmodified. One control case that must exit 0 plus nine deliberately-broken variants that must each exit non-zero with a named diagnostic; four of the nine are inversions cargo itself accepts (dev cycles, build cycles, transitive transport edges). The gate was ALSO observed failing against the real tree: adding `clap` to `swarm-policy`'s `[dependencies]` and `swarm-runtime` to its `[dev-dependencies]` produced five diagnostics including `LAYERING-VIOLATION[advisory-declared] swarm-policy declares 'swarm-runtime' as a dev dependency`, and the tree was restored.
-### Assurance Foundation (v1.79)
+### Collective Cyber Reasoning (v1.79)
+
+The active v1.79 contract replaces the old executor-first queue with a collective reasoning milestone. Phase 285 is closed under a deliberately narrower, truthful assurance scope; phases 286-289 are accepted for implementation. Every metric below is evaluated against a checked-in benchmark manifest and a single-agent or pre-change control. No phase may claim a protected GitHub rule unless the repository independently proves provenance-distinct enforcement.
+
+#### Phase 285: Assurance Foundation Closure
+
+- [x] **ASSURE-01**: The combined-tree assurance bundle contains a parsed assumption registry, exact invariant-to-function mappings, negative-falsifiability entries, fixture freshness evidence, and supply-chain evidence; the local gates exit 0 on the declared commit and exit non-zero for each documented unmapped, missing-negative, stale-fixture, and dependency-policy mutation.
+- [x] **ASSURE-02**: The SBOM is generated from locked `cargo metadata` resolution, includes package identities and dependency edges, validates against the declared CycloneDX schema, and rejects an invented dependency graph, invalid component type, or missing resolve edge in negative controls.
+- [x] **ASSURE-03**: A hosted Linux run executes the local assurance gates on a fresh, credential-free checkout, publishes commit-bound machine-readable results, and records the exact runner/toolchain/input identity needed to reproduce the result.
+- [x] **ASSURE-04**: Local and hosted evidence is reviewed on the combined tree, with no P0, P1, or P2 finding left unresolved in the phase review packet; isolated worktree or script-only green output is not sufficient evidence.
+- [x] **ASSURE-05**: The assurance docs distinguish `wired`, `executed`, `passed`, and `protected-required`; the external provenance-distinct GitHub App check and repository-settings enforcement are explicitly deferred and are not required for Phase 285 acceptance.
+- [x] **ASSURE-06**: Phase 285 verification is recorded as `passed` only for ASSURE-01..05 and the stated evidence boundary; it must not claim protected-branch enforcement, distributed failover coverage, or release authorization.
+
+#### Phase 286: Collective Hypothesis Graph
+
+- [ ] **COG-01**: A versioned, serializable hypothesis graph supports typed `actor`, `asset`, `credential`, `process`, and `event` nodes plus typed causal edges. Every edge carries confidence, source evidence IDs, producer role, observation time, and schema version; malformed or unproven edges are rejected rather than silently admitted.
+- [ ] **COG-02**: A seed signal creates at least two competing attack hypotheses when the evidence is ambiguous. Hypotheses retain confidence distributions, explicit uncertainty, contradiction sets, and a decision history; no single detector classification may erase a live alternative before evidence resolution.
+- [ ] **COG-03**: Evidence-hunter, challenger, and falsifier roles claim unresolved graph edges through a durable stigmergic task ledger. Claims have leases, idempotency keys, evidence scope, and completion/failure state; a 100-task duplicate-claim fixture keeps duplicate investigation work at or below 5%.
+- [ ] **COG-04**: Process, identity, Kubernetes audit, CloudTrail, network, and threat-intelligence telemetry normalize into one evidence envelope with source lineage and clock/ordering metadata. The cross-telemetry fixture contains at least one corroborating and one conflicting signal from each source family.
+- [ ] **COG-05**: The converged incident includes a reconstructed kill chain whose every node, edge, stage assignment, and narration claim links to one or more evidence IDs. A withheld multi-stage fixture must preserve declared stage order and report missing evidence instead of inventing a link.
+- [ ] **COG-06**: Containment options are simulated and ranked by predicted blast radius, reversibility, evidence support, and required approval. Planning cannot execute a response; any selected live action must still enter the existing policy, receipt, and operator-approval path.
+- [ ] **COG-07**: Completed investigations persist strategy memories containing the hypothesis delta, evidence utility, falsified alternatives, outcome, and provenance. A replayed investigation retrieves the memory without raw telemetry and changes task prioritization deterministically when the memory is applicable.
+- [ ] **COG-08**: The benchmark reports median time to the correct causal hypothesis, attack-chain recall, false causal-edge rate, duplicate investigation work, and evidence coverage. Phase 286 passes when the collective lane beats the single-agent control by at least 20% median hypothesis time, improves chain recall by at least 10 percentage points, keeps false causal edges at or below 10%, duplicate work at or below 5%, and covers at least 90% of adjudicated evidence.
+
+#### Phase 287: Adversarial Co-evolution Arena
+
+- [ ] **ARENA-01**: Red agents compose bounded multi-stage campaigns from the catalogued tactic/technique corpus, with deterministic seeds, virtual time, event budgets, and no invented capabilities or live-target access.
+- [ ] **ARENA-02**: Blue agents investigate the generated campaign through the real Ambush ingest, hypothesis-graph, detector, policy, and containment-planning path. Arena actions run against fixtures or an isolated sandbox; red code has no response-adapter or policy-authority capability.
+- [ ] **ARENA-03**: Red mutation consumes observed blue evidence and changes ordering, timing, or tactic composition within the declared budget. A replay report must show which blue outcome caused each surviving mutation and must terminate on generation, budget, plateau, or coverage bounds.
+- [ ] **ARENA-04**: Blue synthesis emits detector and response candidates from escapes and falsified hypotheses, each with evidence lineage, affected telemetry sources, expected coverage, safety constraints, and a reproducible candidate ID.
+- [ ] **ARENA-05**: Candidates compete against historical attacks, benign controls, and counterexamples. A candidate cannot survive on aggregate catch rate alone: false positives, latency/resource budgets, containment safety, and withheld campaigns are separate scored dimensions.
+- [ ] **ARENA-06**: The arena is structurally isolated from destructive authority. Static and runtime controls fail closed if red code imports response execution, blue simulation bypasses policy, or a generated action lacks a receipt/approval boundary; the controls include a negative fixture that proves they can fail.
+- [ ] **ARENA-07**: Arena reports measure time to containment, containment blast radius, previously unseen evasions discovered, improvement over the single-agent baseline, and generalization to withheld campaigns. Acceptance requires at least 15% median containment-time improvement, no increase in median blast radius, at least one previously unseen evasion found in three consecutive seeded runs, at least 10% improvement over the single-agent baseline, and withheld-campaign performance no worse than 5% relative to the in-sample score.
+- [ ] **ARENA-08**: A fixed seed, corpus digest, scheduler, and virtual clock produce byte-identical campaign decisions and candidate lineage; wall-clock guards, maximum generations, event budgets, and teardown checks prevent an unbounded or state-leaking run.
+
+#### Phase 288: Autonomous Detector And Response Synthesis
+
+- [ ] **SYNTH-01**: The synthesis lane derives detector candidates from graph gaps, evasion escapes, and falsifier findings using typed templates or bounded mutations; each candidate names the signal features, detector family, hypothesis edges addressed, and source evidence.
+- [ ] **SYNTH-02**: The lane derives response-plan candidates only from the existing typed response library and policy vocabulary, attaching approval requirements, reversibility, blast-radius scope, and rollback expectations. It cannot invent or directly invoke a response adapter.
+- [ ] **SYNTH-03**: Candidate evaluation runs historical attacks, benign controls, counterexamples, and withheld campaigns through the real replay/detection path, with deterministic reports for catch rate, false-positive rate, latency, resource cost, and causal-evidence coverage.
+- [ ] **SYNTH-04**: Mutation, differential, and metamorphic controls prove candidate gains are not artifacts of a weakened oracle: removing a candidate rule, swapping a source adapter, or mutating an expected verdict must produce the documented regression or block the candidate.
+- [ ] **SYNTH-05**: Promotion remains fail closed and operator-reviewed. A candidate without complete evidence lineage, safety checks, reproducible evaluation, and required solver/approval artifacts is rejected; accepted candidates produce a durable review packet and never silently replace the baseline.
+- [ ] **SYNTH-06**: The synthesis report records candidate quality and safety deltas against the baseline, including attack-chain recall, false causal edges, evidence coverage, time to containment, blast radius, latency, and resource use. A candidate must improve at least one target metric by 10% while regressing none of the safety ceilings and must pass every withheld-campaign and counterexample gate.
+
+#### Phase 289: Herd Memory
+
+- [ ] **HERDMEM-01**: Investigations export typed attack abstractions, causal motifs, detector/response outcomes, and strategy utility without exporting raw telemetry, secrets, host identifiers, or operator credentials. The export schema is versioned and rejects unredacted fields.
+- [ ] **HERDMEM-02**: Every memory record carries signer/provenance lineage, source-corpus digest, confidence, expiry, and transformation history. Import rejects tampered, replayed, stale, schema-invalid, or privacy-violating records and records the refusal reason.
+- [ ] **HERDMEM-03**: A receiving swarm requires independent local corroboration before using a peer memory for prioritization. No single publisher can raise confidence or authorize containment; conflicting memories remain visible as contradictions.
+- [ ] **HERDMEM-04**: Retrieved memory changes the next investigation's task ordering only when its context matches the current graph and source evidence. The benchmark compares memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage.
+- [ ] **HERDMEM-05**: Memory retention, expiry, revocation, poisoning quarantine, and operator deletion are durable and restart-safe. Garbage collection removes expired payloads and dependent indexes without leaving actionable orphan state.
+- [ ] **HERDMEM-06**: Herd-memory acceptance requires at least 20% lower median time to correct hypothesis or 10 percentage-point higher chain recall versus the single-agent control, no increase above the Phase 286 false-edge/duplicate-work ceilings, discovery of at least one previously unseen evasion across the withheld corpus, and withheld-campaign generalization within 5% of the in-sample score.
+
+### Historical Assurance Foundation (retired 2026-08-21; not an acceptance set)
+
+The former `MAPPING-*`, `FALSIFY-*`, `DST-*`, `FUZZ-*`, `LOOM-*`, and `SUPPLY-*` definitions below are retained as historical planning notes and evidence lineage. The deterministic-simulation, fuzz, and Loom executor backlog is not carried into active v1.79 acceptance. The local mapping, negative-registry, supply-chain, SBOM, and hosted-runner work is represented by the passed `ASSURE-*` scope above. The old definitions remain useful when tracing prior work, but their unchecked boxes do not indicate current blockers.
 
 #### Fixture Determinism And Suite Health
 
@@ -863,7 +918,9 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [x] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification. Before parsing Cargo.lock it runs `cargo metadata --locked --format-version 1`; its lock cross-check then owns exact full textual selector identity, and `cargo deny --locked check` plus denied `unmatched-skip` and `unnecessary-skip` lints and ordinary duplicate errors own applicability in the same locked graph. The gate also deduplicates the `cargo audit --ignore` list against `deny.toml` by DERIVATION rather than comparison: it reads `[advisories] ignore` and builds the flags, holds no id of its own, and fails if a RustSec id appears on any other enforcement surface. Cargo-audit has no locked mode, so the gate snapshots Cargo.lock and fails if any scanner rewrites it.
   The independently locked `tools/negative-registry-ast` executable is covered explicitly: locked metadata and lock immutability, a separate zero-waiver deny policy, cargo-deny, cargo-audit, and enforcement-surface inventory all run in the same gate.
 
-### Red Swarm (v1.80)
+### Historical Red Swarm Scope (retired 2026-08-21; not an acceptance set)
+
+The former OPFOR/ATKSCORE/COEVOLVE/ARMSCI definitions are retained below for provenance only. They are superseded by the ARENA/SYNTH requirements in active v1.79 and do not create queued v1.80 acceptance.
 
 #### Red Operator Genome And Target Graph
 
@@ -920,7 +977,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **SAFEP-04**: `formal/tla/PartitionContingency.tla` models the four partition states, lease issuance and redemption with blast-radius cap, and reconciliation on heal, with named invariants.
 - [ ] **SAFEP-05**: At least 3 negative-falsifiability entries produce Apalache violations, each naming the runtime regression test pinning the same defect.
 
-#### Z3-Backed Promotion Gate
+#### Historical Z3-Backed Promotion Gate (Phase 322; completed in v1.78.1)
 
 - [x] **ZGATE-01**: `require_solver_result_for_promotion` is added to config, distinct from `evolution.assurance.require_solver_summary`, defaulting to `true` in the curated ruleset. SHIPPED 99733a0. "Defaults true in the curated ruleset" can only mean "a ruleset that omits the key resolves to true" — `rulesets/default.yaml` is frozen by the signed attestation and cannot carry the key — so the serde default is the mechanism, pinned by `tracked_default_ruleset_resolves_the_promotion_solver_gate_to_enabled`.
 - [x] **ZGATE-02**: `crates/swarm-runtime/src/promotion.rs` rejects a candidate whose `solver_summary` is `None` when the gate is enabled; today `promotion.rs` never references `solver_summary` at all (verified: 0 occurrences). PATH CORRECTED 2026-08-13: `crates/swarm-evolution/src/promotion.rs` does not exist and never did — that crate owns four modules and re-exports `promotion` from `swarm-runtime` (`swarm-evolution/src/lib.rs:36-39`). The 0-occurrence measurement is correct for the real file, which is 2,901 lines and also has 0 occurrences of `z3`. SHIPPED 99733a0 as `ProductionPromotionError::SolverResultMissing`.
@@ -962,7 +1019,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **TRIAGE-05**: New signed record types go through the existing agent signing paths, with signature round-trip coverage.
 ### Distributed Governance (v1.83)
 
-#### BFT Correctness Repair
+#### Historical BFT Correctness Repair (Phase 321; deliberate partial)
 
 - [x] **BFT-01**: `recommended_max_faulty` in `crates/swarm-consensus/src/lib.rs:65` is corrected from `(committee_size - 1) / 2` to `(committee_size - 1) / 3` to match the module's own documented 2f+1-of-3f+1 model; a regression table asserts `recommended_max_faulty(4)==1`, `(7)==2`, `(10)==3`, `(13)==4`.
 - [x] **BFT-02**: A round with a correctly sized `3f+1` committee still reaches `commits.len() == committee.threshold()` after excluding the maximum tolerable number of Byzantine members; today `ConsensusCommittee::threshold()` never shrinks after `exclude_sender`, so ejecting one bad actor can strand a round below its own threshold, and the existing Byzantine test never asserts the round still commits.
@@ -999,7 +1056,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 ### Herd Immunity (v1.84)
 
-#### Reversible Quarantine Execution
+#### Historical Reversible Quarantine Execution (Phase 320; completed in v1.78.1)
 
 - [x] **QRT-01**: `crates/swarm-response` gains a real executor for `QuarantineFile`, `SuspendProcess`, `IsolateHost`, and `TerminateUserSession` that persists a quarantine lease carrying blast radius, rollback plan, governance receipt, and expiry.
   UNCHECKED 2026-08-13, was marked `[x]` in error. 4d03543 added the TYPES (`ContainmentLease`, `ContainmentLedger`, `RollbackExecutor`, `RollbackReceipt`) and nothing that uses them: `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt|RollbackTrigger'` returns exactly `crates/swarm-response/src/lib.rs` (the re-export at :35-38) and `crates/swarm-response/src/rollback.rs` (the definitions plus their own `#[cfg(test)]` tests). Zero production code constructs a lease, so "persists a quarantine lease" is unmet for all four actions. The original trailing clause ("no rollback executor exists anywhere in `swarm-response`, verified: zero non-preview rollback references") was true before 4d03543 and is now false; the accurate measurement is that rollback types exist and are constructed only in tests.
@@ -1481,48 +1538,40 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | FIXTURE-02 | Phase 284 | Satisfied |
 | FIXTURE-03 | Phase 284 | Satisfied |
 | FIXTURE-04 | Phase 284 | Satisfied |
-| MAPPING-01 | Phase 285 | Satisfied |
-| MAPPING-02 | Phase 285 | Satisfied - 59 exact IDs plus 5 enforced omissions enumerated and locally ratcheted by the universe manifest |
-| MAPPING-03 | Phase 285 | Satisfied |
-| MAPPING-04 | Phase 285 | Satisfied |
-| MAPPING-05 | Phase 285 | Pending - workflow wired; provenance-distinct external required check not configured |
-| FALSIFY-01 | Phase 285 | Satisfied |
-| FALSIFY-02 | Phase 285 | Satisfied - 59 exact tests structurally checked and executed with zero ignored |
-| FALSIFY-03 | Phase 285 | Satisfied |
-| FALSIFY-04 | Phase 285 | Pending - workflow wired; provenance-distinct external required check not configured |
-| DST-01 | Phase 286 | Pending |
-| DST-02 | Phase 286 | Pending |
-| DST-03 | Phase 286 | Pending |
-| DST-04 | Phase 286 | Pending |
-| DST-05 | Phase 286 | Pending |
-| DST-06 | Phase 286 | Pending |
-| FUZZ-01 | Phase 287 | Pending |
-| FUZZ-02 | Phase 287 | Pending |
-| FUZZ-03 | Phase 287 | Pending |
-| FUZZ-04 | Phase 287 | Pending |
-| LOOM-01 | Phase 287 | Pending |
-| LOOM-02 | Phase 287 | Pending |
-| LOOM-03 | Phase 287 | Pending |
-| LOOM-04 | Phase 287 | Pending |
-| SUPPLY-01 | Phase 287 | Satisfied |
-| SUPPLY-02 | Phase 287 | Satisfied |
-| OPFOR-01 | Phase 288 | Pending |
-| OPFOR-02 | Phase 288 | Pending |
-| OPFOR-03 | Phase 288 | Pending |
-| OPFOR-04 | Phase 288 | Pending |
-| ATKSCORE-01 | Phase 289 | Pending |
-| ATKSCORE-02 | Phase 289 | Pending |
-| ATKSCORE-03 | Phase 289 | Pending |
-| ATKSCORE-04 | Phase 289 | Pending |
-| COEVOLVE-01 | Phase 290 | Pending |
-| COEVOLVE-02 | Phase 290 | Pending |
-| COEVOLVE-03 | Phase 290 | Pending |
-| COEVOLVE-04 | Phase 290 | Pending |
-| ARMSCI-01 | Phase 291 | Pending |
-| ARMSCI-02 | Phase 291 | Pending |
-| ARMSCI-03 | Phase 291 | Pending |
-| ARMSCI-04 | Phase 291 | Pending |
-| ARMSCI-05 | Phase 291 | Pending |
+| ASSURE-01 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-02 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-03 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-04 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-05 | Phase 285 | Satisfied (external App enforcement deferred) |
+| ASSURE-06 | Phase 285 | Satisfied (scope verification only) |
+| COG-01 | Phase 286 | Pending |
+| COG-02 | Phase 286 | Pending |
+| COG-03 | Phase 286 | Pending |
+| COG-04 | Phase 286 | Pending |
+| COG-05 | Phase 286 | Pending |
+| COG-06 | Phase 286 | Pending |
+| COG-07 | Phase 286 | Pending |
+| COG-08 | Phase 286 | Pending |
+| ARENA-01 | Phase 287 | Pending |
+| ARENA-02 | Phase 287 | Pending |
+| ARENA-03 | Phase 287 | Pending |
+| ARENA-04 | Phase 287 | Pending |
+| ARENA-05 | Phase 287 | Pending |
+| ARENA-06 | Phase 287 | Pending |
+| ARENA-07 | Phase 287 | Pending |
+| ARENA-08 | Phase 287 | Pending |
+| SYNTH-01 | Phase 288 | Pending |
+| SYNTH-02 | Phase 288 | Pending |
+| SYNTH-03 | Phase 288 | Pending |
+| SYNTH-04 | Phase 288 | Pending |
+| SYNTH-05 | Phase 288 | Pending |
+| SYNTH-06 | Phase 288 | Pending |
+| HERDMEM-01 | Phase 289 | Pending |
+| HERDMEM-02 | Phase 289 | Pending |
+| HERDMEM-03 | Phase 289 | Pending |
+| HERDMEM-04 | Phase 289 | Pending |
+| HERDMEM-05 | Phase 289 | Pending |
+| HERDMEM-06 | Phase 289 | Pending |
 | DCORE-01 | Phase 292 | Pending |
 | DCORE-02 | Phase 292 | Pending |
 | DCORE-03 | Phase 292 | Pending |
@@ -1533,11 +1582,11 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | KANI-03 | Phase 293 | Pending |
 | KANI-04 | Phase 293 | Pending |
 | KANI-05 | Phase 293 | Pending |
-| SAFEP-01 | Phase 294 | Pending |
-| SAFEP-02 | Phase 294 | Pending |
-| SAFEP-03 | Phase 294 | Pending |
-| SAFEP-04 | Phase 294 | Pending |
-| SAFEP-05 | Phase 294 | Pending |
+| SAFEP-01 | Phase 292 | Pending |
+| SAFEP-02 | Phase 292 | Pending |
+| SAFEP-03 | Phase 292 | Pending |
+| SAFEP-04 | Phase 292 | Pending |
+| SAFEP-05 | Phase 292 | Pending |
 | ZGATE-01 | Phase 322 | Satisfied |
 | ZGATE-02 | Phase 322 | Satisfied |
 | ZGATE-03 | Phase 322 | Satisfied |
@@ -1685,8 +1734,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
 - v1.78 complete as scoped: phases 280-283 shipped; GATEFIX-01-04 and TCBOUND-01-04 are satisfied, while phase 282's measured SPLIT remainder remains explicit rather than silently claimed
 - v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83 rather than claimed
-- v1.79 active: phase 284 complete; phase 285 is 7/9 satisfied on the current v1.79 integration branch, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
-- v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
+- v1.79 active: 34 requirements across phases 284-289; Phase 285 is passed under the revised ASSURE-01..06 scope, and COG/ARENA/SYNTH/HERDMEM are accepted for implementation
+- v1.80 historical only: the former OPFOR/ATKSCORE/COEVOLVE/ARMSCI block (phases 288-291) is superseded by active v1.79 ARENA/SYNTH and creates no queued acceptance set
 - v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
 - v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
@@ -1697,4 +1746,4 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-08-15 - Activated v1.79 and separated local phase-285 delivery from external required-check acceptance*
+*Last updated: 2026-08-21 - Reset v1.79 around Collective Cyber Reasoning and explicitly deferred the external GitHub App enforcement gate*

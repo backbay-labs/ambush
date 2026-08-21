@@ -2,21 +2,21 @@
 
 ## Latest Completed Milestone
 
-### v1.78 Runtime Decomposition And TCB Boundary
-**Executable phases:** 280-283
-**Status:** Complete
-**Shipped:** 2026-08-13
-**Goal:** Green the verification gates, eliminate the core.inc pattern, split the 97,709-LOC swarm-runtime crate, and name and enforce a trusted computing base.
-**Progress:** Phases 280-283 complete as scoped; phase 282's explicitly measured remainder remains recorded rather than silently claimed
+### v1.78.1 Runtime Safety Corrections
+**Executable phases:** 320-322
+**Status:** Complete with explicitly deferred distributed extensions
+**Shipped:** 2026-08-14
+**Goal:** Close reversible containment and promotion-solver safety defects while keeping the single-node fail-closed boundary explicit.
+**Progress:** QRT-01..04 and ZGATE-01..05 are satisfied; the networked pheromone exchange and multi-process governance round remain deferred to the later distributed-governance queue.
 
 ## Active Milestone
 
-### v1.79 Assurance Foundation
-**Executable phases:** 284-287
+### v1.79 Collective Cyber Reasoning
+**Executable phases:** 284-289
 **Status:** Active
-**Started:** 2026-08-14
-**Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
-**Progress:** Phase 284 complete; phase 285 has 7/9 requirements satisfied on the current v1.79 integration branch, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
+**Started:** 2026-08-21
+**Goal:** Turn the runtime from parallel detectors into a collective reasoning system that constructs, contests, and refines causal attack theories, then learns from bounded adversarial pressure.
+**Progress:** Phase 284 complete; Phase 285 passed under its revised local-and-hosted assurance scope; Phases 286-289 are accepted and ready for planning.
 
 ## Queued Milestones
 
@@ -24,55 +24,65 @@
 **Executable phases:** 264-267
 **Status:** Deferred
 **Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
-**Progress:** Phases 264-267 remain defined and explicitly deferred
+**Progress:** Preserved for later reactivation; it is not an active v1.79 blocker.
 
-### v1.80 Red Swarm
-**Executable phases:** 288-291
-**Status:** Queued
-**Goal:** Land a deterministic, catalog-bounded adversarial lane so detectors are scored against something that adapts, with a bounded arms race in CI.
-**Progress:** Phases 288-291 defined 2026-08-10; ready to activate in sequence
+### v1.78 Runtime Decomposition And TCB Boundary
+**Executable phases:** 280-283
+**Status:** Complete
+**Goal:** Green the verification gates, eliminate the core.inc pattern, split the runtime along its real seams, and enforce the trusted-computing-base boundary.
+**Progress:** Phases 280-283 complete as scoped; measured remainder and deliberate limitations remain in the historical planning record.
+
+### Historical v1.80 Red Swarm (superseded; not queued)
+**Executable phases:** 288-291 (historical only)
+**Status:** Superseded by v1.79 Collective Cyber Reasoning
+**Goal:** The former catalog-bounded red-swarm proposal is retained for provenance, but its OPFOR/ATKSCORE/COEVOLVE/ARMSCI acceptance set is replaced by ARENA/SYNTH in active v1.79.
+**Progress:** No v1.80 acceptance gate is active in this reset; phases 290-291 remain historical entries and are not silently counted as complete.
 
 ### v1.81 Machine-Checked Decision Core
-**Executable phases:** 292-295
+**Executable phases:** 292-294
 **Status:** Queued
-**Goal:** Extract an IO-free decision core and bind it to Kani, named safety properties, a TLA+ lease model, and a Z3-gated promotion path.
-**Progress:** Phases 292-295 defined 2026-08-10; ready to activate in sequence
+**Goal:** Extract pure decision predicates, bind them to bounded model checking, and model the highest-risk lease and governance properties.
+**Progress:** Original phase numbering is preserved after the v1.79 reset; no future phase was compressed or renumbered.
 
 ### v1.82 Provenance Memory And Correlation
 **Executable phases:** 296-299
 **Status:** Queued
-**Goal:** Deepen the four-graph substrate into real provenance, reconstruct kill chains across hunts, and cut false positives with dependency-aware scoring.
-**Progress:** Phases 296-299 defined 2026-08-10; ready to activate in sequence
+**Goal:** Deepen causal provenance, reconstruct kill chains, correlate hunts through graph traversal, and reduce false positives with dependency-aware scoring.
+**Progress:** Original phase numbering is preserved; the active v1.79 hypothesis graph owns the first collective-reasoning vertical slice.
 
 ### v1.83 Distributed Governance
-**Executable phases:** 300-303
+**Executable phases:** 301-303
 **Status:** Queued
-**Goal:** Repair the BFT sizing defect, then move to VRF-selected epoch committees, networked rounds with per-instance keys, and quorum-authorized revocation.
-**Progress:** Phases 300-303 defined 2026-08-10; ready to activate in sequence
+**Goal:** Move from the single-node governance seam to unpredictable committees, quorum-authorized revocation, and re-verified fail-closed recovery.
+**Progress:** Original phase numbering is preserved; the superseded BFT row remains historical and does not create an acceptance phase.
 
 ### v1.84 Herd Immunity
-**Executable phases:** 304-307
+**Executable phases:** 305-307
 **Status:** Queued
-**Goal:** Give containment a real undo, then compose taint-aware flow control, no-single-publisher cross-instance immunity, and adaptive deception.
-**Progress:** Phases 304-307 defined 2026-08-10; ready to activate in sequence
+**Goal:** Compose taint-aware flow control, no-single-publisher cross-instance immunity, and adaptive deception after the distributed governance boundary is ready.
+**Progress:** Original phase numbering is preserved.
 
 ### v1.85 The Detection Commons
 **Executable phases:** 308-311
 **Status:** Queued
-**Goal:** Publish a normative spec with schemas, package an external conformance suite, ship a detector-authoring SDK, and generate the coverage claim.
-**Progress:** Phases 308-311 defined 2026-08-10; ready to activate in sequence
+**Goal:** Publish a normative spec, external conformance suite, detector-authoring SDK, and generated coverage claim.
+**Progress:** Original phase numbering is preserved.
 
 ### v1.86 Federation
 **Executable phases:** 312-315
 **Status:** Queued
-**Goal:** Exchange verifiable evidence across operator boundaries with no shared server and no auto-authorization of local action.
-**Progress:** Phases 312-315 defined 2026-08-10; ready to activate in sequence
+**Goal:** Exchange verifiable evidence across operator boundaries without shared servers or automatic local authorization.
+**Progress:** Original phase numbering is preserved.
 
 ### v1.87 Fleet Scale
 **Executable phases:** 316-319
 **Status:** Queued
-**Goal:** Scale to a multi-instance fleet with fleet-wide blast-radius control, tenant isolation, measured capacity, and enforced release provenance.
-**Progress:** Phases 316-319 defined 2026-08-10; ready to activate in sequence
+**Goal:** Scale to a multi-instance fleet with blast-radius control, tenant isolation, measured capacity, and enforced release provenance.
+**Progress:** Original phase numbering is preserved.
+
+### Numbering and historical-scope decision
+
+The old v1.79 DST/FUZZ/LOOM backlog and v1.80 OPFOR/ATKSCORE/COEVOLVE/ARMSCI backlog are retained below as historical scope only. They are not active acceptance gates. Future v1.81+ phase numbering is unchanged, and no protected GitHub App check is implied by any phase status.
 
 ## History
 
