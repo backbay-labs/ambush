@@ -760,15 +760,19 @@ def workflow_contract_problems(
     if sbom_job is None:
         problems.append(f"{release_name}: workflow has no parseable sbom job")
         sbom_job = ""
-    if release.count(cyclonedx_pin) != 1:
-        problems.append(
-            f"{release_name}: cargo-cyclonedx pin must be exactly {cyclonedx_version}"
-        )
-    if sbom_job.count(cyclonedx_install) != 1:
-        problems.append(
-            f"{release_name}: cargo-cyclonedx must be installed exactly once, "
-            "unconditionally, with --locked --force and exact version verification"
-        )
+    for document_name, document, job in (
+        (ci_name, ci, supply_job),
+        (release_name, release, sbom_job),
+    ):
+        if document.count(cyclonedx_pin) != 1:
+            problems.append(
+                f"{document_name}: cargo-cyclonedx pin must be exactly {cyclonedx_version}"
+            )
+        if job.count(cyclonedx_install) != 1:
+            problems.append(
+                f"{document_name}: cargo-cyclonedx must be installed exactly once, "
+                "unconditionally, with --locked --force and exact version verification"
+            )
 
     permission_count = len(re.findall(r"(?m)^ *permissions:$", release))
     if release.count(top_permissions) != 1 or permission_count != 3:
@@ -1227,44 +1231,45 @@ for tool in ("cargo-deny", "cargo-audit"):
         [f"{tool} must be installed exactly once, unconditionally"],
     )
 
-conditional_cyclonedx = replaced(
-    workflows,
-    release_name,
-    "      - name: Install cargo-cyclonedx\n        run: |\n",
-    "      - name: Install cargo-cyclonedx\n        if: success()\n        run: |\n",
-    "conditional cargo-cyclonedx install mutation",
-)
-require_invalid(
-    "conditional cargo-cyclonedx install mutation",
-    conditional_cyclonedx,
-    ["cargo-cyclonedx must be installed exactly once, unconditionally"],
-)
+for document_name in (ci_name, release_name):
+    conditional_cyclonedx = replaced(
+        workflows,
+        document_name,
+        "      - name: Install cargo-cyclonedx\n        run: |\n",
+        "      - name: Install cargo-cyclonedx\n        if: success()\n        run: |\n",
+        f"{document_name} conditional cargo-cyclonedx install mutation",
+    )
+    require_invalid(
+        f"{document_name} conditional cargo-cyclonedx install mutation",
+        conditional_cyclonedx,
+        ["cargo-cyclonedx must be installed exactly once, unconditionally"],
+    )
 
-alias_shadowed_version = replaced(
-    workflows,
-    release_name,
-    '          test "$("${CARGO_CYCLONEDX_BIN}" cyclonedx --version)" = ',
-    '          test "$(cargo cyclonedx --version)" = ',
-    "cargo alias-shadowed cyclonedx version mutation",
-)
-require_invalid(
-    "cargo alias-shadowed cyclonedx version mutation",
-    alias_shadowed_version,
-    ["cargo-cyclonedx must be installed exactly once, unconditionally"],
-)
+    alias_shadowed_version = replaced(
+        workflows,
+        document_name,
+        '          test "$("${CARGO_CYCLONEDX_BIN}" cyclonedx --version)" = ',
+        '          test "$(cargo cyclonedx --version)" = ',
+        f"{document_name} cargo alias-shadowed cyclonedx version mutation",
+    )
+    require_invalid(
+        f"{document_name} cargo alias-shadowed cyclonedx version mutation",
+        alias_shadowed_version,
+        ["cargo-cyclonedx must be installed exactly once, unconditionally"],
+    )
 
-cyclonedx_drift = replaced(
-    workflows,
-    release_name,
-    cyclonedx_pin,
-    '  CARGO_CYCLONEDX_VERSION: "0.5.8"\n',
-    "cargo-cyclonedx pin drift mutation",
-)
-require_invalid(
-    "cargo-cyclonedx pin drift mutation",
-    cyclonedx_drift,
-    [f"cargo-cyclonedx pin must be exactly {cyclonedx_version}"],
-)
+    cyclonedx_drift = replaced(
+        workflows,
+        document_name,
+        cyclonedx_pin,
+        '  CARGO_CYCLONEDX_VERSION: "0.5.8"\n',
+        f"{document_name} cargo-cyclonedx pin drift mutation",
+    )
+    require_invalid(
+        f"{document_name} cargo-cyclonedx pin drift mutation",
+        cyclonedx_drift,
+        [f"cargo-cyclonedx pin must be exactly {cyclonedx_version}"],
+    )
 
 fake_cached_release = replaced(
     workflows,
@@ -1394,7 +1399,15 @@ dependencies = [
 name = "omitted"
 version = "2.0.0"
 TOML
-SBOM_FIXTURE_CYCLONEDX_BIN="$(command -v cargo-cyclonedx)"
+if [[ -n "${CARGO_CYCLONEDX_BIN:-}" ]]; then
+  SBOM_FIXTURE_CYCLONEDX_BIN="$CARGO_CYCLONEDX_BIN"
+else
+  SBOM_FIXTURE_CYCLONEDX_BIN="$(command -v cargo-cyclonedx || true)"
+fi
+if [[ "$SBOM_FIXTURE_CYCLONEDX_BIN" != /* || ! -x "$SBOM_FIXTURE_CYCLONEDX_BIN" ]]; then
+  echo "::error::supply-chain gate requires an absolute executable CARGO_CYCLONEDX_BIN or cargo-cyclonedx on PATH" >&2
+  exit 1
+fi
 if [[ "$($SBOM_FIXTURE_CYCLONEDX_BIN cyclonedx --version)" != \
   "cargo-cyclonedx-cyclonedx $REQUIRED_CARGO_CYCLONEDX_VERSION" ]]; then
   echo "::error::SBOM graph control did not resolve the pinned cargo-cyclonedx" >&2

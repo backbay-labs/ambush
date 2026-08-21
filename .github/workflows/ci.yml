@@ -595,6 +595,7 @@ jobs:
     env:
       CARGO_DENY_VERSION: "0.19.4"
       CARGO_AUDIT_VERSION: "0.22.0"
+      CARGO_CYCLONEDX_VERSION: "0.5.9"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -607,9 +608,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-
+            cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -623,6 +624,14 @@ jobs:
         run: |
           cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
           cargo-audit --version
+
+      - name: Install cargo-cyclonedx
+        run: |
+          CYCLONEDX_INSTALL_ROOT="${RUNNER_TEMP}/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}"
+          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked --force --root "${CYCLONEDX_INSTALL_ROOT}"
+          CARGO_CYCLONEDX_BIN="${CYCLONEDX_INSTALL_ROOT}/bin/cargo-cyclonedx"
+          test "$("${CARGO_CYCLONEDX_BIN}" cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${CARGO_CYCLONEDX_VERSION}"
+          printf 'CARGO_CYCLONEDX_BIN=%s\n' "${CARGO_CYCLONEDX_BIN}" >>"${GITHUB_ENV}"
 
       - name: Run supply-chain checks
         run: bash tools/check-supply-chain.sh
