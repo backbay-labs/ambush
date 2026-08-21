@@ -410,12 +410,12 @@
         (
             RuntimeService::new(
                 service_config(
-                    RuntimeMode::LiveResponse,
+                    RuntimeMode::DetectOnly,
                     PheromoneBackendConfig::InMemory,
                     false,
                 ),
                 SwarmRuntime::new(
-                    RuntimeMode::LiveResponse,
+                    RuntimeMode::DetectOnly,
                     StaticApprovalGate::default(),
                     executor,
                 ),

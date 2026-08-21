@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde_json::json;
@@ -6,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use swarm_agents::pounce_agent::PounceAgent;
 use swarm_agents::stalker_agent::StalkerAgent;
-use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
+use swarm_agents::tom_agent::{
+    GovernanceAuthority, GovernancePolicy, GovernancePolicyConfig, TomAgent,
+};
 use swarm_agents::weaver_agent::WeaverAgent;
 use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::agent::{AgentRole, SwarmAgent, SwarmModeState};
@@ -17,8 +21,8 @@ use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
 use swarm_policy::ApprovalContext;
 use swarm_runtime::agent_identity::{
-    FileAgentIdentityRegistry, FileAgentKeyStore, PersistedAgentIdentity, RegistryAdmission,
-    resolve_agent_key_dir, resolve_identity_registry_dir,
+    AgentKeyLoadStatus, FileAgentIdentityRegistry, FileAgentKeyStore, PersistedAgentIdentity,
+    RegistryAdmission, resolve_agent_key_dir, resolve_identity_registry_dir,
 };
 use swarm_runtime::approval::DefaultApprovalHarness;
 use swarm_runtime::calico_agent::CalicoAgent;
@@ -53,12 +57,38 @@ struct Cli {
     otlp_endpoint: Option<String>,
     #[arg(long)]
     serve: bool,
+    /// Archive all existing governance state and create an empty signed stream.
+    /// Run only while the daemon is stopped; legacy leases and authorizations
+    /// are deliberately discarded rather than migrated as trusted state.
+    #[arg(
+        long,
+        conflicts_with = "serve",
+        conflicts_with = "scenario",
+        conflicts_with = "scenarios_dir"
+    )]
+    reinitialize_governance_state: bool,
     #[arg(long, default_value = "127.0.0.1:9090")]
     bind: String,
     #[arg(long, default_value = "data/approval-sets")]
     approval_set_results_dir: PathBuf,
     #[arg(long, default_value = "data/approval-ledgers")]
     approval_ledger_results_dir: PathBuf,
+    #[arg(long, default_value = "data/approval-verdicts")]
+    approval_verdict_results_dir: PathBuf,
+    #[arg(long, default_value = "data/approval-receipt-packs")]
+    approval_receipt_pack_results_dir: PathBuf,
+}
+
+fn build_approval_harness(
+    cli: &Cli,
+) -> Result<DefaultApprovalHarness, swarm_runtime::approval::ApprovalError> {
+    DefaultApprovalHarness::from_path(
+        &cli.config,
+        &cli.approval_verdict_results_dir,
+        &cli.approval_receipt_pack_results_dir,
+        &cli.approval_set_results_dir,
+        &cli.approval_ledger_results_dir,
+    )
 }
 
 fn response_kind(value: &swarm_spine::AuditResponseRecord) -> &'static str {
@@ -184,21 +214,15 @@ fn load_persisted_agent_identity(
         .map_err(std::io::Error::other)
 }
 
-fn default_partition_governance_state_path(config_path: &std::path::Path) -> PathBuf {
-    let config_dir = config_path
+fn default_partition_governance_state_path(
+    config_path: &std::path::Path,
+    identity: &swarm_core::config::IdentityConfig,
+) -> PathBuf {
+    let agent_key_dir = resolve_agent_key_dir(config_path, identity);
+    agent_key_dir
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    if config_dir
-        .file_name()
-        .is_some_and(|name| name == "rulesets")
-    {
-        config_dir
-            .parent()
-            .unwrap_or(config_dir)
-            .join("data/governance-partition-state.json")
-    } else {
-        config_dir.join("governance-partition-state.json")
-    }
+        .unwrap_or(agent_key_dir.as_path())
+        .join("governance-partition-state.json")
 }
 
 fn admit_runtime_identity(
@@ -225,6 +249,20 @@ fn admit_runtime_identity(
         }
         Err(error) => Err(std::io::Error::other(error)),
     }
+}
+
+fn admit_required_tom_identity(
+    registry: &FileAgentIdentityRegistry,
+    identity: &PersistedAgentIdentity,
+    now_ms: i64,
+) -> Result<RegistryAdmission, std::io::Error> {
+    registry
+        .admit_persisted_identity(AgentRole::Tom, "primary", identity, now_ms)
+        .map_err(|error| {
+            std::io::Error::other(format!(
+                "Tom/primary identity must be admitted before governance state can load: {error}"
+            ))
+        })
 }
 
 fn build_restartable_agent<F>(
@@ -268,6 +306,80 @@ where
         .register_restartable(agent, restart_factory)
         .map_err(std::io::Error::other)?;
     Ok(Some(expected_agent_id))
+}
+
+fn register_preloaded_runtime_agent<F>(
+    dispatcher: &mut AgentDispatcher,
+    identity: PersistedAgentIdentity,
+    build: F,
+) -> Result<AgentId, std::io::Error>
+where
+    F: FnOnce(PersistedAgentIdentity) -> Result<(Box<dyn SwarmAgent>, AgentRestartFactory), String>,
+{
+    let expected_agent_id = identity.id.clone();
+    let (agent, restart_factory) = build(identity).map_err(std::io::Error::other)?;
+    if agent.id() != &expected_agent_id {
+        return Err(std::io::Error::other(format!(
+            "restartable Tom/primary builder returned mismatched id `{}` (expected `{expected_agent_id}`)",
+            agent.id()
+        )));
+    }
+    dispatcher
+        .register_restartable(agent, restart_factory)
+        .map_err(std::io::Error::other)?;
+    Ok(expected_agent_id)
+}
+
+fn governance_policy_for_bootstrap(
+    config: GovernancePolicyConfig,
+    path: &std::path::Path,
+    identity: &PersistedAgentIdentity,
+    key_status: AgentKeyLoadStatus,
+) -> Result<GovernancePolicy, swarm_agents::tom_agent::GovernancePersistenceError> {
+    match key_status {
+        AgentKeyLoadStatus::Created => GovernancePolicy::initialize_persistence(
+            config,
+            path,
+            identity.id.clone(),
+            identity.signing_key.clone(),
+        ),
+        AgentKeyLoadStatus::Loaded => GovernancePolicy::with_persistence(
+            config,
+            path,
+            identity.id.clone(),
+            identity.signing_key.clone(),
+        ),
+    }
+}
+
+/// The shipped `swarm-detect` governance composition.
+///
+/// Every security-sensitive consumer receives a clone of one opaque authority
+/// minted by the authenticated persisted governance policy.
+#[derive(Clone)]
+struct ShippedGovernanceWiring {
+    authority: GovernanceAuthority,
+}
+
+impl ShippedGovernanceWiring {
+    fn new(authority: GovernanceAuthority) -> Self {
+        Self { authority }
+    }
+
+    fn configure_ingest(&self, state: IngestState) -> IngestState {
+        state.with_governance_authority(self.authority.clone())
+    }
+
+    fn configure_dispatcher(&self, dispatcher: AgentDispatcher) -> AgentDispatcher {
+        dispatcher.with_governance_authority(self.authority.clone())
+    }
+
+    fn configure_containment(
+        &self,
+        sweep: swarm_runtime::containment::ContainmentSweep,
+    ) -> swarm_runtime::containment::ContainmentSweep {
+        sweep.with_governance_authority(self.authority.clone())
+    }
 }
 
 fn spawn_secret_reload_watcher(
@@ -677,6 +789,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.detection.strategy,
             cli.bind
         );
+    } else if cli.reinitialize_governance_state {
+        println!(
+            "swarm-detect reinitializing governance state config={}",
+            cli.config.display()
+        );
     } else {
         let mut paths = if let Some(dir) = &cli.scenarios_dir {
             scenario_paths_in_dir(dir)?
@@ -700,11 +817,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(AntiTamperFailure::new(&anti_tamper).into());
     }
 
-    if cli.serve {
-        let approval_harness = DefaultApprovalHarness::from_paths(
-            &cli.approval_set_results_dir,
-            &cli.approval_ledger_results_dir,
+    if cli.reinitialize_governance_state {
+        let identity_store =
+            FileAgentKeyStore::open(resolve_agent_key_dir(&cli.config, &config.identity))
+                .map_err(std::io::Error::other)?;
+        let identity_registry = FileAgentIdentityRegistry::open(resolve_identity_registry_dir(
+            &cli.config,
+            &config.identity,
+        ))
+        .map_err(std::io::Error::other)?;
+        let tom_identity =
+            load_persisted_agent_identity(&identity_store, AgentRole::Tom, "primary")?;
+        admit_required_tom_identity(
+            &identity_registry,
+            &tom_identity,
+            swarm_runtime::runtime_events::now_ms(),
         )?;
+        let governance_path =
+            default_partition_governance_state_path(&cli.config, &config.identity);
+        GovernancePolicy::reinitialize_persistence(
+            GovernancePolicyConfig {
+                contingency_lease_ttl_ms: config.runtime.partition_contingency_lease_ttl_ms,
+                contingency_blast_radius_cap: config.runtime.partition_contingency_blast_radius_cap,
+            },
+            &governance_path,
+            tom_identity.id,
+            tom_identity.signing_key,
+        )?;
+        println!(
+            "swarm-detect initialized empty signed governance state at {}",
+            governance_path.display()
+        );
+        return Ok(());
+    }
+
+    if cli.serve {
+        let approval_harness = build_approval_harness(&cli)?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel(10_000);
         let (bridge_ingest_tx, mut bridge_ingest_rx) =
@@ -716,25 +864,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bridge_health = bridge_registry.shared_health();
         let threat_intel_registry = ThreatIntelFeedRuntimeRegistry::from_config(&config);
         let threat_intel_feed_health = threat_intel_registry.shared_health();
-        let governance_policy = Arc::new(GovernancePolicy::with_persistence(
-            GovernancePolicyConfig {
-                contingency_lease_ttl_ms: config.runtime.partition_contingency_lease_ttl_ms,
-                contingency_blast_radius_cap: config.runtime.partition_contingency_blast_radius_cap,
-            },
-            default_partition_governance_state_path(&cli.config),
-        )?);
         let runtime_events = RuntimeEventBroadcaster::new(DEFAULT_RUNTIME_EVENT_CAPACITY);
+        let agent_key_dir = resolve_agent_key_dir(&cli.config, &config.identity);
         let identity_store =
-            FileAgentKeyStore::open(resolve_agent_key_dir(&cli.config, &config.identity))
-                .map_err(std::io::Error::other)?;
-        let ingest_identity =
-            load_persisted_agent_identity(&identity_store, AgentRole::Whisker, "primary")?;
+            FileAgentKeyStore::open(&agent_key_dir).map_err(std::io::Error::other)?;
         let identity_registry = FileAgentIdentityRegistry::open(resolve_identity_registry_dir(
             &cli.config,
             &config.identity,
         ))
         .map_err(std::io::Error::other)?;
         let now_ms = swarm_runtime::runtime_events::now_ms();
+        let (tom_identity, tom_key_status) = identity_store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .map_err(std::io::Error::other)?;
+        admit_required_tom_identity(&identity_registry, &tom_identity, now_ms)?;
+        let governance_config = GovernancePolicyConfig {
+            contingency_lease_ttl_ms: config.runtime.partition_contingency_lease_ttl_ms,
+            contingency_blast_radius_cap: config.runtime.partition_contingency_blast_radius_cap,
+        };
+        let governance_path =
+            default_partition_governance_state_path(&cli.config, &config.identity);
+        let governance_policy = Arc::new(governance_policy_for_bootstrap(
+            governance_config,
+            &governance_path,
+            &tom_identity,
+            tom_key_status,
+        )?);
+        let governance = ShippedGovernanceWiring::new(
+            governance_policy
+                .authority()
+                .map_err(std::io::Error::other)?,
+        );
+        let ingest_identity =
+            load_persisted_agent_identity(&identity_store, AgentRole::Whisker, "primary")?;
         let state = IngestState::from_config_with_signing_key(
             cli.config.clone(),
             config.clone(),
@@ -742,29 +904,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?
         .with_startup_attestation(startup_attestation.clone())
         .with_anti_tamper_report(anti_tamper.clone());
-        let state = state
-            .with_telemetry_channel(telemetry_tx.clone())
-            .with_agent_health(Arc::clone(&agent_health))
-            .with_mode_state(Arc::clone(&mode_state))
-            .with_bridge_health(bridge_health)
-            .with_threat_intel_feed_health(threat_intel_feed_health)
-            .with_shutdown_channel(shutdown_tx.clone())
-            .with_runtime_events(runtime_events.clone())
-            .with_governance_policy(Arc::clone(&governance_policy))
-            .with_approval_harness(approval_harness);
+        let state = governance.configure_ingest(
+            state
+                .with_telemetry_channel(telemetry_tx.clone())
+                .with_agent_health(Arc::clone(&agent_health))
+                .with_mode_state(Arc::clone(&mode_state))
+                .with_bridge_health(bridge_health)
+                .with_threat_intel_feed_health(threat_intel_feed_health)
+                .with_shutdown_channel(shutdown_tx.clone())
+                .with_runtime_events(runtime_events.clone())
+                .with_approval_harness(approval_harness),
+        );
         let dispatcher_shutdown = shutdown_rx.clone();
         let monitor_shutdown = shutdown_rx.clone();
-        let mut dispatcher = AgentDispatcher::new(
-            AgentDispatcherConfig::default(),
-            dispatcher_shutdown,
-            state.current_substrate(),
-            Arc::clone(&agent_health),
-        )
-        .with_mode_state(Arc::clone(&mode_state))
-        .with_request_response_router(state.current_request_response_router())
-        .with_strategy_proposal_router(state.current_strategy_proposal_router())
-        .with_governance_policy(Arc::clone(&governance_policy))
-        .with_runtime_events(runtime_events.clone());
+        let mut dispatcher = governance.configure_dispatcher(
+            AgentDispatcher::new(
+                AgentDispatcherConfig::default(),
+                dispatcher_shutdown,
+                state.current_substrate(),
+                Arc::clone(&agent_health),
+            )
+            .with_mode_state(Arc::clone(&mode_state))
+            .with_request_response_router(state.current_request_response_router())
+            .with_strategy_proposal_router(state.current_strategy_proposal_router())
+            .with_runtime_events(runtime_events.clone()),
+        );
         let mut admitted_identities = Vec::new();
         if let Some(metrics) = state.current_prometheus_metrics() {
             dispatcher = dispatcher.with_metrics(metrics);
@@ -808,38 +972,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )? {
             admitted_identities.push(calico_id);
         }
-        if let Some(tom_id) = register_persisted_runtime_agent(
-            &mut dispatcher,
-            &identity_store,
-            &identity_registry,
-            AgentRole::Tom,
-            "primary",
-            now_ms,
-            {
+        let tom_id = register_preloaded_runtime_agent(&mut dispatcher, tom_identity, {
+            let governance_policy = Arc::clone(&governance_policy);
+            let degraded_tick_threshold = config.runtime.governance_degraded_tick_threshold;
+            move |identity| {
                 let governance_policy = Arc::clone(&governance_policy);
-                let degraded_tick_threshold = config.runtime.governance_degraded_tick_threshold;
-                move |identity| {
-                    let governance_policy = Arc::clone(&governance_policy);
-                    build_restartable_agent(move || {
-                        // Fallible since BFT-03: the governance policy holds at
-                        // most ONE governor signing key, so a restart that tried
-                        // to install a second, different key is a configuration
-                        // error the supervisor must see, not something to swallow.
-                        Ok(Box::new(
-                            TomAgent::new_with_signing_key(
-                                identity.id.clone(),
-                                identity.signing_key.clone(),
-                                degraded_tick_threshold,
-                                Arc::clone(&governance_policy),
-                            )
-                            .map_err(|error| error.to_string())?,
-                        ))
-                    })
-                }
-            },
-        )? {
-            admitted_identities.push(tom_id);
-        }
+                build_restartable_agent(move || {
+                    // Fallible since BFT-03: the governance policy holds at
+                    // most ONE governor signing key, so a restart that tried
+                    // to install a second, different key is a configuration
+                    // error the supervisor must see, not something to swallow.
+                    Ok(Box::new(
+                        TomAgent::new_with_signing_key(
+                            identity.id.clone(),
+                            identity.signing_key.clone(),
+                            degraded_tick_threshold,
+                            Arc::clone(&governance_policy),
+                        )
+                        .map_err(|error| error.to_string())?,
+                    ))
+                })
+            }
+        })?;
+        admitted_identities.push(tom_id);
         if let Some(pounce_id) = register_persisted_runtime_agent(
             &mut dispatcher,
             &identity_store,
@@ -1025,18 +1180,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match swarm_runtime::containment::rollback_executor_from_config(
                         &state.current_response_adapter_config(),
                     ) {
-                        Ok(executor) => Some(Arc::new(
+                        Ok(executor) => Some(Arc::new(governance.configure_containment(
                             swarm_runtime::containment::ContainmentSweep::new(
                                 store,
                                 executor,
                                 state.current_execution_mode(),
-                            )
-                            // The same `GovernancePolicy` the dispatcher and the
-                            // ingest surface hold, so a release is co-signed on
-                            // the same receipt chain as the governance decision
-                            // that authorized the containment.
-                            .with_governance(Arc::clone(&governance_policy) as Arc<_>),
-                        )),
+                            ),
+                        ))),
                         Err(error) => {
                             // Loud, not fatal: the runtime still refuses containments
                             // it cannot lease, so nothing new gets contained. What is
@@ -1379,19 +1529,108 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
+        Cli, ShippedGovernanceWiring, build_approval_harness,
+        default_partition_governance_state_path, governance_policy_for_bootstrap,
         register_optional_calico_agent, register_optional_sphinx_agent, watch_paths_differ,
     };
+    use clap::Parser;
     use std::path::PathBuf;
     use std::sync::Arc;
     use swarm_core::agent::{AgentRole, SwarmModeState};
     use swarm_ingest_runtime::ingest::IngestState;
     use swarm_pheromone::ConfiguredPheromoneSubstrate;
     use swarm_runtime::agent_identity::{
-        FileAgentIdentityRegistry, FileAgentKeyStore, resolve_agent_key_dir,
-        resolve_identity_registry_dir,
+        AgentKeyLoadStatus, FileAgentIdentityRegistry, FileAgentKeyStore, RegistryAdmission,
+        resolve_agent_key_dir, resolve_identity_registry_dir,
     };
     use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
     use swarm_runtime::runtime_events::RuntimeEventBroadcaster;
+
+    #[test]
+    fn shipped_builder_shares_one_governance_policy_across_every_trust_consumer() {
+        use swarm_response::ExecutionMode;
+        use swarm_response::containment::MemoryContainmentLeaseStore;
+        use swarm_response::rollback::SandboxRollbackExecutor;
+        use swarm_runtime::containment::ContainmentSweep;
+
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("rulesets/default.yaml");
+        let config =
+            swarm_runtime::config::load_config(&config_path).expect("default config should load");
+        let raw_state =
+            IngestState::from_config(config_path, config).expect("ingest state should build");
+        let substrate = raw_state.current_substrate();
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let health_state = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
+        let raw_dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate,
+            health_state,
+        );
+        let raw_sweep = ContainmentSweep::new(
+            Arc::new(MemoryContainmentLeaseStore::new()),
+            Arc::new(SandboxRollbackExecutor),
+            ExecutionMode::Enforced,
+        );
+        let root = std::env::temp_dir().join(format!(
+            "swarm-detect-shared-governance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let store = FileAgentKeyStore::open(root.join("keys"))
+            .expect("temporary Tom identity store should open");
+        let (identity, key_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .expect("temporary Tom identity should load");
+        let policy = Arc::new(
+            governance_policy_for_bootstrap(
+                swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+                &root.join("governance.json"),
+                &identity,
+                key_status,
+            )
+            .expect("persisted governance policy should initialize"),
+        );
+        let authority = policy
+            .authority()
+            .expect("persisted governance policy should mint authority");
+        let expected_identity = authority.identity();
+        let wiring = ShippedGovernanceWiring::new(authority.clone());
+
+        let state = wiring.configure_ingest(raw_state);
+        let dispatcher = wiring.configure_dispatcher(raw_dispatcher);
+        let sweep = wiring.configure_containment(raw_sweep);
+
+        assert_eq!(
+            state.governance_authority_identity(),
+            Some(expected_identity)
+        );
+        assert_eq!(
+            dispatcher.governance_authority_identity(),
+            Some(expected_identity)
+        );
+        assert_eq!(
+            sweep.governance_authority_identity(),
+            Some(expected_identity)
+        );
+        assert_eq!(
+            state.human_resume_governance_authority_identity(),
+            Some(expected_identity)
+        );
+        drop(state);
+        drop(dispatcher);
+        drop(sweep);
+        drop(wiring);
+        drop(authority);
+        drop(policy);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn watch_paths_differ_detects_secret_dir_retargets() {
@@ -1402,6 +1641,164 @@ mod tests {
         assert!(watch_paths_differ(left.as_ref(), None));
         assert!(!watch_paths_differ(left.as_ref(), left.as_ref()));
         assert!(!watch_paths_differ(None, None));
+    }
+
+    #[test]
+    fn governance_state_lives_beside_the_stable_agent_key_root() {
+        let identity = swarm_core::config::IdentityConfig {
+            agent_key_dir: "/var/lib/swarm/agent-keys".to_string(),
+            registry_dir: "/var/lib/swarm/agent-identity".to_string(),
+        };
+        assert_eq!(
+            default_partition_governance_state_path(
+                std::path::Path::new("/etc/swarm/swarm.yaml"),
+                &identity,
+            ),
+            PathBuf::from("/var/lib/swarm/governance-partition-state.json")
+        );
+    }
+
+    #[test]
+    fn deleted_registry_and_governance_files_do_not_reinitialize_an_existing_tom_key() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-governance-bootstrap-deletion-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let key_root = root.join("keys");
+        let registry_root = root.join("registry");
+        let state_path = root.join("governance-partition-state.json");
+        let store = FileAgentKeyStore::open(&key_root).unwrap();
+        let (identity, status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(status, AgentKeyLoadStatus::Created);
+        let registry = FileAgentIdentityRegistry::open(&registry_root).unwrap();
+        assert_eq!(
+            registry
+                .admit_persisted_identity(AgentRole::Tom, "primary", &identity, 1)
+                .unwrap(),
+            RegistryAdmission::Added
+        );
+        let policy = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &state_path,
+            &identity,
+            status,
+        )
+        .unwrap();
+        drop(policy);
+        drop(registry);
+
+        std::fs::remove_dir_all(&registry_root).unwrap();
+        std::fs::remove_file(&state_path).unwrap();
+        std::fs::remove_file(
+            swarm_agents::tom_agent::GovernancePolicy::persistence_sequence_path(&state_path),
+        )
+        .unwrap();
+
+        let (loaded_identity, loaded_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
+        let recreated_registry = FileAgentIdentityRegistry::open(&registry_root).unwrap();
+        assert_eq!(
+            recreated_registry
+                .admit_persisted_identity(AgentRole::Tom, "primary", &loaded_identity, 2)
+                .unwrap(),
+            RegistryAdmission::Added,
+            "registry deletion alone makes admission look new, so it cannot authorize bootstrap"
+        );
+        assert!(matches!(
+            governance_policy_for_bootstrap(
+                swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+                &state_path,
+                &loaded_identity,
+                loaded_status,
+            )
+            .unwrap_err(),
+            swarm_agents::tom_agent::GovernancePersistenceError::MissingState { .. }
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bootstrap_refuses_a_second_daemon_for_the_live_governance_stream() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-governance-bootstrap-lock-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state_path = root.join("governance-partition-state.json");
+        let store = FileAgentKeyStore::open(root.join("keys")).unwrap();
+        let (identity, status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let first = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &state_path,
+            &identity,
+            status,
+        )
+        .unwrap();
+
+        let error = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &state_path,
+            &identity,
+            AgentKeyLoadStatus::Loaded,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            swarm_agents::tom_agent::GovernancePersistenceError::StateLocked { .. }
+        ));
+
+        drop(first);
+        let second = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &state_path,
+            &identity,
+            AgentKeyLoadStatus::Loaded,
+        )
+        .unwrap();
+        drop(second);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn serve_approval_harness_configures_all_four_durable_stores() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-detect-approval-stores-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let cli = Cli::parse_from([
+            "swarm-detect",
+            "--approval-set-results-dir",
+            root.join("sets").to_str().unwrap(),
+            "--approval-ledger-results-dir",
+            root.join("ledgers").to_str().unwrap(),
+            "--approval-verdict-results-dir",
+            root.join("verdicts").to_str().unwrap(),
+            "--approval-receipt-pack-results-dir",
+            root.join("packs").to_str().unwrap(),
+        ]);
+
+        let harness = build_approval_harness(&cli).expect("all approval stores should open");
+        assert!(harness.list_verdicts().unwrap().verdicts.is_empty());
+        assert!(harness.list_receipt_packs().unwrap().packs.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

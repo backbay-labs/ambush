@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 use swarm_runtime_http::cli::args::Cli;
 

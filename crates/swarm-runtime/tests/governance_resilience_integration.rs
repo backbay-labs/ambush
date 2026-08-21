@@ -31,13 +31,13 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
         .expect("current time should be after unix epoch")
         .as_millis() as i64;
 
-    let policy = GovernancePolicy::with_persistence(config.clone(), &path).unwrap();
-    policy
-        .register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[31; 32]),
-        )
-        .expect("the policy holds no other governor key");
+    let policy = GovernancePolicy::initialize_persistence(
+        config.clone(),
+        &path,
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&[31; 32]),
+    )
+    .unwrap();
     policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
     policy.observe_health(
         &AgentId::new("tom", "primary"),
@@ -56,23 +56,21 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
     let action = ResponseAction::IsolateHost {
         host_id: "host-77".to_string(),
     };
-    let lease = match policy.can_act(&action) {
-        GovernanceDecision::Allow {
+    let mut authorized_request = swarm_policy::ActionRequest {
+        hunt_id: HuntId("hunt-resilience-allow".to_string()),
+        requested_by: AgentId::new("pounce", "primary"),
+        action: action.clone(),
+        severity: Severity::Critical,
+        evidence: json!({}),
+    };
+    let lease = match policy.can_act(&authorized_request) {
+        GovernanceDecision::Authorize {
             contingency_lease: Some(lease),
             ..
         } => lease,
         other => panic!("expected contingency lease, got {other:?}"),
     };
-
-    let authorized_request = swarm_policy::ActionRequest {
-        hunt_id: HuntId("hunt-resilience-allow".to_string()),
-        requested_by: AgentId::new("pounce", "primary"),
-        action: action.clone(),
-        severity: Severity::Critical,
-        evidence: json!({
-            "contingency_lease": lease,
-        }),
-    };
+    authorized_request.evidence = json!({"contingency_lease": lease});
     policy
         .authorize_partition_request(&authorized_request, base_ms + 10_100)
         .expect("lease-backed request should be authorized");
@@ -113,18 +111,22 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
         policy.status_report().partition_state,
         PartitionState::Healthy
     );
+    drop(policy);
 
-    let reloaded = GovernancePolicy::with_persistence(config, &path).unwrap();
-    reloaded
-        .register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[31; 32]),
-        )
-        .expect("the policy holds no other governor key");
+    let reloaded = GovernancePolicy::with_persistence(
+        config,
+        &path,
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&[31; 32]),
+    )
+    .unwrap();
     let status = reloaded.status_report();
     assert_eq!(status.partition_state, PartitionState::Healthy);
     assert_eq!(status.unauthorized_partition_actions, 0);
     assert!(status.last_reconciliation_report_id.is_some());
+    drop(reloaded);
 
-    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(GovernancePolicy::persistence_sequence_path(&path));
+    let _ = fs::remove_file(GovernancePolicy::persistence_lock_path(&path));
 }

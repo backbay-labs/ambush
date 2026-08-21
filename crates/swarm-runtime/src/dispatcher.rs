@@ -1,3 +1,7 @@
+use crate::approval::{
+    ApprovalReceiptPackReport, ApprovalSetReport, approval_set_digest,
+    verify_governed_human_receipt_pack,
+};
 use crate::detection::metrics::CriticalPathMetrics;
 use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster, now_ms};
 use crate::{
@@ -16,12 +20,14 @@ use swarm_core::agent::{
     AgentFinding, AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment,
     SwarmEvent, SwarmModeState,
 };
-use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
+use swarm_core::types::{AgentId, Severity, SwarmAction};
+use swarm_governance::GovernanceAuthority;
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
-use swarm_policy::ActionRequest;
-use swarm_policy::governance::GovernanceAuthority;
+use swarm_policy::governance::GovernedHumanAuthorizationHold;
 use swarm_policy::static_gate::scope_for_response_action;
+use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision, PolicyVerdict};
 use swarm_spine::AuditTrail;
+use swarm_whisker::DetectionFinding;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
@@ -117,11 +123,261 @@ struct PendingRoleShift {
     to_role: AgentRole,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GovernanceVetoRoute {
-    pub request: ActionRequest,
-    pub governing_agent_id: AgentId,
-    pub reason: String,
+    request: ActionRequest,
+    governing_agent_id: AgentId,
+    reason: String,
+    verified_governance_receipt: Option<VerifiedGovernanceReceipt>,
+}
+
+impl GovernanceVetoRoute {
+    pub fn request(&self) -> &ActionRequest {
+        &self.request
+    }
+
+    pub fn governing_agent_id(&self) -> &AgentId {
+        &self.governing_agent_id
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    pub(crate) fn verified_governance_receipt(&self) -> Option<&serde_json::Value> {
+        self.verified_governance_receipt
+            .as_ref()
+            .map(|receipt| &receipt.value)
+    }
+}
+
+#[derive(Debug)]
+struct VerifiedGovernanceReceipt {
+    receipt: ConsensusGovernanceReceipt,
+    value: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct VerifiedHumanApproval {
+    receipt_pack: ApprovalReceiptPackReport,
+}
+
+/// One ordinary-policy evaluation performed before governance consumption.
+///
+/// The type is intentionally linear and opaque. Only a runtime in this crate can
+/// construct it, and only the dispatcher can combine it with governance evidence.
+#[derive(Debug)]
+pub struct DispatcherPolicyPermit {
+    request: ActionRequest,
+    detection: DetectionFinding,
+    context: ApprovalContext,
+    decision: PolicyDecision,
+    policy_elapsed_us: u64,
+}
+
+impl DispatcherPolicyPermit {
+    pub(crate) fn new(
+        request: ActionRequest,
+        detection: DetectionFinding,
+        context: ApprovalContext,
+        decision: PolicyDecision,
+        policy_elapsed_us: u64,
+    ) -> Self {
+        Self {
+            request,
+            detection,
+            context,
+            decision,
+            policy_elapsed_us,
+        }
+    }
+
+    pub fn request(&self) -> &ActionRequest {
+        &self.request
+    }
+
+    pub fn decision(&self) -> &PolicyDecision {
+        &self.decision
+    }
+
+    /// Replace any restoration-time timestamp with the host time sampled by the
+    /// dispatcher after the last awaited preflight step.
+    fn bind_trusted_now_ms(mut self, trusted_now_ms: i64) -> Self {
+        self.context.now_ms = trusted_now_ms;
+        self
+    }
+
+    pub(crate) fn into_execution_parts(
+        self,
+    ) -> (
+        ActionRequest,
+        DetectionFinding,
+        ApprovalContext,
+        PolicyDecision,
+        u64,
+    ) {
+        (
+            self.request,
+            self.detection,
+            self.context,
+            self.decision,
+            self.policy_elapsed_us,
+        )
+    }
+}
+
+#[derive(Debug)]
+enum DispatcherPolicyOutcome {
+    Allow(DispatcherPolicyPermit),
+    RequireHuman {
+        permit: DispatcherPolicyPermit,
+        audit: Box<AuditTrail>,
+    },
+    Deny(Box<AuditTrail>),
+}
+
+/// Opaque result of the router's single ordinary-policy preflight.
+#[derive(Debug)]
+pub struct DispatcherPolicyPreflight {
+    outcome: DispatcherPolicyOutcome,
+}
+
+impl DispatcherPolicyPreflight {
+    pub(crate) fn allow(permit: DispatcherPolicyPermit) -> Self {
+        Self {
+            outcome: DispatcherPolicyOutcome::Allow(permit),
+        }
+    }
+
+    pub(crate) fn require_human(permit: DispatcherPolicyPermit, audit: AuditTrail) -> Self {
+        Self {
+            outcome: DispatcherPolicyOutcome::RequireHuman {
+                permit,
+                audit: Box::new(audit),
+            },
+        }
+    }
+
+    pub(crate) fn deny(audit: AuditTrail) -> Self {
+        Self {
+            outcome: DispatcherPolicyOutcome::Deny(Box::new(audit)),
+        }
+    }
+
+    pub fn verdict(&self) -> PolicyVerdict {
+        match &self.outcome {
+            DispatcherPolicyOutcome::Allow(permit)
+            | DispatcherPolicyOutcome::RequireHuman { permit, .. } => permit.decision.verdict,
+            DispatcherPolicyOutcome::Deny(audit) => audit.policy.verdict,
+        }
+    }
+}
+
+/// Opaque, one-shot route asking the production router to persist a human
+/// approval set for an already-persisted governance hold.
+#[derive(Debug)]
+pub struct GovernedHumanHoldRoute {
+    hold: GovernedHumanAuthorizationHold,
+    initial_audit: AuditTrail,
+}
+
+impl GovernedHumanHoldRoute {
+    pub fn hold(&self) -> &GovernedHumanAuthorizationHold {
+        &self.hold
+    }
+
+    pub fn initial_audit(&self) -> &AuditTrail {
+        &self.initial_audit
+    }
+
+    pub fn challenge_for_persisted_set(
+        &self,
+        report: &ApprovalSetReport,
+    ) -> Result<HumanApprovalChallenge, RuntimeError> {
+        let expected = self.hold.approval_evidence_ref();
+        if report.promotion_evidence_ref != expected {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "human approval set does not bind the governance hold".into(),
+            ));
+        }
+        Ok(HumanApprovalChallenge {
+            approval_set_id: report.set_id.clone(),
+            approval_set_digest: approval_set_digest(report)
+                .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct HumanApprovalChallenge {
+    approval_set_id: String,
+    approval_set_digest: String,
+}
+
+impl VerifiedGovernanceReceipt {
+    fn from_verified_value(value: serde_json::Value) -> Result<Self, String> {
+        let receipt = serde_json::from_value(value.clone()).map_err(|error| {
+            format!("verified governance receipt could not be decoded: {error}")
+        })?;
+        Ok(Self { receipt, value })
+    }
+}
+
+/// Dispatcher-issued admission for a response request.
+///
+/// Its fields and constructor are private: code outside this module can inspect and
+/// route an admission, but cannot manufacture one to bypass governance consumption.
+#[derive(Debug)]
+pub struct RoutedActionRequest {
+    permit: DispatcherPolicyPermit,
+    verified_governance_receipt: Option<VerifiedGovernanceReceipt>,
+    verified_human_approval: Option<VerifiedHumanApproval>,
+}
+
+impl RoutedActionRequest {
+    fn new(
+        permit: DispatcherPolicyPermit,
+        verified_governance_receipt: Option<serde_json::Value>,
+        verified_human_approval: Option<ApprovalReceiptPackReport>,
+    ) -> Result<Self, String> {
+        if permit.request.action.requires_governance_receipt()
+            && verified_governance_receipt.is_none()
+        {
+            return Err("governed dispatcher admission requires a verified receipt".into());
+        }
+        match (permit.decision.verdict, verified_human_approval.is_some()) {
+            (PolicyVerdict::Allow, false) | (PolicyVerdict::RequireHuman, true) => {}
+            _ => return Err("dispatcher admission policy state is inconsistent".into()),
+        }
+        Ok(Self {
+            permit,
+            verified_governance_receipt: verified_governance_receipt
+                .map(VerifiedGovernanceReceipt::from_verified_value)
+                .transpose()?,
+            verified_human_approval: verified_human_approval
+                .map(|receipt_pack| VerifiedHumanApproval { receipt_pack }),
+        })
+    }
+
+    pub fn request(&self) -> &ActionRequest {
+        &self.permit.request
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        DispatcherPolicyPermit,
+        Option<(ConsensusGovernanceReceipt, serde_json::Value)>,
+        Option<ApprovalReceiptPackReport>,
+    ) {
+        (
+            self.permit,
+            self.verified_governance_receipt
+                .map(|verified| (verified.receipt, verified.value)),
+            self.verified_human_approval
+                .map(|approval| approval.receipt_pack),
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -151,12 +407,179 @@ pub struct StrategyProposalRouteReport {
 
 #[async_trait]
 pub trait RequestResponseRouter: Send + Sync {
-    async fn route_request(&self, request: ActionRequest) -> Result<AuditTrail, RuntimeError>;
+    /// Evaluate ordinary policy exactly once, without executing or consuming a
+    /// governance authorization.
+    async fn preflight_request(
+        &self,
+        request: ActionRequest,
+    ) -> Result<DispatcherPolicyPreflight, RuntimeError>;
+
+    /// Record a terminal ordinary-policy decision without constructing an
+    /// execution admission.
+    async fn route_preflight_audit(&self, audit: AuditTrail) -> Result<AuditTrail, RuntimeError>;
+
+    async fn route_request(&self, request: RoutedActionRequest)
+    -> Result<AuditTrail, RuntimeError>;
+
+    /// Persist the human approval set for an exact governance hold.
+    async fn route_human_hold(
+        &self,
+        hold: GovernedHumanHoldRoute,
+    ) -> Result<HumanApprovalChallenge, RuntimeError>;
+
+    /// Load the trusted, locally persisted receipt pack. The dispatcher refuses
+    /// caller-supplied packs that are not byte-for-byte identical to this value.
+    async fn load_persisted_human_approval(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<ApprovalReceiptPackReport>, RuntimeError>;
+
+    /// Reconstitute execution context from a persisted hold without evaluating
+    /// mutable ordinary policy a second time. This awaited step must be
+    /// side-effect-free: it runs before the dispatcher samples the trusted clock
+    /// and before either approval is consumed.
+    async fn restore_human_preflight(
+        &self,
+        hold: &GovernedHumanAuthorizationHold,
+        approval_pack_id: &str,
+    ) -> Result<DispatcherPolicyPermit, RuntimeError>;
 
     async fn route_governance_veto(
         &self,
         veto: GovernanceVetoRoute,
     ) -> Result<AuditTrail, RuntimeError>;
+}
+
+/// Dedicated human-resume dispatcher. It is the only path that composes a
+/// persisted human approval with a still-pending governance authorization.
+pub struct HumanApprovalResumeDispatcher {
+    governance: GovernanceAuthority,
+    router: Arc<dyn RequestResponseRouter>,
+    clock: Arc<dyn HumanResumeClock>,
+}
+
+trait HumanResumeClock: Send + Sync {
+    fn now_ms(&self) -> i64;
+}
+
+struct HostHumanResumeClock;
+
+impl HumanResumeClock for HostHumanResumeClock {
+    fn now_ms(&self) -> i64 {
+        now_ms()
+    }
+}
+
+impl HumanApprovalResumeDispatcher {
+    pub fn new(governance: GovernanceAuthority, router: Arc<dyn RequestResponseRouter>) -> Self {
+        Self {
+            governance,
+            router,
+            clock: Arc::new(HostHumanResumeClock),
+        }
+    }
+
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// This exposes no authority reference and cannot authorize an action.
+    pub fn governance_authority_identity(&self) -> swarm_governance::GovernanceAuthorityIdentity {
+        self.governance.identity()
+    }
+
+    #[cfg(test)]
+    fn with_clock(
+        governance: GovernanceAuthority,
+        router: Arc<dyn RequestResponseRouter>,
+        clock: Arc<dyn HumanResumeClock>,
+    ) -> Self {
+        Self {
+            governance,
+            router,
+            clock,
+        }
+    }
+
+    /// Verify the locally persisted approval pack and exact request binding,
+    /// atomically consume the governance receipt, then move one admission to one
+    /// router invocation. A later routing/execution failure burns both approvals.
+    pub async fn resume(
+        &self,
+        receipt_pack: ApprovalReceiptPackReport,
+    ) -> Result<AuditTrail, RuntimeError> {
+        let persisted = self
+            .router
+            .load_persisted_human_approval(&receipt_pack.pack_id)
+            .await?
+            .ok_or_else(|| {
+                RuntimeError::GovernanceAuthorization(format!(
+                    "human approval pack `{}` is not persisted",
+                    receipt_pack.pack_id
+                ))
+            })?;
+        if persisted != receipt_pack {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "human approval pack does not match the persisted artifact".into(),
+            ));
+        }
+        let hold = self
+            .governance
+            .pending_human_authorization(&receipt_pack.approval_set.set_id)
+            .map_err(RuntimeError::GovernanceAuthorization)?;
+        let approval_set_id = hold.approval_set_id.as_deref().ok_or_else(|| {
+            RuntimeError::GovernanceAuthorization(
+                "pending human authorization is not bound to an approval set".into(),
+            )
+        })?;
+        let approval_set_digest = hold.approval_set_digest.as_deref().ok_or_else(|| {
+            RuntimeError::GovernanceAuthorization(
+                "pending human authorization has no approval-set digest".into(),
+            )
+        })?;
+        let permit = self
+            .router
+            .restore_human_preflight(&hold, &receipt_pack.pack_id)
+            .await?;
+        if permit.request != hold.request || permit.decision != hold.policy_decision {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "restored policy preflight does not match the persisted human hold".into(),
+            ));
+        }
+        // All artifact I/O and awaited, side-effect-free preflight work is now
+        // complete. Use one post-await host timestamp for human-pack freshness,
+        // governance consumption, and the eventual lease/execution context. No
+        // await may be introduced between verification and durable consumption.
+        let trusted_now_ms = self.clock.now_ms();
+        verify_governed_human_receipt_pack(
+            &receipt_pack,
+            approval_set_id,
+            approval_set_digest,
+            &hold.approval_evidence_ref(),
+            hold.created_at_ms,
+            trusted_now_ms,
+        )
+        .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
+        let consumed = self
+            .governance
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                approval_set_id,
+                approval_set_digest,
+                trusted_now_ms,
+            )
+            .map_err(RuntimeError::GovernanceAuthorization)?;
+        if consumed.hold != hold {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "consumed human hold changed during resume".into(),
+            ));
+        }
+        let admitted = RoutedActionRequest::new(
+            permit.bind_trusted_now_ms(trusted_now_ms),
+            Some(consumed.verified_governance_receipt),
+            Some(receipt_pack),
+        )
+        .map_err(RuntimeError::GovernanceAuthorization)?;
+        self.router.route_request(admitted).await
+    }
 }
 
 #[async_trait]
@@ -182,7 +605,7 @@ pub struct AgentDispatcher {
     request_response_router: Option<Arc<dyn RequestResponseRouter>>,
     strategy_proposal_router: Option<Arc<dyn StrategyProposalRouter>>,
     runtime_events: Option<RuntimeEventBroadcaster>,
-    governance_policy: Option<Arc<dyn GovernanceAuthority>>,
+    governance_authority: Option<GovernanceAuthority>,
 }
 
 pub type AgentRestartFactory = Arc<dyn Fn() -> Result<Box<dyn SwarmAgent>, String> + Send + Sync>;
@@ -209,7 +632,7 @@ impl AgentDispatcher {
             request_response_router: None,
             strategy_proposal_router: None,
             runtime_events: None,
-            governance_policy: None,
+            governance_authority: None,
         }
     }
 
@@ -241,16 +664,22 @@ impl AgentDispatcher {
         self
     }
 
-    /// Accepts any `Arc<impl GovernanceAuthority>` rather than `Arc<dyn ..>` so every
-    /// existing `Arc<GovernancePolicy>` call site is unchanged: `Arc::clone(&policy)`
-    /// infers `Arc<GovernancePolicy>` and an inference variable is not an unsizing
-    /// coercion site, so a `dyn` parameter would have forced a cast at each caller.
-    pub fn with_governance_policy(
-        mut self,
-        governance_policy: Arc<impl GovernanceAuthority + 'static>,
-    ) -> Self {
-        self.governance_policy = Some(governance_policy);
+    /// Install the concrete opaque authority minted by an authenticated persisted
+    /// governance policy. There is no generic backend installation surface.
+    pub fn with_governance_authority(mut self, governance_authority: GovernanceAuthority) -> Self {
+        self.governance_authority = Some(governance_authority);
         self
+    }
+
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// This exposes no authority reference and cannot authorize an action.
+    pub fn governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.governance_authority
+            .as_ref()
+            .map(GovernanceAuthority::identity)
     }
 
     pub fn set_admitted_identities(
@@ -557,13 +986,181 @@ impl AgentDispatcher {
                             );
                             continue;
                         };
-                        let partition_authorized = match self.authorize_partition_request(&request)
+                        let preflight = match router.preflight_request(request).await {
+                            Ok(preflight) => preflight,
+                            Err(error) => {
+                                self.publish_routed_response_error(
+                                    &completed.agent_id,
+                                    &hunt_id_value,
+                                    &action_kind,
+                                    None,
+                                    error.to_string(),
+                                );
+                                tracing::warn!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %hunt_id_value,
+                                    action = %action_kind,
+                                    reason = %error,
+                                    module = module_path!(),
+                                    "request_response ordinary-policy preflight failed"
+                                );
+                                continue;
+                            }
+                        };
+                        let permit = match preflight.outcome {
+                            DispatcherPolicyOutcome::Deny(audit) => {
+                                let audit = match router.route_preflight_audit(*audit).await {
+                                    Ok(audit) => audit,
+                                    Err(error) => {
+                                        self.publish_routed_response_error(
+                                            &completed.agent_id,
+                                            &hunt_id_value,
+                                            &action_kind,
+                                            None,
+                                            error.to_string(),
+                                        );
+                                        continue;
+                                    }
+                                };
+                                self.publish_routed_response(
+                                    &completed.agent_id,
+                                    &audit,
+                                    &action_kind,
+                                    None,
+                                    None,
+                                );
+                                continue;
+                            }
+                            DispatcherPolicyOutcome::RequireHuman { permit, audit } => {
+                                if !permit.request.action.requires_governance_receipt() {
+                                    let audit = match router.route_preflight_audit(*audit).await {
+                                        Ok(audit) => audit,
+                                        Err(error) => {
+                                            self.publish_routed_response_error(
+                                                &completed.agent_id,
+                                                &hunt_id_value,
+                                                &action_kind,
+                                                None,
+                                                error.to_string(),
+                                            );
+                                            continue;
+                                        }
+                                    };
+                                    self.publish_routed_response(
+                                        &completed.agent_id,
+                                        &audit,
+                                        &action_kind,
+                                        None,
+                                        None,
+                                    );
+                                    continue;
+                                }
+                                let Some(governance) = self.governance_authority.as_ref() else {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %permit.request.hunt_id.0,
+                                        action = %action_kind,
+                                        module = module_path!(),
+                                        "human-governed request refused because no governance authority is configured"
+                                    );
+                                    continue;
+                                };
+                                if governance.is_partitioned() {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %permit.request.hunt_id.0,
+                                        action = %action_kind,
+                                        module = module_path!(),
+                                        "human-governed request cannot be held while governance is partitioned"
+                                    );
+                                    continue;
+                                }
+                                let Some(receipt) =
+                                    permit.request.evidence.get("governance_receipt").cloned()
+                                else {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %permit.request.hunt_id.0,
+                                        action = %action_kind,
+                                        module = module_path!(),
+                                        "human-governed request is missing its governance receipt"
+                                    );
+                                    continue;
+                                };
+                                let hold = match governance.begin_human_authorization_hold(
+                                    &permit.request,
+                                    &receipt,
+                                    &permit.decision,
+                                    unix_timestamp_millis(),
+                                ) {
+                                    Ok(hold) => hold,
+                                    Err(reason) => {
+                                        tracing::warn!(
+                                            agent_id = %completed.agent_id,
+                                            hunt_id = %permit.request.hunt_id.0,
+                                            action = %action_kind,
+                                            reason = %reason,
+                                            module = module_path!(),
+                                            "human-governed request hold was refused"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let hold_id = hold.hold_id.clone();
+                                let challenge = match router
+                                    .route_human_hold(GovernedHumanHoldRoute {
+                                        hold,
+                                        initial_audit: (*audit).clone(),
+                                    })
+                                    .await
+                                {
+                                    Ok(challenge) => challenge,
+                                    Err(error) => {
+                                        tracing::warn!(
+                                            agent_id = %completed.agent_id,
+                                            hunt_id = %permit.request.hunt_id.0,
+                                            action = %action_kind,
+                                            reason = %error,
+                                            module = module_path!(),
+                                            "human approval set could not be persisted"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                if let Err(reason) = governance.bind_human_approval_set(
+                                    &hold_id,
+                                    &challenge.approval_set_id,
+                                    &challenge.approval_set_digest,
+                                ) {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %permit.request.hunt_id.0,
+                                        action = %action_kind,
+                                        reason = %reason,
+                                        module = module_path!(),
+                                        "human approval set binding was not persisted"
+                                    );
+                                    continue;
+                                }
+                                self.publish_routed_response(
+                                    &completed.agent_id,
+                                    &audit,
+                                    &action_kind,
+                                    None,
+                                    None,
+                                );
+                                continue;
+                            }
+                            DispatcherPolicyOutcome::Allow(permit) => permit,
+                        };
+                        let partition_receipt = match self
+                            .authorize_partition_request(&permit.request)
                         {
-                            Ok(authorized) => authorized,
+                            Ok(receipt) => receipt,
                             Err(reason) => {
                                 tracing::warn!(
                                     agent_id = %completed.agent_id,
-                                    hunt_id = %request.hunt_id.0,
+                                    hunt_id = %permit.request.hunt_id.0,
                                     action = %action_kind,
                                     reason = %reason,
                                     module = module_path!(),
@@ -572,21 +1169,45 @@ impl AgentDispatcher {
                                 continue;
                             }
                         };
-                        if !partition_authorized
-                            && let Some(reason) = missing_governance_receipt_reason(&request)
-                        {
-                            tracing::warn!(
-                                agent_id = %completed.agent_id,
-                                hunt_id = %request.hunt_id.0,
-                                action = %action_kind,
-                                reason = %reason,
-                                module = module_path!(),
-                                "request_response action rejected before runtime routing"
-                            );
-                            continue;
-                        }
+                        let verified_receipt = match partition_receipt {
+                            Some(receipt) => Some(receipt),
+                            None => match verify_and_consume_governance_receipt(
+                                &permit.request,
+                                self.governance_authority.as_ref(),
+                                GovernanceRouteDecision::Approve,
+                                unix_timestamp_millis(),
+                            ) {
+                                Ok(receipt) => receipt,
+                                Err(reason) => {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %permit.request.hunt_id.0,
+                                        action = %action_kind,
+                                        reason = %reason,
+                                        module = module_path!(),
+                                        "request_response action rejected before runtime routing"
+                                    );
+                                    continue;
+                                }
+                            },
+                        };
+                        let admitted =
+                            match RoutedActionRequest::new(permit, verified_receipt, None) {
+                                Ok(admitted) => admitted,
+                                Err(reason) => {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %hunt_id_value,
+                                        action = %action_kind,
+                                        reason = %reason,
+                                        module = module_path!(),
+                                        "request_response admission could not be constructed"
+                                    );
+                                    continue;
+                                }
+                            };
 
-                        match router.route_request(request).await {
+                        match router.route_request(admitted).await {
                             Ok(audit) => {
                                 self.publish_routed_response(
                                     &completed.agent_id,
@@ -656,36 +1277,66 @@ impl AgentDispatcher {
                             );
                             continue;
                         };
-                        if self
-                            .governance_policy
+                        let verified_receipt = if self
+                            .governance_authority
                             .as_ref()
                             .is_some_and(|policy| policy.is_partitioned())
                         {
-                            if let Some(policy) = &self.governance_policy {
+                            if let Some(policy) = &self.governance_authority {
                                 policy.note_partition_veto(
                                     &request,
                                     &reason,
                                     unix_timestamp_millis(),
                                 );
                             }
-                        } else if let Some(reason) = missing_governance_receipt_reason(&request) {
-                            tracing::warn!(
-                                agent_id = %completed.agent_id,
-                                hunt_id = %request.hunt_id.0,
-                                action = %action_kind,
-                                governing_agent_id = %governing_agent_id,
-                                reason = %reason,
-                                module = module_path!(),
-                                "governance veto rejected before runtime routing"
-                            );
-                            continue;
-                        }
+                            None
+                        } else {
+                            match verify_and_consume_governance_receipt(
+                                &request,
+                                self.governance_authority.as_ref(),
+                                GovernanceRouteDecision::Veto,
+                                unix_timestamp_millis(),
+                            ) {
+                                Ok(receipt) => receipt,
+                                Err(receipt_reason) => {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %request.hunt_id.0,
+                                        action = %action_kind,
+                                        governing_agent_id = %governing_agent_id,
+                                        reason = %receipt_reason,
+                                        module = module_path!(),
+                                        "governance veto rejected before runtime routing"
+                                    );
+                                    continue;
+                                }
+                            }
+                        };
+
+                        let verified_governance_receipt = match verified_receipt
+                            .map(VerifiedGovernanceReceipt::from_verified_value)
+                            .transpose()
+                        {
+                            Ok(receipt) => receipt,
+                            Err(receipt_reason) => {
+                                tracing::warn!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %request.hunt_id.0,
+                                    action = %action_kind,
+                                    reason = %receipt_reason,
+                                    module = module_path!(),
+                                    "governance veto admission could not be constructed"
+                                );
+                                continue;
+                            }
+                        };
 
                         match router
                             .route_governance_veto(GovernanceVetoRoute {
                                 request,
                                 governing_agent_id: governing_agent_id.clone(),
                                 reason: reason.clone(),
+                                verified_governance_receipt,
                             })
                             .await
                         {
@@ -1011,15 +1662,18 @@ impl AgentDispatcher {
         });
     }
 
-    fn authorize_partition_request(&self, request: &ActionRequest) -> Result<bool, String> {
-        let Some(governance_policy) = &self.governance_policy else {
-            return Ok(false);
+    fn authorize_partition_request(
+        &self,
+        request: &ActionRequest,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let Some(governance_policy) = &self.governance_authority else {
+            return Ok(None);
         };
         governance_policy.authorize_partition_request(request, unix_timestamp_millis())
     }
 
     fn publish_governance_events(&self) {
-        let Some(governance_policy) = &self.governance_policy else {
+        let Some(governance_policy) = &self.governance_authority else {
             return;
         };
         let events = governance_policy.drain_runtime_events();
@@ -1273,40 +1927,39 @@ fn governance_action_requires_admission(action: &SwarmAction) -> bool {
     )
 }
 
-fn response_action_requires_governance_receipt(action: &ResponseAction) -> bool {
-    matches!(
-        action,
-        ResponseAction::BlockEgress { .. }
-            | ResponseAction::IsolateHost { .. }
-            | ResponseAction::RevokeCredential { .. }
-            | ResponseAction::SinkholeDns { .. }
-            | ResponseAction::TerminateUserSession { .. }
-            | ResponseAction::InjectFirewallRule { .. }
-            | ResponseAction::QuarantineFile { .. }
-            | ResponseAction::KillProcess { .. }
-            | ResponseAction::SuspendProcess { .. }
-            | ResponseAction::DisableUserAccount { .. }
-            | ResponseAction::ForcePasswordReset { .. }
-            | ResponseAction::RemoveScheduledTask { .. }
-    )
+#[derive(Debug, Clone, Copy)]
+enum GovernanceRouteDecision {
+    Approve,
+    Veto,
 }
 
-fn missing_governance_receipt_reason(request: &ActionRequest) -> Option<String> {
-    if !response_action_requires_governance_receipt(&request.action) {
-        return None;
+/// Verify and consume the route-specific receipt before anything is handed to a
+/// runtime router. A configured signer alone is insufficient: the authority also
+/// checks the exact request subject and its durable one-time pending ledger.
+fn verify_and_consume_governance_receipt(
+    request: &ActionRequest,
+    governance: Option<&GovernanceAuthority>,
+    decision: GovernanceRouteDecision,
+    now_ms: i64,
+) -> Result<Option<serde_json::Value>, String> {
+    if !request.action.requires_governance_receipt() {
+        return Ok(None);
     }
     let Some(receipt_value) = request.evidence.get("governance_receipt").cloned() else {
-        return Some("missing governance receipt".to_string());
+        return Err("missing governance receipt".to_string());
     };
-    let receipt: ConsensusGovernanceReceipt = match serde_json::from_value(receipt_value) {
-        Ok(receipt) => receipt,
-        Err(error) => return Some(format!("invalid governance receipt: {error}")),
+    let Some(governance) = governance else {
+        return Err("no governance authority is configured".to_string());
     };
-    receipt
-        .verify()
-        .map(|_| ())
-        .map_err(|error| format!("invalid governance receipt signature: {error}"))
-        .err()
+    match decision {
+        GovernanceRouteDecision::Approve => {
+            governance.verify_and_consume_action_authorization(request, &receipt_value, now_ms)
+        }
+        GovernanceRouteDecision::Veto => {
+            governance.verify_and_consume_veto(request, &receipt_value, now_ms)
+        }
+    }
+    .map(Some)
 }
 
 fn swarm_action_hunt_id(action: &SwarmAction) -> Option<&swarm_core::types::HuntId> {
@@ -1391,9 +2044,15 @@ fn unix_timestamp_millis() -> i64 {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        AgentDispatcher, AgentDispatcherConfig, AgentRestartFactory, StrategyProposalOutcome,
-        StrategyProposalRoute, StrategyProposalRouteReport, StrategyProposalRouter,
-        agent_role_label,
+        AgentDispatcher, AgentDispatcherConfig, AgentRestartFactory, DispatcherPolicyPermit,
+        DispatcherPolicyPreflight, GovernanceVetoRoute, GovernedHumanHoldRoute,
+        HumanApprovalChallenge, HumanApprovalResumeDispatcher, HumanResumeClock,
+        RequestResponseRouter, RoutedActionRequest, StrategyProposalOutcome, StrategyProposalRoute,
+        StrategyProposalRouteReport, StrategyProposalRouter, agent_role_label,
+    };
+    use crate::approval::{
+        ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule, approval_set_digest,
+        build_receipt_pack, evaluate_verdict,
     };
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
@@ -1405,18 +2064,367 @@ mod tests {
     use async_trait::async_trait;
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::time::Duration;
-    use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
+    use swarm_agents::tom_agent::{
+        GovernanceDecision, GovernancePolicy, GovernancePolicyConfig, TomAgent,
+    };
+    use swarm_core::ThreatClass;
     use swarm_core::agent::{
         AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
         SwarmEvent,
     };
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
-    use swarm_core::types::{AgentId, HuntId, SwarmAction};
+    use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
+    use swarm_crypto::Ed25519Signer;
+    use swarm_governance::GovernanceAuthority;
     use swarm_pheromone::{ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate};
+    use swarm_policy::governance::GovernedHumanAuthorizationHold;
+    use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision};
+    use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
+    use swarm_whisker::DetectionFinding;
     use tokio::sync::{mpsc, watch};
+
+    struct TestGovernance {
+        policy: Option<Arc<GovernancePolicy>>,
+        authority: Option<GovernanceAuthority>,
+        root: PathBuf,
+    }
+
+    impl TestGovernance {
+        fn new(label: &str, config: GovernancePolicyConfig, key_bytes: [u8; 32]) -> Self {
+            static TEST_GOVERNANCE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "swarm-dispatcher-{label}-{}-{}-{}",
+                std::process::id(),
+                super::now_ms(),
+                TEST_GOVERNANCE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            ));
+            let policy = Arc::new(
+                GovernancePolicy::initialize_persistence(
+                    config,
+                    root.join("governance.json"),
+                    AgentId::new("tom", label),
+                    SigningKey::from_bytes(&key_bytes),
+                )
+                .expect("test governance should initialize signed persistence"),
+            );
+            let authority = policy
+                .authority()
+                .expect("persisted test governance should mint authority");
+            Self {
+                policy: Some(policy),
+                authority: Some(authority),
+                root,
+            }
+        }
+
+        fn authority(&self) -> GovernanceAuthority {
+            self.authority
+                .as_ref()
+                .expect("test authority remains available")
+                .clone()
+        }
+
+        fn policy(&self) -> Arc<GovernancePolicy> {
+            Arc::clone(
+                self.policy
+                    .as_ref()
+                    .expect("test governance policy remains available"),
+            )
+        }
+    }
+
+    impl std::ops::Deref for TestGovernance {
+        type Target = GovernancePolicy;
+
+        fn deref(&self) -> &Self::Target {
+            self.policy
+                .as_deref()
+                .expect("test governance policy remains available")
+        }
+    }
+
+    impl Drop for TestGovernance {
+        fn drop(&mut self) {
+            drop(self.authority.take());
+            drop(self.policy.take());
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    struct AdjustableHumanResumeClock {
+        now_ms: AtomicI64,
+    }
+
+    impl AdjustableHumanResumeClock {
+        fn new(now_ms: i64) -> Self {
+            Self {
+                now_ms: AtomicI64::new(now_ms),
+            }
+        }
+    }
+
+    impl HumanResumeClock for AdjustableHumanResumeClock {
+        fn now_ms(&self) -> i64 {
+            self.now_ms.load(Ordering::SeqCst)
+        }
+    }
+
+    struct DelayedHumanResumeRouter {
+        pack: ApprovalReceiptPackReport,
+        clock: Arc<AdjustableHumanResumeClock>,
+        advance_clock_to_ms: Option<i64>,
+        lease_calls: AtomicUsize,
+        executor_calls: AtomicUsize,
+        effect_calls: AtomicUsize,
+        execution_now_ms: AtomicI64,
+    }
+
+    #[async_trait]
+    impl RequestResponseRouter for DelayedHumanResumeRouter {
+        async fn preflight_request(
+            &self,
+            _request: ActionRequest,
+        ) -> Result<DispatcherPolicyPreflight, crate::RuntimeError> {
+            unreachable!("resume test never performs ordinary policy preflight")
+        }
+
+        async fn route_preflight_audit(
+            &self,
+            _audit: AuditTrail,
+        ) -> Result<AuditTrail, crate::RuntimeError> {
+            unreachable!("resume test never routes a preflight audit")
+        }
+
+        async fn route_request(
+            &self,
+            admitted: RoutedActionRequest,
+        ) -> Result<AuditTrail, crate::RuntimeError> {
+            let (permit, _, _) = admitted.into_parts();
+            let (request, detection, context, decision, _) = permit.into_execution_parts();
+            self.lease_calls.fetch_add(1, Ordering::SeqCst);
+            self.executor_calls.fetch_add(1, Ordering::SeqCst);
+            self.effect_calls.fetch_add(1, Ordering::SeqCst);
+            self.execution_now_ms
+                .store(context.now_ms, Ordering::SeqCst);
+            Ok(AuditTrail {
+                trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
+                hunt_id: request.hunt_id.0,
+                related_receipt_ids: context.receipt_chain,
+                detection,
+                policy: PolicyRecord {
+                    verdict: decision.verdict,
+                    rule_name: decision.rule_name,
+                    reason: decision.reason,
+                    lease: None,
+                },
+                response: AuditResponseRecord::Skipped {
+                    reason: "test execution recorded".to_string(),
+                },
+                created_at_ms: context.now_ms,
+            })
+        }
+
+        async fn route_human_hold(
+            &self,
+            _hold: GovernedHumanHoldRoute,
+        ) -> Result<HumanApprovalChallenge, crate::RuntimeError> {
+            unreachable!("resume test starts from a persisted hold")
+        }
+
+        async fn load_persisted_human_approval(
+            &self,
+            pack_id: &str,
+        ) -> Result<Option<ApprovalReceiptPackReport>, crate::RuntimeError> {
+            Ok((pack_id == self.pack.pack_id).then(|| self.pack.clone()))
+        }
+
+        async fn restore_human_preflight(
+            &self,
+            hold: &GovernedHumanAuthorizationHold,
+            approval_pack_id: &str,
+        ) -> Result<DispatcherPolicyPermit, crate::RuntimeError> {
+            // Model an awaited policy-context restore during which the artifacts
+            // cross their freshness boundary, without sleeping in the test.
+            tokio::task::yield_now().await;
+            if let Some(now_ms) = self.advance_clock_to_ms {
+                self.clock.now_ms.store(now_ms, Ordering::SeqCst);
+            }
+            Ok(DispatcherPolicyPermit::new(
+                hold.request.clone(),
+                DetectionFinding {
+                    finding_id: "finding-human-resume-clock".to_string(),
+                    event_id: "event-human-resume-clock".to_string(),
+                    threat_class: ThreatClass::CommandAndControl,
+                    severity: Severity::Critical,
+                    confidence: 1.0,
+                    evidence: serde_json::json!({}),
+                    strategy_id: "test".to_string(),
+                },
+                ApprovalContext {
+                    live_mode: true,
+                    receipt_chain: vec![approval_pack_id.to_string()],
+                    correlation_id: None,
+                    now_ms: i64::MIN,
+                },
+                hold.policy_decision.clone(),
+                0,
+            ))
+        }
+
+        async fn route_governance_veto(
+            &self,
+            _veto: GovernanceVetoRoute,
+        ) -> Result<AuditTrail, crate::RuntimeError> {
+            unreachable!("resume test never routes a veto")
+        }
+    }
+
+    fn human_resume_clock_fixture(
+        advance_past_freshness: bool,
+    ) -> (
+        TestGovernance,
+        Arc<DelayedHumanResumeRouter>,
+        Arc<AdjustableHumanResumeClock>,
+        ApprovalReceiptPackReport,
+        String,
+    ) {
+        let governance =
+            TestGovernance::new("resume-clock", GovernancePolicyConfig::default(), [91; 32]);
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-human-resume-clock".to_string()),
+            requested_by: AgentId::new("pounce", "resume-clock"),
+            action: ResponseAction::BlockEgress {
+                target: "203.0.113.91".to_string(),
+            },
+            severity: Severity::Critical,
+            evidence: serde_json::json!({"finding": "clock-bound"}),
+        };
+        let receipt = match governance.can_act(&request) {
+            GovernanceDecision::Authorize { receipt, .. } => receipt,
+            other => panic!("expected governance authorization, got {other:?}"),
+        };
+        let receipt_value = serde_json::to_value(receipt).unwrap();
+        let hold = governance
+            .begin_human_authorization_hold(
+                &request,
+                &receipt_value,
+                &PolicyDecision::require_human_with_rule("test.human", "human approval required"),
+                super::now_ms(),
+            )
+            .unwrap();
+
+        static FIXTURE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+        let approval_root = std::env::temp_dir().join(format!(
+            "swarm-human-resume-clock-{}-{}-{}",
+            std::process::id(),
+            super::now_ms(),
+            FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let harness = DefaultApprovalHarness::from_path(
+            approval_root.join("config"),
+            approval_root.join("verdicts"),
+            approval_root.join("packs"),
+            approval_root.join("sets"),
+            approval_root.join("ledgers"),
+        )
+        .unwrap();
+        let voter = Ed25519Signer::from_secret_material("human-resume-clock-voter");
+        let voter_id = format!("swarm:ed25519:{}", voter.public_key_hex());
+        let set_record = harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                &hold.approval_evidence_ref(),
+            )
+            .unwrap();
+        let set = harness
+            .load_approval_set(&set_record.set_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        governance
+            .bind_human_approval_set(
+                &hold.hold_id,
+                &set.set_id,
+                &approval_set_digest(&set).unwrap(),
+            )
+            .unwrap();
+        harness.append_vote(&set.set_id, &voter_id, &voter).unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap().report;
+        let evaluated_at_ms = super::now_ms().max(set.created_at_ms);
+        let verdict = evaluate_verdict(&set, &ledger, evaluated_at_ms).unwrap();
+        let pack_signer = Ed25519Signer::from_secret_material("human-resume-clock-pack-signer");
+        let pack = build_receipt_pack(
+            &set,
+            &ledger,
+            &verdict,
+            vec![set.promotion_evidence_ref.clone()],
+            &pack_signer,
+            "human-resume-clock-pack-signer",
+            evaluated_at_ms.saturating_add(1),
+        )
+        .unwrap();
+        let initial_now_ms = pack.created_at_ms;
+        let clock = Arc::new(AdjustableHumanResumeClock::new(initial_now_ms));
+        let router = Arc::new(DelayedHumanResumeRouter {
+            pack: pack.clone(),
+            clock: Arc::clone(&clock),
+            advance_clock_to_ms: advance_past_freshness
+                .then(|| initial_now_ms.saturating_add(300_001)),
+            lease_calls: AtomicUsize::new(0),
+            executor_calls: AtomicUsize::new(0),
+            effect_calls: AtomicUsize::new(0),
+            execution_now_ms: AtomicI64::new(i64::MIN),
+        });
+        (governance, router, clock, pack, set.set_id)
+    }
+
+    #[tokio::test]
+    async fn human_resume_rechecks_freshness_after_awaited_preflight_restore() {
+        let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(true);
+        let resume = HumanApprovalResumeDispatcher::with_clock(
+            governance.authority(),
+            router.clone(),
+            clock,
+        );
+
+        let error = resume
+            .resume(pack)
+            .await
+            .expect_err("approval expiring during awaited restore must be refused");
+        assert!(error.to_string().contains("stale"), "{error}");
+        assert_eq!(router.lease_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(router.executor_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(router.effect_calls.load(Ordering::SeqCst), 0);
+        assert!(governance.pending_human_authorization(&set_id).is_ok());
+
+        let (fresh_governance, fresh_router, fresh_clock, fresh_pack, _) =
+            human_resume_clock_fixture(false);
+        let expected_execution_now_ms = fresh_clock.now_ms();
+        HumanApprovalResumeDispatcher::with_clock(
+            fresh_governance.authority(),
+            fresh_router.clone(),
+            fresh_clock,
+        )
+        .resume(fresh_pack)
+        .await
+        .expect("fresh approval control must execute once");
+        assert_eq!(fresh_router.lease_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fresh_router.executor_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fresh_router.effect_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fresh_router.execution_now_ms.load(Ordering::SeqCst),
+            expected_execution_now_ms,
+            "execution context must carry the final trusted timestamp"
+        );
+    }
 
     struct MockAgent {
         id: AgentId,
@@ -1588,16 +2596,14 @@ mod tests {
     async fn dispatcher_publishes_partition_state_transitions_to_runtime_events() {
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let health_state = empty_health_state();
-        let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-            contingency_lease_ttl_ms: 60_000,
-            contingency_blast_radius_cap: 1,
-        }));
-        governance_policy
-            .register_governor(
-                AgentId::new("tom", "primary"),
-                SigningKey::from_bytes(&[31; 32]),
-            )
-            .expect("the policy holds no other governor key");
+        let governance_policy = TestGovernance::new(
+            "primary-transition",
+            GovernancePolicyConfig {
+                contingency_lease_ttl_ms: 60_000,
+                contingency_blast_radius_cap: 1,
+            },
+            [31; 32],
+        );
         governance_policy.observe_health(
             &AgentId::new("tom", "primary"),
             &[AgentHealthEntry {
@@ -1616,7 +2622,7 @@ mod tests {
             substrate(),
             health_state,
         )
-        .with_governance_policy(governance_policy)
+        .with_governance_authority(governance_policy.authority())
         .with_runtime_events(broadcaster);
 
         dispatcher.tick_once().await;
@@ -2275,7 +3281,11 @@ mod tests {
     async fn dispatcher_restarts_failed_agent_after_tom_failure_boundary() {
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let health_state = empty_health_state();
-        let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+        let governance_policy = TestGovernance::new(
+            "primary-restart",
+            GovernancePolicyConfig::default(),
+            [17; 32],
+        );
         let restart_builds = Arc::new(AtomicUsize::new(0));
         let restarted_agent_ticks = Arc::new(AtomicUsize::new(0));
         let healthy_peer_ticks = Arc::new(AtomicUsize::new(0));
@@ -2300,7 +3310,7 @@ mod tests {
             substrate(),
             Arc::clone(&health_state),
         )
-        .with_governance_policy(Arc::clone(&governance_policy));
+        .with_governance_authority(governance_policy.authority());
         dispatcher
             .register_restartable(initial_agent, Arc::clone(&restart_factory))
             .unwrap();
@@ -2310,7 +3320,7 @@ mod tests {
                     AgentId::new("tom", "primary"),
                     SigningKey::from_bytes(&[17; 32]),
                     1,
-                    Arc::clone(&governance_policy),
+                    governance_policy.policy(),
                 )
                 .expect("the fixture policy holds no other governor key"),
             ))
@@ -2426,6 +3436,42 @@ mod tests {
     fn default_agent_tick_timeout_is_500() {
         let config = AgentDispatcherConfig::default();
         assert_eq!(config.agent_tick_timeout_ms, 500);
+    }
+
+    #[test]
+    fn governed_admission_cannot_be_constructed_without_verified_governance() {
+        let permit = DispatcherPolicyPermit::new(
+            ActionRequest {
+                hunt_id: HuntId("hunt-missing-governance".to_string()),
+                requested_by: AgentId("pounce-primary".to_string()),
+                action: ResponseAction::BlockEgress {
+                    target: "203.0.113.50".to_string(),
+                },
+                severity: Severity::Critical,
+                evidence: serde_json::json!({}),
+            },
+            DetectionFinding {
+                finding_id: "finding-missing-governance".to_string(),
+                event_id: "event-missing-governance".to_string(),
+                threat_class: ThreatClass::CommandAndControl,
+                severity: Severity::Critical,
+                confidence: 1.0,
+                evidence: serde_json::json!({}),
+                strategy_id: "pounce_agent".to_string(),
+            },
+            ApprovalContext {
+                live_mode: true,
+                receipt_chain: Vec::new(),
+                correlation_id: None,
+                now_ms: 1_700_000_000_000,
+            },
+            PolicyDecision::allow("test allow"),
+            0,
+        );
+
+        let error = RoutedActionRequest::new(permit, None, None)
+            .expect_err("governed admission must carry verified governance");
+        assert!(error.contains("requires a verified receipt"));
     }
 
     #[tokio::test]

@@ -4,6 +4,12 @@
 
 Accepted on 2026-08-13. Phase 283 (TCBOUND-01..04).
 
+Amended 2026-08-15 after extracting authenticated governance into the new
+`swarm-governance` crate. The TCB remains the original three crates, while the
+trust-sensitive inventory is now seven crates and explicitly includes
+`swarm-governance`; the layering gate requires its crate-level ownership
+contract and inventories its declared dependency edges.
+
 ### A note on this file's path and number
 
 TCBOUND-01 names `docs/adr/ADR-0001-trusted-computing-base.md`. There is no
@@ -63,7 +69,8 @@ through a door that did not exist when the requirement was written.
 - **`swarm-crypto`** — Ed25519, SHA-256, Merkle trees, canonical JSON. The
   deepest member: everything above it inherits whatever it links.
 - **`swarm-policy`** — the deterministic response gate, capability leases, and
-  the governance authority the dispatcher authorizes through.
+  governance request/value types. The concrete authority lives outside the TCB
+  in the separately inventoried `swarm-governance` crate.
 - **`swarm-spine`** — signed envelopes, the issuer chain, witnessed
   checkpoints, and the audit record shapes for one handled event.
 
@@ -106,11 +113,12 @@ sentence. These are stated as prohibitions so that violating one is an event.
 
 ### What is trust-sensitive but deliberately outside the TCB
 
-TCBOUND-02 names six crates, all six of which exist and now carry an
+TCBOUND-02 originally named six crates. All six exist and the current inventory
+adds `swarm-governance`; all seven carry an
 "Owns / does not own" section in their crate-level doc comment:
-`swarm-policy`, `swarm-pheromone`, `swarm-response`, `swarm-guard`,
-`swarm-crypto`, `swarm-spine`. Three are the TCB. The other three are trust-
-sensitive and outside it, each for a stated reason:
+`swarm-policy`, `swarm-governance`, `swarm-pheromone`, `swarm-response`,
+`swarm-guard`, `swarm-crypto`, `swarm-spine`. Three are the TCB. The other four
+are trust-sensitive and outside it, each for a stated reason:
 
 - **`swarm-response`** links `reqwest`, because a live-response adapter has to
   talk to an EDR. That is exactly why the *decision* lives one crate down in
@@ -120,6 +128,10 @@ sensitive and outside it, each for a stated reason:
   trust-sensitive; it links a network client, so it is not TCB.
 - **`swarm-guard`** is a consumer of the boundary, not part of it. Passing every
   guard authorizes nothing; only `swarm-policy` does.
+- **`swarm-governance`** owns the authenticated persisted governance policy,
+  opaque authority handle, consensus/contingency decisions, and Tom role. It
+  depends on `swarm-consensus`, so it is trust-sensitive but is not added to the
+  original three-crate TCB by this extraction amendment.
 
 Two further crates were considered and are not in either list.
 `swarm-consensus` is trust-sensitive by any reading — it sizes the Byzantine
@@ -242,14 +254,14 @@ fixture: proving this gate can fail before trusting it to pass
   ok  swarm-response reaching the advisory lane is caught  (exit 1)
   ok  a trust-sensitive crate losing its Owns section is caught  (exit 1)
   ok  the correlation module moving fails the gate loudly  (exit 2)
-fixture: 10 case(s) passed (1 control, 9 deliberately broken)
+fixture: 11 case(s) passed (1 control, 10 deliberately broken)
 
 workspace layering holds: 3 TCB crates (swarm-crypto, swarm-policy,
-swarm-spine); 6 crates in the TCB closure; 14 crates derived as downstream of
+swarm-spine); 6 crates in the TCB closure; 15 crates derived as downstream of
 it, including all 3 named by TCBOUND-03; 4 transport names checked against
 declared edges of all three kinds; 2 resolved-normal transport edge(s), all on
 the accepted baseline; 1 advisory-lane host crate(s) (swarm-runtime) held out of
-2 critical-path crate(s); 6 crate(s) carrying Owns / Does not own
+2 critical-path crate(s); 7 crate(s) carrying Owns / Does not own
 ```
 
 The control case is load-bearing: without a clean fixture that exits 0, the nine
@@ -259,8 +271,8 @@ the defect corrected in `tools/check-gates-wired.sh` and
 `tools/check-visibility-baseline.sh` was a success line printing hand-typed
 counts.
 
-Four of the nine variants exercise cases **cargo itself accepts**: dev- and
-build-dependency cycles are legal, and a transitive transport edge is not
+Five of the ten variants exercise cases **cargo itself accepts**: dev- and
+build-dependency cycles, the allow-listed normal-edge mutation, and a transitive transport edge are not
 cargo's concern. A TCB crate taking a *normal* dependency on a crate above it is
 a cycle that `cargo metadata` refuses to resolve; that failure is real and this
 script propagates it under `set -e`, but it is cargo speaking, not this gate.

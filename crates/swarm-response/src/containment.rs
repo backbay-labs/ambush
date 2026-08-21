@@ -83,6 +83,7 @@ pub struct ContainmentTtl(NonZeroI64);
 impl ContainmentTtl {
     /// Build a TTL from a configured millisecond value, refusing zero and negatives.
     pub fn from_config_ms(ttl_ms: i64) -> Result<Self, ContainmentLeaseError> {
+        // INVARIANT: RESPONSE-TTL-STRICTLY-POSITIVE
         match NonZeroI64::new(ttl_ms) {
             Some(value) if value.get() > 0 => Ok(Self(value)),
             _ => Err(ContainmentLeaseError::NonPositiveTtl { ttl_ms }),
@@ -158,6 +159,7 @@ impl TryFrom<ContainmentLeaseRecord> for ContainmentLease {
     type Error = ContainmentLeaseError;
 
     fn try_from(record: ContainmentLeaseRecord) -> Result<Self, Self::Error> {
+        // INVARIANT: RESPONSE-STORED-LEASE-SCHEMA-KNOWN
         if record.schema_version != CONTAINMENT_LEASE_SCHEMA_VERSION {
             return Err(ContainmentLeaseError::UnknownSchemaVersion {
                 lease_id: record.lease_id,
@@ -165,6 +167,7 @@ impl TryFrom<ContainmentLeaseRecord> for ContainmentLease {
                 expected: CONTAINMENT_LEASE_SCHEMA_VERSION,
             });
         }
+        // INVARIANT: RESPONSE-STORED-LEASE-BOUNDED
         if record.expires_at_ms <= record.issued_at_ms {
             return Err(ContainmentLeaseError::UnboundedLease {
                 lease_id: record.lease_id,
@@ -206,6 +209,7 @@ impl ContainmentLease {
         // add is a no-op and the lease would be unbounded, which is exactly the
         // state the error below exists to refuse.
         let expires_at_ms = issued_at_ms.saturating_add(ttl.get());
+        // INVARIANT: RESPONSE-LEASE-BOUNDED
         if expires_at_ms <= issued_at_ms {
             return Err(ContainmentLeaseError::UnboundedLease {
                 lease_id,
@@ -382,6 +386,7 @@ impl MemoryContainmentLeaseStore {
 
 impl ContainmentLeaseStore for MemoryContainmentLeaseStore {
     fn open_lease(&self, lease: &ContainmentLease) -> Result<(), ContainmentStoreError> {
+        // INVARIANT: RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED
         self.locked().open_lease(lease)
     }
 
@@ -403,6 +408,7 @@ impl ContainmentLeaseStore for MemoryContainmentLeaseStore {
     }
 
     fn close(&self, receipt: &RollbackReceipt) -> Result<(), ContainmentStoreError> {
+        // INVARIANT: RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED
         self.locked().close(receipt)
     }
 }
@@ -477,6 +483,7 @@ impl ContainmentLeaseStore for FileContainmentLeaseStore {
     fn open_lease(&self, lease: &ContainmentLease) -> Result<(), ContainmentStoreError> {
         let _guard = self.locked();
         let mut state = self.read()?;
+        // INVARIANT: RESPONSE-FILE-DUPLICATE-LEASE-REFUSED
         if state.open.contains_key(&lease.lease_id) {
             return Err(ContainmentStoreError::AlreadyOpen {
                 lease_id: lease.lease_id.clone(),
@@ -504,6 +511,7 @@ impl ContainmentLeaseStore for FileContainmentLeaseStore {
     fn close(&self, receipt: &RollbackReceipt) -> Result<(), ContainmentStoreError> {
         let _guard = self.locked();
         let mut state = self.read()?;
+        // INVARIANT: RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED
         if state.open.remove(&receipt.lease_id).is_none() {
             return Err(ContainmentStoreError::NotOpen {
                 lease_id: receipt.lease_id.clone(),

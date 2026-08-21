@@ -1,4 +1,5 @@
 mod demo;
+mod governance_resume;
 mod health;
 mod platform_api;
 mod providence_handlers;
@@ -37,9 +38,10 @@ use swarm_core::config::{
 use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::AgentId;
+use swarm_governance::GovernanceAuthority;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
-use swarm_policy::governance::GovernanceAuthority;
+use swarm_policy::governance::GovernedHumanAuthorizationHold;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::DispatchingExecutor;
 use swarm_runtime::approval::{
@@ -51,7 +53,10 @@ use swarm_runtime::config::{
 };
 use swarm_runtime::correlation::CorrelationEngine;
 use swarm_runtime::detection::metrics::CriticalPathMetrics;
-use swarm_runtime::dispatcher::{GovernanceVetoRoute, RequestResponseRouter};
+use swarm_runtime::dispatcher::{
+    DispatcherPolicyPermit, DispatcherPolicyPreflight, GovernanceVetoRoute, GovernedHumanHoldRoute,
+    HumanApprovalChallenge, RequestResponseRouter, RoutedActionRequest,
+};
 use swarm_runtime::dispatcher::{
     StrategyProposalOutcome, StrategyProposalRoute, StrategyProposalRouteReport,
     StrategyProposalRouter,
@@ -116,6 +121,8 @@ type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send 
 
 struct IngestRuntimeRequestResponseRouter {
     runtime: Arc<ArcSwap<IngestRequestRuntime>>,
+    approval_harness: Option<Arc<DefaultApprovalHarness>>,
+    operator_id: String,
 }
 
 /// Moved verbatim from `swarm_runtime::dispatcher::approval_context_now` in SPLIT-05.
@@ -137,16 +144,78 @@ fn approval_context_now(live_mode: bool) -> ApprovalContext {
 
 #[async_trait]
 impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
-    async fn route_request(
+    async fn preflight_request(
         &self,
         request: ActionRequest,
-    ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
+    ) -> Result<DispatcherPolicyPreflight, RuntimeError> {
         let runtime = self.runtime.load_full();
         let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
         let detection = routed_detection_from_request(&request);
-        runtime
-            .audit_authorize_and_execute(&detection, &request, &context)
-            .await
+        runtime.preflight_dispatcher_request(request, detection, context)
+    }
+
+    async fn route_preflight_audit(
+        &self,
+        audit: swarm_spine::AuditTrail,
+    ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
+        Ok(audit)
+    }
+
+    async fn route_request(
+        &self,
+        admitted: RoutedActionRequest,
+    ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
+        let runtime = self.runtime.load_full();
+        runtime.audit_authorize_and_execute_admitted(admitted).await
+    }
+
+    async fn route_human_hold(
+        &self,
+        route: GovernedHumanHoldRoute,
+    ) -> Result<HumanApprovalChallenge, RuntimeError> {
+        let harness = self.approval_harness.as_ref().ok_or_else(|| {
+            RuntimeError::GovernanceAuthorization("human approval harness is not configured".into())
+        })?;
+        let record = harness
+            .create_approval_set(
+                vec![self.operator_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                &route.hold().approval_evidence_ref(),
+            )
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
+        let report = harness
+            .load_approval_set(&record.set_id)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?
+            .ok_or_else(|| {
+                RuntimeError::GovernanceAuthorization(
+                    "persisted human approval set could not be reloaded".into(),
+                )
+            })?;
+        route.challenge_for_persisted_set(&report.report)
+    }
+
+    async fn load_persisted_human_approval(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<ApprovalReceiptPackReport>, RuntimeError> {
+        let harness = self.approval_harness.as_ref().ok_or_else(|| {
+            RuntimeError::GovernanceAuthorization("human approval harness is not configured".into())
+        })?;
+        Ok(harness
+            .load_receipt_pack(pack_id)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?
+            .map(|lookup| lookup.report))
+    }
+
+    async fn restore_human_preflight(
+        &self,
+        hold: &GovernedHumanAuthorizationHold,
+        approval_pack_id: &str,
+    ) -> Result<DispatcherPolicyPermit, RuntimeError> {
+        let runtime = self.runtime.load_full();
+        let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
+        let detection = routed_detection_from_request(&hold.request);
+        runtime.restore_human_dispatcher_preflight(hold, detection, context, approval_pack_id)
     }
 
     async fn route_governance_veto(
@@ -155,14 +224,8 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
     ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
         let runtime = self.runtime.load_full();
         let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
-        let detection = routed_detection_from_request(&veto.request);
-        Ok(runtime.audit_governance_veto(
-            &detection,
-            &veto.request,
-            &context,
-            &veto.governing_agent_id,
-            veto.reason,
-        ))
+        let detection = routed_detection_from_request(veto.request());
+        Ok(runtime.audit_admitted_governance_veto(&detection, &veto, &context))
     }
 }
 
@@ -1089,6 +1152,7 @@ async fn process_runtime_event(
                             stack
                                 .service
                                 .playbook_action_for_finding(finding, swarm_mode)
+                                .filter(|action| !action.requires_governance_receipt())
                         } else {
                             None
                         }
@@ -1181,6 +1245,8 @@ async fn process_demo_replay_step(
         now_ms: step.event.timestamp,
     };
     let replay_action = step.action.clone();
+    let live_governed_action = stack.service.mode() == RuntimeMode::LiveResponse
+        && replay_action.requires_governance_receipt();
     let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
     let detector = state.detector.load_full();
     let outcome = stack
@@ -1192,7 +1258,13 @@ async fn process_demo_replay_step(
                 approval: &approval,
                 signing_key: &state.signing_key,
             },
-            |_| Some(replay_action.clone()),
+            |_| {
+                if live_governed_action {
+                    None
+                } else {
+                    Some(replay_action.clone())
+                }
+            },
             |event, findings| publish_runtime_findings(state, event, findings),
         )
         .await?;
@@ -1210,11 +1282,18 @@ async fn process_demo_replay_step(
     let Some(bundle) = outcome else {
         state.append_demo_timeline(
             run_id,
-            "replay_step_without_findings",
+            if live_governed_action {
+                "governance_deferred"
+            } else {
+                "replay_step_without_findings"
+            },
             json!({
                 "step_index": step_index,
                 "event_id": step.event.event_id,
                 "action_kind": step.action.kind(),
+                "reason": live_governed_action.then_some(
+                    "live governed actions require Pouncer issuance and dispatcher admission; human approval alone cannot authorize execution"
+                ),
             }),
             now_ms(),
         );
@@ -1372,7 +1451,7 @@ pub struct IngestState {
     demo_runs: Arc<Mutex<DemoRunRegistry>>,
     providence_adapter: Arc<ArcSwap<Option<Arc<ProvidenceIncidentAdapter>>>>,
     providence_task_started: Arc<AtomicBool>,
-    governance_policy: Option<Arc<dyn GovernanceAuthority>>,
+    governance_authority: Option<GovernanceAuthority>,
     startup_attestation: Option<Arc<StartupAttestationReport>>,
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
@@ -1458,7 +1537,7 @@ impl IngestState {
             demo_runs: Arc::new(Mutex::new(DemoRunRegistry::default())),
             providence_adapter: Arc::new(ArcSwap::from_pointee(providence_adapter)),
             providence_task_started: Arc::new(AtomicBool::new(false)),
-            governance_policy: None,
+            governance_authority: None,
             startup_attestation: None,
             anti_tamper_report: Arc::new(ArcSwap::from_pointee(AntiTamperReport::disabled())),
             runtime_degradation: Arc::new(ArcSwap::from_pointee(
@@ -1712,16 +1791,42 @@ impl IngestState {
 
     /// Install the governance authority whose quorum health `/healthz` reports.
     ///
-    /// Takes `Arc<impl GovernanceAuthority>` rather than `Arc<dyn ..>` for the same
-    /// reason `AgentDispatcher::with_governance_policy` does: every existing
-    /// `Arc<GovernancePolicy>` call site is unchanged, because an inference variable
-    /// is not an unsizing coercion site.
-    pub fn with_governance_policy(
-        mut self,
-        governance_policy: Arc<impl GovernanceAuthority + 'static>,
-    ) -> Self {
-        self.governance_policy = Some(governance_policy);
+    /// Install the concrete opaque authority minted by an authenticated persisted
+    /// governance policy. There is no generic backend installation surface.
+    pub fn with_governance_authority(mut self, governance_authority: GovernanceAuthority) -> Self {
+        self.governance_authority = Some(governance_authority);
         self
+    }
+
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// This exposes no authority reference and cannot authorize an action.
+    pub fn governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.governance_authority
+            .as_ref()
+            .map(GovernanceAuthority::identity)
+    }
+
+    pub(crate) fn human_approval_resume_dispatcher(
+        &self,
+    ) -> Option<swarm_runtime::dispatcher::HumanApprovalResumeDispatcher> {
+        self.governance_authority.clone().map(|governance| {
+            swarm_runtime::dispatcher::HumanApprovalResumeDispatcher::new(
+                governance,
+                self.current_request_response_router(),
+            )
+        })
+    }
+
+    /// Process-local identity used by shipped composition tests to prove that
+    /// the real human-resume dispatcher receives the configured authority.
+    pub fn human_resume_governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.human_approval_resume_dispatcher()
+            .map(|dispatcher| dispatcher.governance_authority_identity())
     }
 
     pub fn with_startup_attestation(mut self, report: StartupAttestationReport) -> Self {
@@ -1818,6 +1923,8 @@ impl IngestState {
     pub fn current_request_response_router(&self) -> Arc<dyn RequestResponseRouter> {
         Arc::new(IngestRuntimeRequestResponseRouter {
             runtime: Arc::clone(&self.request_runtime),
+            approval_harness: self.approval_harness.clone(),
+            operator_id: self.operator_id(),
         })
     }
 
@@ -1845,7 +1952,7 @@ impl IngestState {
     }
 
     pub fn current_governance_status(&self) -> Option<Value> {
-        self.governance_policy.as_ref().map(|policy| {
+        self.governance_authority.as_ref().map(|policy| {
             let report = policy.status_report();
             json!({
                 "ready": true,
@@ -2570,6 +2677,7 @@ pub fn detect_http_router(state: IngestState) -> Router {
             post(soar_verdict_handlers::soar_verdict_handler),
         )
         .route("/v1/events/stream", get(demo::runtime_events_handler))
+        .merge(governance_resume::governed_resume_router(&state))
         .nest("/api/v1", platform_api::legacy_evasion_api_router(&state))
         .nest("/v2/api", platform_api::platform_api_router(&state))
         .with_state(state)

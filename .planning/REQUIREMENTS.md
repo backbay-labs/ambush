@@ -744,21 +744,21 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### EDR Response Adapter
 
-- [ ] **EDRINT-01**: A `CrowdStrikeRtrAdapter` implements the existing `ResponseExecutor` trait and translates `ResponseAction` variants (isolate host, kill process, quarantine file) into CrowdStrike Real Time Response API calls with OAuth2 service-to-service authentication, session management, and response status tracking
-- [ ] **EDRINT-02**: The CrowdStrike adapter inherits the existing `ResilientExecutor` retry, `CircuitBreakerState` circuit-breaker, and dead-letter journaling behaviors without duplicating resilience logic
-- [ ] **EDRINT-03**: An integration test suite validates the CrowdStrike adapter against a repo-owned mock RTR API server covering session creation, command execution, result retrieval, and error/timeout handling without requiring live CrowdStrike credentials
+- [x] **EDRINT-01**: A `CrowdStrikeRtrAdapter` implements the existing `ResponseExecutor` trait and translates `ResponseAction` variants (isolate host, kill process, quarantine file) into CrowdStrike Real Time Response API calls with OAuth2 service-to-service authentication, session management, and response status tracking
+- [x] **EDRINT-02**: The CrowdStrike adapter inherits the existing `ResilientExecutor` retry, `CircuitBreakerState` circuit-breaker, and dead-letter journaling behaviors without duplicating resilience logic
+- [x] **EDRINT-03**: An integration test suite validates the CrowdStrike adapter against a repo-owned mock RTR API server covering session creation, command execution, result retrieval, and error/timeout handling without requiring live CrowdStrike credentials
 
 #### SIEM Delivery Adapter
 
-- [ ] **SIEMINT-01**: A `SplunkHecAdapter` implements the existing `ResponseExecutor` trait and delivers `DetectionFinding` payloads to Splunk HTTP Event Collector with configurable index, source, sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication via `@secret:` resolution
-- [ ] **SIEMINT-02**: The Splunk adapter batches findings within a configurable flush interval and max batch size, inherits `ResilientExecutor` retry and circuit-breaker behavior, and exposes delivery metrics (events sent, bytes delivered, errors, latency) on the existing `/metrics` surface
-- [ ] **SIEMINT-03**: An integration test suite validates the Splunk adapter against a repo-owned mock HEC endpoint covering batch delivery, CIM field mapping, authentication, and error/backpressure handling
+- [x] **SIEMINT-01**: A `SplunkHecAdapter` implements the existing `ResponseExecutor` trait and delivers `DetectionFinding` payloads to Splunk HTTP Event Collector with configurable index, source, sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication via `@secret:` resolution
+- [x] **SIEMINT-02**: The Splunk adapter batches findings within a configurable flush interval and max batch size, inherits `ResilientExecutor` retry and circuit-breaker behavior, and exposes delivery metrics (events sent, bytes delivered, errors, latency) on the existing `/metrics` surface
+- [x] **SIEMINT-03**: An integration test suite validates the Splunk adapter against a repo-owned mock HEC endpoint covering batch delivery, CIM field mapping, authentication, and error/backpressure handling
 
 #### End-to-End Deployment Proof
 
-- [ ] **E2EPROOF-01**: A repo-owned Docker Compose stack provisions the runtime with CrowdStrike RTR adapter (mocked), Splunk HEC adapter (mocked), and one telemetry source bridge, proving the full detect -> respond -> deliver loop with observable finding delivery and response receipt generation
-- [ ] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
-- [ ] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
+- [x] **E2EPROOF-01**: A repo-owned Docker Compose stack provisions the runtime with CrowdStrike RTR adapter (mocked), Splunk HEC adapter (mocked), and one telemetry source bridge, proving the full detect -> respond -> deliver loop with observable finding delivery and response receipt generation
+- [x] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
+- [x] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
 
 ### Runtime Decomposition And TCB Boundary (v1.78)
 
@@ -824,18 +824,18 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Assumption Registry And Invariant Mapping
 
-- [ ] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants.
-- [ ] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and an assumption ID.
-- [ ] **MAPPING-03**: A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
-- [ ] **MAPPING-04**: `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists.
-- [ ] **MAPPING-05**: `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`.
+- [x] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants. DELIVERED with 13. `ASSUME-STATEFUL-GATE-DETERMINISM` is limited to deterministic local policy state transitions; external adapter outcomes use `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR`, and release-signer membership uses `ASSUME-GOVERNANCE-TRUST-ANCHOR`. Assumptions are many-to-many and the gate enforces complete overlapping blast-radius sets.
+- [x] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `SwarmRuntime::preflight_containment`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and assumption IDs. DELIVERED with 59 mapped invariants and 5 owned omissions. `docs/assurance/universe.toml` records exact IDs/counts, mapped/omitted disjointness, and one-surface assignment. The local gate rejects deletion unless the checked-in ratchet and checker are coherently changed; that remaining trust-root problem is external, not described as immutable here.
+- [x] **MAPPING-03**: A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
+- [x] **MAPPING-04**: `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists. DELIVERED AT `tools/check-mapping.sh`; there is no `scripts/` directory in this repository and `tools/check-gates-wired.sh` only enumerates `tools/check-*.sh`, so the requirement's path would have made the gate invisible to the gate that catches unrun gates (same correction phase 283 recorded).
+- [ ] **MAPPING-05**: `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`. WORKFLOW WIRING DELIVERED AT `tools/check-mapping.sh`; protected provenance remains open. The current Free organization cannot pin an organization-owned required workflow, and the existing Actions App plus the local `mapping-contract` / `negative-registry-contract` contexts remain spoofable. Acceptance needs a protected dedicated external GitHub App check with a separate integration ID (or an organization-plan upgrade and admin-owned required workflow).
 
 #### Negative Falsifiability
 
-- [ ] **FALSIFY-01**: `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
-- [ ] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous.
-- [ ] **FALSIFY-03**: `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test.
-- [ ] **FALSIFY-04**: `scripts/check-negative-registry.sh` is a required CI step.
+- [x] **FALSIFY-01**: `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
+- [x] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous. DELIVERED for all 59 rows: every exact built-in `#[test]` invokes a registry-bound named case with one probe; the shared synchronous protocol executes one macro-owned production call through an exact crate-root external-crate alias, mirror(None), and mirror(BrokenVariant) operation and asserts real/control denial plus broken permission. A source-digested entry/completion sentinel surrounds the future driver. A separate five-test compiled contract uses typed counters/roles. The focused Rust-syntax checker parses each distinct registered source once and locally digests the complete source files and shared protocol, including imports, helper/wrapper bodies, setup, production arguments, normalization, mirror roles, and denial/permission predicates; actual-source attacks covering dead/control-flow calls, black-box and unrelated assertions, dependency-root shadows, aliases/re-exports/globs, dead genuine calls with fabricated results, forced mirror roles, identity-selective early returns, and constant/ignored/swapped/vacuous predicates fail. The gate binds checker-owned semantic digests of the four complete crate manifests plus root execution tables, exact Cargo.lock/metadata dependency identities, pinned toolchain semantics, canonical auto-discovered integration-test and production-library source paths, and absence of explicit target overrides or custom builds. Every Cargo command uses a fresh config-free home, pinned Cargo/rustc, a sanitized PATH, and no repository/ancestor config; a gate-owned isolated-Python wrapper forces and audits one exact test-mode compile per target, including canonical source realpath/hash. Emitted test binaries run directly under a sanitized environment for exact inventory/count proof. Executable attacks cover hostile external Cargo homes, compiler/workspace wrappers, build.rustc, rustflags, linker/runner, Python module shadowing, proc-macro body erasure, path build dependencies, and same-name target redirection. These co-located checks are tamper-evident against uncoordinated edits, not an external trust anchor, and handwritten-mirror fidelity beyond the probe remains a review claim.
+- [x] **FALSIFY-03**: `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test. DELIVERED AT `tools/check-negative-registry.sh`; there is no `scripts/` directory in this repository and `tools/check-gates-wired.sh` only enumerates `tools/check-*.sh`, so the requirement's path would have made the gate invisible to the gate that catches unrun gates (same correction phase 283 recorded).
+- [ ] **FALSIFY-04**: `scripts/check-negative-registry.sh` is a required CI step. WORKFLOW WIRING DELIVERED AT `tools/check-negative-registry.sh`; the same protected-provenance acceptance as MAPPING-05 remains open and requires the external check anchor described there.
 
 #### Deterministic Simulation Testing
 
@@ -859,8 +859,9 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Supply-Chain Hardening
 
-- [ ] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition.
-- [ ] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift.
+- [x] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition. Also an `expires` date: an exception whose deadline has passed FAILS `tools/check-supply-chain.sh` (constructed and observed), and the last-checked..expires window is capped at 180 days. `[[bans.skip]]` entries carry `last-checked` and `pinned-by`/`clears-when` under the same parser. Selectors split at the final `@`; only non-empty name and exact SemVer syntax are checked locally, while exact Cargo.lock name matching authoritatively accepts Cargo-valid leading-underscore and Unicode-XID names. Executable fixtures require a full-text lock match including `+build`, refuse absent names, reject same-name same-precedence ambiguity for every selector (including registry+path same-version and stable-plus-build rows), list source/path identity, retain stable/prerelease/build/name pass controls, and prove a first-run locked resolution rejects a disposable path-dependency version change whose lock row is stale without changing its bytes.
+- [x] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification. Before parsing Cargo.lock it runs `cargo metadata --locked --format-version 1`; its lock cross-check then owns exact full textual selector identity, and `cargo deny --locked check` plus denied `unmatched-skip` and `unnecessary-skip` lints and ordinary duplicate errors own applicability in the same locked graph. The gate also deduplicates the `cargo audit --ignore` list against `deny.toml` by DERIVATION rather than comparison: it reads `[advisories] ignore` and builds the flags, holds no id of its own, and fails if a RustSec id appears on any other enforcement surface. Cargo-audit has no locked mode, so the gate snapshots Cargo.lock and fails if any scanner rewrites it.
+  The independently locked `tools/negative-registry-ast` executable is covered explicitly: locked metadata and lock immutability, a separate zero-waiver deny policy, cargo-deny, cargo-audit, and enforcement-surface inventory all run in the same gate.
 
 ### Red Swarm (v1.80)
 
@@ -1016,6 +1017,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
   ONE FUNCTION, TWO TRIGGERS, STRUCTURALLY. `ContainmentSweep` now carries the governance authority as a FIELD, so `ContainmentSweep::release` (manual) and `ContainmentSweep::sweep` (TTL) read the same store, executor, mode and authority, and both call `swarm_runtime::containment::release_lease`. Manual and automatic differ in one argument, the `RollbackTrigger`. `swarm_detect` builds ONE `Arc<ContainmentSweep>` and gives it to both the TTL task and the router.
   SIGNING IS THE SAME PATH, AND THE TEST PROVES IT RATHER THAN ASSERTING IT. `GovernanceAuthority` gained `attest_release` (ADR 0010 states why the seal's bar is met: opaque `serde_json::Value` in and out, so no `swarm-consensus` edge is added to the TCB crate `swarm-policy`; no authorization verdict; still exactly one implementer). `GovernancePolicy::attest_release` holds the same mutex, keyring, `simulate_governance_commit`, `previous_commit_hash`, `receipt_counter` and `persist_locked` as `issue_governance_receipt`. The integration test asserts the TTL release's attestation names the MANUAL release's `commit_hash` as its `previous_commit_hash` — one chain, which a second signer could not produce.
   TAMPERING IS REFUSED BY TWO INDEPENDENT CHECKS. `verify_release_attestation` checks the ed25519 detached signature via `ConsensusGovernanceReceipt::verify` AND that the attestation's `proposal_id` equals `sha256(canonical(receipt-with-attestation-cleared))`. Measured with the second check disabled: a receipt whose `steps[0].status` was rewritten `Reversed` -> `Failed` verified against a genuine signature. Nine single-field mutations, a stripped attestation, and a genuine attestation lifted from a different release are each refused with a distinct error.
+  A THIRD CHECK LANDED 2026-08-14 (task #27, ADR 0011), and the two above did not cover what it covers. Both were closed over the receipt -- the signature is verified against `signature.public_key_hex`, a FIELD OF THE RECEIPT -- so a full re-attestation passed: measured on cf48f7a, a receipt whose `steps[0].status` was rewritten `Reversed` -> `Failed` and then re-signed end to end by `SigningKey::from_bytes(&[251; 32])` verified `Ok`. `verify_release_attestation` now also requires the signing key to be one of `GovernanceAuthority::governor_public_keys()`, and refuses (rather than falling back) when no authority is available. `attestation_verified: true` on the release route therefore now means "a governor this process recognizes signed this exact body". Chain linkage remains unchecked; see ADR 0011's Consequences.
   Six mutants were run against the suite and each was caught: dropping `.with_governance(..)`; disabling the subject binding; letting an unattested receipt through; attesting only the expiry trigger; moving the expiry predicate by 1s (caught by the 5_999/6_001 boundary); and closing a lease whose inverse reported `Failed`.
   Open follow-up, not blocking: the routes are unavailable when the daemon is down, and `LocalOperatorSurface` still has none. Both are consequences recorded in ADR 0010.
   The original deferral note, kept for the record:
@@ -1479,15 +1481,15 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | FIXTURE-02 | Phase 284 | Satisfied |
 | FIXTURE-03 | Phase 284 | Satisfied |
 | FIXTURE-04 | Phase 284 | Satisfied |
-| MAPPING-01 | Phase 285 | Pending |
-| MAPPING-02 | Phase 285 | Pending |
-| MAPPING-03 | Phase 285 | Pending |
-| MAPPING-04 | Phase 285 | Pending |
-| MAPPING-05 | Phase 285 | Pending |
-| FALSIFY-01 | Phase 285 | Pending |
-| FALSIFY-02 | Phase 285 | Pending |
-| FALSIFY-03 | Phase 285 | Pending |
-| FALSIFY-04 | Phase 285 | Pending |
+| MAPPING-01 | Phase 285 | Satisfied |
+| MAPPING-02 | Phase 285 | Satisfied - 59 exact IDs plus 5 enforced omissions enumerated and locally ratcheted by the universe manifest |
+| MAPPING-03 | Phase 285 | Satisfied |
+| MAPPING-04 | Phase 285 | Satisfied |
+| MAPPING-05 | Phase 285 | Pending - workflow wired; provenance-distinct external required check not configured |
+| FALSIFY-01 | Phase 285 | Satisfied |
+| FALSIFY-02 | Phase 285 | Satisfied - 59 exact tests structurally checked and executed with zero ignored |
+| FALSIFY-03 | Phase 285 | Satisfied |
+| FALSIFY-04 | Phase 285 | Pending - workflow wired; provenance-distinct external required check not configured |
 | DST-01 | Phase 286 | Pending |
 | DST-02 | Phase 286 | Pending |
 | DST-03 | Phase 286 | Pending |
@@ -1502,8 +1504,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | LOOM-02 | Phase 287 | Pending |
 | LOOM-03 | Phase 287 | Pending |
 | LOOM-04 | Phase 287 | Pending |
-| SUPPLY-01 | Phase 287 | Pending |
-| SUPPLY-02 | Phase 287 | Pending |
+| SUPPLY-01 | Phase 287 | Satisfied |
+| SUPPLY-02 | Phase 287 | Satisfied |
 | OPFOR-01 | Phase 288 | Pending |
 | OPFOR-02 | Phase 288 | Pending |
 | OPFOR-03 | Phase 288 | Pending |
@@ -1681,9 +1683,9 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.75 complete: 10 requirements satisfied across phases 268-271
 - v1.76 complete: 9 requirements satisfied across phases 272-275
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
-- v1.78 in progress: 17 requirements across phases 280-283 (GATEFIX-01-04 Satisfied 2026-08-11; TCBOUND-01-04 Satisfied 2026-08-13) (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
-- v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
-- v1.79 queued: 25 requirements across phases 284-287 (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
+- v1.78 complete as scoped: phases 280-283 shipped; GATEFIX-01-04 and TCBOUND-01-04 are satisfied, while phase 282's measured SPLIT remainder remains explicit rather than silently claimed
+- v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83 rather than claimed
+- v1.79 active: phase 284 complete; phase 285 is 7/9 satisfied on the current v1.79 integration branch, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
 - v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
@@ -1695,4 +1697,4 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-08-10 - Merged v1.75-v1.77 completion from feat/milestones-v1.74-v1.77; v1.78-v1.87 requirements mapped to phases 280-322*
+*Last updated: 2026-08-15 - Activated v1.79 and separated local phase-285 delivery from external required-check acceptance*

@@ -1,0 +1,16 @@
+error[E0061]: this method takes 1 argument but 2 arguments were supplied
+ --> tests/ui/resume_clock_cannot_be_selected.rs:9:28
+  |
+9 |         let _ = dispatcher.resume(pack, 0);
+  |                            ^^^^^^       - unexpected argument #2 of type `{integer}`
+  |
+note: method defined here
+ --> src/dispatcher.rs
+  |
+  |     pub async fn resume(
+  |                  ^^^^^^
+help: remove the extra argument
+  |
+9 -         let _ = dispatcher.resume(pack, 0);
+9 +         let _ = dispatcher.resume(pack);
+  |

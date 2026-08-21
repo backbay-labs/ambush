@@ -1,0 +1,5 @@
+error[E0404]: expected trait, found struct `GovernanceAuthority`
+ --> tests/ui/fake_governance_authority_cannot_be_implemented.rs:5:6
+  |
+5 | impl GovernanceAuthority for Fake {}
+  |      ^^^^^^^^^^^^^^^^^^^ not a trait

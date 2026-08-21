@@ -11,7 +11,8 @@ pub struct OperatorSurfaceConfig {
     /// Local socket address the surface listens on.
     #[serde(default = "default_operator_bind_addr")]
     pub bind_addr: String,
-    /// Runtime HTTP base URL the live demo dashboard reads from.
+    /// Detect-server base URL. HTTPS is required unless the parsed host is exact
+    /// loopback, because approval routes forward an operator bearer to it.
     #[serde(default = "default_operator_runtime_base_url")]
     pub runtime_base_url: String,
     /// Public HTTP base URL external systems use for operator drilldown links.

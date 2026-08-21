@@ -174,9 +174,10 @@
 
         assert!(matches!(
             source.audit.response,
-            AuditResponseRecord::Skipped { .. }
+            AuditResponseRecord::Success(_)
         ));
-        assert!(modes.lock().await.is_empty());
+        assert_eq!(&*modes.lock().await, &[ExecutionMode::DryRun]);
+        modes.lock().await.clear();
 
         let store = MemoryReplayBundleStore::default();
         let rehearsal_context = approval_context(1_700_000_000_321, "corr-rehearsal-run");
@@ -233,6 +234,8 @@
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(&*modes.lock().await, &[ExecutionMode::DryRun]);
+        modes.lock().await.clear();
         source.action_request.action = ResponseAction::BlockEgress {
             target: "   ".to_string(),
         };
@@ -356,4 +359,3 @@
             service.playbook_action_for_finding(&single_action_finding, SwarmMode::Alert);
         assert!(matches!(fallback, Some(ResponseAction::Escalate { .. })));
     }
-

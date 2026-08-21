@@ -20,6 +20,7 @@ serde_json.workspace = true
 sha2.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
+swarm-governance.workspace = true
 swarm-ingest-json.workspace = true
 swarm-ingest-sentinel.workspace = true
 swarm-ingest-tetragon.workspace = true
@@ -39,12 +40,9 @@ zeroize.workspace = true
 
 [dev-dependencies]
 serde_yaml.workspace = true
-# Dev-only. `ingest/tests.rs` constructs a concrete `tom_agent::GovernancePolicy`
-# to drive the governance health endpoint; SPLIT-03 moved that type to
-# `swarm-agents`, so the test import followed it. Non-test code here names
-# nothing in `swarm-agents` -- it reaches governance through the
-# `swarm_policy::governance::GovernanceAuthority` trait, which is the boundary
-# SPLIT-05 introduced for exactly this reason.
+# Dev-only. Tests still spell the compatibility path
+# `swarm_agents::tom_agent::GovernancePolicy`; non-test code consumes the concrete
+# opaque handle directly from the lower `swarm-governance` dependency above.
 swarm-agents.workspace = true
 tower.workspace = true
 

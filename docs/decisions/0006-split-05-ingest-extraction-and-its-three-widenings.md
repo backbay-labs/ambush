@@ -204,12 +204,14 @@ substitution is the clock: the original called `dispatcher`'s private
 ### The alternative to the three widenings, weighed and declined
 
 Leave `control.rs` in the root and invert `control -> ingest` behind a trait, as
-SPLIT-03's `swarm_core::agent` seal and this phase's `GovernanceAuthority`
-inversion both did. Two of the three widenings are `control.rs`'s and would go
-away.
+SPLIT-03's `swarm_core::agent` seal and the then-current governance backend
+inversion both did. The governance backend trait was later removed by ADR 0011's
+2026-08-15 capability amendment; this comparison records the extraction-time
+architecture. Two of the three widenings are `control.rs`'s and would go away.
 
-It was declined because the coupling is not one method. `GovernanceAuthority`
-inverted a single call, `policy.status_report()`. `control -> ingest` is:
+It was declined because the coupling is not one method. The historical
+governance backend inverted a single call, `policy.status_report()`.
+`control -> ingest` is:
 
 - two variants of the public `ControlError` enum -- `IngestBuild(Box<IngestBuildError>)`
   and `FirstRunWizard(#[from] FirstRunWizardError)`;

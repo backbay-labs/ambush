@@ -4,9 +4,9 @@ use super::platform_api::{
     PlatformRuntimeStatus,
 };
 use super::{
-    DemoApprovalResumeRequest, DemoApprovalResumeResponse, DemoDashboardSnapshot, DemoProofPackage,
-    DemoReplayRequest, DemoReplayResponse, IngestRequest, IngestRequestError, IngestResponse,
-    IngestState, StrategyProposalRoute, detect_http_router, ingest_router, validate_and_parse,
+    DemoDashboardSnapshot, DemoProofPackage, DemoReplayRequest, DemoReplayResponse, IngestRequest,
+    IngestRequestError, IngestResponse, IngestState, StrategyProposalRoute, detect_http_router,
+    ingest_router, validate_and_parse,
 };
 use crate::anti_tamper::AntiTamperReport;
 use crate::bridge_runtime::SharedBridgeHealth;
@@ -36,8 +36,8 @@ use swarm_core::config::{
     OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, PheromoneBackendConfig,
     PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig, PlatformApiScope,
     PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
-    ResponseAdapterConfig, RetryConfig, RoutingRule, RuntimeAntiTamperConfig, RuntimeMode,
-    RuntimeSettings, SecretString, SwarmConfig, TelemetrySourceConfig, WebhookConfig,
+    ResponseAdapterConfig, ResponsePlaybookRule, RetryConfig, RoutingRule, RuntimeAntiTamperConfig,
+    RuntimeMode, RuntimeSettings, SecretString, SwarmConfig, TelemetrySourceConfig, WebhookConfig,
 };
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{
@@ -783,6 +783,19 @@ fn live_response_config(strategy: &str) -> SwarmConfig {
     config
 }
 
+fn live_response_playbook_config(action: ResponseAction) -> SwarmConfig {
+    let mut config = live_response_config("suspicious_process_tree");
+    config.pheromone.response_playbook.rules = vec![ResponsePlaybookRule {
+        threat_class: ThreatClass::Execution,
+        severity: Severity::Critical,
+        min_confidence: 0.90,
+        max_confidence: 1.0,
+        actions: vec![action],
+        branches: Vec::new(),
+    }];
+    config
+}
+
 /// Everything the two `route_kitten_candidate` cases assert on.
 struct RoutedKittenCandidate {
     report: super::StrategyProposalRouteReport,
@@ -1164,6 +1177,17 @@ fn live_demo_ingest_state() -> (IngestState, DefaultApprovalHarness) {
     )
 }
 
+fn rehearsal_demo_ingest_state() -> (IngestState, DefaultApprovalHarness) {
+    let (mut state, harness) = live_demo_ingest_state();
+    let mut config = state.config_template.load_full().as_ref().clone();
+    config.runtime.mode = RuntimeMode::DetectOnly;
+    let config_path = temp_path("demo-rehearsal-inline");
+    state = IngestState::from_config(config_path, config)
+        .unwrap()
+        .with_approval_harness(harness.clone());
+    (state, harness)
+}
+
 fn bridge_health(entries: Vec<BridgeStatusSnapshot>) -> SharedBridgeHealth {
     Arc::new(std::sync::Mutex::new(entries))
 }
@@ -1311,13 +1335,6 @@ async fn parse_demo_replay_response(response: axum::response::Response) -> DemoR
 async fn parse_demo_dashboard_response(
     response: axum::response::Response,
 ) -> DemoDashboardSnapshot {
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&body).unwrap()
-}
-
-async fn parse_demo_approval_resume_response(
-    response: axum::response::Response,
-) -> DemoApprovalResumeResponse {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&body).unwrap()
 }
@@ -1790,6 +1807,195 @@ async fn platform_api_routes_require_bearer_and_api_key_but_health_and_ingest_do
         .await
         .unwrap();
     assert_eq!(ingest.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn governed_resume_requires_approve_bearer_and_fails_closed_without_pack_store() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_AUTH_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-auth-test-secret";
+    const READ_TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_READ_TEST_TOKEN";
+    const READ_TOKEN: &str = "governed-resume-read-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-auth-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: "governed-resume-auth-operator".to_string(),
+            token_env: TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: "governed-resume-read-operator".to_string(),
+            token_env: READ_TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+        },
+    ];
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(READ_TOKEN_ENV, READ_TOKEN);
+    }
+    let state = IngestState::from_config(temp_path("governed-resume-auth"), config).unwrap();
+    let app = detect_http_router(state);
+    let uri = "/v1/governance/approvals/approval-set:missing/resume";
+    let body = json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string();
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {READ_TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let caller_selected_time = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "receipt_pack_id": "approval-receipt-pack:missing",
+                        "now_ms": 0,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        caller_selected_time.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let unavailable = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(READ_TOKEN_ENV);
+    }
+}
+
+#[tokio::test]
+async fn governed_resume_fails_closed_when_receipt_pack_store_is_not_configured() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_STORE_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-store-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-store-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "governed-resume-store-operator".to_string(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    unsafe { std::env::set_var(TOKEN_ENV, TOKEN) };
+    let root = temp_path("governed-resume-two-stores");
+    let harness = DefaultApprovalHarness::from_paths(root.join("sets"), root.join("ledgers"))
+        .expect("two-store compatibility harness should open");
+    let state = IngestState::from_config(temp_path("governed-resume-two-store-config"), config)
+        .unwrap()
+        .with_approval_harness(harness);
+    let response = detect_http_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/governance/approvals/approval-set:missing/resume")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    unsafe { std::env::remove_var(TOKEN_ENV) };
+}
+
+#[tokio::test]
+async fn governed_resume_fails_closed_when_persisted_pack_is_missing() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_MISSING_PACK_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-missing-pack-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-missing-pack-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "governed-resume-missing-pack-operator".to_string(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    unsafe { std::env::set_var(TOKEN_ENV, TOKEN) };
+    let root = temp_path("governed-resume-four-stores");
+    let harness = DefaultApprovalHarness::from_path(
+        root.join("config.yaml"),
+        root.join("verdicts"),
+        root.join("receipt-packs"),
+        root.join("sets"),
+        root.join("ledgers"),
+    )
+    .expect("four-store approval harness should open");
+    let state = IngestState::from_config(temp_path("governed-resume-four-store-config"), config)
+        .unwrap()
+        .with_approval_harness(harness);
+    let response = detect_http_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/governance/approvals/approval-set:missing/resume")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    unsafe { std::env::remove_var(TOKEN_ENV) };
 }
 
 #[tokio::test]
@@ -3085,15 +3291,10 @@ async fn demo_replay_endpoint_injects_events_into_runtime_lane() {
 }
 
 #[tokio::test]
-async fn human_gated_demo_replay_can_resume_and_export_proof() {
-    unsafe {
-        std::env::set_var("SWARM_EVIDENCE_SIGNING_KEY", "demo-proof-signing-key");
-    }
-
-    let scenario_path = temp_path("demo-scenario-human-gate");
+async fn detect_only_governed_demo_produces_rehearsal_proof_without_live_approval() {
+    let scenario_path = temp_path("demo-scenario-detect-only-governed");
     write_human_gate_demo_scenario(&scenario_path);
-    let (state, harness) = live_demo_ingest_state();
-    let operator_id = state.operator_id();
+    let (state, harness) = rehearsal_demo_ingest_state();
     let app = detect_http_router(state);
 
     let replay_response = app
@@ -3113,52 +3314,7 @@ async fn human_gated_demo_replay_can_resume_and_export_proof() {
     assert_eq!(replay_response.status(), StatusCode::OK);
     let replay_body = parse_demo_replay_response(replay_response).await;
 
-    let approval_sets = harness.list_approval_sets().unwrap();
-    assert_eq!(approval_sets.total_count, 1);
-    let approval_set_id = approval_sets.sets[0].set_id.clone();
-    let approval_ledgers = harness.list_ledgers(Some(&approval_set_id)).unwrap();
-    assert_eq!(approval_ledgers.total_count, 1);
-    let approval_ledger_id = approval_ledgers.ledgers[0].ledger_id.clone();
-
-    let voter = Ed25519Signer::from_secret_material("demo-operator-vote-key");
-    let quorum = harness
-        .append_vote(&approval_set_id, &operator_id, &voter)
-        .unwrap();
-    assert!(quorum.quorum_met);
-
-    let verdict = harness
-        .create_verdict(&approval_set_id, &approval_ledger_id)
-        .unwrap();
-    let receipt_pack = harness
-        .export_receipt_pack(
-            &verdict.report.verdict_id,
-            "demo-proof-signer",
-            "SWARM_EVIDENCE_SIGNING_KEY",
-        )
-        .unwrap();
-
-    let resume_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/demo/approvals/{approval_set_id}/resume"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::to_string(&DemoApprovalResumeRequest {
-                        receipt_pack: receipt_pack.report.clone(),
-                    })
-                    .unwrap(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resume_response.status(), StatusCode::OK);
-    let resume_body = parse_demo_approval_resume_response(resume_response).await;
-    assert_eq!(resume_body.approval_set_id, approval_set_id);
-    assert_eq!(resume_body.receipt_pack_id, receipt_pack.report.pack_id);
-    assert_eq!(resume_body.response_kind, "success");
+    assert_eq!(harness.list_approval_sets().unwrap().total_count, 0);
 
     let proof_response = app
         .oneshot(
@@ -3173,25 +3329,56 @@ async fn human_gated_demo_replay_can_resume_and_export_proof() {
     assert_eq!(proof_response.status(), StatusCode::OK);
     let proof = parse_demo_proof_response(proof_response).await;
     assert_eq!(proof.run_id, replay_body.run_id);
-    assert_eq!(proof.signed_receipts.len(), 1);
-    assert_eq!(
-        proof.signed_receipts[0].pack_id,
-        receipt_pack.report.pack_id
-    );
+    assert!(proof.signed_receipts.is_empty());
     assert!(!proof.final_incident.incident_id.is_empty());
     assert!(
         proof
             .decision_timeline
             .iter()
-            .any(|entry| entry.stage == "approval_paused")
+            .any(|entry| entry.stage == "replay_step_decision")
     );
     assert!(
         proof
             .decision_timeline
             .iter()
-            .any(|entry| entry.stage == "approval_resumed")
+            .all(|entry| entry.stage != "governance_deferred")
     );
-    assert!(proof.merkle_leaves.len() >= 5);
+    assert!(proof.merkle_leaves.len() >= 2);
+
+    let _ = fs::remove_file(scenario_path);
+}
+
+#[tokio::test]
+async fn live_governed_demo_defers_without_creating_human_approval() {
+    let scenario_path = temp_path("demo-scenario-governance-deferred");
+    write_human_gate_demo_scenario(&scenario_path);
+    let (state, harness) = live_demo_ingest_state();
+    let app = detect_http_router(state.clone());
+
+    let replay_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/demo/replay")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&demo_replay_request(&scenario_path)).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(replay_response.status(), StatusCode::OK);
+    let replay = parse_demo_replay_response(replay_response).await;
+    assert_eq!(harness.list_approval_sets().unwrap().total_count, 0);
+    let run = state.load_demo_run(&replay.run_id).unwrap();
+    assert!(
+        run.timeline
+            .iter()
+            .any(|entry| entry.stage == "governance_deferred")
+    );
+    assert!(run.approvals.is_empty());
 
     let _ = fs::remove_file(scenario_path);
 }
@@ -5146,6 +5333,115 @@ async fn handler_forwards_accepted_events_to_agent_buffer() {
 }
 
 #[tokio::test]
+async fn live_ingest_defers_governed_playbook_action_but_deposits_and_forwards() {
+    let mut config = live_response_playbook_config(ResponseAction::BlockEgress {
+        target: "203.0.113.25".to_string(),
+    });
+    config.policy.rules = vec![PolicyRuleConfig {
+        name: "would-execute-without-governance-boundary".to_string(),
+        decision: PolicyRuleDecision::Allow,
+        threat_class: ThreatClass::Execution,
+        actions: vec![PolicyActionSelector::BlockEgress],
+        min_severity: Severity::Critical,
+        max_severity: Severity::Critical,
+        time_window_utc: None,
+        max_actions_per_agent_per_minute: None,
+        reason: Some("security regression fixture".to_string()),
+    }];
+    let (tx, mut rx) = mpsc::channel(4);
+    let state = IngestState::from_config(temp_path("governed-live-ingest"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report())
+        .with_telemetry_channel(tx);
+    let app = ingest_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![valid_process_event_json()]))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(rx.recv().await.unwrap().event_id, "evt-ingest-1");
+    let deposits = state.current_substrate().recent_deposits(10).await.unwrap();
+    assert_eq!(deposits.len(), 1, "the finding must still be deposited");
+    assert_eq!(deposits[0].indicator["event_id"], "evt-ingest-1");
+    assert!(
+        state.current_replay_store().recent(10).unwrap().is_empty(),
+        "direct ingest must not propose or execute a governed action"
+    );
+}
+
+#[tokio::test]
+async fn live_ingest_still_executes_non_governed_playbook_action() {
+    let config = live_response_playbook_config(ResponseAction::Escalate {
+        summary: "notify the response team".to_string(),
+        urgency: Severity::Critical,
+    });
+    let state = IngestState::from_config(temp_path("non-governed-live-ingest"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report());
+    let app = ingest_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![valid_process_event_json()]))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let decisions = state.current_replay_store().recent(10).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].action_kind, "escalate");
+    assert_eq!(decisions[0].response_kind, "success");
+}
+
+#[tokio::test]
+async fn bridge_ingest_defers_governed_playbook_action_and_forwards_to_agents() {
+    let config = live_response_playbook_config(ResponseAction::IsolateHost {
+        host_id: "host-1".to_string(),
+    });
+    let (tx, mut rx) = mpsc::channel(4);
+    let state = IngestState::from_config(temp_path("governed-bridge-ingest"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report())
+        .with_telemetry_channel(tx);
+    let event = validate_and_parse(valid_process_event_json()).unwrap();
+
+    state.process_bridge_event(event).await.unwrap();
+
+    assert_eq!(rx.recv().await.unwrap().event_id, "evt-ingest-1");
+    assert_eq!(
+        state
+            .current_substrate()
+            .recent_deposits(10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(state.current_replay_store().recent(10).unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn healthz_includes_agent_component_when_available() {
     let health = Arc::new(ArcSwap::from_pointee(vec![AgentHealthEntry {
         id: "whisker-primary".to_string(),
@@ -5209,16 +5505,22 @@ async fn healthz_includes_async_lane_component_when_enabled() {
 
 #[tokio::test]
 async fn healthz_includes_governance_partition_component() {
-    let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-        contingency_lease_ttl_ms: 60_000,
-        contingency_blast_radius_cap: 1,
-    }));
-    governance_policy
-        .register_governor(
+    let governance_root = temp_dir("healthz-governance");
+    let governance_policy = Arc::new(
+        GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig {
+                contingency_lease_ttl_ms: 60_000,
+                contingency_blast_radius_cap: 1,
+            },
+            governance_root.join("governance.json"),
             AgentId::new("tom", "primary"),
             ed25519_dalek::SigningKey::from_bytes(&[29; 32]),
         )
-        .expect("the policy holds no other governor key");
+        .expect("test governance should initialize signed persistence"),
+    );
+    let governance_authority = governance_policy
+        .authority()
+        .expect("persisted test governance should mint authority");
     governance_policy.observe_health(
         &AgentId::new("tom", "primary"),
         &[AgentHealthEntry {
@@ -5229,7 +5531,8 @@ async fn healthz_includes_governance_partition_component() {
         1_700_000_000_000,
     );
 
-    let app = detect_http_router(test_ingest_state().with_governance_policy(governance_policy));
+    let app =
+        detect_http_router(test_ingest_state().with_governance_authority(governance_authority));
     let response = app
         .oneshot(
             Request::builder()
@@ -5250,6 +5553,8 @@ async fn healthz_includes_governance_partition_component() {
         json["components"]["governance"]["active_contingency_leases"],
         0
     );
+    drop(governance_policy);
+    let _ = fs::remove_dir_all(governance_root);
 }
 
 #[tokio::test]

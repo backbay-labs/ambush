@@ -15,9 +15,10 @@ repo-owned Docker image and `swarmctl`.
 
 The quickstart path uses the signed detect-only bootstrap bundle at
 `/app/rulesets/default.yaml`. The built-in quickstart scenario injects one
-synthetic process-start event, forces the approval path through the sandboxed
-first-run wizard, and prints the resulting finding, receipt-pack ID, and proof
-Merkle root in one command.
+synthetic process-start event, rehearses the policy and human-approval path in
+the sandbox, and prints the resulting finding, rehearsal receipt-pack ID, and
+proof Merkle root in one command. The receipt pack is evidence for that dry run;
+it is not governance authorization for a live destructive action.
 
 ## Prerequisites
 
@@ -46,21 +47,16 @@ Expected outcome:
 
 ## 3. Run One-Command Quickstart
 
-`swarmctl quickstart` needs a voter signing key for the built-in approval step
-and an evidence signing key for the exported receipt pack. The bootstrap
-detect-only bundle keeps incident storage in memory, so the quickstart report
-itself is the supported first-run finding inspection surface.
+`swarmctl quickstart` runs the built-in scenario as a detect-only rehearsal. It
+does not mint a human-approval receipt or a live governance authorization, so no
+voter or evidence signing key is required. The bootstrap bundle keeps incident
+storage in memory, so the quickstart report itself is the supported first-run
+finding inspection surface.
 
 ```bash
 docker compose run --rm --entrypoint swarmctl \
   -e RUST_LOG=warn \
-  -e SWARM_VOTER_SIGNING_KEY=quickstart-voter-key \
-  -e SWARM_EVIDENCE_SIGNING_KEY=quickstart-evidence-key \
   swarm-detect \
-  --approval-verdict-results-dir /tmp/approval-verdicts \
-  --approval-receipt-pack-results-dir /tmp/approval-receipt-packs \
-  --approval-set-results-dir /tmp/approval-sets \
-  --approval-ledger-results-dir /tmp/approval-ledgers \
   quickstart --config /app/rulesets/default.yaml
 ```
 
@@ -80,7 +76,6 @@ Incident: incident:evt-first-run-1:...
 Trigger strategy: suspicious_process_tree
 Threat class: execution
 Severity: CRITICAL
-Receipt pack: approval-receipt-pack:...
 Proof Merkle root: 0x...
 Next steps:
 - swarmctl status --config /app/rulesets/default.yaml
@@ -88,8 +83,7 @@ Next steps:
 ```
 
 The visible detection proof for this guide is the `Incident`, `Threat class`,
-`Severity`, `Receipt pack`, and `Proof Merkle root` block printed by that one
-command.
+`Severity`, and `Proof Merkle root` block printed by that one command.
 
 ## 4. Optional JSON Output
 
@@ -99,14 +93,8 @@ automation.
 ```bash
 docker compose run --rm --entrypoint swarmctl \
   -e RUST_LOG=warn \
-  -e SWARM_VOTER_SIGNING_KEY=quickstart-voter-key \
-  -e SWARM_EVIDENCE_SIGNING_KEY=quickstart-evidence-key \
   swarm-detect \
   --json \
-  --approval-verdict-results-dir /tmp/approval-verdicts \
-  --approval-receipt-pack-results-dir /tmp/approval-receipt-packs \
-  --approval-set-results-dir /tmp/approval-sets \
-  --approval-ledger-results-dir /tmp/approval-ledgers \
   quickstart --config /app/rulesets/default.yaml
 ```
 
@@ -120,7 +108,6 @@ The JSON payload includes:
 - `finding.strategy_id`
 - `finding.threat_class`
 - `finding.severity`
-- `receipt_pack_id`
 - `proof_merkle_root`
 
 ## 5. Start The HTTP Runtime Surface

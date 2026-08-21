@@ -14,7 +14,6 @@ use swarm_core::pheromone::{
     ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
 use swarm_core::types::Severity;
-use swarm_crypto::Ed25519Signer;
 use swarm_ingest_json::{
     AuditdBridge, CloudTrailBridge, GenericJsonBridge, KubernetesAuditBridge, SysmonBridge,
     WindowsEventLogBridge,
@@ -23,7 +22,7 @@ use swarm_pheromone::{PheromoneSubstrate, SubstrateError};
 use swarm_response::{
     DeadLetterEntry, DispatchingExecutor, NotificationError, NotificationReplayResult,
 };
-use swarm_runtime::approval::{ApprovalError, DefaultApprovalHarness};
+use swarm_runtime::approval::ApprovalError;
 use swarm_runtime::config::{
     DetectorProfileError, RuntimeConfigError, kill_chain_sequence_profile, load_config,
     validate_all_detector_profiles,
@@ -237,12 +236,32 @@ pub enum FirstRunStatus {
     Completed,
 }
 
-/// Filesystem locations used by the guided first-run approval flow.
+/// Legacy approval-store locations retained for source compatibility.
+///
+/// Guided first-run is now a detect-only rehearsal and does not read or write
+/// these stores. Remove these fields from downstream callers after migrating to
+/// [`FirstRunWizardOptions::detect_only`].
 #[derive(Debug, Clone)]
 pub struct FirstRunWizardPaths {
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
     pub approval_verdict_results_dir: PathBuf,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
     pub approval_receipt_pack_results_dir: PathBuf,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
     pub approval_set_results_dir: PathBuf,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
     pub approval_ledger_results_dir: PathBuf,
 }
 
@@ -251,10 +270,47 @@ pub struct FirstRunWizardPaths {
 pub struct FirstRunWizardOptions {
     pub scenario_path: Option<PathBuf>,
     pub pace_ms: u64,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer reads a voter signing key"
+    )]
     pub voter_signing_key_env: String,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer signs approval evidence"
+    )]
     pub evidence_signer_id: String,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer reads an evidence signing key"
+    )]
     pub evidence_signing_key_env: String,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
     pub paths: FirstRunWizardPaths,
+}
+
+#[allow(deprecated)]
+impl FirstRunWizardOptions {
+    /// Construct the current detect-only guided walkthrough without treating
+    /// legacy approval inputs as authority.
+    pub fn detect_only(scenario_path: Option<PathBuf>, pace_ms: u64) -> Self {
+        Self {
+            scenario_path,
+            pace_ms,
+            voter_signing_key_env: String::new(),
+            evidence_signer_id: String::new(),
+            evidence_signing_key_env: String::new(),
+            paths: FirstRunWizardPaths {
+                approval_verdict_results_dir: PathBuf::new(),
+                approval_receipt_pack_results_dir: PathBuf::new(),
+                approval_set_results_dir: PathBuf::new(),
+                approval_ledger_results_dir: PathBuf::new(),
+            },
+        }
+    }
 }
 
 /// Readiness-gated first-run walkthrough report exposed through `swarmctl`.
@@ -426,26 +482,14 @@ impl DefaultControlPlane {
             ));
         }
 
-        let harness = DefaultApprovalHarness::from_path(
-            &self.config_path,
-            &options.paths.approval_verdict_results_dir,
-            &options.paths.approval_receipt_pack_results_dir,
-            &options.paths.approval_set_results_dir,
-            &options.paths.approval_ledger_results_dir,
-        )?;
-        let config =
-            guided_first_run_config(&self.stack.service.config, &options.voter_signing_key_env)?;
+        let config = guided_first_run_config(&self.stack.service.config);
         let state = IngestState::from_config(self.config_path.clone(), config)
-            .map_err(|error| ControlError::IngestBuild(Box::new(error)))?
-            .with_approval_harness(harness);
+            .map_err(|error| ControlError::IngestBuild(Box::new(error)))?;
         let walkthrough = run_first_run_wizard(
             state,
             FirstRunWizardRequest {
                 scenario_path: options.scenario_path.map(|path| path.display().to_string()),
                 pace_ms: options.pace_ms,
-                voter_signing_key_env: options.voter_signing_key_env,
-                evidence_signer_id: options.evidence_signer_id,
-                evidence_signing_key_env: options.evidence_signing_key_env,
             },
         )
         .await?;
@@ -736,40 +780,29 @@ fn build_single_detector(
     ))
 }
 
-fn guided_first_run_config(
-    config: &SwarmConfig,
-    voter_signing_key_env: &str,
-) -> Result<SwarmConfig, FirstRunWizardError> {
-    let voter_secret = std::env::var(voter_signing_key_env)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| FirstRunWizardError::MissingVoterSigningKey {
-            env_name: voter_signing_key_env.to_string(),
-        })?;
-    let voter = Ed25519Signer::from_secret_material(&voter_secret);
+fn guided_first_run_config(config: &SwarmConfig) -> SwarmConfig {
     let mut guided = config.clone();
     guided.runtime.demo_mode = true;
-    guided.runtime.mode = RuntimeMode::LiveResponse;
+    // The guided walkthrough demonstrates detection, policy evaluation, and
+    // evidence export, not live destructive authority. A live governed action must come
+    // from Pouncer and cross the dispatcher's one-time admission boundary;
+    // the wizard intentionally stays in dry-run mode and mints no human receipt
+    // that could be mistaken for that governance authorization.
+    guided.runtime.mode = RuntimeMode::DetectOnly;
     guided.runtime.require_durable_live_response = false;
     guided.policy.human_gate_severity = Severity::Low;
-    // Lowering `human_gate_severity` alone does not establish the invariant the
-    // walkthrough depends on. `ConfigurableApprovalGate` evaluates `policy.rules`
-    // first and the first matching rule decides outright; the static human gate is
-    // only reached when no rule matches (see docs/CONSENSUS.md "Human Approval
-    // Boundary"). An operator ruleset that broadly allows a destructive action --
-    // for example any rule with an empty `actions` selector -- therefore short
-    // circuits the gate, no approval is ever registered, and the wizard aborts with
-    // `FirstRunWizardError::MissingApproval`.
+    // `ConfigurableApprovalGate` evaluates `policy.rules` first and the first
+    // matching rule decides outright. Normalize the rehearsal rules so an
+    // operator's broad live allow cannot make the dry-run report imply that
+    // governance was exercised.
     //
     // Normalize the derived ruleset instead: keep every operator Deny authoritative
     // (ordered evaluation means a matching Deny still wins, and dropping them would
     // let a non-destructive denial fall through to `static.default_allow` inside a
-    // LiveResponse config), then append one non-destructive Allow so the ruleset is
+    // derived config), then append one non-destructive Allow so the ruleset is
     // never empty -- an empty ruleset fails closed with `Deny` at
-    // `configurable.fail_closed.empty_ruleset`, which also registers no approval.
-    // Every destructive action now falls through to `static.human_gate`, which the
-    // forced `human_gate_severity = Low` above turns into `RequireHuman`.
+    // `configurable.fail_closed.empty_ruleset`. Governed actions remain visible
+    // as non-authorizing detect-only dry runs.
     guided
         .policy
         .rules
@@ -784,15 +817,14 @@ fn guided_first_run_config(
         time_window_utc: None,
         max_actions_per_agent_per_minute: None,
         reason: Some(
-            "guided first-run permits non-destructive escalation only; destructive responses are human-gated"
+            "guided first-run permits non-destructive escalation only; governed responses remain detect-only rehearsals"
                 .to_string(),
         ),
     });
     guided.response_adapter = swarm_core::config::ResponseAdapterConfig::Sandbox;
     guided.investigation.enabled = true;
     guided.correlation.enabled = true;
-    guided.operator.auth.operator_id = format!("swarm:ed25519:{}", voter.public_key_hex());
-    Ok(guided)
+    guided
 }
 
 fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
@@ -1087,12 +1119,6 @@ fn render_first_run(envelope: &ControlEnvelope<FirstRunDiagnosticReport>) -> Str
     if let Some(walkthrough) = &report.walkthrough {
         lines.push(format!("Scenario: {}", walkthrough.scenario_name));
         lines.push(format!("Run: {}", walkthrough.run_id));
-        if let Some(approval_set_id) = walkthrough.artifacts.approval_set_id.as_deref() {
-            lines.push(format!("Approval set: {approval_set_id}"));
-        }
-        if let Some(receipt_pack_id) = walkthrough.artifacts.receipt_pack_id.as_deref() {
-            lines.push(format!("Receipt pack: {receipt_pack_id}"));
-        }
         if let Some(incident_id) = walkthrough.artifacts.incident_id.as_deref() {
             lines.push(format!("Incident: {incident_id}"));
         }
@@ -1656,8 +1682,8 @@ fn now_ms() -> i64 {
 mod tests {
     use super::{
         CURRENT_OPERATOR_API_SCHEMA_VERSION, ControlDataOrigin, DefaultControlPlane,
-        FirstRunStatus, FirstRunWizardOptions, FirstRunWizardPaths, IncidentLookupSelector,
-        InvestigationLookupSelector, OperatorControlOutput, ReplayLookupSelector, render_output,
+        FirstRunStatus, FirstRunWizardOptions, IncidentLookupSelector, InvestigationLookupSelector,
+        OperatorControlOutput, ReplayLookupSelector, render_output,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1675,7 +1701,6 @@ mod tests {
         ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
     };
     use swarm_core::types::{AgentId, ProvidenceFeedbackAction, ResponseAction, Severity};
-    use swarm_crypto::Ed25519Signer;
     use swarm_pheromone::PheromoneSubstrate;
     use swarm_policy::ApprovalContext;
     use swarm_runtime::RuntimeMode;
@@ -1696,20 +1721,8 @@ mod tests {
         dir
     }
 
-    fn first_run_options(root: &std::path::Path) -> FirstRunWizardOptions {
-        FirstRunWizardOptions {
-            scenario_path: None,
-            pace_ms: 0,
-            voter_signing_key_env: "SWARM_FIRST_RUN_TEST_VOTER_KEY".to_string(),
-            evidence_signer_id: "first-run-test-signer".to_string(),
-            evidence_signing_key_env: "SWARM_FIRST_RUN_TEST_EVIDENCE_KEY".to_string(),
-            paths: FirstRunWizardPaths {
-                approval_verdict_results_dir: root.join("approval-verdicts"),
-                approval_receipt_pack_results_dir: root.join("approval-receipt-packs"),
-                approval_set_results_dir: root.join("approval-sets"),
-                approval_ledger_results_dir: root.join("approval-ledgers"),
-            },
-        }
+    fn first_run_options(_root: &std::path::Path) -> FirstRunWizardOptions {
+        FirstRunWizardOptions::detect_only(None, 0)
     }
 
     fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
@@ -2328,21 +2341,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_run_completes_detection_approval_and_proof() {
-        unsafe {
-            std::env::set_var("SWARM_FIRST_RUN_TEST_VOTER_KEY", "first-run-vote-key");
-            std::env::set_var(
-                "SWARM_FIRST_RUN_TEST_EVIDENCE_KEY",
-                "first-run-evidence-key",
-            );
-        }
-
+    async fn first_run_completes_detect_only_governance_rehearsal_and_proof() {
         let mut config = control_config();
-        let voter = Ed25519Signer::from_secret_material("first-run-vote-key");
         config.runtime.mode = RuntimeMode::DetectOnly;
         config.investigation.enabled = false;
         config.correlation.enabled = false;
-        config.operator.auth.operator_id = format!("swarm:ed25519:{}", voter.public_key_hex());
         let plane = DefaultControlPlane::from_config("inline", config).unwrap();
         let temp_dir = unique_temp_dir("first-run-complete");
 
@@ -2352,8 +2355,9 @@ mod tests {
         assert_eq!(report.data.status, FirstRunStatus::Completed);
         let walkthrough = report.data.walkthrough.as_ref().unwrap();
         assert_eq!(walkthrough.injected_events, 1);
-        assert!(walkthrough.artifacts.approval_set_id.is_some());
-        assert!(walkthrough.artifacts.receipt_pack_id.is_some());
+        assert!(walkthrough.artifacts.approval_set_id.is_none());
+        assert!(walkthrough.artifacts.receipt_pack_id.is_none());
+        assert!(walkthrough.proof.signed_receipts.is_empty());
         assert!(walkthrough.artifacts.incident_id.is_some());
         assert!(walkthrough.artifacts.proof_merkle_root.is_some());
         assert_eq!(
@@ -2365,20 +2369,20 @@ mod tests {
                 .run
                 .timeline
                 .iter()
-                .any(|entry| entry.stage == "approval_paused")
+                .any(|entry| entry.stage == "replay_step_decision")
         );
         assert!(
             walkthrough
                 .run
                 .timeline
                 .iter()
-                .any(|entry| entry.stage == "approval_resumed")
+                .all(|entry| entry.stage != "governance_deferred")
         );
 
         let rendered = render_output(&OperatorControlOutput::FirstRun(Box::new(report.clone())));
         assert!(rendered.contains("Schema version: 1"));
         assert!(rendered.contains("Origin: guided_first_run"));
-        assert!(rendered.contains("Receipt pack:"));
+        assert!(!rendered.contains("Receipt pack:"));
 
         let json =
             serde_json::to_string(&OperatorControlOutput::FirstRun(Box::new(report))).unwrap();
@@ -2387,16 +2391,11 @@ mod tests {
         assert!(json.contains("\"status\":\"completed\""));
     }
 
-    /// `guided_first_run_config` declares "this run pauses at a human gate" by
-    /// forcing `human_gate_severity = Low`. That declaration is only true if the
-    /// derived ruleset actually lets destructive actions reach the static gate.
-    /// This asserts the derived config establishes the invariant it declares, and
-    /// that it does so without discarding operator denials.
+    /// `guided_first_run_config` is a detect-only policy rehearsal. It can report
+    /// the policy-layer human-gate verdict but cannot confer live governed
+    /// authority. Operator denials remain authoritative.
     #[test]
-    fn guided_first_run_config_human_gates_destructive_actions_and_keeps_denials() {
-        unsafe {
-            std::env::set_var("SWARM_FIRST_RUN_TEST_VOTER_KEY", "first-run-vote-key");
-        }
+    fn guided_first_run_config_keeps_denials_in_detect_only_rehearsal() {
         let mut config = control_config();
         // A blanket operator allow: empty `actions` matches every action kind.
         config.policy.rules = vec![
@@ -2424,8 +2423,8 @@ mod tests {
             },
         ];
 
-        let guided =
-            super::guided_first_run_config(&config, "SWARM_FIRST_RUN_TEST_VOTER_KEY").unwrap();
+        let guided = super::guided_first_run_config(&config);
+        assert_eq!(guided.runtime.mode, RuntimeMode::DetectOnly);
 
         // The operator's denial survives verbatim.
         assert!(

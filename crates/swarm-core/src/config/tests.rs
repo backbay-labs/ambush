@@ -265,8 +265,62 @@ fn operator_surface_requires_http_runtime_base_url_when_enabled() {
     let error = config.validate().unwrap_err();
     assert_eq!(
         error.to_string(),
-        "invalid field `operator_surface.runtime_base_url`: must start with http:// or https://"
+        "invalid field `operator_surface.runtime_base_url`: must be a valid HTTPS URL, or HTTP on exact loopback (localhost, 127.0.0.0/8, or ::1)"
     );
+}
+
+#[test]
+fn operator_runtime_base_url_allows_https_and_exact_http_loopback() {
+    for runtime_base_url in [
+        "https://detect.example",
+        "http://localhost:9090",
+        "http://127.0.0.1:9090",
+        "http://127.255.255.254:9090",
+        "http://[::1]:9090",
+    ] {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+
+        assert!(
+            config.validate().is_ok(),
+            "expected `{runtime_base_url}` to be accepted"
+        );
+    }
+}
+
+#[test]
+fn operator_runtime_base_url_rejects_plaintext_non_loopback_and_spoofed_authorities() {
+    for runtime_base_url in [
+        "http://detect.example",
+        "http://192.168.1.10:9090",
+        "http://10.0.0.1:9090",
+        "http://169.254.1.1:9090",
+        "http://0.0.0.0:9090",
+        "http://[::]:9090",
+        "http://[fe80::1]:9090",
+        "http://localhost.example:9090",
+        "http://localhost.:9090",
+        "http://@localhost:9090",
+        "http://operator:secret@localhost:9090",
+        "http://localhost@detect.example:9090",
+        "https://operator@detect.example",
+    ] {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+
+        let error = config
+            .validate()
+            .expect_err("bearer-bearing runtime URL must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.runtime_base_url`: must be a valid HTTPS URL, or HTTP on exact loopback (localhost, 127.0.0.0/8, or ::1)",
+            "unexpected validation result for `{runtime_base_url}`"
+        );
+    }
 }
 
 #[test]

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 use std::path::PathBuf;
 use swarm_runtime::config::load_config;

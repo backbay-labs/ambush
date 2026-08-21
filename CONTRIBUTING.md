@@ -64,7 +64,7 @@ bash tools/check-fixture-freshness.sh
 bash tools/check-platform-openapi.sh      # needs `uv` on PATH and outbound network (PyPI)
 bash tools/check-stigmergic-feedback-benchmark.sh
 bash tools/check-adversary-emulation-coverage.sh
-bash tools/check-supply-chain.sh          # needs cargo-deny and cargo-audit installed
+bash tools/check-supply-chain.sh          # needs cargo-deny 0.19.4 and cargo-audit 0.22.0
 bash tools/check-hot-path-regression.sh   # Criterion; the slowest of these by a wide margin
 ```
 
@@ -99,6 +99,24 @@ container ships, before that image is signed and attested.
 
 Supply chain is enforced with `cargo deny` and `cargo audit` through
 `tools/check-supply-chain.sh`. A new dependency needs a reason in the pull request description.
+
+Waiving a supply-chain finding -- a RustSec advisory or a duplicate dependency -- means adding an
+entry to `deny.toml` with the metadata that gate parses out of its `reason`: `last-checked
+<YYYY-MM-DD>` and a `clears-when:` clause on either kind of entry, plus `expires <YYYY-MM-DD>` and a
+`blast-radius:` note on an `[advisories] ignore`. Duplicate skips must use the exact
+`<crate>@<SemVer 2.0>` form. The gate splits at the final `@`, requires a non-empty name and valid
+exact SemVer, and uses exact `Cargo.lock` matching as the authority for Cargo package names; this
+includes leading-underscore and Unicode-XID names. The complete version text must occur in the
+lock, including build metadata. Every selector is rejected when multiple locked rows share its
+exact name and build-stripped core-plus-prerelease identity; diagnostics list registry/git sources
+and truthfully identify source-less rows as path/local while noting that Cargo.lock omits the
+filesystem path. Cargo-deny separately checks duplicate applicability in its scanned graph. Do not
+add `--ignore` to `cargo audit`: that list is derived from `deny.toml`, and a RustSec id in a
+workflow or `tools/*.sh` fails as a second list that would drift. The gate refuses stale resolution
+before parsing the lock with `cargo metadata --locked`, runs cargo-deny with `--locked`, and
+byte-compares Cargo.lock after cargo-audit because cargo-audit has no locked mode. Its executable
+fixture changes a path dependency's manifest version without updating its locked dependency row
+and proves the first locked metadata call fails without changing the lock bytes.
 
 ## Conventions
 

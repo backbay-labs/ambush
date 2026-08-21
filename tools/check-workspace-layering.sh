@@ -183,6 +183,7 @@ TCB = ("swarm-crypto", "swarm-policy", "swarm-spine")
 # TCBOUND-02. Order is the requirement's; sorted only for output.
 TRUST_SENSITIVE = (
     "swarm-policy",
+    "swarm-governance",
     "swarm-pheromone",
     "swarm-response",
     "swarm-guard",
@@ -621,9 +622,10 @@ swarm-whisker|swarm-core
 swarm-guard|swarm-core
 swarm-pheromone|swarm-core swarm-crypto
 swarm-policy|swarm-core
+swarm-governance|swarm-core swarm-crypto swarm-policy
 swarm-response|swarm-core swarm-crypto swarm-policy swarm-whisker reqwest
 swarm-spine|swarm-core swarm-crypto swarm-policy swarm-response swarm-whisker
-swarm-agents|swarm-pheromone swarm-spine
+swarm-agents|swarm-governance swarm-pheromone swarm-spine
 swarm-runtime|swarm-spine swarm-policy swarm-response swarm-pheromone swarm-guard swarm-agents clap
 swarm-runtime-http|swarm-runtime axum
 swarm-cli|swarm-policy clap
@@ -632,9 +634,9 @@ hyper|
 axum|
 clap|'
 
-# The six TCBOUND-02 crates get the two headings in the fixture too, so RULE 5
+# The seven trust-sensitive crates get the two headings in the fixture too, so RULE 5
 # is exercised by the fixture rather than skipped in it.
-FIXTURE_DOCUMENTED='swarm-policy swarm-pheromone swarm-response swarm-guard swarm-crypto swarm-spine'
+FIXTURE_DOCUMENTED='swarm-policy swarm-governance swarm-pheromone swarm-response swarm-guard swarm-crypto swarm-spine'
 
 build_fixture() { # <dir>
   local dir="$1" line crate deps dep members=""

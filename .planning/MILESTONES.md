@@ -2,21 +2,21 @@
 
 ## Latest Completed Milestone
 
-### v1.76 External Signal Ingestion
-**Executable phases:** 272-275
+### v1.78 Runtime Decomposition And TCB Boundary
+**Executable phases:** 280-283
 **Status:** Complete
-**Shipped:** 2026-04-13
-**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
-**Progress:** Phases 272-275 complete
+**Shipped:** 2026-08-13
+**Goal:** Green the verification gates, eliminate the core.inc pattern, split the 97,709-LOC swarm-runtime crate, and name and enforce a trusted computing base.
+**Progress:** Phases 280-283 complete as scoped; phase 282's explicitly measured remainder remains recorded rather than silently claimed
 
 ## Active Milestone
 
-### v1.77 Integration Proof
-**Executable phases:** 276-279
+### v1.79 Assurance Foundation
+**Executable phases:** 284-287
 **Status:** Active
-**Started:** 2026-04-13
-**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
-**Progress:** Phases 276-279 complete; milestone is active pending v1.78 definition or archive/promotion
+**Started:** 2026-08-14
+**Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
+**Progress:** Phase 284 complete; phase 285 has 7/9 requirements satisfied on the current v1.79 integration branch, with MAPPING-05 and FALSIFY-04 awaiting external protected-required-check acceptance; phases 286-287 not started
 
 ## Queued Milestones
 
@@ -24,25 +24,7 @@
 **Executable phases:** 264-267
 **Status:** Deferred
 **Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
-**Progress:** Phases 264-267 remain defined; deferred while v1.76 executes
-
-### v1.76 External Signal Ingestion
-**Executable phases:** 272-275
-**Status:** Queued
-**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
-**Progress:** Phases 272-275 defined; ready to activate after v1.75 completes
-
-### v1.78 Runtime Decomposition And TCB Boundary
-**Executable phases:** 280-283
-**Status:** Queued
-**Goal:** Green the verification gates, eliminate the core.inc pattern, split the 97,709-LOC swarm-runtime crate, and name and enforce a trusted computing base.
-**Progress:** Phases 280-283 defined 2026-08-10; ready to activate in sequence
-
-### v1.79 Assurance Foundation
-**Executable phases:** 284-287
-**Status:** Queued
-**Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
-**Progress:** Phases 284-287 defined 2026-08-10; ready to activate in sequence
+**Progress:** Phases 264-267 remain defined and explicitly deferred
 
 ### v1.80 Red Swarm
 **Executable phases:** 288-291
@@ -92,13 +74,19 @@
 **Goal:** Scale to a multi-instance fleet with fleet-wide blast-radius control, tenant isolation, measured capacity, and enforced release provenance.
 **Progress:** Phases 316-319 defined 2026-08-10; ready to activate in sequence
 
-### v1.77 Integration Proof
-**Executable phases:** 276-279
-**Status:** Queued
-**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
-**Progress:** Phases 276-279 defined; ready to activate after v1.76 completes
-
 ## History
+
+## v1.77 Integration Proof (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The repo ships a resilient CrowdStrike RTR response adapter with OAuth2 service authentication, session management, host isolation, process kill, file quarantine, and repo-owned mock-server coverage.
+- The repo ships a resilient Splunk HEC delivery adapter with CIM-compliant field mapping, configurable batching, secret-resolved token authentication, delivery metrics, and repo-owned mock-endpoint coverage.
+- The Compose-backed integration proof executes the complete telemetry -> detection -> policy-gated response -> CrowdStrike RTR -> Splunk HEC path with observable response receipts and CIM-mapped delivery artifacts.
+- `bash tools/run-integration-proof.sh` validates the documented integration architecture, component health, metrics, and audit evidence without live vendor credentials.
+
+---
 
 ## v1.72 OpenAPI Spec And SOAR Bidirectional Sync (Shipped: 2026-04-13)
 

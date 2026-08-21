@@ -1,0 +1,205 @@
+# Phase-285 assumption registry. Dependencies are many-to-many: the mapping
+# gate requires each list to equal every MAPPING.md row that names the assumption.
+
+schema_version = 2
+
+[[assumption]]
+id = "ASSUME-OS-CLOCK"
+owner = "swarm-runtime"
+statement = "The supplied now_ms values are ordered Unix-millisecond instants and do not move backward across a decision window."
+holds_because = "Critical decisions take now_ms explicitly, leaving the clock read at auditable call sites."
+breaks_if = "Clock rollback or attacker-controlled timestamps can revive leases and reset rate windows."
+invariants = [
+  "POLICY-RULE-TIME-WINDOW",
+  "POLICY-RULE-AGENT-RATE-LIMIT",
+  "POLICY-SCOPE-RATE-LIMIT",
+  "RESPONSE-LEASE-BOUNDED",
+  "RESPONSE-STORED-LEASE-BOUNDED",
+  "RUNTIME-EXPIRED-LEASE-REFUSED",
+]
+
+[[assumption]]
+id = "ASSUME-ED25519"
+owner = "swarm-crypto"
+statement = "Without a private key, an attacker cannot produce a signature that verifies under the corresponding Ed25519 public key."
+holds_because = "The implementation delegates the primitive to ed25519-dalek; this repository adds no stronger claim."
+breaks_if = "The primitive, dependency, or private-key custody is compromised."
+invariants = [
+  "RUNTIME-RELEASE-ATTESTATION-REQUIRED",
+  "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED",
+  "RUNTIME-RELEASE-SIGNATURE-VALID",
+  "RUNTIME-RELEASE-SUBJECT-BOUND",
+  "RUNTIME-RELEASE-SIGNER-TRUSTED",
+  "SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED",
+  "SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED",
+  "SPINE-ENVELOPE-ISSUER-KEY-VALID",
+  "SPINE-ENVELOPE-SIGNATURE-WELL-FORMED",
+  "SPINE-ENVELOPE-SIGNATURE-VALID",
+  "SPINE-CHAIN-ISSUER-BOUND",
+]
+
+[[assumption]]
+id = "ASSUME-SHA256"
+owner = "swarm-crypto"
+statement = "SHA-256 is collision resistant for the canonical byte strings hashed by these paths."
+holds_because = "It is the repository's content-addressing primitive and no custom compression is inserted before hashing."
+breaks_if = "A collision lets distinct canonical subjects or envelopes share an identity."
+invariants = [
+  "RUNTIME-RELEASE-SUBJECT-BOUND",
+  "SPINE-ENVELOPE-HASH-FIELD-REQUIRED",
+  "SPINE-ENVELOPE-HASH-BOUND",
+  "SPINE-CHAIN-PREV-HASH-BOUND",
+]
+
+[[assumption]]
+id = "ASSUME-CANONICAL-JSON"
+owner = "swarm-crypto"
+statement = "Canonicalization is deterministic and injective over signed values: one value has one encoding and different values do not collapse to the same bytes."
+holds_because = "The shared canonicalizer sorts keys and fixes the number and escape representation used by signing and verification."
+breaks_if = "Encoder drift breaks honest verification; non-injectivity lets a signature or digest bind two structures."
+invariants = [
+  "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED",
+  "RUNTIME-RELEASE-SIGNATURE-VALID",
+  "RUNTIME-RELEASE-SUBJECT-BOUND",
+  "SPINE-ENVELOPE-HASH-FIELD-REQUIRED",
+  "SPINE-ENVELOPE-HASH-BOUND",
+  "SPINE-ENVELOPE-SIGNATURE-VALID",
+]
+
+[[assumption]]
+id = "ASSUME-GOVERNANCE-TRUST-ANCHOR"
+owner = "swarm-runtime-http"
+statement = "The shipped swarm-detect composition supplies every governance consumer and release verifier with clones of one opaque GovernanceAuthority minted from its authenticated persisted GovernancePolicy; public downstream composition is outside this shipped identity claim."
+holds_because = "GovernanceAuthority has a private Arc<GovernancePolicy>, no backend trait, Deref, generic installer, or public constructor; GovernancePolicy::authority rechecks signed persistence and local-governor anchors, and the shipped-builder identity test proves that dispatcher, ingest, containment, human resume, and release verification receive the same inner policy."
+breaks_if = "The shipped builder mints or installs a second authority, the handle becomes externally constructible or substitutable, minting stops authenticating persistence and the local governor, or the admitted governor set mutates outside the signed persistence protocol."
+invariants = [
+  "RUNTIME-RELEASE-SIGNER-TRUSTED",
+]
+
+[[assumption]]
+id = "ASSUME-KEYSTORE-ATOMICITY"
+owner = "swarm-runtime"
+statement = "One process writes each containment state file, and tmp-write plus rename is atomic on its filesystem."
+holds_because = "The daemon is the intended sole writer; manual release is routed through that running process."
+breaks_if = "Two processes or a non-atomic shared filesystem can fork or lose lease state."
+invariants = [
+  "RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED",
+  "RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED",
+  "RESPONSE-FILE-DUPLICATE-LEASE-REFUSED",
+  "RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED",
+  "RESPONSE-STORED-LEASE-SCHEMA-KNOWN",
+  "RESPONSE-STORED-LEASE-BOUNDED",
+  "RUNTIME-CONTAINMENT-NEEDS-STORE",
+  "RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE",
+]
+
+[[assumption]]
+id = "ASSUME-NETWORK-TRANSPORT"
+owner = "swarm-response"
+statement = "Configured network transports deliver bytes according to their documented timeout and error contracts."
+holds_because = "Transport integrations expose typed success and error results to the adapter layer."
+breaks_if = "A transport corrupts, duplicates, or silently discards a request while reporting delivery."
+invariants = []
+no_dependent_invariants_reason = "Transport delivery is outside the local fail-closed decision universe; adapter interpretation of outcomes is modeled separately."
+
+[[assumption]]
+id = "ASSUME-EXTERNAL-ADAPTER-BEHAVIOR"
+owner = "swarm-response"
+statement = "An external adapter reports only operations that actually landed as successful step or response outcomes, and reports failed, simulated, unsupported, or irreversible effects distinctly."
+holds_because = "The runtime and rollback classifiers consume typed adapter outcomes; focused fakes exercise every local classification branch without claiming the remote system is deterministic."
+breaks_if = "An adapter fabricates a success-shaped receipt or step for an operation that did not land."
+invariants = [
+  "RESPONSE-IRREVERSIBLE-INVERSE-REFUSED",
+  "RESPONSE-UNMAPPED-INVERSE-REFUSED",
+  "RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS",
+  "RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS",
+  "RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS",
+  "RESPONSE-ROLLBACK-REQUIRES-STEPS",
+  "RESPONSE-SANDBOX-NEVER-REVERSES",
+  "RUNTIME-ADAPTER-ERROR-NOT-SUCCESS",
+  "RUNTIME-FAILED-RECEIPT-NOT-SUCCESS",
+  "RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE",
+]
+
+[[assumption]]
+id = "ASSUME-JETSTREAM-DURABILITY"
+owner = "swarm-pheromone"
+statement = "An acknowledged file-backed JetStream record survives restart and preserves sequence identity."
+holds_because = "The JetStream integration lane exercises file-backed streams with explicit acknowledgement."
+breaks_if = "Memory retention, broker loss, or split delivery can lose or duplicate substrate records."
+invariants = []
+no_dependent_invariants_reason = "The Phase 285 authorization/response universe does not read the pheromone substrate; Phase 286 owns those fault rows."
+
+[[assumption]]
+id = "ASSUME-SUBPROCESS-ISOLATION"
+owner = "swarm-runtime"
+statement = "No production response path spawns a subprocess whose environment, quoting, or isolation can change a verdict or side effect."
+holds_because = "Production response adapters use typed Rust and HTTP paths; Command::new appears only under tests in the current tree."
+breaks_if = "A response adapter begins shelling out to an external EDR or helper process."
+invariants = []
+no_dependent_invariants_reason = "No production subprocess exists in the declared Phase 285 universe, so there is no executable guard to map."
+
+[[assumption]]
+id = "ASSUME-CHAIN-HEAD-DURABILITY"
+owner = "swarm-spine"
+statement = "A caller supplies the last accepted head for the issuer and does not roll it back or forget it between verifications."
+holds_because = "Nothing in this branch establishes it in production: verify_chain_link remains an uncoupled public primitive, and that reachability limit is stated in MAPPING.md."
+breaks_if = "A stale head, rollback, or None passed for a known issuer can re-admit replayed or truncated history."
+invariants = [
+  "SPINE-CHAIN-ISSUER-FIELD-REQUIRED",
+  "SPINE-CHAIN-SEQ-FIELD-REQUIRED",
+  "SPINE-CHAIN-PREV-FIELD-REQUIRED",
+  "SPINE-CHAIN-PREV-TYPE-VALID",
+  "SPINE-CHAIN-FIRST-SEQ",
+  "SPINE-CHAIN-FIRST-PREV-NULL",
+  "SPINE-CHAIN-ISSUER-BOUND",
+  "SPINE-CHAIN-HEAD-NOT-OVERFLOWED",
+  "SPINE-CHAIN-SEQ-MONOTONIC",
+  "SPINE-CHAIN-PREV-HASH-BOUND",
+]
+
+[[assumption]]
+id = "ASSUME-STATEFUL-GATE-DETERMINISM"
+owner = "swarm-policy"
+statement = "Given the same initial local gate state, request, context, configuration, and ordered call history, policy decision transitions produce the same verdict and next local state."
+holds_because = "The policy gates explicitly model their Mutex-protected rate-window state and update it in a defined order."
+breaks_if = "An unmodelled dependency, concurrent mutation, or different prior call sequence changes a policy verdict for the same visible request."
+invariants = [
+  "POLICY-EMPTY-RULESET-DENIES",
+  "POLICY-RULE-TIME-WINDOW",
+  "POLICY-RULE-AGENT-RATE-LIMIT",
+  "POLICY-CONFIGURED-DENY-RULE",
+  "POLICY-NULL-EVIDENCE-REFUSED",
+  "POLICY-ACTION-TARGETS-NONEMPTY",
+  "POLICY-DESTRUCTIVE-MIN-SEVERITY",
+  "POLICY-DEPLOY-DECOY-MIN-SEVERITY",
+  "POLICY-SCOPE-RATE-LIMIT",
+  "POLICY-DESTRUCTIVE-HUMAN-GATE",
+  "RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION",
+  "RUNTIME-DENY-BLOCKS-EXECUTION",
+  "RUNTIME-HUMAN-GATE-BLOCKS-LIVE",
+  "RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION",
+  "RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION",
+  "RUNTIME-EXPIRED-LEASE-REFUSED",
+]
+
+[[assumption]]
+id = "ASSUME-CONFIG-INTEGRITY"
+owner = "swarm-runtime"
+statement = "Loaded policy and containment settings are the tracked curated configuration or deliberate operator input; an empty in-memory PolicyConfig means unconfigured, not permissive."
+holds_because = "rulesets/default.yaml is digest-attested and contains configured rules. PolicyConfig::default() is an empty constructor used for explicit unconfigured and test states; it is not the shipped YAML ruleset."
+breaks_if = "Untrusted writers can replace operator configuration or callers mistake an empty constructor for curated policy."
+invariants = [
+  "POLICY-EMPTY-RULESET-DENIES",
+  "POLICY-RULE-TIME-WINDOW",
+  "POLICY-RULE-AGENT-RATE-LIMIT",
+  "POLICY-CONFIGURED-DENY-RULE",
+  "POLICY-DESTRUCTIVE-MIN-SEVERITY",
+  "POLICY-DEPLOY-DECOY-MIN-SEVERITY",
+  "POLICY-SCOPE-RATE-LIMIT",
+  "POLICY-DESTRUCTIVE-HUMAN-GATE",
+  "RESPONSE-TTL-STRICTLY-POSITIVE",
+  "RUNTIME-GOVERNED-ACTION-REQUIRES-ADMISSION",
+  "RUNTIME-CONTAINMENT-NEEDS-STORE",
+  "RUNTIME-CONTAINMENT-PREVIEW-REQUIRED",
+]

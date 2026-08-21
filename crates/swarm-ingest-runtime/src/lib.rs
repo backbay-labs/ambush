@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 //! Ingest HTTP surface, telemetry bridge runtime, and operator control plane.
 //!
 //! This crate holds the code that turns telemetry and operator requests into

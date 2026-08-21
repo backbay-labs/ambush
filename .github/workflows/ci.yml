@@ -10,9 +10,47 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_TARGET_DIR: target/ci
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci
 
 jobs:
+  # Phase 285 runs these gates on separate fresh hosted runners. Each job has
+  # only the pinned credential-free checkout before the gate, and its explicit
+  # custom shell makes /usr/bin/env the first child instead of a PATH-resolved
+  # default Bash. This prevents earlier repository commands, caches,
+  # GITHUB_ENV, or GITHUB_PATH from affecting either gate's bootstrap.
+  # Two warm local clean-launch runs of the preceding 179-self-test registry gate
+  # took 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
+  # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. The current gate adds four
+  # lexical workflow-name mutations and fourteen governance-assurance mutations; it
+  # also executes the exact 94-case single-governor gate inside the protected
+  # contract. These are local observations, not a CI estimate; compiled
+  # actual-source mutations dominate.
+  mapping-contract:
+    name: mapping-contract (${{ github.sha }})
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Check the invariant map against the source markers
+        shell: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: tools/check-mapping.sh
+
+  negative-registry-contract:
+    name: negative-registry-contract (${{ github.sha }})
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Check every mapped invariant has a falsifying negative test
+        shell: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: tools/check-negative-registry.sh
+
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -23,16 +61,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -59,16 +94,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -144,9 +176,10 @@ jobs:
       # to fail is the eleventh entry in .planning/STATE.md's defect catalogue.
       # Every invocation generates a real miniature cargo workspace, runs the
       # SAME rule engine with the SAME policy and baseline over it, proves the
-      # clean fixture exits 0, then breaks it nine ways and proves each break is
-      # caught with the right diagnostic. Four of the nine are cases cargo
-      # itself accepts (dev cycles, build cycles, transitive transport edges),
+      # clean fixture exits 0, then breaks it ten ways and proves each break is
+      # caught with the right diagnostic. Five of the ten are cases cargo
+      # itself accepts (dev/build cycles, a normal allow-list escape, and
+      # transitive transport edges),
       # so they are violations nothing else in this pipeline would reject.
       - name: Check the trusted-computing-base layering boundary
         run: bash tools/check-workspace-layering.sh
@@ -159,18 +192,20 @@ jobs:
       # This is the WEAKEST of the three mechanisms and its header says so. The
       # type (`LocalGovernorKey`, no `SigningKey` accessor) and the test
       # (`register_governor` returns Err on a second distinct key) are the
-      # guarantee; this is a lexical backstop over the three files that make up
-      # the governance signing path, and it enumerates four things it cannot
-      # see -- including two `GovernancePolicy` instances in one process, which
-      # nothing here closes.
+      # guarantee; this gate scans the three governance signing paths and pins
+      # the shipped opaque-handle source, impl, and public-API inventories. It
+      # still cannot prove that no other `GovernancePolicy` instance exists in a
+      # process; the shipped builder's same-Arc identity test covers its concrete
+      # dispatcher/ingest/containment/resume composition.
       #
       # It runs a FIXTURE on every invocation before it touches the real tree:
-      # six planted violations that must be caught and three controls that must
-      # not be, including a keyring inside `#[cfg(test)]` and one named only in
+      # fifty-two planted violations that must be caught and six controls that
+      # must not be, including a keyring inside `#[cfg(test)]` and one named only in
       # a comment. Three identifier-grep sweeps in this repository's history
       # declared themselves complete and were wrong; a grep that has never been
-      # observed to fail is not evidence. No toolchain needed beyond awk, so it
-      # belongs in this job with the other fast static checks.
+      # observed to fail is not evidence. Its compiler red also proves the
+      # crate-level unsafe-code prohibition; this job already installs the pinned
+      # Rust toolchain.
       - name: Check no production path holds a governor keyring
         run: bash tools/check-single-governor-key.sh
 
@@ -184,24 +219,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -210,8 +234,6 @@ jobs:
         run: cargo build --workspace --all-targets
 
   clippy:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -221,24 +243,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -249,8 +260,6 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -260,24 +269,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -367,13 +365,11 @@ jobs:
   # than needing libz3-dev or a source build. Measured in this worktree: a cold
   # `cargo check -p swarm-runtime --features z3 --all-targets` finished in 58s and
   # the test run in 1m06s. The download is a network fetch at build time; it is
-  # cached with the other build artifacts by the same key the sibling jobs use.
-  # If GitHub releases ever becomes unreachable this job fails loudly, which is
-  # the correct failure -- silently not compiling the solver is what this job
-  # exists to end.
+  # not preserved: this lane restores registry/git sources only, then uses a cold,
+  # uncached target directory and downloads the solver again. If GitHub releases
+  # ever becomes unreachable this job fails loudly, which is the correct failure
+  # -- silently not compiling the solver is what this job exists to end.
   solver-z3:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -383,24 +379,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-z3-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-z3-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -434,16 +419,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -452,8 +434,6 @@ jobs:
         run: bash tools/check-fixture-freshness.sh
 
   platform-contract:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -463,24 +443,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -506,8 +475,6 @@ jobs:
         run: bash tools/check-platform-openapi.sh
 
   proof-surfaces:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -517,24 +484,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -577,8 +533,6 @@ jobs:
         run: bash tools/check-worktree-clean.sh "the proof-surface run"
 
   jetstream:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -588,24 +542,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -614,8 +557,6 @@ jobs:
         run: bash tools/with-nats-jetstream.sh cargo test -p swarm-pheromone --test jetstream --test multi_instance -- --ignored
 
   benchmark:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -625,24 +566,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -662,6 +592,10 @@ jobs:
 
   supply-chain:
     runs-on: ubuntu-latest
+    env:
+      CARGO_DENY_VERSION: "0.19.4"
+      CARGO_AUDIT_VERSION: "0.22.0"
+      CARGO_CYCLONEDX_VERSION: "0.5.9"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -670,25 +604,34 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        run: command -v cargo-deny >/dev/null || cargo install cargo-deny --locked
+        run: |
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked --force
+          cargo-deny --version
 
       - name: Install cargo-audit
-        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+        run: |
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
+          cargo-audit --version
+
+      - name: Install cargo-cyclonedx
+        run: |
+          CYCLONEDX_INSTALL_ROOT="${RUNNER_TEMP}/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}"
+          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked --force --root "${CYCLONEDX_INSTALL_ROOT}"
+          CARGO_CYCLONEDX_BIN="${CYCLONEDX_INSTALL_ROOT}/bin/cargo-cyclonedx"
+          test "$("${CARGO_CYCLONEDX_BIN}" cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${CARGO_CYCLONEDX_VERSION}"
+          printf 'CARGO_CYCLONEDX_BIN=%s\n' "${CARGO_CYCLONEDX_BIN}" >>"${GITHUB_ENV}"
 
       - name: Run supply-chain checks
         run: bash tools/check-supply-chain.sh

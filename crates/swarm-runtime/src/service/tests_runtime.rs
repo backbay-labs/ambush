@@ -603,7 +603,7 @@
     }
 
     #[tokio::test]
-    async fn process_event_records_require_human_metrics_in_prometheus() {
+    async fn process_event_refuses_raw_governed_action_before_policy_metrics() {
         let service = runtime_service_with_prometheus();
         let detector = SuspiciousProcessTreeDetector::default();
         let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
@@ -611,7 +611,7 @@
         let context = approval_context(1_700_000_000_013, "corr-human");
         let agent_id = test_agent_id();
 
-        let bundle = service
+        let error = service
             .process_event(
                 &detector,
                 &substrate,
@@ -628,16 +628,11 @@
                 },
             )
             .await
-            .unwrap()
-            .unwrap();
+            .expect_err("raw live service execution must require dispatcher admission");
 
-        assert_eq!(bundle.audit.policy.verdict, PolicyVerdict::RequireHuman);
-        assert!(matches!(
-            bundle.audit.response,
-            AuditResponseRecord::Skipped { .. }
-        ));
+        assert!(error.to_string().contains("dispatcher governance admission"));
         let encoded = encode_metrics(service.prometheus_metrics().unwrap());
-        assert!(encoded.contains("swarm_verdict_total{verdict=\"require_human\"} 1"));
+        assert!(!encoded.contains("swarm_verdict_total{verdict=\"require_human\"}"));
     }
 
     #[tokio::test]
@@ -802,9 +797,10 @@
 
         assert!(matches!(
             source.audit.response,
-            AuditResponseRecord::Skipped { .. }
+            AuditResponseRecord::Success(_)
         ));
-        assert!(modes.lock().await.is_empty());
+        assert_eq!(&*modes.lock().await, &[ExecutionMode::DryRun]);
+        modes.lock().await.clear();
 
         let store = MemoryReplayBundleStore::default();
         let rehearsal_context = approval_context(1_700_000_000_200, "corr-rehearsal-run");

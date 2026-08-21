@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 #[cfg(debug_assertions)]
 use anyhow::Context;
 #[cfg(debug_assertions)]

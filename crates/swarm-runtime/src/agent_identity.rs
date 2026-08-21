@@ -18,12 +18,22 @@ pub enum AgentIdentityError {
         source: std::io::Error,
     },
 
+    #[error("failed to durably sync agent key root parent `{path}`: {source}")]
+    SyncKeyRootParent {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("failed to read agent key `{path}`: {source}")]
     Read {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
+
+    #[error("agent key is missing at `{path}`; refusing implicit creation")]
+    MissingKey { path: PathBuf },
 
     #[error("failed to write agent key `{path}`: {source}")]
     Write {
@@ -95,6 +105,12 @@ pub enum AgentIdentityError {
 pub struct PersistedAgentIdentity {
     pub id: AgentId,
     pub signing_key: SigningKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentKeyLoadStatus {
+    Created,
+    Loaded,
 }
 
 impl PersistedAgentIdentity {
@@ -173,11 +189,85 @@ pub struct FileAgentKeyStore {
 
 impl FileAgentKeyStore {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, AgentIdentityError> {
+        Self::open_with_parent_sync(root, |parent| {
+            fs::File::open(parent).and_then(|directory| directory.sync_all())
+        })
+    }
+
+    fn open_with_parent_sync<ParentSync>(
+        root: impl AsRef<Path>,
+        sync_parent: ParentSync,
+    ) -> Result<Self, AgentIdentityError>
+    where
+        ParentSync: FnMut(&Path) -> std::io::Result<()>,
+    {
+        Self::open_with_parent_sync_and_scan_hook(root, sync_parent, || {})
+    }
+
+    fn open_with_parent_sync_and_scan_hook<ParentSync, ScanHook>(
+        root: impl AsRef<Path>,
+        mut sync_parent: ParentSync,
+        after_missing_scan: ScanHook,
+    ) -> Result<Self, AgentIdentityError>
+    where
+        ParentSync: FnMut(&Path) -> std::io::Result<()>,
+        ScanHook: FnOnce(),
+    {
         let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(&root).map_err(|source| AgentIdentityError::CreateDir {
-            path: root.clone(),
-            source,
-        })?;
+        let missing = missing_key_root_directories(&root)?;
+        after_missing_scan();
+        let mut created = Vec::with_capacity(missing.len());
+        for directory in missing.iter().rev() {
+            match fs::create_dir(directory) {
+                Ok(()) => created.push(directory.clone()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let metadata = fs::symlink_metadata(directory).map_err(|source| {
+                        AgentIdentityError::CreateDir {
+                            path: directory.clone(),
+                            source,
+                        }
+                    })?;
+                    if !metadata.file_type().is_dir() {
+                        best_effort_remove_empty_key_directories(&created);
+                        return Err(AgentIdentityError::CreateDir {
+                            path: directory.clone(),
+                            source: std::io::Error::new(
+                                std::io::ErrorKind::AlreadyExists,
+                                "key-store path component is not a directory",
+                            ),
+                        });
+                    }
+                }
+                Err(source) => {
+                    best_effort_remove_empty_key_directories(&created);
+                    return Err(AgentIdentityError::CreateDir {
+                        path: directory.clone(),
+                        source,
+                    });
+                }
+            }
+        }
+        // Every opener that observed a path component missing owns a durability
+        // obligation for that directory entry. Another process may win the
+        // create race, but `AlreadyExists` does not prove that winner synced the
+        // anchoring parent before this opener returns.
+        for directory in &missing {
+            let parent =
+                normalized_parent(directory).ok_or_else(|| AgentIdentityError::CreateDir {
+                    path: directory.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "new key-store directory has no existing parent anchor",
+                    ),
+                })?;
+            if let Err(source) = sync_parent(&parent) {
+                best_effort_remove_empty_key_directories(&created);
+                return Err(AgentIdentityError::SyncKeyRootParent {
+                    path: parent,
+                    source,
+                });
+            }
+        }
         Ok(Self { root })
     }
 
@@ -186,19 +276,62 @@ impl FileAgentKeyStore {
         role: AgentRole,
         slot: &str,
     ) -> Result<PersistedAgentIdentity, AgentIdentityError> {
+        self.load_or_create_with_status(role, slot)
+            .map(|(identity, _status)| identity)
+    }
+
+    /// Load a role/slot key without creating replacement identity material.
+    ///
+    /// Offline recovery and migration paths must use this method: creating a
+    /// key while attempting to authenticate an existing signed stream would
+    /// manufacture an unrelated signer and obscure the real recovery failure.
+    pub fn load_existing(
+        &self,
+        role: AgentRole,
+        slot: &str,
+    ) -> Result<PersistedAgentIdentity, AgentIdentityError> {
+        let path = self.key_path(role, slot);
+        let bytes = fs::read(&path).map_err(|source| {
+            if source.kind() == ErrorKind::NotFound {
+                AgentIdentityError::MissingKey { path: path.clone() }
+            } else {
+                AgentIdentityError::Read {
+                    path: path.clone(),
+                    source,
+                }
+            }
+        })?;
+        Self::decode_key(&path, &bytes)
+    }
+
+    /// Load a stable role/slot key, reporting whether this call created it.
+    ///
+    /// Security-sensitive bootstrap code must not infer first initialization from
+    /// a mutable identity-registry row. A key that already existed before this call
+    /// is an existing installation even if its registry entry was deleted.
+    pub fn load_or_create_with_status(
+        &self,
+        role: AgentRole,
+        slot: &str,
+    ) -> Result<(PersistedAgentIdentity, AgentKeyLoadStatus), AgentIdentityError> {
         let path = self.key_path(role, slot);
         match fs::read(&path) {
-            Ok(bytes) => Self::decode_key(&path, &bytes),
+            Ok(bytes) => Self::decode_key(&path, &bytes)
+                .map(|identity| (identity, AgentKeyLoadStatus::Loaded)),
             Err(source) if source.kind() == ErrorKind::NotFound => {
                 let signing_key = SigningKey::generate(&mut OsRng);
                 if self.write_new_key(&path, &signing_key)? {
-                    Ok(PersistedAgentIdentity::from_signing_key(signing_key))
+                    Ok((
+                        PersistedAgentIdentity::from_signing_key(signing_key),
+                        AgentKeyLoadStatus::Created,
+                    ))
                 } else {
                     let bytes = fs::read(&path).map_err(|source| AgentIdentityError::Read {
                         path: path.clone(),
                         source,
                     })?;
                     Self::decode_key(&path, &bytes)
+                        .map(|identity| (identity, AgentKeyLoadStatus::Loaded))
                 }
             }
             Err(source) => Err(AgentIdentityError::Read { path, source }),
@@ -248,61 +381,107 @@ impl FileAgentKeyStore {
         path: &Path,
         signing_key: &SigningKey,
     ) -> Result<bool, AgentIdentityError> {
+        self.write_new_key_with_sync(path, signing_key, fs::File::sync_all, |parent| {
+            fs::File::open(parent).and_then(|directory| directory.sync_all())
+        })
+    }
+
+    fn write_new_key_with_sync<FileSync, ParentSync>(
+        &self,
+        path: &Path,
+        signing_key: &SigningKey,
+        sync_file: FileSync,
+        sync_parent: ParentSync,
+    ) -> Result<bool, AgentIdentityError>
+    where
+        FileSync: FnOnce(&fs::File) -> std::io::Result<()>,
+        ParentSync: FnOnce(&Path) -> std::io::Result<()>,
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::fs::OpenOptions;
-            use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
-
-            let mut file = match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)
-            {
-                Ok(file) => file,
-                Err(source) if source.kind() == ErrorKind::AlreadyExists => {
-                    return Ok(false);
-                }
-                Err(source) => {
-                    return Err(AgentIdentityError::Write {
-                        path: path.to_path_buf(),
-                        source,
-                    });
-                }
-            };
-            file.write_all(&signing_key.to_bytes()).map_err(|source| {
-                AgentIdentityError::Write {
+            options.mode(0o600);
+        }
+        let mut file = match options.open(path) {
+            Ok(file) => file,
+            Err(source) if source.kind() == ErrorKind::AlreadyExists => return Ok(false),
+            Err(source) => {
+                return Err(AgentIdentityError::Write {
                     path: path.to_path_buf(),
                     source,
-                }
+                });
+            }
+        };
+        file.write_all(&signing_key.to_bytes())
+            .and_then(|()| sync_file(&file))
+            .map_err(|source| AgentIdentityError::Write {
+                path: path.to_path_buf(),
+                source,
             })?;
-            Ok(true)
+        if let Some(parent) = path.parent() {
+            sync_parent(parent).map_err(|source| AgentIdentityError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
+        Ok(true)
+    }
+}
 
-        #[cfg(not(unix))]
-        {
-            use std::fs::OpenOptions;
-            use std::io::Write;
-
-            let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
-                Ok(file) => file,
-                Err(source) if source.kind() == ErrorKind::AlreadyExists => return Ok(false),
-                Err(source) => {
-                    return Err(AgentIdentityError::Write {
-                        path: path.to_path_buf(),
-                        source,
-                    });
-                }
-            };
-            file.write_all(&signing_key.to_bytes()).map_err(|source| {
-                AgentIdentityError::Write {
-                    path: path.to_path_buf(),
+fn missing_key_root_directories(root: &Path) -> Result<Vec<PathBuf>, AgentIdentityError> {
+    let mut missing = Vec::new();
+    let mut current = root.to_path_buf();
+    loop {
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_dir() => return Ok(missing),
+            Ok(_) => {
+                return Err(AgentIdentityError::CreateDir {
+                    path: current,
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "key-store path component is not a directory",
+                    ),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(current.clone());
+                current =
+                    normalized_parent(&current).ok_or_else(|| AgentIdentityError::CreateDir {
+                        path: root.to_path_buf(),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "key-store path has no existing directory anchor",
+                        ),
+                    })?;
+            }
+            Err(source) => {
+                return Err(AgentIdentityError::CreateDir {
+                    path: current,
                     source,
-                }
-            })?;
-            Ok(true)
+                });
+            }
         }
+    }
+}
+
+fn normalized_parent(path: &Path) -> Option<PathBuf> {
+    path.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            parent.to_path_buf()
+        }
+    })
+}
+
+fn best_effort_remove_empty_key_directories(created_shallow_to_deep: &[PathBuf]) {
+    for directory in created_shallow_to_deep.iter().rev() {
+        let _ = fs::remove_dir(directory);
     }
 }
 
@@ -332,6 +511,43 @@ impl FileAgentIdentityRegistry {
             .into_iter()
             .map(|entry| entry.agent_id)
             .collect())
+    }
+
+    /// Verify an exact active role/slot identity without refreshing or adding
+    /// registry state.
+    pub fn verify_admitted_persisted_identity(
+        &self,
+        role: AgentRole,
+        slot: &str,
+        identity: &PersistedAgentIdentity,
+    ) -> Result<(), AgentIdentityError> {
+        let slot = sanitize_slot(slot);
+        let derived = PersistedAgentIdentity::from_signing_key(identity.signing_key.clone());
+        if derived.id != identity.id {
+            return Err(AgentIdentityError::DerivedIdentityMismatch {
+                role,
+                slot,
+                derived: derived.id.0,
+                recorded: identity.id.0.clone(),
+            });
+        }
+        let snapshot = self.load_snapshot()?;
+        let Some(active) = snapshot
+            .active
+            .iter()
+            .find(|entry| entry.role == role && entry.slot == slot)
+        else {
+            return Err(AgentIdentityError::MissingActiveIdentity { role, slot });
+        };
+        let expected_public_key = hex::encode(identity.signing_key.verifying_key().to_bytes());
+        if active.agent_id != identity.id || active.public_key_hex != expected_public_key {
+            return Err(AgentIdentityError::UnregisteredIdentity {
+                role,
+                slot,
+                agent_id: identity.id.0.clone(),
+            });
+        }
+        Ok(())
     }
 
     pub fn admit_persisted_identity(
@@ -644,8 +860,8 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        FileAgentIdentityRegistry, FileAgentKeyStore, RegistryAdmission, resolve_agent_key_dir,
-        resolve_identity_registry_dir, verify_continuity_proof,
+        AgentKeyLoadStatus, FileAgentIdentityRegistry, FileAgentKeyStore, RegistryAdmission,
+        resolve_agent_key_dir, resolve_identity_registry_dir, verify_continuity_proof,
     };
     use ed25519_dalek::SigningKey;
     use rand_core::OsRng;
@@ -678,6 +894,312 @@ mod tests {
 
         assert_eq!(first.id, second.id);
         assert_eq!(first.signing_key.to_bytes(), second.signing_key.to_bytes());
+    }
+
+    #[test]
+    fn key_store_open_retries_parent_sync_before_creating_one_key() {
+        let parent = temp_root("open-parent-sync");
+        let root = parent.join("keys");
+        let Err(error) = FileAgentKeyStore::open_with_parent_sync(&root, |_| {
+            Err(std::io::Error::other(
+                "injected key-root parent sync failure",
+            ))
+        }) else {
+            panic!("an unsynced key root must not be returned for identity creation");
+        };
+        assert!(matches!(
+            error,
+            super::AgentIdentityError::SyncKeyRootParent { .. }
+        ));
+        assert!(
+            !root.exists(),
+            "failed durability must remove only the newly created empty root"
+        );
+
+        let retry_attempt = std::cell::RefCell::new(Vec::new());
+        let store = FileAgentKeyStore::open_with_parent_sync(&root, |synced| {
+            retry_attempt.borrow_mut().push(synced.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(retry_attempt.into_inner(), vec![parent]);
+        let (created, created_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let (loaded, loaded_status) = FileAgentKeyStore::open(&root)
+            .unwrap()
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(created_status, AgentKeyLoadStatus::Created);
+        assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
+        assert_eq!(
+            created.signing_key.to_bytes(),
+            loaded.signing_key.to_bytes()
+        );
+    }
+
+    #[test]
+    fn key_store_open_syncs_only_the_new_ancestor_chain() {
+        let anchor = temp_root("open-nested-parent-sync");
+        let first = anchor.join("first");
+        let second = first.join("second");
+        let root = second.join("keys");
+        let failed_attempt = std::cell::RefCell::new(Vec::new());
+
+        let error = match FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            failed_attempt.borrow_mut().push(parent.to_path_buf());
+            if parent == first {
+                Err(std::io::Error::other(
+                    "injected higher-ancestor sync failure",
+                ))
+            } else {
+                Ok(())
+            }
+        }) {
+            Ok(_) => panic!("a higher-ancestor sync failure must abort key-store open"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            super::AgentIdentityError::SyncKeyRootParent { ref path, .. } if path == &first
+        ));
+        assert_eq!(
+            failed_attempt.into_inner(),
+            vec![second.clone(), first.clone()]
+        );
+        assert!(anchor.is_dir());
+        assert!(
+            !first.exists(),
+            "failed durability removes the newly created empty chain for retry"
+        );
+
+        let retry_attempt = std::cell::RefCell::new(Vec::new());
+        let store = FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            retry_attempt.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        let retry_attempt = retry_attempt.into_inner();
+        assert_eq!(
+            retry_attempt,
+            vec![second, first, anchor],
+            "only parents anchoring newly created directory entries are synced"
+        );
+
+        let (created, created_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let (loaded, loaded_status) = FileAgentKeyStore::open(&root)
+            .unwrap()
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(created_status, AgentKeyLoadStatus::Created);
+        assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
+        assert_eq!(created.id, loaded.id);
+    }
+
+    #[test]
+    fn key_store_open_syncs_no_ancestors_for_an_existing_root() {
+        let root = temp_root("open-existing-root-no-sync");
+        let sync_attempts = std::cell::RefCell::new(Vec::new());
+        let store = FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            sync_attempts.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(sync_attempts.into_inner().is_empty());
+
+        let (_, status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(status, AgentKeyLoadStatus::Created);
+    }
+
+    #[test]
+    fn concurrent_first_open_loser_must_sync_every_ancestor_it_observed_missing() {
+        let anchor = temp_root("open-concurrent-missing-sync");
+        let first = anchor.join("first");
+        let root = first.join("keys");
+        let scan_reached = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let resume_loser = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let loser_scan_reached = std::sync::Arc::clone(&scan_reached);
+        let loser_resume = std::sync::Arc::clone(&resume_loser);
+        let loser_root = root.clone();
+        let loser_anchor = anchor.clone();
+
+        let loser = std::thread::spawn(move || {
+            let attempted_syncs = std::cell::RefCell::new(Vec::new());
+            let result = FileAgentKeyStore::open_with_parent_sync_and_scan_hook(
+                &loser_root,
+                |parent| {
+                    attempted_syncs.borrow_mut().push(parent.to_path_buf());
+                    if parent == loser_anchor {
+                        Err(std::io::Error::other(
+                            "injected losing-contender parent sync failure",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    loser_scan_reached.wait();
+                    loser_resume.wait();
+                },
+            );
+            (result, attempted_syncs.into_inner())
+        });
+
+        scan_reached.wait();
+        let winner_syncs = std::cell::RefCell::new(Vec::new());
+        let winner = FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            winner_syncs.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            winner_syncs.into_inner(),
+            vec![first.clone(), anchor.clone()]
+        );
+        resume_loser.wait();
+
+        let (loser_result, loser_syncs) = loser.join().unwrap();
+        assert!(matches!(
+            loser_result,
+            Err(super::AgentIdentityError::SyncKeyRootParent { ref path, .. }) if path == &anchor
+        ));
+        assert_eq!(
+            loser_syncs,
+            vec![first, anchor],
+            "a contender must sync every ancestor it observed missing even after losing every create race"
+        );
+        assert!(
+            root.is_dir(),
+            "the loser must not remove directories created by the winner"
+        );
+        drop(winner);
+
+        let existing_syncs = std::cell::RefCell::new(Vec::new());
+        FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            existing_syncs.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            existing_syncs.into_inner().is_empty(),
+            "a contender that observed an existing root has no ancestor-sync obligation"
+        );
+    }
+
+    #[test]
+    fn key_store_reports_creation_separately_from_loading_an_existing_key() {
+        let root = temp_root("load-status");
+        let store = FileAgentKeyStore::open(&root).unwrap();
+        let (created, created_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let key_path = root.join("tom-primary.ed25519");
+        assert_eq!(fs::read(&key_path).unwrap(), created.signing_key.to_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let (loaded, loaded_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+
+        assert_eq!(created_status, AgentKeyLoadStatus::Created);
+        assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
+        assert_eq!(created.id, loaded.id);
+        assert_eq!(
+            created.signing_key.to_bytes(),
+            loaded.signing_key.to_bytes()
+        );
+    }
+
+    #[test]
+    fn recovery_identity_lookup_is_read_only_and_requires_exact_admission() {
+        let root = temp_root("read-only-recovery");
+        let key_root = root.join("keys");
+        let store = FileAgentKeyStore::open(&key_root).unwrap();
+        assert!(matches!(
+            store.load_existing(AgentRole::Tom, "primary").unwrap_err(),
+            super::AgentIdentityError::MissingKey { .. }
+        ));
+        assert!(!key_root.join("tom-primary.ed25519").exists());
+
+        let identity = store.load_or_create(AgentRole::Tom, "primary").unwrap();
+        let loaded = store.load_existing(AgentRole::Tom, "primary").unwrap();
+        assert_eq!(loaded.id, identity.id);
+        assert_eq!(
+            loaded.signing_key.to_bytes(),
+            identity.signing_key.to_bytes()
+        );
+
+        let registry = FileAgentIdentityRegistry::open(root.join("registry")).unwrap();
+        assert!(matches!(
+            registry
+                .verify_admitted_persisted_identity(AgentRole::Tom, "primary", &loaded)
+                .unwrap_err(),
+            super::AgentIdentityError::MissingActiveIdentity { .. }
+        ));
+        registry
+            .admit_persisted_identity(AgentRole::Tom, "primary", &loaded, 1_000)
+            .unwrap();
+        let before = fs::read(registry.registry_path.clone()).unwrap();
+        registry
+            .verify_admitted_persisted_identity(AgentRole::Tom, "primary", &loaded)
+            .unwrap();
+        assert_eq!(fs::read(registry.registry_path.clone()).unwrap(), before);
+    }
+
+    #[test]
+    fn key_store_sync_failures_leave_an_existing_key_that_cannot_be_recreated() {
+        for (slot, fail_file_sync) in [("file-sync-failure", true), ("dir-sync-failure", false)] {
+            let root = temp_root(slot);
+            let store = FileAgentKeyStore::open(&root).unwrap();
+            let path = store.key_path(AgentRole::Tom, slot);
+            let signing_key = SigningKey::generate(&mut OsRng);
+            let result = store.write_new_key_with_sync(
+                &path,
+                &signing_key,
+                |file| {
+                    if fail_file_sync {
+                        Err(std::io::Error::other("injected file sync failure"))
+                    } else {
+                        file.sync_all()
+                    }
+                },
+                |_| Err(std::io::Error::other("injected parent sync failure")),
+            );
+
+            assert!(matches!(
+                result,
+                Err(super::AgentIdentityError::Write { .. })
+            ));
+            assert_eq!(fs::read(&path).unwrap(), signing_key.to_bytes());
+            let (loaded, status) = store
+                .load_or_create_with_status(AgentRole::Tom, slot)
+                .unwrap();
+            assert_eq!(status, AgentKeyLoadStatus::Loaded);
+            assert_eq!(loaded.signing_key.to_bytes(), signing_key.to_bytes());
+        }
+    }
+
+    #[test]
+    fn key_store_create_new_race_never_replaces_an_existing_key() {
+        let root = temp_root("create-new-race");
+        let store = FileAgentKeyStore::open(&root).unwrap();
+        let path = store.key_path(AgentRole::Tom, "primary");
+        let winner = SigningKey::generate(&mut OsRng);
+        let loser = SigningKey::generate(&mut OsRng);
+
+        assert!(store.write_new_key(&path, &winner).unwrap());
+        assert!(!store.write_new_key(&path, &loser).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), winner.to_bytes());
     }
 
     #[test]

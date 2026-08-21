@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `RoutedActionRequest` in the current scope
+ --> tests/ui/one_dispatcher_admission_can_be_reused_for_two_enforced_executions.rs:7:32
+  |
+7 |         execute_once(admission.clone());
+  |                                ^^^^^ method not found in `RoutedActionRequest`
