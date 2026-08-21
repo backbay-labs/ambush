@@ -350,7 +350,7 @@ async fn cross_instance_query_deposits() {
 
 #[tokio::test]
 #[ignore = "run via tools/with-nats-jetstream.sh"]
-async fn strategy_scoped_agent_ids_count_as_distinct_sources_across_instances() {
+async fn strategy_scoped_agent_ids_share_one_source_across_instances() {
     let Some((alpha, beta)) = connect_pair("strategy-scope-distinct").await else {
         return;
     };
@@ -376,7 +376,7 @@ async fn strategy_scoped_agent_ids_count_as_distinct_sources_across_instances() 
         alpha
             .query_concentration(&ThreatClass::Execution, ts + 2)
             .await
-            .map(|concentration| concentration.distinct_sources == 2)
+            .map(|concentration| concentration.distinct_sources == 1)
             .unwrap_or(false)
     })
     .await;
@@ -385,7 +385,7 @@ async fn strategy_scoped_agent_ids_count_as_distinct_sources_across_instances() 
         .query_concentration(&ThreatClass::Execution, ts + 2)
         .await
         .unwrap();
-    assert_eq!(concentration.distinct_sources, 2);
+    assert_eq!(concentration.distinct_sources, 1);
 }
 
 #[tokio::test]

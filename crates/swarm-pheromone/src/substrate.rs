@@ -1286,13 +1286,16 @@ pub(crate) fn concentration_for(
         if is_suppressed_by_feedback(deposit, &suppression) {
             continue;
         }
+        let Some(agent_identity) = independent_source_identity(deposit) else {
+            continue;
+        };
         let strength = deposit.strength_at(now);
         if strength <= 0.0 {
             continue;
         }
         total_strength += strength;
         peak_confidence = peak_confidence.max(deposit.confidence);
-        sources.insert(deposit.agent_id.0.clone());
+        sources.insert(agent_identity.to_owned());
     }
 
     PheromoneConcentration {
@@ -1301,6 +1304,21 @@ pub(crate) fn concentration_for(
         distinct_sources: sources.len(),
         peak_confidence,
     }
+}
+
+/// Return the stable cryptographic witness identity for a deposit.
+///
+/// `agent_id` is intentionally not used here: it may carry a strategy scope
+/// suffix (for example, `identity:strategy-a`) and therefore is not an
+/// independent source. Concentration is also computed over persisted reads,
+/// so reverify the complete deposit signature here; a journal-tampered body,
+/// identity, key, or strategy label cannot contribute strength or source
+/// diversity to an escalation decision. This is an intentional O(n) Ed25519
+/// verification cost on each concentration query in exchange for fail-closed
+/// read integrity.
+fn independent_source_identity(deposit: &PheromoneDeposit) -> Option<&str> {
+    validate_deposit_signature(deposit).ok()?;
+    Some(deposit.agent_identity.as_str())
 }
 
 pub(crate) fn filter_deposits(
@@ -1782,8 +1800,9 @@ mod tests {
     use swarm_core::pheromone::{
         BehavioralBaselineSnapshot, BehavioralFrequencyEntry, BehavioralHostBaseline,
         BehavioralIdentityBaseline, BehavioralPeerGroupBaseline, BehavioralRoleToolFrequencyEntry,
-        BehavioralTelemetryFamilyBaseline, EscalationRecord, PheromoneDeposit, ThreatClass,
-        ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
+        BehavioralTelemetryFamilyBaseline, EscalationRecord, PheromoneConcentration,
+        PheromoneDeposit, ThreatClass, ThreatClassConfig, ThreatIntelEntry,
+        ThreatIntelIndicatorType,
     };
     use swarm_core::types::{AgentId, Severity};
 
@@ -1869,6 +1888,21 @@ mod tests {
             signature: Vec::new(),
             agent_key: Vec::new(),
         };
+        sign_deposit(&mut deposit, &key);
+        deposit
+    }
+
+    fn strategy_scoped_deposit(
+        base_agent: &str,
+        strategy: &str,
+        timestamp: i64,
+        confidence: f64,
+    ) -> PheromoneDeposit {
+        let key = signing_key_for_label(base_agent);
+        let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
+        let mut deposit = sample_deposit(base_agent, timestamp, confidence);
+        deposit.agent_id = AgentId(format!("{}:{strategy}", derived_agent_id.0));
+        deposit.agent_identity = derived_agent_id.0;
         sign_deposit(&mut deposit, &key);
         deposit
     }
@@ -2102,18 +2136,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_counts_strategy_scoped_agent_ids_as_distinct_sources() {
+    async fn query_counts_strategy_scoped_agent_ids_by_derived_identity() {
         let substrate = in_memory();
+        let admitted_identity =
+            AgentId::from_verifying_key(&signing_key_for_label("whisker-primary").verifying_key());
         substrate
-            .deposit(sample_deposit(
-                "whisker-primary:suspicious_process_tree",
+            .set_admitted_identities([admitted_identity])
+            .unwrap();
+        substrate
+            .deposit(strategy_scoped_deposit(
+                "whisker-primary",
+                "suspicious_process_tree",
                 100,
                 0.9,
             ))
             .await
             .unwrap();
         substrate
-            .deposit(sample_deposit("whisker-primary:dns_exfiltration", 100, 0.9))
+            .deposit(strategy_scoped_deposit(
+                "whisker-primary",
+                "dns_exfiltration",
+                100,
+                0.9,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .deposit(strategy_scoped_deposit(
+                "whisker-primary",
+                "credential_access",
+                100,
+                0.9,
+            ))
             .await
             .unwrap();
 
@@ -2122,24 +2176,26 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(concentration.distinct_sources == 2);
+        assert_eq!(concentration.distinct_sources, 1);
     }
 
     #[tokio::test]
-    async fn query_collapses_repeated_strategy_scoped_agent_ids_to_one_source() {
+    async fn query_collapses_replayed_strategy_scoped_agent_ids_to_one_source() {
         let substrate = in_memory();
         substrate
-            .deposit(sample_deposit(
-                "whisker-primary:suspicious_process_tree",
+            .deposit(strategy_scoped_deposit(
+                "whisker-primary",
+                "suspicious_process_tree",
                 100,
                 0.9,
             ))
             .await
             .unwrap();
         substrate
-            .deposit(sample_deposit(
-                "whisker-primary:suspicious_process_tree",
-                100,
+            .deposit(strategy_scoped_deposit(
+                "whisker-primary",
+                "dns_exfiltration",
+                101,
                 0.8,
             ))
             .await
@@ -2151,6 +2207,108 @@ mod tests {
             .unwrap();
 
         assert_eq!(concentration.distinct_sources, 1);
+    }
+
+    #[tokio::test]
+    async fn query_counts_two_admitted_signing_keys_as_two_sources() {
+        let substrate = in_memory();
+        let admitted_a =
+            AgentId::from_verifying_key(&signing_key_for_label("admitted-a").verifying_key());
+        let admitted_b =
+            AgentId::from_verifying_key(&signing_key_for_label("admitted-b").verifying_key());
+        substrate
+            .set_admitted_identities([admitted_a, admitted_b])
+            .unwrap();
+
+        substrate
+            .deposit(strategy_scoped_deposit(
+                "admitted-a",
+                "suspicious_process_tree",
+                100,
+                0.9,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .deposit(strategy_scoped_deposit(
+                "admitted-b",
+                "dns_exfiltration",
+                100,
+                0.9,
+            ))
+            .await
+            .unwrap();
+
+        let concentration = substrate
+            .query_concentration(&ThreatClass::Execution, 100)
+            .await
+            .unwrap();
+
+        assert_eq!(concentration.distinct_sources, 2);
+    }
+
+    #[tokio::test]
+    async fn changing_only_strategy_suffix_cannot_change_escalation_outcome() {
+        async fn query_for_suffixes(suffixes: &[&str]) -> PheromoneConcentration {
+            let substrate = in_memory();
+            for (timestamp, suffix) in suffixes.iter().enumerate() {
+                substrate
+                    .deposit(strategy_scoped_deposit(
+                        "threshold-agent",
+                        suffix,
+                        100 + timestamp as i64,
+                        1.0,
+                    ))
+                    .await
+                    .unwrap();
+            }
+            substrate
+                .query_concentration(&ThreatClass::Execution, 100)
+                .await
+                .unwrap()
+        }
+
+        let unchanged_suffix = query_for_suffixes(&["strategy-a", "strategy-a"]).await;
+        let changed_suffix = query_for_suffixes(&["strategy-a", "strategy-b"]).await;
+
+        assert_eq!(unchanged_suffix.distinct_sources, 1);
+        assert_eq!(changed_suffix.distinct_sources, 1);
+        assert!((unchanged_suffix.total_strength - changed_suffix.total_strength).abs() < 0.01);
+        assert_eq!(
+            unchanged_suffix.exceeds_threshold(2.0, 2),
+            changed_suffix.exceeds_threshold(2.0, 2)
+        );
+        assert!(!changed_suffix.exceeds_threshold(2.0, 2));
+    }
+
+    #[test]
+    fn concentration_ignores_malformed_cryptographic_identity() {
+        let key = signing_key_for_label("malformed-identity");
+        let mut deposit = strategy_scoped_deposit("malformed-identity", "strategy-a", 100, 1.0);
+        deposit.agent_identity = "not-a-derived-identity".to_string();
+        sign_deposit(&mut deposit, &key);
+
+        let policy = substrate_config().resolve_threat_class_policy(None);
+        let concentration =
+            super::concentration_for(&[deposit], &ThreatClass::Execution, 100, &policy);
+
+        assert_eq!(concentration.distinct_sources, 0);
+        assert_eq!(concentration.total_strength, 0.0);
+        assert_eq!(concentration.peak_confidence, 0.0);
+    }
+
+    #[test]
+    fn concentration_ignores_body_tampered_after_signing() {
+        let mut deposit = strategy_scoped_deposit("tampered-body", "strategy-a", 100, 1.0);
+        deposit.confidence = 0.25;
+
+        let policy = substrate_config().resolve_threat_class_policy(None);
+        let concentration =
+            super::concentration_for(&[deposit], &ThreatClass::Execution, 100, &policy);
+
+        assert_eq!(concentration.distinct_sources, 0);
+        assert_eq!(concentration.total_strength, 0.0);
+        assert_eq!(concentration.peak_confidence, 0.0);
     }
 
     #[tokio::test]
