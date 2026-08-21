@@ -10,6 +10,7 @@
 pub mod agent;
 pub mod config;
 pub mod http_rate_limit;
+pub mod hypothesis_graph;
 pub mod observability;
 pub mod pheromone;
 pub mod signed_state;
