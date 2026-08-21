@@ -473,8 +473,9 @@ RUBY_CACHE_VALIDATOR = r'''
 require "json"
 require "yaml"
 
-unless YAML.respond_to?(:safe_load) && Psych.respond_to?(:parse_stream) && defined?(Psych::Nodes::Mapping)
-  abort "ruby bootstrap lacks YAML.safe_load, Psych.parse_stream, or Psych node APIs"
+unless YAML.respond_to?(:safe_load) && Psych.respond_to?(:parse_stream) &&
+       defined?(Psych::Nodes::Mapping) && defined?(Psych::Nodes::Alias)
+  abort "ruby bootstrap lacks YAML.safe_load, Psych.parse_stream, or required Psych node APIs"
 end
 
 payload = JSON.parse(STDIN.read)
@@ -509,7 +510,9 @@ parse_document = lambda do |source, name, kind|
       if node.respond_to?(:tag) && !node.tag.nil? && !node.tag.empty?
         duplicate_problems << "#{name}: #{kind} YAML custom tag #{node.tag.inspect} is forbidden at #{path}"
       end
-      if node.is_a?(Psych::Nodes::Mapping)
+      if node.is_a?(Psych::Nodes::Alias)
+        duplicate_problems << "#{name}: #{kind} YAML alias #{node.anchor.inspect} is forbidden at #{path}"
+      elsif node.is_a?(Psych::Nodes::Mapping)
         seen = {}
         node.children.each_slice(2).with_index do |pair, index|
           key, value = pair
@@ -1168,7 +1171,7 @@ jobs:
 require_invalid(
     "workflow YAML alias mutation",
     yaml_alias_mutation,
-    ["workflow YAML parse failed with aliases disabled", "Psych::BadAlias"],
+    ["workflow YAML alias \"cache_paths\" is forbidden"],
 )
 
 yaml_parse_mutation = dict(workflows)
