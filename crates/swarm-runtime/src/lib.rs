@@ -133,6 +133,7 @@ pub mod evasion_coverage;
 pub mod evolution;
 pub mod evolution_status;
 pub mod http;
+pub mod hypothesis_graph;
 pub mod investigation;
 pub mod kitten_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod mutation;

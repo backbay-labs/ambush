@@ -486,22 +486,27 @@ pub struct EventNode {
     pub schema_version: u32,
     pub node_id: GraphNodeId,
     pub event_kind: String,
+    pub source_record_id: String,
     pub observed_at: GraphLogicalTime,
 }
 
 impl EventNode {
     pub fn new(
         event_kind: impl Into<String>,
+        source_record_id: impl Into<String>,
         observed_at: GraphLogicalTime,
     ) -> Result<Self, GraphAdmissionError> {
         let event_kind = event_kind.into();
+        let source_record_id = source_record_id.into();
         validate_text("event_kind", &event_kind, 128)?;
+        validate_text("event.source_record_id", &source_record_id, 256)?;
         observed_at.validate()?;
-        let material = (&event_kind, observed_at);
+        let material = (&event_kind, &source_record_id, observed_at);
         Ok(Self {
             schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
             node_id: GraphNodeId::new(stable_id("node:event", &material)?),
             event_kind,
+            source_record_id,
             observed_at,
         })
     }
@@ -509,10 +514,11 @@ impl EventNode {
     fn validate(&self) -> Result<(), GraphAdmissionError> {
         validate_schema(self.schema_version)?;
         validate_text("event.event_kind", &self.event_kind, 128)?;
+        validate_text("event.source_record_id", &self.source_record_id, 256)?;
         self.observed_at.validate()?;
         let expected = GraphNodeId::new(stable_id(
             "node:event",
-            &(&self.event_kind, self.observed_at),
+            &(&self.event_kind, &self.source_record_id, self.observed_at),
         )?);
         if expected != self.node_id {
             return Err(GraphAdmissionError::IdCollision {
@@ -734,7 +740,7 @@ impl OrderingClaim {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TypedEvidencePayload {
     Signal {
@@ -771,9 +777,17 @@ pub enum TypedEvidencePayload {
         signal_kind: String,
         event_id: String,
         event_name: String,
+        event_source: String,
         principal_digest: String,
         account_digest: String,
         source_ip_digest: Option<String>,
+        request_digest: String,
+        response_digest: String,
+        mfa_authenticated: Option<bool>,
+        region: Option<String>,
+        error_code: Option<String>,
+        error_message: Option<String>,
+        entity_ids: Vec<GraphNodeId>,
         content_digest: String,
     },
     Network {
@@ -790,9 +804,222 @@ pub enum TypedEvidencePayload {
         indicator_digest: String,
         indicator_kind: String,
         confidence_basis_points: u16,
+        expires_at: GraphLogicalTime,
         entity_ids: Vec<GraphNodeId>,
         content_digest: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum TypedEvidencePayloadWire {
+    Signal {
+        signal_kind: String,
+        entity_ids: Vec<GraphNodeId>,
+        relation_ids: Vec<EdgeId>,
+        supports: Vec<HypothesisId>,
+        refutes: Vec<HypothesisId>,
+        content_digest: String,
+    },
+    Process {
+        signal_kind: String,
+        process_digest: String,
+        parent_process_digest: Option<String>,
+        entity_ids: Vec<GraphNodeId>,
+        content_digest: String,
+    },
+    Identity {
+        signal_kind: String,
+        principal_digest: String,
+        credential_digest: Option<String>,
+        entity_ids: Vec<GraphNodeId>,
+        content_digest: String,
+    },
+    KubernetesAudit {
+        signal_kind: String,
+        audit_id: String,
+        verb: String,
+        resource_digest: String,
+        entity_ids: Vec<GraphNodeId>,
+        content_digest: String,
+    },
+    Cloudtrail {
+        signal_kind: String,
+        event_id: String,
+        event_name: String,
+        event_source: String,
+        principal_digest: String,
+        account_digest: String,
+        source_ip_digest: Option<String>,
+        request_digest: String,
+        response_digest: String,
+        mfa_authenticated: Option<bool>,
+        region: Option<String>,
+        error_code: Option<String>,
+        error_message: Option<String>,
+        entity_ids: Vec<GraphNodeId>,
+        content_digest: String,
+    },
+    Network {
+        signal_kind: String,
+        source_digest: String,
+        destination_digest: String,
+        protocol: String,
+        entity_ids: Vec<GraphNodeId>,
+        content_digest: String,
+    },
+    ThreatIntelligence {
+        signal_kind: String,
+        feed_id: String,
+        indicator_digest: String,
+        indicator_kind: String,
+        confidence_basis_points: u16,
+        expires_at: GraphLogicalTime,
+        entity_ids: Vec<GraphNodeId>,
+        content_digest: String,
+    },
+}
+
+impl From<TypedEvidencePayloadWire> for TypedEvidencePayload {
+    fn from(payload: TypedEvidencePayloadWire) -> Self {
+        match payload {
+            TypedEvidencePayloadWire::Signal {
+                signal_kind,
+                entity_ids,
+                relation_ids,
+                supports,
+                refutes,
+                content_digest,
+            } => Self::Signal {
+                signal_kind,
+                entity_ids,
+                relation_ids,
+                supports,
+                refutes,
+                content_digest,
+            },
+            TypedEvidencePayloadWire::Process {
+                signal_kind,
+                process_digest,
+                parent_process_digest,
+                entity_ids,
+                content_digest,
+            } => Self::Process {
+                signal_kind,
+                process_digest,
+                parent_process_digest,
+                entity_ids,
+                content_digest,
+            },
+            TypedEvidencePayloadWire::Identity {
+                signal_kind,
+                principal_digest,
+                credential_digest,
+                entity_ids,
+                content_digest,
+            } => Self::Identity {
+                signal_kind,
+                principal_digest,
+                credential_digest,
+                entity_ids,
+                content_digest,
+            },
+            TypedEvidencePayloadWire::KubernetesAudit {
+                signal_kind,
+                audit_id,
+                verb,
+                resource_digest,
+                entity_ids,
+                content_digest,
+            } => Self::KubernetesAudit {
+                signal_kind,
+                audit_id,
+                verb,
+                resource_digest,
+                entity_ids,
+                content_digest,
+            },
+            TypedEvidencePayloadWire::Cloudtrail {
+                signal_kind,
+                event_id,
+                event_name,
+                event_source,
+                principal_digest,
+                account_digest,
+                source_ip_digest,
+                request_digest,
+                response_digest,
+                mfa_authenticated,
+                region,
+                error_code,
+                error_message,
+                entity_ids,
+                content_digest,
+            } => Self::Cloudtrail {
+                signal_kind,
+                event_id,
+                event_name,
+                event_source,
+                principal_digest,
+                account_digest,
+                source_ip_digest,
+                request_digest,
+                response_digest,
+                mfa_authenticated,
+                region,
+                error_code,
+                error_message,
+                entity_ids,
+                content_digest,
+            },
+            TypedEvidencePayloadWire::Network {
+                signal_kind,
+                source_digest,
+                destination_digest,
+                protocol,
+                entity_ids,
+                content_digest,
+            } => Self::Network {
+                signal_kind,
+                source_digest,
+                destination_digest,
+                protocol,
+                entity_ids,
+                content_digest,
+            },
+            TypedEvidencePayloadWire::ThreatIntelligence {
+                signal_kind,
+                feed_id,
+                indicator_digest,
+                indicator_kind,
+                confidence_basis_points,
+                expires_at,
+                entity_ids,
+                content_digest,
+            } => Self::ThreatIntelligence {
+                signal_kind,
+                feed_id,
+                indicator_digest,
+                indicator_kind,
+                confidence_basis_points,
+                expires_at,
+                entity_ids,
+                content_digest,
+            },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TypedEvidencePayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let payload =
+            TypedEvidencePayload::from(TypedEvidencePayloadWire::deserialize(deserializer)?);
+        payload.validate().map_err(serde::de::Error::custom)?;
+        Ok(payload)
+    }
 }
 
 impl TypedEvidencePayload {
@@ -874,19 +1101,40 @@ impl TypedEvidencePayload {
                 signal_kind,
                 event_id,
                 event_name,
+                event_source,
                 principal_digest,
                 account_digest,
                 source_ip_digest,
+                request_digest,
+                response_digest,
+                mfa_authenticated: _,
+                region,
+                error_code,
+                error_message,
+                entity_ids,
                 content_digest,
             } => {
                 validate_text("payload.signal_kind", signal_kind, 128)?;
                 validate_text("payload.event_id", event_id, 256)?;
                 validate_text("payload.event_name", event_name, 256)?;
+                validate_text("payload.event_source", event_source, 256)?;
                 validate_text("payload.principal_digest", principal_digest, 256)?;
                 validate_text("payload.account_digest", account_digest, 256)?;
                 if let Some(source_ip) = source_ip_digest {
                     validate_text("payload.source_ip_digest", source_ip, 256)?;
                 }
+                validate_text("payload.request_digest", request_digest, 128)?;
+                validate_text("payload.response_digest", response_digest, 128)?;
+                if let Some(region) = region {
+                    validate_text("payload.region", region, 256)?;
+                }
+                if let Some(error_code) = error_code {
+                    validate_text("payload.error_code", error_code, 512)?;
+                }
+                if let Some(error_message) = error_message {
+                    validate_text("payload.error_message", error_message, 4 * 1024)?;
+                }
+                validate_entities(entity_ids)?;
                 validate_text("payload.content_digest", content_digest, 128)?;
             }
             Self::Network {
@@ -910,6 +1158,7 @@ impl TypedEvidencePayload {
                 indicator_digest,
                 indicator_kind,
                 confidence_basis_points,
+                expires_at,
                 entity_ids,
                 content_digest,
             } => {
@@ -918,6 +1167,7 @@ impl TypedEvidencePayload {
                 validate_text("payload.indicator_digest", indicator_digest, 256)?;
                 validate_text("payload.indicator_kind", indicator_kind, 128)?;
                 validate_text("payload.content_digest", content_digest, 128)?;
+                expires_at.validate()?;
                 validate_entities(entity_ids)?;
                 if *confidence_basis_points > CONFIDENCE_BASIS_POINTS {
                     return Err(GraphAdmissionError::InvalidConfidence {
@@ -935,10 +1185,24 @@ impl TypedEvidencePayload {
             | Self::Process { entity_ids, .. }
             | Self::Identity { entity_ids, .. }
             | Self::KubernetesAudit { entity_ids, .. }
+            | Self::Cloudtrail { entity_ids, .. }
             | Self::Network { entity_ids, .. }
             | Self::ThreatIntelligence { entity_ids, .. } => entity_ids.clone(),
-            Self::Cloudtrail { .. } => Vec::new(),
         }
+    }
+
+    /// Return the threat-intelligence expiry when this payload carries one.
+    pub fn expires_at(&self) -> Option<GraphLogicalTime> {
+        match self {
+            Self::ThreatIntelligence { expires_at, .. } => Some(*expires_at),
+            _ => None,
+        }
+    }
+
+    /// Threat intelligence is active strictly before its expiry boundary.
+    pub fn is_active_at(&self, now: GraphLogicalTime) -> Result<Option<bool>, GraphAdmissionError> {
+        now.validate()?;
+        Ok(self.expires_at().map(|expires_at| now < expires_at))
     }
 }
 
@@ -1027,6 +1291,29 @@ struct EvidenceSigningMaterial {
     schema_version: u32,
     evidence_id: EvidenceId,
     core: EvidenceEnvelopeCore,
+    producer_role: GraphProducerRole,
+    scoped_agent_id: String,
+    producer_identity: AgentId,
+    public_key_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceDeterministicWitness<'a> {
+    schema_version: u32,
+    producer_role: GraphProducerRole,
+    scoped_agent_id: &'a str,
+    producer_identity: &'a AgentId,
+    public_key_hex: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceDeterministicMaterial<'a> {
+    schema_version: u32,
+    evidence_id: &'a EvidenceId,
+    core: EvidenceEnvelopeCore,
+    witness: EvidenceDeterministicWitness<'a>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1063,7 +1350,7 @@ impl EvidenceEnvelope {
             source_family,
             source_id: source_id.clone(),
             lineage: lineage.clone(),
-            clock: clock.clone(),
+            clock: clock_without_ingest(&clock),
             ordering: ordering.clone(),
             payload: payload.clone(),
         };
@@ -1097,7 +1384,15 @@ impl EvidenceEnvelope {
         role: GraphProducerRole,
         scoped_agent_id: impl Into<String>,
     ) -> Result<Self, GraphAdmissionError> {
-        let material = self.signing_material()?;
+        let scoped_agent_id = scoped_agent_id.into();
+        let public_key_hex = signer.public_key().to_hex();
+        let producer_identity = AgentId::from_public_key_hex(&public_key_hex);
+        let material = self.signing_material_for(
+            role,
+            scoped_agent_id.clone(),
+            producer_identity,
+            public_key_hex,
+        )?;
         let bytes = canonical_json_bytes(&material).map_err(|error| {
             GraphAdmissionError::Canonicalization {
                 reason: error.to_string(),
@@ -1126,11 +1421,43 @@ impl EvidenceEnvelope {
         }
     }
 
+    fn identity_core(&self) -> EvidenceEnvelopeCore {
+        EvidenceEnvelopeCore {
+            schema_version: self.schema_version,
+            source_family: self.source_family,
+            source_id: self.source_id.clone(),
+            lineage: self.lineage.clone(),
+            clock: clock_without_ingest(&self.clock),
+            ordering: self.ordering.clone(),
+            payload: self.payload.clone(),
+        }
+    }
+
     fn signing_material(&self) -> Result<EvidenceSigningMaterial, GraphAdmissionError> {
+        self.signing_material_for(
+            self.witness.producer_role,
+            self.witness.scoped_agent_id.clone(),
+            self.witness.producer_identity.clone(),
+            self.witness.public_key_hex.clone(),
+        )
+    }
+
+    fn signing_material_for(
+        &self,
+        producer_role: GraphProducerRole,
+        scoped_agent_id: String,
+        producer_identity: AgentId,
+        public_key_hex: String,
+    ) -> Result<EvidenceSigningMaterial, GraphAdmissionError> {
+        validate_text("witness.scoped_agent_id", &scoped_agent_id, 128)?;
         Ok(EvidenceSigningMaterial {
             schema_version: self.schema_version,
             evidence_id: self.evidence_id.clone(),
             core: self.core(),
+            producer_role,
+            scoped_agent_id,
+            producer_identity,
+            public_key_hex,
         })
     }
 
@@ -1182,7 +1509,7 @@ impl EvidenceEnvelope {
                 reason: "an evidence record cannot precede itself".to_string(),
             });
         }
-        let core = self.core();
+        let core = self.identity_core();
         let core_bytes =
             canonical_json_bytes(&core).map_err(|error| GraphAdmissionError::Canonicalization {
                 reason: error.to_string(),
@@ -1197,8 +1524,41 @@ impl EvidenceEnvelope {
         self.witness.validate(&bytes)
     }
 
+    /// Canonical facts used for duplicate/conflict identity.
+    ///
+    /// Ingestion time is intentionally omitted: it is operational metadata,
+    /// not source fact content.  Witness role, scoped label, base identity,
+    /// and public key remain bound so a role alias or signer cannot turn a
+    /// different witness into an idempotent retry.
+    pub fn deterministic_content_bytes(&self) -> Result<Vec<u8>, GraphAdmissionError> {
+        let material = EvidenceDeterministicMaterial {
+            schema_version: self.schema_version,
+            evidence_id: &self.evidence_id,
+            core: self.identity_core(),
+            witness: EvidenceDeterministicWitness {
+                schema_version: self.witness.schema_version,
+                producer_role: self.witness.producer_role,
+                scoped_agent_id: &self.witness.scoped_agent_id,
+                producer_identity: &self.witness.producer_identity,
+                public_key_hex: &self.witness.public_key_hex,
+            },
+        };
+        canonical_json_bytes(&material).map_err(|error| GraphAdmissionError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
     pub fn entity_ids(&self) -> Vec<GraphNodeId> {
         self.payload.entity_ids()
+    }
+}
+
+fn clock_without_ingest(clock: &EvidenceClock) -> EvidenceClock {
+    EvidenceClock {
+        observed_at: clock.observed_at,
+        ingested_at: None,
+        precision: clock.precision,
+        uncertainty_ms: clock.uncertainty_ms,
     }
 }
 
@@ -1211,6 +1571,30 @@ pub enum GraphProducerRole {
     Adjudicator,
     Normalizer,
     Planner,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WitnessBindingMaterial<'a> {
+    record_bytes: &'a [u8],
+    producer_role: GraphProducerRole,
+    scoped_agent_id: &'a str,
+}
+
+fn witness_binding_bytes(
+    record_bytes: &[u8],
+    producer_role: GraphProducerRole,
+    scoped_agent_id: &str,
+) -> Result<Vec<u8>, GraphAdmissionError> {
+    validate_text("witness.scoped_agent_id", scoped_agent_id, 128)?;
+    canonical_json_bytes(&WitnessBindingMaterial {
+        record_bytes,
+        producer_role,
+        scoped_agent_id,
+    })
+    .map_err(|error| GraphAdmissionError::Canonicalization {
+        reason: error.to_string(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1349,7 +1733,9 @@ impl CausalEdge {
     ) -> Result<Self, GraphAdmissionError> {
         self.producer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
         self.edge_id = self.derived_id()?;
-        let bytes = self.canonical_bytes_without_witness()?;
+        let scoped_agent_id = scoped_agent_id.into();
+        let record_bytes = self.canonical_bytes_without_witness()?;
+        let bytes = witness_binding_bytes(&record_bytes, self.producer_role, &scoped_agent_id)?;
         self.witness = Some(EvidenceWitness::new(
             signer,
             self.producer_role,
@@ -1422,7 +1808,13 @@ impl CausalEdge {
                 reason: "causal edge witness does not bind producer identity and role".to_string(),
             });
         }
-        witness.validate(&self.canonical_bytes_without_witness()?)?;
+        let record_bytes = self.canonical_bytes_without_witness()?;
+        let bytes = witness_binding_bytes(
+            &record_bytes,
+            witness.producer_role,
+            &witness.scoped_agent_id,
+        )?;
+        witness.validate(&bytes)?;
         Ok(())
     }
 
@@ -1795,8 +2187,8 @@ impl HypothesisGraph {
             }
             return Ok(());
         }
+        self.bump_version()?;
         self.nodes.insert(node.id().clone(), node);
-        self.version = self.version.saturating_add(1);
         Ok(())
     }
 
@@ -1813,7 +2205,7 @@ impl HypothesisGraph {
             });
         }
         if let Some(existing) = self.evidence.get(&evidence.evidence_id) {
-            if existing != &evidence {
+            if existing.deterministic_content_bytes()? != evidence.deterministic_content_bytes()? {
                 return Err(GraphAdmissionError::IdCollision {
                     id: evidence.evidence_id.0.clone(),
                 });
@@ -1833,8 +2225,8 @@ impl HypothesisGraph {
                 limit: self.limits.max_evidence_bytes,
             });
         }
+        self.bump_version()?;
         self.evidence.insert(evidence.evidence_id.clone(), evidence);
-        self.version = self.version.saturating_add(1);
         Ok(())
     }
 
@@ -1873,8 +2265,8 @@ impl HypothesisGraph {
             }
             return Ok(());
         }
+        self.bump_version()?;
         self.edges.insert(edge.edge_id.clone(), edge);
-        self.version = self.version.saturating_add(1);
         Ok(())
     }
 
@@ -1908,9 +2300,9 @@ impl HypothesisGraph {
         {
             return Err(GraphAdmissionError::UnknownEvidence);
         }
+        self.bump_version()?;
         self.contradictions
             .insert(contradiction.contradiction_id.clone(), contradiction);
-        self.version = self.version.saturating_add(1);
         Ok(())
     }
 
@@ -1937,9 +2329,34 @@ impl HypothesisGraph {
             }
             return Ok(());
         }
+        self.bump_version()?;
         self.conflicts
             .insert(conflict.conflict_id.clone(), conflict);
-        self.version = self.version.saturating_add(1);
+        Ok(())
+    }
+
+    /// Remove one runtime-indexed conflict while preserving the graph version
+    /// invariant.  The version is checked before removal so an exhausted
+    /// graph cannot mutate and then report an overflow failure.
+    pub fn remove_conflict(
+        &mut self,
+        conflict_id: &ContradictionId,
+    ) -> Result<bool, GraphAdmissionError> {
+        if !self.conflicts.contains_key(conflict_id) {
+            return Ok(false);
+        }
+        self.bump_version()?;
+        debug_assert!(self.conflicts.remove(conflict_id).is_some());
+        Ok(true)
+    }
+
+    fn bump_version(&mut self) -> Result<(), GraphAdmissionError> {
+        self.version =
+            self.version
+                .checked_add(1)
+                .ok_or_else(|| GraphAdmissionError::InvalidTransition {
+                    reason: "graph version is exhausted".to_string(),
+                })?;
         Ok(())
     }
 
@@ -2474,7 +2891,9 @@ impl DecisionRecord {
     ) -> Result<Self, GraphAdmissionError> {
         self.producer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
         self.decision_id = self.derived_id()?;
-        let bytes = self.canonical_bytes_without_witness()?;
+        let scoped_agent_id = scoped_agent_id.into();
+        let record_bytes = self.canonical_bytes_without_witness()?;
+        let bytes = witness_binding_bytes(&record_bytes, self.producer_role, &scoped_agent_id)?;
         self.witness = Some(EvidenceWitness::new(
             signer,
             self.producer_role,
@@ -2561,7 +2980,13 @@ impl DecisionRecord {
                 reason: "decision witness does not bind producer identity and role".to_string(),
             });
         }
-        witness.validate(&self.canonical_bytes_without_witness()?)?;
+        let record_bytes = self.canonical_bytes_without_witness()?;
+        let bytes = witness_binding_bytes(
+            &record_bytes,
+            witness.producer_role,
+            &witness.scoped_agent_id,
+        )?;
+        witness.validate(&bytes)?;
         Ok(())
     }
 
@@ -5755,13 +6180,115 @@ mod tests {
     }
 
     #[test]
+    fn evidence_identity_ignores_ingest_time_but_signature_keeps_operational_clock() {
+        let payload = TypedEvidencePayload::Signal {
+            signal_kind: "clocked".to_string(),
+            entity_ids: vec![GraphNodeId::new("node:event:clocked")],
+            relation_ids: vec![],
+            supports: vec![],
+            refutes: vec![],
+            content_digest: "digest:clocked".to_string(),
+        };
+        let first = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Process,
+            "tetragon",
+            SourceLineage::new("fixture", "record:clocked").unwrap(),
+            EvidenceClock {
+                observed_at: GraphLogicalTime::new(1_000),
+                ingested_at: Some(GraphLogicalTime::new(2_000)),
+                precision: ClockPrecision::Millisecond,
+                uncertainty_ms: 0,
+            },
+            OrderingClaim::Unknown,
+            payload.clone(),
+        )
+        .unwrap()
+        .sign_with(&signer(), GraphProducerRole::Normalizer, "normalizer-clock")
+        .unwrap();
+        let second = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Process,
+            "tetragon",
+            SourceLineage::new("fixture", "record:clocked").unwrap(),
+            EvidenceClock {
+                observed_at: GraphLogicalTime::new(1_000),
+                ingested_at: Some(GraphLogicalTime::new(3_000)),
+                precision: ClockPrecision::Millisecond,
+                uncertainty_ms: 0,
+            },
+            OrderingClaim::Unknown,
+            payload,
+        )
+        .unwrap()
+        .sign_with(&signer(), GraphProducerRole::Normalizer, "normalizer-clock")
+        .unwrap();
+        assert_eq!(first.evidence_id, second.evidence_id);
+        assert_ne!(
+            first.canonical_bytes().unwrap(),
+            second.canonical_bytes().unwrap()
+        );
+        assert_eq!(
+            first.deterministic_content_bytes().unwrap(),
+            second.deterministic_content_bytes().unwrap()
+        );
+        let mut graph =
+            HypothesisGraph::new(GraphId::new("graph:clock"), Default::default()).unwrap();
+        graph.admit_evidence(first).unwrap();
+        graph.admit_evidence(second).unwrap();
+        assert_eq!(graph.evidence.len(), 1);
+    }
+
+    #[test]
+    fn threat_intelligence_expiry_is_typed_and_boundary_is_expired() {
+        let payload = TypedEvidencePayload::ThreatIntelligence {
+            signal_kind: "threat_intelligence".to_string(),
+            feed_id: "feed:test".to_string(),
+            indicator_digest: "digest:indicator".to_string(),
+            indicator_kind: "domain".to_string(),
+            confidence_basis_points: 9_000,
+            expires_at: GraphLogicalTime::new(2_000),
+            entity_ids: vec![GraphNodeId::new("node:indicator:test")],
+            content_digest: "digest:threat".to_string(),
+        };
+        assert_eq!(payload.expires_at(), Some(GraphLogicalTime::new(2_000)));
+        assert_eq!(
+            payload.is_active_at(GraphLogicalTime::new(1_999)).unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            payload.is_active_at(GraphLogicalTime::new(2_000)).unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            payload.is_active_at(GraphLogicalTime::new(2_001)).unwrap(),
+            Some(false)
+        );
+        assert!(payload.is_active_at(GraphLogicalTime::new(-1)).is_err());
+        let invalid = TypedEvidencePayload::ThreatIntelligence {
+            signal_kind: "threat_intelligence".to_string(),
+            feed_id: "feed:test".to_string(),
+            indicator_digest: "digest:indicator".to_string(),
+            indicator_kind: "domain".to_string(),
+            confidence_basis_points: 9_000,
+            expires_at: GraphLogicalTime::new(-1),
+            entity_ids: vec![GraphNodeId::new("node:indicator:test")],
+            content_digest: "digest:threat".to_string(),
+        };
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
     fn hypothesis_graph_strictly_admits_typed_nodes_evidence_and_edges() {
         let limits = GraphResourceLimits::default();
         let mut graph = HypothesisGraph::new(GraphId::new("graph:test"), limits).expect("graph");
         let actor =
             GraphNode::Actor(ActorNode::new("principal:digest", "principal-a").expect("actor"));
         let event = GraphNode::Event(
-            EventNode::new("seed", GraphLogicalTime::new(1_700_000_000_100)).expect("event"),
+            EventNode::new(
+                "seed",
+                "source:seed:1",
+                GraphLogicalTime::new(1_700_000_000_100),
+            )
+            .expect("event"),
         );
         let actor_id = actor.id().clone();
         let event_id = event.id().clone();
@@ -5803,7 +6330,9 @@ mod tests {
         let limits = GraphResourceLimits::default();
         let mut graph = HypothesisGraph::new(GraphId::new("graph:test"), limits).expect("graph");
         let actor = GraphNode::Actor(ActorNode::new("principal:digest", "principal-a").unwrap());
-        let event = GraphNode::Event(EventNode::new("seed", GraphLogicalTime::new(100)).unwrap());
+        let event = GraphNode::Event(
+            EventNode::new("seed", "source:seed:2", GraphLogicalTime::new(100)).unwrap(),
+        );
         let actor_id = actor.id().clone();
         let event_id = event.id().clone();
         graph.admit_node(actor).unwrap();
@@ -6110,7 +6639,12 @@ mod tests {
         admitted.insert(evidence_id.clone(), evidence);
         let actor = GraphNode::Actor(ActorNode::new("principal:a", "a").unwrap());
         let event = GraphNode::Event(
-            EventNode::new("event", GraphLogicalTime::new(1_700_000_000_100)).unwrap(),
+            EventNode::new(
+                "event",
+                "source:event:1",
+                GraphLogicalTime::new(1_700_000_000_100),
+            )
+            .unwrap(),
         );
         let mut edge = CausalEdge::new(
             actor.id(),
@@ -6180,10 +6714,10 @@ mod tests {
         .unwrap();
         let actor = GraphNode::Actor(ActorNode::new("principal:t", "t").unwrap());
         let event_a = GraphNode::Event(
-            EventNode::new("a", GraphLogicalTime::new(1_700_000_000_100)).unwrap(),
+            EventNode::new("a", "source:a:1", GraphLogicalTime::new(1_700_000_000_100)).unwrap(),
         );
         let event_b = GraphNode::Event(
-            EventNode::new("b", GraphLogicalTime::new(1_700_000_000_100)).unwrap(),
+            EventNode::new("b", "source:b:1", GraphLogicalTime::new(1_700_000_000_100)).unwrap(),
         );
         let actor_id = actor.id().clone();
         let a_id = event_a.id().clone();
@@ -6318,7 +6852,31 @@ mod tests {
 
     #[test]
     fn review_regressions_reject_invalid_time_claim_scheduler_and_parent() {
-        assert!(EventNode::new("negative", GraphLogicalTime::new(-1)).is_err());
+        assert!(EventNode::new("negative", "source:negative", GraphLogicalTime::new(-1)).is_err());
+        let first =
+            EventNode::new("same-time", "source-record:a", GraphLogicalTime::new(10)).unwrap();
+        let second =
+            EventNode::new("same-time", "source-record:b", GraphLogicalTime::new(10)).unwrap();
+        assert_ne!(first.node_id, second.node_id);
+
+        assert!(serde_json::from_str::<TypedEvidencePayload>(
+            r#"{"kind":"process","signal_kind":"","process_digest":"digest","parent_process_digest":null,"entity_ids":[],"content_digest":"digest"}"#
+        )
+        .is_err());
+
+        let mut exhausted = HypothesisGraph::new(
+            GraphId::new("graph:version-exhausted"),
+            GraphResourceLimits::default(),
+        )
+        .unwrap();
+        exhausted.version = u64::MAX;
+        assert!(matches!(
+            exhausted.admit_node(GraphNode::Actor(
+                ActorNode::new("actor:version-exhausted", "test",).unwrap()
+            )),
+            Err(GraphAdmissionError::InvalidTransition { .. })
+        ));
+        assert!(exhausted.nodes.is_empty());
 
         let scope = EvidenceScope::new(
             [EvidenceSourceFamily::Process],
