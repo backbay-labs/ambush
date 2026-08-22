@@ -10,10 +10,11 @@ pub mod normalize;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
     CausalEdge, ConflictRecord, ContradictionId, ContradictionKind, DecisionRecord,
     EvidenceEnvelope, EvidenceId, EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime,
-    GraphResourceLimits, HypothesisGraph,
+    GraphResourceLimits, GraphSchedulerKey, HypothesisGraph, SchedulerBudget,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::Keypair;
@@ -270,7 +271,15 @@ pub struct EvidenceRegistry {
     evidence: BTreeMap<EvidenceId, EvidenceEnvelope>,
     conflicts: BTreeMap<ContradictionId, ConflictRecord>,
     source_records: BTreeMap<SourceRecordKey, BTreeSet<EvidenceId>>,
+    /// The constructor-time capability snapshot used for every admission
+    /// decision.  This field is deliberately distinct from the legacy
+    /// mutable accessor below: changing a caller-owned compatibility view
+    /// must never widen the registry's trust boundary.
     witnesses: WitnessAdmission,
+    /// Kept only so the historical mutable accessor remains source-compatible
+    /// for downstream callers while being incapable of granting admission.
+    /// Runtime admission never reads this field.
+    legacy_witnesses: WitnessAdmission,
     limits: GraphResourceLimits,
     evidence_bytes: usize,
 }
@@ -278,6 +287,7 @@ pub struct EvidenceRegistry {
 impl EvidenceRegistry {
     pub fn new(witnesses: WitnessAdmission) -> Self {
         Self {
+            legacy_witnesses: witnesses.clone(),
             witnesses,
             limits: GraphResourceLimits::default(),
             evidence_bytes: 0,
@@ -303,6 +313,7 @@ impl EvidenceRegistry {
             ));
         }
         Ok(Self {
+            legacy_witnesses: witnesses.clone(),
             witnesses,
             limits,
             evidence_bytes: 0,
@@ -361,8 +372,14 @@ impl EvidenceRegistry {
         &self.witnesses
     }
 
+    /// Return the historical mutable compatibility view.
+    ///
+    /// This view is not consulted by [`Self::admit`] or
+    /// [`Self::admit_into_graph`].  New code should construct a new registry
+    /// when its key-derived allowlist changes; mutating this value can never
+    /// grant a producer capability to an existing registry.
     pub fn witness_admission_mut(&mut self) -> &mut WitnessAdmission {
-        &mut self.witnesses
+        &mut self.legacy_witnesses
     }
 
     pub fn get(&self, evidence_id: &EvidenceId) -> Option<&EvidenceEnvelope> {
@@ -783,6 +800,14 @@ pub struct HypothesisGraphRuntime<C: GraphClock> {
     pub clock: C,
     pub scheduler: DeterministicScheduler,
     pub evidence: EvidenceRegistry,
+    /// Optional per-logical-tick budget.  Legacy/default constructors leave
+    /// this disabled so existing scheduling behavior remains unchanged;
+    /// `with_config` enables it only for an explicitly enabled graph config.
+    pub budget: Option<SchedulerBudget>,
+    /// The validated deployment configuration that owns `budget`'s ceilings.
+    /// It is private so callers cannot widen the active reasoning limits by
+    /// mutating a runtime-owned configuration after construction.
+    budget_config: Option<HypothesisGraphConfig>,
 }
 
 impl<C: GraphClock> HypothesisGraphRuntime<C> {
@@ -792,6 +817,8 @@ impl<C: GraphClock> HypothesisGraphRuntime<C> {
             clock,
             scheduler: DeterministicScheduler::from_validated_limits(scheduler_limits),
             evidence,
+            budget: None,
+            budget_config: None,
         }
     }
 
@@ -803,10 +830,18 @@ impl<C: GraphClock> HypothesisGraphRuntime<C> {
         evidence: EvidenceRegistry,
         limits: GraphResourceLimits,
     ) -> Result<Self, GraphAdmissionError> {
+        limits.validate()?;
+        if evidence.limits() != &limits {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "runtime registry and scheduler limits must match".to_string(),
+            });
+        }
         Ok(Self {
             clock,
             scheduler: DeterministicScheduler::with_limits(limits)?,
             evidence,
+            budget: None,
+            budget_config: None,
         })
     }
 
@@ -816,6 +851,128 @@ impl<C: GraphClock> HypothesisGraphRuntime<C> {
         limits: GraphResourceLimits,
     ) -> Result<Self, GraphAdmissionError> {
         Self::with_limits(clock, evidence, limits)
+    }
+
+    /// Construct a runtime bound to one validated collective-reasoning config.
+    /// The injected clock supplies the initial logical budget tick; callers
+    /// that already own a replay tick can use [`Self::with_config_at`].
+    pub fn with_config(
+        clock: C,
+        evidence: EvidenceRegistry,
+        config: &HypothesisGraphConfig,
+    ) -> Result<Self, GraphAdmissionError> {
+        let current_tick = GraphLogicalTime::new(clock.now_ms());
+        Self::with_config_at(clock, evidence, config, current_tick)
+    }
+
+    /// Construct a runtime with an explicit logical budget tick.  Resource
+    /// limits are checked against the registry before any scheduler or budget
+    /// state is published, and the per-tick budget is created only after the
+    /// config's reasoning ceilings validate.
+    pub fn with_config_at(
+        clock: C,
+        evidence: EvidenceRegistry,
+        config: &HypothesisGraphConfig,
+        current_tick: GraphLogicalTime,
+    ) -> Result<Self, GraphAdmissionError> {
+        config.validate_reasoning_limits()?;
+        let limits = config.resource_limits();
+        limits.validate()?;
+        let budget = if config.enabled {
+            Some(SchedulerBudget::new_with_config(config, current_tick)?)
+        } else {
+            None
+        };
+        let mut runtime = Self::with_limits(clock, evidence, limits)?;
+        runtime.budget = budget;
+        runtime.budget_config = config.enabled.then(|| config.clone());
+        Ok(runtime)
+    }
+
+    pub fn new_with_config(
+        clock: C,
+        evidence: EvidenceRegistry,
+        config: &HypothesisGraphConfig,
+    ) -> Result<Self, GraphAdmissionError> {
+        Self::with_config(clock, evidence, config)
+    }
+
+    pub fn new_with_config_at(
+        clock: C,
+        evidence: EvidenceRegistry,
+        config: &HypothesisGraphConfig,
+        current_tick: GraphLogicalTime,
+    ) -> Result<Self, GraphAdmissionError> {
+        Self::with_config_at(clock, evidence, config, current_tick)
+    }
+
+    /// Admit scheduler work at an explicit logical time.  Disabled/default
+    /// runtimes validate the time but retain the historical no-budget path.
+    pub fn admit_scheduler_work(
+        &mut self,
+        logical_tick: GraphLogicalTime,
+        work_units: u32,
+        claims: u16,
+    ) -> Result<(), GraphAdmissionError> {
+        logical_tick.validate()?;
+        match (&mut self.budget, &self.budget_config) {
+            (Some(budget), Some(config)) => {
+                budget.admit_at(config, logical_tick, work_units, claims)?;
+            }
+            (None, None) => {}
+            (Some(_), None) => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "scheduler budget is not bound to an active config".to_string(),
+                });
+            }
+            (None, Some(_)) => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "active scheduler budget is missing".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Pop one ready task while atomically admitting its logical work/claim
+    /// cost.  A future or absent task does not consume budget or scheduler
+    /// state; an over-limit admission leaves both byte-identical.
+    pub fn pop_ready_budgeted(
+        &mut self,
+        now: GraphLogicalTime,
+        work_units: u32,
+        claims: u16,
+    ) -> Result<Option<GraphSchedulerKey>, GraphAdmissionError> {
+        now.validate()?;
+        let Some(next) = self.scheduler.peek() else {
+            return Ok(None);
+        };
+        if next.ready_at > now {
+            return Ok(None);
+        }
+
+        let mut candidate_budget = self.budget.clone();
+        match (&mut candidate_budget, &self.budget_config) {
+            (Some(budget), Some(config)) => {
+                budget.admit_at(config, now, work_units, claims)?;
+            }
+            (None, None) => {}
+            (Some(_), None) => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "scheduler budget is not bound to an active config".to_string(),
+                });
+            }
+            (None, Some(_)) => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "active scheduler budget is missing".to_string(),
+                });
+            }
+        }
+        let popped = self.scheduler.pop_ready(now)?;
+        if popped.is_some() {
+            self.budget = candidate_budget;
+        }
+        Ok(popped)
     }
 
     pub fn now(&self) -> Result<GraphLogicalTime, GraphAdmissionError> {

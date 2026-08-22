@@ -8,10 +8,12 @@
 
 use std::collections::BTreeSet;
 
+use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
     CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeState, EvidenceEnvelope,
     EvidenceSourceFamily, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNodeId,
-    GraphProducerRole, GraphResourceLimits, HypothesisId, TypedEvidencePayload,
+    GraphProducerRole, GraphResourceLimits, HypothesisGraph, HypothesisId, SchedulerBudget, TaskId,
+    TaskKind, TypedEvidencePayload,
 };
 use swarm_core::types::AgentId;
 use swarm_core::{
@@ -21,11 +23,11 @@ use swarm_core::{
 };
 use swarm_crypto::Keypair;
 use swarm_runtime::hypothesis_graph::{
-    EvidenceAdmissionError, EvidenceAdmissionOutcome, EvidenceRegistry, FixedGraphClock,
-    GraphRecordSigner, HypothesisGraphRuntime, KeypairGraphRecordSigner, MAX_RAW_PROJECTION_BYTES,
-    MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES, MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit,
-    WitnessAdmission, normalize_source_timestamp, normalize_telemetry_event,
-    normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
+    DeterministicScheduler, EvidenceAdmissionError, EvidenceAdmissionOutcome, EvidenceRegistry,
+    FixedGraphClock, GraphRecordSigner, HypothesisGraphRuntime, KeypairGraphRecordSigner,
+    MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES,
+    MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, WitnessAdmission, normalize_source_timestamp,
+    normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
 };
 
 fn key(seed: u8) -> Keypair {
@@ -34,6 +36,34 @@ fn key(seed: u8) -> Keypair {
 
 fn clock() -> FixedGraphClock {
     FixedGraphClock::new(GraphLogicalTime::new(1_700_000_010_000))
+}
+
+fn json_bytes<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    serde_json::to_vec(value).unwrap()
+}
+
+fn registry_state_bytes(registry: &EvidenceRegistry) -> Vec<u8> {
+    json_bytes(&(
+        registry.evidence(),
+        registry.conflicts(),
+        registry.witness_admission().identities(),
+        registry.limits(),
+    ))
+}
+
+fn signer_edge(signer: &Keypair) -> CausalEdge {
+    CausalEdge::new(
+        &GraphNodeId::new("node:process"),
+        &GraphNodeId::new("node:asset"),
+        CausalRelation::Contacts,
+        8_000,
+        [],
+        GraphProducerRole::Hunter,
+        AgentId::from_public_key_hex(&signer.public_key().to_hex()),
+        GraphLogicalTime::new(1_700_000_000_000),
+        EdgeState::Unresolved,
+    )
+    .unwrap()
 }
 
 fn process_event(event_id: &str, command_line: &str) -> TelemetryEvent {
@@ -451,6 +481,181 @@ fn wrong_or_unadmitted_witness_key_fails_closed() {
 }
 
 #[test]
+fn unadmitted_graph_signer_is_rejected() {
+    let admitted_key = key(70);
+    let unadmitted_key = key(71);
+    let admission = WitnessAdmission::from_key(&admitted_key);
+
+    assert!(matches!(
+        KeypairGraphRecordSigner::with_admission(unadmitted_key.clone(), &admission),
+        Err(GraphAdmissionError::InvalidWitness { .. })
+    ));
+
+    // The same key must fail before either side of a registry/graph
+    // transaction changes.  The serialized graph bytes are the failure spy;
+    // a hidden partial node/evidence/version mutation fails this assertion.
+    let envelope = normalize_telemetry_event(
+        &process_event("process:unadmitted-graph", "curl https://same.example"),
+        &clock(),
+        &unadmitted_key,
+        GraphProducerRole::Normalizer,
+        "normalizer:unadmitted",
+    )
+    .unwrap();
+    let mut registry = EvidenceRegistry::with_key(&admitted_key);
+    let mut graph = HypothesisGraph::new(
+        GraphId::new("graph:unadmitted-graph"),
+        GraphResourceLimits::default(),
+    )
+    .unwrap();
+    let before_graph = json_bytes(&graph);
+    let before_evidence = registry.evidence().clone();
+    let before_conflicts = registry.conflicts().clone();
+    assert!(matches!(
+        registry.admit_into_graph(&mut graph, envelope),
+        Err(EvidenceAdmissionError::UnadmittedWitness { .. })
+    ));
+    assert_eq!(json_bytes(&graph), before_graph);
+    assert_eq!(registry.evidence(), &before_evidence);
+    assert_eq!(registry.conflicts(), &before_conflicts);
+}
+
+#[test]
+fn new_signer_cannot_sign_without_admission() {
+    let signer_key = key(72);
+    let signer = KeypairGraphRecordSigner::new(signer_key.clone());
+
+    assert!(matches!(
+        signer.sign_edge(signer_edge(&signer_key), "hunter:unadmitted"),
+        Err(GraphAdmissionError::InvalidWitness { .. })
+    ));
+}
+
+#[test]
+fn role_scope_mutation_invalidates_witness() {
+    let signer = key(73);
+    let envelope = normalize_telemetry_event(
+        &process_event("process:witness-mutation", "curl https://same.example"),
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:trusted",
+    )
+    .unwrap();
+    let mut registry = EvidenceRegistry::with_key(&signer);
+    let before_evidence = registry.evidence().clone();
+    let before_conflicts = registry.conflicts().clone();
+
+    let mut role_mutated = envelope.clone();
+    role_mutated.witness.producer_role = GraphProducerRole::Planner;
+    assert!(matches!(
+        registry.admit(role_mutated),
+        Err(EvidenceAdmissionError::Graph(
+            GraphAdmissionError::InvalidWitness { .. }
+        ))
+    ));
+    let mut scope_mutated = envelope;
+    scope_mutated.witness.scoped_agent_id = "normalizer:forged".to_string();
+    assert!(matches!(
+        registry.admit(scope_mutated),
+        Err(EvidenceAdmissionError::Graph(
+            GraphAdmissionError::InvalidWitness { .. }
+        ))
+    ));
+    assert_eq!(registry.evidence(), &before_evidence);
+    assert_eq!(registry.conflicts(), &before_conflicts);
+}
+
+#[test]
+fn scoped_alias_cannot_grant_capability() {
+    let signer = key(74);
+    let scoped_alias = AgentId::new("normalizer", "alias-only");
+    let envelope = normalize_telemetry_event(
+        &process_event("process:scoped-alias", "curl https://same.example"),
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:alias-only",
+    )
+    .unwrap();
+    let mut registry = EvidenceRegistry::with_identities([scoped_alias]);
+
+    assert!(matches!(
+        registry.admit(envelope),
+        Err(EvidenceAdmissionError::UnadmittedWitness { identity })
+            if identity == AgentId::from_public_key_hex(&signer.public_key().to_hex())
+    ));
+}
+
+#[test]
+fn allowlist_is_snapshotted() {
+    let admitted = key(75);
+    let newly_allowed = key(76);
+    let mut admission = WitnessAdmission::from_key(&admitted);
+    let mut registry = EvidenceRegistry::new(admission.clone());
+    admission.admit_key(&newly_allowed);
+    let envelope = normalize_telemetry_event(
+        &process_event(
+            "process:external-allowlist-mutation",
+            "curl https://same.example",
+        ),
+        &clock(),
+        &newly_allowed,
+        GraphProducerRole::Normalizer,
+        "normalizer:newly-allowed",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        registry.admit(envelope),
+        Err(EvidenceAdmissionError::UnadmittedWitness { .. })
+    ));
+    assert_eq!(registry.witness_admission().identities().len(), 1);
+}
+
+#[test]
+fn registry_allowlist_cannot_change_after_construction() {
+    let admitted = key(77);
+    let newly_allowed = key(78);
+    let mut registry = EvidenceRegistry::with_key(&admitted);
+    let mut graph = HypothesisGraph::new(
+        GraphId::new("graph:registry-allowlist-snapshot"),
+        GraphResourceLimits::default(),
+    )
+    .unwrap();
+    let before_registry_evidence = registry.evidence().clone();
+    let before_registry_conflicts = registry.conflicts().clone();
+    let before_graph = json_bytes(&graph);
+
+    registry.witness_admission_mut().admit_key(&newly_allowed);
+    let envelope = normalize_telemetry_event(
+        &process_event(
+            "process:registry-allowlist-mutation",
+            "curl https://same.example",
+        ),
+        &clock(),
+        &newly_allowed,
+        GraphProducerRole::Normalizer,
+        "normalizer:mutated-view",
+    )
+    .unwrap();
+    assert!(matches!(
+        registry.admit_into_graph(&mut graph, envelope),
+        Err(EvidenceAdmissionError::UnadmittedWitness { .. })
+    ));
+    assert_eq!(registry.evidence(), &before_registry_evidence);
+    assert_eq!(registry.conflicts(), &before_registry_conflicts);
+    assert_eq!(json_bytes(&graph), before_graph);
+    assert!(
+        !registry
+            .witness_admission()
+            .contains(&AgentId::from_public_key_hex(
+                &newly_allowed.public_key().to_hex()
+            ))
+    );
+}
+
+#[test]
 fn source_time_conflicts_remain_visible_and_legacy_host_id_is_ignored() {
     let signer = key(41);
     let mut registry = EvidenceRegistry::with_key(&signer);
@@ -668,6 +873,166 @@ fn cross_source_ids_do_not_conflict_but_adapter_variation_cannot_evade_conflict(
         Ok(EvidenceAdmissionOutcome::Conflict { .. })
     ));
     assert_eq!(registry.conflicts().len(), 1);
+}
+
+#[test]
+fn event_node_same_time_different_source_records_are_distinct() {
+    let signer = key(79);
+    let first = normalize_telemetry_event(
+        &process_event("process:source-record-a", "curl https://same.example"),
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:event-a",
+    )
+    .unwrap();
+    let second = normalize_telemetry_event(
+        &process_event("process:source-record-b", "curl https://same.example"),
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:event-b",
+    )
+    .unwrap();
+    let event_node = |envelope: &EvidenceEnvelope| match &envelope.payload {
+        TypedEvidencePayload::Process { entity_ids, .. } => entity_ids[1].clone(),
+        other => panic!("expected process payload, got {other:?}"),
+    };
+
+    assert_eq!(first.clock.observed_at, second.clock.observed_at);
+    assert_ne!(event_node(&first), event_node(&second));
+    assert_ne!(first.evidence_id, second.evidence_id);
+
+    let mut registry = EvidenceRegistry::with_key(&signer);
+    assert!(matches!(
+        registry.admit(first.clone()),
+        Ok(EvidenceAdmissionOutcome::Inserted { .. })
+    ));
+    assert!(matches!(
+        registry.admit(second),
+        Ok(EvidenceAdmissionOutcome::Inserted { .. })
+    ));
+    assert!(matches!(
+        registry.admit(first),
+        Ok(EvidenceAdmissionOutcome::Idempotent { .. })
+    ));
+}
+
+#[test]
+fn source_record_identity_is_required_and_bounded() {
+    let signer = key(80);
+    let mut missing = process_event(
+        "process:source-record-required",
+        "curl https://same.example",
+    );
+    missing.event_id.clear();
+    assert!(matches!(
+        normalize_telemetry_event(
+            &missing,
+            &clock(),
+            &signer,
+            GraphProducerRole::Normalizer,
+            "normalizer:missing-record",
+        ),
+        Err(GraphAdmissionError::InvalidField { field, .. }) if field == "telemetry.event_id"
+    ));
+
+    let mut oversized = process_event(
+        "process:source-record-oversized",
+        "curl https://same.example",
+    );
+    oversized.event_id = "x".repeat(257);
+    assert!(matches!(
+        normalize_telemetry_event(
+            &oversized,
+            &clock(),
+            &signer,
+            GraphProducerRole::Normalizer,
+            "normalizer:oversized-record",
+        ),
+        Err(GraphAdmissionError::ResourceLimitExceeded { resource, .. })
+            if resource == "telemetry.event_id"
+    ));
+}
+
+#[test]
+fn cloudtrail_unknown_identity_is_event_scoped() {
+    let signer = key(81);
+    let mut first = cloudtrail_event("cloudtrail:unknown-a", "AssumeRole");
+    first.payload = match first.payload {
+        TelemetryPayload::CloudTrail(mut payload) => {
+            payload.aws_account_id = None;
+            payload.principal_arn = None;
+            payload.principal_id = None;
+            payload.principal_name = None;
+            payload.principal_type = None;
+            TelemetryPayload::CloudTrail(payload)
+        }
+        _ => unreachable!(),
+    };
+    let mut second = first.clone();
+    second.event_id = "cloudtrail:unknown-b".to_string();
+    let first = normalize_telemetry_event(
+        &first,
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:cloudtrail",
+    )
+    .unwrap();
+    let second = normalize_telemetry_event(
+        &second,
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:cloudtrail",
+    )
+    .unwrap();
+    let digests = |envelope: &EvidenceEnvelope| match &envelope.payload {
+        TypedEvidencePayload::Cloudtrail {
+            principal_digest,
+            account_digest,
+            ..
+        } => (principal_digest.clone(), account_digest.clone()),
+        other => panic!("expected CloudTrail payload, got {other:?}"),
+    };
+    assert_ne!(digests(&first), digests(&second));
+
+    let mut lower_priority_a = cloudtrail_event("cloudtrail:lower-priority", "AssumeRole");
+    lower_priority_a.payload = match lower_priority_a.payload {
+        TelemetryPayload::CloudTrail(mut payload) => {
+            payload.principal_id = Some("AIDAEXAMPLE".to_string());
+            payload.principal_name = Some("alice".to_string());
+            TelemetryPayload::CloudTrail(payload)
+        }
+        _ => unreachable!(),
+    };
+    let mut lower_priority_b = lower_priority_a.clone();
+    lower_priority_b.payload = match lower_priority_b.payload {
+        TelemetryPayload::CloudTrail(mut payload) => {
+            payload.principal_type = Some("Role".to_string());
+            TelemetryPayload::CloudTrail(payload)
+        }
+        _ => unreachable!(),
+    };
+    let lower_priority_a = normalize_telemetry_event(
+        &lower_priority_a,
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:cloudtrail",
+    )
+    .unwrap();
+    let lower_priority_b = normalize_telemetry_event(
+        &lower_priority_b,
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:cloudtrail",
+    )
+    .unwrap();
+    assert_ne!(digests(&lower_priority_a), digests(&lower_priority_b));
+    assert_ne!(lower_priority_a.evidence_id, lower_priority_b.evidence_id);
 }
 
 #[test]
@@ -901,6 +1266,261 @@ fn cloudtrail_dns_expiry_and_typed_metadata_are_preserved_without_host_aliasing(
             .unwrap(),
         Some(true)
     );
+}
+
+#[test]
+fn typed_evidence_payload_direct_deserialize_is_validated() {
+    let signer = key(82);
+    let envelope = normalize_telemetry_event(
+        &process_event("process:payload-wire", "curl https://same.example"),
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:payload-wire",
+    )
+    .unwrap();
+    let before = json_bytes(&envelope.payload);
+    let mut tampered = serde_json::to_value(&envelope.payload).unwrap();
+    tampered["signal_kind"] = serde_json::Value::String(String::new());
+
+    assert!(serde_json::from_value::<TypedEvidencePayload>(tampered).is_err());
+    assert_eq!(json_bytes(&envelope.payload), before);
+}
+
+#[test]
+fn graph_version_overflow_is_fail_closed() {
+    let signer = key(83);
+    let envelope = normalize_telemetry_event(
+        &process_event(
+            "process:graph-version-overflow",
+            "curl https://same.example",
+        ),
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:graph-version",
+    )
+    .unwrap();
+    let mut graph = HypothesisGraph::new(
+        GraphId::new("graph:version-overflow"),
+        GraphResourceLimits::default(),
+    )
+    .unwrap();
+    graph.version = u64::MAX;
+    let before = json_bytes(&graph);
+
+    assert!(matches!(
+        graph.admit_evidence(envelope),
+        Err(GraphAdmissionError::InvalidTransition { reason })
+            if reason == "graph version is exhausted"
+    ));
+    assert_eq!(json_bytes(&graph), before);
+    assert!(graph.evidence.is_empty());
+}
+
+#[test]
+fn runtime_with_limits_rejects_registry_scheduler_mismatch_without_mutation() {
+    let signer = key(84);
+    let registry_limits = GraphResourceLimits::default();
+    let registry = EvidenceRegistry::with_key_and_limits(&signer, registry_limits.clone()).unwrap();
+    let before = registry_state_bytes(&registry);
+    let mut scheduler_limits = registry_limits;
+    scheduler_limits.max_tasks += 1;
+
+    let result = HypothesisGraphRuntime::with_limits(clock(), registry.clone(), scheduler_limits);
+
+    assert!(matches!(
+        result,
+        Err(GraphAdmissionError::InvalidTransition { reason })
+            if reason == "runtime registry and scheduler limits must match"
+    ));
+    assert_eq!(registry_state_bytes(&registry), before);
+}
+
+#[test]
+fn config_bound_runtime_budget_gates_logical_pop_and_admission() {
+    let signer = key(85);
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 2,
+        max_claims_per_tick: 1,
+        ..HypothesisGraphConfig::default()
+    };
+    let registry =
+        EvidenceRegistry::with_key_and_limits(&signer, config.resource_limits()).unwrap();
+    let mut runtime = HypothesisGraphRuntime::with_config_at(
+        FixedGraphClock::new(GraphLogicalTime::new(100)),
+        registry,
+        &config,
+        GraphLogicalTime::new(100),
+    )
+    .unwrap();
+
+    let budget = runtime.budget.as_ref().unwrap();
+    assert_eq!(budget.max_work_units, config.max_work_units_per_tick);
+    assert_eq!(budget.max_claims, config.max_claims_per_tick);
+    assert_eq!(budget.current_tick(), GraphLogicalTime::new(100));
+
+    let future_task = TaskId::new("task:budget-future");
+    runtime
+        .scheduler
+        .schedule_task(
+            GraphLogicalTime::new(110),
+            TaskKind::AcquireEvidence,
+            100,
+            future_task.clone(),
+        )
+        .unwrap();
+    let before_future_tasks = json_bytes(&runtime.scheduler.ordered());
+    let before_future_budget = runtime.budget.clone();
+    assert!(
+        runtime
+            .pop_ready_budgeted(GraphLogicalTime::new(109), 2, 1)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        json_bytes(&runtime.scheduler.ordered()),
+        before_future_tasks
+    );
+    assert_eq!(runtime.budget, before_future_budget);
+    assert!(runtime.scheduler.contains(&future_task));
+
+    runtime
+        .scheduler
+        .schedule_task(
+            GraphLogicalTime::new(100),
+            TaskKind::AcquireEvidence,
+            100,
+            TaskId::new("task:budget-ready-first"),
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .pop_ready_budgeted(GraphLogicalTime::new(100), 2, 1)
+            .unwrap()
+            .is_some()
+    );
+    let used_budget = runtime.budget.as_ref().unwrap();
+    assert_eq!(used_budget.work_units_used(), 2);
+    assert_eq!(used_budget.claims_used(), 1);
+
+    let second_task = TaskId::new("task:budget-ready-second");
+    runtime
+        .scheduler
+        .schedule_task(
+            GraphLogicalTime::new(100),
+            TaskKind::FalsifyHypothesis,
+            100,
+            second_task.clone(),
+        )
+        .unwrap();
+    let before_failed_pop_tasks = json_bytes(&runtime.scheduler.ordered());
+    let before_failed_pop_budget = runtime.budget.clone();
+    assert!(matches!(
+        runtime.pop_ready_budgeted(GraphLogicalTime::new(100), 1, 0),
+        Err(GraphAdmissionError::ResourceLimitExceeded { resource, .. })
+            if resource == "scheduler.work_units_per_tick"
+    ));
+    assert_eq!(
+        json_bytes(&runtime.scheduler.ordered()),
+        before_failed_pop_tasks
+    );
+    assert_eq!(runtime.budget, before_failed_pop_budget);
+    assert!(runtime.scheduler.contains(&second_task));
+
+    let before_failed_admission = runtime.budget.clone();
+    assert!(matches!(
+        runtime.admit_scheduler_work(GraphLogicalTime::new(100), 0, 1),
+        Err(GraphAdmissionError::ResourceLimitExceeded { resource, .. })
+            if resource == "scheduler.claims_per_tick"
+    ));
+    assert_eq!(runtime.budget, before_failed_admission);
+}
+
+#[test]
+fn serde_mutated_budget_above_active_config_is_rejected_without_pop() {
+    let signer = key(86);
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 2,
+        max_claims_per_tick: 1,
+        ..HypothesisGraphConfig::default()
+    };
+    let registry =
+        EvidenceRegistry::with_key_and_limits(&signer, config.resource_limits()).unwrap();
+    let mut runtime = HypothesisGraphRuntime::with_config_at(
+        FixedGraphClock::new(GraphLogicalTime::new(200)),
+        registry,
+        &config,
+        GraphLogicalTime::new(200),
+    )
+    .unwrap();
+    runtime
+        .scheduler
+        .schedule_task(
+            GraphLogicalTime::new(200),
+            TaskKind::AcquireEvidence,
+            100,
+            TaskId::new("task:budget-tampered"),
+        )
+        .unwrap();
+
+    let mut tampered_wire = serde_json::to_value(runtime.budget.as_ref().unwrap()).unwrap();
+    tampered_wire["max_work_units"] = serde_json::json!(3);
+    let tampered_budget: SchedulerBudget = serde_json::from_value(tampered_wire).unwrap();
+    runtime.budget = Some(tampered_budget);
+    let before_tasks = json_bytes(&runtime.scheduler.ordered());
+    let before_budget = runtime.budget.clone();
+
+    assert!(matches!(
+        runtime.pop_ready_budgeted(GraphLogicalTime::new(200), 0, 0),
+        Err(GraphAdmissionError::InvalidLimit { field, .. })
+            if field == "scheduler.max_work_units"
+    ));
+    assert_eq!(json_bytes(&runtime.scheduler.ordered()), before_tasks);
+    assert_eq!(runtime.budget, before_budget);
+}
+
+#[test]
+fn disabled_config_and_legacy_runtime_keep_unbudgeted_scheduler_behavior() {
+    let signer = key(87);
+    let config = HypothesisGraphConfig::default();
+    assert!(!config.enabled);
+    let registry =
+        EvidenceRegistry::with_key_and_limits(&signer, config.resource_limits()).unwrap();
+    let mut configured = HypothesisGraphRuntime::with_config_at(
+        FixedGraphClock::new(GraphLogicalTime::new(300)),
+        registry,
+        &config,
+        GraphLogicalTime::new(300),
+    )
+    .unwrap();
+    assert!(configured.budget.is_none());
+    configured
+        .admit_scheduler_work(GraphLogicalTime::new(300), u32::MAX, u16::MAX)
+        .unwrap();
+    configured
+        .scheduler
+        .schedule_task(
+            GraphLogicalTime::new(300),
+            TaskKind::AcquireEvidence,
+            100,
+            TaskId::new("task:disabled-config"),
+        )
+        .unwrap();
+    assert!(
+        configured
+            .pop_ready_budgeted(GraphLogicalTime::new(300), u32::MAX, u16::MAX)
+            .unwrap()
+            .is_some()
+    );
+
+    let mut legacy = HypothesisGraphRuntime::new(clock(), EvidenceRegistry::with_key(&signer));
+    assert!(legacy.budget.is_none());
+    legacy
+        .admit_scheduler_work(GraphLogicalTime::new(1), u32::MAX, u16::MAX)
+        .unwrap();
 }
 
 #[test]
@@ -1337,4 +1957,107 @@ fn graph_record_signer_binds_edge_and_decision() {
             .verify_decision(&role_tampered_decision)
             .is_err()
     );
+}
+
+#[test]
+fn future_task_is_not_consumed_before_ready_time() {
+    let task_id = TaskId::new("task:future-not-ready");
+    let mut scheduler = DeterministicScheduler::new();
+    scheduler
+        .schedule_task(
+            GraphLogicalTime::new(20),
+            TaskKind::AcquireEvidence,
+            500,
+            task_id.clone(),
+        )
+        .unwrap();
+    let before = json_bytes(&scheduler.ordered());
+
+    assert!(
+        scheduler
+            .pop_ready(GraphLogicalTime::new(19))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(json_bytes(&scheduler.ordered()), before);
+    assert_eq!(scheduler.len(), 1);
+    assert!(scheduler.contains(&task_id));
+    assert_eq!(scheduler.tombstone_len(), 0);
+    assert_eq!(scheduler.retained_len(), 1);
+}
+
+#[test]
+fn future_task_survives_earlier_pop() {
+    let future_id = TaskId::new("task:future-survives");
+    let mut scheduler = DeterministicScheduler::new();
+    scheduler
+        .schedule_task(
+            GraphLogicalTime::new(20),
+            TaskKind::FalsifyHypothesis,
+            1,
+            future_id.clone(),
+        )
+        .unwrap();
+    scheduler
+        .schedule_task(
+            GraphLogicalTime::new(10),
+            TaskKind::AcquireEvidence,
+            1,
+            TaskId::new("task:ready-now"),
+        )
+        .unwrap();
+    let before_future = json_bytes(
+        &scheduler
+            .ordered()
+            .into_iter()
+            .find(|key| key.task_id == future_id)
+            .unwrap(),
+    );
+
+    let popped = scheduler
+        .pop_ready(GraphLogicalTime::new(10))
+        .unwrap()
+        .unwrap();
+    assert_eq!(popped.task_id, TaskId::new("task:ready-now"));
+    let future = scheduler
+        .ordered()
+        .into_iter()
+        .find(|key| key.task_id == future_id)
+        .unwrap();
+    assert_eq!(json_bytes(&future), before_future);
+    assert!(scheduler.contains(&future_id));
+    assert_eq!(scheduler.tombstone_len(), 1);
+}
+
+#[test]
+fn scheduler_pop_is_logical_time_only() {
+    let task_id = TaskId::new("task:logical-time-only");
+    let mut scheduler = DeterministicScheduler::new();
+    scheduler
+        .schedule_task(
+            GraphLogicalTime::new(30),
+            TaskKind::AcquireEvidence,
+            10,
+            task_id.clone(),
+        )
+        .unwrap();
+    let before = json_bytes(&scheduler.ordered());
+
+    // The scheduler receives an explicit logical instant.  Host-clock
+    // observations are intentionally absent from this API and cannot move
+    // the task ahead of its declared ready time.
+    for now in [GraphLogicalTime::new(0), GraphLogicalTime::new(29)] {
+        assert!(scheduler.pop_ready(now).unwrap().is_none());
+        assert_eq!(json_bytes(&scheduler.ordered()), before);
+    }
+    assert_eq!(
+        scheduler
+            .pop_ready(GraphLogicalTime::new(30))
+            .unwrap()
+            .unwrap()
+            .task_id,
+        task_id
+    );
+    assert_eq!(scheduler.len(), 0);
+    assert_eq!(scheduler.tombstone_len(), 1);
 }

@@ -27,8 +27,9 @@ use std::sync::{
 use std::time::Duration;
 use swarm_core::hypothesis_graph::{
     FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime, GraphResourceLimits,
-    HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, LeaseId, TaskClaimRequest, TaskCompletion,
-    TaskId, TaskLease, TaskRecord, TaskState, TaskTerminalProof,
+    HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, LeaseId, TaskCapabilityProof,
+    TaskClaimRequest, TaskCompletion, TaskId, TaskLease, TaskRecord, TaskState,
+    TaskTerminalEnvelope, TaskTerminalProof, derive_logical_task_id,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::{
@@ -503,6 +504,67 @@ impl GraphStoreState {
 pub struct GraphStoreSnapshot {
     pub state: GraphStoreState,
     pub revision: GraphStoreRevision,
+}
+
+/// Validate a terminal publication against the exact claimed task and its
+/// signed capability.  The persisted task record does not contain the seed
+/// that was used to derive a claimant-independent logical [`TaskId`], so this
+/// function deliberately does not pretend to re-derive that identity.  It
+/// checks the stronger boundary that is available at this seam: task,
+/// envelope, capability, lease, fence, completion, and decision/evidence
+/// lineage must all describe one exact claimed request.  Callers that retain
+/// the seed can additionally use [`validate_task_logical_identity`].
+pub fn validate_task_terminal_envelope(
+    task: &TaskRecord,
+    envelope: &TaskTerminalEnvelope,
+    capability: &TaskCapabilityProof,
+    limits: &GraphResourceLimits,
+) -> Result<(), GraphStoreError> {
+    // Core owns structural, signature, exact-task, lease, fence, completion,
+    // and lineage validation.  The spine supplies the configured persistence
+    // boundary but does not reimplement those rules.
+    envelope
+        .validate_for_task(task, limits.max_task_lease_ms, limits.max_task_retries)
+        .map_err(GraphStoreError::Admission)?;
+    if envelope.capability != *capability {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "terminal envelope capability differs from supplied capability".to_string(),
+        });
+    }
+    if let Some(link) = &envelope.decision_link
+        && link.target != task.request.target
+    {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "terminal decision lineage targets a different task target".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Validate a logical task identity when the creator has retained the seed
+/// digest.  A [`TaskRecord`] alone cannot provide this proof because its
+/// historical wire shape intentionally stores only the derived `TaskId`.
+pub fn validate_task_logical_identity(
+    graph_id: &GraphId,
+    task: &TaskRecord,
+    seed_digest: &str,
+) -> Result<(), GraphStoreError> {
+    task.request
+        .validate()
+        .map_err(GraphStoreError::Admission)?;
+    let derived = derive_logical_task_id(
+        graph_id,
+        &task.request.target,
+        task.request.kind,
+        seed_digest,
+    )
+    .map_err(GraphStoreError::Admission)?;
+    if derived != task.request.task_id {
+        return Err(GraphStoreError::InvalidState {
+            reason: "persisted task ID does not match the supplied logical seed".to_string(),
+        });
+    }
+    Ok(())
 }
 
 impl GraphStoreSnapshot {
@@ -3195,6 +3257,12 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
                     reason: "compare-and-swap candidate fencing counter regressed".to_string(),
                 });
             }
+            if state.logical_time_high_water < current.logical_time_high_water {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "compare-and-swap candidate logical time high-water regressed"
+                        .to_string(),
+                });
+            }
             if state.tasks != current.tasks || state.task_tombstones != current.task_tombstones {
                 return Err(GraphStoreError::InvalidState {
                     reason: "generic CAS cannot replace task records or tombstones".to_string(),
@@ -3203,6 +3271,7 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
             state.validate_with_limits(&self.limits)?;
             current.graph = state.graph;
             current.fencing_counter = state.fencing_counter;
+            current.logical_time_high_water = state.logical_time_high_water;
             Ok(StateMutation {
                 value: (),
                 changed: true,
@@ -6089,6 +6158,12 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
                     reason: "compare-and-swap candidate fencing counter regressed".to_string(),
                 });
             }
+            if state.logical_time_high_water < current.logical_time_high_water {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "compare-and-swap candidate logical time high-water regressed"
+                        .to_string(),
+                });
+            }
             if state.tasks != current.tasks || state.task_tombstones != current.task_tombstones {
                 return Err(GraphStoreError::InvalidState {
                     reason: "generic CAS cannot replace task records or tombstones".to_string(),
@@ -6097,6 +6172,7 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
             state.validate_with_limits(&self.limits)?;
             current.graph = state.graph.clone();
             current.fencing_counter = state.fencing_counter;
+            current.logical_time_high_water = state.logical_time_high_water;
             Ok(StateMutation {
                 value: (),
                 changed: true,

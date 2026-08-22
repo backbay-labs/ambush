@@ -15,6 +15,12 @@ use super::{
 use crate::ThreatClass;
 use crate::agent::SwarmMode;
 use crate::types::{ResponseAction, Severity};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+use swarm_crypto::{
+    DetachedSignature, canonical_json_bytes, sha256_hex, verify_detached_signature,
+};
 use zeroize::Zeroize;
 
 fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
@@ -112,6 +118,22 @@ fn hypothesis_graph_config_unknown_fields_fail_closed() {
 }
 
 #[test]
+fn hypothesis_graph_config_direct_deserialize_validates_all_limits() {
+    let mut zero_resource = serde_json::to_value(HypothesisGraphConfig::default()).unwrap();
+    zero_resource["max_nodes"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<HypothesisGraphConfig>(zero_resource).is_err());
+
+    let mut zero_reasoning = serde_json::to_value(HypothesisGraphConfig::default()).unwrap();
+    zero_reasoning["max_memory_ttl_ticks"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<HypothesisGraphConfig>(zero_reasoning).is_err());
+
+    let mut contradictory = serde_json::to_value(HypothesisGraphConfig::default()).unwrap();
+    contradictory["max_nodes"] = serde_json::json!(64);
+    contradictory["max_edges"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<HypothesisGraphConfig>(contradictory).is_err());
+}
+
+#[test]
 fn hypothesis_graph_config_rejects_zero_and_contradictory_limits() {
     let mut config = valid_config(PheromoneBackendConfig::InMemory);
     config.runtime.require_durable_live_response = false;
@@ -174,6 +196,92 @@ fn hypothesis_graph_config_rejects_unbounded_reasoning_limits() {
     config.runtime.require_durable_live_response = false;
     config.hypothesis_graph.max_claims_per_tick = u16::MAX;
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn hypothesis_graph_deployment_limits_bind_scheduler_budget() {
+    use crate::hypothesis_graph::{GraphLogicalTime, SchedulerBudget};
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_work_units_per_tick = 10;
+    config.hypothesis_graph.max_claims_per_tick = 2;
+    let budget =
+        SchedulerBudget::new_with_config(&config.hypothesis_graph, GraphLogicalTime::new(1))
+            .unwrap();
+    assert!(budget.validate_with_limits(10, 2).is_ok());
+    assert!(budget.validate_with_limits(9, 2).is_err());
+    assert!(budget.validate_with_limits(10, 1).is_err());
+    assert!(budget.validate_for_config(&config.hypothesis_graph).is_ok());
+
+    let mut narrower = config.hypothesis_graph.clone();
+    narrower.max_work_units_per_tick = 9;
+    assert!(budget.validate_for_config(&narrower).is_err());
+    let mut application_budget = budget.clone();
+    let before = serde_json::to_vec(&application_budget).unwrap();
+    assert!(application_budget.admit(&narrower, 1, 1).is_err());
+    assert_eq!(serde_json::to_vec(&application_budget).unwrap(), before);
+
+    let wider_config = crate::config::HypothesisGraphConfig {
+        max_work_units_per_tick: 11,
+        max_claims_per_tick: 2,
+        ..Default::default()
+    };
+    let global_budget =
+        SchedulerBudget::new_with_config(&wider_config, GraphLogicalTime::new(1)).unwrap();
+    let encoded = serde_json::to_string(&global_budget).unwrap();
+    assert!(SchedulerBudget::deserialize_with_config(&encoded, &config.hypothesis_graph).is_err());
+    assert!(
+        global_budget
+            .validate_with_limits(
+                config.hypothesis_graph.max_work_units_per_tick,
+                config.hypothesis_graph.max_claims_per_tick,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn signed_default_ruleset_hash_and_signature_remain_verified() {
+    #[derive(Debug, Deserialize, Serialize)]
+    struct SignedRuleset {
+        statement: RulesetStatement,
+        signature: DetachedSignature,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct RulesetStatement {
+        version: u32,
+        issued_at_ms: i64,
+        config_file_name: String,
+        sha256: String,
+        size_bytes: u64,
+    }
+
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("swarm-core lives two levels below the repository root");
+    let config_path = repo_root.join("rulesets/default.yaml");
+    let sidecar_path = repo_root.join("rulesets/default.yaml.sig.json");
+    let config_bytes = fs::read(&config_path).unwrap();
+    let sidecar: SignedRuleset = serde_json::from_slice(&fs::read(&sidecar_path).unwrap()).unwrap();
+
+    assert_eq!(sidecar.statement.version, 1);
+    assert!(sidecar.statement.issued_at_ms > 0);
+    assert_eq!(sidecar.statement.config_file_name, "default.yaml");
+    assert_eq!(sidecar.statement.sha256, sha256_hex(&config_bytes));
+    assert_eq!(sidecar.statement.size_bytes, config_bytes.len() as u64);
+    assert_eq!(
+        sidecar.signature.key_id,
+        "854cb2ac6a51da46daf5bdbb0d5b34d9831e5aa60290b94ea2f810f5999f2521"
+    );
+    assert_eq!(
+        sidecar.signature.public_key_hex,
+        "25e6e1874dbaedbf86dd50afcadeb0067d973c35e88dbf6ea3c3dc30281753f5"
+    );
+    let statement_bytes = canonical_json_bytes(&sidecar.statement).unwrap();
+    verify_detached_signature(&statement_bytes, &sidecar.signature).unwrap();
 }
 
 #[test]

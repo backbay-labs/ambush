@@ -74,7 +74,7 @@ pub use hypothesis_graph_store::{
     ConfiguredHypothesisGraphStore, DurableTaskRecord, FileHypothesisGraphStore, GraphStoreError,
     GraphStoreRevision, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
     MemoryHypothesisGraphStore, TaskClaimResult, TaskFailure, TaskMutationResult, TaskStore,
-    TaskTerminalResult,
+    TaskTerminalResult, validate_task_logical_identity, validate_task_terminal_envelope,
 };
 pub use incident::{
     AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
@@ -99,8 +99,8 @@ pub use store::{
 };
 pub use strategy_memory::{
     FileStrategyMemoryStore, MemoryStrategyMemoryStore, RetrievedStrategyMemory,
-    StrategyMemoryAppendResult, StrategyMemoryRecord, StrategyMemoryStore,
-    StrategyMemoryStoreError,
+    StrategyMemoryAppendResult, StrategyMemoryExpiryRecord, StrategyMemoryRecord,
+    StrategyMemoryStore, StrategyMemoryStoreError, applicable_strategy_memory,
 };
 
 /// Policy step captured in an audit trail.

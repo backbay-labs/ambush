@@ -6,7 +6,7 @@ const DEFAULT_HYPOTHESIS_GRAPH_MAX_CLAIMS_PER_TICK: u16 = 128;
 
 /// Bounded collective-reasoning configuration. The feature is deliberately
 /// disabled by default so existing runtime paths retain their byte shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HypothesisGraphConfig {
     #[serde(default)]
@@ -45,6 +45,82 @@ pub struct HypothesisGraphConfig {
     pub max_work_units_per_tick: u32,
     #[serde(default = "default_hypothesis_graph_max_claims_per_tick")]
     pub max_claims_per_tick: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HypothesisGraphConfigWire {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_hypothesis_graph_max_nodes")]
+    max_nodes: usize,
+    #[serde(default = "default_hypothesis_graph_max_edges")]
+    max_edges: usize,
+    #[serde(default = "default_hypothesis_graph_max_evidence_bytes")]
+    max_evidence_bytes: usize,
+    #[serde(default = "default_hypothesis_graph_max_evidence_references_per_edge")]
+    max_evidence_references_per_edge: usize,
+    #[serde(default = "default_hypothesis_graph_max_hypotheses")]
+    max_hypotheses: usize,
+    #[serde(default = "default_hypothesis_graph_max_contradictions")]
+    max_contradictions: usize,
+    #[serde(default = "default_hypothesis_graph_max_decisions")]
+    max_decisions: usize,
+    #[serde(default = "default_hypothesis_graph_max_tasks")]
+    max_tasks: usize,
+    #[serde(default = "default_hypothesis_graph_max_lease_ms")]
+    max_lease_ms: u64,
+    #[serde(default = "default_hypothesis_graph_max_retries")]
+    max_retries: u16,
+    #[serde(default = "default_hypothesis_graph_max_memory_records")]
+    max_memory_records: usize,
+    #[serde(default = "default_hypothesis_graph_max_depth")]
+    max_graph_depth: usize,
+    #[serde(default = "default_hypothesis_graph_max_fan_out")]
+    max_graph_fan_out: usize,
+    #[serde(default = "default_hypothesis_graph_max_benchmark_work_units")]
+    max_benchmark_work_units: usize,
+    #[serde(default = "default_hypothesis_graph_max_memory_ttl_ticks")]
+    max_memory_ttl_ticks: u64,
+    #[serde(default = "default_hypothesis_graph_max_work_units_per_tick")]
+    max_work_units_per_tick: u32,
+    #[serde(default = "default_hypothesis_graph_max_claims_per_tick")]
+    max_claims_per_tick: u16,
+}
+
+impl<'de> Deserialize<'de> for HypothesisGraphConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = HypothesisGraphConfigWire::deserialize(deserializer)?;
+        let config = Self {
+            enabled: wire.enabled,
+            max_nodes: wire.max_nodes,
+            max_edges: wire.max_edges,
+            max_evidence_bytes: wire.max_evidence_bytes,
+            max_evidence_references_per_edge: wire.max_evidence_references_per_edge,
+            max_hypotheses: wire.max_hypotheses,
+            max_contradictions: wire.max_contradictions,
+            max_decisions: wire.max_decisions,
+            max_tasks: wire.max_tasks,
+            max_lease_ms: wire.max_lease_ms,
+            max_retries: wire.max_retries,
+            max_memory_records: wire.max_memory_records,
+            max_graph_depth: wire.max_graph_depth,
+            max_graph_fan_out: wire.max_graph_fan_out,
+            max_benchmark_work_units: wire.max_benchmark_work_units,
+            max_memory_ttl_ticks: wire.max_memory_ttl_ticks,
+            max_work_units_per_tick: wire.max_work_units_per_tick,
+            max_claims_per_tick: wire.max_claims_per_tick,
+        };
+        config
+            .resource_limits()
+            .validate()
+            .and(config.validate_reasoning_limits())
+            .map_err(serde::de::Error::custom)?;
+        Ok(config)
+    }
 }
 
 const fn default_hypothesis_graph_max_memory_ttl_ticks() -> u64 {

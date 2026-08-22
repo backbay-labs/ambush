@@ -18,6 +18,11 @@ pub mod telemetry;
 pub mod types;
 pub mod verdict;
 
+pub use hypothesis_graph::{
+    EventNode, EvidenceWitness, GraphLogicalTime, GraphPolicyContract, GraphPolicyMode,
+    HypothesisGraph, TypedEvidencePayload,
+};
+
 pub use agent::{
     AgentFinding, AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmEvent, SwarmMode,
     SwarmModeState,

@@ -108,9 +108,10 @@ impl ScheduledGraphTask {
 
 /// Deterministic ready queue.
 ///
-/// Ordering is exactly the core key ordering: logical ready time, task kind,
-/// stable priority, then task ID.  A task ID can be scheduled only once; an
-/// exact retry is idempotent, while a retry with a different key fails closed.
+/// Ordering is exactly the core key ordering: logical ready time ascending,
+/// priority descending, task-kind dispatch rank, then task ID.  A task ID can
+/// be scheduled only once; an exact retry is idempotent, while a retry with a
+/// different key fails closed.
 #[derive(Debug, Clone)]
 pub struct DeterministicScheduler {
     ready: BTreeSet<GraphSchedulerKey>,
@@ -225,11 +226,16 @@ impl DeterministicScheduler {
         now: GraphLogicalTime,
     ) -> Result<Option<GraphSchedulerKey>, GraphAdmissionError> {
         now.validate()?;
-        if self.ready.first().is_some_and(|key| key.ready_at <= now) {
-            Ok(self.pop_next())
-        } else {
-            Ok(None)
+        let Some(next) = self.ready.first() else {
+            return Ok(None);
+        };
+        // `GraphSchedulerKey` orders by logical ready time first.  Inspect the
+        // borrowed key before invoking the consuming primitive so a future
+        // item remains in every canonical queue/index view byte-for-byte.
+        if next.ready_at > now {
+            return Ok(None);
         }
+        Ok(self.pop_next())
     }
 
     /// Borrow the next task without changing scheduler state.

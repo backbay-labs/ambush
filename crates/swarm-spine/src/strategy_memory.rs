@@ -26,8 +26,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
-    EvidenceId, GraphAdmissionError, GraphId, GraphResourceLimits, HypothesisId, StrategyMemory,
+    EvidenceId, GraphAdmissionError, GraphId, GraphLogicalTime, GraphResourceLimits, HypothesisId,
+    MAX_STRATEGY_MEMORY_TTL_TICKS, StrategyMemory, StrategyMemoryExpiryEnvelope,
     StrategyMemoryMatch,
 };
 use swarm_crypto::{
@@ -41,6 +43,49 @@ pub const STRATEGY_MEMORY_LOCK_FILE: &str = "state.lock";
 pub const STRATEGY_MEMORY_ANCHOR_FILE: &str = "state.head";
 pub const STRATEGY_MEMORY_HIGH_WATER_FILE: &str = GRAPH_STORE_HIGH_WATER_FILE;
 pub const STRATEGY_MEMORY_HIGH_WATER_TAIL_FILE: &str = GRAPH_STORE_HIGH_WATER_TAIL_FILE;
+
+fn validate_max_memory_ttl_ticks(
+    max_memory_ttl_ticks: u64,
+) -> Result<(), StrategyMemoryStoreError> {
+    if max_memory_ttl_ticks == 0 || max_memory_ttl_ticks > MAX_STRATEGY_MEMORY_TTL_TICKS {
+        return Err(StrategyMemoryStoreError::Admission(
+            GraphAdmissionError::InvalidLimit {
+                field: "max_memory_ttl_ticks".to_string(),
+                reason: format!("must be between 1 and {MAX_STRATEGY_MEMORY_TTL_TICKS}"),
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn validate_expiry_for(
+    memory: &StrategyMemory,
+    envelope: &StrategyMemoryExpiryEnvelope,
+    max_memory_ttl_ticks: u64,
+) -> Result<(), StrategyMemoryStoreError> {
+    memory
+        .validate()
+        .map_err(StrategyMemoryStoreError::Admission)?;
+    envelope
+        .validate_with_limit(max_memory_ttl_ticks)
+        .map_err(StrategyMemoryStoreError::Admission)?;
+    let memory_digest = canonical_json_bytes(memory)
+        .map(|bytes| sha256_hex(&bytes))
+        .map_err(|error| StrategyMemoryStoreError::Canonicalization {
+            reason: error.to_string(),
+        })?;
+    if envelope.memory_id != memory.memory_id || envelope.memory_digest != memory_digest {
+        return Err(StrategyMemoryStoreError::InvalidState {
+            reason: "memory expiry sidecar does not bind its memory record".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// The expiry envelope is deliberately kept out of `StrategyMemoryRecord` so
+/// the historical memory wire bytes remain unchanged.  It is persisted in a
+/// state-owned sidecar map instead.
+pub type StrategyMemoryExpiryRecord = StrategyMemoryExpiryEnvelope;
 
 fn strategy_memory_stream_id(path: &Path) -> String {
     format!(
@@ -86,6 +131,16 @@ struct StrategyMemoryState {
     predecessor_digest: Option<String>,
     memories: BTreeMap<String, StrategyMemoryRecord>,
     order: Vec<String>,
+    /// Versioned logical-time sidecars keyed by the unchanged memory ID.
+    /// Missing entries are legacy/quarantined and are never returned by the
+    /// logical-time retrieval path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    expiry_envelopes: BTreeMap<String, StrategyMemoryExpiryEnvelope>,
+    /// The deployment TTL ceiling is absent from historical Plan 03 state.
+    /// Keeping it optional lets the exact legacy canonical bytes verify before
+    /// an explicit append migrates the state to the configured ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_memory_ttl_ticks: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,7 +171,7 @@ struct StrategyMemoryStateMaterial<'a> {
 }
 
 impl StrategyMemoryState {
-    fn empty(limits: GraphResourceLimits) -> Self {
+    fn empty(limits: GraphResourceLimits, max_memory_ttl_ticks: u64) -> Self {
         Self {
             schema_version: STRATEGY_MEMORY_STORE_SCHEMA_VERSION,
             limits,
@@ -124,6 +179,8 @@ impl StrategyMemoryState {
             predecessor_digest: None,
             memories: BTreeMap::new(),
             order: Vec::new(),
+            expiry_envelopes: BTreeMap::new(),
+            max_memory_ttl_ticks: Some(max_memory_ttl_ticks),
         }
     }
 
@@ -154,6 +211,7 @@ impl StrategyMemoryState {
         &self,
         limits: &GraphResourceLimits,
         expected_signer: &swarm_core::types::AgentId,
+        max_memory_ttl_ticks: u64,
     ) -> Result<(), StrategyMemoryStoreError> {
         if self.schema_version != STRATEGY_MEMORY_STORE_SCHEMA_VERSION {
             return Err(StrategyMemoryStoreError::UnsupportedSchema(
@@ -171,6 +229,15 @@ impl StrategyMemoryState {
                 reason: "memory resource limits do not match the configured store limits"
                     .to_string(),
             });
+        }
+        validate_max_memory_ttl_ticks(max_memory_ttl_ticks)?;
+        if let Some(persisted) = self.max_memory_ttl_ticks {
+            validate_max_memory_ttl_ticks(persisted)?;
+            if persisted != max_memory_ttl_ticks {
+                return Err(StrategyMemoryStoreError::InvalidState {
+                    reason: "configured memory TTL does not match persisted TTL".to_string(),
+                });
+            }
         }
         if self.generation == 0 {
             if self.predecessor_digest.is_some() || !self.order.is_empty() {
@@ -194,6 +261,11 @@ impl StrategyMemoryState {
         if self.memories.len() != self.order.len() {
             return Err(StrategyMemoryStoreError::InvalidState {
                 reason: "memory index and append order have different lengths".to_string(),
+            });
+        }
+        if self.expiry_envelopes.len() > self.memories.len() {
+            return Err(StrategyMemoryStoreError::InvalidState {
+                reason: "memory expiry sidecar has more entries than memory records".to_string(),
             });
         }
         let mut previous_digest = None;
@@ -225,6 +297,19 @@ impl StrategyMemoryState {
                 });
             }
             previous_digest = Some(record.digest.clone());
+        }
+        for (memory_id, envelope) in &self.expiry_envelopes {
+            let memory = self.memories.get(memory_id).ok_or_else(|| {
+                StrategyMemoryStoreError::InvalidState {
+                    reason: "memory expiry sidecar references a missing memory".to_string(),
+                }
+            })?;
+            if envelope.memory_id.as_str() != memory_id {
+                return Err(StrategyMemoryStoreError::InvalidState {
+                    reason: "memory expiry sidecar key does not match memory ID".to_string(),
+                });
+            }
+            validate_expiry_for(&memory.memory, envelope, max_memory_ttl_ticks)?;
         }
         if self.generation
             != u64::try_from(self.order.len()).map_err(|_| {
@@ -343,13 +428,14 @@ impl StrategyMemoryRecord {
     }
 }
 
-fn sign_state(
+fn sign_state_with_limit(
     state: StrategyMemoryState,
     signer: &Keypair,
     limits: &GraphResourceLimits,
+    max_memory_ttl_ticks: u64,
 ) -> Result<SignedStrategyMemoryState, StrategyMemoryStoreError> {
     let signer_id = swarm_core::types::AgentId::from_public_key_hex(&signer.public_key().to_hex());
-    state.validate(limits, &signer_id)?;
+    state.validate(limits, &signer_id, max_memory_ttl_ticks)?;
     let digest = state.digest()?;
     let material = StrategyMemoryStateMaterial {
         schema_version: STRATEGY_MEMORY_STORE_SCHEMA_VERSION,
@@ -396,12 +482,15 @@ fn sign_state(
     Ok(envelope)
 }
 
-fn verify_state(
+fn verify_state_with_limit(
     envelope: &SignedStrategyMemoryState,
     expected_signer: &swarm_core::types::AgentId,
     limits: &GraphResourceLimits,
+    max_memory_ttl_ticks: u64,
 ) -> Result<(), StrategyMemoryStoreError> {
-    envelope.state.validate(limits, expected_signer)?;
+    envelope
+        .state
+        .validate(limits, expected_signer, max_memory_ttl_ticks)?;
     let digest = envelope.state.digest()?;
     if digest != envelope.digest {
         return Err(StrategyMemoryStoreError::DigestMismatch {
@@ -492,6 +581,24 @@ pub trait StrategyMemoryStore: Send + Sync {
     ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
         self.append(memory)
     }
+    /// Append a memory together with its signed logical-time expiry sidecar.
+    /// The historical `append` method remains available for legacy records;
+    /// those records are quarantined from priority retrieval until an expiry
+    /// envelope is explicitly supplied.
+    fn append_at(
+        &self,
+        memory: StrategyMemory,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+    ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError>;
+    fn append_with_expiry(
+        &self,
+        memory: StrategyMemory,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+    ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
+        self.append_at(memory, created_at, ttl_ticks)
+    }
     fn load(
         &self,
         memory_id: &swarm_core::hypothesis_graph::MemoryId,
@@ -502,6 +609,14 @@ pub trait StrategyMemoryStore: Send + Sync {
         graph_id: &GraphId,
         hypothesis_id: &HypothesisId,
         evidence_ids: &BTreeSet<EvidenceId>,
+        limit: usize,
+    ) -> Result<Vec<RetrievedStrategyMemory>, StrategyMemoryStoreError>;
+    fn retrieve_at(
+        &self,
+        graph_id: &GraphId,
+        hypothesis_id: &HypothesisId,
+        evidence_ids: &BTreeSet<EvidenceId>,
+        now: GraphLogicalTime,
         limit: usize,
     ) -> Result<Vec<RetrievedStrategyMemory>, StrategyMemoryStoreError>;
 }
@@ -516,16 +631,45 @@ fn relevance(memory: &StrategyMemory, evidence_ids: &BTreeSet<EvidenceId>) -> u1
     u16::try_from((overlap.saturating_add(base)).min(10_000)).unwrap_or(10_000)
 }
 
+/// Return only valid, logically applicable expiry sidecars in canonical ID
+/// order.  Invalid envelopes are omitted so a malformed or forged sidecar
+/// cannot influence priority; callers still bind each returned envelope to its
+/// memory record before using it.
+pub fn applicable_strategy_memory(
+    memories: &[StrategyMemoryExpiryEnvelope],
+    now: GraphLogicalTime,
+) -> Vec<&StrategyMemoryExpiryEnvelope> {
+    if now.validate().is_err() {
+        return Vec::new();
+    }
+    let mut applicable = memories
+        .iter()
+        .filter(|envelope| envelope.is_applicable_at_with_limit(now, MAX_STRATEGY_MEMORY_TTL_TICKS))
+        .collect::<Vec<_>>();
+    applicable.sort_by(|left, right| left.memory_id.cmp(&right.memory_id));
+    applicable
+}
+
 fn retrieve_from_state(
     state: &StrategyMemoryState,
     graph_id: &GraphId,
     hypothesis_id: &HypothesisId,
     evidence_ids: &BTreeSet<EvidenceId>,
+    now: GraphLogicalTime,
     limit: usize,
+    max_memory_ttl_ticks: u64,
 ) -> Result<Vec<RetrievedStrategyMemory>, StrategyMemoryStoreError> {
     if limit == 0 || limit > 256 {
         return Err(StrategyMemoryStoreError::InvalidLimit(256));
     }
+    now.validate()
+        .map_err(StrategyMemoryStoreError::Admission)?;
+    let active_ids = state
+        .expiry_envelopes
+        .values()
+        .filter(|envelope| envelope.is_applicable_at_with_limit(now, max_memory_ttl_ticks))
+        .map(|envelope| envelope.memory_id.as_str())
+        .collect::<BTreeSet<_>>();
     let ordering = |left: &(&StrategyMemoryRecord, StrategyMemoryMatch),
                     right: &(&StrategyMemoryRecord, StrategyMemoryMatch)| {
         right
@@ -542,6 +686,7 @@ fn retrieve_from_state(
     for record in state
         .memories
         .values()
+        .filter(|record| active_ids.contains(record.memory.memory_id.as_str()))
         .filter(|record| record.memory.applicable_to(graph_id, hypothesis_id))
     {
         let score = relevance(&record.memory, evidence_ids);
@@ -577,6 +722,7 @@ pub struct MemoryStrategyMemoryStore {
     inner: Arc<RwLock<SignedStrategyMemoryState>>,
     signer: Keypair,
     limits: GraphResourceLimits,
+    max_memory_ttl_ticks: u64,
     signer_id: swarm_core::types::AgentId,
 }
 
@@ -585,15 +731,51 @@ impl MemoryStrategyMemoryStore {
         signer: Keypair,
         limits: GraphResourceLimits,
     ) -> Result<Self, StrategyMemoryStoreError> {
+        Self::new_with_max_memory_ttl(signer, limits, MAX_STRATEGY_MEMORY_TTL_TICKS)
+    }
+
+    pub fn new_with_max_memory_ttl(
+        signer: Keypair,
+        limits: GraphResourceLimits,
+        max_memory_ttl_ticks: u64,
+    ) -> Result<Self, StrategyMemoryStoreError> {
+        validate_max_memory_ttl_ticks(max_memory_ttl_ticks)?;
         let signer_id =
             swarm_core::types::AgentId::from_public_key_hex(&signer.public_key().to_hex());
-        let state = sign_state(StrategyMemoryState::empty(limits.clone()), &signer, &limits)?;
+        let state = sign_state_with_limit(
+            StrategyMemoryState::empty(limits.clone(), max_memory_ttl_ticks),
+            &signer,
+            &limits,
+            max_memory_ttl_ticks,
+        )?;
         Ok(Self {
             inner: Arc::new(RwLock::new(state)),
             signer,
             limits,
+            max_memory_ttl_ticks,
             signer_id,
         })
+    }
+
+    pub fn new_with_config(
+        signer: Keypair,
+        config: &HypothesisGraphConfig,
+    ) -> Result<Self, StrategyMemoryStoreError> {
+        config
+            .validate_reasoning_limits()
+            .map_err(StrategyMemoryStoreError::Admission)?;
+        Self::new_with_max_memory_ttl(
+            signer,
+            config.resource_limits(),
+            config.max_memory_ttl_ticks,
+        )
+    }
+
+    pub fn with_config(
+        signer: Keypair,
+        config: &HypothesisGraphConfig,
+    ) -> Result<Self, StrategyMemoryStoreError> {
+        Self::new_with_config(signer, config)
     }
 
     pub fn with_defaults(signer: Keypair) -> Result<Self, StrategyMemoryStoreError> {
@@ -605,21 +787,44 @@ impl MemoryStrategyMemoryStore {
             .inner
             .read()
             .map_err(|_| StrategyMemoryStoreError::PoisonedLock)?;
-        verify_state(&guard, &self.signer_id, &self.limits)?;
+        verify_state_with_limit(
+            &guard,
+            &self.signer_id,
+            &self.limits,
+            self.max_memory_ttl_ticks,
+        )?;
         Ok(guard.clone())
     }
 
     fn append_inner(
         &self,
         memory: StrategyMemory,
+        expiry: Option<(GraphLogicalTime, u64)>,
     ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
         let mut guard = self
             .inner
             .write()
             .map_err(|_| StrategyMemoryStoreError::PoisonedLock)?;
-        verify_state(&guard, &self.signer_id, &self.limits)?;
+        verify_state_with_limit(
+            &guard,
+            &self.signer_id,
+            &self.limits,
+            self.max_memory_ttl_ticks,
+        )?;
         if let Some(existing) = guard.state.memories.get(memory.memory_id.as_str()) {
             if existing.memory == memory {
+                if expiry.is_some()
+                    && !guard
+                        .state
+                        .expiry_envelopes
+                        .contains_key(memory.memory_id.as_str())
+                {
+                    return Err(StrategyMemoryStoreError::InvalidState {
+                        reason:
+                            "legacy memory has no expiry sidecar; explicit append_at is quarantined"
+                                .to_string(),
+                    });
+                }
                 return Ok(StrategyMemoryAppendResult {
                     generation: existing.generation,
                     record: existing.clone(),
@@ -649,12 +854,25 @@ impl MemoryStrategyMemoryStore {
                 .map(|record| record.digest.clone())
         });
         let state_predecessor_digest = guard.state.digest()?;
+        let expiry_envelope = expiry
+            .map(|(created_at, ttl_ticks)| {
+                StrategyMemoryExpiryEnvelope::new_with_limit(
+                    &memory,
+                    created_at,
+                    ttl_ticks,
+                    self.max_memory_ttl_ticks,
+                    &self.signer,
+                )
+                .map_err(StrategyMemoryStoreError::Admission)
+            })
+            .transpose()?;
         let record =
             StrategyMemoryRecord::new(memory, generation, predecessor_digest, &self.signer)?;
         // Build and sign an independent candidate before publishing it.  A
         // size/signing failure must leave the locked state byte-for-byte
         // unchanged, matching the file backend's fail-closed admission.
         let mut next_state = guard.state.clone();
+        next_state.max_memory_ttl_ticks = Some(self.max_memory_ttl_ticks);
         next_state.generation = generation;
         next_state.predecessor_digest = Some(state_predecessor_digest);
         next_state
@@ -663,7 +881,17 @@ impl MemoryStrategyMemoryStore {
         next_state
             .memories
             .insert(record.memory.memory_id.as_str().to_string(), record.clone());
-        let next = sign_state(next_state, &self.signer, &self.limits)?;
+        if let Some(envelope) = expiry_envelope {
+            next_state
+                .expiry_envelopes
+                .insert(record.memory.memory_id.as_str().to_string(), envelope);
+        }
+        let next = sign_state_with_limit(
+            next_state,
+            &self.signer,
+            &self.limits,
+            self.max_memory_ttl_ticks,
+        )?;
         *guard = next;
         Ok(StrategyMemoryAppendResult {
             generation,
@@ -686,7 +914,16 @@ impl StrategyMemoryStore for MemoryStrategyMemoryStore {
         &self,
         memory: StrategyMemory,
     ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
-        self.append_inner(memory)
+        self.append_inner(memory, None)
+    }
+
+    fn append_at(
+        &self,
+        memory: StrategyMemory,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+    ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
+        self.append_inner(memory, Some((created_at, ttl_ticks)))
     }
 
     fn load(
@@ -720,12 +957,31 @@ impl StrategyMemoryStore for MemoryStrategyMemoryStore {
         evidence_ids: &BTreeSet<EvidenceId>,
         limit: usize,
     ) -> Result<Vec<RetrievedStrategyMemory>, StrategyMemoryStoreError> {
+        self.retrieve_at(
+            graph_id,
+            hypothesis_id,
+            evidence_ids,
+            GraphLogicalTime::new(0),
+            limit,
+        )
+    }
+
+    fn retrieve_at(
+        &self,
+        graph_id: &GraphId,
+        hypothesis_id: &HypothesisId,
+        evidence_ids: &BTreeSet<EvidenceId>,
+        now: GraphLogicalTime,
+        limit: usize,
+    ) -> Result<Vec<RetrievedStrategyMemory>, StrategyMemoryStoreError> {
         retrieve_from_state(
             &self.read_state()?.state,
             graph_id,
             hypothesis_id,
             evidence_ids,
+            now,
             limit,
+            self.max_memory_ttl_ticks,
         )
     }
 }
@@ -743,6 +999,7 @@ pub struct FileStrategyMemoryStore {
     mutation_lock: Mutex<()>,
     signer: Keypair,
     limits: GraphResourceLimits,
+    max_memory_ttl_ticks: u64,
     signer_id: swarm_core::types::AgentId,
 }
 
@@ -752,7 +1009,16 @@ impl FileStrategyMemoryStore {
         signer: Keypair,
         limits: GraphResourceLimits,
     ) -> Result<Self, StrategyMemoryStoreError> {
-        Self::open_internal(path.as_ref(), signer, limits)
+        Self::open_internal(path.as_ref(), signer, limits, MAX_STRATEGY_MEMORY_TTL_TICKS)
+    }
+
+    pub fn new_with_max_memory_ttl(
+        path: impl AsRef<Path>,
+        signer: Keypair,
+        limits: GraphResourceLimits,
+        max_memory_ttl_ticks: u64,
+    ) -> Result<Self, StrategyMemoryStoreError> {
+        Self::open_internal(path.as_ref(), signer, limits, max_memory_ttl_ticks)
     }
 
     pub fn open_with_signer(
@@ -760,14 +1026,49 @@ impl FileStrategyMemoryStore {
         signer: Keypair,
         limits: GraphResourceLimits,
     ) -> Result<Self, StrategyMemoryStoreError> {
-        Self::open_internal(path.as_ref(), signer, limits)
+        Self::open_internal(path.as_ref(), signer, limits, MAX_STRATEGY_MEMORY_TTL_TICKS)
+    }
+
+    pub fn open_with_signer_and_max_memory_ttl(
+        path: impl AsRef<Path>,
+        signer: Keypair,
+        limits: GraphResourceLimits,
+        max_memory_ttl_ticks: u64,
+    ) -> Result<Self, StrategyMemoryStoreError> {
+        Self::open_internal(path.as_ref(), signer, limits, max_memory_ttl_ticks)
+    }
+
+    pub fn new_with_config(
+        path: impl AsRef<Path>,
+        signer: Keypair,
+        config: &HypothesisGraphConfig,
+    ) -> Result<Self, StrategyMemoryStoreError> {
+        config
+            .validate_reasoning_limits()
+            .map_err(StrategyMemoryStoreError::Admission)?;
+        Self::open_internal(
+            path.as_ref(),
+            signer,
+            config.resource_limits(),
+            config.max_memory_ttl_ticks,
+        )
+    }
+
+    pub fn open_with_config(
+        path: impl AsRef<Path>,
+        signer: Keypair,
+        config: &HypothesisGraphConfig,
+    ) -> Result<Self, StrategyMemoryStoreError> {
+        Self::new_with_config(path, signer, config)
     }
 
     fn open_internal(
         path: &Path,
         signer: Keypair,
         limits: GraphResourceLimits,
+        max_memory_ttl_ticks: u64,
     ) -> Result<Self, StrategyMemoryStoreError> {
+        validate_max_memory_ttl_ticks(max_memory_ttl_ticks)?;
         prepare_private_store_root(path).map_err(StrategyMemoryStoreError::GraphPersistence)?;
         let lock_path = path.join(STRATEGY_MEMORY_LOCK_FILE);
         let lock_existed = std::fs::symlink_metadata(&lock_path).is_ok();
@@ -824,7 +1125,7 @@ impl FileStrategyMemoryStore {
                     reason: "configured memory limits do not match persisted limits".to_string(),
                 });
             }
-            verify_state(&state, &signer_id, &limits)?;
+            verify_state_with_limit(&state, &signer_id, &limits, max_memory_ttl_ticks)?;
             let mut state_revision = state.state.revision()?;
             // Resolve pending rollback before ordinary tuple validation.  The
             // rollback pointer makes each replacement restart-safe.
@@ -867,7 +1168,7 @@ impl FileStrategyMemoryStore {
                 state = lock
                     .read_json(&state_path)
                     .map_err(StrategyMemoryStoreError::GraphPersistence)?;
-                verify_state(&state, &signer_id, &limits)?;
+                verify_state_with_limit(&state, &signer_id, &limits, max_memory_ttl_ticks)?;
                 state_revision = state.state.revision()?;
                 head = lock
                     .read_json(&anchor_path)
@@ -958,7 +1259,12 @@ impl FileStrategyMemoryStore {
                     GraphStoreError::MissingState { path: state_path },
                 ));
             }
-            let state = sign_state(StrategyMemoryState::empty(limits.clone()), &signer, &limits)?;
+            let state = sign_state_with_limit(
+                StrategyMemoryState::empty(limits.clone(), max_memory_ttl_ticks),
+                &signer,
+                &limits,
+                max_memory_ttl_ticks,
+            )?;
             let head = sign_state_head(
                 STRATEGY_MEMORY_STATE_KIND,
                 &stream_id,
@@ -1009,6 +1315,7 @@ impl FileStrategyMemoryStore {
             mutation_lock: Mutex::new(()),
             signer,
             limits,
+            max_memory_ttl_ticks,
             signer_id,
         })
     }
@@ -1072,7 +1379,12 @@ impl FileStrategyMemoryStore {
             .lock
             .read_json(&self.state_path)
             .map_err(StrategyMemoryStoreError::GraphPersistence)?;
-        verify_state(&state, &self.signer_id, &self.limits)?;
+        verify_state_with_limit(
+            &state,
+            &self.signer_id,
+            &self.limits,
+            self.max_memory_ttl_ticks,
+        )?;
         let mut state_revision = state.state.revision()?;
         let stream_id = strategy_memory_stream_id(&self.root);
         // Process a pending rollback before loading/validating the ordinary
@@ -1122,7 +1434,12 @@ impl FileStrategyMemoryStore {
                 .lock
                 .read_json(&self.state_path)
                 .map_err(StrategyMemoryStoreError::GraphPersistence)?;
-            verify_state(&state, &self.signer_id, &self.limits)?;
+            verify_state_with_limit(
+                &state,
+                &self.signer_id,
+                &self.limits,
+                self.max_memory_ttl_ticks,
+            )?;
             state_revision = state.state.revision()?;
             head = self
                 .lock
@@ -1214,10 +1531,11 @@ impl FileStrategyMemoryStore {
     }
 }
 
-impl StrategyMemoryStore for FileStrategyMemoryStore {
-    fn append(
+impl FileStrategyMemoryStore {
+    fn append_inner(
         &self,
         memory: StrategyMemory,
+        expiry: Option<(GraphLogicalTime, u64)>,
     ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
         let _mutation_guard = self
             .mutation_lock
@@ -1226,6 +1544,18 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
         let current = self.read_state()?;
         if let Some(existing) = current.state.memories.get(memory.memory_id.as_str()) {
             if existing.memory == memory {
+                if expiry.is_some()
+                    && !current
+                        .state
+                        .expiry_envelopes
+                        .contains_key(memory.memory_id.as_str())
+                {
+                    return Err(StrategyMemoryStoreError::InvalidState {
+                        reason:
+                            "legacy memory has no expiry sidecar; explicit append_at is quarantined"
+                                .to_string(),
+                    });
+                }
                 return Ok(StrategyMemoryAppendResult {
                     generation: existing.generation,
                     record: existing.clone(),
@@ -1255,10 +1585,23 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
                 .map(|record| record.digest.clone())
         });
         let state_predecessor_digest = current.state.digest()?;
+        let expiry_envelope = expiry
+            .map(|(created_at, ttl_ticks)| {
+                StrategyMemoryExpiryEnvelope::new_with_limit(
+                    &memory,
+                    created_at,
+                    ttl_ticks,
+                    self.max_memory_ttl_ticks,
+                    &self.signer,
+                )
+                .map_err(StrategyMemoryStoreError::Admission)
+            })
+            .transpose()?;
         let record =
             StrategyMemoryRecord::new(memory, generation, record_predecessor_digest, &self.signer)?;
         let base_state = current.clone();
         let mut next_state = current.state;
+        next_state.max_memory_ttl_ticks = Some(self.max_memory_ttl_ticks);
         next_state.generation = generation;
         next_state.predecessor_digest = Some(state_predecessor_digest);
         next_state
@@ -1267,7 +1610,17 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
         next_state
             .memories
             .insert(record.memory.memory_id.as_str().to_string(), record.clone());
-        let next = sign_state(next_state, &self.signer, &self.limits)?;
+        if let Some(envelope) = expiry_envelope {
+            next_state
+                .expiry_envelopes
+                .insert(record.memory.memory_id.as_str().to_string(), envelope);
+        }
+        let next = sign_state_with_limit(
+            next_state,
+            &self.signer,
+            &self.limits,
+            self.max_memory_ttl_ticks,
+        )?;
         let external_lock = self
             .monotonic_anchor
             .acquire_lock()
@@ -1445,6 +1798,24 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
             idempotent: false,
         })
     }
+}
+
+impl StrategyMemoryStore for FileStrategyMemoryStore {
+    fn append(
+        &self,
+        memory: StrategyMemory,
+    ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
+        self.append_inner(memory, None)
+    }
+
+    fn append_at(
+        &self,
+        memory: StrategyMemory,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+    ) -> Result<StrategyMemoryAppendResult, StrategyMemoryStoreError> {
+        self.append_inner(memory, Some((created_at, ttl_ticks)))
+    }
 
     fn load(
         &self,
@@ -1481,12 +1852,31 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
         evidence_ids: &BTreeSet<EvidenceId>,
         limit: usize,
     ) -> Result<Vec<RetrievedStrategyMemory>, StrategyMemoryStoreError> {
+        self.retrieve_at(
+            graph_id,
+            hypothesis_id,
+            evidence_ids,
+            GraphLogicalTime::new(0),
+            limit,
+        )
+    }
+
+    fn retrieve_at(
+        &self,
+        graph_id: &GraphId,
+        hypothesis_id: &HypothesisId,
+        evidence_ids: &BTreeSet<EvidenceId>,
+        now: GraphLogicalTime,
+        limit: usize,
+    ) -> Result<Vec<RetrievedStrategyMemory>, StrategyMemoryStoreError> {
         retrieve_from_state(
             &self.read_state()?.state,
             graph_id,
             hypothesis_id,
             evidence_ids,
+            now,
             limit,
+            self.max_memory_ttl_ticks,
         )
     }
 }
@@ -1527,6 +1917,36 @@ mod tests {
         .unwrap()
         .signed_with(&key, GraphProducerRole::Hunter, format!("hunter-{suffix}"))
         .unwrap()
+    }
+
+    #[derive(serde::Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct LegacyStrategyMemoryStateFixture {
+        schema_version: u32,
+        limits: GraphResourceLimits,
+        generation: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        predecessor_digest: Option<String>,
+        memories: BTreeMap<String, StrategyMemoryRecord>,
+        order: Vec<String>,
+    }
+
+    #[derive(serde::Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct LegacyStrategyMemoryStateMaterial<'a> {
+        schema_version: u32,
+        state_kind: &'static str,
+        generation: u64,
+        digest: &'a str,
+        state: &'a LegacyStrategyMemoryStateFixture,
+    }
+
+    #[derive(serde::Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct LegacySignedStrategyMemoryStateFixture {
+        state: LegacyStrategyMemoryStateFixture,
+        digest: String,
+        signature: DetachedSignature,
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -1570,7 +1990,13 @@ mod tests {
         next_state
             .memories
             .insert(record.memory.memory_id.as_str().to_string(), record);
-        let signed = sign_state(next_state, &store.signer, &store.limits).unwrap();
+        let signed = sign_state_with_limit(
+            next_state,
+            &store.signer,
+            &store.limits,
+            store.max_memory_ttl_ticks,
+        )
+        .unwrap();
         serde_json::to_vec(&signed).unwrap()
     }
 
@@ -1598,16 +2024,21 @@ mod tests {
     fn memory_is_signed_deduplicated_and_retrieved_deterministically() {
         let store = MemoryStrategyMemoryStore::with_defaults(signer(1)).unwrap();
         let first = memory(2, "one");
-        let inserted = store.append(first.clone()).unwrap();
+        let inserted = store
+            .append_at(first.clone(), GraphLogicalTime::new(100), 100)
+            .unwrap();
         assert!(!inserted.idempotent);
-        let duplicate = store.append(first).unwrap();
+        let duplicate = store
+            .append_at(first, GraphLogicalTime::new(100), 100)
+            .unwrap();
         assert!(duplicate.idempotent);
         assert_eq!(inserted.record, duplicate.record);
         let matches = store
-            .retrieve(
+            .retrieve_at(
                 &GraphId::new("graph:test"),
                 &HypothesisId::new("hypothesis:selected"),
                 &BTreeSet::from([EvidenceId::new("evidence:one")]),
+                GraphLogicalTime::new(150),
                 8,
             )
             .unwrap();
@@ -1615,15 +2046,177 @@ mod tests {
         assert_eq!(matches[0].matched.relevance_basis_points, 8_500);
         assert!(
             store
-                .retrieve(
+                .retrieve_at(
                     &GraphId::new("graph:other"),
                     &HypothesisId::new("hypothesis:selected"),
                     &BTreeSet::new(),
+                    GraphLogicalTime::new(150),
                     8,
                 )
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn legacy_signed_state_reopens_without_rewriting_its_authenticated_bytes() {
+        let path = temp_dir("legacy-byte-exact");
+        let key = signer(27);
+        let limits = GraphResourceLimits::default();
+        let store = FileStrategyMemoryStore::new(&path, key.clone(), limits.clone()).unwrap();
+        let state_path = store.state_path().to_path_buf();
+        drop(store);
+
+        // Construct the exact Plan 03 wire shape: no expiry sidecar and no
+        // deployment TTL field.  The fixture is signed independently instead
+        // of being produced by the current serializer, so a new field cannot
+        // accidentally hide a compatibility regression.
+        let legacy_empty = LegacyStrategyMemoryStateFixture {
+            schema_version: STRATEGY_MEMORY_STORE_SCHEMA_VERSION,
+            limits: limits.clone(),
+            generation: 0,
+            predecessor_digest: None,
+            memories: BTreeMap::new(),
+            order: Vec::new(),
+        };
+        let legacy_empty_digest = sha256_hex(&canonical_json_bytes(&legacy_empty).unwrap());
+        let legacy_memory = memory(28, "legacy-byte-exact");
+        let legacy_record = StrategyMemoryRecord::new(legacy_memory, 1, None, &key).unwrap();
+        let legacy_state = LegacyStrategyMemoryStateFixture {
+            schema_version: STRATEGY_MEMORY_STORE_SCHEMA_VERSION,
+            limits,
+            generation: 1,
+            predecessor_digest: Some(legacy_empty_digest),
+            memories: BTreeMap::from([(
+                legacy_record.memory.memory_id.as_str().to_string(),
+                legacy_record.clone(),
+            )]),
+            order: vec![legacy_record.memory.memory_id.as_str().to_string()],
+        };
+        let legacy_digest = sha256_hex(&canonical_json_bytes(&legacy_state).unwrap());
+        let material = LegacyStrategyMemoryStateMaterial {
+            schema_version: STRATEGY_MEMORY_STORE_SCHEMA_VERSION,
+            state_kind: STRATEGY_MEMORY_STATE_KIND,
+            generation: legacy_state.generation,
+            digest: &legacy_digest,
+            state: &legacy_state,
+        };
+        let signature_bytes = canonical_json_bytes(&material).unwrap();
+        let signed = LegacySignedStrategyMemoryStateFixture {
+            state: legacy_state,
+            digest: legacy_digest.clone(),
+            signature: DetachedSignature {
+                algorithm: "ed25519".to_string(),
+                key_id: sha256_hex(key.public_key().as_bytes()),
+                public_key_hex: key.public_key().to_hex(),
+                signature_hex: key.sign(&signature_bytes).to_hex(),
+            },
+        };
+        let legacy_bytes = serde_json::to_vec(&signed).unwrap();
+
+        // Rebuild the sibling signed head/high-water/journal tuple against
+        // the legacy digest so reopening exercises the real file protocol.
+        let old_anchor = DurableMonotonicAnchor::new(&path, STRATEGY_MEMORY_STATE_KIND).unwrap();
+        let anchor_namespace = old_anchor.path().parent().unwrap().to_path_buf();
+        drop(old_anchor);
+        fs::remove_dir_all(anchor_namespace).unwrap();
+        let root_lock = DurableFileLock::acquire(&path.join(STRATEGY_MEMORY_LOCK_FILE)).unwrap();
+        let stream_id = strategy_memory_stream_id(&path);
+        let legacy_revision = GraphStoreRevision::new(1, legacy_digest.clone());
+        let head = sign_state_head(
+            STRATEGY_MEMORY_STATE_KIND,
+            &stream_id,
+            &legacy_revision,
+            root_lock.generation(),
+            &root_lock.identity_token(),
+            &key,
+        )
+        .unwrap();
+        root_lock
+            .atomic_write_bytes(&state_path, &legacy_bytes)
+            .unwrap();
+        root_lock
+            .atomic_write_json(&path.join(STRATEGY_MEMORY_ANCHOR_FILE), &head)
+            .unwrap();
+        let high_water = path.join(STRATEGY_MEMORY_HIGH_WATER_FILE);
+        let high_water_tail = path.join(STRATEGY_MEMORY_HIGH_WATER_TAIL_FILE);
+        let _ = fs::remove_file(&high_water);
+        let _ = fs::remove_file(&high_water_tail);
+        append_high_water(&root_lock, &high_water, &high_water_tail, &head).unwrap();
+
+        let monotonic = DurableMonotonicAnchor::new(&path, STRATEGY_MEMORY_STATE_KIND).unwrap();
+        let external_lock = monotonic.acquire_lock().unwrap();
+        let initial = sign_external_commit_record(
+            STRATEGY_MEMORY_STATE_KIND,
+            &stream_id,
+            0,
+            &sha256_hex(
+                &canonical_json_bytes(&LegacyStrategyMemoryStateFixture {
+                    schema_version: STRATEGY_MEMORY_STORE_SCHEMA_VERSION,
+                    limits: GraphResourceLimits::default(),
+                    generation: 0,
+                    predecessor_digest: None,
+                    memories: BTreeMap::new(),
+                    order: Vec::new(),
+                })
+                .unwrap(),
+            ),
+            0,
+            ExternalCommitPhase::Commit,
+            None,
+            root_lock.generation(),
+            &root_lock.identity_token(),
+            &key,
+        )
+        .unwrap();
+        monotonic
+            .append_external_locked(&external_lock, &initial)
+            .unwrap();
+        let intent = sign_external_commit_record(
+            STRATEGY_MEMORY_STATE_KIND,
+            &stream_id,
+            1,
+            &legacy_digest,
+            1,
+            ExternalCommitPhase::Intent,
+            Some(initial.record_digest.clone()),
+            root_lock.generation(),
+            &root_lock.identity_token(),
+            &key,
+        )
+        .unwrap();
+        monotonic
+            .append_external_locked(&external_lock, &intent)
+            .unwrap();
+        let commit = sign_external_commit_record(
+            STRATEGY_MEMORY_STATE_KIND,
+            &stream_id,
+            1,
+            &legacy_digest,
+            2,
+            ExternalCommitPhase::Commit,
+            Some(intent.record_digest.clone()),
+            root_lock.generation(),
+            &root_lock.identity_token(),
+            &key,
+        )
+        .unwrap();
+        monotonic
+            .append_external_locked(&external_lock, &commit)
+            .unwrap();
+        drop(external_lock);
+        drop(root_lock);
+
+        let before = fs::read(&state_path).unwrap();
+        let reopened =
+            FileStrategyMemoryStore::open_with_signer(&path, key, GraphResourceLimits::default())
+                .unwrap();
+        assert_eq!(
+            reopened.load(&legacy_record.memory.memory_id).unwrap(),
+            Some(legacy_record)
+        );
+        assert_eq!(fs::read(&state_path).unwrap(), before);
+        let _ = fs::remove_dir_all(path);
     }
 
     #[test]
@@ -1828,7 +2421,13 @@ mod tests {
             .map_err(StrategyMemoryStoreError::GraphPersistence)
             .unwrap();
         state.state.predecessor_digest = Some("forged-state-predecessor".to_string());
-        let signed = sign_state(state.state, &key, &GraphResourceLimits::default()).unwrap();
+        let signed = sign_state_with_limit(
+            state.state,
+            &key,
+            &GraphResourceLimits::default(),
+            MAX_STRATEGY_MEMORY_TTL_TICKS,
+        )
+        .unwrap();
         atomic_write_json(&state_path, &signed).unwrap();
         drop(store);
         fs::write(&anchor_path, initial_anchor).unwrap();

@@ -1080,7 +1080,13 @@ fn event_node_source_record_id(
     source_id: &str,
     source_record_id: &str,
 ) -> Result<String, GraphAdmissionError> {
-    let digest = digest_projection(&("event_source_record", source_id, source_record_id))?;
+    // Keep the source-record identity bounded at the one event-node boundary
+    // as well as at each adapter entry point.  This prevents a future adapter
+    // from bypassing the canonical EventNode identity contract by calling the
+    // shared projection with an empty or oversized lineage value.
+    let source_id = bounded_text("event.source_id", source_id, 256)?;
+    let source_record_id = bounded_text("event.source_record_id", source_record_id, 256)?;
+    let digest = digest_projection(&("event_source_record", &source_id, &source_record_id))?;
     Ok(format!("event-source-record:{digest}"))
 }
 

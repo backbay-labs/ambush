@@ -3542,6 +3542,16 @@ impl TaskClaimRequest {
         )))
     }
 
+    /// Digest the complete, validated claim envelope, including its
+    /// claimant-scoped idempotency key and logical request time.  This is the
+    /// capability binding used by durable terminal admission; it is distinct
+    /// from `derive_idempotency_key`, which deliberately omits arrival time so
+    /// a retry can reuse the same operation key.
+    pub fn canonical_digest(&self) -> Result<String, GraphAdmissionError> {
+        self.validate()?;
+        canonical_digest(self)
+    }
+
     pub fn validate(&self) -> Result<(), GraphAdmissionError> {
         validate_schema(self.schema_version)?;
         validate_id("task.task_id", &self.task_id, 256)?;
@@ -3887,6 +3897,30 @@ impl TaskCapabilityProof {
         }
         self.witness.validate(&self.canonical_bytes()?)
     }
+
+    /// Bind this signed capability to one exact durable claim request.  A
+    /// matching task ID or claimant alone is insufficient: changing the
+    /// request's logical time, target, scope, role, or idempotency key must
+    /// produce a different canonical claim digest and fail closed.
+    pub fn validate_for_claim(&self, claim: &TaskClaimRequest) -> Result<(), GraphAdmissionError> {
+        claim.validate()?;
+        self.validate()?;
+        if self.task_id != claim.task_id
+            || self.claimant != claim.claimant
+            || self.role != claim.role
+            || self.kind != claim.kind
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "capability does not bind the exact task claim".to_string(),
+            });
+        }
+        if self.canonical_claim_digest != claim.canonical_digest()? {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "capability canonical claim digest does not match task claim".to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Keep completion semantics closed at the task-kind boundary.
@@ -3913,6 +3947,20 @@ pub fn validate_completion_kind(
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskTerminalMaterial<'a> {
+    task_id: &'a TaskId,
+    idempotency_key: &'a IdempotencyKey,
+    lease_id: &'a LeaseId,
+    fencing_token: FencingToken,
+    completion: &'a TaskCompletion,
+    decision_link: &'a Option<TaskDecisionLink>,
+    producer: &'a AgentId,
+    capability: &'a TaskCapabilityProof,
+    terminal_scope: &'a str,
+}
+
 /// A terminal task publication that retains its lease/fence and complete
 /// evidence lineage in one typed value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -3926,6 +3974,8 @@ pub struct TaskTerminalEnvelope {
     pub decision_link: Option<TaskDecisionLink>,
     pub producer: AgentId,
     pub capability: TaskCapabilityProof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_witness: Option<EvidenceWitness>,
 }
 
 impl TaskTerminalEnvelope {
@@ -3949,9 +3999,65 @@ impl TaskTerminalEnvelope {
             decision_link,
             producer,
             capability,
+            terminal_witness: None,
         };
         envelope.validate()?;
         Ok(envelope)
+    }
+
+    /// Attach a claimant-key signature over the complete terminal material.
+    /// The structural constructor intentionally leaves this witness absent so
+    /// callers cannot mistake an assembled request for durable authority.
+    pub fn signed_with(
+        mut self,
+        signer: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphAdmissionError> {
+        let signer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+        if signer_identity != self.producer || signer_identity != self.capability.claimant {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "terminal signer does not match the claimant producer".to_string(),
+            });
+        }
+        let scoped_agent_id = scoped_agent_id.into();
+        validate_text("task.terminal.scoped_agent_id", &scoped_agent_id, 128)?;
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.terminal_witness = Some(EvidenceWitness::new(
+            signer,
+            self.capability.role,
+            scoped_agent_id,
+            &bytes,
+        )?);
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphAdmissionError> {
+        let terminal_scope = self
+            .terminal_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(terminal_scope)
+    }
+
+    fn canonical_bytes_for_scope(
+        &self,
+        terminal_scope: &str,
+    ) -> Result<Vec<u8>, GraphAdmissionError> {
+        canonical_json_bytes(&TaskTerminalMaterial {
+            task_id: &self.task_id,
+            idempotency_key: &self.idempotency_key,
+            lease_id: &self.lease_id,
+            fencing_token: self.fencing_token,
+            completion: &self.completion,
+            decision_link: &self.decision_link,
+            producer: &self.producer,
+            capability: &self.capability,
+            terminal_scope,
+        })
+        .map_err(|error| GraphAdmissionError::Canonicalization {
+            reason: error.to_string(),
+        })
     }
 
     pub fn validate(&self) -> Result<(), GraphAdmissionError> {
@@ -4016,7 +4122,80 @@ impl TaskTerminalEnvelope {
                 }
             }
         }
+        if let Some(witness) = &self.terminal_witness {
+            if witness.producer_identity != self.producer
+                || witness.producer_role != self.capability.role
+            {
+                return Err(GraphAdmissionError::InvalidWitness {
+                    reason: "terminal witness does not bind producer and capability role"
+                        .to_string(),
+                });
+            }
+            witness.validate(&self.canonical_bytes_without_witness()?)?;
+        }
         Ok(())
+    }
+
+    /// Validate the terminal publication against the exact claimed task and
+    /// its currently active lease.  This is the durable admission boundary;
+    /// `validate()` remains structural so an unsigned assembled envelope can
+    /// still be represented and inspected before a signer is available.
+    pub fn validate_for_task(
+        &self,
+        task: &TaskRecord,
+        max_task_lease_ms: u64,
+        max_task_retries: u16,
+    ) -> Result<(), GraphAdmissionError> {
+        self.validate()?;
+        task.validate_with_limits(max_task_lease_ms, max_task_retries)?;
+        if task.state != TaskState::Claimed || task.completion.is_some() {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal envelope requires an active claimed task".to_string(),
+            });
+        }
+        let lease = task
+            .lease
+            .as_ref()
+            .ok_or(GraphAdmissionError::InvalidTransition {
+                reason: "terminal envelope requires the task's active lease".to_string(),
+            })?;
+        lease.validate_with_limit(max_task_lease_ms)?;
+        self.capability.validate_for_claim(&task.request)?;
+        if self.task_id != task.request.task_id
+            || self.idempotency_key != task.request.idempotency_key
+            || self.lease_id != lease.lease_id
+            || self.fencing_token != lease.fencing_token
+            || self.producer != lease.holder
+            || self.completion.completed_by != lease.holder
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal envelope does not bind the active task lease".to_string(),
+            });
+        }
+        if self.completion.completed_at < lease.issued_at
+            || self.completion.completed_at > lease.expires_at
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal completion time is outside the active lease".to_string(),
+            });
+        }
+        if let Some(link) = &self.decision_link
+            && link.target != task.request.target
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal decision lineage target does not match the claimed task"
+                    .to_string(),
+            });
+        }
+        let Some(witness) = self.terminal_witness.as_ref() else {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "durable terminal admission requires a signed terminal witness".to_string(),
+            });
+        };
+        // Re-run the signature check after all exact-task comparisons above;
+        // this prevents a valid capability witness from being replayed with a
+        // caller-selected completion, decision, lease, or fence.
+        witness.validate(&self.canonical_bytes_without_witness()?)
     }
 }
 
@@ -4426,6 +4605,83 @@ impl GraphPolicyMode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GraphPolicyMaterial {
+    schema_version: u32,
+    mode: GraphPolicyMode,
+}
+
+/// Canonical policy contract.  The mode is both behavior-bearing and part of
+/// the digest, so a caller cannot swap policy behavior while retaining an old
+/// contract identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphPolicyContract {
+    pub schema_version: u32,
+    pub mode: GraphPolicyMode,
+    pub policy_digest: String,
+}
+
+impl GraphPolicyContract {
+    pub fn new(mode: GraphPolicyMode) -> Result<Self, GraphAdmissionError> {
+        let material = GraphPolicyMaterial {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            mode,
+        };
+        let policy_digest = canonical_digest(&material)?;
+        let contract = Self {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            mode,
+            policy_digest,
+        };
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        validate_schema(self.schema_version)?;
+        validate_sha256_digest("graph_policy.policy_digest", &self.policy_digest)?;
+        let expected = canonical_digest(&GraphPolicyMaterial {
+            schema_version: self.schema_version,
+            mode: self.mode,
+        })?;
+        if self.policy_digest != expected {
+            return Err(GraphAdmissionError::IdCollision {
+                id: self.policy_digest.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, GraphAdmissionError> {
+        self.validate()?;
+        canonical_json_bytes(&GraphPolicyMaterial {
+            schema_version: self.schema_version,
+            mode: self.mode,
+        })
+        .map_err(|error| GraphAdmissionError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    pub const fn requires_evidence_coverage(&self) -> bool {
+        self.mode.requires_evidence_coverage()
+    }
+
+    pub const fn emits_falsification_work(&self) -> bool {
+        self.mode.emits_falsification_work()
+    }
+
+    pub const fn retains_alternatives(&self) -> bool {
+        self.mode.retains_alternatives()
+    }
+
+    pub const fn requires_reversible_containment(&self) -> bool {
+        self.mode.requires_reversible_containment()
+    }
+}
+
 /// Per-logical-tick scheduler ceilings and durable usage counters.
 ///
 /// Counters and the current logical tick are part of the wire so a restart or
@@ -4444,11 +4700,19 @@ impl SchedulerBudget {
     pub const MAX_WORK_UNITS: u32 = 1_000_000;
     pub const MAX_CLAIMS: u16 = 4_096;
 
-    pub fn new(max_work_units: u32, max_claims: u16) -> Result<Self, GraphAdmissionError> {
-        Self::new_at(max_work_units, max_claims, GraphLogicalTime::new(0))
+    /// Construct a budget bound to the active deployment configuration.
+    ///
+    /// The configuration is deliberately required here rather than accepting
+    /// caller-selected ceilings: a budget must never become an authority for
+    /// widening the deployment's reasoning limits.
+    pub fn new(
+        config: &crate::config::HypothesisGraphConfig,
+        current_tick: GraphLogicalTime,
+    ) -> Result<Self, GraphAdmissionError> {
+        Self::new_with_config(config, current_tick)
     }
 
-    pub fn new_at(
+    fn from_limits(
         max_work_units: u32,
         max_claims: u16,
         current_tick: GraphLogicalTime,
@@ -4464,18 +4728,89 @@ impl SchedulerBudget {
         Ok(budget)
     }
 
+    /// Construct a budget from the deployment-scoped reasoning limits.  The
+    /// config validator is part of this boundary so a caller cannot silently
+    /// widen a deployment budget back to the global persistence ceiling.
+    pub fn new_with_config(
+        config: &crate::config::HypothesisGraphConfig,
+        current_tick: GraphLogicalTime,
+    ) -> Result<Self, GraphAdmissionError> {
+        config.validate_reasoning_limits()?;
+        let budget = Self::from_limits(
+            config.max_work_units_per_tick,
+            config.max_claims_per_tick,
+            current_tick,
+        )?;
+        budget.validate_for_config(config)?;
+        Ok(budget)
+    }
+
+    /// Validate a restored budget against the active deployment limits.
+    /// `validate()` only checks the self-contained wire invariants; durable
+    /// restart and admission must use this configuration-bound validator.
+    pub fn validate_for_config(
+        &self,
+        config: &crate::config::HypothesisGraphConfig,
+    ) -> Result<(), GraphAdmissionError> {
+        config.validate_reasoning_limits()?;
+        self.validate_with_limits(config.max_work_units_per_tick, config.max_claims_per_tick)
+    }
+
+    /// Deserialize a persisted budget and bind it to the active deployment
+    /// limits before returning it to an application path.
+    pub fn deserialize_with_config(
+        json: &str,
+        config: &crate::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphAdmissionError> {
+        let budget: Self =
+            serde_json::from_str(json).map_err(|error| GraphAdmissionError::Deserialization {
+                reason: error.to_string(),
+            })?;
+        budget.validate_for_config(config)?;
+        Ok(budget)
+    }
+
     pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        self.validate_with_limits(Self::MAX_WORK_UNITS, Self::MAX_CLAIMS)
+    }
+
+    /// Validate one budget against deployment-scoped ceilings.  The supplied
+    /// ceilings themselves are bounded by the global contract and the budget
+    /// may not exceed either one.
+    pub fn validate_with_limits(
+        &self,
+        max_work_units: u32,
+        max_claims: u16,
+    ) -> Result<(), GraphAdmissionError> {
         self.current_tick.validate()?;
-        if self.max_work_units == 0 || self.max_work_units > Self::MAX_WORK_UNITS {
+        if max_work_units == 0 || max_work_units > Self::MAX_WORK_UNITS {
             return Err(GraphAdmissionError::InvalidLimit {
-                field: "scheduler.max_work_units".to_string(),
+                field: "scheduler.max_work_units_limit".to_string(),
                 reason: format!("must be between 1 and {}", Self::MAX_WORK_UNITS),
             });
         }
-        if self.max_claims == 0 || self.max_claims > Self::MAX_CLAIMS {
+        if max_claims == 0 || max_claims > Self::MAX_CLAIMS {
+            return Err(GraphAdmissionError::InvalidLimit {
+                field: "scheduler.max_claims_limit".to_string(),
+                reason: format!("must be between 1 and {}", Self::MAX_CLAIMS),
+            });
+        }
+        if self.max_work_units == 0
+            || self.max_work_units > Self::MAX_WORK_UNITS
+            || self.max_work_units > max_work_units
+        {
+            return Err(GraphAdmissionError::InvalidLimit {
+                field: "scheduler.max_work_units".to_string(),
+                reason: format!("must be between 1 and {max_work_units}"),
+            });
+        }
+        if self.max_claims == 0
+            || self.max_claims > Self::MAX_CLAIMS
+            || self.max_claims > max_claims
+        {
             return Err(GraphAdmissionError::InvalidLimit {
                 field: "scheduler.max_claims".to_string(),
-                reason: format!("must be between 1 and {}", Self::MAX_CLAIMS),
+                reason: format!("must be between 1 and {max_claims}"),
             });
         }
         if self.work_units_used > self.max_work_units || self.claims_used > self.max_claims {
@@ -4486,22 +4821,32 @@ impl SchedulerBudget {
         Ok(())
     }
 
-    /// Atomically admit one unit of work and its associated claims.  Failed
-    /// admissions leave both counters unchanged.
-    pub fn admit(&mut self, work_units: u32, claims: u16) -> Result<(), GraphAdmissionError> {
-        self.admit_at(self.current_tick, work_units, claims)
+    /// Atomically admit one unit of work and its associated claims under the
+    /// active deployment configuration. Failed admissions leave both
+    /// counters unchanged.
+    pub fn admit(
+        &mut self,
+        config: &crate::config::HypothesisGraphConfig,
+        work_units: u32,
+        claims: u16,
+    ) -> Result<(), GraphAdmissionError> {
+        let current_tick = self.current_tick;
+        self.admit_at(config, current_tick, work_units, claims)
     }
 
     /// Admit work at an injected logical tick. Advancing to a newer tick
     /// resets usage atomically with the successful admission; a stale tick or
-    /// over-limit request leaves the complete budget byte-identical.
+    /// over-limit request leaves the complete budget byte-identical. The
+    /// active configuration is checked on every call so a restored or mutated
+    /// budget cannot widen itself through this path.
     pub fn admit_at(
         &mut self,
+        config: &crate::config::HypothesisGraphConfig,
         logical_tick: GraphLogicalTime,
         work_units: u32,
         claims: u16,
     ) -> Result<(), GraphAdmissionError> {
-        self.validate()?;
+        self.validate_for_config(config)?;
         logical_tick.validate()?;
         if logical_tick < self.current_tick {
             return Err(GraphAdmissionError::InvalidTransition {
@@ -5657,17 +6002,33 @@ struct StrategyMemoryExpiryMaterial<'a> {
 }
 
 impl StrategyMemoryExpiryEnvelope {
+    /// Construct an expiry envelope using the active deployment TTL bound.
     pub fn new(
         memory: &StrategyMemory,
         created_at: GraphLogicalTime,
         ttl_ticks: u64,
+        config: &crate::config::HypothesisGraphConfig,
         signer: &Keypair,
     ) -> Result<Self, GraphAdmissionError> {
+        Self::new_with_config(memory, created_at, ttl_ticks, config, signer)
+    }
+
+    /// Construct an expiry envelope bound to the active deployment
+    /// configuration. A caller cannot silently fall back to the global TTL
+    /// ceiling when the deployment has configured a lower one.
+    pub fn new_with_config(
+        memory: &StrategyMemory,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+        config: &crate::config::HypothesisGraphConfig,
+        signer: &Keypair,
+    ) -> Result<Self, GraphAdmissionError> {
+        config.validate_reasoning_limits()?;
         Self::new_with_limit(
             memory,
             created_at,
             ttl_ticks,
-            MAX_STRATEGY_MEMORY_TTL_TICKS,
+            config.max_memory_ttl_ticks,
             signer,
         )
     }
@@ -5725,9 +6086,45 @@ impl StrategyMemoryExpiryEnvelope {
         Ok(envelope)
     }
 
-    pub fn is_applicable_at(&self, now: GraphLogicalTime) -> bool {
+    /// Validate a restored expiry envelope against the active deployment
+    /// configuration before it is used for applicability decisions.
+    pub fn validate_for_config(
+        &self,
+        config: &crate::config::HypothesisGraphConfig,
+    ) -> Result<(), GraphAdmissionError> {
+        config.validate_reasoning_limits()?;
+        self.validate_with_limit(config.max_memory_ttl_ticks)
+    }
+
+    /// Deserialize a persisted expiry envelope and bind it to the active
+    /// deployment TTL before returning it to an application path.
+    pub fn deserialize_with_config(
+        json: &str,
+        config: &crate::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphAdmissionError> {
+        let envelope: Self =
+            serde_json::from_str(json).map_err(|error| GraphAdmissionError::Deserialization {
+                reason: error.to_string(),
+            })?;
+        envelope.validate_for_config(config)?;
+        Ok(envelope)
+    }
+
+    /// Apply an expiry envelope under the active deployment TTL bound.
+    pub fn is_applicable_at(
+        &self,
+        now: GraphLogicalTime,
+        config: &crate::config::HypothesisGraphConfig,
+    ) -> bool {
         now.validate().is_ok()
-            && self.validate().is_ok()
+            && self.validate_for_config(config).is_ok()
+            && self.created_at <= now
+            && now < self.expires_at
+    }
+
+    pub fn is_applicable_at_with_limit(&self, now: GraphLogicalTime, max_ttl_ticks: u64) -> bool {
+        now.validate().is_ok()
+            && self.validate_with_limit(max_ttl_ticks).is_ok()
             && self.created_at <= now
             && now < self.expires_at
     }
@@ -6651,6 +7048,8 @@ struct TaskTerminalEnvelopeWire {
     decision_link: Option<TaskDecisionLink>,
     producer: AgentId,
     capability: TaskCapabilityProof,
+    #[serde(default)]
+    terminal_witness: Option<EvidenceWitness>,
 }
 
 impl<'de> Deserialize<'de> for TaskTerminalEnvelope {
@@ -6668,6 +7067,7 @@ impl<'de> Deserialize<'de> for TaskTerminalEnvelope {
             decision_link: wire.decision_link,
             producer: wire.producer,
             capability: wire.capability,
+            terminal_witness: wire.terminal_witness,
         };
         record.validate().map_err(serde::de::Error::custom)?;
         Ok(record)
@@ -6715,6 +7115,30 @@ struct GraphSchedulerKeyWire {
     task_kind: TaskKind,
     priority_basis_points: u16,
     task_id: TaskId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphPolicyContractWire {
+    schema_version: u32,
+    mode: GraphPolicyMode,
+    policy_digest: String,
+}
+
+impl<'de> Deserialize<'de> for GraphPolicyContract {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = GraphPolicyContractWire::deserialize(deserializer)?;
+        let record = Self {
+            schema_version: wire.schema_version,
+            mode: wire.mode,
+            policy_digest: wire.policy_digest,
+        };
+        record.validate().map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
 }
 
 impl<'de> Deserialize<'de> for GraphSchedulerKey {
@@ -7006,6 +7430,8 @@ impl_validated_record!(TaskCapabilityProof, |record: &TaskCapabilityProof| recor
 impl_validated_record!(TaskTerminalEnvelope, |record: &TaskTerminalEnvelope| record
     .validate());
 impl_validated_record!(SchedulerBudget, |record: &SchedulerBudget| record
+    .validate());
+impl_validated_record!(GraphPolicyContract, |record: &GraphPolicyContract| record
     .validate());
 impl_validated_record!(TaskRecord, |record: &TaskRecord| record
     .validate_with_limits(
@@ -7772,6 +8198,137 @@ mod tests {
     }
 
     #[test]
+    fn event_node_same_time_different_source_records_are_distinct() {
+        let observed_at = GraphLogicalTime::new(10);
+        let first = EventNode::new("process_exec", "source-record:a", observed_at).unwrap();
+        let retry = EventNode::new("process_exec", "source-record:a", observed_at).unwrap();
+        let distinct = EventNode::new("process_exec", "source-record:b", observed_at).unwrap();
+
+        assert_eq!(first.node_id, retry.node_id);
+        assert_ne!(first.node_id, distinct.node_id);
+
+        let mut graph =
+            HypothesisGraph::new(GraphId::new("graph:event-identity"), Default::default()).unwrap();
+        graph.admit_node(GraphNode::Event(first)).unwrap();
+        let retry_bytes = serde_json::to_vec(&graph).unwrap();
+        graph.admit_node(GraphNode::Event(retry)).unwrap();
+        assert_eq!(serde_json::to_vec(&graph).unwrap(), retry_bytes);
+        graph.admit_node(GraphNode::Event(distinct)).unwrap();
+        assert_eq!(graph.nodes.len(), 2);
+    }
+
+    #[test]
+    fn unsigned_witness_is_untrusted() {
+        let unsigned = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Process,
+            "unsigned-record",
+            SourceLineage::new("fixture", "unsigned-record").unwrap(),
+            EvidenceClock::observed(GraphLogicalTime::new(10)),
+            OrderingClaim::Unknown,
+            TypedEvidencePayload::Signal {
+                signal_kind: "unsigned".to_string(),
+                entity_ids: vec![GraphNodeId::new("node:event:unsigned")],
+                relation_ids: vec![],
+                supports: vec![],
+                refutes: vec![],
+                content_digest: "digest:unsigned".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(unsigned.witness.scoped_agent_id, "unsigned");
+        assert!(unsigned.validate().is_err());
+
+        let mut graph =
+            HypothesisGraph::new(GraphId::new("graph:unsigned"), Default::default()).unwrap();
+        let before = serde_json::to_vec(&graph).unwrap();
+        assert!(graph.admit_evidence(unsigned).is_err());
+        assert_eq!(serde_json::to_vec(&graph).unwrap(), before);
+    }
+
+    #[test]
+    fn typed_evidence_payload_direct_deserialize_is_validated() {
+        let valid_signal = serde_json::json!({
+            "kind": "signal",
+            "signal_kind": "seed",
+            "entity_ids": ["node:event:seed"],
+            "relation_ids": [],
+            "supports": [],
+            "refutes": [],
+            "content_digest": "digest:seed"
+        });
+        assert!(serde_json::from_value::<TypedEvidencePayload>(valid_signal.clone()).is_ok());
+
+        let mut malformed_entity = valid_signal.clone();
+        malformed_entity["entity_ids"] = serde_json::json!([""]);
+        assert!(serde_json::from_value::<TypedEvidencePayload>(malformed_entity).is_err());
+
+        let mut empty_digest = valid_signal.clone();
+        empty_digest["content_digest"] = serde_json::json!("");
+        assert!(serde_json::from_value::<TypedEvidencePayload>(empty_digest).is_err());
+
+        let mut oversized_digest = valid_signal.clone();
+        oversized_digest["content_digest"] = serde_json::json!("x".repeat(129));
+        assert!(serde_json::from_value::<TypedEvidencePayload>(oversized_digest).is_err());
+
+        let family_mismatch = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Identity,
+            "family-mismatch",
+            SourceLineage::new("fixture", "family-mismatch").unwrap(),
+            EvidenceClock::observed(GraphLogicalTime::new(10)),
+            OrderingClaim::Unknown,
+            serde_json::from_value::<TypedEvidencePayload>(valid_signal).unwrap(),
+        )
+        .unwrap();
+        assert!(family_mismatch.validate().is_err());
+
+        let threat = serde_json::json!({
+            "kind": "threat_intelligence",
+            "signal_kind": "intel",
+            "feed_id": "feed:test",
+            "indicator_digest": "digest:indicator",
+            "indicator_kind": "domain",
+            "confidence_basis_points": 10_001,
+            "expires_at": 100,
+            "entity_ids": [],
+            "content_digest": "digest:intel"
+        });
+        assert!(serde_json::from_value::<TypedEvidencePayload>(threat).is_err());
+
+        let expired = serde_json::json!({
+            "kind": "threat_intelligence",
+            "signal_kind": "intel",
+            "feed_id": "feed:test",
+            "indicator_digest": "digest:indicator",
+            "indicator_kind": "domain",
+            "confidence_basis_points": 9_000,
+            "expires_at": -1,
+            "entity_ids": [],
+            "content_digest": "digest:intel"
+        });
+        assert!(serde_json::from_value::<TypedEvidencePayload>(expired).is_err());
+    }
+
+    #[test]
+    fn graph_version_overflow_is_fail_closed() {
+        let mut graph = HypothesisGraph::new(
+            GraphId::new("graph:version-overflow"),
+            GraphResourceLimits::default(),
+        )
+        .unwrap();
+        graph.version = u64::MAX;
+        let before = serde_json::to_vec(&graph).unwrap();
+        let result = graph.admit_node(GraphNode::Actor(
+            ActorNode::new("actor:version-overflow", "test").unwrap(),
+        ));
+        assert!(matches!(
+            result,
+            Err(GraphAdmissionError::InvalidTransition { .. })
+        ));
+        assert_eq!(serde_json::to_vec(&graph).unwrap(), before);
+        assert!(graph.nodes.is_empty());
+    }
+
+    #[test]
     fn review_regressions_reject_invalid_time_claim_scheduler_and_parent() {
         assert!(EventNode::new("negative", "source:negative", GraphLogicalTime::new(-1)).is_err());
         let first =
@@ -8243,6 +8800,214 @@ mod tests {
     }
 
     #[test]
+    fn terminal_signature_binds_exact_claim_lease_and_lineage() {
+        let signer = signer();
+        let claimant = signer_identity();
+        let scope = EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [EvidenceId::new("evidence:terminal")],
+            [GraphNodeId::new("node:event:terminal")],
+        )
+        .unwrap();
+        let request = TaskClaimRequest::new(
+            TaskId::new("task:terminal"),
+            TaskKind::AcquireEvidence,
+            TaskTarget::Evidence {
+                evidence_id: EvidenceId::new("evidence:terminal"),
+            },
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            scope,
+            GraphLogicalTime::new(10),
+        )
+        .unwrap();
+        let lease = TaskLease::new(
+            LeaseId::new("lease:terminal"),
+            claimant.clone(),
+            GraphLogicalTime::new(10),
+            GraphLogicalTime::new(20),
+            FencingToken::new(1),
+        )
+        .unwrap();
+        let task = TaskRecord::claimed(request.clone(), lease.clone()).unwrap();
+        let capability = TaskCapabilityProof::new(
+            request.task_id.clone(),
+            claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &signer,
+            "hunter-terminal",
+        )
+        .unwrap();
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::NoFinding,
+            claimant.clone(),
+            GraphLogicalTime::new(15),
+            [],
+            "digest:terminal",
+        )
+        .unwrap();
+        let unsigned = TaskTerminalEnvelope::new(
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            completion,
+            None,
+            claimant.clone(),
+            capability,
+        )
+        .unwrap();
+        assert!(unsigned.validate().is_ok());
+        assert!(unsigned.validate_for_task(&task, 100, 3).is_err());
+
+        let signed = unsigned
+            .clone()
+            .signed_with(&signer, "terminal-worker")
+            .unwrap();
+        assert!(signed.validate_for_task(&task, 100, 3).is_ok());
+        let other_signer = Keypair::from_seed(&[8_u8; 32]);
+        assert!(
+            signed
+                .clone()
+                .signed_with(&other_signer, "attacker")
+                .is_err()
+        );
+
+        let mut changed = signed.clone();
+        changed.completion.summary_digest = "digest:changed".to_string();
+        assert!(changed.validate_for_task(&task, 100, 3).is_err());
+
+        let mut changed = signed.clone();
+        changed.terminal_witness.as_mut().unwrap().scoped_agent_id =
+            "terminal-attacker".to_string();
+        assert!(changed.validate_for_task(&task, 100, 3).is_err());
+
+        let mut changed = signed.clone();
+        changed.lease_id = LeaseId::new("lease:attacker");
+        assert!(changed.validate_for_task(&task, 100, 3).is_err());
+
+        let mut changed = signed.clone();
+        changed.fencing_token = FencingToken::new(2);
+        assert!(changed.validate_for_task(&task, 100, 3).is_err());
+
+        let mut changed = signed.clone();
+        changed.idempotency_key = IdempotencyKey::new("idempotency:attacker");
+        assert!(changed.validate_for_task(&task, 100, 3).is_err());
+
+        let mut invalid_task = task.clone();
+        invalid_task.attempts = 4;
+        assert!(signed.validate_for_task(&invalid_task, 100, 3).is_err());
+        let mut invalid_task = task.clone();
+        invalid_task.generation = 2;
+        assert!(signed.validate_for_task(&invalid_task, 100, 3).is_err());
+
+        let challenge_scope = EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [EvidenceId::new("evidence:challenge-terminal")],
+            [],
+        )
+        .unwrap();
+        let challenge_request = TaskClaimRequest::new(
+            TaskId::new("task:challenge-terminal"),
+            TaskKind::ChallengeEdge,
+            TaskTarget::Edge {
+                edge_id: EdgeId::new("edge:claimed"),
+            },
+            GraphProducerRole::Challenger,
+            claimant.clone(),
+            challenge_scope,
+            GraphLogicalTime::new(10),
+        )
+        .unwrap();
+        let challenge_lease = TaskLease::new(
+            LeaseId::new("lease:challenge-terminal"),
+            claimant.clone(),
+            GraphLogicalTime::new(10),
+            GraphLogicalTime::new(20),
+            FencingToken::new(2),
+        )
+        .unwrap();
+        let challenge_task =
+            TaskRecord::claimed(challenge_request.clone(), challenge_lease.clone()).unwrap();
+        let challenge_capability = TaskCapabilityProof::new(
+            challenge_request.task_id.clone(),
+            claimant.clone(),
+            challenge_request.role,
+            challenge_request.kind,
+            challenge_request.canonical_digest().unwrap(),
+            &signer,
+            "challenger-terminal",
+        )
+        .unwrap();
+        let challenge_completion = TaskCompletion::new(
+            TaskCompletionKind::EdgeChallenged,
+            claimant.clone(),
+            GraphLogicalTime::new(15),
+            [EvidenceId::new("evidence:challenge-terminal")],
+            "digest:challenge-terminal",
+        )
+        .unwrap();
+        let wrong_lineage = TaskDecisionLink::new(
+            challenge_request.task_id.clone(),
+            TaskTarget::Edge {
+                edge_id: EdgeId::new("edge:attacker-selected"),
+            },
+            [EvidenceId::new("evidence:challenge-terminal")],
+            Some(DecisionId::new("decision:challenge-terminal")),
+        )
+        .unwrap();
+        let wrong_lineage = TaskTerminalEnvelope::new(
+            challenge_request.task_id,
+            challenge_request.idempotency_key,
+            challenge_lease.lease_id,
+            challenge_lease.fencing_token,
+            challenge_completion,
+            Some(wrong_lineage),
+            claimant,
+            challenge_capability,
+        )
+        .unwrap()
+        .signed_with(&signer, "challenger-terminal")
+        .unwrap();
+        assert!(
+            wrong_lineage
+                .validate_for_task(&challenge_task, 100, 3)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn policy_contract_digest_and_behavior_are_mode_bound() {
+        let evidence_first = GraphPolicyContract::new(GraphPolicyMode::EvidenceFirst).unwrap();
+        let challenge = GraphPolicyContract::new(GraphPolicyMode::ChallengeContradictions).unwrap();
+        let containment =
+            GraphPolicyContract::new(GraphPolicyMode::ConservativeContainment).unwrap();
+
+        assert_ne!(evidence_first.policy_digest, challenge.policy_digest);
+        assert_ne!(challenge.policy_digest, containment.policy_digest);
+        assert!(evidence_first.requires_evidence_coverage());
+        assert!(!evidence_first.emits_falsification_work());
+        assert!(challenge.emits_falsification_work());
+        assert!(challenge.retains_alternatives());
+        assert!(containment.requires_reversible_containment());
+
+        let encoded = serde_json::to_value(&evidence_first).unwrap();
+        assert_eq!(
+            serde_json::from_value::<GraphPolicyContract>(encoded.clone()).unwrap(),
+            evidence_first
+        );
+        let mut tampered = encoded;
+        tampered["mode"] = serde_json::json!("challenge_contradictions");
+        assert!(serde_json::from_value::<GraphPolicyContract>(tampered).is_err());
+        assert!(serde_json::from_str::<GraphPolicyContract>(
+            r#"{"schema_version":1,"mode":"future_mode","policy_digest":"0000000000000000000000000000000000000000000000000000000000000000"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
     fn scheduler_dispatch_is_ready_priority_kind_and_id_deterministic() {
         let low = GraphSchedulerKey::new(
             GraphLogicalTime::new(5),
@@ -8264,18 +9029,105 @@ mod tests {
             (5, std::cmp::Reverse(9_000), 0, "task:z".to_string())
         );
 
-        let mut budget = SchedulerBudget::new(10, 2).unwrap();
-        budget.admit(6, 1).unwrap();
-        assert!(budget.admit(5, 1).is_err());
-        assert!(budget.admit(1, 2).is_err());
+        let config = crate::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..Default::default()
+        };
+        let mut budget = SchedulerBudget::new(&config, GraphLogicalTime::new(0)).unwrap();
+        budget.admit(&config, 6, 1).unwrap();
+        assert!(budget.admit(&config, 5, 1).is_err());
+        assert!(budget.admit(&config, 1, 2).is_err());
         let encoded = serde_json::to_vec(&budget).unwrap();
-        let mut decoded: SchedulerBudget = serde_json::from_slice(&encoded).unwrap();
+        let mut decoded = SchedulerBudget::deserialize_with_config(
+            std::str::from_utf8(&encoded).unwrap(),
+            &config,
+        )
+        .unwrap();
         assert_eq!(decoded, budget);
-        assert!(decoded.admit_at(GraphLogicalTime::new(0), 5, 1).is_err());
+        assert!(
+            decoded
+                .admit_at(&config, GraphLogicalTime::new(0), 5, 1)
+                .is_err()
+        );
         assert_eq!(serde_json::to_vec(&decoded).unwrap(), encoded);
-        assert!(decoded.admit_at(GraphLogicalTime::new(1), 10, 2).is_ok());
+        assert!(
+            decoded
+                .admit_at(&config, GraphLogicalTime::new(1), 10, 2)
+                .is_ok()
+        );
         assert_eq!(decoded.current_tick(), GraphLogicalTime::new(1));
-        assert!(decoded.admit_at(GraphLogicalTime::new(0), 0, 0).is_err());
+        assert!(
+            decoded
+                .admit_at(&config, GraphLogicalTime::new(0), 0, 0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn deployment_limits_bind_scheduler_and_memory_expiry() {
+        let config = crate::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..Default::default()
+        };
+        let budget = SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(1)).unwrap();
+        assert!(budget.validate_with_limits(10, 2).is_ok());
+        assert!(budget.validate_with_limits(9, 2).is_err());
+        assert!(budget.validate_with_limits(10, 1).is_err());
+        let widened_config = crate::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 11,
+            max_claims_per_tick: 2,
+            ..Default::default()
+        };
+        let widened =
+            SchedulerBudget::new_with_config(&widened_config, GraphLogicalTime::new(1)).unwrap();
+        assert!(widened.validate_with_limits(10, 2).is_err());
+
+        let provenance =
+            MemoryProvenance::new(signer_identity(), [EvidenceId::new("evidence:limit")])
+                .signed_with(&signer(), GraphProducerRole::Hunter, "hunter-limit")
+                .unwrap();
+        let memory = StrategyMemory::new(
+            GraphId::new("graph:limit"),
+            HypothesisId::new("hypothesis:limit"),
+            HypothesisDelta::new([], [], []),
+            [EvidenceUtility::new(
+                EvidenceId::new("evidence:limit"),
+                5_000,
+            )],
+            [],
+            MemoryOutcome::Confirmed,
+            provenance,
+        )
+        .unwrap()
+        .signed_with(&signer(), GraphProducerRole::Hunter, "hunter-limit")
+        .unwrap();
+        let expiry = StrategyMemoryExpiryEnvelope::new_with_limit(
+            &memory,
+            GraphLogicalTime::new(100),
+            5,
+            5,
+            &signer(),
+        )
+        .unwrap();
+        assert!(expiry.is_applicable_at_with_limit(GraphLogicalTime::new(104), 5));
+        assert!(!expiry.is_applicable_at_with_limit(GraphLogicalTime::new(105), 5));
+        assert!(!expiry.is_applicable_at_with_limit(GraphLogicalTime::new(104), 4));
+        let config = crate::config::HypothesisGraphConfig {
+            max_memory_ttl_ticks: 5,
+            ..Default::default()
+        };
+        assert!(expiry.is_applicable_at(GraphLogicalTime::new(104), &config));
+        let mut narrower = config.clone();
+        narrower.max_memory_ttl_ticks = 4;
+        assert!(!expiry.is_applicable_at(GraphLogicalTime::new(104), &narrower));
+        let encoded = serde_json::to_string(&expiry).unwrap();
+        assert!(StrategyMemoryExpiryEnvelope::deserialize_with_config(&encoded, &config).is_ok());
+        assert!(
+            StrategyMemoryExpiryEnvelope::deserialize_with_config(&encoded, &narrower).is_err()
+        );
+        assert!(expiry.validate_with_limit(4).is_err());
     }
 
     #[test]
@@ -8296,17 +9148,26 @@ mod tests {
         .unwrap()
         .signed_with(&signer(), GraphProducerRole::Hunter, "hunter-ttl")
         .unwrap();
-        let expiry =
-            StrategyMemoryExpiryEnvelope::new(&memory, GraphLogicalTime::new(100), 10, &signer())
-                .unwrap();
-        assert!(expiry.is_applicable_at(GraphLogicalTime::new(100)));
-        assert!(expiry.is_applicable_at(GraphLogicalTime::new(109)));
-        assert!(!expiry.is_applicable_at(GraphLogicalTime::new(110)));
+        let config = crate::config::HypothesisGraphConfig {
+            max_memory_ttl_ticks: 10,
+            ..Default::default()
+        };
+        let expiry = StrategyMemoryExpiryEnvelope::new(
+            &memory,
+            GraphLogicalTime::new(100),
+            10,
+            &config,
+            &signer(),
+        )
+        .unwrap();
+        assert!(expiry.is_applicable_at(GraphLogicalTime::new(100), &config));
+        assert!(expiry.is_applicable_at(GraphLogicalTime::new(109), &config));
+        assert!(!expiry.is_applicable_at(GraphLogicalTime::new(110), &config));
         assert!(expiry.validate().is_ok());
 
         let mut forged = expiry.clone();
         forged.memory_digest = "digest:forged".to_string();
-        assert!(!forged.is_applicable_at(GraphLogicalTime::new(101)));
+        assert!(!forged.is_applicable_at(GraphLogicalTime::new(101), &config));
         assert!(forged.validate().is_err());
         let mut unknown = expiry;
         unknown.schema_version = STRATEGY_MEMORY_EXPIRY_SCHEMA_VERSION + 1;
