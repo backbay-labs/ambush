@@ -5,6 +5,7 @@
 
 use crate::types::AgentId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use swarm_crypto::{
@@ -2609,6 +2610,21 @@ fn validate_text(field: &str, value: &str, max_bytes: usize) -> Result<(), Graph
     Ok(())
 }
 
+fn validate_sha256_digest(field: &str, value: &str) -> Result<(), GraphAdmissionError> {
+    if value.len() != 64
+        || !value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(GraphAdmissionError::InvalidField {
+            field: field.to_string(),
+            reason: "must be a canonical lowercase SHA-256 digest".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_id<T: AsRef<str>>(
     field: &str,
     value: &T,
@@ -3270,6 +3286,18 @@ pub enum TaskKind {
     FalsifyHypothesis,
 }
 
+impl TaskKind {
+    /// Closed scheduler rank.  This is deliberately not derived from enum
+    /// layout so adding a variant cannot silently change durable ordering.
+    pub const fn dispatch_rank(self) -> u8 {
+        match self {
+            Self::AcquireEvidence => 0,
+            Self::ChallengeEdge => 1,
+            Self::FalsifyHypothesis => 2,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskTarget {
@@ -3289,6 +3317,92 @@ impl TaskTarget {
                 validate_id("task.target.hypothesis_id", hypothesis_id, 256)
             }
         }
+    }
+}
+
+/// Derive the claimant-independent identity for one investigation operation.
+///
+/// The seed is intentionally part of the canonical material: a retry by a
+/// different claimant must address the same logical task, while a new seed
+/// must create a distinct task.  Claimant-scoped idempotency remains owned by
+/// [`TaskClaimRequest`].
+pub fn derive_logical_task_id(
+    graph_id: &GraphId,
+    target: &TaskTarget,
+    kind: TaskKind,
+    seed_digest: &str,
+) -> Result<TaskId, GraphAdmissionError> {
+    validate_id("task.logical.graph_id", graph_id, 256)?;
+    target.validate()?;
+    validate_task_kind_target(kind, target)?;
+    validate_sha256_digest("task.logical.seed_digest", seed_digest)?;
+    let material = (graph_id, target, kind, seed_digest);
+    Ok(TaskId::new(format!(
+        "task:logical:{}",
+        canonical_digest(&material)?
+    )))
+}
+
+/// Evidence and decision lineage retained by challenge/falsification tasks.
+///
+/// An optional decision is useful while a task is being assembled, but a
+/// terminal challenge/falsification envelope requires it.  Evidence is
+/// always required: a challenge without an evidentiary basis is not a
+/// reviewable graph transition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDecisionLink {
+    pub task_id: TaskId,
+    pub target: TaskTarget,
+    pub evidence_ids: BTreeSet<EvidenceId>,
+    pub decision_id: Option<DecisionId>,
+}
+
+impl TaskDecisionLink {
+    pub fn new<I>(
+        task_id: TaskId,
+        target: TaskTarget,
+        evidence_ids: I,
+        decision_id: Option<DecisionId>,
+    ) -> Result<Self, GraphAdmissionError>
+    where
+        I: IntoIterator<Item = EvidenceId>,
+    {
+        let evidence_ids = evidence_ids.into_iter().collect::<BTreeSet<_>>();
+        let link = Self {
+            task_id,
+            target,
+            evidence_ids,
+            decision_id,
+        };
+        link.validate()?;
+        Ok(link)
+    }
+
+    pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        validate_id("task.decision_link.task_id", &self.task_id, 256)?;
+        self.target.validate()?;
+        if matches!(self.target, TaskTarget::Evidence { .. }) {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "decision lineage must target an edge or hypothesis".to_string(),
+            });
+        }
+        validate_id_set(
+            "task.decision_link.evidence_ids",
+            &self.evidence_ids,
+            256,
+            256,
+        )?;
+        if self.evidence_ids.is_empty() {
+            return Err(GraphAdmissionError::InvalidField {
+                field: "task.decision_link.evidence_ids".to_string(),
+                reason: "challenge and falsification lineage requires evidence".to_string(),
+            });
+        }
+        if let Some(decision_id) = &self.decision_id {
+            validate_id("task.decision_link.decision_id", decision_id, 256)?;
+        }
+        Ok(())
     }
 }
 
@@ -3637,6 +3751,272 @@ impl TaskCompletion {
         self.completed_at.validate()?;
         validate_id_set("task.completion.evidence_ids", &self.evidence_ids, 256, 256)?;
         validate_text("task.completion.summary_digest", &self.summary_digest, 128)
+    }
+}
+
+/// Bind a worker's claim to the logical task, capability role, and signed
+/// canonical claim it is authorized to complete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCapabilityProof {
+    pub task_id: TaskId,
+    pub claimant: AgentId,
+    pub role: GraphProducerRole,
+    pub kind: TaskKind,
+    pub canonical_claim_digest: String,
+    pub witness: EvidenceWitness,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskCapabilityMaterial<'a> {
+    task_id: &'a TaskId,
+    claimant: &'a AgentId,
+    role: GraphProducerRole,
+    kind: TaskKind,
+    canonical_claim_digest: &'a str,
+    scoped_agent_id: &'a str,
+}
+
+impl TaskCapabilityProof {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        task_id: TaskId,
+        claimant: AgentId,
+        role: GraphProducerRole,
+        kind: TaskKind,
+        canonical_claim_digest: impl Into<String>,
+        signer: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphAdmissionError> {
+        Self::signed_with(
+            task_id,
+            claimant,
+            role,
+            kind,
+            canonical_claim_digest,
+            signer,
+            scoped_agent_id,
+        )
+    }
+
+    /// Sign a capability proof with the key belonging to `claimant`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn signed_with(
+        task_id: TaskId,
+        claimant: AgentId,
+        role: GraphProducerRole,
+        kind: TaskKind,
+        canonical_claim_digest: impl Into<String>,
+        signer: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphAdmissionError> {
+        let canonical_claim_digest = canonical_claim_digest.into();
+        validate_id("task.capability.task_id", &task_id, 256)?;
+        validate_agent_id("task.capability.claimant", &claimant)?;
+        validate_task_kind_role(kind, role)?;
+        validate_sha256_digest(
+            "task.capability.canonical_claim_digest",
+            &canonical_claim_digest,
+        )?;
+        let scoped_agent_id = scoped_agent_id.into();
+        validate_text("task.capability.scoped_agent_id", &scoped_agent_id, 128)?;
+        let signer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+        if signer_identity != claimant {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "capability signer does not match claimant identity".to_string(),
+            });
+        }
+        let material = TaskCapabilityMaterial {
+            task_id: &task_id,
+            claimant: &claimant,
+            role,
+            kind,
+            canonical_claim_digest: &canonical_claim_digest,
+            scoped_agent_id: &scoped_agent_id,
+        };
+        let bytes = canonical_json_bytes(&material).map_err(|error| {
+            GraphAdmissionError::Canonicalization {
+                reason: error.to_string(),
+            }
+        })?;
+        let witness = EvidenceWitness::new(signer, role, scoped_agent_id, &bytes)?;
+        let proof = Self {
+            task_id,
+            claimant,
+            role,
+            kind,
+            canonical_claim_digest,
+            witness,
+        };
+        proof.validate()?;
+        Ok(proof)
+    }
+
+    fn canonical_bytes(&self) -> Result<Vec<u8>, GraphAdmissionError> {
+        canonical_json_bytes(&TaskCapabilityMaterial {
+            task_id: &self.task_id,
+            claimant: &self.claimant,
+            role: self.role,
+            kind: self.kind,
+            canonical_claim_digest: &self.canonical_claim_digest,
+            scoped_agent_id: &self.witness.scoped_agent_id,
+        })
+        .map_err(|error| GraphAdmissionError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        validate_id("task.capability.task_id", &self.task_id, 256)?;
+        validate_agent_id("task.capability.claimant", &self.claimant)?;
+        validate_task_kind_role(self.kind, self.role)?;
+        validate_sha256_digest(
+            "task.capability.canonical_claim_digest",
+            &self.canonical_claim_digest,
+        )?;
+        if self.witness.producer_identity != self.claimant {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "capability witness identity does not match claimant".to_string(),
+            });
+        }
+        if self.witness.producer_role != self.role {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "capability witness role does not match capability".to_string(),
+            });
+        }
+        self.witness.validate(&self.canonical_bytes()?)
+    }
+}
+
+/// Keep completion semantics closed at the task-kind boundary.
+pub fn validate_completion_kind(
+    task_kind: TaskKind,
+    completion_kind: TaskCompletionKind,
+) -> Result<(), GraphAdmissionError> {
+    let valid = matches!(
+        (task_kind, completion_kind),
+        (TaskKind::AcquireEvidence, TaskCompletionKind::EvidenceAdded)
+            | (TaskKind::AcquireEvidence, TaskCompletionKind::NoFinding)
+            | (TaskKind::ChallengeEdge, TaskCompletionKind::EdgeChallenged)
+            | (
+                TaskKind::FalsifyHypothesis,
+                TaskCompletionKind::HypothesisFalsified
+            )
+    );
+    if valid {
+        Ok(())
+    } else {
+        Err(GraphAdmissionError::InvalidTransition {
+            reason: "task kind does not permit this completion kind".to_string(),
+        })
+    }
+}
+
+/// A terminal task publication that retains its lease/fence and complete
+/// evidence lineage in one typed value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTerminalEnvelope {
+    pub task_id: TaskId,
+    pub idempotency_key: IdempotencyKey,
+    pub lease_id: LeaseId,
+    pub fencing_token: FencingToken,
+    pub completion: TaskCompletion,
+    pub decision_link: Option<TaskDecisionLink>,
+    pub producer: AgentId,
+    pub capability: TaskCapabilityProof,
+}
+
+impl TaskTerminalEnvelope {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        task_id: TaskId,
+        idempotency_key: IdempotencyKey,
+        lease_id: LeaseId,
+        fencing_token: FencingToken,
+        completion: TaskCompletion,
+        decision_link: Option<TaskDecisionLink>,
+        producer: AgentId,
+        capability: TaskCapabilityProof,
+    ) -> Result<Self, GraphAdmissionError> {
+        let envelope = Self {
+            task_id,
+            idempotency_key,
+            lease_id,
+            fencing_token,
+            completion,
+            decision_link,
+            producer,
+            capability,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        validate_id("task.terminal.task_id", &self.task_id, 256)?;
+        validate_id("task.terminal.idempotency_key", &self.idempotency_key, 256)?;
+        validate_id("task.terminal.lease_id", &self.lease_id, 256)?;
+        self.fencing_token.validate()?;
+        self.completion.validate()?;
+        validate_agent_id("task.terminal.producer", &self.producer)?;
+        self.capability.validate()?;
+        if self.capability.task_id != self.task_id {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal capability task does not match envelope task".to_string(),
+            });
+        }
+        if self.capability.claimant != self.producer
+            || self.completion.completed_by != self.producer
+        {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "terminal producer, completion actor, and claimant must match".to_string(),
+            });
+        }
+        validate_completion_kind(self.capability.kind, self.completion.kind.clone())?;
+        match self.capability.kind {
+            TaskKind::AcquireEvidence => {
+                if self.decision_link.is_some() {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "evidence acquisition cannot carry decision lineage".to_string(),
+                    });
+                }
+            }
+            TaskKind::ChallengeEdge | TaskKind::FalsifyHypothesis => {
+                let link = self.decision_link.as_ref().ok_or_else(|| {
+                    GraphAdmissionError::InvalidField {
+                        field: "task.terminal.decision_link".to_string(),
+                        reason: "challenge and falsification require decision lineage".to_string(),
+                    }
+                })?;
+                link.validate()?;
+                if link.task_id != self.task_id || link.evidence_ids != self.completion.evidence_ids
+                {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal evidence does not match decision lineage".to_string(),
+                    });
+                }
+                let target_matches = matches!(
+                    (self.capability.kind, &link.target),
+                    (TaskKind::ChallengeEdge, TaskTarget::Edge { .. })
+                        | (TaskKind::FalsifyHypothesis, TaskTarget::Hypothesis { .. })
+                );
+                if !target_matches {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision target does not match task kind".to_string(),
+                    });
+                }
+                if link.decision_id.is_none() {
+                    return Err(GraphAdmissionError::InvalidField {
+                        field: "task.terminal.decision_link.decision_id".to_string(),
+                        reason: "terminal challenge and falsification require a decision"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -4017,13 +4397,192 @@ impl TaskRecord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+/// Closed graph behavior modes.  These values are consumed by orchestration,
+/// not merely included in a digest: each mode changes what the coordinator is
+/// allowed to converge on or simulate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphPolicyMode {
+    EvidenceFirst,
+    ChallengeContradictions,
+    ConservativeContainment,
+}
+
+impl GraphPolicyMode {
+    pub const fn requires_evidence_coverage(self) -> bool {
+        matches!(self, Self::EvidenceFirst)
+    }
+
+    pub const fn emits_falsification_work(self) -> bool {
+        matches!(self, Self::ChallengeContradictions)
+    }
+
+    pub const fn retains_alternatives(self) -> bool {
+        matches!(self, Self::ChallengeContradictions)
+    }
+
+    pub const fn requires_reversible_containment(self) -> bool {
+        matches!(self, Self::ConservativeContainment)
+    }
+}
+
+/// Per-logical-tick scheduler ceilings and durable usage counters.
+///
+/// Counters and the current logical tick are part of the wire so a restart or
+/// serialize/deserialize cycle cannot reset admission state within a tick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulerBudget {
+    pub max_work_units: u32,
+    pub max_claims: u16,
+    current_tick: GraphLogicalTime,
+    work_units_used: u32,
+    claims_used: u16,
+}
+
+impl SchedulerBudget {
+    pub const MAX_WORK_UNITS: u32 = 1_000_000;
+    pub const MAX_CLAIMS: u16 = 4_096;
+
+    pub fn new(max_work_units: u32, max_claims: u16) -> Result<Self, GraphAdmissionError> {
+        Self::new_at(max_work_units, max_claims, GraphLogicalTime::new(0))
+    }
+
+    pub fn new_at(
+        max_work_units: u32,
+        max_claims: u16,
+        current_tick: GraphLogicalTime,
+    ) -> Result<Self, GraphAdmissionError> {
+        let budget = Self {
+            max_work_units,
+            max_claims,
+            current_tick,
+            work_units_used: 0,
+            claims_used: 0,
+        };
+        budget.validate()?;
+        Ok(budget)
+    }
+
+    pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        self.current_tick.validate()?;
+        if self.max_work_units == 0 || self.max_work_units > Self::MAX_WORK_UNITS {
+            return Err(GraphAdmissionError::InvalidLimit {
+                field: "scheduler.max_work_units".to_string(),
+                reason: format!("must be between 1 and {}", Self::MAX_WORK_UNITS),
+            });
+        }
+        if self.max_claims == 0 || self.max_claims > Self::MAX_CLAIMS {
+            return Err(GraphAdmissionError::InvalidLimit {
+                field: "scheduler.max_claims".to_string(),
+                reason: format!("must be between 1 and {}", Self::MAX_CLAIMS),
+            });
+        }
+        if self.work_units_used > self.max_work_units || self.claims_used > self.max_claims {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "scheduler budget usage exceeds its configured ceiling".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Atomically admit one unit of work and its associated claims.  Failed
+    /// admissions leave both counters unchanged.
+    pub fn admit(&mut self, work_units: u32, claims: u16) -> Result<(), GraphAdmissionError> {
+        self.admit_at(self.current_tick, work_units, claims)
+    }
+
+    /// Admit work at an injected logical tick. Advancing to a newer tick
+    /// resets usage atomically with the successful admission; a stale tick or
+    /// over-limit request leaves the complete budget byte-identical.
+    pub fn admit_at(
+        &mut self,
+        logical_tick: GraphLogicalTime,
+        work_units: u32,
+        claims: u16,
+    ) -> Result<(), GraphAdmissionError> {
+        self.validate()?;
+        logical_tick.validate()?;
+        if logical_tick < self.current_tick {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "scheduler budget cannot move logical time backwards".to_string(),
+            });
+        }
+        let (current_work, current_claims) = if logical_tick == self.current_tick {
+            (self.work_units_used, self.claims_used)
+        } else {
+            (0, 0)
+        };
+        let next_work = current_work.checked_add(work_units).ok_or(
+            GraphAdmissionError::ResourceLimitExceeded {
+                resource: "scheduler.work_units_per_tick".to_string(),
+                limit: self.max_work_units as usize,
+            },
+        )?;
+        let next_claims = current_claims.checked_add(claims).ok_or(
+            GraphAdmissionError::ResourceLimitExceeded {
+                resource: "scheduler.claims_per_tick".to_string(),
+                limit: self.max_claims as usize,
+            },
+        )?;
+        if next_work > self.max_work_units {
+            return Err(GraphAdmissionError::ResourceLimitExceeded {
+                resource: "scheduler.work_units_per_tick".to_string(),
+                limit: self.max_work_units as usize,
+            });
+        }
+        if next_claims > self.max_claims {
+            return Err(GraphAdmissionError::ResourceLimitExceeded {
+                resource: "scheduler.claims_per_tick".to_string(),
+                limit: self.max_claims as usize,
+            });
+        }
+        self.current_tick = logical_tick;
+        self.work_units_used = next_work;
+        self.claims_used = next_claims;
+        Ok(())
+    }
+
+    pub const fn current_tick(&self) -> GraphLogicalTime {
+        self.current_tick
+    }
+
+    pub const fn work_units_used(&self) -> u32 {
+        self.work_units_used
+    }
+
+    pub const fn claims_used(&self) -> u16 {
+        self.claims_used
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphSchedulerKey {
     pub ready_at: GraphLogicalTime,
     pub task_kind: TaskKind,
     pub priority_basis_points: u16,
     pub task_id: TaskId,
+}
+
+impl Ord for GraphSchedulerKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.ready_at
+            .cmp(&other.ready_at)
+            .then_with(|| other.priority_basis_points.cmp(&self.priority_basis_points))
+            .then_with(|| {
+                self.task_kind
+                    .dispatch_rank()
+                    .cmp(&other.task_kind.dispatch_rank())
+            })
+            .then_with(|| self.task_id.cmp(&other.task_id))
+    }
+}
+
+impl PartialOrd for GraphSchedulerKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl GraphSchedulerKey {
@@ -4059,6 +4618,22 @@ impl GraphSchedulerKey {
             });
         }
         Ok(())
+    }
+
+    /// Return the exact dispatch tuple, including the descending-priority
+    /// component.  The tuple is useful to independent consumers that must
+    /// reproduce the core queue order without observing insertion order.
+    pub fn dispatch_order_key(&self) -> (i64, Reverse<u16>, u8, String) {
+        (
+            self.ready_at.as_millis(),
+            Reverse(self.priority_basis_points),
+            self.task_kind.dispatch_rank(),
+            self.task_id.0.clone(),
+        )
+    }
+
+    pub fn dispatches_before(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Less
     }
 }
 
@@ -5053,6 +5628,190 @@ impl StrategyMemory {
     }
 }
 
+/// Versioned envelope for newly persisted logical-time strategy memory.
+/// Existing `StrategyMemory` records intentionally retain their historical
+/// wire shape; stores treat records without this envelope as quarantined.
+pub const STRATEGY_MEMORY_EXPIRY_SCHEMA_VERSION: u32 = 1;
+pub const MAX_STRATEGY_MEMORY_TTL_TICKS: u64 = 86_400_000;
+const STRATEGY_MEMORY_EXPIRY_SCOPED_AGENT_ID: &str = "strategy-memory-expiry";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrategyMemoryExpiryEnvelope {
+    pub schema_version: u32,
+    pub memory_id: MemoryId,
+    pub memory_digest: String,
+    pub created_at: GraphLogicalTime,
+    pub expires_at: GraphLogicalTime,
+    pub signature: EvidenceWitness,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StrategyMemoryExpiryMaterial<'a> {
+    schema_version: u32,
+    memory_id: &'a MemoryId,
+    memory_digest: &'a str,
+    created_at: GraphLogicalTime,
+    expires_at: GraphLogicalTime,
+}
+
+impl StrategyMemoryExpiryEnvelope {
+    pub fn new(
+        memory: &StrategyMemory,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+        signer: &Keypair,
+    ) -> Result<Self, GraphAdmissionError> {
+        Self::new_with_limit(
+            memory,
+            created_at,
+            ttl_ticks,
+            MAX_STRATEGY_MEMORY_TTL_TICKS,
+            signer,
+        )
+    }
+
+    pub fn new_with_limit(
+        memory: &StrategyMemory,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+        max_ttl_ticks: u64,
+        signer: &Keypair,
+    ) -> Result<Self, GraphAdmissionError> {
+        memory.validate()?;
+        created_at.validate()?;
+        validate_ttl_ticks(ttl_ticks, max_ttl_ticks)?;
+        let ttl = i64::try_from(ttl_ticks).map_err(|_| GraphAdmissionError::InvalidField {
+            field: "strategy_memory_expiry.ttl_ticks".to_string(),
+            reason: "must fit in logical time".to_string(),
+        })?;
+        let expires_at =
+            created_at
+                .checked_add(ttl)
+                .ok_or_else(|| GraphAdmissionError::InvalidField {
+                    field: "strategy_memory_expiry.expires_at".to_string(),
+                    reason: "logical time overflow".to_string(),
+                })?;
+        let memory_digest = canonical_digest(memory)?;
+        let material = StrategyMemoryExpiryMaterial {
+            schema_version: STRATEGY_MEMORY_EXPIRY_SCHEMA_VERSION,
+            memory_id: &memory.memory_id,
+            memory_digest: &memory_digest,
+            created_at,
+            expires_at,
+        };
+        let bytes = canonical_json_bytes(&material).map_err(|error| {
+            GraphAdmissionError::Canonicalization {
+                reason: error.to_string(),
+            }
+        })?;
+        let signature = EvidenceWitness::new(
+            signer,
+            GraphProducerRole::Planner,
+            STRATEGY_MEMORY_EXPIRY_SCOPED_AGENT_ID,
+            &bytes,
+        )?;
+        let envelope = Self {
+            schema_version: STRATEGY_MEMORY_EXPIRY_SCHEMA_VERSION,
+            memory_id: memory.memory_id.clone(),
+            memory_digest,
+            created_at,
+            expires_at,
+            signature,
+        };
+        envelope.validate_with_limit(max_ttl_ticks)?;
+        envelope.validate_for(memory)?;
+        Ok(envelope)
+    }
+
+    pub fn is_applicable_at(&self, now: GraphLogicalTime) -> bool {
+        now.validate().is_ok()
+            && self.validate().is_ok()
+            && self.created_at <= now
+            && now < self.expires_at
+    }
+
+    pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        self.validate_with_limit(MAX_STRATEGY_MEMORY_TTL_TICKS)
+    }
+
+    pub fn validate_with_limit(&self, max_ttl_ticks: u64) -> Result<(), GraphAdmissionError> {
+        if self.schema_version != STRATEGY_MEMORY_EXPIRY_SCHEMA_VERSION {
+            return Err(GraphAdmissionError::UnsupportedSchema(self.schema_version));
+        }
+        validate_id("strategy_memory_expiry.memory_id", &self.memory_id, 256)?;
+        validate_sha256_digest("strategy_memory_expiry.memory_digest", &self.memory_digest)?;
+        self.created_at.validate()?;
+        self.expires_at.validate()?;
+        if self.expires_at <= self.created_at {
+            return Err(GraphAdmissionError::InvalidField {
+                field: "strategy_memory_expiry.expires_at".to_string(),
+                reason: "must be after created_at".to_string(),
+            });
+        }
+        let ttl = u64::try_from(
+            self.expires_at
+                .as_millis()
+                .checked_sub(self.created_at.as_millis())
+                .ok_or_else(|| GraphAdmissionError::InvalidField {
+                    field: "strategy_memory_expiry.expires_at".to_string(),
+                    reason: "logical time is not ordered".to_string(),
+                })?,
+        )
+        .map_err(|_| GraphAdmissionError::InvalidField {
+            field: "strategy_memory_expiry.ttl_ticks".to_string(),
+            reason: "must be non-negative".to_string(),
+        })?;
+        validate_ttl_ticks(ttl, max_ttl_ticks)?;
+        if self.signature.producer_role != GraphProducerRole::Planner
+            || self.signature.scoped_agent_id != STRATEGY_MEMORY_EXPIRY_SCOPED_AGENT_ID
+        {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "strategy memory expiry witness role or scope is invalid".to_string(),
+            });
+        }
+        let bytes = self.canonical_bytes()?;
+        self.signature.validate(&bytes)
+    }
+
+    /// Validate that this envelope actually describes the supplied memory,
+    /// rather than merely carrying a valid signature over unrelated IDs.
+    pub fn validate_for(&self, memory: &StrategyMemory) -> Result<(), GraphAdmissionError> {
+        memory.validate()?;
+        self.validate()?;
+        if self.memory_id != memory.memory_id || self.memory_digest != canonical_digest(memory)? {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "strategy memory expiry does not bind the supplied memory".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn canonical_bytes(&self) -> Result<Vec<u8>, GraphAdmissionError> {
+        canonical_json_bytes(&StrategyMemoryExpiryMaterial {
+            schema_version: self.schema_version,
+            memory_id: &self.memory_id,
+            memory_digest: &self.memory_digest,
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+        })
+        .map_err(|error| GraphAdmissionError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+}
+
+fn validate_ttl_ticks(ttl_ticks: u64, max_ttl_ticks: u64) -> Result<(), GraphAdmissionError> {
+    if ttl_ticks == 0 || max_ttl_ticks == 0 || ttl_ticks > max_ttl_ticks {
+        return Err(GraphAdmissionError::InvalidLimit {
+            field: "strategy_memory_expiry.ttl_ticks".to_string(),
+            reason: format!("must be between 1 and {max_ttl_ticks}"),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StrategyMemoryCore<'a> {
@@ -5825,6 +6584,98 @@ impl<'de> Deserialize<'de> for TaskCompletion {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct TaskDecisionLinkWire {
+    task_id: TaskId,
+    target: TaskTarget,
+    evidence_ids: BTreeSet<EvidenceId>,
+    #[serde(default)]
+    decision_id: Option<DecisionId>,
+}
+
+impl<'de> Deserialize<'de> for TaskDecisionLink {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = TaskDecisionLinkWire::deserialize(deserializer)?;
+        let record = Self {
+            task_id: wire.task_id,
+            target: wire.target,
+            evidence_ids: wire.evidence_ids,
+            decision_id: wire.decision_id,
+        };
+        record.validate().map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskCapabilityProofWire {
+    task_id: TaskId,
+    claimant: AgentId,
+    role: GraphProducerRole,
+    kind: TaskKind,
+    canonical_claim_digest: String,
+    witness: EvidenceWitness,
+}
+
+impl<'de> Deserialize<'de> for TaskCapabilityProof {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = TaskCapabilityProofWire::deserialize(deserializer)?;
+        let record = Self {
+            task_id: wire.task_id,
+            claimant: wire.claimant,
+            role: wire.role,
+            kind: wire.kind,
+            canonical_claim_digest: wire.canonical_claim_digest,
+            witness: wire.witness,
+        };
+        record.validate().map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskTerminalEnvelopeWire {
+    task_id: TaskId,
+    idempotency_key: IdempotencyKey,
+    lease_id: LeaseId,
+    fencing_token: FencingToken,
+    completion: TaskCompletion,
+    #[serde(default)]
+    decision_link: Option<TaskDecisionLink>,
+    producer: AgentId,
+    capability: TaskCapabilityProof,
+}
+
+impl<'de> Deserialize<'de> for TaskTerminalEnvelope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = TaskTerminalEnvelopeWire::deserialize(deserializer)?;
+        let record = Self {
+            task_id: wire.task_id,
+            idempotency_key: wire.idempotency_key,
+            lease_id: wire.lease_id,
+            fencing_token: wire.fencing_token,
+            completion: wire.completion,
+            decision_link: wire.decision_link,
+            producer: wire.producer,
+            capability: wire.capability,
+        };
+        record.validate().map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TaskTerminalProofWire {
     schema_version: u32,
     prior_state: TaskState,
@@ -5877,6 +6728,64 @@ impl<'de> Deserialize<'de> for GraphSchedulerKey {
             task_kind: wire.task_kind,
             priority_basis_points: wire.priority_basis_points,
             task_id: wire.task_id,
+        };
+        record.validate().map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SchedulerBudgetWire {
+    max_work_units: u32,
+    max_claims: u16,
+    current_tick: GraphLogicalTime,
+    work_units_used: u32,
+    claims_used: u16,
+}
+
+impl<'de> Deserialize<'de> for SchedulerBudget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = SchedulerBudgetWire::deserialize(deserializer)?;
+        let record = Self {
+            max_work_units: wire.max_work_units,
+            max_claims: wire.max_claims,
+            current_tick: wire.current_tick,
+            work_units_used: wire.work_units_used,
+            claims_used: wire.claims_used,
+        };
+        record.validate().map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrategyMemoryExpiryEnvelopeWire {
+    schema_version: u32,
+    memory_id: MemoryId,
+    memory_digest: String,
+    created_at: GraphLogicalTime,
+    expires_at: GraphLogicalTime,
+    signature: EvidenceWitness,
+}
+
+impl<'de> Deserialize<'de> for StrategyMemoryExpiryEnvelope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = StrategyMemoryExpiryEnvelopeWire::deserialize(deserializer)?;
+        let record = Self {
+            schema_version: wire.schema_version,
+            memory_id: wire.memory_id,
+            memory_digest: wire.memory_digest,
+            created_at: wire.created_at,
+            expires_at: wire.expires_at,
+            signature: wire.signature,
         };
         record.validate().map_err(serde::de::Error::custom)?;
         Ok(record)
@@ -6090,6 +6999,14 @@ impl_validated_record!(TaskClaimRequest, |record: &TaskClaimRequest| record
 impl_validated_record!(TaskLease, |record: &TaskLease| record
     .validate_with_limit(persistence_limits().max_task_lease_ms));
 impl_validated_record!(TaskCompletion, |record: &TaskCompletion| record.validate());
+impl_validated_record!(TaskDecisionLink, |record: &TaskDecisionLink| record
+    .validate());
+impl_validated_record!(TaskCapabilityProof, |record: &TaskCapabilityProof| record
+    .validate());
+impl_validated_record!(TaskTerminalEnvelope, |record: &TaskTerminalEnvelope| record
+    .validate());
+impl_validated_record!(SchedulerBudget, |record: &SchedulerBudget| record
+    .validate());
 impl_validated_record!(TaskRecord, |record: &TaskRecord| record
     .validate_with_limits(
         persistence_limits().max_task_lease_ms,
@@ -6116,6 +7033,10 @@ impl_validated_record!(EvidenceUtility, |record: &EvidenceUtility| record
 impl_validated_record!(MemoryProvenance, |record: &MemoryProvenance| record
     .validate());
 impl_validated_record!(StrategyMemory, |record: &StrategyMemory| record.validate());
+impl_validated_record!(
+    StrategyMemoryExpiryEnvelope,
+    |record: &StrategyMemoryExpiryEnvelope| record.validate()
+);
 impl_validated_record!(StrategyMemoryMatch, |record: &StrategyMemoryMatch| record
     .validate());
 impl_validated_record!(CollectiveMetricReport, |record: &CollectiveMetricReport| {
@@ -7224,5 +8145,171 @@ mod tests {
                 .expect("signed authorized decision");
             assert!(decision.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn post_plan03_task_identity_lineage_and_capability_are_strict() {
+        let graph_id = GraphId::new("graph:post-plan03");
+        let seed_digest = canonical_digest(&"seed").unwrap();
+        let other_seed_digest = canonical_digest(&"other-seed").unwrap();
+        let claim_digest = canonical_digest(&"claim").unwrap();
+        let target = TaskTarget::Edge {
+            edge_id: EdgeId::new("edge:challenge"),
+        };
+        let logical =
+            derive_logical_task_id(&graph_id, &target, TaskKind::ChallengeEdge, &seed_digest)
+                .expect("logical task id");
+        assert_eq!(
+            logical,
+            derive_logical_task_id(&graph_id, &target, TaskKind::ChallengeEdge, &seed_digest)
+                .unwrap()
+        );
+        assert_ne!(
+            logical,
+            derive_logical_task_id(
+                &graph_id,
+                &target,
+                TaskKind::ChallengeEdge,
+                &other_seed_digest
+            )
+            .unwrap()
+        );
+        assert!(
+            derive_logical_task_id(&graph_id, &target, TaskKind::ChallengeEdge, "seed:digest")
+                .is_err()
+        );
+
+        let signer = signer();
+        let claimant = signer_identity();
+        let capability = TaskCapabilityProof::signed_with(
+            logical.clone(),
+            claimant.clone(),
+            GraphProducerRole::Challenger,
+            TaskKind::ChallengeEdge,
+            claim_digest,
+            &signer,
+            "challenger-a",
+        )
+        .expect("capability proof");
+        assert!(capability.validate().is_ok());
+
+        let link = TaskDecisionLink::new(
+            logical.clone(),
+            target.clone(),
+            [EvidenceId::new("evidence:challenge")],
+            Some(DecisionId::new("decision:challenge")),
+        )
+        .expect("decision lineage");
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::EdgeChallenged,
+            claimant.clone(),
+            GraphLogicalTime::new(10),
+            [EvidenceId::new("evidence:challenge")],
+            "summary:challenge",
+        )
+        .unwrap();
+        let envelope = TaskTerminalEnvelope::new(
+            logical,
+            IdempotencyKey::new("idempotency:claim"),
+            LeaseId::new("lease:challenge"),
+            FencingToken::new(1),
+            completion,
+            Some(link),
+            claimant,
+            capability,
+        )
+        .expect("terminal envelope");
+        assert!(envelope.validate().is_ok());
+
+        let mut forged = envelope.clone();
+        forged.completion.kind = TaskCompletionKind::EvidenceAdded;
+        assert!(forged.validate().is_err());
+        forged = envelope;
+        forged.producer = AgentId::new("other", "producer");
+        assert!(forged.validate().is_err());
+
+        let mut forged_scope = TaskCapabilityProof::signed_with(
+            TaskId::new("task:scope"),
+            signer_identity(),
+            GraphProducerRole::Challenger,
+            TaskKind::ChallengeEdge,
+            canonical_digest(&"scope-claim").unwrap(),
+            &signer,
+            "scope-a",
+        )
+        .unwrap();
+        forged_scope.witness.scoped_agent_id = "scope-b".to_string();
+        assert!(forged_scope.validate().is_err());
+    }
+
+    #[test]
+    fn scheduler_dispatch_is_ready_priority_kind_and_id_deterministic() {
+        let low = GraphSchedulerKey::new(
+            GraphLogicalTime::new(5),
+            TaskKind::ChallengeEdge,
+            1_000,
+            TaskId::new("task:b"),
+        )
+        .unwrap();
+        let high = GraphSchedulerKey::new(
+            GraphLogicalTime::new(5),
+            TaskKind::AcquireEvidence,
+            9_000,
+            TaskId::new("task:z"),
+        )
+        .unwrap();
+        assert!(high.dispatches_before(&low));
+        assert_eq!(
+            high.dispatch_order_key(),
+            (5, std::cmp::Reverse(9_000), 0, "task:z".to_string())
+        );
+
+        let mut budget = SchedulerBudget::new(10, 2).unwrap();
+        budget.admit(6, 1).unwrap();
+        assert!(budget.admit(5, 1).is_err());
+        assert!(budget.admit(1, 2).is_err());
+        let encoded = serde_json::to_vec(&budget).unwrap();
+        let mut decoded: SchedulerBudget = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, budget);
+        assert!(decoded.admit_at(GraphLogicalTime::new(0), 5, 1).is_err());
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), encoded);
+        assert!(decoded.admit_at(GraphLogicalTime::new(1), 10, 2).is_ok());
+        assert_eq!(decoded.current_tick(), GraphLogicalTime::new(1));
+        assert!(decoded.admit_at(GraphLogicalTime::new(0), 0, 0).is_err());
+    }
+
+    #[test]
+    fn strategy_memory_expiry_is_signed_and_logical() {
+        let provenance =
+            MemoryProvenance::new(signer_identity(), [EvidenceId::new("evidence:ttl")])
+                .signed_with(&signer(), GraphProducerRole::Hunter, "hunter-ttl")
+                .unwrap();
+        let memory = StrategyMemory::new(
+            GraphId::new("graph:ttl"),
+            HypothesisId::new("hypothesis:ttl"),
+            HypothesisDelta::new([], [], []),
+            [EvidenceUtility::new(EvidenceId::new("evidence:ttl"), 5_000)],
+            [],
+            MemoryOutcome::Confirmed,
+            provenance,
+        )
+        .unwrap()
+        .signed_with(&signer(), GraphProducerRole::Hunter, "hunter-ttl")
+        .unwrap();
+        let expiry =
+            StrategyMemoryExpiryEnvelope::new(&memory, GraphLogicalTime::new(100), 10, &signer())
+                .unwrap();
+        assert!(expiry.is_applicable_at(GraphLogicalTime::new(100)));
+        assert!(expiry.is_applicable_at(GraphLogicalTime::new(109)));
+        assert!(!expiry.is_applicable_at(GraphLogicalTime::new(110)));
+        assert!(expiry.validate().is_ok());
+
+        let mut forged = expiry.clone();
+        forged.memory_digest = "digest:forged".to_string();
+        assert!(!forged.is_applicable_at(GraphLogicalTime::new(101)));
+        assert!(forged.validate().is_err());
+        let mut unknown = expiry;
+        unknown.schema_version = STRATEGY_MEMORY_EXPIRY_SCHEMA_VERSION + 1;
+        assert!(unknown.validate().is_err());
     }
 }

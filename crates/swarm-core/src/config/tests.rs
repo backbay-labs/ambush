@@ -95,6 +95,10 @@ fn hypothesis_graph_config_defaults_are_disabled_and_bounded() {
     assert_eq!(config.max_evidence_bytes, 1_048_576);
     assert_eq!(config.max_lease_ms, 300_000);
     assert_eq!(config.max_benchmark_work_units, 10_000);
+    assert_eq!(config.max_memory_ttl_ticks, 86_400_000);
+    assert_eq!(config.max_work_units_per_tick, 10_000);
+    assert_eq!(config.max_claims_per_tick, 128);
+    assert!(config.validate_reasoning_limits().is_ok());
     assert!(config.resource_limits().validate().is_ok());
 }
 
@@ -152,6 +156,24 @@ fn hypothesis_graph_config_round_trips_all_limits() {
     let decoded: HypothesisGraphConfig = serde_json::from_value(encoded).unwrap();
     assert_eq!(decoded, expected);
     assert!(decoded.resource_limits().validate().is_ok());
+}
+
+#[test]
+fn hypothesis_graph_config_rejects_unbounded_reasoning_limits() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_memory_ttl_ticks = 0;
+    assert!(config.validate().is_err());
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_work_units_per_tick = u32::MAX;
+    assert!(config.validate().is_err());
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_claims_per_tick = u16::MAX;
+    assert!(config.validate().is_err());
 }
 
 #[test]

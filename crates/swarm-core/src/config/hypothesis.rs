@@ -1,5 +1,9 @@
 use super::*;
 
+const DEFAULT_HYPOTHESIS_GRAPH_MAX_MEMORY_TTL_TICKS: u64 = 86_400_000;
+const DEFAULT_HYPOTHESIS_GRAPH_MAX_WORK_UNITS_PER_TICK: u32 = 10_000;
+const DEFAULT_HYPOTHESIS_GRAPH_MAX_CLAIMS_PER_TICK: u16 = 128;
+
 /// Bounded collective-reasoning configuration. The feature is deliberately
 /// disabled by default so existing runtime paths retain their byte shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +39,24 @@ pub struct HypothesisGraphConfig {
     pub max_graph_fan_out: usize,
     #[serde(default = "default_hypothesis_graph_max_benchmark_work_units")]
     pub max_benchmark_work_units: usize,
+    #[serde(default = "default_hypothesis_graph_max_memory_ttl_ticks")]
+    pub max_memory_ttl_ticks: u64,
+    #[serde(default = "default_hypothesis_graph_max_work_units_per_tick")]
+    pub max_work_units_per_tick: u32,
+    #[serde(default = "default_hypothesis_graph_max_claims_per_tick")]
+    pub max_claims_per_tick: u16,
+}
+
+const fn default_hypothesis_graph_max_memory_ttl_ticks() -> u64 {
+    DEFAULT_HYPOTHESIS_GRAPH_MAX_MEMORY_TTL_TICKS
+}
+
+const fn default_hypothesis_graph_max_work_units_per_tick() -> u32 {
+    DEFAULT_HYPOTHESIS_GRAPH_MAX_WORK_UNITS_PER_TICK
+}
+
+const fn default_hypothesis_graph_max_claims_per_tick() -> u16 {
+    DEFAULT_HYPOTHESIS_GRAPH_MAX_CLAIMS_PER_TICK
 }
 
 impl Default for HypothesisGraphConfig {
@@ -56,6 +78,9 @@ impl Default for HypothesisGraphConfig {
             max_graph_depth: default_hypothesis_graph_max_depth(),
             max_graph_fan_out: default_hypothesis_graph_max_fan_out(),
             max_benchmark_work_units: default_hypothesis_graph_max_benchmark_work_units(),
+            max_memory_ttl_ticks: default_hypothesis_graph_max_memory_ttl_ticks(),
+            max_work_units_per_tick: default_hypothesis_graph_max_work_units_per_tick(),
+            max_claims_per_tick: default_hypothesis_graph_max_claims_per_tick(),
         }
     }
 }
@@ -78,5 +103,48 @@ impl HypothesisGraphConfig {
             max_graph_fan_out: self.max_graph_fan_out,
             max_benchmark_work_units: self.max_benchmark_work_units,
         }
+    }
+
+    /// Validate the post-Plan-03 logical-time and per-tick ceilings.  These
+    /// limits are kept separate from graph cardinality limits so adding them
+    /// does not alter the historical `GraphResourceLimits` wire shape.
+    pub fn validate_reasoning_limits(
+        &self,
+    ) -> Result<(), crate::hypothesis_graph::GraphAdmissionError> {
+        if self.max_memory_ttl_ticks == 0
+            || self.max_memory_ttl_ticks > crate::hypothesis_graph::MAX_STRATEGY_MEMORY_TTL_TICKS
+        {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_memory_ttl_ticks".to_string(),
+                reason: format!(
+                    "must be between 1 and {}",
+                    crate::hypothesis_graph::MAX_STRATEGY_MEMORY_TTL_TICKS
+                ),
+            });
+        }
+        if self.max_work_units_per_tick == 0
+            || self.max_work_units_per_tick
+                > crate::hypothesis_graph::SchedulerBudget::MAX_WORK_UNITS
+        {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_work_units_per_tick".to_string(),
+                reason: format!(
+                    "must be between 1 and {}",
+                    crate::hypothesis_graph::SchedulerBudget::MAX_WORK_UNITS
+                ),
+            });
+        }
+        if self.max_claims_per_tick == 0
+            || self.max_claims_per_tick > crate::hypothesis_graph::SchedulerBudget::MAX_CLAIMS
+        {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_claims_per_tick".to_string(),
+                reason: format!(
+                    "must be between 1 and {}",
+                    crate::hypothesis_graph::SchedulerBudget::MAX_CLAIMS
+                ),
+            });
+        }
+        Ok(())
     }
 }
