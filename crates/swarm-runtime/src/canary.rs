@@ -1306,9 +1306,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
-        DetectorProfilesConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
-        PolicyConfig, PromotionConfig, ResponseAdapterConfig, RuntimeSettings, SwarmConfig,
-        TelemetrySourceConfig,
+        DetectorProfilesConfig, HypothesisGraphConfig, InvestigationConfig, PheromoneBackendConfig,
+        PheromoneConfig, PolicyConfig, PromotionConfig, ResponseAdapterConfig, RuntimeSettings,
+        SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::types::{AgentId, Severity};
     use swarm_crypto::Ed25519Signer;
@@ -1388,7 +1388,7 @@ mod tests {
                 recent_decisions_limit: 20,
             },
             investigation: InvestigationConfig::default(),
-            hypothesis_graph: Default::default(),
+            hypothesis_graph: HypothesisGraphConfig::default(),
             correlation: CorrelationConfig::default(),
             canary: CanaryConfig {
                 enabled: true,
@@ -1409,6 +1409,40 @@ mod tests {
             operator: swarm_core::config::OperatorSurfaceConfig::default(),
             tls: None,
         }
+    }
+
+    #[test]
+    fn canary_support_config_preserves_disabled_graph_and_legacy_runtime_bytes() {
+        let config = canary_config();
+
+        assert_eq!(config.hypothesis_graph, HypothesisGraphConfig::default());
+        assert!(!config.hypothesis_graph.enabled);
+        assert_eq!(
+            serde_json::to_vec(&config.runtime.mode).unwrap(),
+            br#""detect_only""#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.policy).unwrap(),
+            br#"{"human_gate_severity":"HIGH","lease_ttl_ms":60000,"max_actions_per_scope_per_minute":5,"rules":[]}"#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.response_adapter).unwrap(),
+            br#"{"kind":"sandbox"}"#
+        );
+    }
+
+    #[test]
+    fn signed_default_ruleset_bytes_remain_unchanged() {
+        const EXPECTED_SHA256: &str =
+            "bc63f0e53780325317f638b6e22f4d6f638048fc7ba177485c18592f6104c324";
+        const EXPECTED_SIZE: usize = 10_599;
+
+        let bytes = include_bytes!("../../../rulesets/default.yaml");
+        assert_eq!(bytes.len(), EXPECTED_SIZE);
+        assert_eq!(
+            hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes)),
+            EXPECTED_SHA256
+        );
     }
 
     fn control_candidate() -> DetectorCandidateManifest {

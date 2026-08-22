@@ -18,11 +18,11 @@
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CircuitBreakerConfig, CorrelationConfig,
-        InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PolicyRuleConfig, PolicyRuleDecision, PromotionConfig, ResponsePlaybookBranch,
-        ResponsePlaybookCondition, ResponsePlaybookConfig, ResponsePlaybookRule, RetryConfig,
-        RuntimeSettings, SiemForwardConfig, SwarmConfig, TelemetrySourceConfig,
-        TemporalEventWindowConfig,
+        HypothesisGraphConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
+        PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
+        ResponsePlaybookBranch, ResponsePlaybookCondition, ResponsePlaybookConfig,
+        ResponsePlaybookRule, RetryConfig, RuntimeSettings, SiemForwardConfig, SwarmConfig,
+        TelemetrySourceConfig, TemporalEventWindowConfig,
     };
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::{
@@ -120,7 +120,7 @@
                 recent_decisions_limit: 20,
             },
             investigation: InvestigationConfig::default(),
-            hypothesis_graph: Default::default(),
+            hypothesis_graph: HypothesisGraphConfig::default(),
             correlation: CorrelationConfig::default(),
             canary: CanaryConfig::default(),
             promotion: PromotionConfig::default(),
@@ -132,6 +132,30 @@
             operator: swarm_core::config::OperatorSurfaceConfig::default(),
             tls: None,
         }
+    }
+
+    #[test]
+    fn service_support_config_preserves_disabled_graph_and_legacy_runtime_bytes() {
+        let config = service_config(
+            RuntimeMode::DetectOnly,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+
+        assert_eq!(config.hypothesis_graph, HypothesisGraphConfig::default());
+        assert!(!config.hypothesis_graph.enabled);
+        assert_eq!(
+            serde_json::to_vec(&config.runtime.mode).unwrap(),
+            br#""detect_only""#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.policy).unwrap(),
+            br#"{"human_gate_severity":"HIGH","lease_ttl_ms":60000,"max_actions_per_scope_per_minute":5,"rules":[]}"#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.response_adapter).unwrap(),
+            br#"{"kind":"sandbox"}"#
+        );
     }
 
     fn runtime_service() -> RuntimeService<StaticApprovalGate, SandboxExecutor> {
