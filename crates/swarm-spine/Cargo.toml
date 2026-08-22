@@ -18,6 +18,7 @@ sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+libc.workspace = true
 
 [lints]
 workspace = true

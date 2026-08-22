@@ -46,10 +46,12 @@
 pub mod chain;
 pub mod checkpoint;
 pub mod envelope;
+pub mod hypothesis_graph_store;
 pub mod incident;
 pub mod investigation;
 pub mod spine_error;
 pub mod store;
+pub mod strategy_memory;
 
 use serde::{Deserialize, Serialize};
 use swarm_core::pheromone::PheromoneDeposit;
@@ -67,6 +69,12 @@ pub use envelope::{
     ENVELOPE_SCHEMA_V1, build_signed_envelope, compute_envelope_hash, compute_envelope_hash_hex,
     envelope_signing_bytes, extract_envelope_hash, issuer_from_keypair, now_rfc3339,
     parse_issuer_pubkey_hex, sign_envelope, verify_envelope,
+};
+pub use hypothesis_graph_store::{
+    ConfiguredHypothesisGraphStore, DurableTaskRecord, FileHypothesisGraphStore, GraphStoreError,
+    GraphStoreRevision, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
+    MemoryHypothesisGraphStore, TaskClaimResult, TaskFailure, TaskMutationResult, TaskStore,
+    TaskTerminalResult,
 };
 pub use incident::{
     AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
@@ -88,6 +96,11 @@ pub use store::{
     ConfiguredReplayBundleStore, FileReplayBundleStore, MemoryReplayBundleStore,
     ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
     ReplayStoreHealth,
+};
+pub use strategy_memory::{
+    FileStrategyMemoryStore, MemoryStrategyMemoryStore, RetrievedStrategyMemory,
+    StrategyMemoryAppendResult, StrategyMemoryRecord, StrategyMemoryStore,
+    StrategyMemoryStoreError,
 };
 
 /// Policy step captured in an audit trail.
