@@ -14,5 +14,4 @@ Transfer learned attack abstractions between swarms without sharing raw telemetr
 
 ## Measurement contract
 
-Compare memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage. Pass with at least 20% lower median time to correct hypothesis or +10 percentage points chain recall, no breach of Phase 286 false-edge/duplicate ceilings, at least one previously unseen evasion across the withheld corpus, and withheld-campaign performance within 5% of in-sample score.
-
+Compare memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage. Pass with checked-integer time improvement `>= 2,000 bp` OR chain-recall improvement `>= 1,000 bp`, false edges `<= 1,000 bp`, duplicate work `<= 500 bp`, at least one previously unseen evasion across the withheld corpus, and withheld-campaign relative gap `<= 500 bp` versus in-sample. No float or wall-clock-only comparison is acceptance evidence.

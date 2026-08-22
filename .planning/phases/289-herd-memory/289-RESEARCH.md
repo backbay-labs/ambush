@@ -25,7 +25,7 @@ Transfer learned attack abstractions between swarms without sharing raw telemetr
 
 #### Measurement contract
 
-Compare memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage. Pass with at least 20% lower median time to correct hypothesis or +10 percentage points chain recall, no breach of Phase 286 false-edge/duplicate ceilings, at least one previously unseen evasion across the withheld corpus, and withheld-campaign performance within 5% of in-sample score.
+Compare memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage. Plan 00 freezes checked-integer basis-point formulas: pass with time improvement `>= 2,000 bp` OR chain-recall improvement `>= 1,000 bp`, false edges `<= 1,000 bp`, duplicate work `<= 500 bp`, at least one previously unseen evasion across the withheld corpus, and withheld-campaign relative gap `<= 500 bp` versus in-sample. No float or wall-clock-only comparison is acceptance evidence.
 
 ### Claude's Discretion
 
@@ -46,7 +46,7 @@ The context file has no Deferred Ideas heading. Raw-telemetry export, peer-autho
 | HERDMEM-03 | A receiving swarm requires independent local corroboration before using a peer memory for prioritization. No single publisher can raise confidence or authorize containment; conflicting memories remain visible as contradictions. | Tag imported origin separately, join only with local evidence, retain contradiction sets, and keep memory above the policy/response TCB boundary. |
 | HERDMEM-04 | Retrieved memory changes the next investigation's task ordering only when its context matches the current graph and source evidence. The benchmark compares memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage. | Adapt Sphinx/strategy retrieval to a corroboration-gated priority delta and reuse the deterministic replay harness for three isolated arms. |
 | HERDMEM-05 | Memory retention, expiry, revocation, poisoning quarantine, and operator deletion are durable and restart-safe. Garbage collection removes expired payloads and dependent indexes without leaving actionable orphan state. | Use a tombstone-first lifecycle ledger, atomic committed generations, restart recovery, registry revocation, and complete dependent-index GC. |
-| HERDMEM-06 | Herd-memory acceptance requires at least 20% lower median time to correct hypothesis or 10 percentage-point higher chain recall versus the single-agent control, no increase above the Phase 286 false-edge/duplicate-work ceilings, discovery of at least one previously unseen evasion across the withheld corpus, and withheld-campaign generalization within 5% of the in-sample score. | Add deterministic event/virtual-clock metrics, unseen-evasion accounting, and an evaluator-only held-out corpus digest. |
+| HERDMEM-06 | Herd-memory acceptance requires checked-integer time improvement `>= 2,000 bp` or chain-recall improvement `>= 1,000 bp` versus the single-agent control, false-edge `<= 1,000 bp`, duplicate-work `<= 500 bp`, at least one previously unseen evasion across the withheld corpus, and withheld-campaign relative gap `<= 500 bp` versus in-sample. | Add deterministic event/virtual-clock metrics, unseen-evasion accounting, and an evaluator-only held-out corpus digest. |
 </phase_requirements>
 
 ## Summary
@@ -131,7 +131,7 @@ Verify in this order: exact schema and bounds; tenant, source swarm, receiver sw
 
 Envelope fields should include schema_version, memory_id, tenant_id, source_swarm_id, receiver_swarm_id, epoch, issuer_id, issuer_key_id, sequence, previous_envelope_hash, nonce, issued_at_ms, expires_at_ms, source_corpus_digest, confidence, transformation_history, body, body_hash, and signature. The receiver's configured scope is authoritative.
 
-Registry entries need active/retired/revoked state, tenant/source-swarm/schema/domain, validity interval, epoch, and continuity proof. The old key signs a canonical rotation payload linking old/new key IDs, following FileAgentIdentityRegistry::rotate_identity. A revoked key cannot create new actionable imports. Unknown keys are never admitted from envelopes.
+Registry entries need active/retired/revoked state, tenant/source-swarm/schema/domain, validity interval, epoch, and continuity proof. The old key signs a canonical rotation payload linking old/new key IDs, following FileAgentIdentityRegistry::rotate_identity. Persist the registry snapshot atomically at the configured `HerdMemoryConfig.issuer_registry_path`, including generation, active entries, rotation history, and revocation/retirement history; reopen must reproduce the same trust state. A revoked key cannot create new actionable imports. Unknown keys are never admitted from envelopes.
 
 Require exact head plus one and exact predecessor. A second valid record at an already-seen sequence with a different hash is equivocation: retain both in a contradiction set and quarantine the stream. HashMismatch or SequenceMismatch returned only in memory is not durable detection.
 
@@ -143,7 +143,7 @@ Imported records never count as independent sources, local corroboration, graph 
 
 ### Pattern 4: Tombstone-first restart-safe lifecycle
 
-Accepted payload, indexes, head, nonce ledger, refusal report, quarantine state, and tombstone form one durable state machine. Write a complete temporary generation, sync it, rename atomically, and sync the parent directory. Write a tombstone before deleting payload. GC removes payload and every dependent index but retains a non-actionable tombstone/refusal/equivocation record so restart cannot resurrect it.
+Accepted payload, indexes, per-stream head, nonce ledger, refusal report, quarantine state, and tombstone form one durable state machine. Write a complete temporary generation, sync it, rename atomically, and sync the parent directory. Write a tombstone before deleting payload. GC removes payload and every dependent retrieval index but retains a non-actionable tombstone/refusal/equivocation record plus per-stream head, nonce, and replay tombstones at the current epoch, so restart cannot resurrect it or permit sequence reset/replay. Clearing a stream replay fence requires an explicit trusted epoch transition.
 
 ### Pattern 5: Deterministic three-arm/withheld evaluation
 
@@ -166,7 +166,7 @@ Run memory-enabled, single-agent, and no-memory arms through the same seeded rep
 |---------|--------------|-------------|-----|
 | Canonical signing | Per-module JSON sorting or signing serde_json text | swarm_crypto::canonical_json_bytes | One protocol byte representation. |
 | Content ID | Caller IDs or pretty-printed hashes | SHA-256 over canonical allowlisted body | Hash identifies exactly signed bytes. |
-| Opaque entity ref | Plain SHA-256 of local identifiers | swarm_crypto::hmac_sha256_hex with tenant/key-epoch key | Prevents offline dictionary recovery and cross-scope correlation. |
+| Opaque entity ref | Plain SHA-256 of local identifiers or caller-provided secret bytes | `OpaqueKeyResolver` with `swarm_crypto::hmac_sha256_hex` over tenant/export namespace/key epoch | Prevents offline dictionary recovery, cross-scope correlation, and cross-tenant key lookup; resolver controls rotation/retirement. |
 | Signature verification | New wrapper or trust from public_key_hex | swarm-crypto primitives after registry lookup | Signature integrity and trust admission stay separate. |
 | Chain validation | Sequence-only counter | Extend swarm-spine chain with durable head, nonce, predecessor, equivocation | Existing negative tests enumerate failure classes. |
 | Key rotation | First-seen key acceptance | Agent identity continuity-proof pattern plus registry/revocation | Rotation requires trusted continuity. |
@@ -236,6 +236,8 @@ pub struct OpaqueEntityRef {
     pub kind: OpaqueEntityKind,
     pub ref_digest: String,
     pub key_epoch: u64,
+    pub tenant_scope_digest: String,
+    pub export_namespace_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,9 +263,18 @@ fn body_id(body: &HerdMemoryBody) -> Result<String, swarm_crypto::CryptoError> {
     Ok(sha256_hex(&canonical_json_bytes(body)?))
 }
 
-fn opaque_ref(key: &[u8], epoch: u64, kind: &str, normalized: &str) -> String {
-    let material = format!("ambush.herd.entity-ref.v1:{epoch}:{kind}:{normalized}");
-    hmac_sha256_hex(key, material.as_bytes())
+fn opaque_ref(
+    resolver: &dyn OpaqueKeyResolver,
+    key_ref: &str,
+    tenant: &str,
+    export_namespace: &str,
+    epoch: u64,
+    kind: &str,
+    normalized: &str,
+) -> Result<String, OpaqueKeyError> {
+    let key = resolver.resolve(key_ref, tenant, export_namespace, epoch, KeyPurpose::HerdEntity)?;
+    let material = format!("ambush.herd.entity-ref.v2:{tenant}:{export_namespace}:{epoch}:{kind}:{normalized}");
+    Ok(key.hmac_sha256_hex(material.as_bytes()))
 }
 ~~~
 
@@ -381,7 +392,7 @@ The returned value is a task ordering hint, never a policy verdict or permit.
 3. **Corroboration threshold:** Define a typed policy requiring at least one independent local producer/evidence digest by default; test zero, one, and conflict cases.
 4. **TTL/skew/revocation history:** Configure bounded values; revoked historical records may remain review-only but never retrieval-actionable.
 5. **Contradiction key:** Use canonical graph context plus motif and source-corpus digest; retain every content-addressed body below it.
-6. **Opaque-key rotation:** Scope HMAC to tenant/export namespace and key epoch; allow only bounded dual-key reads during planned rotation, never raw fallback.
+6. **Opaque-key rotation:** Scope HMAC to tenant/export namespace and key epoch; new exports use only the configured current epoch, same-scope retired epochs are verification-only, and missing/retired/revoked/rotated keys fail closed with no raw, environment, test, or process-local fallback.
 7. **Withheld corpus location:** Add a separate evaluator-owned manifest/digest; no Phase 289 benchmark manifest currently exists.
 
 ## Validation Architecture
@@ -414,7 +425,7 @@ The project config explicitly sets workflow.nyquist_validation to true, so valid
 | HERDMEM-03 | Imported memory cannot count as corroboration/diversity or authorize; context and local evidence gate ordering; conflicts remain visible | integration + authority negative | <code>cargo test -p swarm-runtime --test herd_memory_integration corroboration_and_conflicts</code> | No — Wave 0 |
 | HERDMEM-04 | Matching graph/source evidence alone changes ordering; three arms report all required metrics | deterministic integration/benchmark | <code>cargo test -p swarm-runtime --test herd_memory_benchmark ordering_requires_context</code> | No — Wave 0 |
 | HERDMEM-05 | Expiry, rotation, revocation, quarantine, tombstone/delete, GC, indexes, and restart recover without actionable orphan | restart/fault integration | <code>cargo test -p swarm-runtime --test herd_memory_integration lifecycle_survives_restart</code> | No — Wave 0 |
-| HERDMEM-06 | Either 20% time or +10pp recall; Phase 286 ceilings; unseen evasion; within 5% withheld score | benchmark gate | <code>cargo test -p swarm-runtime --test herd_memory_benchmark acceptance_gate</code> | No — Wave 0 |
+| HERDMEM-06 | Checked-integer `>=2,000 bp` time OR `>=1,000 bp` recall; false-edge `<=1,000 bp`; duplicate-work `<=500 bp`; unseen evasion; withheld relative gap `<=500 bp` | benchmark gate | <code>cargo test -p swarm-runtime --test herd_memory_benchmark acceptance_gate</code> | No — Wave 0 |
 
 ### Sampling Rate
 
