@@ -144,6 +144,8 @@ Any operation whose intent counter is not the unique next value is stale. An abo
 
 Commit and abort form one linearizable transition. If commit wins, abort returns `Committed`; if abort wins, commit permanently returns `Aborted` for that intent.
 
+Before requesting an external abort, the local transaction must durably write and fsync an `AbortPending` journal record containing the prepared transaction identifier, candidate digest, expected current witness head, expected intent-only successor head, and complete local mappings. A local transition cannot manufacture `Aborted`. It may write `Aborted` only after an authenticated witness abort outcome or recovery discovery proves that abort won. If commit won or its response was lost, discovery resolves the external outcome and the local transaction advances to `Committed`; it never rolls back through `Aborted`.
+
 ## Bootstrap state machine
 
 Bootstrap runs under the selector, authority-pair, state, and pool guards.
@@ -191,6 +193,7 @@ Recovery uses the external committed/prepared record, local journal phases, and 
 - `ReadyForWitnessCommit` with witness still prepared: revalidate and commit or abort through the explicit protocol.
 - Witness committed but local `Committed` absent: external escrow is authoritative; finish the local journal.
 - Witness committed but local bytes are missing, replaced, or corrupt: fetch immutable payloads, preserve conflicting local entries through offline no-replace archive/rebind, reconstruct only into verified fixed lanes, and keep ordinary startup `Uncertain` until repair completes.
+- `AbortPending`: resolve the linearizable witness outcome. Authenticated `Aborted` permits the local `Aborted` record; `Committed` requires local commit recovery; `Prepared` permits an idempotent abort retry. No local phase guess decides the result.
 - Witness aborted but local journal lags: discover the exact abort outcome, durably write `Aborted`, and require local data digests to match the witness data head before another prepare.
 - Equal journal generations, forks, two invalid journal lanes, unknown mappings, or content disagreement return `Uncertain`.
 
