@@ -92,20 +92,20 @@ fn memory(byte: u8, suffix: &str) -> StrategyMemory {
 
 fn assert_high_water_cas(store: &dyn HypothesisGraphStore) {
     let baseline = store.snapshot().unwrap();
-    let mut advanced = baseline.state.clone();
+    let mut advanced = baseline.state().clone();
     advanced.logical_time_high_water = GraphLogicalTime::new(20);
     let advanced = store
-        .compare_and_swap(&baseline.revision, advanced)
+        .compare_and_swap(baseline.revision(), advanced)
         .unwrap();
     assert_eq!(
-        advanced.state.logical_time_high_water,
+        advanced.state().logical_time_high_water,
         GraphLogicalTime::new(20)
     );
 
-    let mut lower = advanced.state.clone();
+    let mut lower = advanced.state().clone();
     lower.logical_time_high_water = GraphLogicalTime::new(19);
     let error = store
-        .compare_and_swap(&advanced.revision, lower)
+        .compare_and_swap(advanced.revision(), lower)
         .unwrap_err();
     assert!(matches!(
         error,
@@ -113,9 +113,22 @@ fn assert_high_water_cas(store: &dyn HypothesisGraphStore) {
             if reason.contains("logical time high-water regressed")
     ));
     assert_eq!(
-        store.snapshot().unwrap().state.logical_time_high_water,
+        store.snapshot().unwrap().state().logical_time_high_water,
         GraphLogicalTime::new(20)
     );
+}
+
+#[test]
+fn snapshot_exposes_only_authenticated_read_views_and_owned_parts() {
+    let store =
+        MemoryHypothesisGraphStore::new(graph("graph:snapshot-contract"), signer(2)).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let expected_revision = snapshot.revision().clone();
+    let expected_digest = snapshot.state().digest().unwrap();
+    let (state, revision) = snapshot.into_parts();
+
+    assert_eq!(revision, expected_revision);
+    assert_eq!(state.revision().unwrap().digest, expected_digest);
 }
 
 #[test]

@@ -6,7 +6,11 @@
 //! explicit without changing the core record model.
 
 pub mod clock;
+pub mod containment_plan;
+pub mod hypotheses;
+pub mod kill_chain;
 pub mod normalize;
+pub mod tasks;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,12 +26,22 @@ use swarm_crypto::Keypair;
 pub use clock::{
     DeterministicScheduler, FixedGraphClock, GraphClock, ScheduledGraphTask, SystemObservationClock,
 };
+pub use containment_plan::{ContainmentPlanner, ContainmentPlanningInput};
+pub use hypotheses::{
+    HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput, competing_hypotheses,
+    unresolved_task_targets,
+};
+pub use kill_chain::reconstruct_kill_chain;
 pub use normalize::{
     MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES,
     MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX,
     TETRAGON_FALLBACK_TIME_SOURCE_MARKER, normalize_source_timestamp, normalize_telemetry,
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_telemetry_with_unit,
     normalize_threat_intel, normalize_threat_intel_at, normalize_threat_intel_entry,
+};
+pub use tasks::{
+    DurableHypothesisCoordinator, HypothesisCoordinationResult, HypothesisTaskLedger, TaskClaim,
+    commit_terminal_once,
 };
 
 /// Runtime signing and verification seam for graph records produced after

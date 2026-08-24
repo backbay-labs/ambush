@@ -111,6 +111,17 @@ pub struct GraphResourceLimits {
     pub max_tasks: usize,
     pub max_task_lease_ms: u64,
     pub max_task_retries: u16,
+    /// Deployment-selected upper bound for a strategy-memory expiry window.
+    ///
+    /// This is deliberately carried with the graph limits rather than read
+    /// from a process-global constant at publication time.  A persisted
+    /// terminal outbox must be admitted under the same bound as the graph
+    /// store that will reload it.
+    #[serde(
+        default = "default_max_memory_ttl_ticks",
+        skip_serializing_if = "is_default_max_memory_ttl_ticks"
+    )]
+    pub max_memory_ttl_ticks: u64,
     pub max_memory_records: usize,
     pub max_graph_depth: usize,
     pub max_graph_fan_out: usize,
@@ -130,6 +141,7 @@ impl Default for GraphResourceLimits {
             max_tasks: 128,
             max_task_lease_ms: 300_000,
             max_task_retries: 3,
+            max_memory_ttl_ticks: MAX_STRATEGY_MEMORY_TTL_TICKS,
             max_memory_records: 128,
             max_graph_depth: 32,
             max_graph_fan_out: 32,
@@ -194,6 +206,14 @@ impl GraphResourceLimits {
                 reason: "must be between 1 and 128".to_string(),
             });
         }
+        if self.max_memory_ttl_ticks == 0
+            || self.max_memory_ttl_ticks > MAX_STRATEGY_MEMORY_TTL_TICKS
+        {
+            return Err(GraphAdmissionError::InvalidLimit {
+                field: "max_memory_ttl_ticks".to_string(),
+                reason: format!("must be between 1 and {MAX_STRATEGY_MEMORY_TTL_TICKS}"),
+            });
+        }
         if self.max_edges < self.max_nodes.saturating_sub(1) {
             return Err(GraphAdmissionError::InvalidLimit {
                 field: "max_edges".to_string(),
@@ -202,6 +222,14 @@ impl GraphResourceLimits {
         }
         Ok(())
     }
+}
+
+fn default_max_memory_ttl_ticks() -> u64 {
+    MAX_STRATEGY_MEMORY_TTL_TICKS
+}
+
+fn is_default_max_memory_ttl_ticks(value: &u64) -> bool {
+    *value == MAX_STRATEGY_MEMORY_TTL_TICKS
 }
 
 /// Upper wire-safety bounds used by standalone Deserialize implementations.
@@ -219,6 +247,7 @@ fn persistence_limits() -> GraphResourceLimits {
         max_tasks: 4_096,
         max_task_lease_ms: 86_400_000,
         max_task_retries: 128,
+        max_memory_ttl_ticks: MAX_STRATEGY_MEMORY_TTL_TICKS,
         max_memory_records: 4_096,
         max_graph_depth: 1_024,
         max_graph_fan_out: 1_024,
@@ -3298,7 +3327,7 @@ impl TaskKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskTarget {
     Evidence { evidence_id: EvidenceId },
@@ -3341,6 +3370,64 @@ pub fn derive_logical_task_id(
         "task:logical:{}",
         canonical_digest(&material)?
     )))
+}
+
+/// The persisted, claimant-independent identity of one reasoning operation.
+///
+/// The seed is intentionally represented as a digest rather than an opaque
+/// caller supplied idempotency key.  Claimants may retry a logical operation
+/// with different retry keys, but a new seed always creates a new durable task
+/// identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LogicalTaskDescriptor {
+    pub graph_id: GraphId,
+    pub task_id: TaskId,
+    pub target: TaskTarget,
+    pub kind: TaskKind,
+    pub seed_digest: String,
+}
+
+impl LogicalTaskDescriptor {
+    pub fn new(
+        graph_id: GraphId,
+        target: TaskTarget,
+        kind: TaskKind,
+        seed_digest: impl Into<String>,
+    ) -> Result<Self, GraphAdmissionError> {
+        let seed_digest = seed_digest.into();
+        let task_id = derive_logical_task_id(&graph_id, &target, kind, &seed_digest)?;
+        let descriptor = Self {
+            graph_id,
+            task_id,
+            target,
+            kind,
+            seed_digest,
+        };
+        descriptor.validate()?;
+        Ok(descriptor)
+    }
+
+    pub fn validate(&self) -> Result<(), GraphAdmissionError> {
+        validate_id("logical_task.graph_id", &self.graph_id, 256)?;
+        validate_id("logical_task.task_id", &self.task_id, 256)?;
+        self.target.validate()?;
+        validate_task_kind_target(self.kind, &self.target)?;
+        validate_sha256_digest("logical_task.seed_digest", &self.seed_digest)?;
+        let expected =
+            derive_logical_task_id(&self.graph_id, &self.target, self.kind, &self.seed_digest)?;
+        if expected != self.task_id {
+            return Err(GraphAdmissionError::IdCollision {
+                id: self.task_id.0.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn derive_task_id(&self) -> Result<TaskId, GraphAdmissionError> {
+        self.validate()?;
+        derive_logical_task_id(&self.graph_id, &self.target, self.kind, &self.seed_digest)
+    }
 }
 
 /// Evidence and decision lineage retained by challenge/falsification tasks.
@@ -3947,6 +4034,102 @@ pub fn validate_completion_kind(
     }
 }
 
+/// Bind completion evidence to the exact claim that authorized the terminal
+/// transition.  A task capability authenticates the claim digest, but it does
+/// not by itself constrain the evidence IDs carried by a later completion.
+/// Keep that binding here so both active-lease and committed-task validators
+/// apply the same target/scope rules.
+fn validate_claim_completion_evidence(
+    claim: &TaskClaimRequest,
+    completion: &TaskCompletion,
+) -> Result<(), GraphAdmissionError> {
+    validate_completion_kind(claim.kind, completion.kind.clone())?;
+    if !completion
+        .evidence_ids
+        .is_subset(&claim.evidence_scope.evidence_ids)
+    {
+        return Err(GraphAdmissionError::UnknownEvidence);
+    }
+
+    if claim.kind != TaskKind::AcquireEvidence {
+        return Ok(());
+    }
+
+    let TaskTarget::Evidence {
+        evidence_id: target_id,
+    } = &claim.target
+    else {
+        return Err(GraphAdmissionError::InvalidTransition {
+            reason: "evidence acquisition task target is not an evidence ID".to_string(),
+        });
+    };
+    if !claim.evidence_scope.evidence_ids.contains(target_id) {
+        return Err(GraphAdmissionError::InvalidTransition {
+            reason: "evidence acquisition target is outside the claim evidence scope".to_string(),
+        });
+    }
+
+    match &completion.kind {
+        TaskCompletionKind::EvidenceAdded
+            if completion.evidence_ids.len() != 1
+                || !completion.evidence_ids.contains(target_id) =>
+        {
+            Err(GraphAdmissionError::InvalidTransition {
+                reason: "evidence-added completion must contain exactly the task target"
+                    .to_string(),
+            })
+        }
+        TaskCompletionKind::NoFinding if !completion.evidence_ids.is_empty() => {
+            Err(GraphAdmissionError::InvalidTransition {
+                reason: "no-finding completion cannot publish evidence".to_string(),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Apply the claim-level completion rule to the evidence records carried by
+/// the outbox.  The completion subset check alone would permit a producer to
+/// attach unrelated evidence, so acquisition publishes exactly the target on
+/// `EvidenceAdded` and nothing on `NoFinding`.
+fn validate_outbox_evidence_scope(
+    claim: &TaskClaimRequest,
+    completion: &TaskCompletion,
+    evidence_ids: &BTreeSet<EvidenceId>,
+) -> Result<(), GraphAdmissionError> {
+    validate_claim_completion_evidence(claim, completion)?;
+    if !evidence_ids.is_subset(&claim.evidence_scope.evidence_ids) {
+        return Err(GraphAdmissionError::UnknownEvidence);
+    }
+    if claim.kind != TaskKind::AcquireEvidence {
+        return Ok(());
+    }
+
+    let TaskTarget::Evidence {
+        evidence_id: target_id,
+    } = &claim.target
+    else {
+        return Err(GraphAdmissionError::InvalidTransition {
+            reason: "evidence acquisition task target is not an evidence ID".to_string(),
+        });
+    };
+    match &completion.kind {
+        TaskCompletionKind::EvidenceAdded
+            if evidence_ids.len() != 1 || !evidence_ids.contains(target_id) =>
+        {
+            Err(GraphAdmissionError::InvalidTransition {
+                reason: "evidence-added outbox must contain exactly the task target".to_string(),
+            })
+        }
+        TaskCompletionKind::NoFinding if !evidence_ids.is_empty() => {
+            Err(GraphAdmissionError::InvalidTransition {
+                reason: "no-finding outbox cannot contain evidence".to_string(),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(deny_unknown_fields)]
 struct TaskTerminalMaterial<'a> {
@@ -4161,6 +4344,7 @@ impl TaskTerminalEnvelope {
             })?;
         lease.validate_with_limit(max_task_lease_ms)?;
         self.capability.validate_for_claim(&task.request)?;
+        validate_claim_completion_evidence(&task.request, &self.completion)?;
         if self.task_id != task.request.task_id
             || self.idempotency_key != task.request.idempotency_key
             || self.lease_id != lease.lease_id
@@ -4173,7 +4357,7 @@ impl TaskTerminalEnvelope {
             });
         }
         if self.completion.completed_at < lease.issued_at
-            || self.completion.completed_at > lease.expires_at
+            || self.completion.completed_at >= lease.expires_at
         {
             return Err(GraphAdmissionError::InvalidTransition {
                 reason: "terminal completion time is outside the active lease".to_string(),
@@ -4196,6 +4380,421 @@ impl TaskTerminalEnvelope {
         // this prevents a valid capability witness from being replayed with a
         // caller-selected completion, decision, lease, or fence.
         witness.validate(&self.canonical_bytes_without_witness()?)
+    }
+}
+
+/// The sole durable publication envelope for a terminal reasoning task.
+///
+/// Evidence, the optional hypothesis decision, and strategy memory are
+/// committed as one graph-store value.  A consumer may index this envelope
+/// after the CAS succeeds, but no consumer is allowed to make any of these
+/// records visible before the envelope is durable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTerminalOutboxEntry {
+    pub envelope: TaskTerminalEnvelope,
+    pub evidence: Vec<EvidenceEnvelope>,
+    pub decision: Option<DecisionRecord>,
+    pub memory: Option<StrategyMemory>,
+    pub memory_expiry: Option<StrategyMemoryExpiryEnvelope>,
+    pub producer_key_id: AgentId,
+}
+
+impl TaskTerminalOutboxEntry {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        envelope: TaskTerminalEnvelope,
+        evidence: Vec<EvidenceEnvelope>,
+        decision: Option<DecisionRecord>,
+        memory: Option<StrategyMemory>,
+        memory_expiry: Option<StrategyMemoryExpiryEnvelope>,
+        producer_key_id: AgentId,
+        limits: &GraphResourceLimits,
+    ) -> Result<Self, GraphAdmissionError> {
+        let entry = Self {
+            envelope,
+            evidence,
+            decision,
+            memory,
+            memory_expiry,
+            producer_key_id,
+        };
+        entry.validate_for_task(task, descriptor, limits)?;
+        Ok(entry)
+    }
+
+    fn validate_memory_records(
+        &self,
+        descriptor: &LogicalTaskDescriptor,
+        evidence_ids: &BTreeSet<EvidenceId>,
+        limits: &GraphResourceLimits,
+        terminal_completion_at: GraphLogicalTime,
+    ) -> Result<(), GraphAdmissionError> {
+        terminal_completion_at.validate()?;
+        if let Some(memory) = &self.memory {
+            memory.validate()?;
+            if memory.graph_id != descriptor.graph_id
+                || !evidence_ids.is_superset(&memory.provenance.evidence_ids)
+            {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "terminal strategy memory is not linked to graph evidence".to_string(),
+                });
+            }
+            let expiry =
+                self.memory_expiry
+                    .as_ref()
+                    .ok_or_else(|| GraphAdmissionError::InvalidField {
+                        field: "terminal_outbox.memory_expiry".to_string(),
+                        reason: "memory requires a signed expiry envelope".to_string(),
+                    })?;
+            // The deployment limit, rather than the historical process-wide
+            // ceiling, is authoritative for this durable publication.
+            expiry.validate_with_limit(limits.max_memory_ttl_ticks)?;
+            expiry.validate_for(memory)?;
+            if expiry.created_at > terminal_completion_at {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "memory expiry is future-dated relative to terminal logical time"
+                        .to_string(),
+                });
+            }
+            if expiry.expires_at <= terminal_completion_at {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "memory expiry is not active at terminal completion".to_string(),
+                });
+            }
+        } else if self.memory_expiry.is_some() {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "memory expiry cannot exist without strategy memory".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_memory_lineage_for_transition(
+        &self,
+        descriptor: &LogicalTaskDescriptor,
+        evidence_ids: &BTreeSet<EvidenceId>,
+        limits: &GraphResourceLimits,
+        terminal_completion_at: GraphLogicalTime,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Result<(), GraphAdmissionError> {
+        terminal_completion_at.validate()?;
+        logical_time_high_water.validate()?;
+        if terminal_completion_at < logical_time_high_water {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal completion is below the logical-time high-water".to_string(),
+            });
+        }
+        self.validate_memory_records(descriptor, evidence_ids, limits, terminal_completion_at)?;
+        if let Some(expiry) = &self.memory_expiry
+            && expiry.created_at < logical_time_high_water
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "memory expiry is back-dated before the logical-time high-water"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_memory_lineage_for_committed_state(
+        &self,
+        descriptor: &LogicalTaskDescriptor,
+        evidence_ids: &BTreeSet<EvidenceId>,
+        limits: &GraphResourceLimits,
+        terminal_completion_at: GraphLogicalTime,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Result<(), GraphAdmissionError> {
+        terminal_completion_at.validate()?;
+        logical_time_high_water.validate()?;
+        if terminal_completion_at > logical_time_high_water {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal completion is ahead of the logical-time high-water".to_string(),
+            });
+        }
+        self.validate_memory_records(descriptor, evidence_ids, limits, terminal_completion_at)?;
+        if let Some(expiry) = &self.memory_expiry
+            && expiry.created_at > logical_time_high_water
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "memory expiry is future-dated relative to the logical-time high-water"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_task(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        limits: &GraphResourceLimits,
+    ) -> Result<(), GraphAdmissionError> {
+        limits.validate()?;
+        descriptor.validate()?;
+        if descriptor.graph_id.as_str().trim().is_empty()
+            || descriptor.task_id != task.request.task_id
+            || descriptor.target != task.request.target
+            || descriptor.kind != task.request.kind
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal descriptor does not bind the claimed task".to_string(),
+            });
+        }
+        let evidence_ids = self.validate_for_task_fields(task, limits)?;
+        self.validate_memory_records(
+            descriptor,
+            &evidence_ids,
+            limits,
+            self.envelope.completion.completed_at,
+        )?;
+        Ok(())
+    }
+
+    fn validate_for_task_fields(
+        &self,
+        task: &TaskRecord,
+        limits: &GraphResourceLimits,
+    ) -> Result<BTreeSet<EvidenceId>, GraphAdmissionError> {
+        self.envelope
+            .validate_for_task(task, limits.max_task_lease_ms, limits.max_task_retries)?;
+        if self.producer_key_id != self.envelope.producer
+            || self.producer_key_id != self.envelope.capability.claimant
+        {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "terminal outbox producer key is not bound to the claimant".to_string(),
+            });
+        }
+        let mut evidence_ids = BTreeSet::new();
+        for evidence in &self.evidence {
+            evidence.validate()?;
+            if !evidence_ids.insert(evidence.evidence_id.clone()) {
+                return Err(GraphAdmissionError::IdCollision {
+                    id: evidence.evidence_id.0.clone(),
+                });
+            }
+        }
+        if !self
+            .envelope
+            .completion
+            .evidence_ids
+            .is_subset(&evidence_ids)
+        {
+            return Err(GraphAdmissionError::UnknownEvidence);
+        }
+        validate_outbox_evidence_scope(&task.request, &self.envelope.completion, &evidence_ids)?;
+        match (&self.envelope.decision_link, &self.decision) {
+            (None, None) => {}
+            (Some(link), Some(decision)) => {
+                link.validate()?;
+                decision.validate()?;
+                if link.task_id != self.envelope.task_id
+                    || link.decision_id.as_ref() != Some(&decision.decision_id)
+                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
+                    || decision.hypothesis_id.as_str().trim().is_empty()
+                {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision and link lineage do not match".to_string(),
+                    });
+                }
+                if !decision.evidence_ids.is_subset(&evidence_ids) {
+                    return Err(GraphAdmissionError::UnknownEvidence);
+                }
+            }
+            _ => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "terminal decision must be present with its decision link".to_string(),
+                });
+            }
+        }
+        Ok(evidence_ids)
+    }
+
+    /// Validate a terminal outbox while retaining the injected logical clock
+    /// used by the durable state transition. `logical_time_high_water` is the
+    /// pre-transition high-water mark from the state being replaced; terminal
+    /// completion and expiry creation must not be back-dated before it. The
+    /// three-argument `validate_for_task` remains the compatibility entry point
+    /// when no state high-water is available.
+    pub fn validate_for_task_at(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        limits: &GraphResourceLimits,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Result<(), GraphAdmissionError> {
+        limits.validate()?;
+        descriptor.validate()?;
+        if descriptor.graph_id.as_str().trim().is_empty()
+            || descriptor.task_id != task.request.task_id
+            || descriptor.target != task.request.target
+            || descriptor.kind != task.request.kind
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal descriptor does not bind the claimed task".to_string(),
+            });
+        }
+        let evidence_ids = self.validate_for_task_fields(task, limits)?;
+        self.validate_memory_lineage_for_transition(
+            descriptor,
+            &evidence_ids,
+            limits,
+            self.envelope.completion.completed_at,
+            logical_time_high_water,
+        )?;
+        Ok(())
+    }
+
+    /// Validate an outbox entry after its task terminal transition has been
+    /// materialized in the graph state.  The active-lease checks belong to
+    /// `validate_for_task`; this method additionally binds the same signed
+    /// envelope to the retained terminal proof without accepting a claimed
+    /// task as a committed terminal.
+    pub fn validate_for_committed_task(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        limits: &GraphResourceLimits,
+    ) -> Result<(), GraphAdmissionError> {
+        let logical_time_high_water = task
+            .completion
+            .as_ref()
+            .map_or(GraphLogicalTime::new(0), |completion| {
+                completion.completed_at
+            });
+        self.validate_for_committed_task_at(task, descriptor, limits, logical_time_high_water)
+    }
+
+    /// Validate a terminal outbox against the committed task and the
+    /// persisted logical-time high-water mark. `logical_time_high_water` is
+    /// the candidate state's post-transition mark and must not be below the
+    /// terminal completion. The compatibility validator above uses the
+    /// terminal completion when no state-level mark is available.
+    pub fn validate_for_committed_task_at(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        limits: &GraphResourceLimits,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Result<(), GraphAdmissionError> {
+        limits.validate()?;
+        descriptor.validate()?;
+        if descriptor.task_id != task.request.task_id
+            || descriptor.target != task.request.target
+            || descriptor.kind != task.request.kind
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal descriptor does not bind the committed task".to_string(),
+            });
+        }
+        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)?;
+        if !matches!(task.state, TaskState::Completed | TaskState::Failed)
+            || task.lease.is_some()
+            || task.terminal_history.is_empty()
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "committed outbox requires a terminal task proof".to_string(),
+            });
+        }
+        self.envelope.validate()?;
+        self.envelope.capability.validate_for_claim(&task.request)?;
+        validate_claim_completion_evidence(&task.request, &self.envelope.completion)?;
+        if let Some(link) = &self.envelope.decision_link
+            && link.target != task.request.target
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "committed decision lineage target does not match the task target"
+                    .to_string(),
+            });
+        }
+        let proof =
+            task.terminal_history
+                .last()
+                .ok_or_else(|| GraphAdmissionError::InvalidTransition {
+                    reason: "committed terminal task has no terminal proof".to_string(),
+                })?;
+        let completion =
+            task.completion
+                .as_ref()
+                .ok_or_else(|| GraphAdmissionError::InvalidTransition {
+                    reason: "committed terminal task has no completion".to_string(),
+                })?;
+        if self.envelope.task_id != task.request.task_id
+            || self.envelope.idempotency_key != task.request.idempotency_key
+            || self.envelope.producer != proof.completer
+            || self.envelope.completion != *completion
+            || self.envelope.fencing_token != proof.prior_lease.fencing_token
+            || self.envelope.lease_id != proof.prior_lease.lease_id
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal outbox envelope does not bind the retained proof".to_string(),
+            });
+        }
+        let witness =
+            self.envelope
+                .terminal_witness
+                .as_ref()
+                .ok_or(GraphAdmissionError::InvalidWitness {
+                    reason: "committed terminal outbox requires a signed witness".to_string(),
+                })?;
+        witness.validate(&self.envelope.canonical_bytes_without_witness()?)?;
+        if self.producer_key_id != self.envelope.producer
+            || self.producer_key_id != self.envelope.capability.claimant
+        {
+            return Err(GraphAdmissionError::InvalidWitness {
+                reason: "terminal outbox producer key is not bound to the claimant".to_string(),
+            });
+        }
+
+        let mut evidence_ids = BTreeSet::new();
+        for evidence in &self.evidence {
+            evidence.validate()?;
+            if !evidence_ids.insert(evidence.evidence_id.clone()) {
+                return Err(GraphAdmissionError::IdCollision {
+                    id: evidence.evidence_id.0.clone(),
+                });
+            }
+        }
+        if !self
+            .envelope
+            .completion
+            .evidence_ids
+            .is_subset(&evidence_ids)
+        {
+            return Err(GraphAdmissionError::UnknownEvidence);
+        }
+        validate_outbox_evidence_scope(&task.request, &self.envelope.completion, &evidence_ids)?;
+        match (&self.envelope.decision_link, &self.decision) {
+            (None, None) => {}
+            (Some(link), Some(decision)) => {
+                link.validate()?;
+                decision.validate()?;
+                if link.task_id != self.envelope.task_id
+                    || link.decision_id.as_ref() != Some(&decision.decision_id)
+                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
+                    || !decision.evidence_ids.is_subset(&evidence_ids)
+                {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision and link lineage do not match".to_string(),
+                    });
+                }
+            }
+            _ => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "terminal decision must be present with its decision link".to_string(),
+                });
+            }
+        }
+        self.validate_memory_lineage_for_committed_state(
+            descriptor,
+            &evidence_ids,
+            limits,
+            completion.completed_at,
+            logical_time_high_water,
+        )?;
+        Ok(())
     }
 }
 
@@ -4274,11 +4873,10 @@ impl TaskTerminalProof {
         if matches!(
             self.terminal_state,
             TaskState::Completed | TaskState::Failed
-        ) && self.completed_at > self.prior_lease.expires_at
+        ) && self.completed_at >= self.prior_lease.expires_at
         {
             return Err(GraphAdmissionError::InvalidTransition {
-                reason: "completed or failed proof must finish no later than lease expiry"
-                    .to_string(),
+                reason: "completed or failed proof must finish before lease expiry".to_string(),
             });
         }
         if self.terminal_state == TaskState::Expired
@@ -4522,9 +5120,10 @@ impl TaskRecord {
                 reason: "completion actor must equal the lease holder".to_string(),
             });
         }
-        if completion.completed_at < lease.issued_at || completion.completed_at > lease.expires_at {
+        if completion.completed_at < lease.issued_at || completion.completed_at >= lease.expires_at
+        {
             return Err(GraphAdmissionError::InvalidTransition {
-                reason: "completion time must fall within the active lease".to_string(),
+                reason: "completion time must fall strictly within the active lease".to_string(),
             });
         }
         let proof = TaskTerminalProof::new(
@@ -6848,6 +7447,8 @@ struct GraphResourceLimitsWire {
     max_tasks: usize,
     max_task_lease_ms: u64,
     max_task_retries: u16,
+    #[serde(default = "default_max_memory_ttl_ticks")]
+    max_memory_ttl_ticks: u64,
     max_memory_records: usize,
     max_graph_depth: usize,
     max_graph_fan_out: usize,
@@ -6871,6 +7472,7 @@ impl<'de> Deserialize<'de> for GraphResourceLimits {
             max_tasks: wire.max_tasks,
             max_task_lease_ms: wire.max_task_lease_ms,
             max_task_retries: wire.max_task_retries,
+            max_memory_ttl_ticks: wire.max_memory_ttl_ticks,
             max_memory_records: wire.max_memory_records,
             max_graph_depth: wire.max_graph_depth,
             max_graph_fan_out: wire.max_graph_fan_out,
@@ -7429,6 +8031,13 @@ impl_validated_record!(TaskCapabilityProof, |record: &TaskCapabilityProof| recor
     .validate());
 impl_validated_record!(TaskTerminalEnvelope, |record: &TaskTerminalEnvelope| record
     .validate());
+impl_validated_record!(LogicalTaskDescriptor, |record: &LogicalTaskDescriptor| {
+    record.validate()
+});
+impl_validated_record!(
+    TaskTerminalOutboxEntry,
+    |record: &TaskTerminalOutboxEntry| { record.envelope.validate() }
+);
 impl_validated_record!(SchedulerBudget, |record: &SchedulerBudget| record
     .validate());
 impl_validated_record!(GraphPolicyContract, |record: &GraphPolicyContract| record
@@ -8974,6 +9583,644 @@ mod tests {
         assert!(
             wrong_lineage
                 .validate_for_task(&challenge_task, 100, 3)
+                .is_err()
+        );
+    }
+
+    fn outbox_fixture() -> (
+        TaskRecord,
+        LogicalTaskDescriptor,
+        TaskTerminalOutboxEntry,
+        Keypair,
+    ) {
+        let key = signer();
+        let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
+        let graph_id = GraphId::new("graph:outbox");
+        let target = TaskTarget::Evidence {
+            evidence_id: EvidenceId::new("evidence:outbox"),
+        };
+        let seed_digest = canonical_digest(&"outbox-seed").expect("seed digest");
+        let descriptor = LogicalTaskDescriptor::new(
+            graph_id,
+            target.clone(),
+            TaskKind::AcquireEvidence,
+            seed_digest,
+        )
+        .expect("descriptor");
+        let scope = EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [EvidenceId::new("evidence:outbox")],
+            [GraphNodeId::new("node:event:outbox")],
+        )
+        .expect("scope");
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            descriptor.kind,
+            target,
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            scope,
+            GraphLogicalTime::new(100),
+        )
+        .expect("request");
+        let lease = TaskLease::new(
+            LeaseId::new("lease:outbox"),
+            claimant.clone(),
+            GraphLogicalTime::new(100),
+            GraphLogicalTime::new(200),
+            FencingToken::new(1),
+        )
+        .expect("lease");
+        let task = TaskRecord::claimed(request.clone(), lease.clone()).expect("task");
+        let capability = TaskCapabilityProof::new(
+            request.task_id.clone(),
+            claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().expect("claim digest"),
+            &key,
+            "outbox-worker",
+        )
+        .expect("capability");
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::NoFinding,
+            claimant.clone(),
+            GraphLogicalTime::new(150),
+            [],
+            "digest:outbox-completion",
+        )
+        .expect("completion");
+        let envelope = TaskTerminalEnvelope::new(
+            request.task_id,
+            request.idempotency_key,
+            lease.lease_id,
+            lease.fencing_token,
+            completion,
+            None,
+            claimant.clone(),
+            capability,
+        )
+        .expect("terminal envelope")
+        .signed_with(&key, "outbox-worker")
+        .expect("terminal signature");
+        let entry = TaskTerminalOutboxEntry::new(
+            &task,
+            &descriptor,
+            envelope,
+            Vec::new(),
+            None,
+            None,
+            None,
+            claimant,
+            &GraphResourceLimits::default(),
+        )
+        .expect("outbox entry");
+        (task, descriptor, entry, key)
+    }
+
+    fn outbox_evidence_fixture() -> (
+        TaskRecord,
+        LogicalTaskDescriptor,
+        TaskTerminalOutboxEntry,
+        Keypair,
+    ) {
+        let key = signer();
+        let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
+        let evidence = envelope("record:outbox-evidence", GraphProducerRole::Normalizer);
+        let graph_id = GraphId::new("graph:outbox-evidence");
+        let target = TaskTarget::Evidence {
+            evidence_id: evidence.evidence_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            graph_id,
+            target.clone(),
+            TaskKind::AcquireEvidence,
+            canonical_digest(&"outbox-evidence-seed").expect("seed digest"),
+        )
+        .expect("descriptor");
+        let scope = EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [evidence.evidence_id.clone()],
+            [GraphNodeId::new("node:event:outbox-evidence")],
+        )
+        .expect("scope");
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            descriptor.kind,
+            target,
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            scope,
+            GraphLogicalTime::new(100),
+        )
+        .expect("request");
+        let lease = TaskLease::new(
+            LeaseId::new("lease:outbox-evidence"),
+            claimant.clone(),
+            GraphLogicalTime::new(100),
+            GraphLogicalTime::new(200),
+            FencingToken::new(1),
+        )
+        .expect("lease");
+        let task = TaskRecord::claimed(request.clone(), lease.clone()).expect("task");
+        let capability = TaskCapabilityProof::new(
+            request.task_id.clone(),
+            claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().expect("claim digest"),
+            &key,
+            "outbox-evidence-worker",
+        )
+        .expect("capability");
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::EvidenceAdded,
+            claimant.clone(),
+            GraphLogicalTime::new(150),
+            [evidence.evidence_id.clone()],
+            "digest:outbox-evidence-completion",
+        )
+        .expect("completion");
+        let envelope = TaskTerminalEnvelope::new(
+            request.task_id,
+            request.idempotency_key,
+            lease.lease_id,
+            lease.fencing_token,
+            completion,
+            None,
+            claimant.clone(),
+            capability,
+        )
+        .expect("terminal envelope")
+        .signed_with(&key, "outbox-evidence-worker")
+        .expect("terminal signature");
+        let entry = TaskTerminalOutboxEntry::new(
+            &task,
+            &descriptor,
+            envelope,
+            vec![evidence],
+            None,
+            None,
+            None,
+            claimant,
+            &GraphResourceLimits::default(),
+        )
+        .expect("outbox entry");
+        (task, descriptor, entry, key)
+    }
+
+    fn outbox_memory(
+        descriptor: &LogicalTaskDescriptor,
+        key: &Keypair,
+        created_at: GraphLogicalTime,
+        ttl_ticks: u64,
+    ) -> (StrategyMemory, StrategyMemoryExpiryEnvelope) {
+        let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
+        let provenance = MemoryProvenance::new(claimant, [])
+            .signed_with(key, GraphProducerRole::Hunter, "outbox-memory")
+            .expect("memory provenance");
+        let memory = StrategyMemory::new(
+            descriptor.graph_id.clone(),
+            HypothesisId::new("hypothesis:outbox"),
+            HypothesisDelta::new([], [], []),
+            [],
+            [],
+            MemoryOutcome::Inconclusive,
+            provenance,
+        )
+        .expect("memory")
+        .signed_with(key, GraphProducerRole::Hunter, "outbox-memory")
+        .expect("memory signature");
+        let expiry = StrategyMemoryExpiryEnvelope::new_with_limit(
+            &memory,
+            created_at,
+            ttl_ticks,
+            MAX_STRATEGY_MEMORY_TTL_TICKS,
+            key,
+        )
+        .expect("memory expiry");
+        (memory, expiry)
+    }
+
+    #[test]
+    fn terminal_outbox_binds_claim_capability_kind_key_digest_and_target() {
+        let (task, descriptor, valid, _key) = outbox_fixture();
+        assert!(
+            valid
+                .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+                .is_ok()
+        );
+
+        let mut wrong_key = valid.clone();
+        wrong_key.producer_key_id = AgentId::new("attacker", "key");
+        assert!(
+            wrong_key
+                .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+                .is_err()
+        );
+
+        let mut wrong_role = valid.clone();
+        wrong_role.envelope.capability.role = GraphProducerRole::Challenger;
+        assert!(
+            wrong_role
+                .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+                .is_err()
+        );
+
+        let mut wrong_kind = valid.clone();
+        wrong_kind.envelope.capability.kind = TaskKind::ChallengeEdge;
+        assert!(
+            wrong_kind
+                .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+                .is_err()
+        );
+
+        let mut wrong_digest = valid.clone();
+        wrong_digest.envelope.capability.canonical_claim_digest =
+            canonical_digest(&"different-claim").expect("digest");
+        assert!(
+            wrong_digest
+                .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+                .is_err()
+        );
+
+        let wrong_target = LogicalTaskDescriptor::new(
+            descriptor.graph_id.clone(),
+            TaskTarget::Evidence {
+                evidence_id: EvidenceId::new("evidence:other"),
+            },
+            descriptor.kind,
+            descriptor.seed_digest.clone(),
+        )
+        .expect("other descriptor");
+        assert!(
+            valid
+                .validate_for_task(&task, &wrong_target, &GraphResourceLimits::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_completion_at_lease_expiry_is_rejected_across_core_validators() {
+        let (task, descriptor, valid, key) = outbox_fixture();
+        let limits = GraphResourceLimits::default();
+        let lease = task.lease.clone().expect("active lease");
+        let claimant = task.request.claimant.clone();
+        let boundary = TaskCompletion::new(
+            TaskCompletionKind::NoFinding,
+            claimant.clone(),
+            lease.expires_at,
+            [],
+            "digest:expiry-boundary",
+        )
+        .expect("boundary completion");
+
+        assert!(
+            task.clone()
+                .complete(
+                    boundary.clone(),
+                    lease.fencing_token,
+                    limits.max_task_lease_ms
+                )
+                .is_err()
+        );
+        assert!(
+            TaskTerminalProof::new(
+                task.generation,
+                lease.clone(),
+                TaskState::Completed,
+                claimant.clone(),
+                lease.expires_at,
+                limits.max_task_lease_ms,
+            )
+            .is_err()
+        );
+        assert!(
+            TaskTerminalProof::new(
+                task.generation,
+                lease.clone(),
+                TaskState::Failed,
+                claimant.clone(),
+                lease.expires_at,
+                limits.max_task_lease_ms,
+            )
+            .is_err()
+        );
+        assert!(
+            TaskTerminalProof::new(
+                task.generation,
+                lease.clone(),
+                TaskState::Expired,
+                claimant.clone(),
+                lease.expires_at,
+                limits.max_task_lease_ms,
+            )
+            .is_ok()
+        );
+        assert!(
+            task.clone()
+                .expire(lease.expires_at, limits.max_task_lease_ms)
+                .is_ok()
+        );
+
+        let envelope = TaskTerminalEnvelope::new(
+            valid.envelope.task_id.clone(),
+            valid.envelope.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            boundary.clone(),
+            None,
+            claimant.clone(),
+            valid.envelope.capability.clone(),
+        )
+        .expect("boundary terminal envelope")
+        .signed_with(&key, "outbox-worker")
+        .expect("boundary terminal signature");
+        assert!(
+            envelope
+                .validate_for_task(&task, limits.max_task_lease_ms, limits.max_task_retries)
+                .is_err()
+        );
+
+        let boundary_entry = TaskTerminalOutboxEntry {
+            envelope,
+            evidence: Vec::new(),
+            decision: None,
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: claimant.clone(),
+        };
+        assert!(
+            boundary_entry
+                .validate_for_task(&task, &descriptor, &limits)
+                .is_err()
+        );
+        assert!(
+            boundary_entry
+                .validate_for_task_at(&task, &descriptor, &limits, GraphLogicalTime::new(150),)
+                .is_err()
+        );
+
+        // A committed state carrying a completed proof at the lease boundary
+        // is forged directly so the committed outbox validator itself must
+        // reject the proof; constructing it through `TaskRecord::complete`
+        // already fails above.
+        let mut committed_boundary = task.clone();
+        committed_boundary.state = TaskState::Completed;
+        committed_boundary.generation = task.generation.saturating_add(1);
+        committed_boundary.lease = None;
+        committed_boundary.completion = Some(boundary.clone());
+        committed_boundary.terminal_history.push(TaskTerminalProof {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            prior_state: TaskState::Claimed,
+            terminal_state: TaskState::Completed,
+            prior_generation: task.generation,
+            prior_lease: lease,
+            completer: claimant,
+            completed_at: boundary.completed_at,
+        });
+        assert!(
+            boundary_entry
+                .validate_for_committed_task(&committed_boundary, &descriptor, &limits)
+                .is_err()
+        );
+        assert!(
+            boundary_entry
+                .validate_for_committed_task_at(
+                    &committed_boundary,
+                    &descriptor,
+                    &limits,
+                    boundary.completed_at,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_outbox_acquire_evidence_binds_target_scope_and_exact_ids() {
+        let (task, descriptor, valid, key) = outbox_evidence_fixture();
+        let limits = GraphResourceLimits::default();
+        assert!(valid.validate_for_task(&task, &descriptor, &limits).is_ok());
+        assert!(
+            valid
+                .validate_for_task_at(&task, &descriptor, &limits, GraphLogicalTime::new(140))
+                .is_ok()
+        );
+        let committed = task
+            .clone()
+            .complete(
+                valid.envelope.completion.clone(),
+                valid.envelope.fencing_token,
+                limits.max_task_lease_ms,
+            )
+            .expect("committed task");
+        assert!(
+            valid
+                .validate_for_committed_task(&committed, &descriptor, &limits)
+                .is_ok()
+        );
+        assert!(
+            valid
+                .validate_for_committed_task_at(
+                    &committed,
+                    &descriptor,
+                    &limits,
+                    GraphLogicalTime::new(150),
+                )
+                .is_ok()
+        );
+
+        let assert_rejected_at = |entry: &TaskTerminalOutboxEntry, committed: &TaskRecord| {
+            assert!(
+                entry
+                    .validate_for_task(&task, &descriptor, &limits)
+                    .is_err()
+            );
+            assert!(
+                entry
+                    .validate_for_task_at(&task, &descriptor, &limits, GraphLogicalTime::new(140))
+                    .is_err()
+            );
+            assert!(
+                entry
+                    .validate_for_committed_task(committed, &descriptor, &limits)
+                    .is_err()
+            );
+            assert!(
+                entry
+                    .validate_for_committed_task_at(
+                        committed,
+                        &descriptor,
+                        &limits,
+                        GraphLogicalTime::new(150),
+                    )
+                    .is_err()
+            );
+        };
+
+        let wrong_evidence = envelope("record:outbox-wrong-target", GraphProducerRole::Normalizer);
+        let wrong_completion = TaskCompletion::new(
+            TaskCompletionKind::EvidenceAdded,
+            valid.envelope.producer.clone(),
+            valid.envelope.completion.completed_at,
+            [wrong_evidence.evidence_id.clone()],
+            "digest:outbox-wrong-target",
+        )
+        .expect("wrong completion");
+        let wrong_envelope = TaskTerminalEnvelope::new(
+            valid.envelope.task_id.clone(),
+            valid.envelope.idempotency_key.clone(),
+            valid.envelope.lease_id.clone(),
+            valid.envelope.fencing_token,
+            wrong_completion,
+            None,
+            valid.envelope.producer.clone(),
+            valid.envelope.capability.clone(),
+        )
+        .expect("wrong terminal envelope")
+        .signed_with(&key, "outbox-evidence-worker")
+        .expect("wrong terminal signature");
+        let wrong_target = TaskTerminalOutboxEntry {
+            envelope: wrong_envelope,
+            evidence: vec![wrong_evidence],
+            decision: None,
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: valid.producer_key_id.clone(),
+        };
+        let wrong_target_committed = task
+            .clone()
+            .complete(
+                wrong_target.envelope.completion.clone(),
+                wrong_target.envelope.fencing_token,
+                limits.max_task_lease_ms,
+            )
+            .expect("wrong target committed task");
+        assert_rejected_at(&wrong_target, &wrong_target_committed);
+
+        let mut extra_evidence = valid.clone();
+        extra_evidence.evidence.push(envelope(
+            "record:outbox-extra",
+            GraphProducerRole::Normalizer,
+        ));
+        assert_rejected_at(&extra_evidence, &committed);
+
+        let mut out_of_scope_task = task.clone();
+        out_of_scope_task.request.evidence_scope = EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [EvidenceId::new("evidence:outside-claim")],
+            [GraphNodeId::new("node:event:outbox-evidence")],
+        )
+        .expect("out-of-scope claim");
+        out_of_scope_task.request.idempotency_key = out_of_scope_task
+            .request
+            .derive_idempotency_key()
+            .expect("out-of-scope idempotency key");
+        let claimant = out_of_scope_task.request.claimant.clone();
+        let capability = TaskCapabilityProof::new(
+            out_of_scope_task.request.task_id.clone(),
+            claimant.clone(),
+            out_of_scope_task.request.role,
+            out_of_scope_task.request.kind,
+            out_of_scope_task
+                .request
+                .canonical_digest()
+                .expect("out-of-scope claim digest"),
+            &key,
+            "outbox-evidence-worker",
+        )
+        .expect("out-of-scope capability");
+        let out_of_scope_envelope = TaskTerminalEnvelope::new(
+            out_of_scope_task.request.task_id.clone(),
+            out_of_scope_task.request.idempotency_key.clone(),
+            valid.envelope.lease_id.clone(),
+            valid.envelope.fencing_token,
+            valid.envelope.completion.clone(),
+            None,
+            claimant.clone(),
+            capability,
+        )
+        .expect("out-of-scope terminal envelope")
+        .signed_with(&key, "outbox-evidence-worker")
+        .expect("out-of-scope terminal signature");
+        let out_of_scope = TaskTerminalOutboxEntry {
+            envelope: out_of_scope_envelope,
+            evidence: Vec::new(),
+            decision: None,
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: claimant,
+        };
+        let out_of_scope_committed = out_of_scope_task
+            .clone()
+            .complete(
+                out_of_scope.envelope.completion.clone(),
+                out_of_scope.envelope.fencing_token,
+                limits.max_task_lease_ms,
+            )
+            .expect("out-of-scope committed task");
+        assert_rejected_at(&out_of_scope, &out_of_scope_committed);
+    }
+
+    #[test]
+    fn terminal_outbox_enforces_configured_memory_ttl_and_logical_time() {
+        let (task, descriptor, mut entry, key) = outbox_fixture();
+        let (memory, expiry) = outbox_memory(&descriptor, &key, GraphLogicalTime::new(141), 10);
+        entry.memory = Some(memory);
+        entry.memory_expiry = Some(expiry);
+        let limits = GraphResourceLimits {
+            max_memory_ttl_ticks: 10,
+            ..GraphResourceLimits::default()
+        };
+        assert!(entry.validate_for_task(&task, &descriptor, &limits).is_ok());
+        assert!(
+            entry
+                .validate_for_task_at(&task, &descriptor, &limits, GraphLogicalTime::new(140))
+                .is_ok()
+        );
+        let committed = task
+            .clone()
+            .complete(
+                entry.envelope.completion.clone(),
+                entry.envelope.fencing_token,
+                limits.max_task_lease_ms,
+            )
+            .expect("committed task");
+        assert!(
+            entry
+                .validate_for_committed_task_at(
+                    &committed,
+                    &descriptor,
+                    &limits,
+                    GraphLogicalTime::new(150),
+                )
+                .is_ok()
+        );
+
+        let mut future = entry.clone();
+        let (future_memory, future_expiry) =
+            outbox_memory(&descriptor, &key, GraphLogicalTime::new(151), 10);
+        future.memory = Some(future_memory);
+        future.memory_expiry = Some(future_expiry);
+        assert!(
+            future
+                .validate_for_task(&task, &descriptor, &limits)
+                .is_err()
+        );
+
+        let lower_ttl = entry;
+        let lower_limits = GraphResourceLimits {
+            max_memory_ttl_ticks: 5,
+            ..GraphResourceLimits::default()
+        };
+        assert!(
+            lower_ttl
+                .validate_for_task(&task, &descriptor, &lower_limits)
+                .is_err()
+        );
+        assert!(
+            lower_ttl
+                .validate_for_task_at(&task, &descriptor, &limits, GraphLogicalTime::new(149))
                 .is_err()
         );
     }

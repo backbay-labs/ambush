@@ -6,14 +6,19 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
-    CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeState, EvidenceEnvelope,
-    EvidenceSourceFamily, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNodeId,
-    GraphProducerRole, GraphResourceLimits, HypothesisGraph, HypothesisId, SchedulerBudget, TaskId,
-    TaskKind, TypedEvidencePayload,
+    ActorNode, CausalEdge, CausalRelation, ConfidenceDistribution, DecisionKind, DecisionRecord,
+    EdgeState, EventNode, EvidenceClock, EvidenceEnvelope, EvidenceScope, EvidenceSourceFamily,
+    EvidenceUtility, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphNodeId,
+    GraphProducerRole, GraphResourceLimits, Hypothesis, HypothesisDelta, HypothesisGraph,
+    HypothesisId, KillChainClaim as CoreKillChainClaim, KillChainStage, LogicalTaskDescriptor,
+    MemoryOutcome, MemoryProvenance, OrderingClaim, SchedulerBudget, SourceLineage, StrategyMemory,
+    StrategyMemoryExpiryEnvelope, TaskCapabilityProof, TaskClaimRequest, TaskCompletion,
+    TaskCompletionKind, TaskDecisionLink, TaskId, TaskKind, TaskTarget, TaskTerminalEnvelope,
+    TypedEvidencePayload, UncertaintyReason,
 };
 use swarm_core::types::AgentId;
 use swarm_core::{
@@ -23,11 +28,16 @@ use swarm_core::{
 };
 use swarm_crypto::Keypair;
 use swarm_runtime::hypothesis_graph::{
-    DeterministicScheduler, EvidenceAdmissionError, EvidenceAdmissionOutcome, EvidenceRegistry,
-    FixedGraphClock, GraphRecordSigner, HypothesisGraphRuntime, KeypairGraphRecordSigner,
+    DeterministicScheduler, DurableHypothesisCoordinator, EvidenceAdmissionError,
+    EvidenceAdmissionOutcome, EvidenceRegistry, FixedGraphClock, GraphRecordSigner,
+    HypothesisGraphRuntime, HypothesisTaskLedger, KeypairGraphRecordSigner,
     MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES,
     MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, WitnessAdmission, normalize_source_timestamp,
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
+};
+use swarm_spine::{
+    GraphStoreRevision, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
+    MemoryHypothesisGraphStore, ReasoningStateUpdate,
 };
 
 fn key(seed: u8) -> Keypair {
@@ -2060,4 +2070,1528 @@ fn scheduler_pop_is_logical_time_only() {
     );
     assert_eq!(scheduler.len(), 0);
     assert_eq!(scheduler.tombstone_len(), 1);
+}
+
+#[test]
+fn ambiguous_seed_retains_competing_hypotheses() {
+    let seed = swarm_runtime::hypothesis_graph::HypothesisSeedInput::from_normalized_evidence(
+        GraphId::new("graph:ambiguous"),
+        vec![
+            HypothesisId::new("hypothesis:credential"),
+            HypothesisId::new("hypothesis:automation"),
+        ],
+        vec![swarm_core::hypothesis_graph::EvidenceId::new(
+            "evidence:seed",
+        )],
+        GraphLogicalTime::new(10),
+    )
+    .unwrap();
+    let hypotheses = swarm_runtime::hypothesis_graph::competing_hypotheses(
+        &seed,
+        &GraphResourceLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(hypotheses.len(), 2);
+    assert!(hypotheses.values().all(|hypothesis| {
+        hypothesis.status == swarm_core::hypothesis_graph::HypothesisStatus::Live
+    }));
+}
+
+#[test]
+fn normalized_seed_remains_unresolved() {
+    let seed = swarm_runtime::hypothesis_graph::HypothesisSeedInput::from_normalized_evidence(
+        GraphId::new("graph:neutral"),
+        vec![
+            HypothesisId::new("hypothesis:one"),
+            HypothesisId::new("hypothesis:two"),
+        ],
+        vec![swarm_core::hypothesis_graph::EvidenceId::new(
+            "evidence:neutral",
+        )],
+        GraphLogicalTime::new(10),
+    )
+    .unwrap();
+    assert!(seed.assessments.iter().all(|assessment| {
+        assessment.disposition == swarm_runtime::hypothesis_graph::HypothesisDisposition::Unresolved
+    }));
+}
+
+struct ContainmentFixture {
+    snapshot: GraphStoreSnapshot,
+    hypothesis_id: HypothesisId,
+    edge_id: swarm_core::hypothesis_graph::EdgeId,
+    evidence_id: swarm_core::hypothesis_graph::EvidenceId,
+    unrelated_evidence_id: swarm_core::hypothesis_graph::EvidenceId,
+    node_ids: BTreeSet<GraphNodeId>,
+    claim: CoreKillChainClaim,
+}
+
+fn containment_fixture() -> ContainmentFixture {
+    let signer = key(29);
+    let config = HypothesisGraphConfig::default();
+    let producer = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+    let actor = GraphNode::Actor(ActorNode::new("actor:containment", "containment actor").unwrap());
+    let event = GraphNode::Event(
+        EventNode::new("process", "source:containment", GraphLogicalTime::new(1)).unwrap(),
+    );
+    let actor_id = actor.id().clone();
+    let event_id = event.id().clone();
+    let node_ids = BTreeSet::from([actor_id.clone(), event_id.clone()]);
+    let mut graph =
+        HypothesisGraph::new(GraphId::new("graph:containment"), config.resource_limits()).unwrap();
+    graph.admit_node(actor).unwrap();
+    graph.admit_node(event).unwrap();
+
+    let evidence = EvidenceEnvelope::new(
+        EvidenceSourceFamily::Process,
+        "source:containment",
+        SourceLineage::new("fixture", "containment:evidence").unwrap(),
+        EvidenceClock::observed(GraphLogicalTime::new(1)),
+        OrderingClaim::Unknown,
+        TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "process:containment".to_string(),
+            parent_process_digest: None,
+            entity_ids: vec![actor_id.clone(), event_id.clone()],
+            content_digest: "digest:containment".to_string(),
+        },
+    )
+    .unwrap()
+    .sign_with(
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:containment",
+    )
+    .unwrap();
+    let evidence_id = evidence.evidence_id.clone();
+    graph.admit_evidence(evidence).unwrap();
+    let unrelated_evidence = EvidenceEnvelope::new(
+        EvidenceSourceFamily::Process,
+        "source:containment-unrelated",
+        SourceLineage::new("fixture", "containment:unrelated").unwrap(),
+        EvidenceClock::observed(GraphLogicalTime::new(1)),
+        OrderingClaim::Unknown,
+        TypedEvidencePayload::Process {
+            signal_kind: "process_exit".to_string(),
+            process_digest: "process:unrelated".to_string(),
+            parent_process_digest: None,
+            entity_ids: vec![actor_id.clone(), event_id.clone()],
+            content_digest: "digest:unrelated".to_string(),
+        },
+    )
+    .unwrap()
+    .sign_with(
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer:containment-unrelated",
+    )
+    .unwrap();
+    let unrelated_evidence_id = unrelated_evidence.evidence_id.clone();
+    graph.admit_evidence(unrelated_evidence).unwrap();
+
+    let edge = CausalEdge::new(
+        &actor_id,
+        &event_id,
+        CausalRelation::ObservedIn,
+        8_000,
+        [evidence_id.clone()],
+        GraphProducerRole::Hunter,
+        producer,
+        GraphLogicalTime::new(1),
+        EdgeState::Proposed,
+    )
+    .unwrap()
+    .signed_with(&signer, "hunter:containment")
+    .unwrap();
+    let edge_id = edge.edge_id.clone();
+    graph.admit_edge(edge).unwrap();
+
+    let claim = CoreKillChainClaim::new(
+        KillChainStage::Execution,
+        node_ids.clone(),
+        [edge_id.clone()],
+        [evidence_id.clone()],
+        [],
+        "execution is supported",
+        [evidence_id.clone()],
+    )
+    .unwrap();
+    let hypothesis_id = HypothesisId::new("hypothesis:containment");
+    let hypothesis = Hypothesis::new(
+        hypothesis_id.clone(),
+        ConfidenceDistribution::uniform_two(),
+        [UncertaintyReason::InsufficientEvidence],
+        [],
+    )
+    .unwrap()
+    .with_claims([edge_id.clone()]);
+    let store = MemoryHypothesisGraphStore::new_with_config(graph, signer, &config).unwrap();
+    let initial = store.snapshot().unwrap();
+    let state = GraphStoreState::with_reasoning_state(
+        initial.state().clone(),
+        ReasoningStateUpdate::migration_to_hypotheses(
+            config.resource_limits(),
+            GraphLogicalTime::new(1),
+        )
+        .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
+        .with_scheduler_budget(
+            SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(1)).unwrap(),
+        ),
+    )
+    .unwrap();
+    let snapshot = store.compare_and_swap(initial.revision(), state).unwrap();
+    ContainmentFixture {
+        snapshot,
+        hypothesis_id,
+        edge_id,
+        evidence_id,
+        unrelated_evidence_id,
+        node_ids,
+        claim,
+    }
+}
+
+fn containment_option(target: GraphNodeId) -> swarm_core::hypothesis_graph::ContainmentOption {
+    swarm_core::hypothesis_graph::ContainmentOption::new(
+        swarm_core::hypothesis_graph::ContainmentOptionKind::IsolateAsset,
+        [target],
+        100,
+        9_000,
+        8_000,
+        swarm_core::hypothesis_graph::ApprovalClass::Analyst,
+        true,
+    )
+    .unwrap()
+}
+
+fn exact_kill_chain(
+    fixture: &ContainmentFixture,
+    claims: impl IntoIterator<Item = CoreKillChainClaim>,
+) -> swarm_runtime::hypothesis_graph::kill_chain::KillChainReconstruction {
+    swarm_runtime::hypothesis_graph::kill_chain::KillChainReconstruction::new_with_edge_support(
+        claims,
+        BTreeMap::from([(
+            fixture.edge_id.clone(),
+            BTreeSet::from([fixture.evidence_id.clone()]),
+        )]),
+        [],
+    )
+    .unwrap()
+}
+
+fn plan04_containment_input() -> (
+    ContainmentFixture,
+    swarm_runtime::hypothesis_graph::ContainmentPlanningInput,
+) {
+    let fixture = containment_fixture();
+    let target = fixture.node_ids.first().unwrap().clone();
+    let input = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id.clone()],
+        vec![fixture.edge_id.clone()],
+        vec![fixture.evidence_id.clone()],
+        exact_kill_chain(&fixture, [fixture.claim.clone()]),
+        vec![containment_option(target)],
+        GraphLogicalTime::new(1),
+    )
+    .unwrap();
+    (fixture, input)
+}
+
+#[test]
+fn withheld_kill_chain_reports_missing_evidence() {
+    let (fixture, _) = plan04_containment_input();
+    let claim_id = fixture.claim.claim_id.clone();
+    let reconstruction = swarm_runtime::hypothesis_graph::kill_chain::reconstruct_kill_chain(
+        [fixture.claim.clone()],
+        [fixture.evidence_id.clone()],
+    )
+    .unwrap();
+    let retained = &reconstruction.claims[0];
+    assert_eq!(retained.claim_id, claim_id);
+    assert_eq!(retained.node_ids, fixture.claim.node_ids);
+    assert!(retained.edge_ids.is_empty());
+    assert!(retained.evidence_ids.is_empty());
+    assert!(retained.narration_evidence_ids.is_empty());
+    assert_eq!(reconstruction.missing_evidence[0].claim_id, claim_id);
+    assert!(reconstruction.validate().is_ok());
+    let suppressed = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id.clone()],
+        vec![fixture.edge_id.clone()],
+        vec![fixture.evidence_id.clone()],
+        reconstruction.clone(),
+        vec![containment_option(
+            fixture.node_ids.first().unwrap().clone(),
+        )],
+        GraphLogicalTime::new(1),
+    );
+    assert!(
+        suppressed.is_err(),
+        "withheld support must suppress downstream options"
+    );
+    let mut tampered = reconstruction;
+    tampered.missing_evidence[0].claim_id =
+        swarm_core::hypothesis_graph::KillChainClaimId::new("kill-chain:unknown");
+    assert!(tampered.validate().is_err());
+}
+
+#[test]
+fn containment_rejects_omitted_withheld_support_with_unrelated_valid_evidence() {
+    let (fixture, _) = plan04_containment_input();
+    let reconstruction = swarm_runtime::hypothesis_graph::kill_chain::reconstruct_kill_chain(
+        [fixture.claim.clone()],
+        [fixture.evidence_id.clone()],
+    )
+    .unwrap();
+    let result = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id],
+        vec![fixture.edge_id],
+        vec![fixture.unrelated_evidence_id],
+        reconstruction,
+        vec![containment_option(
+            fixture.node_ids.first().unwrap().clone(),
+        )],
+        GraphLogicalTime::new(1),
+    );
+    assert!(
+        result.is_err(),
+        "a caller cannot hide missing support by omitting it and supplying unrelated valid evidence"
+    );
+}
+
+#[test]
+fn containment_plan_is_simulation_only() {
+    let (_, input) = plan04_containment_input();
+    let planner =
+        swarm_runtime::hypothesis_graph::ContainmentPlanner::new(GraphResourceLimits::default())
+            .unwrap();
+    let simulation = planner.simulate_input(&input).unwrap();
+    assert!(simulation.simulation_only);
+    assert_eq!(simulation.graph_id, GraphId::new("graph:containment"));
+    assert_eq!(simulation.options.len(), input.options().len());
+    let source = &input.options()[0];
+    let projected = &simulation.options[0];
+    assert_eq!(projected.kind, source.kind);
+    assert_eq!(projected.target_node_ids, source.target_node_ids);
+    assert_eq!(
+        projected.predicted_blast_radius_basis_points,
+        source.predicted_blast_radius_basis_points
+    );
+    assert_eq!(
+        projected.reversibility_basis_points,
+        source.reversibility_basis_points
+    );
+    assert_eq!(
+        projected.evidence_support_basis_points,
+        source.evidence_support_basis_points
+    );
+    assert_eq!(projected.required_approval, source.required_approval);
+    assert_eq!(projected.rollback_expected, source.rollback_expected);
+    assert_eq!(projected.option_id, source.option_id);
+}
+
+#[test]
+fn containment_rejects_exact_edge_support_mismatch() {
+    let (fixture, _) = plan04_containment_input();
+    let mismatched_claim = CoreKillChainClaim::new(
+        KillChainStage::Execution,
+        fixture.node_ids.clone(),
+        [fixture.edge_id.clone()],
+        [
+            fixture.evidence_id.clone(),
+            fixture.unrelated_evidence_id.clone(),
+        ],
+        [],
+        "execution has mismatched persisted support",
+        [
+            fixture.evidence_id.clone(),
+            fixture.unrelated_evidence_id.clone(),
+        ],
+    )
+    .unwrap();
+    let mismatched_chain =
+        swarm_runtime::hypothesis_graph::kill_chain::KillChainReconstruction::new_with_edge_support(
+            [mismatched_claim],
+            BTreeMap::from([(
+                fixture.edge_id.clone(),
+                BTreeSet::from([fixture.unrelated_evidence_id.clone()]),
+            )]),
+            [],
+        )
+        .unwrap();
+    let result = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id],
+        vec![fixture.edge_id],
+        vec![fixture.evidence_id, fixture.unrelated_evidence_id],
+        mismatched_chain,
+        vec![containment_option(
+            fixture.node_ids.first().unwrap().clone(),
+        )],
+        GraphLogicalTime::new(1),
+    );
+    assert!(matches!(
+        result,
+        Err(GraphAdmissionError::InvalidTransition { reason }) if reason.contains("support differs")
+    ));
+}
+
+#[test]
+fn containment_rejects_synthetic_target_node() {
+    let (fixture, _) = plan04_containment_input();
+    let result = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id.clone()],
+        vec![fixture.edge_id.clone()],
+        vec![fixture.evidence_id.clone()],
+        exact_kill_chain(&fixture, [fixture.claim.clone()]),
+        vec![containment_option(GraphNodeId::new("node:synthetic"))],
+        GraphLogicalTime::new(1),
+    );
+    assert!(matches!(
+        result,
+        Err(GraphAdmissionError::UnknownNode { .. })
+    ));
+}
+
+#[test]
+fn containment_rejects_duplicate_unknown_and_malformed_ids() {
+    let (fixture, _) = plan04_containment_input();
+    let valid_chain = || exact_kill_chain(&fixture, [fixture.claim.clone()]);
+    let target = fixture.node_ids.first().unwrap().clone();
+    let duplicate = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id.clone(), fixture.hypothesis_id.clone()],
+        vec![fixture.edge_id.clone()],
+        vec![fixture.evidence_id.clone()],
+        valid_chain(),
+        vec![containment_option(target.clone())],
+        GraphLogicalTime::new(1),
+    );
+    assert!(matches!(
+        duplicate,
+        Err(GraphAdmissionError::InvalidField { .. })
+    ));
+    let malformed = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![HypothesisId::new("")],
+        vec![fixture.edge_id.clone()],
+        vec![fixture.evidence_id.clone()],
+        valid_chain(),
+        vec![containment_option(target.clone())],
+        GraphLogicalTime::new(1),
+    );
+    assert!(matches!(
+        malformed,
+        Err(GraphAdmissionError::InvalidField { .. })
+    ));
+    let unknown_edge_id = swarm_core::hypothesis_graph::EdgeId::new("edge:synthetic");
+    let unknown_edge_claim = CoreKillChainClaim::new(
+        KillChainStage::Execution,
+        fixture.claim.node_ids.clone(),
+        [unknown_edge_id.clone()],
+        [fixture.evidence_id.clone()],
+        [],
+        "execution is supported",
+        [fixture.evidence_id.clone()],
+    )
+    .unwrap();
+    let unknown_edge = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id.clone()],
+        vec![unknown_edge_id.clone()],
+        vec![fixture.evidence_id.clone()],
+        swarm_runtime::hypothesis_graph::kill_chain::KillChainReconstruction::new_with_edge_support(
+            [unknown_edge_claim],
+            BTreeMap::from([(
+                unknown_edge_id.clone(),
+                BTreeSet::from([fixture.evidence_id.clone()]),
+            )]),
+            [],
+        )
+        .unwrap(),
+        vec![containment_option(target.clone())],
+        GraphLogicalTime::new(1),
+    );
+    assert!(matches!(
+        unknown_edge,
+        Err(GraphAdmissionError::InvalidField { .. })
+    ));
+    let unknown_evidence_id = swarm_core::hypothesis_graph::EvidenceId::new("evidence:synthetic");
+    let unknown_evidence_claim = CoreKillChainClaim::new(
+        KillChainStage::Execution,
+        fixture.claim.node_ids.clone(),
+        [fixture.edge_id.clone()],
+        [unknown_evidence_id.clone()],
+        [],
+        "execution is supported",
+        [unknown_evidence_id.clone()],
+    )
+    .unwrap();
+    let unknown_evidence = swarm_runtime::hypothesis_graph::ContainmentPlanningInput::from_snapshot(
+        &fixture.snapshot,
+        vec![fixture.hypothesis_id.clone()],
+        vec![fixture.edge_id.clone()],
+        vec![unknown_evidence_id.clone()],
+        swarm_runtime::hypothesis_graph::kill_chain::KillChainReconstruction::new_with_edge_support(
+            [unknown_evidence_claim],
+            BTreeMap::from([(
+                fixture.edge_id.clone(),
+                BTreeSet::from([unknown_evidence_id.clone()]),
+            )]),
+            [],
+        )
+        .unwrap(),
+        vec![containment_option(target)],
+        GraphLogicalTime::new(1),
+    );
+    assert!(matches!(
+        unknown_evidence,
+        Err(GraphAdmissionError::UnknownEvidence)
+    ));
+}
+
+struct TerminalTaskFixture {
+    claimant_key: Keypair,
+    store: MemoryHypothesisGraphStore,
+    ledger: HypothesisTaskLedger,
+    request: TaskClaimRequest,
+    evidence: EvidenceEnvelope,
+}
+
+fn terminal_task_fixture() -> TerminalTaskFixture {
+    let claimant_key = key(91);
+    let evidence = normalize_telemetry_event(
+        &process_event("terminal:evidence", "curl https://terminal.example"),
+        &clock(),
+        &claimant_key,
+        GraphProducerRole::Normalizer,
+        "normalizer:terminal",
+    )
+    .unwrap();
+    let graph_id = GraphId::new("graph:terminal-cas");
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 100,
+        max_claims_per_tick: 10,
+        ..HypothesisGraphConfig::default()
+    };
+    let limits = config.resource_limits();
+    let mut graph = HypothesisGraph::new(graph_id.clone(), limits).unwrap();
+    graph.admit_evidence(evidence.clone()).unwrap();
+    let store = MemoryHypothesisGraphStore::new_with_config(graph, key(92), &config).unwrap();
+    let target = TaskTarget::Evidence {
+        evidence_id: evidence.evidence_id.clone(),
+    };
+    let descriptor = LogicalTaskDescriptor::new(
+        graph_id,
+        target.clone(),
+        TaskKind::AcquireEvidence,
+        "00".repeat(32),
+    )
+    .unwrap();
+    let request = TaskClaimRequest::new(
+        descriptor.task_id.clone(),
+        TaskKind::AcquireEvidence,
+        target,
+        GraphProducerRole::Hunter,
+        AgentId::from_public_key_hex(&claimant_key.public_key().to_hex()),
+        EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [evidence.evidence_id.clone()],
+            [],
+        )
+        .unwrap(),
+        GraphLogicalTime::new(100),
+    )
+    .unwrap();
+    let mut ledger =
+        HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(100)).unwrap();
+    let initial = store.snapshot().unwrap();
+    ledger
+        .create_task(&store, initial.revision(), descriptor, request.clone())
+        .unwrap();
+    TerminalTaskFixture {
+        claimant_key,
+        store,
+        ledger,
+        request,
+        evidence,
+    }
+}
+
+fn terminal_envelope(
+    fixture: &TerminalTaskFixture,
+    claim: &swarm_runtime::hypothesis_graph::TaskClaim,
+) -> TaskTerminalEnvelope {
+    let capability = TaskCapabilityProof::signed_with(
+        claim.task_id.clone(),
+        claim.claimant.clone(),
+        GraphProducerRole::Hunter,
+        TaskKind::AcquireEvidence,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    assert_eq!(capability, claim.capability_proof);
+    TaskTerminalEnvelope::new(
+        claim.task_id.clone(),
+        claim.idempotency_key.clone(),
+        claim.lease_id.clone(),
+        claim.fencing_token,
+        TaskCompletion::new(
+            TaskCompletionKind::EvidenceAdded,
+            claim.claimant.clone(),
+            GraphLogicalTime::new(200),
+            [fixture.evidence.evidence_id.clone()],
+            "00".repeat(32),
+        )
+        .unwrap(),
+        None,
+        claim.claimant.clone(),
+        claim.capability_proof.clone(),
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "hunter:terminal")
+    .unwrap()
+}
+
+fn terminal_memory(
+    fixture: &TerminalTaskFixture,
+) -> (StrategyMemory, StrategyMemoryExpiryEnvelope) {
+    let graph_id = GraphId::new("graph:terminal-cas");
+    let hypothesis_id = HypothesisId::new("hypothesis:memory");
+    let producer = AgentId::from_public_key_hex(&fixture.claimant_key.public_key().to_hex());
+    let provenance = MemoryProvenance::new(producer, [fixture.evidence.evidence_id.clone()])
+        .signed_with(
+            &fixture.claimant_key,
+            GraphProducerRole::Hunter,
+            "hunter:memory-provenance",
+        )
+        .unwrap();
+    let memory = StrategyMemory::new(
+        graph_id,
+        hypothesis_id,
+        HypothesisDelta::new([], [], []),
+        [EvidenceUtility::new(
+            fixture.evidence.evidence_id.clone(),
+            5000,
+        )],
+        [],
+        MemoryOutcome::Inconclusive,
+        provenance,
+    )
+    .unwrap()
+    .signed_with(
+        &fixture.claimant_key,
+        GraphProducerRole::Hunter,
+        "hunter:memory",
+    )
+    .unwrap();
+    let config = HypothesisGraphConfig::default();
+    let expiry = StrategyMemoryExpiryEnvelope::new_with_config(
+        &memory,
+        GraphLogicalTime::new(200),
+        10,
+        &config,
+        &fixture.claimant_key,
+    )
+    .unwrap();
+    (memory, expiry)
+}
+
+#[test]
+fn terminal_publication_is_atomic() {
+    let mut fixture = terminal_task_fixture();
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    let claim = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap();
+    let before = fixture.store.snapshot().unwrap();
+    let after = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            before.revision(),
+            &claim,
+            terminal_envelope(&fixture, &claim),
+            vec![fixture.evidence.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let task = after.state().task(claim.task_id.as_str()).unwrap();
+    assert_eq!(
+        task.task.state,
+        swarm_core::hypothesis_graph::TaskState::Completed
+    );
+    assert_eq!(after.state().graph.evidence.len(), 1);
+    assert_eq!(after.terminal_outbox().len(), 1);
+    assert_eq!(
+        after.terminal_outbox()[&claim.task_id].evidence,
+        vec![fixture.evidence]
+    );
+}
+
+#[test]
+fn production_complete_task_enforces_signed_lineage() {
+    let mut fixture = terminal_task_fixture();
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    let claim = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap();
+    let before = fixture.store.snapshot().unwrap();
+    let before_bytes = before.canonical_bytes().unwrap();
+    let mut unsigned = terminal_envelope(&fixture, &claim);
+    unsigned.terminal_witness = None;
+    assert!(
+        fixture
+            .ledger
+            .complete_task(
+                &fixture.store,
+                before.revision(),
+                &claim,
+                unsigned,
+                vec![fixture.evidence.clone()],
+                None,
+                None,
+                None,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        fixture.store.snapshot().unwrap().canonical_bytes().unwrap(),
+        before_bytes
+    );
+}
+
+#[test]
+fn coordinator_uses_config_bound_budget_per_logical_tick() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 4,
+        max_claims_per_tick: 1,
+        ..HypothesisGraphConfig::default()
+    };
+    let tick = GraphLogicalTime::new(500);
+    let graph_id = GraphId::new("graph:durable-budget");
+    let coordinator_key = key(98);
+    let producer = AgentId::from_public_key_hex(&coordinator_key.public_key().to_hex());
+    let mut graph = HypothesisGraph::new(graph_id.clone(), config.resource_limits()).unwrap();
+    let actor = ActorNode::new("actor:budget", "budget actor").unwrap();
+    let asset = swarm_core::hypothesis_graph::AssetNode::new("asset:budget", "host").unwrap();
+    let actor_id = actor.node_id.clone();
+    let asset_id = asset.node_id.clone();
+    graph.admit_node(GraphNode::Actor(actor)).unwrap();
+    graph.admit_node(GraphNode::Asset(asset)).unwrap();
+    let edge = CausalEdge::new(
+        &actor_id,
+        &asset_id,
+        CausalRelation::Contacts,
+        8_000,
+        [],
+        GraphProducerRole::Hunter,
+        producer,
+        tick,
+        EdgeState::Unresolved,
+    )
+    .unwrap()
+    .signed_with(&coordinator_key, "hunter:budget")
+    .unwrap();
+    graph.admit_edge(edge).unwrap();
+    let store = MemoryHypothesisGraphStore::new_with_config(graph, key(99), &config).unwrap();
+    let evidence_id = swarm_core::hypothesis_graph::EvidenceId::new("evidence:budget");
+    let seed = swarm_runtime::hypothesis_graph::HypothesisSeedInput::from_normalized_evidence(
+        graph_id.clone(),
+        vec![
+            HypothesisId::new("hypothesis:budget-one"),
+            HypothesisId::new("hypothesis:budget-two"),
+        ],
+        vec![evidence_id.clone()],
+        tick,
+    )
+    .unwrap();
+    let scope = EvidenceScope::new([], [evidence_id], []).unwrap();
+    let signer_key = key(100);
+    let signer = KeypairGraphRecordSigner::with_admission(
+        signer_key.clone(),
+        &WitnessAdmission::from_key(&signer_key),
+    )
+    .unwrap();
+    let claimant = AgentId::from_public_key_hex(&signer_key.public_key().to_hex());
+    let mut coordinator =
+        DurableHypothesisCoordinator::new_with_store(&config, tick, &store, signer).unwrap();
+
+    let initial = store.snapshot().unwrap();
+    assert_eq!(coordinator.ledger().scheduler_budget().max_work_units, 4);
+    assert_eq!(coordinator.ledger().scheduler_budget().max_claims, 1);
+    let first = coordinator
+        .coordinate_seed(
+            &store,
+            initial.revision(),
+            &seed,
+            claimant.clone(),
+            scope.clone(),
+        )
+        .unwrap();
+    assert_eq!(first.task_ids.len(), 4);
+    assert_eq!(first.snapshot.state().tasks.len(), 4);
+    let persisted_budget = first.snapshot.scheduler_budget().unwrap().clone();
+    assert_eq!(persisted_budget.current_tick(), tick);
+    assert_eq!(persisted_budget.work_units_used(), 4);
+    assert_eq!(persisted_budget.claims_used(), 0);
+    assert_eq!(coordinator.ledger().scheduler_budget(), &persisted_budget);
+
+    let claim_entry = first
+        .snapshot
+        .state()
+        .tasks
+        .values()
+        .find(|entry| entry.task.request.kind == TaskKind::AcquireEvidence)
+        .unwrap();
+    let claim_request = claim_entry.task.request.clone();
+    let capability = TaskCapabilityProof::signed_with(
+        claim_request.task_id.clone(),
+        claim_request.claimant.clone(),
+        claim_request.role,
+        claim_request.kind,
+        claim_request.canonical_digest().unwrap(),
+        &signer_key,
+        "hunter:budget-claim",
+    )
+    .unwrap();
+    let claimed = coordinator
+        .ledger_mut()
+        .claim_task(
+            &store,
+            claim_request.clone(),
+            tick,
+            1_000,
+            capability.clone(),
+        )
+        .unwrap();
+    let claimed_snapshot = store.snapshot().unwrap();
+    let claimed_budget = claimed_snapshot.scheduler_budget().unwrap().clone();
+    assert_eq!(claimed.task_id, claim_request.task_id);
+    assert_eq!(claimed_budget.work_units_used(), 4);
+    assert_eq!(claimed_budget.claims_used(), 1);
+    assert_eq!(coordinator.ledger().scheduler_budget(), &claimed_budget);
+
+    let before_claim_retry = claimed_snapshot.canonical_bytes().unwrap();
+    let retry_claim = coordinator
+        .ledger_mut()
+        .claim_task(&store, claim_request, tick, 1_000, capability)
+        .unwrap();
+    assert_eq!(retry_claim, claimed);
+    assert_eq!(
+        store.snapshot().unwrap().canonical_bytes().unwrap(),
+        before_claim_retry
+    );
+    assert_eq!(coordinator.ledger().scheduler_budget(), &claimed_budget);
+
+    let before_retry = claimed_snapshot.canonical_bytes().unwrap();
+    let retried = coordinator
+        .coordinate_seed(&store, claimed_snapshot.revision(), &seed, claimant, scope)
+        .unwrap();
+    assert_eq!(retried.snapshot.revision(), claimed_snapshot.revision());
+    assert_eq!(retried.snapshot.canonical_bytes().unwrap(), before_retry);
+    assert_eq!(coordinator.ledger().scheduler_budget(), &claimed_budget);
+
+    let restarted_key = key(101);
+    let restarted_signer = KeypairGraphRecordSigner::with_admission(
+        restarted_key.clone(),
+        &WitnessAdmission::from_key(&restarted_key),
+    )
+    .unwrap();
+    let mut restarted =
+        DurableHypothesisCoordinator::new_with_store(&config, tick, &store, restarted_signer)
+            .unwrap();
+    assert_eq!(restarted.ledger().scheduler_budget(), &claimed_budget);
+
+    let alternate_seed =
+        swarm_runtime::hypothesis_graph::HypothesisSeedInput::from_normalized_evidence(
+            graph_id.clone(),
+            vec![
+                HypothesisId::new("hypothesis:alternate-one"),
+                HypothesisId::new("hypothesis:alternate-two"),
+            ],
+            vec![swarm_core::hypothesis_graph::EvidenceId::new(
+                "evidence:alternate",
+            )],
+            tick,
+        )
+        .unwrap();
+    let before_exhausted = store.snapshot().unwrap();
+    let before_exhausted_bytes = before_exhausted.canonical_bytes().unwrap();
+    let budget_before_exhausted = restarted.ledger().scheduler_budget().clone();
+    assert!(
+        restarted
+            .coordinate_seed(
+                &store,
+                before_exhausted.revision(),
+                &alternate_seed,
+                AgentId::from_public_key_hex(&restarted_key.public_key().to_hex()),
+                EvidenceScope::new(
+                    [],
+                    [swarm_core::hypothesis_graph::EvidenceId::new(
+                        "evidence:alternate",
+                    )],
+                    [],
+                )
+                .unwrap(),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        restarted.ledger().scheduler_budget(),
+        &budget_before_exhausted
+    );
+    assert_eq!(
+        store.snapshot().unwrap().canonical_bytes().unwrap(),
+        before_exhausted_bytes
+    );
+
+    let next_tick_seed =
+        swarm_runtime::hypothesis_graph::HypothesisSeedInput::from_normalized_evidence(
+            graph_id,
+            vec![
+                HypothesisId::new("hypothesis:next-tick-one"),
+                HypothesisId::new("hypothesis:next-tick-two"),
+            ],
+            vec![swarm_core::hypothesis_graph::EvidenceId::new(
+                "evidence:next-tick",
+            )],
+            GraphLogicalTime::new(501),
+        )
+        .unwrap();
+    let next_tick = restarted
+        .coordinate_seed(
+            &store,
+            before_exhausted.revision(),
+            &next_tick_seed,
+            AgentId::from_public_key_hex(&restarted_key.public_key().to_hex()),
+            EvidenceScope::new(
+                [],
+                [swarm_core::hypothesis_graph::EvidenceId::new(
+                    "evidence:next-tick",
+                )],
+                [],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let reset_budget = next_tick.snapshot.scheduler_budget().unwrap();
+    assert_eq!(reset_budget.current_tick(), GraphLogicalTime::new(501));
+    assert_eq!(reset_budget.work_units_used(), 4);
+}
+
+#[test]
+fn terminal_memory_is_not_visible_before_outbox_cas() {
+    let mut fixture = terminal_task_fixture();
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    let claim = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap();
+    let stale = fixture.store.snapshot().unwrap();
+    let current = fixture.store.snapshot().unwrap();
+    let (memory, expiry) = terminal_memory(&fixture);
+    assert!(
+        fixture
+            .ledger
+            .complete_task(
+                &fixture.store,
+                &GraphStoreRevision::new(
+                    stale.revision().generation.saturating_sub(1),
+                    stale.revision().digest.clone(),
+                ),
+                &claim,
+                terminal_envelope(&fixture, &claim),
+                vec![fixture.evidence.clone()],
+                None,
+                Some(memory),
+                Some(expiry),
+            )
+            .is_err()
+    );
+    let after = fixture.store.snapshot().unwrap();
+    assert_eq!(after, current);
+    assert!(after.terminal_outbox().is_empty());
+}
+
+#[test]
+fn stale_terminal_publishes_nothing() {
+    let mut fixture = terminal_task_fixture();
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    let claim = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap();
+    let current = fixture.store.snapshot().unwrap();
+    let stale = GraphStoreRevision::new(
+        current.revision().generation.saturating_sub(1),
+        "00".repeat(32),
+    );
+    assert!(
+        fixture
+            .ledger
+            .complete_task(
+                &fixture.store,
+                &stale,
+                &claim,
+                terminal_envelope(&fixture, &claim),
+                vec![fixture.evidence.clone()],
+                None,
+                None,
+                None,
+            )
+            .is_err()
+    );
+    assert_eq!(fixture.store.snapshot().unwrap(), current);
+}
+
+#[test]
+fn claimant_key_and_completion_kind_are_checked() {
+    let mut fixture = terminal_task_fixture();
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    let claim = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap();
+    let before = fixture.store.snapshot().unwrap();
+    let attacker_key = key(97);
+    let attacker = AgentId::from_public_key_hex(&attacker_key.public_key().to_hex());
+    let attacker_capability = TaskCapabilityProof::signed_with(
+        claim.task_id.clone(),
+        attacker.clone(),
+        GraphProducerRole::Hunter,
+        TaskKind::AcquireEvidence,
+        fixture.request.canonical_digest().unwrap(),
+        &attacker_key,
+        "attacker:terminal",
+    )
+    .unwrap();
+    let wrong_key = TaskTerminalEnvelope::new(
+        claim.task_id.clone(),
+        claim.idempotency_key.clone(),
+        claim.lease_id.clone(),
+        claim.fencing_token,
+        TaskCompletion::new(
+            TaskCompletionKind::EvidenceAdded,
+            attacker.clone(),
+            GraphLogicalTime::new(200),
+            [fixture.evidence.evidence_id.clone()],
+            "00".repeat(32),
+        )
+        .unwrap(),
+        None,
+        attacker,
+        attacker_capability,
+    )
+    .unwrap()
+    .signed_with(&attacker_key, "attacker:terminal")
+    .unwrap();
+    assert!(
+        fixture
+            .ledger
+            .complete_task(
+                &fixture.store,
+                before.revision(),
+                &claim,
+                wrong_key,
+                vec![fixture.evidence.clone()],
+                None,
+                None,
+                None,
+            )
+            .is_err()
+    );
+    let mut wrong_kind = terminal_envelope(&fixture, &claim);
+    wrong_kind.completion.kind = TaskCompletionKind::EdgeChallenged;
+    assert!(
+        fixture
+            .ledger
+            .complete_task(
+                &fixture.store,
+                before.revision(),
+                &claim,
+                wrong_kind,
+                vec![fixture.evidence.clone()],
+                None,
+                None,
+                None,
+            )
+            .is_err()
+    );
+    assert_eq!(fixture.store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn logical_task_descriptor_is_persisted_and_verified() {
+    let fixture = terminal_task_fixture();
+    let before = fixture.store.snapshot().unwrap();
+    let descriptor = before
+        .logical_task_descriptors()
+        .get(&fixture.request.task_id)
+        .unwrap();
+    assert_eq!(descriptor.task_id, fixture.request.task_id);
+    assert_eq!(descriptor.derive_task_id().unwrap(), descriptor.task_id);
+    let mut tampered = before.state().clone();
+    tampered
+        .logical_task_descriptors
+        .get_mut(&fixture.request.task_id)
+        .unwrap()
+        .seed_digest = "11".repeat(32);
+    assert!(
+        fixture
+            .store
+            .compare_and_swap(before.revision(), tampered)
+            .is_err()
+    );
+    assert_eq!(fixture.store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn same_logical_descriptor_is_idempotent() {
+    let mut fixture = terminal_task_fixture();
+    let before = fixture.store.snapshot().unwrap();
+    let descriptor = LogicalTaskDescriptor::new(
+        GraphId::new("graph:terminal-cas"),
+        fixture.request.target.clone(),
+        fixture.request.kind,
+        "00".repeat(32),
+    )
+    .unwrap();
+    let retried = fixture
+        .ledger
+        .create_task(
+            &fixture.store,
+            before.revision(),
+            descriptor,
+            fixture.request.clone(),
+        )
+        .unwrap();
+    assert_eq!(retried.revision(), before.revision());
+    assert_eq!(fixture.store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn different_seed_creates_distinct_task() {
+    let mut fixture = terminal_task_fixture();
+    let before = fixture.store.snapshot().unwrap();
+    let second = LogicalTaskDescriptor::new(
+        GraphId::new("graph:terminal-cas"),
+        fixture.request.target.clone(),
+        fixture.request.kind,
+        "11".repeat(32),
+    )
+    .unwrap();
+    assert_ne!(second.task_id, fixture.request.task_id);
+    let second_request = TaskClaimRequest::new(
+        second.task_id.clone(),
+        fixture.request.kind,
+        fixture.request.target.clone(),
+        fixture.request.role,
+        fixture.request.claimant.clone(),
+        fixture.request.evidence_scope.clone(),
+        fixture.request.requested_at,
+    )
+    .unwrap();
+    fixture
+        .ledger
+        .create_task(&fixture.store, before.revision(), second, second_request)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .snapshot()
+            .unwrap()
+            .logical_task_descriptors()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn logical_task_id_is_not_claimant_idempotency() {
+    let fixture = terminal_task_fixture();
+    let descriptor = fixture.store.snapshot().unwrap().logical_task_descriptors()
+        [&fixture.request.task_id]
+        .clone();
+    assert_ne!(
+        descriptor.task_id.as_str(),
+        fixture.request.idempotency_key.as_str()
+    );
+    assert_ne!(
+        descriptor.seed_digest,
+        fixture.request.idempotency_key.as_str()
+    );
+}
+
+struct DecisionTaskFixture {
+    claimant_key: Keypair,
+    store: MemoryHypothesisGraphStore,
+    ledger: HypothesisTaskLedger,
+    request: TaskClaimRequest,
+    evidence: EvidenceEnvelope,
+    target: TaskTarget,
+    hypothesis_id: HypothesisId,
+    edge_id: swarm_core::hypothesis_graph::EdgeId,
+}
+
+fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTaskFixture {
+    let claimant_key = key(95);
+    let claimant = AgentId::from_public_key_hex(&claimant_key.public_key().to_hex());
+    let evidence = normalize_telemetry_event(
+        &process_event("decision:evidence", "curl https://decision.example"),
+        &clock(),
+        &claimant_key,
+        GraphProducerRole::Normalizer,
+        "normalizer:decision",
+    )
+    .unwrap();
+    let graph_id = GraphId::new("graph:decision-cas");
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 100,
+        max_claims_per_tick: 10,
+        ..HypothesisGraphConfig::default()
+    };
+    let mut graph = HypothesisGraph::new(graph_id.clone(), config.resource_limits()).unwrap();
+    let actor = GraphNode::Actor(ActorNode::new("actor:decision", "decision-actor").unwrap());
+    let event = GraphNode::Event(
+        EventNode::new("process", "source:decision", evidence.clock.observed_at).unwrap(),
+    );
+    let actor_id = actor.id().clone();
+    let event_id = event.id().clone();
+    graph.admit_node(actor).unwrap();
+    graph.admit_node(event).unwrap();
+    graph.admit_evidence(evidence.clone()).unwrap();
+    let edge = CausalEdge::new(
+        &actor_id,
+        &event_id,
+        CausalRelation::ObservedIn,
+        7_500,
+        [evidence.evidence_id.clone()],
+        GraphProducerRole::Hunter,
+        claimant.clone(),
+        evidence.clock.observed_at,
+        EdgeState::Proposed,
+    )
+    .unwrap()
+    .signed_with(&claimant_key, "hunter:decision-edge")
+    .unwrap();
+    let edge_id = edge.edge_id.clone();
+    graph.admit_edge(edge).unwrap();
+
+    let hypothesis_id = HypothesisId::new("hypothesis:decision");
+    let target = match kind {
+        TaskKind::ChallengeEdge => TaskTarget::Edge {
+            edge_id: edge_id.clone(),
+        },
+        TaskKind::FalsifyHypothesis => TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        },
+        TaskKind::AcquireEvidence => panic!("decision fixture requires a decision task"),
+    };
+    let descriptor =
+        LogicalTaskDescriptor::new(graph_id, target.clone(), kind, "22".repeat(32)).unwrap();
+    let request = TaskClaimRequest::new(
+        descriptor.task_id.clone(),
+        kind,
+        target.clone(),
+        role,
+        claimant,
+        EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [evidence.evidence_id.clone()],
+            [],
+        )
+        .unwrap(),
+        GraphLogicalTime::new(100),
+    )
+    .unwrap();
+    let store = MemoryHypothesisGraphStore::new_with_config(graph, key(96), &config).unwrap();
+    let mut ledger =
+        HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(100)).unwrap();
+    let hypothesis = Hypothesis::new(
+        hypothesis_id.clone(),
+        ConfidenceDistribution::uniform_two(),
+        [],
+        [],
+    )
+    .unwrap()
+    .with_claims([edge_id.clone()]);
+    let initial = store.snapshot().unwrap();
+    let reasoning_state = GraphStoreState::with_reasoning_state(
+        initial.state().clone(),
+        ReasoningStateUpdate::migration_to_hypotheses(
+            config.resource_limits(),
+            GraphLogicalTime::new(100),
+        )
+        .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
+        .with_scheduler_budget(
+            SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(100)).unwrap(),
+        ),
+    )
+    .unwrap();
+    let reasoning_snapshot = store
+        .compare_and_swap(initial.revision(), reasoning_state)
+        .unwrap();
+    ledger
+        .create_task(
+            &store,
+            reasoning_snapshot.revision(),
+            descriptor,
+            request.clone(),
+        )
+        .unwrap();
+    DecisionTaskFixture {
+        claimant_key,
+        store,
+        ledger,
+        request,
+        evidence,
+        target,
+        hypothesis_id,
+        edge_id,
+    }
+}
+
+fn claim_decision_task(
+    fixture: &mut DecisionTaskFixture,
+) -> swarm_runtime::hypothesis_graph::TaskClaim {
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "decision:claimant",
+    )
+    .unwrap();
+    fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap()
+}
+
+fn decision_terminal(
+    fixture: &DecisionTaskFixture,
+    claim: &swarm_runtime::hypothesis_graph::TaskClaim,
+) -> (TaskTerminalEnvelope, DecisionRecord) {
+    let (kind, completion_kind) = match fixture.request.kind {
+        TaskKind::ChallengeEdge => (DecisionKind::Challenge, TaskCompletionKind::EdgeChallenged),
+        TaskKind::FalsifyHypothesis => (
+            DecisionKind::Falsify,
+            TaskCompletionKind::HypothesisFalsified,
+        ),
+        TaskKind::AcquireEvidence => panic!("decision fixture requires a decision task"),
+    };
+    let decision = DecisionRecord::new(
+        kind,
+        fixture.hypothesis_id.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        fixture.request.role,
+        fixture.request.claimant.clone(),
+        GraphLogicalTime::new(200),
+        "explicit decision evidence retains lineage",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let link = TaskDecisionLink::new(
+        claim.task_id.clone(),
+        fixture.target.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        Some(decision.decision_id.clone()),
+    )
+    .unwrap();
+    let envelope = TaskTerminalEnvelope::new(
+        claim.task_id.clone(),
+        claim.idempotency_key.clone(),
+        claim.lease_id.clone(),
+        claim.fencing_token,
+        TaskCompletion::new(
+            completion_kind,
+            claim.claimant.clone(),
+            GraphLogicalTime::new(200),
+            [fixture.evidence.evidence_id.clone()],
+            "00".repeat(32),
+        )
+        .unwrap(),
+        Some(link),
+        claim.claimant.clone(),
+        claim.capability_proof.clone(),
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:terminal")
+    .unwrap();
+    (envelope, decision)
+}
+
+#[test]
+fn challenge_completion_retains_edge_lineage() {
+    let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    let claim = claim_decision_task(&mut fixture);
+    let before = fixture.store.snapshot().unwrap();
+    let (envelope, decision) = decision_terminal(&fixture, &claim);
+    let after = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            before.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence.clone()],
+            Some(decision),
+            None,
+            None,
+        )
+        .unwrap();
+    let hypothesis = &after.hypotheses()[&fixture.hypothesis_id];
+    assert_eq!(hypothesis.decision_history.len(), 1);
+    assert_eq!(hypothesis.decision_history[0].kind, DecisionKind::Challenge);
+    assert_eq!(
+        after.terminal_outbox()[&claim.task_id]
+            .envelope
+            .decision_link
+            .as_ref()
+            .unwrap()
+            .target,
+        fixture.target
+    );
+    assert_eq!(
+        fixture.target,
+        TaskTarget::Edge {
+            edge_id: fixture.edge_id
+        }
+    );
+}
+
+#[test]
+fn falsification_completion_retains_hypothesis_lineage() {
+    let mut fixture =
+        decision_task_fixture(TaskKind::FalsifyHypothesis, GraphProducerRole::Falsifier);
+    let claim = claim_decision_task(&mut fixture);
+    let before = fixture.store.snapshot().unwrap();
+    let (envelope, decision) = decision_terminal(&fixture, &claim);
+    let after = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            before.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence.clone()],
+            Some(decision),
+            None,
+            None,
+        )
+        .unwrap();
+    let hypothesis = &after.hypotheses()[&fixture.hypothesis_id];
+    assert_eq!(
+        hypothesis.status,
+        swarm_core::hypothesis_graph::HypothesisStatus::Falsified
+    );
+    assert_eq!(hypothesis.decision_history[0].kind, DecisionKind::Falsify);
+    assert_eq!(
+        after.terminal_outbox()[&claim.task_id]
+            .envelope
+            .decision_link
+            .as_ref()
+            .unwrap()
+            .target,
+        TaskTarget::Hypothesis {
+            hypothesis_id: fixture.hypothesis_id,
+        }
+    );
 }
