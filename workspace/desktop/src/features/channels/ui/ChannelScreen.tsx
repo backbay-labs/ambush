@@ -254,7 +254,12 @@ export function ChannelScreen({
   const deleteMessageMutation = useDeleteMessageMutation(activeChannel);
   const editMessageMutation = useEditMessageMutation(activeChannel);
   const joinChannelMutation = useJoinChannelMutation(activeChannelId);
-  const { resolvedMessages, threadSummaries } = useHuddleChannelMessages({
+  const {
+    resolvedMessages,
+    threadSummaries,
+    threadRepliesError: huddleThreadRepliesError,
+    onRetryThreadReplies: onRetryHuddleThreadReplies,
+  } = useHuddleChannelMessages({
     activeChannel,
     isHuddleTranscript,
     messages: messagesQuery.data ?? EMPTY_RELAY_EVENTS,
@@ -896,6 +901,8 @@ export function ChannelScreen({
                   isTimelineLoading={isTimelineLoading}
                   messages={timelineMessages}
                   threadSummaries={threadSummaries}
+                  huddleThreadRepliesError={huddleThreadRepliesError}
+                  onRetryHuddleThreadReplies={onRetryHuddleThreadReplies}
                   onCancelEdit={handleCancelEdit}
                   onCancelThreadReply={handleCancelThreadReply}
                   onChannelManagementDeleted={handleChannelManagementDeleted}
@@ -967,6 +974,10 @@ export function ChannelScreen({
                   threadHeadMessage={displayedThreadHeadMessage}
                   threadMessages={displayedThreadMessages}
                   threadMessagesPending={threadRepliesQuery.isPending}
+                  threadMessagesError={threadRepliesQuery.isError}
+                  onRetryThreadReplies={() => {
+                    void threadRepliesQuery.refetch();
+                  }}
                   threadPanelWidthPx={threadPanelWidthPx}
                   threadTypingPubkeys={threadTypingPubkeys}
                   threadReplyTargetMessage={displayedThreadReplyTargetMessage}
