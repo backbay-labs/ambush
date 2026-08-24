@@ -378,8 +378,10 @@ pub(super) fn map_approval_error(error: ApprovalError) -> OperatorApiError {
         | ApprovalError::InvalidApprovalSetRequest { .. }
         | ApprovalError::InvalidVerdictRequest { .. }
         | ApprovalError::InvalidReceiptPack { .. }
+        | ApprovalError::QuorumAlreadyMet { .. }
         | ApprovalError::DuplicateVoter { .. }
         | ApprovalError::IneligibleVoter { .. }
+        | ApprovalError::InvalidLedgerRequest { .. }
         | ApprovalError::InvalidSignature { .. } => {
             OperatorApiError::bad_request(error.to_string())
         }
@@ -392,7 +394,8 @@ pub(super) fn map_approval_error(error: ApprovalError) -> OperatorApiError {
         | ApprovalError::VerdictStore(_)
         | ApprovalError::ReceiptPackStore(_)
         | ApprovalError::Crypto(_)
-        | ApprovalError::Spine(_) => OperatorApiError::internal(error.to_string()),
+        | ApprovalError::Spine(_)
+        | ApprovalError::WorkflowLock { .. } => OperatorApiError::internal(error.to_string()),
     }
 }
 

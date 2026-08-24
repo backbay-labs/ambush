@@ -25,6 +25,7 @@ use axum::routing::{get, post};
 use axum::{Router, response::Json as ResponseJson};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -33,7 +34,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use swarm_core::ThreatClass;
 use swarm_core::agent::{AgentHealthEntry, SwarmModeState};
 use swarm_core::config::{
-    OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeAntiTamperConfig, RuntimeMode, SwarmConfig,
+    OperatorScope, OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeAntiTamperConfig,
+    RuntimeMode, SwarmConfig,
 };
 use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
@@ -121,8 +123,8 @@ type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send 
 
 struct IngestRuntimeRequestResponseRouter {
     runtime: Arc<ArcSwap<IngestRequestRuntime>>,
+    stack: Arc<ArcSwap<IngestRuntimeStack>>,
     approval_harness: Option<Arc<DefaultApprovalHarness>>,
-    operator_id: String,
 }
 
 /// Moved verbatim from `swarm_runtime::dispatcher::approval_context_now` in SPLIT-05.
@@ -176,9 +178,11 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         let harness = self.approval_harness.as_ref().ok_or_else(|| {
             RuntimeError::GovernanceAuthorization("human approval harness is not configured".into())
         })?;
+        let eligible_voters = configured_approval_voters(&self.stack.load_full().service.config)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
         let record = harness
             .create_approval_set(
-                vec![self.operator_id.clone()],
+                eligible_voters,
                 ThresholdRule::AtLeast { required: 1 },
                 &route.hold().approval_evidence_ref(),
             )
@@ -1419,6 +1423,60 @@ enum DemoApprovalError {
 }
 
 #[derive(Debug, thiserror::Error)]
+enum ApprovalVoterConfigError {
+    #[error(
+        "governed approvals require at least one eligible approve principal with a canonical swarm:ed25519 public-key identity"
+    )]
+    NoEligibleApprover,
+}
+
+/// Resolve the only identities that may be placed in a persisted approval set.
+///
+/// A configured principal is eligible only when it explicitly grants `Approve`
+/// and its operator identity is the canonical representation of a valid Ed25519
+/// public key. The legacy single-principal fallback remains supported through
+/// `effective_principals()` when no explicit principal list is configured, but a
+/// non-empty explicit list never falls back to `auth.operator_id`.
+fn configured_approval_voters(
+    config: &SwarmConfig,
+) -> Result<Vec<String>, ApprovalVoterConfigError> {
+    let voters = config
+        .operator
+        .auth
+        .effective_principals()
+        .into_iter()
+        .filter(|principal| principal.scopes.contains(&OperatorScope::Approve))
+        .filter_map(|principal| canonical_approval_voter_id(&principal.operator_id))
+        .collect::<BTreeSet<_>>();
+
+    if voters.is_empty() {
+        return Err(ApprovalVoterConfigError::NoEligibleApprover);
+    }
+
+    Ok(voters.into_iter().collect())
+}
+
+fn canonical_approval_voter_id(operator_id: &str) -> Option<String> {
+    const PREFIX: &str = "swarm:ed25519:";
+
+    let public_key_hex = operator_id.strip_prefix(PREFIX)?;
+    if public_key_hex.len() != 64
+        || !public_key_hex
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        || public_key_hex
+            .chars()
+            .any(|character| character.is_ascii_uppercase())
+    {
+        return None;
+    }
+
+    let public_key = swarm_crypto::PublicKey::from_hex(public_key_hex).ok()?;
+    let canonical = format!("{PREFIX}{}", public_key.to_hex());
+    (operator_id == canonical).then_some(canonical)
+}
+
+#[derive(Debug, thiserror::Error)]
 enum IngestProcessingError {
     #[error(transparent)]
     Service(#[from] ServiceError),
@@ -1923,8 +1981,8 @@ impl IngestState {
     pub fn current_request_response_router(&self) -> Arc<dyn RequestResponseRouter> {
         Arc::new(IngestRuntimeRequestResponseRouter {
             runtime: Arc::clone(&self.request_runtime),
+            stack: Arc::clone(&self.stack),
             approval_harness: self.approval_harness.clone(),
-            operator_id: self.operator_id(),
         })
     }
 

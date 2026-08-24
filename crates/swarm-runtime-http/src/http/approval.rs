@@ -7,13 +7,75 @@ use axum::extract::{Extension, Path as RoutePath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use serde::Deserialize;
 use serde_json::json;
+#[cfg(test)]
+use std::sync::{Arc, Mutex, OnceLock};
 use swarm_core::config::OperatorScope;
 use swarm_crypto::DetachedSignature;
 use swarm_policy::governance::GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX;
 use swarm_runtime::approval::{
-    ApprovalLedgerList, ApprovalLedgerLookup, ApprovalSetList, ApprovalSetReport,
-    ApprovalVerdictStatus, ThresholdRule,
+    ApprovalError, ApprovalLedgerList, ApprovalLedgerLookup, ApprovalLedgerVoteTransition,
+    ApprovalSetList, ApprovalSetReport, ThresholdRule,
 };
+#[cfg(test)]
+use tokio::sync::Barrier;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ApprovalAppendTestMode {
+    TransitionOutcome,
+    ReloadLatestMutant,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct ApprovalAppendTestHook {
+    ledger_id: String,
+    barrier: Arc<Barrier>,
+    mode: ApprovalAppendTestMode,
+}
+
+#[cfg(test)]
+static APPROVAL_APPEND_TEST_HOOK: OnceLock<Mutex<Option<ApprovalAppendTestHook>>> = OnceLock::new();
+
+#[cfg(test)]
+fn approval_append_test_hook_cell() -> &'static Mutex<Option<ApprovalAppendTestHook>> {
+    APPROVAL_APPEND_TEST_HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(super) fn install_approval_append_test_hook(
+    ledger_id: &str,
+    barrier: Arc<Barrier>,
+    mode: ApprovalAppendTestMode,
+) {
+    let mut hook = approval_append_test_hook_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *hook = Some(ApprovalAppendTestHook {
+        ledger_id: ledger_id.to_string(),
+        barrier,
+        mode,
+    });
+}
+
+#[cfg(test)]
+pub(super) fn clear_approval_append_test_hook() {
+    let mut hook = approval_append_test_hook_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *hook = None;
+}
+
+#[cfg(test)]
+async fn wait_for_approval_append_test_hook(ledger_id: &str) -> Option<ApprovalAppendTestMode> {
+    let hook = approval_append_test_hook_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let hook = hook.filter(|hook| hook.ledger_id == ledger_id)?;
+    hook.barrier.wait().await;
+    Some(hook.mode)
+}
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ApprovalSetListQuery {
@@ -150,66 +212,92 @@ pub(super) async fn approval_vote_append_handler(
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("approval ledger `{ledger_id}` was not found"))
         })?;
-    harness
-        .append_signed_vote(&ledger_id, &request.voter_id, &request.signature)
+    let outcome = harness
+        .append_signed_vote_outcome(&ledger_id, &request.voter_id, &request.signature)
         .map_err(map_approval_error)?;
-    let updated = harness
-        .load_ledger(&ledger_id)
-        .map_err(map_approval_error)?
-        .ok_or_else(|| {
-            OperatorApiError::internal("approval ledger was updated but could not be reloaded")
-        })?;
-    if updated.quorum_state.quorum_met {
-        let verdict = harness
-            .create_verdict(&updated.report.approval_set_id, &updated.report.ledger_id)
-            .map_err(map_approval_error)?;
-        if matches!(verdict.report.status, ApprovalVerdictStatus::Approved) {
-            let receipt_pack = harness
-                .export_receipt_pack(
-                    &verdict.report.verdict_id,
-                    &state.approval_receipt_signer_id,
-                    &state.approval_receipt_signing_key_env,
+    let updated = outcome.ledger;
+    #[cfg(test)]
+    let test_mode = wait_for_approval_append_test_hook(&ledger_id).await;
+    let should_resume = matches!(
+        outcome.transition,
+        ApprovalLedgerVoteTransition::QuorumCrossed
+            | ApprovalLedgerVoteTransition::ExactDuplicateOfQuorum
+    );
+    #[cfg(test)]
+    let should_resume = if matches!(test_mode, Some(ApprovalAppendTestMode::ReloadLatestMutant)) {
+        harness
+            .load_ledger(&ledger_id)
+            .map_err(map_approval_error)?
+            .is_some_and(|latest| latest.quorum_state.quorum_met)
+    } else {
+        should_resume
+    };
+    if should_resume {
+        let approval_set = harness
+            .load_approval_set(&updated.report.approval_set_id)
+            .map_err(map_approval_error)?
+            .ok_or_else(|| {
+                OperatorApiError::internal(
+                    "approval set disappeared before its approved verdict was routed",
                 )
-                .map_err(map_approval_error)?;
-            let approval_set = harness
-                .load_approval_set(&updated.report.approval_set_id)
-                .map_err(map_approval_error)?
+            })?;
+        let governed = approval_set
+            .report
+            .promotion_evidence_ref
+            .starts_with(GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX);
+        if matches!(
+            outcome.transition,
+            ApprovalLedgerVoteTransition::ExactDuplicateOfQuorum
+        ) && !governed
+        {
+            return Err(map_approval_error(ApprovalError::DuplicateVoter {
+                voter_id: request.voter_id,
+            }));
+        }
+        let receipt_pack = harness
+            .ensure_approved_receipt_pack(
+                &updated.report.approval_set_id,
+                &updated.report.ledger_id,
+                &state.approval_receipt_signer_id,
+                &state.approval_receipt_signing_key_env,
+            )
+            .map_err(map_approval_error)?;
+        if governed {
+            let authorization = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
                 .ok_or_else(|| {
-                    OperatorApiError::internal(
-                        "approval set disappeared before its approved verdict was routed",
+                    OperatorApiError::unauthorized(
+                        "authenticated vote request lost its Authorization header",
                     )
                 })?;
-            if approval_set
-                .report
-                .promotion_evidence_ref
-                .starts_with(GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX)
-            {
-                let authorization = headers
-                    .get(header::AUTHORIZATION)
-                    .and_then(|value| value.to_str().ok())
-                    .ok_or_else(|| {
-                        OperatorApiError::unauthorized(
-                            "authenticated vote request lost its Authorization header",
-                        )
-                    })?;
-                resume_governed_approval(
-                    &state.callback_client,
-                    &state.runtime_base_url,
-                    &updated.report.approval_set_id,
-                    &receipt_pack.report.pack_id,
-                    authorization,
-                )
-                .await?;
-            } else {
-                resume_demo_approval(
-                    &state.callback_client,
-                    &state.runtime_base_url,
-                    &updated.report.approval_set_id,
-                    &receipt_pack.report,
-                )
-                .await?;
-            }
+            resume_governed_approval(
+                &state.callback_client,
+                &state.runtime_base_url,
+                &updated.report.approval_set_id,
+                &receipt_pack.report.pack_id,
+                authorization,
+            )
+            .await?;
+        } else if matches!(
+            outcome.transition,
+            ApprovalLedgerVoteTransition::QuorumCrossed
+        ) {
+            resume_demo_approval(
+                &state.callback_client,
+                &state.runtime_base_url,
+                &updated.report.approval_set_id,
+                &receipt_pack.report,
+            )
+            .await?;
         }
+    } else if matches!(
+        outcome.transition,
+        ApprovalLedgerVoteTransition::ExactDuplicatePending
+    ) {
+        return Err(map_approval_error(ApprovalError::DuplicateVoter {
+            voter_id: request.voter_id,
+        }));
     }
     Ok(Json(updated))
 }
