@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.79
 milestone_name: Collective Cyber Reasoning
-current_phase: 286
-current_phase_name: Collective Hypothesis Graph
+current_phase: 285
+current_phase_name: Assurance Foundation Closure
 current_plan: null
-status: ready_to_plan
-last_updated: "2026-08-21T00:00:00Z"
-last_activity: 2026-08-21
+status: in_progress
+last_updated: "2026-08-24T16:06:22Z"
+last_activity: 2026-08-24
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 33
+  percent: 17
 ---
 
 # State
@@ -27,16 +27,16 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 ## Current Position
 
-**Current Phase:** 286 — Collective Hypothesis Graph (v1.79); Phase 285 is passed under its revised scope and Phase 284 is complete.
-**Current Phase Name:** Collective Hypothesis Graph
+**Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
+**Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** None
-**Total Plans in Phase:** TBD
-**Status:** Ready to plan
-**Last Activity:** 2026-08-21
-**Last Activity Description:** Reset the active milestone around collective cyber reasoning. Phase 285 is closed as passed for local and hosted assurance evidence; provenance-distinct GitHub App enforcement is explicitly deferred and is not represented as a protected check.
+**Current Plan:** Clean checkpoint sequence; next slice is the session-fence protocol repair required by the reviewed witness-adapter contract.
+**Total Plans in Phase:** No new GSD plan count; the remediation is banked as independently reviewed slices.
+**Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
+**Last Activity:** 2026-08-24
+**Last Activity Description:** Banked and pushed the independently reviewed witness-adapter architecture at `eacadf6b071c158a677dd77441fec1be8d7e548f` (`checkpoint/v179-phase285-witness-adapter-contract`), with P0/P1/P2 all zero. Implementation remains open.
 
-**Progress:** v1.79 phases 284/285 COMPLETE; phases 286-289 accepted and ready for planning. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only and no longer acceptance gates. The former v1.80 Red Swarm block is superseded; v1.81+ keeps the original queued phase numbering beginning at Phase 292.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints for approval/voter governance (`f2eb791d`), the production protocol slice (`27b64174`), persistence architecture (`5be011a0`), and witness-adapter contract (`eacadf6b`), but it is not complete until the contract is implemented and a frozen combined tree passes workspace tests, strict clippy, formatting, diff checks, mutation controls, independent review, hosted CI, and closure evidence. Phase 286 Plan 04 is independently accepted at `1408620e` but remains sequenced behind Phase 285. Phase 287-289 plans are independently reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only.
 
 ## Memory
 
@@ -90,7 +90,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 - CORRECTION carried forward: INCFIX-01's rationale is half wrong. rustc, clippy AND rustfmt all follow `#[path]`; only rust-analyzer and `*.rs`-globbing LOC tools skip a `.inc`. Phase 281 criterion 3 is unsatisfiable as written and is marked superseded. Do not repeat the claim in 282/283.
 - OPEN, filed from phase 281's final review: a vacuous-verification bug in replay, proven pre-existing. `ReplayScenarioClass` derives `Default` with `#[default] Mixed` and `ReplayScenarioMetadata.class` is `#[serde(default)]`, while `verify_known_bad_coverage` requires `class == Adversarial` and `verify_false_positive_bound` filters on `scenario_is_benign`. A manifest omitting `class:` is exempt from BOTH invariants and passes vacuously.
 - Phase 284 COMPLETE 2026-08-11 (FIXTURE-01..04). The suite no longer writes into the repository: a full G1+G2 leaves all four drift assertions clean. Parallel phase work is now unblocked.
-- Historical Phase 285 note (superseded 2026-08-21): the earlier MAPPING/FALSIFY scope recorded local completion with external protected-required-check acceptance open. The reset closes Phase 285 as passed under ASSURE-01..06's revised local-plus-hosted evidence boundary; the external GitHub App enforcement claim remains explicitly deferred.
+- Phase 285 correction 2026-08-24: the 2026-08-21 ledger marked Phase 285 passed too early. Governance/detector integration reopened the acceptance gate, and the external witness needed a bounded session fence plus an exact version-pinned persistence contract. External GitHub App enforcement remains deferred, but that deferral does not waive the internal governance durability gate.
 - The kitten_agent flake was NOT prior-run state. `Option::unwrap_or` evaluates eagerly, so `load_source_seed` scanned every manifest under `experiments/` even when given an override, racing four `mutation::tests_autonomous` tests that write transient files there. 11 failures in 107 runs.
 - The CI drift gate now carries four assertions; the fourth (no empty directories anywhere) is unscoped and is what catches leaks the path-scoped checks miss.
 - CORRECTED 2026-08-13: phase 320 is 0/4, not 2/4. 4d03543 shipped TYPES ONLY — `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt'` returns only `swarm-response/src/lib.rs` (the re-export) and `swarm-response/src/rollback.rs` (definitions plus their `#[cfg(test)]` tests). Zero production code constructs a lease. `SandboxRollbackExecutor::rollback` never branches on `ResponseRollbackStepKind` and performs no side effect. The roadmap's own "highest-blast-radius gap" — containment with no undo — is fully open. See task #19.
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-21 — reset
-Stopped At: Phase 285 scope closure and transition to the collective-reasoning milestone.
+Last Date: 2026-08-24 — convergence reset
+Stopped At: Reviewed witness-adapter contract checkpoint pushed; session-fence implementation is next.
 Resume File: None — no `.continue-here` checkpoint exists.
-Incomplete plan: None — active `.planning/phases` contains 98 PLAN files and all 98 have matching SUMMARY files; queued future plan files are not execution checkpoints.
-Interrupted agent: None — `init resume` reports no interrupted GSD agent.
+Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
+Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Plan Phase 286, Collective Hypothesis Graph. The plan must define the typed graph schema, competing-hypothesis and contradiction semantics, role/task claim protocol, cross-telemetry normalization, kill-chain evidence lineage, containment simulation boundary, and the benchmark harness for the first five collective-intelligence metrics. Do not reopen the deferred GitHub App check or resurrect the retired DST/FUZZ/LOOM and Red Swarm acceptance IDs.
+Implement the Phase 285 bounded session-fence repair from `checkpoint/v179-phase285-witness-adapter-contract` as a clean red-first slice on top of `eacadf6b`. Obtain an independent zero-P0/P1/P2 review and push the checkpoint before starting the witness engine/proxy adapter. Do not edit the dirty integration tree, execute Phase 287-289, reopen the deferred GitHub App check, or advance Phase 286 publication before the frozen combined Phase 285 gate passes.

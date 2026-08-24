@@ -1107,11 +1107,11 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 
 ### v1.79 Collective Cyber Reasoning
 
-**Goal:** Make Ambush a collective reasoning system: construct competing typed causal theories from cross-telemetry, have agents acquire and falsify evidence through stigmergic task allocation, simulate containment, and turn measured outcomes into reusable strategy and herd memory. Phase 285 closes the useful assurance foundation under a truthful local+hosted evidence boundary; external GitHub App enforcement is explicitly deferred.
+**Goal:** Make Ambush a collective reasoning system: construct competing typed causal theories from cross-telemetry, have agents acquire and falsify evidence through stigmergic task allocation, simulate containment, and turn measured outcomes into reusable strategy and herd memory. Phase 285 must first close its reopened governance/detector integration gate under a truthful local+hosted evidence boundary; external GitHub App enforcement remains explicitly deferred.
 **Executable phases:** 284-289
 
 - [x] **Phase 284: Fixture Determinism And Suite Health** - Keep the evidence substrate deterministic and isolated. (FIXTURE-01..04; historical prerequisite)
-- [x] **Phase 285: Assurance Foundation Closure** - Preserve local and hosted assurance evidence, negative controls, locked supply-chain evidence, and truthful status reporting; defer provenance-distinct external GitHub App enforcement. (ASSURE-01..06)
+- [ ] **Phase 285: Assurance Foundation Closure** - Preserve local and hosted assurance evidence, negative controls, locked supply-chain evidence, and truthful status reporting; close the reopened governance/detector integration gate; defer provenance-distinct external GitHub App enforcement. (ASSURE-01..06)
 - [ ] **Phase 286: Collective Hypothesis Graph** - Build a typed causal graph with competing hypotheses, role-based evidence claims, stigmergic task allocation, contradiction tracking, kill-chain reconstruction, ranked containment simulation, and strategy memory. (COG-01..08)
 - [ ] **Phase 287: Adversarial Co-evolution Arena** - Run bounded red campaigns and blue investigations through the real Ambush runtime, mutate evasions, synthesize candidates, and retain only measured improvements. (ARENA-01..08)
 - [ ] **Phase 288: Autonomous Detector And Response Synthesis** - Generate typed detector and response candidates, evaluate them against attacks and controls, and promote only fail-closed, operator-reviewed candidates. (SYNTH-01..06)
@@ -1134,21 +1134,22 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Close the assurance foundation on a truthful local-plus-hosted evidence boundary while explicitly deferring provenance-distinct external GitHub App/repository protected-check enforcement.
 **Requirements:** ASSURE-01, ASSURE-02, ASSURE-03, ASSURE-04, ASSURE-05, ASSURE-06
 **Depends on:** Phase 284
-**Status:** Passed 2026-08-21 under revised scope
-**Plans:** Existing assurance implementation and hosted evidence; verification recorded in `285-assurance-foundation-closure/285-VERIFICATION.md`
+**Status:** Reopened 2026-08-24; in progress. The 2026-08-21 pass claim did not include the subsequently reopened governance/detector integration gate.
+**Plans:** Accepted clean checkpoints: approval/voters `f2eb791d`, persistence architecture `5be011a0`, production protocol slice `27b64174`, and reviewed witness-adapter contract `eacadf6b`. The contract implementation, detector integration, frozen combined-tree gate, hosted CI, and closure evidence remain open.
 **Success Criteria**:
 1. Local combined-tree mapping, negative-registry, fixture, and locked-SBOM evidence are reproducible.
 2. Fresh hosted Linux evidence is commit-bound and credential-free.
 3. Status distinguishes wired, executed, passed, and protected-required; no protected GitHub App or release claim is made.
 4. No unresolved P0/P1/P2 finding remains in the scoped review.
+5. The reviewed external witness contract is implemented fail-closed, including the bounded session fence and pinned persistence semantics, and one immutable combined Phase 285 tree passes the full local, mutation, independent-review, hosted, and closure gates.
 
 ### Phase 286: Collective Hypothesis Graph
 
 **Goal:** Turn a seed signal into a shared, contestable causal incident model rather than a single irreversible classification.
 **Requirements:** COG-01, COG-02, COG-03, COG-04, COG-05, COG-06, COG-07, COG-08
 **Depends on:** Phase 285
-**Status:** Accepted and ready to plan
-**Plans:** TBD
+**Status:** Blocked behind Phase 285. Plan 04 is independently accepted as a frozen checkpoint, but Phase 286 is not publishable or advanceable.
+**Plans:** Plan 04 checkpoint `1408620e`; remaining Phase 286 execution resumes only after Phase 285 closure.
 **Success Criteria**:
 1. A typed graph represents actors, assets, credentials, processes, and events plus confidence/provenance causal edges; competing hypotheses retain uncertainty and contradictions.
 2. Hunter, challenger, and falsifier agents claim leased unresolved edges without duplicate work, and process, identity, Kubernetes, CloudTrail, network, and threat-intelligence evidence normalize into the graph.
@@ -1160,8 +1161,8 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Measure collective intelligence against bounded red campaigns and benign controls through the real Ambush runtime.
 **Requirements:** ARENA-01, ARENA-02, ARENA-03, ARENA-04, ARENA-05, ARENA-06, ARENA-07, ARENA-08
 **Depends on:** Phase 286
-**Status:** Accepted and ready to plan
-**Plans:** TBD
+**Status:** Plan set independently reviewed and parked; execution stopped until Phases 285 and 286 close in sequence.
+**Plans:** Parked planning checkpoint `e88204e7`.
 **Success Criteria**:
 1. Red agents compose reusable multi-stage tactics in a deterministic sandbox; blue agents investigate and contain through real runtime boundaries; red cannot reach response authority.
 2. Red mutates evasions from observed blue behavior and blue generates detector/response candidates from escapes.
@@ -1173,8 +1174,8 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Generate and evaluate new defensive strategies from graph gaps and adversarial escapes, promoting only candidates that pass safety and evidence gates.
 **Requirements:** SYNTH-01, SYNTH-02, SYNTH-03, SYNTH-04, SYNTH-05, SYNTH-06
 **Depends on:** Phase 287
-**Status:** Accepted and ready to plan
-**Plans:** TBD
+**Status:** Plan set independently reviewed and parked; execution stopped until Phase 287 closes.
+**Plans:** Parked planning checkpoint `e88204e7`.
 **Success Criteria**:
 1. Detector candidates use the typed graph vocabulary and response candidates use a bounded policy library.
 2. Candidates are evaluated against historical attacks, benign controls, counterexamples, and withheld campaigns with differential, mutation, and metamorphic controls.
@@ -1186,8 +1187,8 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Transfer reusable attack abstractions between swarms without sharing raw telemetry, while resisting poisoning and preserving local epistemic control.
 **Requirements:** HERDMEM-01, HERDMEM-02, HERDMEM-03, HERDMEM-04, HERDMEM-05, HERDMEM-06
 **Depends on:** Phase 288
-**Status:** Accepted and ready to plan
-**Plans:** TBD
+**Status:** Plan set independently reviewed and parked; execution stopped until Phase 288 closes.
+**Plans:** Parked planning checkpoint `e88204e7`.
 **Success Criteria**:
 1. Memory records contain typed attack abstractions only, never raw telemetry, secrets, or host identifiers; signatures, provenance, expiry, and transformations are explicit.
 2. Local corroboration, revocation, retention, and deletion are enforced; retrieval may change task ordering but cannot directly authorize action.
@@ -1976,11 +1977,11 @@ The original DST/FUZZ/LOOM/SUPPLY sequence and its MAPPING/FALSIFY protected-che
 | 282. Crate Extraction From swarm-runtime | v1.78 | 0/6 closed | Code merged 2026-08-13 (0a09358), complete as scoped; all six SPLIT checkboxes still open, remainder re-derived 2026-08-13 (task #14, `.planning/PHASE-282-REMAINDER.md`) | 2026-08-13 |
 | 283. TCB Boundary And Layering Enforcement | v1.78 | 4/4 requirements | Complete | 2026-08-13 |
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
-| 285. Assurance Foundation Closure | v1.79 | 6/6 | Passed revised scope; external GitHub App enforcement deferred | 2026-08-21 |
-| 286. Collective Hypothesis Graph | v1.79 | 0/TBD | Accepted and ready to plan | - |
-| 287. Adversarial Co-evolution Arena | v1.79 | 0/TBD | Accepted and ready to plan | - |
-| 288. Autonomous Detector And Response Synthesis | v1.79 | 0/TBD | Accepted and ready to plan | - |
-| 289. Herd Memory | v1.79 | 0/TBD | Accepted and ready to plan | - |
+| 285. Assurance Foundation Closure | v1.79 | 6/6 requirements; closure gate open | Reopened for governance/detector integration; external GitHub App enforcement deferred | - |
+| 286. Collective Hypothesis Graph | v1.79 | Plan 04 checkpointed | Blocked behind Phase 285 | - |
+| 287. Adversarial Co-evolution Arena | v1.79 | Plans reviewed | Parked; execution blocked by sequencing | - |
+| 288. Autonomous Detector And Response Synthesis | v1.79 | Plans reviewed | Parked; execution blocked by sequencing | - |
+| 289. Herd Memory | v1.79 | Plans reviewed | Parked; execution blocked by sequencing | - |
 | 290. Bidirectional Co-Evolution And Convergence | v1.80 historical | 0/TBD | Superseded; historical only | - |
 | 291. CI Arms Race Gate And Structural Isolation | v1.80 historical | 0/TBD | Superseded; historical only | - |
 | 292. Pure Decision Core Extraction | v1.81 | 0/TBD | Not started | - |
@@ -2017,7 +2018,7 @@ The original DST/FUZZ/LOOM/SUPPLY sequence and its MAPPING/FALSIFY protected-che
 
 ---
 *Active milestone: v1.79 Collective Cyber Reasoning.*
-*v1.79 status: Phases 284 and 285 are complete; Phase 285 passed under the revised local-plus-hosted scope with external GitHub App enforcement explicitly deferred; phases 286-289 are accepted and ready to plan.*
+*v1.79 status (corrected 2026-08-24): Phase 284 is complete. Phase 285 is reopened for governance/detector integration; external GitHub App enforcement remains deferred. Phase 286 Plan 04 is checkpointed but sequenced behind Phase 285. Phase 287-289 plans are reviewed and parked; none is executing.*
 *v1.77 and v1.78 complete: phases 276-279 shipped 2026-04-13; phases 280-283 completed as scoped by 2026-08-13.*
 *v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83.*
 *v1.80 Red Swarm is historical/superseded; v1.81-v1.87 retain their original queued phase numbering (292-319).*
