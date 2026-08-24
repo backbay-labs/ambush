@@ -51,6 +51,7 @@ use swarm_policy::static_gate::scope_for_response_action;
 
 pub mod persistence_protocol;
 pub mod witness_engine;
+pub mod witness_service;
 
 const DEFAULT_CONTINGENCY_LEASE_TTL_MS: i64 = 300_000;
 const DEFAULT_CONTINGENCY_BLAST_RADIUS_CAP: usize = 1;
