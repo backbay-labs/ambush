@@ -49,6 +49,8 @@ use swarm_policy::{ActionRequest, PolicyDecision, PolicyVerdict};
 pub use swarm_policy::governance::{GovernanceStatusReport, PartitionState};
 use swarm_policy::static_gate::scope_for_response_action;
 
+pub mod persistence_protocol;
+
 const DEFAULT_CONTINGENCY_LEASE_TTL_MS: i64 = 300_000;
 const DEFAULT_CONTINGENCY_BLAST_RADIUS_CAP: usize = 1;
 const CONTINGENCY_LEASE_SCHEMA_VERSION: u32 = 1;
