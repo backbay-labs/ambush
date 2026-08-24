@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.79
 milestone_name: Collective Cyber Reasoning
-current_phase: 286
-current_phase_name: Collective Hypothesis Graph
+current_phase: 285
+current_phase_name: Assurance Foundation Closure
 current_plan: null
-status: ready_to_plan
-last_updated: "2026-08-21T00:00:00Z"
-last_activity: 2026-08-21
+status: in_progress
+last_updated: "2026-08-24T06:53:23Z"
+last_activity: 2026-08-24
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 0
-  completed_plans: 0
-  percent: 33
+  completed_phases: 1
+  total_plans: 56
+  completed_plans: 10
+  percent: 17
 ---
 
 # State
@@ -27,16 +27,16 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 ## Current Position
 
-**Current Phase:** 286 — Collective Hypothesis Graph (v1.79); Phase 285 is passed under its revised scope and Phase 284 is complete.
-**Current Phase Name:** Collective Hypothesis Graph
+**Current Phase:** 285 — Assurance Foundation Closure (v1.79), reopened after governance/detector integration review; Phase 284 is complete.
+**Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** None
-**Total Plans in Phase:** TBD
-**Status:** Ready to plan
-**Last Activity:** 2026-08-21
-**Last Activity Description:** Reset the active milestone around collective cyber reasoning. Phase 285 is closed as passed for local and hosted assurance evidence; provenance-distinct GitHub App enforcement is explicitly deferred and is not represented as a protected check.
+**Current Plan:** Witness-backed fixed-lane governance persistence redesign (integration gate, not a numbered plan)
+**Total Plans in Phase:** Existing assurance plans plus the reopened integration gate
+**Status:** In progress; architecture accepted, implementation and production durability-witness wiring not started
+**Last Activity:** 2026-08-24
+**Last Activity Description:** Stopped the rejected governance patch loop after the conditional-exchange experiment created unbounded old-state names. The replacement fixed-lane, two-phase external durability-witness protocol is recorded in `285-GOVERNANCE-PERSISTENCE-PROTOCOL.md` and passed independent architecture review with zero P0/P1/P2. Implementation and production witness wiring remain open. The rejected Stage B checkpoint `efecc7f5`, aborted experiment WIP `087df26`, bounded detector WIP `61ade72`, accepted approval/voter checkpoint `f2eb791`, accepted Phase 286 Plan 04 checkpoint `1408620e`, and reviewed future-plan checkpoint `e88204e` are isolated by purpose. Phases 287-289 remain parked.
 
-**Progress:** v1.79 phases 284/285 COMPLETE; phases 286-289 accepted and ready for planning. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only and no longer acceptance gates. The former v1.80 Red Swarm block is superseded; v1.81+ keeps the original queued phase numbering beginning at Phase 292.
+**Progress:** Phase 284 is complete. Phase 285's 2026-08-21 closure was reopened by governance/detector review and is not currently accepted. The remediation architecture is now independently accepted, but no implementation or production external-witness adapter exists. Phase 286 has 17 plan files and 10 summaries; its independently reviewed Plan 04 implementation is banked on a separate checkpoint branch but cannot advance the phase while Phase 285 remains open. Phases 287-289 have reviewed plans but no accepted implementation and are parked. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only and no longer acceptance gates.
 
 ## Memory
 
@@ -90,7 +90,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 - CORRECTION carried forward: INCFIX-01's rationale is half wrong. rustc, clippy AND rustfmt all follow `#[path]`; only rust-analyzer and `*.rs`-globbing LOC tools skip a `.inc`. Phase 281 criterion 3 is unsatisfiable as written and is marked superseded. Do not repeat the claim in 282/283.
 - OPEN, filed from phase 281's final review: a vacuous-verification bug in replay, proven pre-existing. `ReplayScenarioClass` derives `Default` with `#[default] Mixed` and `ReplayScenarioMetadata.class` is `#[serde(default)]`, while `verify_known_bad_coverage` requires `class == Adversarial` and `verify_false_positive_bound` filters on `scenario_is_benign`. A manifest omitting `class:` is exempt from BOTH invariants and passes vacuously.
 - Phase 284 COMPLETE 2026-08-11 (FIXTURE-01..04). The suite no longer writes into the repository: a full G1+G2 leaves all four drift assertions clean. Parallel phase work is now unblocked.
-- Historical Phase 285 note (superseded 2026-08-21): the earlier MAPPING/FALSIFY scope recorded local completion with external protected-required-check acceptance open. The reset closes Phase 285 as passed under ASSURE-01..06's revised local-plus-hosted evidence boundary; the external GitHub App enforcement claim remains explicitly deferred.
+- Phase 285 status correction, 2026-08-24: the 2026-08-21 revised-scope closure remains the historical assurance decision, including explicit deferral of external GitHub App enforcement, but later governance/detector integration review reopened local acceptance. The active blocker is the bounded authenticated retention handoff and one frozen combined-tree gate, not the deferred external App check.
 - The kitten_agent flake was NOT prior-run state. `Option::unwrap_or` evaluates eagerly, so `load_source_seed` scanned every manifest under `experiments/` even when given an override, racing four `mutation::tests_autonomous` tests that write transient files there. 11 failures in 107 runs.
 - The CI drift gate now carries four assertions; the fourth (no empty directories anywhere) is unscoped and is what catches leaks the path-scoped checks miss.
 - CORRECTED 2026-08-13: phase 320 is 0/4, not 2/4. 4d03543 shipped TYPES ONLY — `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt'` returns only `swarm-response/src/lib.rs` (the re-export) and `swarm-response/src/rollback.rs` (definitions plus their `#[cfg(test)]` tests). Zero production code constructs a lease. `SandboxRollbackExecutor::rollback` never branches on `ResponseRollbackStepKind` and performs no side effect. The roadmap's own "highest-blast-radius gap" — containment with no undo — is fully open. See task #19.
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-21 — reset
-Stopped At: Phase 285 scope closure and transition to the collective-reasoning milestone.
-Resume File: None — no `.continue-here` checkpoint exists.
-Incomplete plan: None — active `.planning/phases` contains 98 PLAN files and all 98 have matching SUMMARY files; queued future plan files are not execution checkpoints.
-Interrupted agent: None — `init resume` reports no interrupted GSD agent.
+Last Date: 2026-08-24 — active execution
+Stopped At: Phase 285 governance patching stopped at the architecture-reset threshold. The witness-backed fixed-lane protocol has independent zero-P0/P1/P2 architecture review; implementation is next. Detector bounded-retention work and all accepted/rejected checkpoints are isolated; Phase 286 Plan 04 is independently checkpointed; Phases 287-289 are parked.
+Resume File: This state ledger is the current checkpoint; no `.continue-here` file is required.
+Incomplete plan: Phase 285 requires implementation of the reviewed persistence protocol, a production durability-witness adapter, detector integration, a frozen combined-tree gate, and exact-commit hostile review. Phase 286 has 17 plans and 10 summaries; Plan 04 is banked without a summary because phase sequencing remains blocked. Phases 287-289 have 39 plans and no execution summaries.
+Interrupted agent: None recorded; current work is deliberate bounded execution, not an abandoned agent run.
 
 ## Next Command
 
-Plan Phase 286, Collective Hypothesis Graph. The plan must define the typed graph schema, competing-hypothesis and contradiction semantics, role/task claim protocol, cross-telemetry normalization, kill-chain evidence lineage, containment simulation boundary, and the benchmark harness for the first five collective-intelligence metrics. Do not reopen the deferred GitHub App check or resurrect the retired DST/FUZZ/LOOM and Red Swarm acceptance IDs.
+Implement `285-GOVERNANCE-PERSISTENCE-PROTOCOL.md` in bounded slices: protocol types and transition model first, then the mandatory production durability-witness adapter, fixed-lane publication/recovery, retention/maintenance/reinitialization, and detector wiring. Freeze and independently review each commit object. Run the full combined-tree gate only after those slices pass. Keep Phases 286-289 parked except for already banked checkpoints. Do not revive the rejected counter/PID temporary-name approach, reopen the deferred GitHub App check, or resurrect the retired DST/FUZZ/LOOM and Red Swarm acceptance IDs.
