@@ -21,6 +21,15 @@ pub const TXID_DOMAIN_V1: &[u8] = b"swarm.governance.txid.v1";
 pub const JOURNAL_RECORD_DOMAIN_V1: &[u8] = b"swarm.governance.journal-record.v1";
 pub const WITNESS_HEAD_DOMAIN_V1: &[u8] = b"swarm.governance.witness-head.v1";
 pub const WITNESS_DATA_HEAD_DOMAIN_V1: &[u8] = b"swarm.governance.witness-data-head.v1";
+pub const WITNESS_FENCE_REQUEST_DOMAIN_V1: &[u8] = b"swarm.governance.witness-fence-request.v1";
+pub const WITNESS_STATE_FENCE_DOMAIN_V1: &[u8] = b"swarm.governance.witness-state-fence.v1";
+pub const WITNESS_SESSION_STATE_DOMAIN_V1: &[u8] = b"swarm.governance.witness-session-state.v1";
+pub const WITNESS_PREPARED_STATE_DOMAIN_V1: &[u8] = b"swarm.governance.witness-prepared-state.v1";
+pub const WITNESS_ROTATION_CHALLENGE_DOMAIN_V1: &[u8] =
+    b"swarm.governance.witness-rotation-challenge.v1";
+pub const WITNESS_ROTATION_RECEIPT_DOMAIN_V1: &[u8] =
+    b"swarm.governance.witness-rotation-receipt.v1";
+pub const WITNESS_EXTERNAL_MARKER_DOMAIN_V1: &[u8] = b"swarm.governance.witness-external-marker.v1";
 pub const GENESIS_PREDECESSOR_DOMAIN_V1: &[u8] = b"swarm.governance.genesis-predecessor.v1";
 pub const GENESIS_DATA_HEAD_DOMAIN_V1: &[u8] = b"swarm.governance.genesis-data-head.v1";
 pub const BINDING_DOMAIN_V1: &[u8] = b"swarm.governance.publication-binding.v1";
@@ -201,6 +210,10 @@ where
 /// byte-length delimiter. Length delimiting prevents raw concatenation
 /// ambiguity and keeps candidate and transaction identifiers non-circular.
 pub fn digest_domain(domain: &[u8], canonical: &[u8]) -> ProtocolResult<String> {
+    Ok(sha256_hex(&domain_separated_bytes(domain, canonical)?))
+}
+
+fn domain_separated_bytes(domain: &[u8], canonical: &[u8]) -> ProtocolResult<Vec<u8>> {
     let length = u64::try_from(canonical.len()).map_err(|_| ProtocolError::Overflow {
         counter: "wire_size",
     })?;
@@ -216,7 +229,7 @@ pub fn digest_domain(domain: &[u8], canonical: &[u8]) -> ProtocolResult<String> 
     material.extend_from_slice(domain);
     material.extend_from_slice(&length.to_be_bytes());
     material.extend_from_slice(canonical);
-    Ok(sha256_hex(&material))
+    Ok(material)
 }
 
 pub fn checked_next_epoch(value: u64) -> ProtocolResult<u64> {
@@ -1487,6 +1500,330 @@ impl WitnessHeadV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct WitnessSessionFenceRequestV1 {
+    pub schema_version: u32,
+    pub stream_id: String,
+    pub authority_pair: AuthorityPairIdentityV1,
+    pub binding_generation: String,
+    pub binding_digest: String,
+    pub signer_key_id: String,
+    pub witness_key_id: String,
+    pub witness_identity: String,
+    pub requester_nonce: String,
+    pub signature: DetachedSignature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct WitnessSessionFenceRequestPreimageV1<'a> {
+    schema_version: u32,
+    stream_id: &'a str,
+    authority_pair: AuthorityPairIdentityV1,
+    binding_generation: &'a str,
+    binding_digest: &'a str,
+    signer_key_id: &'a str,
+    witness_key_id: &'a str,
+    witness_identity: &'a str,
+    requester_nonce: &'a str,
+}
+
+impl WitnessSessionFenceRequestV1 {
+    pub fn signing_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        let canonical = canonical_wire_bytes(&WitnessSessionFenceRequestPreimageV1 {
+            schema_version: self.schema_version,
+            stream_id: &self.stream_id,
+            authority_pair: self.authority_pair,
+            binding_generation: &self.binding_generation,
+            binding_digest: &self.binding_digest,
+            signer_key_id: &self.signer_key_id,
+            witness_key_id: &self.witness_key_id,
+            witness_identity: &self.witness_identity,
+            requester_nonce: &self.requester_nonce,
+        })?;
+        domain_separated_bytes(WITNESS_FENCE_REQUEST_DOMAIN_V1, &canonical)
+    }
+
+    pub fn validate(&self) -> ProtocolResult<()> {
+        if self.schema_version != PROTOCOL_SCHEMA_VERSION {
+            return Err(ProtocolError::UnsupportedSchema(self.schema_version));
+        }
+        validate_string("stream_id", &self.stream_id)?;
+        self.authority_pair.validate()?;
+        validate_digest("binding_generation", &self.binding_generation)?;
+        validate_digest("binding_digest", &self.binding_digest)?;
+        validate_digest("signer_key_id", &self.signer_key_id)?;
+        validate_digest("witness_key_id", &self.witness_key_id)?;
+        validate_string("witness_identity", &self.witness_identity)?;
+        validate_digest("requester_nonce", &self.requester_nonce)?;
+        if self.signature.algorithm != "ed25519"
+            || self.signature.key_id != self.signer_key_id
+            || !swarm_crypto::PublicKey::from_hex(&self.signature.public_key_hex)
+                .map(|key| sha256_hex(key.as_bytes()) == self.signer_key_id)
+                .unwrap_or(false)
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        verify_detached_signature(&self.signing_bytes()?, &self.signature)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
+    }
+
+    pub fn canonical_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        self.validate()?;
+        canonical_wire_bytes(self)
+    }
+
+    pub fn request_digest(&self) -> ProtocolResult<String> {
+        digest_domain(WITNESS_FENCE_REQUEST_DOMAIN_V1, &self.canonical_bytes()?)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessSessionStateSnapshotV1 {
+    pub admission_digest: String,
+    pub bucket_epoch_digest: String,
+    pub bucket_anchor_digest: String,
+    pub ready_manifest_digest: String,
+    pub store_state_digest: String,
+    pub current_session: Option<WitnessSessionV1>,
+    pub current_head: Option<WitnessHeadV1>,
+    pub current_prepared: Option<WitnessPreparedV1>,
+}
+
+impl WitnessSessionStateSnapshotV1 {
+    pub fn validate(&self) -> ProtocolResult<()> {
+        validate_digest("admission_digest", &self.admission_digest)?;
+        validate_digest("bucket_epoch_digest", &self.bucket_epoch_digest)?;
+        validate_digest("bucket_anchor_digest", &self.bucket_anchor_digest)?;
+        validate_digest("ready_manifest_digest", &self.ready_manifest_digest)?;
+        validate_digest("store_state_digest", &self.store_state_digest)?;
+        if let Some(session) = &self.current_session {
+            session.validate()?;
+            WitnessDiscoveryV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                head: self.current_head.clone(),
+                prepared: self.current_prepared.clone(),
+                genesis_abort: None,
+                recovery_session: session.clone(),
+            }
+            .validate()?;
+        } else {
+            if let Some(head) = &self.current_head {
+                head.validate_settled()?;
+            }
+            if let Some(prepared) = &self.current_prepared {
+                prepared.validate()?;
+                match (&self.current_head, &prepared.predecessor_head) {
+                    (Some(current), Some(predecessor)) if current == predecessor => {}
+                    (None, None) => {}
+                    _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn current_session_generation(&self) -> Option<u64> {
+        self.current_session
+            .as_ref()
+            .map(|session| session.session_generation)
+    }
+
+    fn current_session_digest(&self) -> ProtocolResult<Option<String>> {
+        self.current_session
+            .as_ref()
+            .map(|session| {
+                digest_domain(
+                    WITNESS_SESSION_STATE_DOMAIN_V1,
+                    &canonical_wire_bytes(session)?,
+                )
+            })
+            .transpose()
+    }
+
+    fn current_head_digest(&self) -> ProtocolResult<Option<String>> {
+        self.current_head
+            .as_ref()
+            .map(WitnessHeadV1::head_digest)
+            .transpose()
+    }
+
+    fn current_prepared_digest(&self) -> ProtocolResult<Option<String>> {
+        self.current_prepared
+            .as_ref()
+            .map(|prepared| {
+                digest_domain(
+                    WITNESS_PREPARED_STATE_DOMAIN_V1,
+                    &canonical_wire_bytes(prepared)?,
+                )
+            })
+            .transpose()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessSessionStateFenceV1 {
+    pub schema_version: u32,
+    pub request: WitnessSessionFenceRequestV1,
+    pub admission_digest: String,
+    pub bucket_epoch_digest: String,
+    pub bucket_anchor_digest: String,
+    pub ready_manifest_digest: String,
+    pub store_state_digest: String,
+    pub current_session_generation: Option<u64>,
+    pub current_session_digest: Option<String>,
+    pub current_head_digest: Option<String>,
+    pub current_prepared_digest: Option<String>,
+    pub witness_nonce: String,
+    pub witness_identity: String,
+    pub witness_key_id: String,
+    pub signature: DetachedSignature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct WitnessSessionStateFencePreimageV1<'a> {
+    schema_version: u32,
+    request: &'a WitnessSessionFenceRequestV1,
+    admission_digest: &'a str,
+    bucket_epoch_digest: &'a str,
+    bucket_anchor_digest: &'a str,
+    ready_manifest_digest: &'a str,
+    store_state_digest: &'a str,
+    current_session_generation: Option<u64>,
+    current_session_digest: &'a Option<String>,
+    current_head_digest: &'a Option<String>,
+    current_prepared_digest: &'a Option<String>,
+    witness_nonce: &'a str,
+    witness_identity: &'a str,
+    witness_key_id: &'a str,
+}
+
+impl WitnessSessionStateFenceV1 {
+    pub fn signing_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        let canonical = canonical_wire_bytes(&WitnessSessionStateFencePreimageV1 {
+            schema_version: self.schema_version,
+            request: &self.request,
+            admission_digest: &self.admission_digest,
+            bucket_epoch_digest: &self.bucket_epoch_digest,
+            bucket_anchor_digest: &self.bucket_anchor_digest,
+            ready_manifest_digest: &self.ready_manifest_digest,
+            store_state_digest: &self.store_state_digest,
+            current_session_generation: self.current_session_generation,
+            current_session_digest: &self.current_session_digest,
+            current_head_digest: &self.current_head_digest,
+            current_prepared_digest: &self.current_prepared_digest,
+            witness_nonce: &self.witness_nonce,
+            witness_identity: &self.witness_identity,
+            witness_key_id: &self.witness_key_id,
+        })?;
+        domain_separated_bytes(WITNESS_STATE_FENCE_DOMAIN_V1, &canonical)
+    }
+
+    pub fn validate(&self) -> ProtocolResult<()> {
+        if self.schema_version != PROTOCOL_SCHEMA_VERSION {
+            return Err(ProtocolError::UnsupportedSchema(self.schema_version));
+        }
+        self.request.validate()?;
+        validate_digest("admission_digest", &self.admission_digest)?;
+        validate_digest("bucket_epoch_digest", &self.bucket_epoch_digest)?;
+        validate_digest("bucket_anchor_digest", &self.bucket_anchor_digest)?;
+        validate_digest("ready_manifest_digest", &self.ready_manifest_digest)?;
+        validate_digest("store_state_digest", &self.store_state_digest)?;
+        match (
+            self.current_session_generation,
+            self.current_session_digest.as_deref(),
+        ) {
+            (None, None) => {}
+            (Some(generation), Some(digest)) if generation > 0 => {
+                validate_digest("current_session_digest", digest)?;
+            }
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        }
+        if let Some(digest) = &self.current_head_digest {
+            validate_digest("current_head_digest", digest)?;
+        }
+        if let Some(digest) = &self.current_prepared_digest {
+            validate_digest("current_prepared_digest", digest)?;
+        }
+        validate_digest("witness_nonce", &self.witness_nonce)?;
+        validate_string("witness_identity", &self.witness_identity)?;
+        validate_digest("witness_key_id", &self.witness_key_id)?;
+        if self.witness_nonce == self.request.requester_nonce
+            || self.witness_identity != self.request.witness_identity
+            || self.witness_key_id != self.request.witness_key_id
+            || self.signature.algorithm != "ed25519"
+            || self.signature.key_id != self.witness_key_id
+            || !swarm_crypto::PublicKey::from_hex(&self.signature.public_key_hex)
+                .map(|key| sha256_hex(key.as_bytes()) == self.witness_key_id)
+                .unwrap_or(false)
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        verify_detached_signature(&self.signing_bytes()?, &self.signature)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
+    }
+
+    pub fn canonical_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        self.validate()?;
+        canonical_wire_bytes(self)
+    }
+
+    pub fn state_fence_digest(&self) -> ProtocolResult<String> {
+        digest_domain(WITNESS_STATE_FENCE_DOMAIN_V1, &self.canonical_bytes()?)
+    }
+
+    pub fn verify_for_snapshot(
+        &self,
+        snapshot: &WitnessSessionStateSnapshotV1,
+    ) -> ProtocolResult<()> {
+        self.validate()?;
+        snapshot.validate()?;
+        if self.admission_digest != snapshot.admission_digest
+            || self.bucket_epoch_digest != snapshot.bucket_epoch_digest
+            || self.bucket_anchor_digest != snapshot.bucket_anchor_digest
+            || self.ready_manifest_digest != snapshot.ready_manifest_digest
+            || self.store_state_digest != snapshot.store_state_digest
+            || self.current_session_generation != snapshot.current_session_generation()
+            || self.current_session_digest != snapshot.current_session_digest()?
+            || self.current_head_digest != snapshot.current_head_digest()?
+            || self.current_prepared_digest != snapshot.current_prepared_digest()?
+            || snapshot.current_session.as_ref().is_some_and(|session| {
+                session.stream_id != self.request.stream_id
+                    || session.authority_pair != self.request.authority_pair
+                    || session.binding_generation != self.request.binding_generation
+                    || session.binding_digest != self.request.binding_digest
+                    || session.signer_key_id != self.request.signer_key_id
+                    || session.witness_key_id != self.request.witness_key_id
+                    || session.witness_identity != self.request.witness_identity
+            })
+            || snapshot.current_head.as_ref().is_some_and(|head| {
+                head.stream_id != self.request.stream_id
+                    || head.authority_pair != self.request.authority_pair
+                    || head.binding_generation != self.request.binding_generation
+                    || head.binding_digest != self.request.binding_digest
+                    || head.signer_key_id != self.request.signer_key_id
+                    || head.witness_key_id != self.request.witness_key_id
+            })
+            || snapshot.current_prepared.as_ref().is_some_and(|prepared| {
+                prepared.head.stream_id != self.request.stream_id
+                    || prepared.head.authority_pair != self.request.authority_pair
+                    || prepared.head.binding_generation != self.request.binding_generation
+                    || prepared.head.binding_digest != self.request.binding_digest
+                    || prepared.head.signer_key_id != self.request.signer_key_id
+                    || prepared.head.witness_key_id != self.request.witness_key_id
+            })
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn expected_session_generation(&self) -> ProtocolResult<u64> {
+        checked_next_session(self.current_session_generation.unwrap_or(0))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WitnessSessionV1 {
     pub schema_version: u32,
     pub stream_id: String,
@@ -1513,6 +1850,12 @@ impl WitnessSessionV1 {
         validate_digest("witness_key_id", &self.witness_key_id)?;
         validate_digest("ephemeral_key_id", &self.ephemeral_key_id)?;
         validate_string("witness_identity", &self.witness_identity)?;
+        if self.session_generation == 0 {
+            return Err(invalid(
+                "session_generation",
+                "generation zero is the absent-session baseline",
+            ));
+        }
         validate_digest("session_commitment", &self.session_commitment)?;
         self.authority_pair.validate()
     }
@@ -1528,8 +1871,9 @@ pub struct RecoveryChallengeV1 {
     pub binding_digest: String,
     pub signer_key_id: String,
     pub witness_key_id: String,
-    pub ephemeral_key_id: String,
     pub witness_identity: String,
+    pub state_fence: WitnessSessionStateFenceV1,
+    pub ephemeral_key_id: String,
     pub nonce: String,
     pub session_commitment: String,
     pub signature: DetachedSignature,
@@ -1544,15 +1888,16 @@ struct RecoveryChallengePreimageV1<'a> {
     binding_digest: &'a str,
     signer_key_id: &'a str,
     witness_key_id: &'a str,
-    ephemeral_key_id: &'a str,
     witness_identity: &'a str,
+    state_fence: &'a WitnessSessionStateFenceV1,
+    ephemeral_key_id: &'a str,
     nonce: &'a str,
     session_commitment: &'a str,
 }
 
 impl RecoveryChallengeV1 {
     pub fn signing_bytes(&self) -> ProtocolResult<Vec<u8>> {
-        canonical_wire_bytes(&RecoveryChallengePreimageV1 {
+        let canonical = canonical_wire_bytes(&RecoveryChallengePreimageV1 {
             schema_version: self.schema_version,
             stream_id: &self.stream_id,
             authority_pair: self.authority_pair,
@@ -1560,11 +1905,13 @@ impl RecoveryChallengeV1 {
             binding_digest: &self.binding_digest,
             signer_key_id: &self.signer_key_id,
             witness_key_id: &self.witness_key_id,
-            ephemeral_key_id: &self.ephemeral_key_id,
             witness_identity: &self.witness_identity,
+            state_fence: &self.state_fence,
+            ephemeral_key_id: &self.ephemeral_key_id,
             nonce: &self.nonce,
             session_commitment: &self.session_commitment,
-        })
+        })?;
+        domain_separated_bytes(WITNESS_ROTATION_CHALLENGE_DOMAIN_V1, &canonical)
     }
 
     pub fn validate(&self) -> ProtocolResult<()> {
@@ -1576,11 +1923,22 @@ impl RecoveryChallengeV1 {
         validate_digest("binding_digest", &self.binding_digest)?;
         validate_digest("signer_key_id", &self.signer_key_id)?;
         validate_digest("witness_key_id", &self.witness_key_id)?;
-        validate_digest("ephemeral_key_id", &self.ephemeral_key_id)?;
         validate_string("witness_identity", &self.witness_identity)?;
+        self.state_fence.validate()?;
+        validate_digest("ephemeral_key_id", &self.ephemeral_key_id)?;
         validate_digest("nonce", &self.nonce)?;
         validate_digest("session_commitment", &self.session_commitment)?;
-        if self.nonce == self.session_commitment {
+        if self.nonce == self.session_commitment
+            || self.nonce == self.state_fence.witness_nonce
+            || self.nonce == self.state_fence.request.requester_nonce
+            || self.stream_id != self.state_fence.request.stream_id
+            || self.authority_pair != self.state_fence.request.authority_pair
+            || self.binding_generation != self.state_fence.request.binding_generation
+            || self.binding_digest != self.state_fence.request.binding_digest
+            || self.signer_key_id != self.state_fence.request.signer_key_id
+            || self.witness_key_id != self.state_fence.request.witness_key_id
+            || self.witness_identity != self.state_fence.request.witness_identity
+        {
             return Err(ProtocolError::WitnessOutcomeMismatch);
         }
         self.authority_pair.validate()?;
@@ -1594,6 +1952,22 @@ impl RecoveryChallengeV1 {
         }
         verify_detached_signature(&self.signing_bytes()?, &self.signature)
             .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
+    }
+
+    pub fn canonical_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        self.validate()?;
+        canonical_wire_bytes(self)
+    }
+
+    pub fn challenge_digest(&self) -> ProtocolResult<String> {
+        digest_domain(
+            WITNESS_ROTATION_CHALLENGE_DOMAIN_V1,
+            &self.canonical_bytes()?,
+        )
+    }
+
+    pub fn expected_session_generation(&self) -> ProtocolResult<u64> {
+        self.state_fence.expected_session_generation()
     }
 }
 
@@ -1731,6 +2105,12 @@ impl WitnessPreparedV1 {
     pub fn validate(&self) -> ProtocolResult<()> {
         if self.schema_version != PROTOCOL_SCHEMA_VERSION {
             return Err(ProtocolError::UnsupportedSchema(self.schema_version));
+        }
+        if self.session_generation == 0 {
+            return Err(invalid(
+                "session_generation",
+                "generation zero is the absent-session baseline",
+            ));
         }
         self.head.validate_prepared_successor()?;
         validate_digest("predecessor_head_digest", &self.predecessor_head_digest)?;
@@ -2390,6 +2770,280 @@ impl WitnessDiscoveryV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum WitnessSessionRotationResponseKindV1 {
+    Establish,
+    Discover,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessEstablishSnapshotV1 {
+    pub schema_version: u32,
+    pub committed_head: Option<WitnessHeadV1>,
+    pub external_marker: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessSessionRotationReceiptV1 {
+    pub schema_version: u32,
+    pub accepted_request_digest: String,
+    pub accepted_challenge_digest: String,
+    pub response_kind: WitnessSessionRotationResponseKindV1,
+    pub session: WitnessSessionV1,
+    pub establish_snapshot: Option<WitnessEstablishSnapshotV1>,
+    pub discovery_snapshot: Option<WitnessDiscoveryV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct WitnessExternalMarkerPreimageV1<'a> {
+    accepted_challenge_digest: &'a str,
+    resulting_session_digest: &'a str,
+    response_kind: WitnessSessionRotationResponseKindV1,
+}
+
+impl WitnessSessionRotationReceiptV1 {
+    pub fn for_establish(
+        accepted_request_digest: String,
+        challenge: &RecoveryChallengeV1,
+        session: WitnessSessionV1,
+        committed_head: Option<WitnessHeadV1>,
+    ) -> ProtocolResult<Self> {
+        validate_rotated_session_for_challenge(challenge, &session)?;
+        validate_fenced_response_state(challenge, committed_head.as_ref(), None)?;
+        if let Some(head) = &committed_head {
+            validate_established_head_for_session(head, &session)?;
+        }
+        let accepted_challenge_digest = challenge.challenge_digest()?;
+        let external_marker = witness_external_marker(
+            &accepted_challenge_digest,
+            &witness_session_digest(&session)?,
+        )?;
+        let receipt = Self {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            accepted_request_digest,
+            accepted_challenge_digest,
+            response_kind: WitnessSessionRotationResponseKindV1::Establish,
+            session,
+            establish_snapshot: Some(WitnessEstablishSnapshotV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                committed_head,
+                external_marker,
+            }),
+            discovery_snapshot: None,
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
+    pub fn for_discovery(
+        accepted_request_digest: String,
+        challenge: &RecoveryChallengeV1,
+        discovery: WitnessDiscoveryV1,
+    ) -> ProtocolResult<Self> {
+        discovery.validate()?;
+        validate_rotated_session_for_challenge(challenge, &discovery.recovery_session)?;
+        validate_fenced_response_state(
+            challenge,
+            discovery.head.as_ref(),
+            discovery.prepared.as_ref(),
+        )?;
+        let receipt = Self {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            accepted_request_digest,
+            accepted_challenge_digest: challenge.challenge_digest()?,
+            response_kind: WitnessSessionRotationResponseKindV1::Discover,
+            session: discovery.recovery_session.clone(),
+            establish_snapshot: None,
+            discovery_snapshot: Some(discovery),
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
+    pub fn validate(&self) -> ProtocolResult<()> {
+        if self.schema_version != PROTOCOL_SCHEMA_VERSION {
+            return Err(ProtocolError::UnsupportedSchema(self.schema_version));
+        }
+        validate_digest("accepted_request_digest", &self.accepted_request_digest)?;
+        validate_digest("accepted_challenge_digest", &self.accepted_challenge_digest)?;
+        self.session.validate()?;
+        match (
+            self.response_kind,
+            &self.establish_snapshot,
+            &self.discovery_snapshot,
+        ) {
+            (WitnessSessionRotationResponseKindV1::Establish, Some(snapshot), None) => {
+                if snapshot.schema_version != PROTOCOL_SCHEMA_VERSION {
+                    return Err(ProtocolError::UnsupportedSchema(snapshot.schema_version));
+                }
+                if let Some(head) = &snapshot.committed_head {
+                    validate_established_head_for_session(head, &self.session)?;
+                }
+                validate_digest("external_marker", &snapshot.external_marker)?;
+                let expected_marker = witness_external_marker(
+                    &self.accepted_challenge_digest,
+                    &witness_session_digest(&self.session)?,
+                )?;
+                if snapshot.external_marker != expected_marker {
+                    return Err(ProtocolError::WitnessOutcomeMismatch);
+                }
+            }
+            (WitnessSessionRotationResponseKindV1::Discover, None, Some(discovery)) => {
+                discovery.validate()?;
+                if discovery.recovery_session != self.session {
+                    return Err(ProtocolError::WitnessOutcomeMismatch);
+                }
+            }
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        self.validate()?;
+        canonical_wire_bytes(self)
+    }
+
+    pub fn receipt_digest(&self) -> ProtocolResult<String> {
+        digest_domain(WITNESS_ROTATION_RECEIPT_DOMAIN_V1, &self.canonical_bytes()?)
+    }
+
+    pub fn verify_exact_retry(
+        &self,
+        accepted_request_digest: &str,
+        challenge: &RecoveryChallengeV1,
+        response_kind: WitnessSessionRotationResponseKindV1,
+    ) -> ProtocolResult<()> {
+        self.validate()?;
+        validate_digest("accepted_request_digest", accepted_request_digest)?;
+        challenge.validate()?;
+        validate_rotated_session_for_challenge(challenge, &self.session)?;
+        if self.accepted_request_digest != accepted_request_digest
+            || self.accepted_challenge_digest != challenge.challenge_digest()?
+            || self.response_kind != response_kind
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        match (
+            self.response_kind,
+            &self.establish_snapshot,
+            &self.discovery_snapshot,
+        ) {
+            (WitnessSessionRotationResponseKindV1::Establish, Some(snapshot), None) => {
+                validate_fenced_response_state(challenge, snapshot.committed_head.as_ref(), None)?;
+            }
+            (WitnessSessionRotationResponseKindV1::Discover, None, Some(discovery)) => {
+                validate_fenced_response_state(
+                    challenge,
+                    discovery.head.as_ref(),
+                    discovery.prepared.as_ref(),
+                )?;
+            }
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        }
+        Ok(())
+    }
+}
+
+fn witness_session_digest(session: &WitnessSessionV1) -> ProtocolResult<String> {
+    session.validate()?;
+    digest_domain(
+        WITNESS_SESSION_STATE_DOMAIN_V1,
+        &canonical_wire_bytes(session)?,
+    )
+}
+
+fn witness_external_marker(
+    accepted_challenge_digest: &str,
+    resulting_session_digest: &str,
+) -> ProtocolResult<String> {
+    validate_digest("accepted_challenge_digest", accepted_challenge_digest)?;
+    validate_digest("resulting_session_digest", resulting_session_digest)?;
+    digest_domain(
+        WITNESS_EXTERNAL_MARKER_DOMAIN_V1,
+        &canonical_wire_bytes(&WitnessExternalMarkerPreimageV1 {
+            accepted_challenge_digest,
+            resulting_session_digest,
+            response_kind: WitnessSessionRotationResponseKindV1::Establish,
+        })?,
+    )
+}
+
+fn validate_rotated_session_for_challenge(
+    challenge: &RecoveryChallengeV1,
+    session: &WitnessSessionV1,
+) -> ProtocolResult<()> {
+    challenge.validate()?;
+    session.validate()?;
+    if challenge.stream_id != session.stream_id
+        || challenge.authority_pair != session.authority_pair
+        || challenge.binding_generation != session.binding_generation
+        || challenge.binding_digest != session.binding_digest
+        || challenge.signer_key_id != session.signer_key_id
+        || challenge.witness_key_id != session.witness_key_id
+        || challenge.witness_identity != session.witness_identity
+        || challenge.ephemeral_key_id != session.ephemeral_key_id
+        || challenge.session_commitment != session.session_commitment
+        || challenge.expected_session_generation()? != session.session_generation
+    {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    Ok(())
+}
+
+fn validate_established_head_for_session(
+    head: &WitnessHeadV1,
+    session: &WitnessSessionV1,
+) -> ProtocolResult<()> {
+    head.validate_settled()?;
+    if head.stream_id != session.stream_id
+        || head.authority_pair != session.authority_pair
+        || head.binding_generation != session.binding_generation
+        || head.binding_digest != session.binding_digest
+        || head.signer_key_id != session.signer_key_id
+        || head.witness_key_id != session.witness_key_id
+    {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    Ok(())
+}
+
+fn validate_fenced_response_state(
+    challenge: &RecoveryChallengeV1,
+    head: Option<&WitnessHeadV1>,
+    prepared: Option<&WitnessPreparedV1>,
+) -> ProtocolResult<()> {
+    challenge.validate()?;
+    let head_digest = head.map(WitnessHeadV1::head_digest).transpose()?;
+    let prepared_digest = prepared
+        .map(|value| {
+            value.validate()?;
+            let mut fenced_value = value.clone();
+            if let Some(current_generation) = challenge.state_fence.current_session_generation {
+                if value.session_generation != checked_next_session(current_generation)? {
+                    return Err(ProtocolError::WitnessOutcomeMismatch);
+                }
+                fenced_value.session_generation = current_generation;
+            } else if value.session_generation != challenge.expected_session_generation()? {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            digest_domain(
+                WITNESS_PREPARED_STATE_DOMAIN_V1,
+                &canonical_wire_bytes(&fenced_value)?,
+            )
+        })
+        .transpose()?;
+    if challenge.state_fence.current_head_digest != head_digest
+        || challenge.state_fence.current_prepared_digest != prepared_digest
+    {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum WitnessPrepareOutcomeV1 {
@@ -2482,6 +3136,7 @@ impl WitnessSessionAttestationV1 {
         }
         self.challenge.validate()?;
         self.session.validate()?;
+        validate_fenced_response_state(&self.challenge, self.committed_head.as_ref(), None)?;
         if self.challenge.stream_id != self.session.stream_id
             || self.challenge.binding_generation != self.session.binding_generation
             || self.challenge.binding_digest != self.session.binding_digest
@@ -2491,6 +3146,7 @@ impl WitnessSessionAttestationV1 {
             || self.challenge.session_commitment != self.session.session_commitment
             || self.challenge.authority_pair != self.session.authority_pair
             || self.challenge.witness_identity != self.session.witness_identity
+            || self.session.session_generation != self.challenge.expected_session_generation()?
         {
             return Err(ProtocolError::WitnessOutcomeMismatch);
         }
@@ -2510,6 +3166,13 @@ impl WitnessSessionAttestationV1 {
             }
         }
         validate_digest("external_marker", &self.external_marker)?;
+        let expected_external_marker = witness_external_marker(
+            &self.challenge.challenge_digest()?,
+            &witness_session_digest(&self.session)?,
+        )?;
+        if self.external_marker != expected_external_marker {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
         validate_digest("witness_key_id", &self.witness_key_id)?;
         if self.signature.algorithm != "ed25519"
             || self.signature.key_id != self.witness_key_id
@@ -2593,6 +3256,11 @@ impl WitnessDiscoveryAttestationV1 {
         }
         self.challenge.validate()?;
         self.discovery.validate()?;
+        validate_fenced_response_state(
+            &self.challenge,
+            self.discovery.head.as_ref(),
+            self.discovery.prepared.as_ref(),
+        )?;
         if self.discovery.recovery_session.stream_id != self.challenge.stream_id
             || self.discovery.recovery_session.binding_generation
                 != self.challenge.binding_generation
@@ -2604,6 +3272,8 @@ impl WitnessDiscoveryAttestationV1 {
                 != self.challenge.session_commitment
             || self.discovery.recovery_session.authority_pair != self.challenge.authority_pair
             || self.discovery.recovery_session.witness_identity != self.challenge.witness_identity
+            || self.discovery.recovery_session.session_generation
+                != self.challenge.expected_session_generation()?
         {
             return Err(ProtocolError::WitnessOutcomeMismatch);
         }
@@ -2882,7 +3552,8 @@ impl WitnessReadAttestationV1 {
             (WitnessOperationV1::ReadPrepared, WitnessReadResponseV1::Prepared(value)) => {
                 if let Some(prepared) = value.as_ref().as_ref() {
                     prepared.validate()?;
-                    if prepared.head.stream_id != self.stream_id
+                    if prepared.session_generation != self.session_generation
+                        || prepared.head.stream_id != self.stream_id
                         || prepared.head.binding_generation != self.binding_generation
                         || prepared.head.binding_digest != self.binding_digest
                         || prepared.head.signer_key_id != self.signer_key_id
@@ -3076,6 +3747,15 @@ impl WitnessOutcomeAttestationV1 {
         validate_digest("session_commitment", &self.session_commitment)?;
         validate_digest("witness_key_id", &self.witness_key_id)?;
         self.outcome.validate()?;
+        if let WitnessOperationOutcomeV1::Prepare(outcome) = &self.outcome {
+            match outcome.as_ref() {
+                WitnessPrepareOutcomeV1::Prepared(prepared)
+                | WitnessPrepareOutcomeV1::AlreadyPrepared(prepared)
+                    if prepared.session_generation == self.session_generation => {}
+                WitnessPrepareOutcomeV1::Conflict => {}
+                _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+            }
+        }
         validate_outcome_binding(
             self.operation,
             &self.stream_id,
@@ -3199,7 +3879,7 @@ fn validate_prepared_outcome_attestation_for_record(
         WitnessOperationOutcomeV1::Prepare(value) => match value.as_ref() {
             WitnessPrepareOutcomeV1::Prepared(prepared)
             | WitnessPrepareOutcomeV1::AlreadyPrepared(prepared) => {
-                record.validate_witness_prepared(prepared)
+                record.validate_witness_prepared(prepared, attestation.session_generation)
             }
             WitnessPrepareOutcomeV1::Conflict => Err(ProtocolError::WitnessOutcomeMismatch),
         },
@@ -3223,7 +3903,7 @@ fn validate_outcome_attestation_for_record(
         ) => match value.as_ref() {
             WitnessPrepareOutcomeV1::Prepared(prepared)
             | WitnessPrepareOutcomeV1::AlreadyPrepared(prepared) => {
-                record.validate_witness_prepared(prepared)
+                record.validate_witness_prepared(prepared, attestation.session_generation)
             }
             WitnessPrepareOutcomeV1::Conflict => Err(ProtocolError::WitnessOutcomeMismatch),
         },
@@ -3317,7 +3997,10 @@ fn validate_prepared_discovery_attestation_for_record(
         .prepared
         .as_ref()
         .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
-    record.validate_witness_prepared(prepared)
+    record.validate_witness_prepared(
+        prepared,
+        attestation.discovery.recovery_session.session_generation,
+    )
 }
 
 fn validate_terminal_discovery_attestation_for_record(
@@ -3422,6 +4105,31 @@ impl WitnessSessionAuthorizationV1 {
         }
         verify_detached_signature(&self.signing_bytes()?, &self.signature)
             .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
+    }
+
+    pub fn verify_for_session_record(
+        &self,
+        session: &WitnessSessionV1,
+        operation: WitnessOperationV1,
+        txid: &str,
+        request_digest: &str,
+    ) -> ProtocolResult<()> {
+        self.validate()?;
+        session.validate()?;
+        validate_digest("txid", txid)?;
+        validate_digest("request_digest", request_digest)?;
+        if self.operation != operation
+            || self.stream_id != session.stream_id
+            || self.binding_digest != session.binding_digest
+            || self.txid != txid
+            || self.request_digest != request_digest
+            || self.session_generation != session.session_generation
+            || self.session_commitment != session.session_commitment
+            || self.ephemeral_key_id != session.ephemeral_key_id
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -3730,6 +4438,11 @@ fn validate_outcome_namespace(
 #[async_trait]
 pub trait GovernanceDurabilityWitness: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
+
+    async fn issue_session_fence(
+        &self,
+        request: WitnessSessionFenceRequestV1,
+    ) -> Result<WitnessSessionStateFenceV1, Self::Error>;
 
     /// Adapters return a signed wire response.  They cannot construct the
     /// opaque mutation capability; the governance caller must pass it through
@@ -4392,7 +5105,7 @@ impl TransactionRecordV1 {
             },
             _ => return Err(ProtocolError::WitnessOutcomeMismatch),
         };
-        self.validate_witness_prepared(prepared)?;
+        self.validate_witness_prepared(prepared, verified.attestation().session_generation)?;
         let mut record = self.clone();
         record.phase = TransactionPhaseV1::WitnessPrepared;
         record.journal_generation = checked_next_journal_generation(self.journal_generation)?;
@@ -4587,7 +5300,10 @@ impl TransactionRecordV1 {
             }
         }
         if let Some(prepared) = &discovery.prepared {
-            self.validate_witness_prepared(prepared)?;
+            self.validate_witness_prepared(
+                prepared,
+                discovery.recovery_session.session_generation,
+            )?;
             if self.phase == TransactionPhaseV1::Intent {
                 let mut record = self.clone();
                 record.phase = TransactionPhaseV1::WitnessPrepared;
@@ -4620,10 +5336,15 @@ impl TransactionRecordV1 {
         self.validate()
     }
 
-    fn validate_witness_prepared(&self, prepared: &WitnessPreparedV1) -> ProtocolResult<()> {
+    fn validate_witness_prepared(
+        &self,
+        prepared: &WitnessPreparedV1,
+        expected_session_generation: u64,
+    ) -> ProtocolResult<()> {
         prepared.validate()?;
         let head = &prepared.head;
-        if head.stream_id != self.stream_id
+        if prepared.session_generation != expected_session_generation
+            || head.stream_id != self.stream_id
             || head.txid != self.txid
             || head.candidate_digest != self.candidate_digest
             || head.epoch != self.epoch

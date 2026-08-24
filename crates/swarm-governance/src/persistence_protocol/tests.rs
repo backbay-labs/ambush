@@ -46,8 +46,8 @@ fn candidate_embeds_complete_settled_predecessor_and_rejects_digest_only_mutatio
     assert!(changed_data.validate().is_err());
 
     let built = candidate.build()?;
-    assert!(WitnessPreparedV1::from_candidate(&built, None, 0).is_err());
-    assert!(WitnessPreparedV1::from_candidate(&built, Some(predecessor.clone()), 0).is_ok());
+    assert!(WitnessPreparedV1::from_candidate(&built, None, 1).is_err());
+    assert!(WitnessPreparedV1::from_candidate(&built, Some(predecessor.clone()), 1).is_ok());
     Ok(())
 }
 
@@ -127,6 +127,381 @@ fn checked_counters_and_sizes_fail_closed_at_maximum() {
     assert!(checked_add_size(u64::MAX, 1).is_err());
     assert!(validate_next_intent(9, 9).is_err());
     assert!(validate_next_intent(9, 10).is_ok());
+}
+
+#[test]
+fn recovery_challenge_requires_a_signed_current_state_fence() -> ProtocolResult<()> {
+    let record = sample_transaction_record()?;
+    let snapshot = sample_fence_snapshot(&record, None)?;
+    let challenge = sample_challenge(&record, "a".repeat(64), [7_u8; 32]);
+
+    challenge.state_fence.verify_for_snapshot(&snapshot)?;
+    assert_eq!(challenge.expected_session_generation()?, 1);
+
+    let mut wire = serde_json::to_value(&challenge)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let object = wire
+        .as_object_mut()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    object.remove("state_fence");
+    let fence_free = canonical_wire_bytes(&wire)?;
+    assert!(decode_canonical::<RecoveryChallengeV1>(&fence_free).is_err());
+
+    let mut changed = challenge.clone();
+    changed.state_fence.store_state_digest = "f".repeat(64);
+    assert!(changed.validate().is_err());
+    Ok(())
+}
+
+#[test]
+fn stale_fence_replay_fails_after_one_and_one_hundred_rotations() -> ProtocolResult<()> {
+    let record = sample_transaction_record()?;
+    let initial = sample_fence_snapshot(&record, None)?;
+    let challenge = sample_challenge(&record, "a".repeat(64), [7_u8; 32]);
+    challenge.state_fence.verify_for_snapshot(&initial)?;
+
+    let mut after_one = initial.clone();
+    let mut current_session = sample_session(&record);
+    current_session.session_generation = 1;
+    after_one.current_session = Some(current_session.clone());
+    assert!(
+        challenge
+            .state_fence
+            .verify_for_snapshot(&after_one)
+            .is_err()
+    );
+
+    let mut after_one_hundred = after_one;
+    current_session.session_generation = 100;
+    after_one_hundred.current_session = Some(current_session);
+    assert!(
+        challenge
+            .state_fence
+            .verify_for_snapshot(&after_one_hundred)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn fenced_discovery_rejects_a_resigned_prepared_substitution() -> ProtocolResult<()> {
+    let record = sample_transaction_record()?;
+    let prepared = sample_witness_prepared(&record)?;
+    let predecessor = prepared
+        .predecessor_head
+        .clone()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    let discovery = WitnessDiscoveryV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        head: Some(predecessor.clone()),
+        prepared: Some(prepared),
+        genesis_abort: None,
+        recovery_session: sample_session(&record),
+    };
+    let attestation = sample_signed_discovery_attestation(&record, discovery)?;
+
+    let mut changed_preimage = sample_candidate();
+    changed_preimage.state_payload = br#"{"state":2}"#.to_vec();
+    changed_preimage.state_byte_len = changed_preimage.state_payload.len() as u64;
+    changed_preimage.state_digest = swarm_crypto::sha256_hex(&changed_preimage.state_payload);
+    changed_preimage.state_attestation = sign_payload(
+        &sample_signer(),
+        STATE_PAYLOAD_DOMAIN_V1,
+        &changed_preimage.stream_id,
+        &changed_preimage.publication_binding,
+        changed_preimage.state_payload.clone(),
+        changed_preimage.state_digest.clone(),
+    );
+    let changed_candidate = changed_preimage.build()?;
+    let changed_prepared =
+        WitnessPreparedV1::from_candidate(&changed_candidate, Some(predecessor), 1)?;
+    let mut substituted = attestation;
+    substituted.discovery.prepared = Some(changed_prepared);
+    substituted.discovery.validate()?;
+    let witness = sample_witness_signer();
+    substituted.signature = witness.sign(&substituted.signing_bytes()?);
+    assert!(substituted.validate().is_err());
+    Ok(())
+}
+
+#[test]
+fn live_prepared_rotation_reissues_only_the_session_generation() -> ProtocolResult<()> {
+    let record = sample_transaction_record()?;
+    let prepared = sample_witness_prepared(&record)?;
+    let head = prepared
+        .predecessor_head
+        .clone()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    let old_session = sample_session(&record);
+    let snapshot = WitnessSessionStateSnapshotV1 {
+        admission_digest: "1".repeat(64),
+        bucket_epoch_digest: "2".repeat(64),
+        bucket_anchor_digest: "3".repeat(64),
+        ready_manifest_digest: "4".repeat(64),
+        store_state_digest: "5".repeat(64),
+        current_session: Some(old_session.clone()),
+        current_head: Some(head.clone()),
+        current_prepared: Some(prepared.clone()),
+    };
+    snapshot.validate()?;
+    let challenge = sample_challenge_for_snapshot(&record, "a".repeat(64), [7_u8; 32], &snapshot);
+    assert_eq!(challenge.expected_session_generation()?, 2);
+
+    let mut new_session = old_session;
+    new_session.session_generation = 2;
+    let mut reissued_prepared = prepared;
+    reissued_prepared.session_generation = 2;
+    let discovery = WitnessDiscoveryV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        head: Some(head),
+        prepared: Some(reissued_prepared),
+        genesis_abort: None,
+        recovery_session: new_session,
+    };
+    discovery.validate()?;
+    let witness = sample_witness_signer();
+    let mut attestation = WitnessDiscoveryAttestationV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        challenge,
+        discovery,
+        witness_key_id: witness.key_id().to_string(),
+        signature: witness.sign(&[]),
+    };
+    attestation.signature = witness.sign(&attestation.signing_bytes()?);
+    attestation.validate()?;
+
+    let mut changed_candidate = attestation.clone();
+    changed_candidate
+        .discovery
+        .prepared
+        .as_mut()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .head
+        .state_digest = "f".repeat(64);
+    changed_candidate.discovery.validate()?;
+    changed_candidate.signature = witness.sign(&changed_candidate.signing_bytes()?);
+    assert!(changed_candidate.validate().is_err());
+
+    let mut skipped_generation = attestation.clone();
+    skipped_generation
+        .discovery
+        .prepared
+        .as_mut()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .session_generation = 3;
+    skipped_generation
+        .discovery
+        .recovery_session
+        .session_generation = 3;
+    skipped_generation.discovery.validate()?;
+    skipped_generation.signature = witness.sign(&skipped_generation.signing_bytes()?);
+    assert!(skipped_generation.validate().is_err());
+
+    let receipt = WitnessSessionRotationReceiptV1::for_discovery(
+        "8".repeat(64),
+        &attestation.challenge,
+        attestation.discovery.clone(),
+    )?;
+    receipt.verify_exact_retry(
+        &"8".repeat(64),
+        &attestation.challenge,
+        WitnessSessionRotationResponseKindV1::Discover,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn prepare_and_read_prepared_bind_nested_session_generation() -> ProtocolResult<()> {
+    let record = sample_transaction_record()?;
+    let capability = sample_capability(&record, None)?;
+    let session = capability.attestation();
+    let mut stale_prepared = sample_witness_prepared(&record)?;
+    stale_prepared.session_generation = checked_next_session(session.session_generation)?;
+    stale_prepared.validate()?;
+    let witness = sample_witness_signer();
+
+    let mut prepare = WitnessOutcomeAttestationV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        operation: WitnessOperationV1::Prepare,
+        stream_id: record.stream_id.clone(),
+        binding_generation: record.binding_generation.clone(),
+        binding_digest: record.binding_digest.clone(),
+        signer_key_id: record.signer_key_id.clone(),
+        authority_pair: record.authority_pair,
+        txid: record.txid.clone(),
+        candidate_digest: record.candidate_digest.clone(),
+        session_generation: session.session_generation,
+        session_commitment: session.session_commitment.clone(),
+        witness_key_id: session.witness_key_id.clone(),
+        outcome: WitnessOperationOutcomeV1::Prepare(Box::new(WitnessPrepareOutcomeV1::Prepared(
+            stale_prepared.clone(),
+        ))),
+        signature: witness.sign(&[]),
+    };
+    prepare.signature = witness.sign(&prepare.signing_bytes()?);
+    assert!(prepare.validate().is_err());
+
+    let mut read = WitnessReadAttestationV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        operation: WitnessOperationV1::ReadPrepared,
+        stream_id: record.stream_id.clone(),
+        binding_generation: record.binding_generation,
+        binding_digest: record.binding_digest,
+        signer_key_id: record.signer_key_id,
+        authority_pair: record.authority_pair,
+        target_txid: record.txid,
+        request_digest: record.candidate_digest,
+        session_generation: session.session_generation,
+        session_commitment: session.session_commitment.clone(),
+        witness_key_id: session.witness_key_id.clone(),
+        response: WitnessReadResponseV1::Prepared(Box::new(Some(stale_prepared))),
+        signature: witness.sign(&[]),
+    };
+    read.signature = witness.sign(&read.signing_bytes()?);
+    assert!(read.validate().is_err());
+    Ok(())
+}
+
+#[test]
+fn session_authorization_has_a_server_side_record_validator() -> ProtocolResult<()> {
+    let record = sample_transaction_record()?;
+    let capability = sample_capability(&record, None)?;
+    let authorization = capability.authorize(
+        WitnessOperationV1::Commit,
+        &record.txid,
+        &record.candidate_digest,
+    )?;
+    authorization.verify_for_session_record(
+        capability.attestation(),
+        WitnessOperationV1::Commit,
+        &record.txid,
+        &record.candidate_digest,
+    )?;
+
+    let mut stale = capability.attestation().clone();
+    stale.session_generation = checked_next_session(stale.session_generation)?;
+    assert!(
+        authorization
+            .verify_for_session_record(
+                &stale,
+                WitnessOperationV1::Commit,
+                &record.txid,
+                &record.candidate_digest,
+            )
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn rotation_receipt_is_singular_bounded_and_transition_bound() -> ProtocolResult<()> {
+    let record = sample_transaction_record()?;
+    let challenge = sample_challenge(&record, "a".repeat(64), [7_u8; 32]);
+    let session = sample_session(&record);
+    let request_digest = "8".repeat(64);
+    let receipt = WitnessSessionRotationReceiptV1::for_establish(
+        request_digest.clone(),
+        &challenge,
+        session.clone(),
+        None,
+    )?;
+    receipt.validate()?;
+    receipt.verify_exact_retry(
+        &request_digest,
+        &challenge,
+        WitnessSessionRotationResponseKindV1::Establish,
+    )?;
+    assert!(
+        receipt
+            .verify_exact_retry(
+                &"9".repeat(64),
+                &challenge,
+                WitnessSessionRotationResponseKindV1::Establish,
+            )
+            .is_err()
+    );
+    let different_challenge = sample_challenge(&record, "b".repeat(64), [7_u8; 32]);
+    assert!(
+        receipt
+            .verify_exact_retry(
+                &request_digest,
+                &different_challenge,
+                WitnessSessionRotationResponseKindV1::Establish,
+            )
+            .is_err()
+    );
+    assert!(
+        receipt
+            .verify_exact_retry(
+                &request_digest,
+                &challenge,
+                WitnessSessionRotationResponseKindV1::Discover,
+            )
+            .is_err()
+    );
+
+    let mut changed_marker = receipt.clone();
+    changed_marker
+        .establish_snapshot
+        .as_mut()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .external_marker = "9".repeat(64);
+    assert!(changed_marker.validate().is_err());
+
+    let mut changed_snapshot = receipt.clone();
+    changed_snapshot
+        .establish_snapshot
+        .as_mut()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .committed_head = Some(sample_witness_head(
+        &record,
+        record.publication_mapping_after,
+    ));
+    changed_snapshot.validate()?;
+    assert!(
+        changed_snapshot
+            .verify_exact_retry(
+                &request_digest,
+                &challenge,
+                WitnessSessionRotationResponseKindV1::Establish,
+            )
+            .is_err()
+    );
+
+    let discovery = WitnessDiscoveryV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        head: None,
+        prepared: None,
+        genesis_abort: None,
+        recovery_session: session,
+    };
+    let discovery_receipt =
+        WitnessSessionRotationReceiptV1::for_discovery(request_digest, &challenge, discovery)?;
+    discovery_receipt.validate()?;
+
+    let mut skipped_session = discovery_receipt.clone();
+    skipped_session.session.session_generation = 99;
+    skipped_session
+        .discovery_snapshot
+        .as_mut()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .recovery_session
+        .session_generation = 99;
+    skipped_session.validate()?;
+    assert!(
+        skipped_session
+            .verify_exact_retry(
+                &skipped_session.accepted_request_digest.clone(),
+                &challenge,
+                WitnessSessionRotationResponseKindV1::Discover,
+            )
+            .is_err()
+    );
+
+    let mut both_snapshots = discovery_receipt;
+    both_snapshots.establish_snapshot = receipt.establish_snapshot;
+    assert!(both_snapshots.validate().is_err());
+    Ok(())
 }
 
 #[test]
@@ -391,7 +766,7 @@ fn prepared_validation_rejects_unsettled_predecessor_and_mixed_genesis_receipt()
     genesis_preimage.sequence = 0;
     genesis_preimage.intent_counter = 1;
     let genesis_candidate = genesis_preimage.build()?;
-    let genesis_prepared = WitnessPreparedV1::from_candidate(&genesis_candidate, None, 0)?;
+    let genesis_prepared = WitnessPreparedV1::from_candidate(&genesis_candidate, None, 1)?;
     let genesis_abort =
         WitnessGenesisAbortedV1::from_prepared(&genesis_prepared, "test".to_string())?;
 
@@ -524,11 +899,11 @@ fn genesis_predecessor_is_explicit_and_bound() -> ProtocolResult<()> {
     preimage.sequence = 0;
     preimage.intent_counter = 1;
     let candidate = preimage.build()?;
-    let prepared = WitnessPreparedV1::from_candidate(&candidate, None, 0)?;
+    let prepared = WitnessPreparedV1::from_candidate(&candidate, None, 1)?;
     assert!(prepared.predecessor_head.is_none());
     let mut malformed = candidate;
     malformed.preimage.predecessor_head_digest = "f".repeat(64);
-    assert!(WitnessPreparedV1::from_candidate(&malformed, None, 0).is_err());
+    assert!(WitnessPreparedV1::from_candidate(&malformed, None, 1).is_err());
     Ok(())
 }
 
@@ -544,7 +919,7 @@ fn genesis_abort_preserves_absent_data_head_advances_intent_and_refuses_replay()
     preimage.sequence = 0;
     preimage.intent_counter = 1;
     let candidate = preimage.build()?;
-    let prepared = WitnessPreparedV1::from_candidate(&candidate, None, 0)?;
+    let prepared = WitnessPreparedV1::from_candidate(&candidate, None, 1)?;
     let aborted = WitnessGenesisAbortedV1::from_prepared(&prepared, "bootstrap-abort".to_string())?;
     assert!(aborted.resulting_data_head_digest == genesis.data_head_digest()?);
     assert!(
@@ -578,7 +953,7 @@ fn genesis_abort_preserves_absent_data_head_advances_intent_and_refuses_replay()
     let pending = record.begin_abort()?;
     let attestation = sample_signed_discovery_attestation(&pending, discovery.clone())?;
     let verified = attestation.verify_authority(
-        &sample_challenge(&pending, "a".repeat(64), [7_u8; 32]),
+        &attestation.challenge,
         &sample_candidate().publication_binding,
         None,
     )?;
@@ -640,13 +1015,13 @@ fn genesis_abort_preserves_absent_data_head_advances_intent_and_refuses_replay()
 
     // A structurally valid counter-two candidate is still only a request;
     // the raw receipt above cannot authorize its prepared witness state.
-    assert!(WitnessPreparedV1::from_candidate(&next_candidate, None, 0).is_err());
+    assert!(WitnessPreparedV1::from_candidate(&next_candidate, None, 1).is_err());
     let next_prepared =
-        WitnessPreparedV1::from_candidate_after_genesis_abort(&next_candidate, &verified_abort, 0)?;
+        WitnessPreparedV1::from_candidate_after_genesis_abort(&next_candidate, &verified_abort, 1)?;
     let next_prepared_from_commit = WitnessPreparedV1::from_candidate_after_genesis_abort(
         &next_candidate,
         &verified_commit,
-        0,
+        1,
     )?;
     assert_eq!(next_prepared, next_prepared_from_commit);
     assert_eq!(next_prepared.head.intent_counter, 2);
@@ -659,7 +1034,7 @@ fn genesis_abort_preserves_absent_data_head_advances_intent_and_refuses_replay()
         WitnessPreparedV1::from_candidate_after_genesis_abort(
             &wrong_counter_candidate,
             &verified_abort,
-            0,
+            1,
         )
         .is_err()
     );
@@ -690,7 +1065,7 @@ fn genesis_abort_preserves_absent_data_head_advances_intent_and_refuses_replay()
     );
     let wrong_outcome = sample_verified_commit(&wrong_operation_record)?;
     assert!(
-        WitnessPreparedV1::from_candidate_after_genesis_abort(&next_candidate, &wrong_outcome, 0,)
+        WitnessPreparedV1::from_candidate_after_genesis_abort(&next_candidate, &wrong_outcome, 1,)
             .is_err()
     );
 
@@ -783,7 +1158,7 @@ fn witness_commit_abort_outcomes_and_discovery_are_bound() -> ProtocolResult<()>
         witness_key_id: head.witness_key_id.clone(),
         ephemeral_key_id: sample_ephemeral_key_id(),
         witness_identity: "witness-1".to_string(),
-        session_generation: 0,
+        session_generation: 1,
         session_commitment: "e".repeat(64),
     };
     let committed = WitnessCommittedV1 {
@@ -873,7 +1248,7 @@ fn abort_pending_requires_witness_and_lost_commit_resolution() -> ProtocolResult
     };
     let discovery_attestation = sample_signed_discovery_attestation(&ready, discovery)?;
     let recovered = ready.resolve_verified_discovery(&discovery_attestation.verify_authority(
-        &sample_challenge(&ready, "a".repeat(64), [7_u8; 32]),
+        &discovery_attestation.challenge,
         &sample_candidate().publication_binding,
         None,
     )?)?;
@@ -888,7 +1263,7 @@ fn abort_pending_requires_witness_and_lost_commit_resolution() -> ProtocolResult
     };
     let aborted_attestation = sample_signed_discovery_attestation(&pending, aborted_discovery)?;
     let aborted_verified = aborted_attestation.verify_authority(
-        &sample_challenge(&pending, "a".repeat(64), [7_u8; 32]),
+        &aborted_attestation.challenge,
         &sample_candidate().publication_binding,
         None,
     )?;
@@ -1062,7 +1437,7 @@ fn verified_discovery_recovers_prepared_from_intent_and_rejects_absent_or_foreig
     };
     let attestation = sample_signed_discovery_attestation(&record, discovery.clone())?;
     let verified = attestation.verify_authority(
-        &sample_challenge(&record, "a".repeat(64), [7_u8; 32]),
+        &attestation.challenge,
         &sample_candidate().publication_binding,
         Some(&predecessor),
     )?;
@@ -1077,7 +1452,7 @@ fn verified_discovery_recovers_prepared_from_intent_and_rejects_absent_or_foreig
     };
     let absent_attestation = sample_signed_discovery_attestation(&record, absent)?;
     let absent_verified = absent_attestation.verify_authority(
-        &sample_challenge(&record, "a".repeat(64), [7_u8; 32]),
+        &absent_attestation.challenge,
         &sample_candidate().publication_binding,
         Some(&predecessor),
     )?;
@@ -1097,7 +1472,7 @@ fn verified_discovery_recovers_prepared_from_intent_and_rejects_absent_or_foreig
     );
     let foreign_candidate = foreign_preimage.build()?;
     let foreign_prepared =
-        WitnessPreparedV1::from_candidate(&foreign_candidate, Some(predecessor.clone()), 0)?;
+        WitnessPreparedV1::from_candidate(&foreign_candidate, Some(predecessor.clone()), 1)?;
     let foreign = WitnessDiscoveryV1 {
         schema_version: PROTOCOL_SCHEMA_VERSION,
         head: Some(predecessor.clone()),
@@ -1107,7 +1482,7 @@ fn verified_discovery_recovers_prepared_from_intent_and_rejects_absent_or_foreig
     };
     let foreign_attestation = sample_signed_discovery_attestation(&record, foreign)?;
     let foreign_verified = foreign_attestation.verify_authority(
-        &sample_challenge(&record, "a".repeat(64), [7_u8; 32]),
+        &foreign_attestation.challenge,
         &sample_candidate().publication_binding,
         Some(&predecessor),
     )?;
@@ -1137,7 +1512,7 @@ fn recovery_accepts_signed_discovery_prepared_successor_and_rejects_mutations() 
     };
     let attestation = sample_signed_discovery_attestation(&record, discovery.clone())?;
     let verified = attestation.verify_authority(
-        &sample_challenge(&record, "a".repeat(64), [7_u8; 32]),
+        &attestation.challenge,
         &sample_candidate().publication_binding,
         Some(&predecessor),
     )?;
@@ -1202,7 +1577,7 @@ fn prepared_discovery_evidence_survives_full_commit_chain_and_adjacent_recovery(
     };
     let attestation = sample_signed_discovery_attestation(&record, discovery)?;
     let mut current = record.resolve_verified_discovery(&attestation.verify_authority(
-        &sample_challenge(&record, "a".repeat(64), [7_u8; 32]),
+        &attestation.challenge,
         &sample_candidate().publication_binding,
         None,
     )?)?;
@@ -1262,7 +1637,7 @@ fn direct_committed_head_discovery_from_intent_is_rejected() -> ProtocolResult<(
     };
     let attestation = sample_signed_discovery_attestation(&record, discovery)?;
     let verified = attestation.verify_authority(
-        &sample_challenge(&record, "a".repeat(64), [7_u8; 32]),
+        &attestation.challenge,
         &sample_candidate().publication_binding,
         None,
     )?;
@@ -1307,17 +1682,21 @@ fn witness_session_capability_is_head_bound_and_not_wire_attestation() -> Protoc
     let candidate = sample_candidate().build()?;
     let binding = &candidate.preimage.publication_binding;
     let secret = [7_u8; 32];
-    let challenge = sample_challenge(&record, "a".repeat(64), secret);
+    let challenge = sample_challenge_for_state(&record, "a".repeat(64), secret, Some(&head), None);
     let mut session = sample_session(&record);
     session.session_commitment = challenge.session_commitment.clone();
     let request = GovernanceWitnessSessionRequest::from_secret(challenge.clone(), secret)?;
     let signer = sample_witness_signer();
+    let external_marker = witness_external_marker(
+        &challenge.challenge_digest()?,
+        &witness_session_digest(&session)?,
+    )?;
     let mut attestation = WitnessSessionAttestationV1 {
         schema_version: PROTOCOL_SCHEMA_VERSION,
         challenge: challenge.clone(),
         session: session.clone(),
         committed_head: Some(head.clone()),
-        external_marker: "f".repeat(64),
+        external_marker: external_marker.clone(),
         witness_key_id: signer.key_id().to_string(),
         signature: signer.sign(&[]),
     };
@@ -1330,7 +1709,19 @@ fn witness_session_capability_is_head_bound_and_not_wire_attestation() -> Protoc
     )?;
     assert_eq!(capability.attestation(), &session);
     assert_eq!(capability.committed_head(), Some(&head));
-    assert_eq!(capability.external_marker(), "f".repeat(64));
+    assert_eq!(capability.external_marker(), external_marker);
+
+    let mut wrong_marker = attestation.clone();
+    wrong_marker.external_marker = "f".repeat(64);
+    wrong_marker.signature = signer.sign(&wrong_marker.signing_bytes()?);
+    assert!(wrong_marker.validate().is_err());
+
+    let mut wrong_head = attestation.clone();
+    let mut changed_head = head.clone();
+    changed_head.state_digest = "f".repeat(64);
+    wrong_head.committed_head = Some(changed_head);
+    wrong_head.signature = signer.sign(&wrong_head.signing_bytes()?);
+    assert!(wrong_head.validate().is_err());
 
     let mut response = WitnessOutcomeAttestationV1 {
         schema_version: PROTOCOL_SCHEMA_VERSION,
@@ -1546,6 +1937,14 @@ fn signed_discovery_rotation_requires_secret_namespace_and_expected_head() -> Pr
             .verify_authority(&attestation.challenge, &binding, Some(&wrong_head))
             .is_err()
     );
+
+    let mut wrong_fenced_head = attestation;
+    let mut changed_head = head;
+    changed_head.state_digest = "f".repeat(64);
+    wrong_fenced_head.discovery.head = Some(changed_head);
+    let signer = sample_witness_signer();
+    wrong_fenced_head.signature = signer.sign(&wrong_fenced_head.signing_bytes()?);
+    assert!(wrong_fenced_head.validate().is_err());
     Ok(())
 }
 
@@ -1899,16 +2298,20 @@ fn sample_capability(
     expected_head: Option<&WitnessHeadV1>,
 ) -> ProtocolResult<GovernanceWitnessSession> {
     let secret = [7_u8; 32];
-    let challenge = sample_challenge(record, "a".repeat(64), secret);
+    let challenge = sample_challenge_for_state(record, "a".repeat(64), secret, expected_head, None);
     let mut session = sample_session(record);
     session.session_commitment = challenge.session_commitment.clone();
     let signer = sample_witness_signer();
+    let external_marker = witness_external_marker(
+        &challenge.challenge_digest()?,
+        &witness_session_digest(&session)?,
+    )?;
     let mut attestation = WitnessSessionAttestationV1 {
         schema_version: PROTOCOL_SCHEMA_VERSION,
         challenge: challenge.clone(),
         session,
         committed_head: expected_head.cloned(),
-        external_marker: "f".repeat(64),
+        external_marker,
         witness_key_id: signer.key_id().to_string(),
         signature: signer.sign(&[]),
     };
@@ -2021,7 +2424,13 @@ fn sample_signed_discovery_attestation(
     record: &TransactionRecordV1,
     discovery: WitnessDiscoveryV1,
 ) -> ProtocolResult<WitnessDiscoveryAttestationV1> {
-    let challenge = sample_challenge(record, "a".repeat(64), [7_u8; 32]);
+    let challenge = sample_challenge_for_state(
+        record,
+        "a".repeat(64),
+        [7_u8; 32],
+        discovery.head.as_ref(),
+        discovery.prepared.as_ref(),
+    );
     let signer = sample_witness_signer();
     let mut attestation = WitnessDiscoveryAttestationV1 {
         schema_version: PROTOCOL_SCHEMA_VERSION,
@@ -2147,7 +2556,95 @@ fn sample_witness_prepared(record: &TransactionRecordV1) -> ProtocolResult<Witne
         &candidate.preimage.checkpoint_digest,
         candidate.preimage.checkpoint_byte_len,
     );
-    WitnessPreparedV1::from_candidate(&candidate, Some(predecessor), 0)
+    WitnessPreparedV1::from_candidate(&candidate, Some(predecessor), 1)
+}
+
+fn sample_fence_snapshot(
+    record: &TransactionRecordV1,
+    current_session: Option<WitnessSessionV1>,
+) -> ProtocolResult<WitnessSessionStateSnapshotV1> {
+    if current_session.as_ref().is_some_and(|session| {
+        session.stream_id != record.stream_id
+            || session.binding_digest != record.binding_digest
+            || session.witness_key_id != record.witness_key_id
+    }) {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    let snapshot = WitnessSessionStateSnapshotV1 {
+        admission_digest: "1".repeat(64),
+        bucket_epoch_digest: "2".repeat(64),
+        bucket_anchor_digest: "3".repeat(64),
+        ready_manifest_digest: "4".repeat(64),
+        store_state_digest: "5".repeat(64),
+        current_session,
+        current_head: None,
+        current_prepared: None,
+    };
+    snapshot.validate()?;
+    Ok(snapshot)
+}
+
+fn sample_fence_request(record: &TransactionRecordV1) -> WitnessSessionFenceRequestV1 {
+    let signer = sample_signer();
+    let mut request = WitnessSessionFenceRequestV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        stream_id: record.stream_id.clone(),
+        authority_pair: record.authority_pair,
+        binding_generation: record.binding_generation.clone(),
+        binding_digest: record.binding_digest.clone(),
+        signer_key_id: record.signer_key_id.clone(),
+        witness_key_id: record.witness_key_id.clone(),
+        witness_identity: "witness-1".to_string(),
+        requester_nonce: "6".repeat(64),
+        signature: signer.sign(&[]),
+    };
+    request.signature = signer.sign(&request.signing_bytes().unwrap_or_default());
+    request
+}
+
+fn sample_state_fence_for_state(
+    record: &TransactionRecordV1,
+    current_head: Option<&WitnessHeadV1>,
+    current_prepared: Option<&WitnessPreparedV1>,
+) -> WitnessSessionStateFenceV1 {
+    let snapshot = WitnessSessionStateSnapshotV1 {
+        admission_digest: "1".repeat(64),
+        bucket_epoch_digest: "2".repeat(64),
+        bucket_anchor_digest: "3".repeat(64),
+        ready_manifest_digest: "4".repeat(64),
+        store_state_digest: "5".repeat(64),
+        current_session: None,
+        current_head: current_head.cloned(),
+        current_prepared: current_prepared.cloned(),
+    };
+    sample_state_fence_for_snapshot(record, &snapshot)
+}
+
+fn sample_state_fence_for_snapshot(
+    record: &TransactionRecordV1,
+    snapshot: &WitnessSessionStateSnapshotV1,
+) -> WitnessSessionStateFenceV1 {
+    let witness = sample_witness_signer();
+    let request = sample_fence_request(record);
+    let mut fence = WitnessSessionStateFenceV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        request,
+        admission_digest: snapshot.admission_digest.clone(),
+        bucket_epoch_digest: snapshot.bucket_epoch_digest.clone(),
+        bucket_anchor_digest: snapshot.bucket_anchor_digest.clone(),
+        ready_manifest_digest: snapshot.ready_manifest_digest.clone(),
+        store_state_digest: snapshot.store_state_digest.clone(),
+        current_session_generation: snapshot.current_session_generation(),
+        current_session_digest: snapshot.current_session_digest().unwrap_or_default(),
+        current_head_digest: snapshot.current_head_digest().unwrap_or_default(),
+        current_prepared_digest: snapshot.current_prepared_digest().unwrap_or_default(),
+        witness_nonce: "7".repeat(64),
+        witness_identity: "witness-1".to_string(),
+        witness_key_id: record.witness_key_id.clone(),
+        signature: witness.sign(&[]),
+    };
+    fence.signature = witness.sign(&fence.signing_bytes().unwrap_or_default());
+    fence
 }
 
 fn sample_session(record: &TransactionRecordV1) -> WitnessSessionV1 {
@@ -2163,7 +2660,7 @@ fn sample_session(record: &TransactionRecordV1) -> WitnessSessionV1 {
         witness_key_id: record.witness_key_id.clone(),
         ephemeral_key_id: swarm_crypto::sha256_hex(ephemeral.as_bytes()),
         witness_identity: "witness-1".to_string(),
-        session_generation: 0,
+        session_generation: 1,
         session_commitment: swarm_crypto::sha256_hex(&secret),
     }
 }
@@ -2179,6 +2676,16 @@ fn sample_challenge(
     nonce: String,
     secret: [u8; 32],
 ) -> RecoveryChallengeV1 {
+    sample_challenge_for_state(record, nonce, secret, None, None)
+}
+
+fn sample_challenge_for_state(
+    record: &TransactionRecordV1,
+    nonce: String,
+    secret: [u8; 32],
+    current_head: Option<&WitnessHeadV1>,
+    current_prepared: Option<&WitnessPreparedV1>,
+) -> RecoveryChallengeV1 {
     let signer = sample_signer();
     let ephemeral = swarm_crypto::Keypair::from_seed(&secret).public_key();
     let mut challenge = RecoveryChallengeV1 {
@@ -2189,8 +2696,36 @@ fn sample_challenge(
         binding_digest: record.binding_digest.clone(),
         signer_key_id: record.signer_key_id.clone(),
         witness_key_id: record.witness_key_id.clone(),
-        ephemeral_key_id: swarm_crypto::sha256_hex(ephemeral.as_bytes()),
         witness_identity: "witness-1".to_string(),
+        state_fence: sample_state_fence_for_state(record, current_head, current_prepared),
+        ephemeral_key_id: swarm_crypto::sha256_hex(ephemeral.as_bytes()),
+        nonce,
+        session_commitment: swarm_crypto::sha256_hex(&secret),
+        signature: signer.sign(&[]),
+    };
+    challenge.signature = signer.sign(&challenge.signing_bytes().unwrap_or_default());
+    challenge
+}
+
+fn sample_challenge_for_snapshot(
+    record: &TransactionRecordV1,
+    nonce: String,
+    secret: [u8; 32],
+    snapshot: &WitnessSessionStateSnapshotV1,
+) -> RecoveryChallengeV1 {
+    let signer = sample_signer();
+    let ephemeral = swarm_crypto::Keypair::from_seed(&secret).public_key();
+    let mut challenge = RecoveryChallengeV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        stream_id: record.stream_id.clone(),
+        authority_pair: record.authority_pair,
+        binding_generation: record.binding_generation.clone(),
+        binding_digest: record.binding_digest.clone(),
+        signer_key_id: record.signer_key_id.clone(),
+        witness_key_id: record.witness_key_id.clone(),
+        witness_identity: "witness-1".to_string(),
+        state_fence: sample_state_fence_for_snapshot(record, snapshot),
+        ephemeral_key_id: swarm_crypto::sha256_hex(ephemeral.as_bytes()),
         nonce,
         session_commitment: swarm_crypto::sha256_hex(&secret),
         signature: signer.sign(&[]),
