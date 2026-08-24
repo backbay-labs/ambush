@@ -1,8 +1,8 @@
 # Phase 285 Governance Persistence Protocol
 
-status: architecture-reviewed
-reviewed_at: 2026-08-24T06:53:23Z
-architecture_review: P0=0, P1=0, P2=0
+status: architecture-review-pending
+reviewed_at: pending exact-object re-audit
+architecture_review: pending
 implementation_status: not implemented
 
 ## Purpose
@@ -56,11 +56,15 @@ The binding includes:
 - one state staging lane;
 - one checkpoint staging lane;
 - two alternating transaction-journal lanes;
-- every allowed inode identity for those roles;
+- the immutable permitted inode pair for state canonical and state staging;
+- the immutable permitted inode pair for checkpoint canonical and checkpoint staging;
+- the immutable permitted inode pair for the two journal lanes;
 - configured byte and record limits;
 - the external witness identity and stream binding.
 
 The canonical state and checkpoint files and every staging, journal, lock, binding, archive, and cleanup-slot role must be pairwise inode-distinct. Cross-role hard links are invalid even when names differ.
+
+Each runtime name-to-inode mapping must be an exact permutation of its own authenticated pair. State identities may exchange only between the state canonical and state staging names; checkpoint identities may exchange only between the checkpoint canonical and checkpoint staging names; journal identities may alternate only between the two journal names. A mapping that preserves the global inode set but moves an identity across those pair boundaries is invalid. Bootstrap, ordinary load, transaction validation, and recovery all enforce the same pair membership before accepting bytes or mutating a lane.
 
 Ordinary startup, save, retention, and recovery enumerate the complete pool namespace. An unknown entry, missing fixed entry, malformed fixed slot, unexpected file type, role alias, name-to-inode mismatch, or binding disagreement returns a typed refusal before mutation.
 
@@ -126,7 +130,7 @@ Before returning `Prepared`, the witness independently verifies:
 - pairwise-distinct publication roles;
 - candidate-digest and transaction-identifier derivation.
 
-The committed witness head contains the committed transaction identifier, candidate digest, epoch, sequence, intent counter, binding generation, authority-pair identity, and both payload digests and sizes.
+The committed witness head contains the committed transaction identifier, candidate digest, epoch, sequence, intent counter, binding generation, authority-pair identity, and both payload digests and sizes. It also contains the signed `last_intent_outcome`: outcome kind (`Committed` or `Aborted`), transaction identifier, candidate digest, predecessor committed-head digest, reserved intent counter, and resulting data-head identity digest. The data-head identity digest is separately domain-separated over epoch, sequence, state digest and length, checkpoint digest and length, binding generation, authority pair, and publication mapping; it excludes the intent outcome and therefore is non-circular. A commit outcome names the new data-head identity; an abort outcome names the unchanged predecessor data-head identity. This bounded field is replaced by each successful next intent and is not an accumulating tombstone list.
 
 The witness retains the current committed payload, its predecessor, and one live prepared payload. Resource limits bound each payload and total retained bytes per stream.
 
@@ -134,7 +138,7 @@ The witness retains the current committed payload, its predecessor, and one live
 
 After a crash, the prior ephemeral witness session may be unavailable. `discover_stream` therefore does not require that session. It requires a transport-authenticated challenge signed by the admitted governance key over the stream, exact locally held authority-pair identity, nonce, and witness identity.
 
-The signed witness response returns the exact committed head, the optional unique prepared record, and a fresh recovery-session challenge. Completing the challenge rotates the witness session and revokes the lost session. Mutation operations still require the opaque session; transaction-identifier knowledge is not authority.
+The signed witness response returns the exact committed head including `last_intent_outcome`, the optional unique prepared record, and a fresh recovery-session challenge. The signature binds the stream, witness identity, request nonce, authority pair, binding generation, complete committed head, last intent outcome, optional prepared record, and recovery-session challenge. Completing the challenge rotates the witness session and revokes the lost session. Mutation operations still require the opaque session; transaction-identifier knowledge is not authority.
 
 ### Intent counter and aborts
 
@@ -144,7 +148,7 @@ Any operation whose intent counter is not the unique next value is stale. An abo
 
 Commit and abort form one linearizable transition. If commit wins, abort returns `Committed`; if abort wins, commit permanently returns `Aborted` for that intent.
 
-Before requesting an external abort, the local transaction must durably write and fsync an `AbortPending` journal record containing the prepared transaction identifier, candidate digest, expected current witness head, expected intent-only successor head, and complete local mappings. A local transition cannot manufacture `Aborted`. It may write `Aborted` only after an authenticated witness abort outcome or recovery discovery proves that abort won. If commit won or its response was lost, discovery resolves the external outcome and the local transaction advances to `Committed`; it never rolls back through `Aborted`.
+Before requesting an external abort, the local transaction must durably write and fsync an `AbortPending` journal record containing the prepared transaction identifier, candidate digest, predecessor committed-head digest, reserved intent counter, expected unchanged data-head digest, and complete local mappings. A local transition cannot manufacture `Aborted`. It may write `Aborted` only after an authenticated abort receipt or signed recovery discovery supplies a `last_intent_outcome` whose outcome, transaction identifier, candidate digest, predecessor, reserved counter, and resulting unchanged data-head digest exactly equal that `AbortPending` record. Any mismatch is `Uncertain`. If commit won or its response was lost, the authenticated outcome identifies `Committed` and the local transaction advances to `Committed`; it never rolls back through `Aborted`.
 
 ## Bootstrap state machine
 
@@ -167,7 +171,7 @@ A crash before the local prepared journal remains discoverable from the witness'
 
 One state staging inode and one checkpoint staging inode are sufficient because the state lock serializes transactions and lane reuse is forbidden while recovery depends on prior bytes.
 
-1. Validate local signed state/checkpoint, external head, authority-pair guard, binding, complete namespace, pairwise role identities, canonical/staging mappings, and the latest journal record.
+1. Validate local signed state/checkpoint, external head, authority-pair guard, binding, complete namespace, pairwise role identities, each mapping as a permutation of only its authenticated state/checkpoint/journal lane pair, and the latest journal record.
 2. Build complete next state/checkpoint bytes and the canonical candidate/transaction identifiers.
 3. Prepare the successor externally. Resolve a lost response with `read_prepared_for_stream` and exact candidate equality.
 4. Durably journal `WitnessPrepared` with the witness receipt, predecessor, candidate, and complete before/after mappings.
@@ -189,12 +193,12 @@ Recovery uses the external committed/prepared record, local journal phases, and 
 - Before external prepare: canonical predecessor remains authoritative.
 - Prepared externally but no local journal: discover the unique prepared record and deterministic transaction identifier; resume or explicitly abort.
 - `WitnessPrepared` or `PayloadsStaged`: resume only when the complete before/after bytes and mappings match; otherwise `Uncertain`.
-- Exchange completed but phase record absent: infer completion only from the exact prepared payload, predecessor payload, and expected swapped identities; otherwise `Uncertain`.
+- Exchange completed but phase record absent: infer completion only from the exact prepared payload, predecessor payload, and the expected within-pair state or checkpoint identity swap; a cross-pair identity is always `Uncertain`.
 - `ReadyForWitnessCommit` with witness still prepared: revalidate and commit or abort through the explicit protocol.
 - Witness committed but local `Committed` absent: external escrow is authoritative; finish the local journal.
 - Witness committed but local bytes are missing, replaced, or corrupt: fetch immutable payloads, preserve conflicting local entries through offline no-replace archive/rebind, reconstruct only into verified fixed lanes, and keep ordinary startup `Uncertain` until repair completes.
-- `AbortPending`: resolve the linearizable witness outcome. Authenticated `Aborted` permits the local `Aborted` record; `Committed` requires local commit recovery; `Prepared` permits an idempotent abort retry. No local phase guess decides the result.
-- Witness aborted but local journal lags: discover the exact abort outcome, durably write `Aborted`, and require local data digests to match the witness data head before another prepare.
+- `AbortPending`: resolve the linearizable witness outcome. Only an authenticated `last_intent_outcome` that exactly matches every abort-binding field permits the local `Aborted` record; `Committed` requires local commit recovery; `Prepared` permits an idempotent abort retry. No local phase guess decides the result.
+- Witness aborted but local journal lags: discover the exact signed `last_intent_outcome`, match its txid, candidate digest, predecessor, reserved intent counter, and unchanged resulting data-head digest to `AbortPending`, durably write `Aborted`, and require local data digests to match that resulting witness data head before another prepare.
 - Equal journal generations, forks, two invalid journal lanes, unknown mappings, or content disagreement return `Uncertain`.
 
 Journal records are self-contained, signed, predecessor-linked, and alternate between two fixed distinct lanes. The previous valid lane remains authoritative while the other is rewritten and fsynced. A lane is never reused while a live transaction or recovery phase depends on it.
