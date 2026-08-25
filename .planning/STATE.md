@@ -4,16 +4,16 @@ milestone: v1.79
 milestone_name: Collective Cyber Reasoning
 current_phase: 285
 current_phase_name: Assurance Foundation Closure
-current_plan: null
+current_plan: 03A
 status: in_progress
-last_updated: "2026-08-24T16:06:22Z"
-last_activity: 2026-08-24
+last_updated: "2026-08-25T11:05:00Z"
+last_activity: 2026-08-25
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 0
-  completed_plans: 0
-  percent: 17
+  total_plans: 13
+  completed_plans: 2
+  percent: 15
 ---
 
 # State
@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 02 — revision-CAS witness store, deterministic reference model, and typed proxy boundary on accepted Plan 01 commit `f29f2832`.
-**Total Plans in Phase:** 13; Plan 01 is accepted and summarized, and 12 plans remain.
+**Current Plan:** Plan 03A — transport-library boundary and negative dependency closure on accepted Plan 02 commit `ff762236`.
+**Total Plans in Phase:** 13; Plans 01-02 are accepted and summarized, and 11 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-25
-**Last Activity Description:** Reconciled the planning ledger to independently accepted Plan 01 commit `f29f28324d9c9c00ac1fd429c27a54147aad1b17`, reviewed tree `c53c6c7e9d48be3c2b8e09404d4e5eb9102814aa`, and remote checkpoint. Plan 02 is the only authorized next slice.
+**Last Activity Description:** Accepted Plan 02 commit `ff762236a216f44d26da90d7b3fe7eeecc3d178d`, reviewed tree `5a206ebfe472d370e7eb1326b70c91b0c5e91d91`, and both remote refs after exact-selector, package, strict-lint, mutation, and independent zero-finding gates. Plan 03A is the only authorized next slice.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints for approval/voter governance (`f2eb791d`), persistence architecture (`5be011a0`), the production protocol lineage through witness-service wire (`27b64174` through `a9837f21`), and Plan 01 response/candidate verification (`f29f2832`). Plan 02 is next. Phase 285 remains incomplete until the serial Plan 02-07B chain and one frozen combined tree pass workspace tests, strict clippy, formatting, diff checks, mutation controls, independent review, hosted CI, and closure evidence. Phase 286 Plan 04 is independently accepted at `1408620e` but remains sequenced behind Phase 285. Phase 287-289 plans are independently reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints for approval/voter governance (`f2eb791d`), persistence architecture (`5be011a0`), the production protocol lineage through witness-service wire (`27b64174` through `a9837f21`), Plan 01 response/candidate verification (`f29f2832`), and Plan 02 revision-CAS store/reference/proxy behavior (`ff762236`). Plan 03A is next. Phase 285 remains incomplete until the serial Plan 03A-07B chain and one frozen combined tree pass workspace tests, strict clippy, formatting, diff checks, mutation controls, independent review, hosted CI, and closure evidence. Phase 286 Plan 04 is independently accepted at `1408620e` but remains sequenced behind Phase 285. Phase 287-289 plans are independently reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-25 — Plan 01 accepted and planning ledger reconciled
-Stopped At: Plan 01 production checkpoint `f29f2832` pushed after immutable-tree zero-finding review; Plan 02 is next.
+Last Date: 2026-08-25 — Plan 02 accepted and planning ledger reconciled
+Stopped At: Plan 02 production checkpoint `ff762236` pushed after immutable-tree zero-finding review; Plan 03A is next.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Audit and, if necessary, reduce only Plan 02 against accepted production commit `f29f28324d9c9c00ac1fd429c27a54147aad1b17`. Execute it red-first in a fresh clean worktree, require exact non-vacuous atomic-store, in-memory differential, and typed-proxy gates plus strict package validation and independent zero-P0/P1/P2 review, then create one atomic commit and two pushed checkpoint refs. Do not edit Plans 03A-07B, the quarantined dirty integration tree, or Phases 286-289.
+Audit and, if necessary, reduce only Plan 03A against accepted production commit `ff762236a216f44d26da90d7b3fe7eeecc3d178d`. Execute it red-first in a fresh clean worktree, require exact non-vacuous transport-layering and library-only dependency-closure gates plus strict affected-package validation and independent zero-P0/P1/P2 review, then create one atomic commit and two pushed checkpoint refs. Do not edit Plans 03B-07B, the quarantined dirty integration tree, or Phases 286-289.

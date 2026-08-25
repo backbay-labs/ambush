@@ -42,9 +42,9 @@ created: 2026-08-24
 | 285-01-01 | 01 | 0 | ASSURE-06 | wire/failure unit + plan-schema mutation | `bash tools/check-phase285-witness-conformance.sh response-failure-wire && bash tools/check-phase285-plan-schema.sh --self-test` | ✅ `f29f283` | ✅ accepted |
 | 285-01-02 | 01 | 1 | ASSURE-06 | candidate verifier mutation | `bash tools/check-phase285-witness-conformance.sh candidate-verifier` | ✅ `f29f283` | ✅ accepted |
 | 285-01-03 | 01 | 1 | ASSURE-04, ASSURE-06 | slice gate | `bash tools/check-phase285-witness-conformance.sh protocol-checkpoint` | ✅ `f29f283` | ✅ accepted |
-| 285-02-01 | 02 | 2 | ASSURE-06 | atomic-store contract | `bash tools/check-phase285-witness-conformance.sh atomic-store-contract` | ❌ W0 | ⬜ pending |
-| 285-02-02 | 02 | 2 | ASSURE-06 | model differential/fault injection | `bash tools/check-phase285-witness-conformance.sh in-memory-differential` | ❌ W0 | ⬜ pending |
-| 285-02-03 | 02 | 2 | ASSURE-04, ASSURE-06 | typed-proxy conformance | `bash tools/check-phase285-witness-conformance.sh typed-proxy` | ❌ W0 | ⬜ pending |
+| 285-02-01 | 02 | 2 | ASSURE-06 | atomic-store contract | `bash tools/check-phase285-witness-conformance.sh atomic-store-contract` | ✅ `ff76223` | ✅ accepted |
+| 285-02-02 | 02 | 2 | ASSURE-06 | model differential/fault injection | `bash tools/check-phase285-witness-conformance.sh in-memory-differential` | ✅ `ff76223` | ✅ accepted |
+| 285-02-03 | 02 | 2 | ASSURE-04, ASSURE-06 | typed-proxy conformance | `bash tools/check-phase285-witness-conformance.sh typed-proxy` | ✅ `ff76223` | ✅ accepted |
 | 285-03-01 | 03A | 3 | ASSURE-02, ASSURE-06 | dependency/layering negative | `bash tools/check-phase285-witness-conformance.sh transport-layering && bash tools/check-witness-dependency-closure.sh --library-only` | ❌ W0 | ⬜ pending |
 | 285-03-02 | 03B | 4 | ASSURE-06 | JetStream CAS/header mutation | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-cas` | ❌ W0 | ⬜ pending |
 | 285-03-03 | 03B | 4 | ASSURE-04, ASSURE-06 | JetStream restart/non-skip | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-checkpoint` | ❌ W0 | ⬜ pending |
