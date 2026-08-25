@@ -63,6 +63,102 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+phase285_self_test() {
+  local required=(
+    tools/check-phase285-witness-conformance.sh
+    tools/check-phase285-deployment.sh
+    tools/check-phase285-closure.sh
+    tools/check-phase285-evidence.sh
+    tools/check-phase285-plan-schema.sh
+    tools/check-phase285-governance-persistence.sh
+  )
+  local plan01_owned=(
+    tools/check-phase285-witness-conformance.sh
+    tools/check-phase285-deployment.sh
+    tools/check-phase285-closure.sh
+    tools/check-phase285-evidence.sh
+    tools/check-phase285-plan-schema.sh
+  )
+  local path
+  for path in "${plan01_owned[@]}"; do
+    if [ ! -f "$path" ] || [ ! -x "$path" ]; then
+      echo "missing or non-executable Plan 01 Phase 285 checker: $path" >&2
+      return 1
+    fi
+  done
+  if [ -e tools/check-phase285-governance-persistence.sh ] &&
+    [ ! -x tools/check-phase285-governance-persistence.sh ]; then
+    echo "Plan 05A governance checker exists but is not executable" >&2
+    return 1
+  fi
+
+  python3 - .github/workflows/ci.yml "${required[@]}" <<'PY'
+import sys
+
+workflow = sys.argv[1]
+required = set(sys.argv[2:])
+lines = open(workflow, encoding="utf-8").read().splitlines()
+run_text = []
+index = 0
+while index < len(lines):
+    line = lines[index]
+    stripped = line.strip()
+    if stripped.startswith("run:"):
+        _, value = stripped.split(":", 1)
+        value = value.strip()
+        if value and value not in {"|", ">", "|-", ">-"}:
+            run_text.append(value)
+            index += 1
+            continue
+        parent_indent = len(line) - len(line.lstrip(" "))
+        index += 1
+        body = []
+        while index < len(lines):
+            child = lines[index]
+            if child.strip() and len(child) - len(child.lstrip(" ")) <= parent_indent:
+                break
+            if child.strip() and not child.strip().startswith("#"):
+                body.append(child.strip())
+            index += 1
+        run_text.append("\n".join(body))
+        continue
+    index += 1
+observed = {path for path in required if any(path in command for command in run_text)}
+missing = sorted(required - observed)
+if missing:
+    raise SystemExit(f"Phase 285 checker path(s) absent from CI run scalars: {missing}")
+if len(observed) != 6:
+    raise SystemExit(f"Phase 285 checker registry cardinality mismatch: {len(observed)}")
+for omitted in sorted(required):
+    mutated = observed - {omitted}
+    if required <= mutated:
+        raise SystemExit(f"omitted-lane mutation was not rejected: {omitted}")
+print("phase285_wiring_self_test required=6 observed=6 omitted_lane_mutations=6")
+PY
+
+  if [ -x tools/check-phase285-governance-persistence.sh ]; then
+    bash tools/check-phase285-governance-persistence.sh --self-test
+    echo "phase285_governance_self_test owner=Plan05A materialized=1"
+  else
+    local missing_status=0
+    bash tools/check-phase285-governance-persistence.sh --self-test >/dev/null 2>&1 || missing_status=$?
+    if [ "$missing_status" -eq 0 ]; then
+      echo "absent Plan 05A governance checker passed unexpectedly" >&2
+      return 1
+    fi
+    echo "phase285_missing_governance_self_test expected_nonzero=1 observed_status=$missing_status"
+  fi
+}
+
+if [ "${1:-}" = --phase285-self-test ]; then
+  [ "$#" -eq 1 ] || { echo "usage: $0 [--phase285-self-test]" >&2; exit 2; }
+  phase285_self_test
+  exit 0
+elif [ "$#" -ne 0 ]; then
+  echo "usage: $0 [--phase285-self-test]" >&2
+  exit 2
+fi
+
 # `mapfile` is bash 4+; macOS ships 3.2 and this gate has to run locally too.
 scripts=()
 while IFS= read -r path; do

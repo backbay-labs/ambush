@@ -1,0 +1,109 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://backbay.dev/schemas/phase285-plan-frontmatter.schema.yaml"
+title: "Phase 285 plan frontmatter"
+type: object
+additionalProperties: false
+required:
+  - phase
+  - plan
+  - type
+  - wave
+  - depends_on
+  - files_modified
+  - autonomous
+  - requirements
+  - must_haves
+properties:
+  phase:
+    type: string
+    const: "285-assurance-foundation-closure"
+  plan:
+    type: string
+    pattern: "^(01|02|03A|03B|04|05A|05B|05C|06A|06B|06C|07A|07B)$"
+  type:
+    type: string
+    const: "execute"
+  wave:
+    type: integer
+    minimum: 0
+  depends_on:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+      pattern: "^285-[0-9]{2}[A-C]?$"
+  files_modified:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      type: string
+      minLength: 1
+  autonomous:
+    type: boolean
+  requirements:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      type: string
+      pattern: "^ASSURE-[0-9]{2}$"
+  must_haves:
+    type: object
+    additionalProperties: false
+    required:
+      - truths
+      - artifacts
+      - key_links
+    properties:
+      truths:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 1
+      artifacts:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - path
+            - provides
+            - contains
+          properties:
+            path:
+              type: string
+              minLength: 1
+            provides:
+              type: string
+              minLength: 1
+            contains:
+              type: string
+              minLength: 1
+      key_links:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - from
+            - to
+            - via
+            - pattern
+          properties:
+            from:
+              type: string
+              minLength: 1
+            to:
+              type: string
+              minLength: 1
+            via:
+              type: string
+              minLength: 1
+            pattern:
+              type: string
+              minLength: 1

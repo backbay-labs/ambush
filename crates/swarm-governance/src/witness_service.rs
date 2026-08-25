@@ -1,19 +1,22 @@
-//! Canonical public-witness service request wire values.
+//! Canonical public-witness service wire values.
 //!
-//! This module owns only the public request envelope. It does not own
-//! transport, admission, store access, candidate admission, or failure
-//! attestations. Keeping those authorities out of this type prevents a valid
-//! request digest from being mistaken for an accepted witness operation.
+//! This module owns the closed request/response envelope and the pure
+//! service-side candidate admission boundary. It deliberately owns no NATS
+//! transport, store handle, or witness signing key.
 
 use crate::persistence_protocol::{
-    CandidateV1, MAX_PROTOCOL_STRING_BYTES, PROTOCOL_SCHEMA_VERSION, ProtocolError, ProtocolResult,
-    RecoveryChallengeV1, WitnessHeadV1, WitnessOperationV1, WitnessSessionAuthorizationV1,
-    WitnessSessionFenceRequestV1, WitnessSessionV1, canonical_wire_bytes, decode_canonical,
-    digest_domain,
+    CandidateV1, MAX_PROTOCOL_RECORD_BYTES, MAX_PROTOCOL_STRING_BYTES, PROTOCOL_SCHEMA_VERSION,
+    ProtocolError, ProtocolResult, RecoveryChallengeV1, WitnessDiscoveryAttestationV1,
+    WitnessHeadV1, WitnessOperationOutcomeV1, WitnessOperationV1, WitnessOutcomeAttestationV1,
+    WitnessReadAttestationV1, WitnessSessionAttestationV1, WitnessSessionAuthorizationV1,
+    WitnessSessionFenceRequestV1, WitnessSessionStateFenceV1, WitnessSessionV1,
+    canonical_wire_bytes, decode_canonical, digest_domain,
 };
 use serde::{Deserialize, Serialize};
+use swarm_crypto::{DetachedSignature, PublicKey, sha256_hex, verify_detached_signature};
 
 pub const WITNESS_SERVICE_REQUEST_DOMAIN_V1: &[u8] = b"swarm.governance.witness-service-request.v1";
+pub const WITNESS_SERVICE_FAILURE_DOMAIN_V1: &[u8] = b"swarm.governance.witness-service-failure.v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -329,6 +332,571 @@ fn mismatch(field: &'static str, reason: &'static str) -> ProtocolError {
         reason: reason.to_string(),
     }
 }
+
+/// Closed application-level witness failure classes. Framing, timeout,
+/// no-responder, and pre-admission overload failures remain transport errors
+/// and therefore have no signed representation here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum WitnessServiceFailureCodeV1 {
+    NonCanonical,
+    UnsupportedVersion,
+    BoundsExceeded,
+    AdmissionMismatch,
+    SignerMismatch,
+    WitnessMismatch,
+    InvalidSignature,
+    StaleRotationFence,
+    StaleSession,
+    StaleIntent,
+    ExpectedHeadMismatch,
+    Conflict,
+    StoreEntryMissing,
+    StoreEntryCorrupt,
+    StoreTransitionRefused,
+    Contention,
+    CapacityExhausted,
+    InternalUnavailable,
+}
+
+impl WitnessServiceFailureCodeV1 {
+    /// Retryability is protocol policy, never a caller-controlled bit.
+    pub const fn retryable(self) -> bool {
+        matches!(
+            self,
+            Self::Contention | Self::CapacityExhausted | Self::InternalUnavailable
+        )
+    }
+}
+
+/// Service-layer error categories that are not all representable by the
+/// persistence protocol's lower-level error enum. Keeping this enum closed
+/// prevents a dispatcher from converting an arbitrary error string into a
+/// signed application failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WitnessServiceProtocolFailureV1 {
+    Canonical,
+    Admission,
+    Signature,
+    Bounds,
+    StaleSession,
+    StaleIntent,
+    Conflict,
+    StoreTransition,
+}
+
+impl WitnessServiceProtocolFailureV1 {
+    pub const fn failure_code(self) -> WitnessServiceFailureCodeV1 {
+        match self {
+            Self::Canonical => WitnessServiceFailureCodeV1::NonCanonical,
+            Self::Admission => WitnessServiceFailureCodeV1::AdmissionMismatch,
+            Self::Signature => WitnessServiceFailureCodeV1::InvalidSignature,
+            Self::Bounds => WitnessServiceFailureCodeV1::BoundsExceeded,
+            Self::StaleSession => WitnessServiceFailureCodeV1::StaleSession,
+            Self::StaleIntent => WitnessServiceFailureCodeV1::StaleIntent,
+            Self::Conflict => WitnessServiceFailureCodeV1::Conflict,
+            Self::StoreTransition => WitnessServiceFailureCodeV1::StoreTransitionRefused,
+        }
+    }
+}
+
+/// Matchable failure value used before a witness signature is attached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessServiceFailureV1 {
+    pub failure_code: WitnessServiceFailureCodeV1,
+    pub retryable: bool,
+}
+
+impl WitnessServiceFailureV1 {
+    pub const fn new(failure_code: WitnessServiceFailureCodeV1) -> Self {
+        Self {
+            failure_code,
+            retryable: failure_code.retryable(),
+        }
+    }
+
+    pub fn validate(&self) -> ProtocolResult<()> {
+        if self.retryable != self.failure_code.retryable() {
+            return Err(mismatch(
+                "retryable",
+                "must be derived from the closed failure code",
+            ));
+        }
+        Ok(())
+    }
+
+    pub const fn from_service_failure(error: WitnessServiceProtocolFailureV1) -> Self {
+        Self::new(error.failure_code())
+    }
+
+    pub const fn from_protocol_error(error: &ProtocolError) -> Self {
+        let code = match error {
+            ProtocolError::UnsupportedSchema(_) => WitnessServiceFailureCodeV1::UnsupportedVersion,
+            ProtocolError::CanonicalEncoding(_) | ProtocolError::NonCanonicalEncoding => {
+                WitnessServiceFailureCodeV1::NonCanonical
+            }
+            ProtocolError::Bounds { .. } | ProtocolError::Overflow { .. } => {
+                WitnessServiceFailureCodeV1::BoundsExceeded
+            }
+            ProtocolError::StaleIntent { .. } => WitnessServiceFailureCodeV1::StaleIntent,
+            ProtocolError::WitnessOutcomeMismatch | ProtocolError::DigestMismatch { .. } => {
+                WitnessServiceFailureCodeV1::InvalidSignature
+            }
+            ProtocolError::AuthorityPairMismatch
+            | ProtocolError::RoleIdentityAlias { .. }
+            | ProtocolError::InvalidField { .. } => WitnessServiceFailureCodeV1::AdmissionMismatch,
+            ProtocolError::IllegalTransition { .. }
+            | ProtocolError::RecoveryAmbiguous
+            | ProtocolError::RecoveryFork { .. }
+            | ProtocolError::InvalidEpoch { .. } => {
+                WitnessServiceFailureCodeV1::StoreTransitionRefused
+            }
+        };
+        Self::new(code)
+    }
+}
+
+/// Authenticated evidence for the exact admitted stream's current store
+/// state. Its fields are private so request bytes or caller booleans cannot
+/// manufacture an absent-stream proof. This slice deliberately has no absence
+/// constructor: it cannot exist safely before Plan 02 defines and validates
+/// the complete authenticated `InspectReady` response.
+///
+/// ```compile_fail
+/// use swarm_governance::witness_service::VerifiedWitnessStoreStateV1;
+///
+/// let _forged_absence = VerifiedWitnessStoreStateV1 {
+///     stream_id: "stream".to_string(),
+///     admission_digest: "0".repeat(64),
+///     witness_identity: "witness".to_string(),
+///     witness_key_id: "1".repeat(64),
+///     store_state_digest: None,
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedWitnessStoreStateV1 {
+    stream_id: String,
+    admission_digest: String,
+    witness_identity: String,
+    witness_key_id: String,
+    store_state_digest: Option<String>,
+}
+
+impl VerifiedWitnessStoreStateV1 {
+    pub fn from_present(
+        envelope: &crate::witness_engine::WitnessStoreEnvelopeV1,
+    ) -> ProtocolResult<Self> {
+        envelope.validate()?;
+        Ok(Self {
+            stream_id: envelope.stream_id.clone(),
+            admission_digest: envelope.admission_digest.clone(),
+            witness_identity: envelope.witness_identity.clone(),
+            witness_key_id: envelope.witness_key_id.clone(),
+            store_state_digest: Some(envelope.store_state_digest()?),
+        })
+    }
+}
+
+/// Signed, request-bound application rejection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessServiceFailureAttestationV1 {
+    pub schema_version: u32,
+    pub operation: WitnessServiceOperationV1,
+    pub request_digest: String,
+    pub stream_id: String,
+    pub admission_digest: String,
+    pub witness_identity: String,
+    pub witness_key_id: String,
+    pub store_state_digest: Option<String>,
+    pub failure_code: WitnessServiceFailureCodeV1,
+    pub retryable: bool,
+    pub signature: DetachedSignature,
+}
+
+#[derive(Serialize)]
+struct WitnessServiceFailurePreimageV1<'a> {
+    schema_version: u32,
+    operation: WitnessServiceOperationV1,
+    request_digest: &'a str,
+    stream_id: &'a str,
+    admission_digest: &'a str,
+    witness_identity: &'a str,
+    witness_key_id: &'a str,
+    store_state_digest: &'a Option<String>,
+    failure_code: WitnessServiceFailureCodeV1,
+    retryable: bool,
+}
+
+impl WitnessServiceFailureAttestationV1 {
+    fn preimage(&self) -> WitnessServiceFailurePreimageV1<'_> {
+        WitnessServiceFailurePreimageV1 {
+            schema_version: self.schema_version,
+            operation: self.operation,
+            request_digest: &self.request_digest,
+            stream_id: &self.stream_id,
+            admission_digest: &self.admission_digest,
+            witness_identity: &self.witness_identity,
+            witness_key_id: &self.witness_key_id,
+            store_state_digest: &self.store_state_digest,
+            failure_code: self.failure_code,
+            retryable: self.retryable,
+        }
+    }
+
+    pub fn signing_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        let canonical = canonical_wire_bytes(&self.preimage())?;
+        domain_separated_bytes(WITNESS_SERVICE_FAILURE_DOMAIN_V1, &canonical)
+    }
+
+    pub fn validate(&self) -> ProtocolResult<()> {
+        if self.schema_version != PROTOCOL_SCHEMA_VERSION {
+            return Err(ProtocolError::UnsupportedSchema(self.schema_version));
+        }
+        validate_digest("request_digest", &self.request_digest)?;
+        validate_digest("admission_digest", &self.admission_digest)?;
+        validate_digest("witness_key_id", &self.witness_key_id)?;
+        if self.stream_id.is_empty() || self.witness_identity.is_empty() {
+            return Err(mismatch(
+                "failure_identity",
+                "stream and witness identities must not be empty",
+            ));
+        }
+        if let Some(digest) = &self.store_state_digest {
+            validate_digest("store_state_digest", digest)?;
+        }
+        WitnessServiceFailureV1 {
+            failure_code: self.failure_code,
+            retryable: self.retryable,
+        }
+        .validate()?;
+        if self.signature.algorithm != "ed25519"
+            || self.signature.key_id != self.witness_key_id
+            || !PublicKey::from_hex(&self.signature.public_key_hex)
+                .map(|key| sha256_hex(key.as_bytes()) == self.witness_key_id)
+                .unwrap_or(false)
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        verify_detached_signature(&self.signing_bytes()?, &self.signature)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
+    }
+
+    fn validate_for_request(
+        &self,
+        request: &WitnessServiceRequestV1,
+        store_state: &VerifiedWitnessStoreStateV1,
+    ) -> ProtocolResult<()> {
+        self.validate()?;
+        let identity = request_identity(request)?;
+        if self.operation != request.operation
+            || self.request_digest != request.request_digest
+            || self.stream_id != identity.stream_id
+            || self.admission_digest != request.admission_digest
+            || self.witness_identity != identity.witness_identity
+            || self.witness_key_id != identity.witness_key_id
+            || self.stream_id != store_state.stream_id
+            || self.admission_digest != store_state.admission_digest
+            || self.witness_identity != store_state.witness_identity
+            || self.witness_key_id != store_state.witness_key_id
+            || self.store_state_digest != store_state.store_state_digest
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// The only public response wire. Every success variant retains the existing
+/// operation-specific witness signature; there is no generic success body or
+/// signature domain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+// The accepted contract names six direct payload variants exactly; boxing a
+// subset would change that public Rust ownership contract.
+#[allow(clippy::large_enum_variant)]
+pub enum WitnessServiceResponseV1 {
+    Fence(WitnessSessionStateFenceV1),
+    Establish(WitnessSessionAttestationV1),
+    Discover(WitnessDiscoveryAttestationV1),
+    Outcome(WitnessOutcomeAttestationV1),
+    Read(WitnessReadAttestationV1),
+    Failure(WitnessServiceFailureAttestationV1),
+}
+
+struct RequestIdentity<'a> {
+    stream_id: &'a str,
+    witness_identity: &'a str,
+    witness_key_id: &'a str,
+}
+
+fn request_identity(request: &WitnessServiceRequestV1) -> ProtocolResult<RequestIdentity<'_>> {
+    request.validate()?;
+    let identity = match &request.body {
+        WitnessServiceRequestBodyV1::Fence { request } => RequestIdentity {
+            stream_id: &request.stream_id,
+            witness_identity: &request.witness_identity,
+            witness_key_id: &request.witness_key_id,
+        },
+        WitnessServiceRequestBodyV1::Establish { challenge, .. }
+        | WitnessServiceRequestBodyV1::Discover { challenge } => RequestIdentity {
+            stream_id: &challenge.stream_id,
+            witness_identity: &challenge.witness_identity,
+            witness_key_id: &challenge.witness_key_id,
+        },
+        WitnessServiceRequestBodyV1::Prepare { session, .. }
+        | WitnessServiceRequestBodyV1::Commit { session, .. }
+        | WitnessServiceRequestBodyV1::Abort { session, .. }
+        | WitnessServiceRequestBodyV1::ReadPrepared { session, .. }
+        | WitnessServiceRequestBodyV1::ReadHead { session, .. }
+        | WitnessServiceRequestBodyV1::FetchPayload { session, .. } => RequestIdentity {
+            stream_id: &session.stream_id,
+            witness_identity: &session.witness_identity,
+            witness_key_id: &session.witness_key_id,
+        },
+    };
+    Ok(identity)
+}
+
+impl WitnessServiceResponseV1 {
+    pub fn canonical_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        self.validate_nested_attestation()?;
+        canonical_wire_bytes(self)
+    }
+
+    fn validate_nested_attestation(&self) -> ProtocolResult<()> {
+        match self {
+            Self::Fence(value) => value.validate(),
+            Self::Establish(value) => value.validate(),
+            Self::Discover(value) => value.validate(),
+            Self::Outcome(value) => value.validate(),
+            Self::Read(value) => value.validate(),
+            Self::Failure(value) => value.validate(),
+        }
+    }
+
+    pub fn decode_for_request(
+        bytes: &[u8],
+        request: &WitnessServiceRequestV1,
+        store_state: Option<&VerifiedWitnessStoreStateV1>,
+    ) -> ProtocolResult<Self> {
+        let response = decode_canonical::<Self>(bytes)?;
+        response.validate_for_request(request, store_state)?;
+        Ok(response)
+    }
+
+    pub fn validate_for_request(
+        &self,
+        request: &WitnessServiceRequestV1,
+        store_state: Option<&VerifiedWitnessStoreStateV1>,
+    ) -> ProtocolResult<()> {
+        request.validate()?;
+        match (self, &request.body) {
+            (Self::Fence(response), WitnessServiceRequestBodyV1::Fence { request: fence }) => {
+                response.validate()?;
+                if &response.request != fence.as_ref()
+                    || response.admission_digest != request.admission_digest
+                {
+                    return Err(ProtocolError::WitnessOutcomeMismatch);
+                }
+            }
+            (
+                Self::Establish(response),
+                WitnessServiceRequestBodyV1::Establish {
+                    challenge,
+                    expected_head,
+                },
+            ) => {
+                response.validate()?;
+                if &response.challenge != challenge.as_ref()
+                    || response.committed_head.as_ref() != expected_head.as_deref()
+                    || response.challenge.state_fence.admission_digest != request.admission_digest
+                {
+                    return Err(ProtocolError::WitnessOutcomeMismatch);
+                }
+            }
+            (Self::Discover(response), WitnessServiceRequestBodyV1::Discover { challenge }) => {
+                response.validate()?;
+                if &response.challenge != challenge.as_ref()
+                    || response.challenge.state_fence.admission_digest != request.admission_digest
+                {
+                    return Err(ProtocolError::WitnessOutcomeMismatch);
+                }
+            }
+            (
+                Self::Outcome(response),
+                WitnessServiceRequestBodyV1::Prepare {
+                    session, candidate, ..
+                },
+            ) => validate_outcome_for_session(
+                response,
+                session,
+                WitnessOperationV1::Prepare,
+                &candidate.txid,
+                Some(&candidate.candidate_digest),
+            )?,
+            (Self::Outcome(response), WitnessServiceRequestBodyV1::Commit { session, txid }) => {
+                validate_outcome_for_session(
+                    response,
+                    session,
+                    WitnessOperationV1::Commit,
+                    txid,
+                    None,
+                )?
+            }
+            (Self::Outcome(response), WitnessServiceRequestBodyV1::Abort { session, txid }) => {
+                validate_outcome_for_session(
+                    response,
+                    session,
+                    WitnessOperationV1::Abort,
+                    txid,
+                    None,
+                )?
+            }
+            (
+                Self::Read(response),
+                WitnessServiceRequestBodyV1::ReadPrepared {
+                    session,
+                    target_txid,
+                },
+            ) => validate_read_for_session(
+                response,
+                session,
+                WitnessOperationV1::ReadPrepared,
+                target_txid,
+                &request.request_digest,
+            )?,
+            (
+                Self::Read(response),
+                WitnessServiceRequestBodyV1::ReadHead {
+                    session,
+                    target_txid,
+                },
+            ) => validate_read_for_session(
+                response,
+                session,
+                WitnessOperationV1::ReadHead,
+                target_txid,
+                &request.request_digest,
+            )?,
+            (Self::Read(response), WitnessServiceRequestBodyV1::FetchPayload { session, txid }) => {
+                validate_read_for_session(
+                    response,
+                    session,
+                    WitnessOperationV1::FetchPayload,
+                    txid,
+                    &request.request_digest,
+                )?
+            }
+            (Self::Failure(failure), _) => {
+                let proof = store_state.ok_or_else(|| {
+                    mismatch(
+                        "store_state_proof",
+                        "signed application failure requires authenticated current or absent state",
+                    )
+                })?;
+                failure.validate_for_request(request, proof)?;
+            }
+            _ => {
+                return Err(mismatch(
+                    "response",
+                    "variant does not match the exact request operation",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_outcome_for_session(
+    response: &WitnessOutcomeAttestationV1,
+    session: &WitnessSessionV1,
+    operation: WitnessOperationV1,
+    txid: &str,
+    candidate_digest: Option<&str>,
+) -> ProtocolResult<()> {
+    response.validate()?;
+    let outcome_operation = match &response.outcome {
+        WitnessOperationOutcomeV1::Prepare(_) => WitnessOperationV1::Prepare,
+        WitnessOperationOutcomeV1::Commit(_) => WitnessOperationV1::Commit,
+        WitnessOperationOutcomeV1::Abort(_) => WitnessOperationV1::Abort,
+    };
+    if response.operation != operation
+        || outcome_operation != operation
+        || response.stream_id != session.stream_id
+        || response.binding_generation != session.binding_generation
+        || response.binding_digest != session.binding_digest
+        || response.signer_key_id != session.signer_key_id
+        || response.authority_pair != session.authority_pair
+        || response.txid != txid
+        || response.session_generation != session.session_generation
+        || response.session_commitment != session.session_commitment
+        || response.witness_key_id != session.witness_key_id
+        || candidate_digest.is_some_and(|digest| response.candidate_digest != digest)
+    {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    Ok(())
+}
+
+fn validate_read_for_session(
+    response: &WitnessReadAttestationV1,
+    session: &WitnessSessionV1,
+    operation: WitnessOperationV1,
+    target_txid: &str,
+    request_digest: &str,
+) -> ProtocolResult<()> {
+    response.validate()?;
+    if response.operation != operation
+        || response.stream_id != session.stream_id
+        || response.binding_generation != session.binding_generation
+        || response.binding_digest != session.binding_digest
+        || response.signer_key_id != session.signer_key_id
+        || response.authority_pair != session.authority_pair
+        || response.target_txid != target_txid
+        || response.request_digest != request_digest
+        || response.session_generation != session.session_generation
+        || response.session_commitment != session.session_commitment
+        || response.witness_key_id != session.witness_key_id
+    {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    Ok(())
+}
+
+fn domain_separated_bytes(domain: &[u8], canonical: &[u8]) -> ProtocolResult<Vec<u8>> {
+    if canonical.len() > MAX_PROTOCOL_RECORD_BYTES {
+        return Err(ProtocolError::Bounds {
+            field: "wire_bytes".to_string(),
+            observed: canonical.len(),
+            maximum: MAX_PROTOCOL_RECORD_BYTES,
+        });
+    }
+    let length = u64::try_from(canonical.len()).map_err(|_| ProtocolError::Overflow {
+        counter: "wire_size",
+    })?;
+    let capacity = domain
+        .len()
+        .checked_add(8)
+        .and_then(|value| value.checked_add(canonical.len()))
+        .ok_or(ProtocolError::Overflow {
+            counter: "wire_size",
+        })?;
+    let mut material = Vec::with_capacity(capacity);
+    material.extend_from_slice(domain);
+    material.extend_from_slice(&length.to_be_bytes());
+    material.extend_from_slice(canonical);
+    Ok(material)
+}
+
+pub mod witness_candidate_verifier {
+    include!("witness_candidate_verifier.rs");
+}
+pub use witness_candidate_verifier::{
+    VerifiedCandidateAdmissionV1, VerifiedPrepareTransitionV1, WITNESS_ADMISSION_DOMAIN_V1,
+    WitnessAdmissionRecordV1, WitnessCandidateVerifier, prepare_verified_candidate,
+};
 
 #[cfg(test)]
 mod tests;

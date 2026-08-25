@@ -13,6 +13,65 @@ env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci
 
 jobs:
+  phase285-wave0-contract:
+    name: phase285-wave0-contract (${{ github.sha }})
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-sources-v1-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Populate the locked Cargo source cache
+        run: cargo fetch --locked
+
+      - name: Run the materialized witness selectors
+        run: |
+          bash tools/check-phase285-witness-conformance.sh response-failure-wire
+          bash tools/check-phase285-witness-conformance.sh candidate-verifier
+          bash tools/check-phase285-witness-conformance.sh protocol-checkpoint
+
+      - name: Prove the complete witness registry fails closed
+        run: bash tools/check-phase285-witness-conformance.sh --self-test
+
+      - name: Prove later deployment, evidence, and closure targets fail closed
+        run: |
+          bash tools/check-phase285-deployment.sh --self-test
+          bash tools/check-phase285-closure.sh --self-test
+          bash tools/check-phase285-evidence.sh --self-test
+
+      - name: Validate the nested Phase 285 plan schema implementation
+        run: bash tools/check-phase285-plan-schema.sh --self-test
+
+      - name: Check the six-path Phase 285 Wave 0 registry
+        run: bash tools/check-gates-wired.sh --phase285-self-test
+
+      - name: Prove the Plan 05A governance target remains explicitly absent
+        run: |
+          if test -x tools/check-phase285-governance-persistence.sh; then
+            bash tools/check-phase285-governance-persistence.sh --self-test
+          elif bash tools/check-phase285-governance-persistence.sh --self-test; then
+            echo "absent governance checker passed unexpectedly" >&2
+            exit 1
+          else
+            echo "missing target confirmed: Plan 05A owns tools/check-phase285-governance-persistence.sh"
+          fi
+
   # Phase 285 runs these gates on separate fresh hosted runners. Each job has
   # only the pinned credential-free checkout before the gate, and its explicit
   # custom shell makes /usr/bin/env the first child instead of a PATH-resolved
