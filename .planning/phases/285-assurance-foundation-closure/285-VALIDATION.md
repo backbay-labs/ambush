@@ -39,7 +39,7 @@ created: 2026-08-24
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 285-01-01 | 01 | 0 | ASSURE-06 | wire/failure unit + plan-schema mutation | `bash tools/check-phase285-witness-conformance.sh response-failure-wire && bash tools/check-phase285-plan-schema.sh` | ❌ W0 | ⬜ pending |
+| 285-01-01 | 01 | 0 | ASSURE-06 | wire/failure unit + plan-schema mutation | `bash tools/check-phase285-witness-conformance.sh response-failure-wire && bash tools/check-phase285-plan-schema.sh --self-test` | ❌ W0 | ⬜ pending |
 | 285-01-02 | 01 | 1 | ASSURE-06 | candidate verifier mutation | `bash tools/check-phase285-witness-conformance.sh candidate-verifier` | ❌ W0 | ⬜ pending |
 | 285-01-03 | 01 | 1 | ASSURE-04, ASSURE-06 | slice gate | `bash tools/check-phase285-witness-conformance.sh protocol-checkpoint` | ❌ W0 | ⬜ pending |
 | 285-02-01 | 02 | 2 | ASSURE-06 | atomic-store contract | `bash tools/check-phase285-witness-conformance.sh atomic-store-contract` | ❌ W0 | ⬜ pending |
