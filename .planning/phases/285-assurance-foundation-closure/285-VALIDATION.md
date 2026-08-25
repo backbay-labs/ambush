@@ -45,7 +45,7 @@ created: 2026-08-24
 | 285-02-01 | 02 | 2 | ASSURE-06 | atomic-store contract | `bash tools/check-phase285-witness-conformance.sh atomic-store-contract` | ✅ `ff76223` | ✅ accepted |
 | 285-02-02 | 02 | 2 | ASSURE-06 | model differential/fault injection | `bash tools/check-phase285-witness-conformance.sh in-memory-differential` | ✅ `ff76223` | ✅ accepted |
 | 285-02-03 | 02 | 2 | ASSURE-04, ASSURE-06 | typed-proxy conformance | `bash tools/check-phase285-witness-conformance.sh typed-proxy` | ✅ `ff76223` | ✅ accepted |
-| 285-03-01 | 03A | 3 | ASSURE-02, ASSURE-06 | dependency/layering negative | `bash tools/check-phase285-witness-conformance.sh transport-layering && bash tools/check-witness-dependency-closure.sh --library-only` | ❌ W0 | ⬜ pending |
+| 285-03-01 | 03A | 3 | ASSURE-02, ASSURE-06 | dependency/layering negative | `bash tools/check-phase285-witness-conformance.sh transport-layering && bash tools/check-witness-dependency-closure.sh --library-only` | ✅ `cf0ad8b` | ✅ accepted |
 | 285-03-02 | 03B | 4 | ASSURE-06 | JetStream CAS/header mutation | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-cas` | ❌ W0 | ⬜ pending |
 | 285-03-03 | 03B | 4 | ASSURE-04, ASSURE-06 | JetStream restart/non-skip | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-checkpoint` | ❌ W0 | ⬜ pending |
 | 285-04-01 | 04 | 5 | ASSURE-06 | nine-operation dispatcher | `bash tools/check-phase285-witness-conformance.sh public-dispatcher` | ❌ W0 | ⬜ pending |
