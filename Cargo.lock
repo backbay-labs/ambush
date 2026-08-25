@@ -3061,6 +3061,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "swarm-governance-witness"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "async-trait",
+ "futures-util",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "swarm-crypto",
+ "swarm-governance",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swarm-guard"
 version = "0.1.0"
 dependencies = [

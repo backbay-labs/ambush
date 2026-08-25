@@ -45,6 +45,13 @@ jobs:
           bash tools/check-phase285-witness-conformance.sh response-failure-wire
           bash tools/check-phase285-witness-conformance.sh candidate-verifier
           bash tools/check-phase285-witness-conformance.sh protocol-checkpoint
+          bash tools/check-phase285-witness-conformance.sh atomic-store-contract
+          bash tools/check-phase285-witness-conformance.sh in-memory-differential
+          bash tools/check-phase285-witness-conformance.sh typed-proxy
+          bash tools/check-phase285-witness-conformance.sh transport-layering
+
+      - name: Check the witness dependency closure
+        run: bash tools/check-witness-dependency-closure.sh --library-only
 
       - name: Prove the complete witness registry fails closed
         run: bash tools/check-phase285-witness-conformance.sh --self-test

@@ -8,8 +8,98 @@ cd "$ROOT_DIR"
 PHASE285_WITNESS_TEMP_DIR=""
 cleanup_temp_dir() {
   if [ -n "$PHASE285_WITNESS_TEMP_DIR" ]; then
-    rm -rf -- "$PHASE285_WITNESS_TEMP_DIR"
+    local target="$PHASE285_WITNESS_TEMP_DIR"
+    PHASE285_WITNESS_TEMP_DIR=""
+    rm -rf -- "$target" || {
+      echo "Phase 285 scratch cleanup failed: $target" >&2
+      return 1
+    }
+    [ ! -e "$target" ] || {
+      echo "Phase 285 scratch cleanup left its target behind: $target" >&2
+      return 1
+    }
   fi
+}
+
+cleanup_temp_dir_on_exit() {
+  local exit_code=$?
+  cleanup_temp_dir || exit_code=1
+  trap - EXIT
+  exit "$exit_code"
+}
+
+phase285_create_confined_scratch() {
+  local prefix="$1" parent="${2:-${TMPDIR:-/tmp}}"
+  python3 -I - "$ROOT_DIR" "$parent" "$prefix" <<'PY'
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+parent = pathlib.Path(sys.argv[2]).resolve(strict=True)
+prefix = sys.argv[3]
+environment = os.environ.copy()
+environment["GIT_OPTIONAL_LOCKS"] = "0"
+environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+
+def git_boundary(argument):
+    result = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", argument],
+        cwd=root,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode:
+        raise SystemExit(f"PHASE285-SCRATCH[git-boundary]:{argument}")
+    return pathlib.Path(result.stdout.strip()).resolve(strict=True)
+
+boundaries = [root, git_boundary("--git-dir"), git_boundary("--git-common-dir")]
+scratch = pathlib.Path(tempfile.mkdtemp(prefix=f"{prefix}.", dir=parent)).resolve(strict=True)
+if any(scratch.iterdir()):
+    shutil.rmtree(scratch)
+    if scratch.exists():
+        raise SystemExit("PHASE285-SCRATCH[nonempty-cleanup-failed]")
+    raise SystemExit("PHASE285-SCRATCH[nonempty-new-directory]")
+
+def within(child, ancestor):
+    try:
+        child.relative_to(ancestor)
+        return True
+    except ValueError:
+        return False
+
+if any(within(scratch, boundary) or within(boundary, scratch) for boundary in boundaries):
+    scratch.rmdir()
+    if scratch.exists():
+        raise SystemExit("PHASE285-SCRATCH[boundary-cleanup-failed]")
+    raise SystemExit("PHASE285-SCRATCH[boundary-overlap]")
+print(scratch)
+PY
+}
+
+phase285_scratch_hostile_controls() {
+  local site="$1" boundary output exit_code rejected=0
+  local boundaries=(
+    "$ROOT_DIR"
+    "$(git rev-parse --path-format=absolute --git-dir)"
+    "$(git rev-parse --path-format=absolute --git-common-dir)"
+  )
+  for boundary in "${boundaries[@]}"; do
+    exit_code=0
+    output="$(TMPDIR="$boundary" phase285_create_confined_scratch "$site-hostile" 2>&1)" || exit_code=$?
+    [ "$exit_code" -ne 0 ] && [ "$output" = "PHASE285-SCRATCH[boundary-overlap]" ] || {
+      echo "Phase 285 hostile TMPDIR was not refused: site=$site boundary=$boundary output=$output" >&2
+      return 1
+    }
+    rejected=$((rejected + 1))
+  done
+  echo "phase285_scratch_self_test site=$site boundaries=$rejected passed=1"
 }
 
 selectors() {
@@ -338,6 +428,125 @@ run_self_tests() {
   echo "witness_registry_self_test selectors=$count mutations=$((count * 8)) passed=1"
 }
 
+transport_execution_result_validator() {
+  python3 -I - "$1" "$2" <<'PY'
+import pathlib
+import sys
+
+expected_path = pathlib.Path(sys.argv[1])
+results_path = pathlib.Path(sys.argv[2])
+expected = [line for line in expected_path.read_text().splitlines() if line]
+if not expected or len(expected) != len(set(expected)):
+    raise SystemExit("transport expected-row source is empty or duplicated")
+rows = [line.split("\t") for line in results_path.read_text().splitlines() if line]
+if len(rows) != len(expected) or any(len(row) != 5 for row in rows):
+    raise SystemExit("transport execution result count or width mismatch")
+if [row[0] for row in rows] != expected or len({row[0] for row in rows}) != len(rows):
+    raise SystemExit("transport execution result identity/order mismatch")
+for row in rows:
+    try:
+        counts = tuple(int(value) for value in row[1:])
+    except ValueError as error:
+        raise SystemExit("transport execution result count is not an integer") from error
+    if counts != (1, 1, 0, 0):
+        raise SystemExit(f"transport execution result cardinality mismatch: {row[0]}={counts}")
+print(
+    f"transport_execution_results expected={len(expected)} executed={len(rows)} "
+    f"positive={sum(int(row[1]) for row in rows)} "
+    f"mutation_failure={sum(int(row[2]) for row in rows)} failed=0 ignored=0"
+)
+PY
+}
+
+run_transport_execution_self_test() {
+  local prior_results="${PHASE285_TRANSPORT_PRIOR_RESULTS_FILE:-}"
+  [ -n "$prior_results" ] && [ -f "$prior_results" ] || {
+    echo "transport zero/omitted self-test requires parent-provided actual prior results" >&2
+    return 1
+  }
+  phase285_scratch_hostile_controls conformance-transport
+  phase285_scratch_hostile_controls conformance-witness
+  local temp_dir expected_file full_results omitted_results zero_results current_case
+  temp_dir="$(phase285_create_confined_scratch phase285-transport-result-selftest)"
+  PHASE285_WITNESS_TEMP_DIR="$temp_dir"
+  trap cleanup_temp_dir_on_exit EXIT
+  expected_file="$temp_dir/expected.txt"
+  full_results="$temp_dir/full-results.tsv"
+  omitted_results="$temp_dir/omitted-results.tsv"
+  zero_results="$temp_dir/zero-results.tsv"
+  selector_rows transport-layering >"$expected_file"
+  cp "$prior_results" "$full_results"
+  current_case="$(selector_rows transport-layering | tail -n 1)"
+  printf '%s\t1\t1\t0\t0\n' "$current_case" >>"$full_results"
+  transport_execution_result_validator "$expected_file" "$full_results" >/dev/null
+
+  sed '1d' "$full_results" >"$omitted_results"
+  if transport_execution_result_validator "$expected_file" "$omitted_results" >/dev/null 2>&1; then
+    echo "transport actual-row suppression was accepted" >&2
+    return 1
+  fi
+  python3 -I - "$full_results" "$zero_results" <<'PY'
+import pathlib
+import sys
+source, target = map(pathlib.Path, sys.argv[1:])
+rows = source.read_text().splitlines()
+fields = rows[0].split("\t")
+fields[1] = "0"
+rows[0] = "\t".join(fields)
+target.write_text("\n".join(rows) + "\n")
+PY
+  if transport_execution_result_validator "$expected_file" "$zero_results" >/dev/null 2>&1; then
+    echo "transport zero-count mutation was accepted" >&2
+    return 1
+  fi
+  echo "phase285_transport_self_test case=transport-layering-zero-or-omitted positive=1 mutation_failure=1 shared_validator_mutations=2"
+}
+
+run_transport_selector() {
+  local case_name command output_file executed=0
+  local temp_dir expected_file results_file
+  temp_dir="$(phase285_create_confined_scratch phase285-transport)"
+  PHASE285_WITNESS_TEMP_DIR="$temp_dir"
+  trap cleanup_temp_dir_on_exit EXIT
+  expected_file="$temp_dir/expected.txt"
+  results_file="$temp_dir/results.tsv"
+  selector_rows transport-layering >"$expected_file"
+  : >"$results_file"
+  while IFS= read -r case_name; do
+    [ -n "$case_name" ] || continue
+    IFS=$'\t' read -r _ command < <(transport_tuple_for_case "$case_name")
+    output_file="$temp_dir/$case_name.txt"
+    if ! PHASE285_TRANSPORT_PRIOR_RESULTS_FILE="$results_file" \
+      bash -c "$command" >"$output_file" 2>&1; then
+      cat "$output_file" >&2
+      echo "transport row failed: $case_name" >&2
+      return 1
+    fi
+    case "$case_name" in
+      transport_layering_rejects_missing_library_target)
+        [ "$(grep -c '^self_test_red case=missing-library-target ' "$output_file")" -eq 1 ] &&
+          grep -q '^self_test executed=1 passed=1 failed=0$' "$output_file" || return 1
+        ;;
+      transport_layering_rejects_zero_or_omitted_mutation)
+        grep -qx 'phase285_transport_self_test case=transport-layering-zero-or-omitted positive=1 mutation_failure=1 shared_validator_mutations=2' "$output_file" || return 1
+        grep -qx 'phase285_scratch_self_test site=conformance-transport boundaries=3 passed=1' "$output_file" || return 1
+        grep -qx 'phase285_scratch_self_test site=conformance-witness boundaries=3 passed=1' "$output_file" || return 1
+        ;;
+      *)
+        [ "$(grep -c '^phase285_transport_self_test case=.* positive=1 mutation_failure=1$' "$output_file")" -eq 1 ] || return 1
+        ;;
+    esac
+    printf '%s\t1\t1\t0\t0\n' "$case_name" >>"$results_file"
+    executed=$((executed + 1))
+    echo "case=$case_name positive=1 mutation_failure=1 failed=0 ignored=0"
+  done < <(selector_rows transport-layering)
+  transport_execution_result_validator "$expected_file" "$results_file"
+  local required
+  required="$(wc -l <"$expected_file" | tr -d ' ')"
+  [ "$executed" -eq "$required" ] || return 1
+  echo "selector=transport-layering executed=$executed passed=$executed failed=0 ignored=0 mutation_failure_count=$executed"
+}
+
 run_selector() {
   local selector="$1"
   validate_registry
@@ -346,8 +555,8 @@ run_selector() {
     return 2
   }
   if [ "$selector" = transport-layering ]; then
-    echo "missing target for selector transport-layering: Plan 03A has not materialized its six-row shell registry" >&2
-    return 1
+    run_transport_selector
+    return
   fi
   case "$selector" in
     response-failure-wire|candidate-verifier|protocol-checkpoint|atomic-store-contract|in-memory-differential|typed-proxy) ;;
@@ -360,9 +569,9 @@ run_selector() {
   local package target
   IFS=$'\t' read -r package target < <(target_for_selector "$selector")
   local temp_dir list_output
-  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/phase285-witness.XXXXXX")"
+  temp_dir="$(phase285_create_confined_scratch phase285-witness)"
   PHASE285_WITNESS_TEMP_DIR="$temp_dir"
-  trap cleanup_temp_dir EXIT
+  trap cleanup_temp_dir_on_exit EXIT
   list_output="$temp_dir/list.txt"
   if ! cargo test -p "$package" --test "$target" --locked --offline -- --list >"$list_output" 2>&1; then
     cat "$list_output" >&2
@@ -440,8 +649,14 @@ PY
 
 case "${1:-}" in
   --self-test)
-    [ "$#" -eq 1 ] || { echo "usage: $0 --self-test" >&2; exit 2; }
-    run_self_tests
+    if [ "$#" -eq 2 ] && [ "$2" = transport-layering-zero-or-omitted ]; then
+      run_transport_execution_self_test
+    elif [ "$#" -eq 1 ]; then
+      run_self_tests
+    else
+      echo "usage: $0 --self-test [transport-layering-zero-or-omitted]" >&2
+      exit 2
+    fi
     ;;
   "")
     echo "usage: $0 <selector>|--self-test" >&2

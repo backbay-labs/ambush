@@ -60,6 +60,143 @@ if [[ -z "$PHASE285_PYTHON" ]]; then
   exit 1
 fi
 
+phase285_paths_overlap() {
+  [[ "$1" == "$2" || "$1" == "$2/"* || "$2" == "$1/"* ]]
+}
+
+phase285_create_confined_scratch() {
+  local prefix="$1" parent="${2:-${TMPDIR:-/tmp}}" scratch raw_scratch boundary
+  parent="$(cd -- "$parent" && pwd -P)" || return 1
+  local boundaries=(
+    "$ROOT_DIR"
+    "$(git rev-parse --path-format=absolute --git-dir)"
+    "$(git rev-parse --path-format=absolute --git-common-dir)"
+  )
+  local canonical_boundaries=()
+  for boundary in "${boundaries[@]}"; do
+    canonical_boundaries+=("$(cd -- "$boundary" && pwd -P)") || return 1
+  done
+  scratch="$(mktemp -d "$parent/$prefix.XXXXXX")" || return 1
+  raw_scratch="$scratch"
+  scratch="$(cd -- "$scratch" && pwd -P)" || {
+    rm -rf -- "$raw_scratch"
+    [ ! -e "$raw_scratch" ]
+    return 1
+  }
+  [ -z "$(find "$scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] || {
+    rm -rf -- "$scratch" || true
+    [ ! -e "$scratch" ] || echo "PHASE285-SCRATCH[nonempty-cleanup-failed]" >&2
+    echo "PHASE285-SCRATCH[nonempty-new-directory]" >&2
+    return 1
+  }
+  for boundary in "${canonical_boundaries[@]}"; do
+    if phase285_paths_overlap "$scratch" "$boundary"; then
+      rmdir -- "$scratch" || {
+        echo "PHASE285-SCRATCH[boundary-cleanup-failed]" >&2
+        return 1
+      }
+      [ ! -e "$scratch" ] || {
+        echo "PHASE285-SCRATCH[boundary-cleanup-failed]" >&2
+        return 1
+      }
+      echo "PHASE285-SCRATCH[boundary-overlap]" >&2
+      return 1
+    fi
+  done
+  printf '%s\n' "$scratch"
+}
+
+phase285_cleanup_confined_scratch() {
+  rm -rf -- "$1" || return 1
+  [ ! -e "$1" ] || return 1
+}
+
+phase285_scratch_hostile_controls() {
+  local boundary output exit_code rejected=0
+  local boundaries=(
+    "$ROOT_DIR"
+    "$(git rev-parse --path-format=absolute --git-dir)"
+    "$(git rev-parse --path-format=absolute --git-common-dir)"
+  )
+  for boundary in "${boundaries[@]}"; do
+    exit_code=0
+    output="$(TMPDIR="$boundary" phase285_create_confined_scratch phase285-negative-hostile 2>&1)" || exit_code=$?
+    [ "$exit_code" -ne 0 ] && [ "$output" = "PHASE285-SCRATCH[boundary-overlap]" ] || return 1
+    rejected=$((rejected + 1))
+  done
+  echo "phase285_scratch_self_test site=negative boundaries=$rejected passed=1"
+}
+
+phase285_transport_negative_check() {
+  "$PHASE285_PYTHON" -I - "$1" "$2" <<'PY'
+import pathlib, re, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+case = sys.argv[2]
+if case == "phase285-raw-kv-subject":
+    source = root / "crates/swarm-governance-witness/src"
+    if not source.is_dir():
+        raise SystemExit("PHASE285-NEGATIVE[missing-witness-source]")
+    for path in sorted(source.rglob("*.rs")):
+        if re.search(r"\$KV\.[A-Za-z0-9_.>*-]*", path.read_text()):
+            raise SystemExit("PHASE285-NEGATIVE[raw-kv-subject]")
+elif case == "phase285-unrelated-authority-crate":
+    path = root / "crates/swarm-governance-witness/Cargo.toml"
+    with path.open("rb") as handle:
+        manifest = tomllib.load(handle)
+    names = set()
+    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+        for key, value in manifest.get(section, {}).items():
+            names.add(value.get("package", key) if isinstance(value, dict) else key)
+    if "swarm-consensus" in names:
+        raise SystemExit("PHASE285-NEGATIVE[unrelated-authority-crate]")
+else:
+    raise SystemExit(f"unknown Phase 285 transport negative case: {case}")
+print(f"phase285_transport_negative case={case} positive=1")
+PY
+}
+
+phase285_transport_negative_self_test() (
+  local case="$1" scratch output status=0
+  phase285_transport_negative_check "$ROOT_DIR" "$case"
+  phase285_scratch_hostile_controls
+  scratch="$(phase285_create_confined_scratch phase285-negative)"
+  trap 'phase285_cleanup_confined_scratch "$scratch" || exit 1' EXIT
+  mkdir -p "$scratch/crates/swarm-governance-witness/src"
+  cp "$ROOT_DIR/crates/swarm-governance-witness/Cargo.toml" "$scratch/crates/swarm-governance-witness/Cargo.toml"
+  cp "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "$scratch/crates/swarm-governance-witness/src/lib.rs"
+  if [ "$case" = phase285-raw-kv-subject ]; then
+    # The mutant must contain a literal raw subject.
+    # shellcheck disable=SC2016
+    printf '\npub const FORBIDDEN_RAW: &str = "$KV.raw.>";\n' >>"$scratch/crates/swarm-governance-witness/src/lib.rs"
+  else
+    "$PHASE285_PYTHON" -I - "$scratch/crates/swarm-governance-witness/Cargo.toml" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1]); text = path.read_text()
+text = text.replace("[dev-dependencies]", "swarm-consensus.workspace = true\n\n[dev-dependencies]", 1)
+path.write_text(text)
+PY
+  fi
+  output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+  [ "$status" -ne 0 ] && [[ "$output" == PHASE285-NEGATIVE\[* ]] || return 1
+  echo "phase285_transport_self_test case=$case positive=1 mutation_failure=1"
+)
+
+if [ "${1:-}" = --self-test ]; then
+  [ "$#" -eq 2 ] || { echo "usage: $0 [--self-test case]" >&2; exit 2; }
+  case "$2" in
+    phase285-raw-kv-subject|phase285-unrelated-authority-crate)
+      phase285_transport_negative_self_test "$2"
+      exit 0
+      ;;
+    *) echo "unknown Phase 285 self-test: $2" >&2; exit 2 ;;
+  esac
+elif [ "$#" -ne 0 ]; then
+  echo "usage: $0 [--self-test case]" >&2
+  exit 2
+fi
+phase285_transport_negative_check "$ROOT_DIR" phase285-raw-kv-subject
+phase285_transport_negative_check "$ROOT_DIR" phase285-unrelated-authority-crate
+
 "$PHASE285_PYTHON" -I - "$ROOT_DIR" "$PHASE285_PYTHON" <<'PY'
 from __future__ import annotations
 

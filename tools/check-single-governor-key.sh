@@ -81,6 +81,132 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+phase285_paths_overlap() {
+  [[ "$1" == "$2" || "$1" == "$2/"* || "$2" == "$1/"* ]]
+}
+
+phase285_create_confined_scratch() {
+  local prefix="$1" parent="${2:-${TMPDIR:-/tmp}}" scratch raw_scratch boundary
+  parent="$(cd -- "$parent" && pwd -P)" || return 1
+  local boundaries=(
+    "$ROOT_DIR"
+    "$(git rev-parse --path-format=absolute --git-dir)"
+    "$(git rev-parse --path-format=absolute --git-common-dir)"
+  )
+  local canonical_boundaries=()
+  for boundary in "${boundaries[@]}"; do
+    canonical_boundaries+=("$(cd -- "$boundary" && pwd -P)") || return 1
+  done
+  scratch="$(mktemp -d "$parent/$prefix.XXXXXX")" || return 1
+  raw_scratch="$scratch"
+  scratch="$(cd -- "$scratch" && pwd -P)" || {
+    rm -rf -- "$raw_scratch"
+    [ ! -e "$raw_scratch" ]
+    return 1
+  }
+  [ -z "$(find "$scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] || {
+    rm -rf -- "$scratch" || true
+    [ ! -e "$scratch" ] || echo "PHASE285-SCRATCH[nonempty-cleanup-failed]" >&2
+    echo "PHASE285-SCRATCH[nonempty-new-directory]" >&2
+    return 1
+  }
+  for boundary in "${canonical_boundaries[@]}"; do
+    if phase285_paths_overlap "$scratch" "$boundary"; then
+      rmdir -- "$scratch" || {
+        echo "PHASE285-SCRATCH[boundary-cleanup-failed]" >&2
+        return 1
+      }
+      [ ! -e "$scratch" ] || {
+        echo "PHASE285-SCRATCH[boundary-cleanup-failed]" >&2
+        return 1
+      }
+      echo "PHASE285-SCRATCH[boundary-overlap]" >&2
+      return 1
+    fi
+  done
+  printf '%s\n' "$scratch"
+}
+
+phase285_cleanup_confined_scratch() {
+  rm -rf -- "$1" || return 1
+  [ ! -e "$1" ] || return 1
+}
+
+phase285_scratch_hostile_controls() {
+  local boundary output exit_code rejected=0
+  local boundaries=(
+    "$ROOT_DIR"
+    "$(git rev-parse --path-format=absolute --git-dir)"
+    "$(git rev-parse --path-format=absolute --git-common-dir)"
+  )
+  for boundary in "${boundaries[@]}"; do
+    exit_code=0
+    output="$(TMPDIR="$boundary" phase285_create_confined_scratch phase285-signer-hostile 2>&1)" || exit_code=$?
+    [ "$exit_code" -ne 0 ] && [ "$output" = "PHASE285-SCRATCH[boundary-overlap]" ] || return 1
+    rejected=$((rejected + 1))
+  done
+  echo "phase285_scratch_self_test site=signer boundaries=$rejected passed=1"
+}
+
+PHASE285_SIGNER_PYTHON=""
+for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  if [[ -x "$candidate" ]] \
+    && "$candidate" -I -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' \
+      >/dev/null 2>&1; then
+    PHASE285_SIGNER_PYTHON="$candidate"
+    break
+  fi
+done
+if [[ -z "$PHASE285_SIGNER_PYTHON" ]]; then
+  echo "Phase 285 signer check requires Python >= 3.11 at a pinned system path" >&2
+  exit 1
+fi
+
+phase285_second_signer_check() {
+  "$PHASE285_SIGNER_PYTHON" -I - "$1/crates/swarm-governance-witness/src" <<'PY'
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+if not root.is_dir():
+    raise SystemExit("PHASE285-SIGNER[missing-witness-source]")
+pattern = re.compile(r"\bSigningKey\b|\bsigning_key\b|\bgovernor_signer\b")
+for path in sorted(root.rglob("*.rs")):
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if line.lstrip().startswith("//"):
+            continue
+        if pattern.search(line):
+            raise SystemExit(f"PHASE285-SIGNER[second-governor-signer]:{path.name}:{number}")
+print("phase285_second_signer positive=1")
+PY
+}
+
+phase285_second_signer_self_test() (
+  phase285_second_signer_check "$ROOT_DIR"
+  phase285_scratch_hostile_controls
+  local scratch
+  scratch="$(phase285_create_confined_scratch phase285-signer)"
+  trap 'phase285_cleanup_confined_scratch "$scratch" || exit 1' EXIT
+  mkdir -p "$scratch/crates/swarm-governance-witness/src"
+  cp "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "$scratch/crates/swarm-governance-witness/src/lib.rs"
+  printf '\npub struct Forbidden { signing_key: SigningKey }\n' >>"$scratch/crates/swarm-governance-witness/src/lib.rs"
+  local output status=0
+  output="$(phase285_second_signer_check "$scratch" 2>&1)" || status=$?
+  [ "$status" -ne 0 ] && [[ "$output" == PHASE285-SIGNER\[second-governor-signer\]:* ]] || return 1
+  echo "phase285_transport_self_test case=phase285-second-governor-signer positive=1 mutation_failure=1"
+)
+
+if [ "${1:-}" = --self-test ]; then
+  [ "$#" -eq 2 ] && [ "$2" = phase285-second-governor-signer ] || {
+    echo "usage: $0 [--self-test phase285-second-governor-signer]" >&2
+    exit 2
+  }
+  phase285_second_signer_self_test
+  exit 0
+elif [ "$#" -ne 0 ]; then
+  echo "usage: $0 [--self-test phase285-second-governor-signer]" >&2
+  exit 2
+fi
+phase285_second_signer_check "$ROOT_DIR"
+
 SINGLE_GOVERNOR_PYTHON=""
 for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
   if [[ -x "$candidate" ]] \
@@ -1759,6 +1885,8 @@ plant test_region 'struct GovernanceState {
 mod tests {
     fn simulator(governors: &BTreeMap<AgentId, SigningKey>) {}
 }'
+# Fixture prose must retain literal Rust tokens.
+# shellcheck disable=SC2016
 plant prose '//! This module used to take `&BTreeMap<AgentId, SigningKey>`.
 /// Replaced by a single-key type; see `Vec<SigningKey>` in the history.
 // governors: HashMap<AgentId, SigningKey>,
@@ -2560,6 +2688,8 @@ compiler_input="$(plant_compiler_input_fixture)"
 write_unsafe_compiler_input \
   "$compiler_input/crates/swarm-runtime-workbench/capability_forge.txt" \
   '#[cfg(not(debug_assertions))]'
+# Fixture macro tokens are intentionally literal.
+# shellcheck disable=SC2016
 printf '%s\n' \
   'macro_rules! load_assurance_escape {' \
   '    ($loader:ident, $path:literal) => { $loader!($path); };' \
