@@ -292,7 +292,14 @@ Unless an optional/container/type is written explicitly below,
 canonical `String` values. `stream_keys` is `Vec<String>` and every displayed
 map is a `BTreeMap<String, T>`. `nats_stream_created_at` is a canonical UTC
 RFC3339 string with exactly nine fractional-second digits and `Z`; decoding and
-re-encoding must preserve its exact bytes.
+re-encoding of that protocol field must preserve its exact bytes. Pinned NATS
+2.11.17 reports Go `RFC3339Nano`, whose fractional component may be absent or
+contain one through nine digits. The closed adapter must reject every other
+form and right-pad that server value with zeroes to the canonical nine-digit
+protocol value before anchor construction or comparison. This normalization
+is only the stable creation-time projection: each complete closed Stream.Info
+response and its digest retain the original server-reported `created` spelling
+and top-level `ts` unchanged.
 
 `bucket_generation` is the sole exception to the generic generation rule. It
 is a canonical `String` containing exactly 64 lowercase hexadecimal characters
@@ -667,9 +674,13 @@ it does not contain the KV revision or its own digest.
 Every fence requires `bucket_epoch_digest` to match both the external epoch and
 the stream envelope, `ready_manifest_digest` to match both the Ready manifest
 and external anchor, and `bucket_anchor_digest` to match the external anchor.
-The anchor's `nats_stream_created_at` must equal the current server-reported
-stream creation time. A recreated stream therefore cannot accept a replayed
-old manifest/envelope set under the old external anchor.
+The anchor's `nats_stream_created_at` must equal the canonical nine-digit
+projection of the current server-reported stream creation time. A recreated
+stream therefore cannot accept a replayed old manifest/envelope set under the
+old external anchor. Raw RFC3339Nano spelling is evidence, not an identity
+distinction: `...01Z`, `...01.0Z`, and `...01.000000000Z` project to the same
+creation instant while their complete raw Stream.Info evidence remains
+distinct.
 
 `stream_initialization_digest` covers canonical
 `WitnessStreamInitializationV1`. `empty_envelope_digest` uses the store-signed
@@ -1073,11 +1084,13 @@ stream-initialization digest, and full signed empty-envelope digest. It then:
 After rereading and validating the complete exact key set and progress map,
 init revision-CASes the manifest to `Ready`. It queries the authoritative NATS
 stream information through the closed raw 2.11.17 DTO, constructs the anchor
-with the server-reported creation time, raw-stream-configuration digest, and
-complete signed Ready-manifest digest, signs it, and emits it for the operator
-to seal outside NATS. Anchor construction contains no fresh nonce or wall-clock
-input, so Ed25519 signing of the same canonical Ready state produces the same
-anchor bytes.
+with the canonical nine-digit projection of the server-reported creation time,
+raw-stream-configuration digest, and complete signed Ready-manifest digest,
+signs it, and emits it for the operator to seal outside NATS. The adapter
+retains the original closed response bytes/digest separately and never rewrites
+their `created` or `ts` values. Anchor construction contains no fresh nonce or
+wall-clock input, so Ed25519 signing of the same canonical Ready state produces
+the same anchor bytes.
 
 An interrupted init may resume only from a valid `Initializing` manifest under
 the exact external epoch and rules above. If the Ready CAS committed but the
@@ -1090,7 +1103,8 @@ deleted, purged, extra, or malformed stream key and never recreate it. An
 existing bucket without its manifest is not an uninitialized bucket.
 
 Store-proxy startup requires all of the following before it subscribes: a valid
-external epoch and sealed anchor, exact server-reported stream creation time,
+external epoch and sealed anchor, exact canonical projection of the
+server-reported stream creation time,
 exact pinned server version, exact canonical bucket-configuration projection,
 exact anchor-bound raw-stream-configuration digest, exact
 configuration/admission/Ready-manifest digests, `manifest.phase ==
@@ -1108,14 +1122,14 @@ init has exited, the anchor Secret is sealed, and init authority is revoked.
 collection when the iterator's public initial
 `info.state.subjects_count` exceeds one manifest plus the maximum admitted
 streams. It snapshots that initial subject count, message count, first/last
-sequence, creation time, raw-configuration digest, and complete projected
+sequence, canonical creation time, raw-configuration digest, and complete projected
 configuration; bounds each
 yield and the cumulative item count to the same limit; rejects duplicate
 subjects; and requires the yielded item count to equal the initial advertised
 subject count. Every yielded count must be exactly one and the complete set
 must equal the manifest key plus admission-derived stream keys. After iterator
 exhaustion it performs a fresh leader-mediated `Stream::get_info` and requires
-the subject count, message count, first/last sequence, creation time, and
+the subject count, message count, first/last sequence, canonical creation time, and
 complete raw-configuration digest and projected configuration to equal the
 initial snapshot and sealed anchor before it
 raw-reads and validates each entry. A short iterator, duplicate, changed
