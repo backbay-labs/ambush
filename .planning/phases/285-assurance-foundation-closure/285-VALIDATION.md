@@ -39,9 +39,9 @@ created: 2026-08-24
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 285-01-01 | 01 | 0 | ASSURE-06 | wire/failure unit + plan-schema mutation | `bash tools/check-phase285-witness-conformance.sh response-failure-wire && bash tools/check-phase285-plan-schema.sh --self-test` | ❌ W0 | ⬜ pending |
-| 285-01-02 | 01 | 1 | ASSURE-06 | candidate verifier mutation | `bash tools/check-phase285-witness-conformance.sh candidate-verifier` | ❌ W0 | ⬜ pending |
-| 285-01-03 | 01 | 1 | ASSURE-04, ASSURE-06 | slice gate | `bash tools/check-phase285-witness-conformance.sh protocol-checkpoint` | ❌ W0 | ⬜ pending |
+| 285-01-01 | 01 | 0 | ASSURE-06 | wire/failure unit + plan-schema mutation | `bash tools/check-phase285-witness-conformance.sh response-failure-wire && bash tools/check-phase285-plan-schema.sh --self-test` | ✅ `f29f283` | ✅ accepted |
+| 285-01-02 | 01 | 1 | ASSURE-06 | candidate verifier mutation | `bash tools/check-phase285-witness-conformance.sh candidate-verifier` | ✅ `f29f283` | ✅ accepted |
+| 285-01-03 | 01 | 1 | ASSURE-04, ASSURE-06 | slice gate | `bash tools/check-phase285-witness-conformance.sh protocol-checkpoint` | ✅ `f29f283` | ✅ accepted |
 | 285-02-01 | 02 | 2 | ASSURE-06 | atomic-store contract | `bash tools/check-phase285-witness-conformance.sh atomic-store-contract` | ❌ W0 | ⬜ pending |
 | 285-02-02 | 02 | 2 | ASSURE-06 | model differential/fault injection | `bash tools/check-phase285-witness-conformance.sh in-memory-differential` | ❌ W0 | ⬜ pending |
 | 285-02-03 | 02 | 2 | ASSURE-04, ASSURE-06 | typed-proxy conformance | `bash tools/check-phase285-witness-conformance.sh typed-proxy` | ❌ W0 | ⬜ pending |

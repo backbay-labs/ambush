@@ -1135,7 +1135,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Requirements:** ASSURE-01, ASSURE-02, ASSURE-03, ASSURE-04, ASSURE-05, ASSURE-06
 **Depends on:** Phase 284
 **Status:** Reopened 2026-08-24; in progress. The 2026-08-21 pass claim did not include the subsequently reopened governance/detector integration gate.
-**Plans:** Accepted clean checkpoints: approval/voters `f2eb791d`, persistence architecture `5be011a0`, production protocol slice `27b64174`, reviewed witness-adapter contract `eacadf6b`, session fence `3a584882`, witness-envelope model `296bb983`, and independently accepted witness-service wire `a9837f21`. Failure/attestation handling, candidate verification, production witness persistence/service exposure, fixed-lane and recovery completion, detector integration, the frozen combined-tree gate, hosted CI, and closure evidence remain open.
+**Plans:** Accepted clean checkpoints: approval/voters `f2eb791d`, persistence architecture `5be011a0`, production protocol slice `27b64174`, reviewed witness-adapter contract `eacadf6b`, session fence `3a584882`, witness-envelope model `296bb983`, witness-service wire `a9837f21`, and independently accepted Plan 01 response/candidate-verifier slice `f29f2832`. Plan 02 revision-CAS store/reference/proxy work is next; transport, production witness persistence/service exposure, fixed-lane and recovery completion, detector integration, the frozen combined-tree gate, hosted CI, and closure evidence remain open.
 **Success Criteria**:
 1. Local combined-tree mapping, negative-registry, fixture, and locked-SBOM evidence are reproducible.
 2. Fresh hosted Linux evidence is commit-bound and credential-free.

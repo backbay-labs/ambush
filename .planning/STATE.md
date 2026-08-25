@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Clean checkpoint sequence; next slice is the session-fence protocol repair required by the reviewed witness-adapter contract.
-**Total Plans in Phase:** No new GSD plan count; the remediation is banked as independently reviewed slices.
+**Current Plan:** Plan 02 — revision-CAS witness store, deterministic reference model, and typed proxy boundary on accepted Plan 01 commit `f29f2832`.
+**Total Plans in Phase:** 13; Plan 01 is accepted and summarized, and 12 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
-**Last Activity:** 2026-08-24
-**Last Activity Description:** Banked and pushed the independently reviewed witness-adapter architecture at `eacadf6b071c158a677dd77441fec1be8d7e548f` (`checkpoint/v179-phase285-witness-adapter-contract`), with P0/P1/P2 all zero. Implementation remains open.
+**Last Activity:** 2026-08-25
+**Last Activity Description:** Reconciled the planning ledger to independently accepted Plan 01 commit `f29f28324d9c9c00ac1fd429c27a54147aad1b17`, reviewed tree `c53c6c7e9d48be3c2b8e09404d4e5eb9102814aa`, and remote checkpoint. Plan 02 is the only authorized next slice.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints for approval/voter governance (`f2eb791d`), the production protocol slice (`27b64174`), persistence architecture (`5be011a0`), and witness-adapter contract (`eacadf6b`), but it is not complete until the contract is implemented and a frozen combined tree passes workspace tests, strict clippy, formatting, diff checks, mutation controls, independent review, hosted CI, and closure evidence. Phase 286 Plan 04 is independently accepted at `1408620e` but remains sequenced behind Phase 285. Phase 287-289 plans are independently reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints for approval/voter governance (`f2eb791d`), persistence architecture (`5be011a0`), the production protocol lineage through witness-service wire (`27b64174` through `a9837f21`), and Plan 01 response/candidate verification (`f29f2832`). Plan 02 is next. Phase 285 remains incomplete until the serial Plan 02-07B chain and one frozen combined tree pass workspace tests, strict clippy, formatting, diff checks, mutation controls, independent review, hosted CI, and closure evidence. Phase 286 Plan 04 is independently accepted at `1408620e` but remains sequenced behind Phase 285. Phase 287-289 plans are independently reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-24 — convergence reset
-Stopped At: Reviewed witness-adapter contract checkpoint pushed; session-fence implementation is next.
+Last Date: 2026-08-25 — Plan 01 accepted and planning ledger reconciled
+Stopped At: Plan 01 production checkpoint `f29f2832` pushed after immutable-tree zero-finding review; Plan 02 is next.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Implement the Phase 285 bounded session-fence repair from `checkpoint/v179-phase285-witness-adapter-contract` as a clean red-first slice on top of `eacadf6b`. Obtain an independent zero-P0/P1/P2 review and push the checkpoint before starting the witness engine/proxy adapter. Do not edit the dirty integration tree, execute Phase 287-289, reopen the deferred GitHub App check, or advance Phase 286 publication before the frozen combined Phase 285 gate passes.
+Audit and, if necessary, reduce only Plan 02 against accepted production commit `f29f28324d9c9c00ac1fd429c27a54147aad1b17`. Execute it red-first in a fresh clean worktree, require exact non-vacuous atomic-store, in-memory differential, and typed-proxy gates plus strict package validation and independent zero-P0/P1/P2 review, then create one atomic commit and two pushed checkpoint refs. Do not edit Plans 03A-07B, the quarantined dirty integration tree, or Phases 286-289.
