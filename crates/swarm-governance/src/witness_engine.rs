@@ -4,6 +4,8 @@
 //! signed value stored for one admitted stream and the exact legal one-step
 //! mutations that a later CAS adapter may accept.
 
+pub mod store;
+
 use crate::persistence_protocol::{
     AuthorityPairIdentityV1, CandidatePreimageV1, MAX_PROTOCOL_RECORD_BYTES,
     MAX_PROTOCOL_STRING_BYTES, PROTOCOL_SCHEMA_VERSION, ProtocolError, ProtocolResult,
@@ -312,6 +314,21 @@ impl WitnessStoreEnvelopeV1 {
         self.validate_contents()?;
         let canonical = canonical_wire_bytes(&self.preimage())?;
         domain_separated_bytes(WITNESS_STORE_SIGNED_DOMAIN_V1, &canonical)
+    }
+
+    pub(crate) fn validate_signature_before_semantics(&self) -> ProtocolResult<()> {
+        let canonical = canonical_wire_bytes(&self.preimage())?;
+        let signing_bytes = domain_separated_bytes(WITNESS_STORE_SIGNED_DOMAIN_V1, &canonical)?;
+        if self.signature.algorithm != "ed25519"
+            || self.signature.key_id != self.witness_key_id
+            || !PublicKey::from_hex(&self.signature.public_key_hex)
+                .map(|key| sha256_hex(key.as_bytes()) == self.witness_key_id)
+                .unwrap_or(false)
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        verify_detached_signature(&signing_bytes, &self.signature)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
     }
 
     pub fn store_state_digest(&self) -> ProtocolResult<String> {

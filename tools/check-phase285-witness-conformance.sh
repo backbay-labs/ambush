@@ -195,12 +195,15 @@ registry_rows() {
   done < <(selectors)
 }
 
-# Plan 01 materializes exactly these ten cases. Later owners must extend this
-# inventory before adding another case to this target, so an extra test is red.
-materialized_plan01_inventory() {
+# Plans 01-02 materialize exactly these twenty cases. Later owners must extend
+# this inventory before adding another case, so an extra test is red.
+materialized_inventory() {
   selector_rows response-failure-wire
   selector_rows candidate-verifier
   selector_rows protocol-checkpoint
+  selector_rows atomic-store-contract
+  selector_rows in-memory-differential
+  selector_rows typed-proxy
 }
 
 REGISTRY_SHA256="a3a3ec459600ac3163a9b66aa40aa39e9387c50cc75b1e765d9f0693ddb8983b"
@@ -347,7 +350,7 @@ run_selector() {
     return 1
   fi
   case "$selector" in
-    response-failure-wire|candidate-verifier|protocol-checkpoint) ;;
+    response-failure-wire|candidate-verifier|protocol-checkpoint|atomic-store-contract|in-memory-differential|typed-proxy) ;;
     *)
       echo "missing target for selector $selector: its later owning Phase 285 slice has not materialized the target inventory" >&2
       return 1
@@ -367,7 +370,7 @@ run_selector() {
     return 1
   fi
   local inventory_file="$temp_dir/inventory.txt"
-  materialized_plan01_inventory | LC_ALL=C sort >"$inventory_file"
+  materialized_inventory | LC_ALL=C sort >"$inventory_file"
   python3 - "$list_output" "$inventory_file" <<'PY'
 import re
 import sys
