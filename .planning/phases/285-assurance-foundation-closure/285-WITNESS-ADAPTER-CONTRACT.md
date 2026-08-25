@@ -1290,6 +1290,24 @@ After an unavailable or ambiguous mutation, no caller may downgrade to a local
 success path. The only recovery is a new fenced discovery followed by exact
 attestation verification and the local transaction resolver.
 
+Differential conformance evidence for an ambiguous CAS must preserve two
+independent observations rather than collapse either into the final read. The
+`backend_reported` capture copies the backend CAS result's optional physical
+revision and value digest exactly; the normalized record may project that raw
+revision exactly once into its explicit revision relation and must retain the
+digest byte-for-byte. The separate `authenticated_diagnostic` object is a
+closed union: `not_attempted` iff no diagnostic call occurred and revision and
+digest are both absent; `failed(<typed error>)` iff the actual call returned
+that error and both values are absent; `authenticated` iff the actual read
+authenticated and both values are present and exactly equal to the verified
+final entry. Status and values come only from the actual call/result, never a
+scenario or fault label or `backend_reported`. Backend and diagnostic omission,
+substitution, invalid status/value combinations, and cross-copy mutants in
+both directions must fail independently. Fixed-label controls must vary the
+actual backend result and the actual diagnostic result separately and observe
+the corresponding evidence change. These fields are test evidence only and do
+not expand the public store result or transport API.
+
 A trusted-volume snapshot rollback is not a matchable runtime failure because
 the rolled-back bytes remain internally valid. Operations and evidence must not
 classify it as detected; it is prevented operationally by the explicit TCB and
