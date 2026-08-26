@@ -59,9 +59,9 @@ This is a local Plan 03B slice checkpoint only. It does not complete Phase 285, 
 | 285-03-02A | 03B | 4 | ASSURE-06 | closed raw config + pinned two-account harness | `bash tools/with-nats-jetstream.sh --self-test && bash tools/with-nats-jetstream.sh cargo test -p swarm-governance-witness --test jetstream_cas --locked --offline -- jetstream_cas_rejects_raw_config_unknown_field_or_persist_mode --exact && bash tools/with-nats-jetstream.sh cargo test -p swarm-governance-witness --test jetstream_cas --locked --offline -- jetstream_cas_rejects_each_raw_config_mutation --exact` | ✅ `8abe28d` | ✅ accepted |
 | 285-03-02B | 03B | 4 | ASSURE-06 | JetStream CAS/header + 19-row differential | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-cas` | ✅ `8abe28d` | ✅ accepted |
 | 285-03-03 | 03B | 4 | ASSURE-04, ASSURE-06 | JetStream restart/non-skip plus root-pinned integrity boundary | `PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh --integrity-self-test && bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh jetstream-checkpoint` | ✅ `8abe28d` | ✅ accepted |
-| 285-04-01 | 04 | 5 | ASSURE-06 | nine-operation dispatcher | `bash tools/check-phase285-witness-conformance.sh public-dispatcher` | ❌ W0 | ⬜ pending |
-| 285-04-02 | 04 | 5 | ASSURE-06 | full request/reply isolation | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh full-service-path` | ❌ W0 | ⬜ pending |
-| 285-04-03 | 04 | 5 | ASSURE-04, ASSURE-06 | kill/restart/client attestation | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh service-checkpoint && bash tools/check-witness-dependency-closure.sh --all-targets` | ❌ W0 | ⬜ pending |
+| 285-04-01 | 04 | 5 | ASSURE-06 | exact request-only nine-method API plus dispatcher 4/4 and mapping 9/9 | `test -n "${PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256:-}" && test -n "${PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256:-}" && bash tools/check-phase285-witness-integrity.sh --integrity-self-test && bash tools/check-phase285-witness-integrity.sh public-dispatcher && bash tools/check-witness-dependency-closure.sh --library-only` using only the separately reviewed Task 04-01 pin | ❌ W0 | ⬜ pending |
+| 285-04-02 | 04 | 5 | ASSURE-06 | exact three-account/four-principal isolation 4/4 plus capability 20/20 | `bash tools/with-nats-jetstream.sh --self-test && bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" bash tools/check-phase285-witness-integrity.sh full-service-path` using only the separately reviewed cumulative Task 04-02 pin | ❌ W0 | ⬜ pending |
+| 285-04-03 | 04 | 5 | ASSURE-04, ASSURE-06 | 15/15 top-level plus reads 6/6, restart/lost 18/18, bounds 66/66, rotation/retention 9/9 | `bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" bash tools/check-phase285-witness-integrity.sh service-checkpoint && bash tools/check-witness-dependency-closure.sh --all-targets` using only the separately reviewed full-tree pin | ❌ W0 | ⬜ pending |
 | 285-05-01 | 05A | 6 | ASSURE-06 | exact governance registry + fixed-lane seam/race matrix | `bash tools/check-phase285-governance-persistence.sh fixed-lanes && cargo test -p swarm-governance --test phase285_governance_persistence --locked --offline -- fixed_lanes_validate_complete_binding_and_namespace --exact` | ❌ W0 | ⬜ pending |
 | 285-05-02 | 05B | 7 | ASSURE-06 | witness transaction crash/recovery and escrow reconstruction | `bash tools/check-phase285-governance-persistence.sh transaction-recovery` | ❌ W0 | ⬜ pending |
 | 285-05-03 | 05B | 7 | ASSURE-06 | bootstrap crash/recovery matrix and exact registry | `bash tools/check-phase285-governance-persistence.sh transaction-recovery` | ❌ W0 | ⬜ pending |
@@ -263,18 +263,21 @@ bash tools/check-workspace-layering.sh
 bash tools/check-gates-wired.sh
 bash tools/check-witness-dependency-closure.sh --all-targets
 bash tools/check-phase285-plan-schema.sh
-bash tools/check-phase285-witness-conformance.sh response-failure-wire
-bash tools/check-phase285-witness-conformance.sh candidate-verifier
-bash tools/check-phase285-witness-conformance.sh protocol-checkpoint
-bash tools/check-phase285-witness-conformance.sh atomic-store-contract
-bash tools/check-phase285-witness-conformance.sh in-memory-differential
-bash tools/check-phase285-witness-conformance.sh typed-proxy
-bash tools/check-phase285-witness-conformance.sh transport-layering
-bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh jetstream-cas
-bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh jetstream-checkpoint
-bash tools/check-phase285-witness-conformance.sh public-dispatcher
-bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh full-service-path
-bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh service-checkpoint
+test -n "${PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256:-}" && test -n "${PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256:-}"
+bash tools/check-phase285-witness-integrity.sh --integrity-self-test
+bash tools/check-phase285-witness-integrity.sh --self-test jetstream-release-hook
+bash tools/check-phase285-witness-integrity.sh response-failure-wire
+bash tools/check-phase285-witness-integrity.sh candidate-verifier
+bash tools/check-phase285-witness-integrity.sh protocol-checkpoint
+bash tools/check-phase285-witness-integrity.sh atomic-store-contract
+bash tools/check-phase285-witness-integrity.sh in-memory-differential
+bash tools/check-phase285-witness-integrity.sh typed-proxy
+bash tools/check-phase285-witness-integrity.sh transport-layering
+bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" bash tools/check-phase285-witness-integrity.sh jetstream-cas
+bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" bash tools/check-phase285-witness-integrity.sh jetstream-checkpoint
+PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="${PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256:?reviewed Plan04 pin required}" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="${PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256:?reviewed Plan04 pin required}" bash tools/check-phase285-witness-integrity.sh public-dispatcher
+bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="${PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256:?reviewed Plan04 pin required}" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="${PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256:?reviewed Plan04 pin required}" bash tools/check-phase285-witness-integrity.sh full-service-path
+bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="${PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256:?reviewed Plan04 pin required}" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="${PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256:?reviewed Plan04 pin required}" bash tools/check-phase285-witness-integrity.sh service-checkpoint
 bash tools/check-phase285-governance-persistence.sh fixed-lanes
 bash tools/check-phase285-governance-persistence.sh transaction-recovery
 bash tools/check-phase285-governance-persistence.sh enforced-checkpoint
