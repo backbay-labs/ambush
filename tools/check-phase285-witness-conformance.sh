@@ -308,6 +308,7 @@ materialized_inventory_for_target() {
       ;;
     swarm-governance-witness/full_service_path)
       selector_rows public-dispatcher
+      selector_rows full-service-path
       ;;
     *) return 1 ;;
   esac
@@ -499,14 +500,6 @@ def validate(
         ("assert_bound_taxonomy_is_seam_specific().await?;", 1),
         ("assert_current_head_intent_classification().await?;", 1),
         ("assert_authenticated_entry_limits_are_enforced().await?;", 1),
-        ("const FIELDS: [&str; 7]", 1),
-        ('"stream",', 1),
-        ('"signer",', 1),
-        ('"witness_identity",', 1),
-        ('"witness_key",', 1),
-        ('"binding_generation",', 1),
-        ('"binding_digest",', 1),
-        ('"authority_pair",', 1),
         ("ReadyMutation::CrossStreamSummaries", 2),
         ("fixture.enable_second_stream()?;", 1),
         ("two_stream.enable_second_stream()?;", 1),
@@ -515,6 +508,18 @@ def validate(
     ]:
         if integration_text.count(fragment) != count:
             raise ValueError(f"admission/multistream executable projection differs: {fragment}")
+    fields_tables = re.findall(
+        r"const FIELDS: \[&str; 7\] = \[(.*?)\n    \];",
+        integration_text,
+        re.S,
+    )
+    expected_fields = [
+        "stream", "signer", "witness_identity", "witness_key",
+        "binding_generation", "binding_digest", "authority_pair",
+    ]
+    if len(fields_tables) != 1 \
+            or re.findall(r'"([a-z_]+)"', fields_tables[0]) != expected_fields:
+        raise ValueError("pre-store admission field inventory differs")
     ready_table = re.search(
         r"for \(mutation, expected_startup_reads\) in \[(.*?)\n    \] \{",
         integration_text,
@@ -1264,6 +1269,9 @@ if mode != "self-test":
     print("dispatcher_source_guard passed=1")
     raise SystemExit(0)
 
+validate(source, integration + '\nconst UNRELATED_STORE_LABEL: &str = "stream";\n')
+print("dispatcher_source_positive_mutation mutation=unrelated_stream_literal_tolerated")
+
 mutations = [
     ("backend_public_response", "pub trait PublicWitnessStoreProxyClient", "pub trait PublicWitnessBackend"),
     ("startup_ready_bypassed", "dispatcher.validate_startup_ready().await?;", "/* startup Ready bypassed */"),
@@ -1403,6 +1411,26 @@ for label, old, new in mutations:
         raise SystemExit(f"dispatcher source mutation survived: {label}")
 
 integration_mutations = [
+    (
+        "prestore_field_inventory_omitted",
+        'const FIELDS: [&str; 7] = [\n        "stream",\n        "signer",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "authority_pair",\n    ];',
+        'const FIELDS: [&str; 7] = [\n        "signer",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "authority_pair",\n    ];',
+    ),
+    (
+        "prestore_field_inventory_substituted_exact",
+        'const FIELDS: [&str; 7] = [\n        "stream",\n        "signer",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "authority_pair",\n    ];',
+        'const FIELDS: [&str; 7] = [\n        "stream",\n        "foreign_signer",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "authority_pair",\n    ];',
+    ),
+    (
+        "prestore_field_inventory_duplicated",
+        'const FIELDS: [&str; 7] = [\n        "stream",\n        "signer",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "authority_pair",\n    ];',
+        'const FIELDS: [&str; 7] = [\n        "stream",\n        "signer",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "stream",\n    ];',
+    ),
+    (
+        "prestore_field_inventory_reordered",
+        'const FIELDS: [&str; 7] = [\n        "stream",\n        "signer",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "authority_pair",\n    ];',
+        'const FIELDS: [&str; 7] = [\n        "signer",\n        "stream",\n        "witness_identity",\n        "witness_key",\n        "binding_generation",\n        "binding_digest",\n        "authority_pair",\n    ];',
+    ),
     (
         "registered_overload_ingress_binding_omitted",
         "assert!(public_witness_ingress_overload_control());",
@@ -1716,8 +1744,238 @@ print(f"dispatcher_source_guard_self_test mutations={expected_mutations} unique=
 PY
 }
 
+store_proxy_source_guard() {
+  local source="$ROOT_DIR/crates/swarm-governance-witness/src/store_proxy_service.rs"
+  local config="$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs"
+  local integration="$ROOT_DIR/crates/swarm-governance-witness/tests/full_service_path.rs"
+  local harness="$ROOT_DIR/tools/with-nats-jetstream.sh"
+  local compose="$ROOT_DIR/docker-compose.yml"
+  python3 -I - "$source" "$config" "$integration" "$harness" "$compose" "${1:-normal}" <<'PY'
+import hashlib, re, sys
+
+source, config, integration, harness, compose = [open(path, encoding="utf-8").read() for path in sys.argv[1:6]]
+mode = sys.argv[6]
+ids = [
+    "runtime_private_subject", "runtime_raw_kv", "runtime_js_api", "witness_raw_kv",
+    "witness_js_api", "init_serving_subject", "runtime_credential_swap",
+    "witness_credential_swap", "store_credential_swap", "init_credential_swap",
+    "account_swap", "mount_swap", "reply_subject_injection", "wildcard_import",
+    "tls_ca_swap", "tls_server_name_swap", "store_queue_exhaustion",
+    "public_store_bypass", "private_public_signing", "hostile_cleanup_preservation",
+]
+
+def validate(s=source, c=config, i=integration, h=harness, d=compose):
+    subjects = re.findall(r'"(swarm\.governance\.witness\.store\.v1\.[a-z_]+)"', s)
+    if sorted(set(subjects)) != sorted([
+        "swarm.governance.witness.store.v1.inspect_ready",
+        "swarm.governance.witness.store.v1.read_entry",
+        "swarm.governance.witness.store.v1.compare_and_swap",
+    ]): raise ValueError("private subject inventory differs")
+    if 'const PRIVATE_STORE_QUEUE_GROUP: &str = "swarm-governance-witness-store-v1";' not in s:
+        raise ValueError("private queue group differs")
+    for fragment in [
+        "WitnessStoreProxy::new(store, ready.clone())",
+        "self.preflight(subject, raw)?;",
+        "self.proxy.handle_bytes(raw)",
+        ".validate_signature()",
+        "request.signature.public_key_hex != self.config.pinned_witness_public_key_hex",
+        "request.bucket_epoch_digest != self.config.bucket_epoch_digest",
+        "request.bucket_anchor_digest != self.config.bucket_anchor_digest",
+        "self.ready.entry(stream_id)",
+        "raw.len() as u64 > admission.max_request_bytes",
+        "max_response_bytes: self.config.max_response_bytes.min(selected_response_bytes)",
+        "if bytes.len() > selected.max_response_bytes",
+        "(bytes.len() <= selected.max_response_bytes).then_some(bytes)",
+        "Duration::from_millis(self.config.request_deadline_millis)",
+        "sender.try_send(ingress).is_err()",
+        "service.overload_response(subject, &message.payload)",
+        "private_store_ingress_overload_control() -> bool",
+        "response.operation != operation || response.request_digest != request_digest",
+        "pub struct StoreRoleConnectionV1 {",
+        "StoreProxyReadyBindingV1::validated(&config, &ready)?",
+        "StoreProxyReadyBindingV1::validated(config, ready)",
+        ".validate_for_ready(ready)",
+        "ready,\n            ready_binding,",
+        "client,\n            ready_binding,",
+        "canonical_wire_bytes(&(config, ready))",
+        'b"swarm.phase285.store-proxy-ready-binding.v1"',
+        "fn constant_time_matches(&self, other: &Self) -> bool {",
+        "difference | (left ^ right)",
+        ".constant_time_matches(&service.ready_binding)",
+        "get_stream(&service.config.stream_name)",
+        "credentials.role != \"witness-store\"",
+        "credentials.invocation_token != config.credential_invocation_token",
+        ".require_tls(true)",
+        ".add_root_certificates(PathBuf::from(&config.tls_ca_path))",
+        ".subscription_capacity(config.subscription_capacity)",
+        ".client_capacity(config.client_capacity)",
+        ".read_buffer_capacity(config.read_buffer_capacity)",
+        "connection: StoreRoleConnectionV1",
+    ]:
+        if s.count(fragment) != 1: raise ValueError(f"private service boundary differs: {fragment}")
+    if s.index("self.preflight(subject, raw)?;") > s.index("self.proxy.handle_bytes(raw)"):
+        raise ValueError("private preflight occurs after store")
+    if s.index(".constant_time_matches(&service.ready_binding)") > s.index("get_stream(&service.config.stream_name)") \
+            or s.index(".constant_time_matches(&service.ready_binding)") > s.index(".queue_subscribe("):
+        raise ValueError("Ready binding comparison occurs after external authority")
+    for forbidden in ["$KV.", "$JS.API.", "Store::put", "Store::delete", "Store::purge"]:
+        if forbidden in s: raise ValueError(f"private service exposes raw authority: {forbidden}")
+    for fragment in [
+        'if !self.nats_url.starts_with("tls://") || self.nats_url.contains("skip_verify")',
+        "PublicKey::from_hex(&self.pinned_witness_public_key_hex)",
+        "sha256_hex(public_key.as_bytes()) != self.witness_key_id",
+        "ready.bucket_epoch.digest()? != self.bucket_epoch_digest",
+        "ready.bucket_anchor.digest()? != self.bucket_anchor_digest",
+        "ready.admission_set.admission_set_digest != self.admission_set_digest",
+        "ready.bucket_configuration.stream_name != self.stream_name",
+        '("subscription_capacity", self.subscription_capacity)',
+        '("client_capacity", self.client_capacity)',
+        'usize::from(self.read_buffer_capacity)',
+    ]:
+        if c.count(fragment) != 1: raise ValueError(f"private config boundary differs: {fragment}")
+    found_ids = re.findall(r'^    "([a-z_]+)",$', re.search(r"const CAPABILITY_MATRIX: \[&str; 20\] = \[(.*?)\n\];", i, re.S).group(1), re.M)
+    if found_ids != ids: raise ValueError("capability matrix inventory differs")
+    for test in [
+        "full_service_path_rejects_runtime_private_subject_and_store_raw_api",
+        "full_service_path_rejects_credential_account_and_mount_swaps",
+        "full_service_path_validates_proxy_response_before_public_attestation",
+        "full_service_path_fails_closed_on_store_queue_exhaustion",
+    ]:
+        if len(re.findall(rf"(?:async )?fn {test}\(", i)) != 1: raise ValueError(f"registered capability test differs: {test}")
+    for fragment in [
+        "async fn assert_live_subject_refused(",
+        "struct BlockingReadAtomicStore {",
+        "secondary_response_bytes_at_limit(Some(exact_limit - 1))",
+        "selected_overload_response_at_limit(overload_limit - 1)",
+        "PHASE285_CAPABILITY_MATRIX_INVOCATION_TOKEN",
+        "swarm.phase285.capability-evidence-row.v1",
+        "assert_eq!(after, before);",
+        "async fn assert_connection_service_ready_mismatch(",
+        '"credential_path",', '"credential_token",', '"tls_url",', '"tls_ca",',
+        '"tls_server_name",', '"subscription_capacity",', '"client_capacity",',
+        '"read_capacity",', '"deadline",', '"worker_capacities",',
+        '("stream", ReadyBindingMutation::Stream)',
+        '("epoch", ReadyBindingMutation::Epoch)',
+        '("anchor", ReadyBindingMutation::Anchor)',
+        '("admission_set", ReadyBindingMutation::AdmissionSet)',
+        '("selected_limits", ReadyBindingMutation::SelectedLimits)',
+        '"binding mismatch touched the raw store: {label}"',
+    ]:
+        if fragment not in i: raise ValueError(f"capability execution evidence differs: {fragment}")
+    for fragment in [
+        'RUNTIME_ACCOUNT="PHASE285_RUNTIME"', 'WITNESS_ACCOUNT="PHASE285_WITNESS"',
+        'EXPECTED_ACCOUNT="PHASE285_WITNESS_STORE"', 'RUNTIME_USER="phase285_foreign"',
+        'WITNESS_USER="phase285_witness"', 'STORE_USER="phase285_witness_store"',
+        'INIT_USER="phase285_expected"', 'cleanup_confined_scratch "$SCRATCH"',
+        'TLS_RUNTIME_PASSWORD="$(openssl rand -hex 32)"',
+        'TLS_WITNESS_PASSWORD="$(openssl rand -hex 32)"',
+        'TLS_STORE_PASSWORD="$(openssl rand -hex 32)"',
+        'TLS_INIT_PASSWORD="$(openssl rand -hex 32)"',
+        'TLS_CREDENTIAL_TOKEN="$(openssl rand -hex 32)"',
+        'openssl x509 -req -days 1',
+        '  nats_tls:\n    image: "$PINNED_IMAGE"',
+        'export SWARM_NATS_STORE_TLS_URL="tls://localhost:$tls_nats_port"',
+    ]:
+        if h.count(fragment) != 1: raise ValueError(f"harness authority boundary differs: {fragment}")
+    for fragment in [
+        "    - phase285-runtime\n", "    - phase285-witness\n", "    - phase285-witness-store\n",
+        "phase285-init:", "url: tls://nats.phase285.test:4222",
+        "- wildcard-service-import", "- cross-role-credential-mount",
+    ]:
+        if d.count(fragment) != 1: raise ValueError(f"compose authority boundary differs: {fragment}")
+    if re.search(r"imports: \[[^\]]*[*>]", d): raise ValueError("compose wildcard import survived")
+    if "mounts: [raw-store-credentials, witness-signing-key" in d:
+        raise ValueError("store proxy gained signing authority")
+
+validate()
+if mode == "normal":
+    print("store_proxy_source_guard passed=1")
+    raise SystemExit(0)
+if mode != "self-test": raise SystemExit("unknown store proxy source guard mode")
+mutations = [
+    ("omit_preflight", "source", "self.preflight(subject, raw)?;", ""),
+    ("bypass_signature", "source", ".validate_signature()", ".validate_semantics()"),
+    ("bypass_public_key", "source", "request.signature.public_key_hex != self.config.pinned_witness_public_key_hex", "false"),
+    ("bypass_epoch", "source", "request.bucket_epoch_digest != self.config.bucket_epoch_digest", "false"),
+    ("bypass_anchor", "source", "request.bucket_anchor_digest != self.config.bucket_anchor_digest", "false"),
+    ("bypass_mapping", "source", "self.ready.entry(stream_id)", "self.ready.admission_set.entries.first()"),
+    ("bypass_request_bound", "source", "raw.len() as u64 > admission.max_request_bytes", "false"),
+    ("bypass_selected_response_bound", "source", "max_response_bytes: self.config.max_response_bytes.min(selected_response_bytes)", "max_response_bytes: self.config.max_response_bytes"),
+    ("bypass_normal_response_bound", "source", "if bytes.len() > selected.max_response_bytes", "if false"),
+    ("bypass_overload_response_bound", "source", "(bytes.len() <= selected.max_response_bytes).then_some(bytes)", "Some(bytes)"),
+    ("unbounded_queue", "source", "sender.try_send(ingress).is_err()", "false"),
+    ("omit_overload_response", "source", "service.overload_response(subject, &message.payload)", "None"),
+    ("bypass_client_response_binding", "source", "response.operation != operation || response.request_digest != request_digest", "false"),
+    ("arbitrary_store_client", "source", "connection: StoreRoleConnectionV1", "connection: async_nats::Client"),
+    ("omit_ready_validation", "source", ".validate_for_ready(ready)", ".validate_transport()"),
+    ("omit_service_binding", "source", "let ready_binding = StoreProxyReadyBindingV1::validated(&config, &ready)?;", "let ready_binding = StoreProxyReadyBindingV1([0_u8; 32]);"),
+    ("omit_connection_binding", "source", "let ready_binding = StoreProxyReadyBindingV1::validated(config, ready)", "let ready_binding = StoreProxyReadyBindingV1([0_u8; 32])"),
+    ("bypass_binding_comparison", "source", ".constant_time_matches(&service.ready_binding)", ".constant_time_matches(&connection.ready_binding)"),
+    ("weaken_binding_comparison", "source", "fn constant_time_matches(&self, other: &Self) -> bool {", "fn constant_time_matches(&self, _other: &Self) -> bool { return true;"),
+    ("constant_binding_comparison", "source", "difference | (left ^ right)", "difference"),
+    ("cross_copy_service_binding", "source", "ready,\n            ready_binding,", "ready,\n            ready_binding: StoreProxyReadyBindingV1([0_u8; 32]),"),
+    ("self_bind_connection", "source", "client,\n            ready_binding,", "client,\n            ready_binding: StoreProxyReadyBindingV1([0_u8; 32]),"),
+    ("bypass_store_role", "source", "credentials.role != \"witness-store\"", "false"),
+    ("bypass_credential_token", "source", "credentials.invocation_token != config.credential_invocation_token", "false"),
+    ("bypass_tls_requirement", "source", ".require_tls(true)", ".require_tls(false)"),
+    ("bypass_pinned_ca", "source", ".add_root_certificates(PathBuf::from(&config.tls_ca_path))", ""),
+    ("bypass_store_account_probe", "source", "get_stream(&service.config.stream_name)", "get_stream(\"foreign\")"),
+    ("bypass_subscription_capacity", "source", ".subscription_capacity(config.subscription_capacity)", ".subscription_capacity(1024)"),
+    ("bypass_client_capacity", "source", ".client_capacity(config.client_capacity)", ".client_capacity(1024)"),
+    ("bypass_read_capacity", "source", ".read_buffer_capacity(config.read_buffer_capacity)", ".read_buffer_capacity(65535)"),
+    ("plaintext_tls", "config", 'if !self.nats_url.starts_with("tls://") || self.nats_url.contains("skip_verify") {', 'if !self.nats_url.starts_with("nats://") || self.nats_url.contains("skip_verify") {'),
+    ("bypass_pinned_key", "config", "sha256_hex(public_key.as_bytes()) != self.witness_key_id", "false"),
+    ("bypass_stream_binding", "config", "ready.bucket_configuration.stream_name != self.stream_name", "false"),
+    ("fixed_tls_credentials", "harness", 'TLS_STORE_PASSWORD="$(openssl rand -hex 32)"', 'TLS_STORE_PASSWORD="fixed"'),
+    ("tls_listener_omitted", "harness", '  nats_tls:\n    image: "$PINNED_IMAGE"', '  nats_tls_missing:\n    image: "$PINNED_IMAGE"'),
+    ("account_swap", "harness", 'WITNESS_ACCOUNT="PHASE285_WITNESS"', 'WITNESS_ACCOUNT="PHASE285_RUNTIME"'),
+    ("credential_swap", "harness", 'STORE_USER="phase285_witness_store"', 'STORE_USER="phase285_witness"'),
+    ("cleanup_omitted", "harness", 'cleanup_confined_scratch "$SCRATCH"', 'true'),
+    ("wildcard_import", "compose", "imports: [swarm.governance.witness.store.v1]", "imports: [swarm.governance.witness.store.>]") ,
+    ("cross_role_mount", "compose", "mounts: [raw-store-credentials, witness-public-key, phase285-ca]", "mounts: [raw-store-credentials, witness-signing-key, phase285-ca]"),
+    ("capability_omission", "integration", '    "runtime_private_subject",\n    "runtime_raw_kv",', '    "runtime_raw_kv",'),
+    ("capability_rename", "integration", '    "private_public_signing",\n    "hostile_cleanup_preservation",', '    "private_public_signing",\n    "cleanup_preservation",'),
+]
+values = {"source":source,"config":config,"integration":integration,"harness":harness,"compose":compose}
+digests=[]
+for label, which, old, new in mutations:
+    if values[which].count(old) != 1: raise SystemExit(f"store proxy mutation anchor differs: {label}")
+    changed = values.copy(); changed[which] = changed[which].replace(old,new,1)
+    combined = "\0".join(changed[key] for key in ["source","config","integration","harness","compose"])
+    digests.append(hashlib.sha256(combined.encode()).hexdigest())
+    try: validate(changed["source"],changed["config"],changed["integration"],changed["harness"],changed["compose"])
+    except (ValueError, AttributeError): print(f"store_proxy_source_mutation_red mutation={label}")
+    else: raise SystemExit(f"store proxy source mutant survived: {label}")
+if len(set(digests)) != len(mutations): raise SystemExit("store proxy mutation digests differ")
+print(f"store_proxy_source_guard_self_test mutations={len(mutations)} unique={len(set(digests))} passed=1")
+PY
+}
+
 inner_ids_for_case() {
   case "$1" in
+    capability-matrix) cat <<'EOF'
+runtime_private_subject
+runtime_raw_kv
+runtime_js_api
+witness_raw_kv
+witness_js_api
+init_serving_subject
+runtime_credential_swap
+witness_credential_swap
+store_credential_swap
+init_credential_swap
+account_swap
+mount_swap
+reply_subject_injection
+wildcard_import
+tls_ca_swap
+tls_server_name_swap
+store_queue_exhaustion
+public_store_bypass
+private_public_signing
+hostile_cleanup_preservation
+EOF
+      ;;
     dispatcher-mapping) cat <<'EOF'
 issue_session_fence
 establish_session
@@ -2026,6 +2284,107 @@ for name, rows in mutants:
     else:
         raise SystemExit(f"inner-ledger mutation unexpectedly passed: {name}")
 print(f"inner_ledger_self_test mutations={len(mutants)} passed=1")
+PY
+}
+
+capability_ledger_validator() {
+  local observed="$1" invocation_token="$2" mode="${3:-validate}"
+  python3 -I - "$observed" "$invocation_token" "$mode" <<'PY'
+import copy, hashlib, json, pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+invocation_token = sys.argv[2]
+mode = sys.argv[3]
+domain = b"swarm.phase285.capability-evidence-row.v1"
+expected = {
+  "runtime_private_subject": ("runtime","PHASE285_RUNTIME","swarm.governance.witness.store.v1.read_entry","no_private_import"),
+  "runtime_raw_kv": ("runtime","PHASE285_RUNTIME",None,"raw_subject_refused"),
+  "runtime_js_api": ("runtime","PHASE285_RUNTIME","$JS.API.STREAM.INFO.KV_phase285_service","foreign_stream_invisible"),
+  "witness_raw_kv": ("witness","PHASE285_WITNESS",None,"raw_subject_refused"),
+  "witness_js_api": ("witness","PHASE285_WITNESS","$JS.API.STREAM.INFO.KV_phase285_service","raw_api_refused"),
+  "init_serving_subject": ("init","PHASE285_WITNESS_STORE","swarm.governance.witness.store.v1.read_entry","serving_subject_refused"),
+  "runtime_credential_swap": ("runtime","PHASE285_WITNESS_STORE","KV_phase285_service","credential_role_refused"),
+  "witness_credential_swap": ("witness","PHASE285_WITNESS_STORE","KV_phase285_service","credential_role_refused"),
+  "store_credential_swap": ("witness-store","PHASE285_WITNESS","swarm.governance.witness.store.v1.read_entry","cross_role_login_refused"),
+  "init_credential_swap": ("init","PHASE285_WITNESS_STORE","KV_phase285_service","credential_role_refused"),
+  "account_swap": ("witness-store","PHASE285_RUNTIME","KV_phase285_service","account_stream_probe_refused"),
+  "mount_swap": ("witness-store","PHASE285_WITNESS_STORE","raw-store-credentials","cross_role_mount_absent"),
+  "reply_subject_injection": ("witness","PHASE285_WITNESS","swarm.governance.witness.store.v1.read_entry","invalid_reply_inbox"),
+  "wildcard_import": ("topology","PHASE285_WITNESS","swarm.governance.witness.store.v1.>","wildcard_import_absent"),
+  "tls_ca_swap": ("witness-store","PHASE285_WITNESS_STORE","tls://localhost","ca_authentication_refused"),
+  "tls_server_name_swap": ("witness-store","PHASE285_WITNESS_STORE","wrong.phase285.test","server_name_refused"),
+  "store_queue_exhaustion": ("witness","PHASE285_WITNESS","swarm.governance.witness.store.v1.read_entry","overload_unavailable"),
+  "public_store_bypass": ("runtime","PHASE285_RUNTIME","StoreProxyService","raw_store_api_absent"),
+  "private_public_signing": ("witness-store","PHASE285_WITNESS_STORE","StoreProxyService","public_signer_absent"),
+  "hostile_cleanup_preservation": ("harness","confined-project","cleanup_confined_scratch","cleanup_fail_closed"),
+}
+
+def row_digest(row):
+    canonical = json.dumps({
+      "account":row[5], "case":row[0], "credential_role":row[4],
+      "expected_failure":row[7], "inner_id":row[1], "invocation_token":row[3],
+      "status":row[2], "store_calls_after":int(row[9]),
+      "store_calls_before":int(row[8]), "subject":row[6],
+    }, sort_keys=True, separators=(",",":"), allow_nan=False).encode()
+    return hashlib.sha256(domain + len(canonical).to_bytes(8,"big") + canonical).hexdigest()
+
+def refresh(row): row[10] = row_digest(row)
+
+def parse(raw):
+    if not raw or not raw.endswith(b"\n") or b"\n\n" in raw: raise ValueError("capability ledger framing differs")
+    try: lines = raw.decode("ascii").splitlines()
+    except UnicodeDecodeError as error: raise ValueError("capability ledger is not ASCII") from error
+    rows = [line.split("\t") for line in lines]
+    if any(len(row) != 11 for row in rows): raise ValueError("capability ledger width differs")
+    if len(rows) != len(expected) or len({row[1] for row in rows}) != len(rows): raise ValueError("capability cardinality differs")
+    if {row[1] for row in rows} != set(expected): raise ValueError("capability inventory differs")
+    for row in rows:
+        case, inner_id, status, token, role, account, subject, failure, before, after, digest = row
+        if case != "capability-matrix" or status != "passed" or token != invocation_token:
+            raise ValueError("capability identity/status/token differs")
+        expected_role, expected_account, expected_subject, expected_failure = expected[inner_id]
+        if (role,account,failure) != (expected_role,expected_account,expected_failure):
+            raise ValueError("capability role/account/failure differs")
+        if expected_subject is None:
+            if not subject.startswith("$KV.phase285_service.s.") or len(subject) != len("$KV.phase285_service.s.") + 64:
+                raise ValueError("capability derived raw subject differs")
+        elif subject != expected_subject: raise ValueError("capability subject differs")
+        if not before.isascii() or not before.isdigit() or not after.isascii() or not after.isdigit():
+            raise ValueError("capability counters differ")
+        if int(before) != int(after): raise ValueError("capability reached storage")
+        if inner_id == "store_queue_exhaustion" and int(before) != 1:
+            raise ValueError("queue overload did not bind one blocked store call")
+        if digest != row_digest(row): raise ValueError("capability digest differs")
+    return rows
+
+raw = path.read_bytes()
+rows = parse(raw)
+if mode == "validate":
+    print(f"capability_ledger rows={len(rows)} passed={len(rows)} failed=0")
+    raise SystemExit(0)
+if mode != "self-test": raise SystemExit("unknown capability ledger mode")
+def encode(value): return ("\n".join("\t".join(row) for row in value)+"\n").encode() if value else b""
+mutants=[]
+omitted=copy.deepcopy(rows); omitted.pop(); mutants.append(("omission",omitted))
+added=copy.deepcopy(rows); added.append(added[0].copy()); added[-1][1]="unexpected"; refresh(added[-1]); mutants.append(("addition",added))
+duplicated=copy.deepcopy(rows); duplicated.append(duplicated[0].copy()); mutants.append(("duplication",duplicated))
+mutants.append(("zero",[]))
+for name,index,value in [
+ ("rename",1,rows[0][1]+"_renamed"),("status",2,"failed"),("stale_token",3,"stale-token"),
+ ("role_substitution",4,"foreign"),("account_substitution",5,"foreign"),
+ ("subject_substitution",6,"foreign.subject"),("failure_substitution",7,"success"),
+ ("store_call_substitution",9,str(int(rows[0][9])+1)),
+]:
+    changed=copy.deepcopy(rows); changed[0][index]=value; refresh(changed[0]); mutants.append((name,changed))
+wrong_digest=copy.deepcopy(rows); wrong_digest[0][10]="0"*64; mutants.append(("wrong_digest",wrong_digest))
+cross=copy.deepcopy(rows); cross[0][4:8]=cross[1][4:8]; refresh(cross[0]); mutants.append(("cross_row_substitution",cross))
+labels=[name for name,_ in mutants]
+if len(labels) != len(set(labels)): raise SystemExit("capability mutant labels duplicated")
+for name,candidate in mutants:
+    try: parse(encode(candidate))
+    except ValueError: print(f"capability_ledger_self_test_red mutation={name}")
+    else: raise SystemExit(f"capability ledger mutant survived: {name}")
+print(f"capability_ledger_self_test mutations={len(mutants)} passed=1")
 PY
 }
 
@@ -5067,8 +5426,11 @@ run_selector() {
     run_transport_selector
     return
   fi
+  if [ "$selector" = full-service-path ]; then
+    store_proxy_source_guard normal
+  fi
   case "$selector" in
-    response-failure-wire|candidate-verifier|protocol-checkpoint|atomic-store-contract|in-memory-differential|typed-proxy|jetstream-cas|jetstream-checkpoint|public-dispatcher) ;;
+    response-failure-wire|candidate-verifier|protocol-checkpoint|atomic-store-contract|in-memory-differential|typed-proxy|jetstream-cas|jetstream-checkpoint|public-dispatcher|full-service-path) ;;
     *)
       echo "missing target for selector $selector: its later owning Phase 285 slice has not materialized the target inventory" >&2
       return 1
@@ -5114,7 +5476,7 @@ PY
   local target_count expected_filtered case_name output_file executed=0
   local expected_inner inner_ledger expected_union observed_union
   local first_expected_inner first_inner_ledger second_expected_inner
-  local checkpoint_token_registry checkpoint_tree checkpoint_invocation_token
+  local checkpoint_token_registry checkpoint_tree checkpoint_invocation_token capability_invocation_token
   target_count="$(wc -l <"$inventory_file" | tr -d ' ')"
   expected_filtered=$((target_count - 1))
   if [ "$selector" = jetstream-cas ]; then
@@ -5132,6 +5494,10 @@ PY
     expected_union="$temp_dir/dispatcher-mapping.expected.tsv"
     observed_union="$temp_dir/dispatcher-mapping.ledger.tsv"
     write_expected_inner_ledger dispatcher-mapping "$expected_union"
+    [ ! -e "$observed_union" ] || return 1
+  elif [ "$selector" = full-service-path ]; then
+    observed_union="$temp_dir/capability-matrix.ledger.tsv"
+    capability_invocation_token="$(release_probe_token "$temp_dir")"
     [ ! -e "$observed_union" ] || return 1
   fi
   while IFS= read -r case_name; do
@@ -5168,6 +5534,15 @@ PY
     elif [ "$selector" = public-dispatcher ] && [ "$executed" -eq 0 ]; then
       if ! PHASE285_DISPATCHER_MAPPING_LEDGER_REQUIRED=1 \
         PHASE285_DISPATCHER_MAPPING_LEDGER="$observed_union" \
+        cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
+        cat "$output_file" >&2
+        echo "named case failed: selector=$selector case=$case_name" >&2
+        return 1
+      fi
+    elif [ "$selector" = full-service-path ]; then
+      if ! PHASE285_CAPABILITY_MATRIX_LEDGER_REQUIRED=1 \
+        PHASE285_CAPABILITY_MATRIX_LEDGER="$observed_union" \
+        PHASE285_CAPABILITY_MATRIX_INVOCATION_TOKEN="$capability_invocation_token" \
         cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
         cat "$output_file" >&2
         echo "named case failed: selector=$selector case=$case_name" >&2
@@ -5224,6 +5599,12 @@ PY
     echo "selector omitted rows: selector=$selector executed=$executed required=$required" >&2
     return 1
   }
+  if [ "$selector" = full-service-path ]; then
+    capability_ledger_validator "$observed_union" "$capability_invocation_token"
+    capability_ledger_validator "$observed_union" "$capability_invocation_token" self-test
+    store_proxy_source_guard self-test
+    echo "capability_matrix executed=20 passed=20 failed=0 ignored=0"
+  fi
   local iterator_ledger iterator_output iterator_token iterator_token_path
   if [ "$selector" = jetstream-checkpoint ]; then
     iterator_ledger="$temp_dir/checkpoint-iterator.ledger.tsv"
@@ -5341,7 +5722,7 @@ PY
   if [ "$selector" = jetstream-cas ]; then
     echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 registry_mutation_failure_count=8 inner_ledger_mutation_failure_count=11"
   elif [ "$selector" = public-dispatcher ]; then
-    echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 registry_mutation_failure_count=8 inner_ledger_mutation_failure_count=9 dispatcher_source_mutation_failure_count=262"
+    echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 registry_mutation_failure_count=8 inner_ledger_mutation_failure_count=9 dispatcher_source_mutation_failure_count=266"
   else
     echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 mutation_failure_count=8"
   fi

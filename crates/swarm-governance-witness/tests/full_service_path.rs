@@ -1,16 +1,21 @@
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use swarm_crypto::{DetachedSignature, Ed25519Signer, sha256_hex};
 use swarm_governance::persistence_protocol::*;
 use swarm_governance::witness_engine::store::{
-    WitnessAdmissionEntryV1, WitnessAdmissionSetV1, WitnessBucketManifestPhaseV1,
-    WitnessBucketManifestV1, WitnessStoreProxyFailureCodeV1, WitnessStoreProxyOperationV1,
-    WitnessStoreProxyRequestBodyV1, WitnessStoreProxyRequestV1, WitnessStoreProxyResponseBodyV1,
-    WitnessStoreProxyResponseV1, WitnessStoreProxyValidatedEntryV1,
+    WitnessAdmissionEntryV1, WitnessAdmissionSetV1, WitnessAtomicStore, WitnessBucketAnchorV1,
+    WitnessBucketConfigurationV1, WitnessBucketEpochV1, WitnessBucketManifestPhaseV1,
+    WitnessBucketManifestV1, WitnessCompressionV1, WitnessDiscardPolicyV1,
+    WitnessPersistenceSemanticsV1, WitnessRetentionPolicyV1, WitnessStorageTypeV1,
+    WitnessStoreCasResultV1, WitnessStoreDeploymentInputsV1, WitnessStoreErrorV1,
+    WitnessStoreProxyFailureCodeV1, WitnessStoreProxyOperationV1, WitnessStoreProxyRequestBodyV1,
+    WitnessStoreProxyRequestV1, WitnessStoreProxyResponseBodyV1, WitnessStoreProxyResponseV1,
+    WitnessStoreProxyValidatedEntryV1, WitnessStoreReadResultV1, WitnessStoreReadyResultV1,
     WitnessStreamInitializationRecordV1, WitnessStreamInitializationV1,
+    in_memory::InMemoryWitnessStore,
 };
 use swarm_governance::witness_engine::{
     WitnessStoreEnvelopeV1, WitnessStoredPreparedV1, witness_stream_key,
@@ -21,9 +26,12 @@ use swarm_governance::witness_service::{
     WitnessServiceRequestV1, WitnessServiceResponseV1, verify_public_prepare,
 };
 use swarm_governance_witness::{
-    PublicWitnessDispatchErrorV1, PublicWitnessDispatcher, PublicWitnessProxyTransportErrorV1,
-    PublicWitnessServiceConfigV1, PublicWitnessStoreProxyClient, dispatcher_mapping,
-    public_witness_ingress_overload_control,
+    NatsPublicWitnessStoreProxyClient, PublicWitnessDispatchErrorV1, PublicWitnessDispatcher,
+    PublicWitnessProxyTransportErrorV1, PublicWitnessServiceConfigV1,
+    PublicWitnessStoreProxyClient, StoreProxyService, StoreProxyServiceConfigV1,
+    StoreProxyServiceErrorV1, StoreProxyServiceRunner, StoreRoleConnectionV1, dispatcher_mapping,
+    private_store_ingress_overload_control, public_witness_ingress_overload_control,
+    store_proxy_subjects,
 };
 use tokio::sync::Notify;
 
@@ -4365,4 +4373,1391 @@ fn write_dispatcher_mapping_ledger() -> ProtocolResult<()> {
     }
     file.sync_all()
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))
+}
+
+const CAPABILITY_MATRIX: [&str; 20] = [
+    "runtime_private_subject",
+    "runtime_raw_kv",
+    "runtime_js_api",
+    "witness_raw_kv",
+    "witness_js_api",
+    "init_serving_subject",
+    "runtime_credential_swap",
+    "witness_credential_swap",
+    "store_credential_swap",
+    "init_credential_swap",
+    "account_swap",
+    "mount_swap",
+    "reply_subject_injection",
+    "wildcard_import",
+    "tls_ca_swap",
+    "tls_server_name_swap",
+    "store_queue_exhaustion",
+    "public_store_bypass",
+    "private_public_signing",
+    "hostile_cleanup_preservation",
+];
+
+fn write_capability_row(
+    id: &str,
+    credential_role: &str,
+    account: &str,
+    subject: &str,
+    expected_failure: &str,
+    store_calls_before: usize,
+    store_calls_after: usize,
+) -> ProtocolResult<()> {
+    let required = std::env::var_os("PHASE285_CAPABILITY_MATRIX_LEDGER_REQUIRED").is_some();
+    let Some(path) = std::env::var_os("PHASE285_CAPABILITY_MATRIX_LEDGER") else {
+        if required {
+            return Err(ProtocolError::InvalidField {
+                field: "capability_matrix_ledger".to_string(),
+                reason: "required ledger path is absent".to_string(),
+            });
+        }
+        return Ok(());
+    };
+    use sha2::{Digest, Sha256};
+    let invocation_token =
+        std::env::var("PHASE285_CAPABILITY_MATRIX_INVOCATION_TOKEN").map_err(|_| {
+            ProtocolError::InvalidField {
+                field: "capability_matrix_invocation_token".to_string(),
+                reason: "required invocation token is absent".to_string(),
+            }
+        })?;
+    if invocation_token.is_empty() || invocation_token.len() > 512 {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    if !CAPABILITY_MATRIX.contains(&id) {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    let canonical = serde_json::to_vec(&serde_json::json!({
+        "account": account,
+        "case": "capability-matrix",
+        "credential_role": credential_role,
+        "expected_failure": expected_failure,
+        "inner_id": id,
+        "invocation_token": invocation_token,
+        "status": "passed",
+        "store_calls_after": store_calls_after,
+        "store_calls_before": store_calls_before,
+        "subject": subject,
+    }))
+    .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let mut preimage = b"swarm.phase285.capability-evidence-row.v1".to_vec();
+    preimage.extend_from_slice(&(canonical.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(&canonical);
+    writeln!(
+        file,
+        "capability-matrix\t{id}\tpassed\t{invocation_token}\t{credential_role}\t{account}\t{subject}\t{expected_failure}\t{store_calls_before}\t{store_calls_after}\t{:x}",
+        Sha256::digest(preimage)
+    )
+    .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    file.sync_all()
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))
+}
+
+type ReadyFixtureEntries = (
+    WitnessStoreReadyResultV1,
+    BTreeMap<String, (u64, WitnessStoreEnvelopeV1)>,
+);
+
+#[derive(Clone, Copy)]
+enum ReadyBindingMutation {
+    None,
+    Stream,
+    Epoch,
+    Anchor,
+    AdmissionSet,
+    SelectedLimits,
+}
+
+type StoreConfigMutation = (&'static str, fn(&mut StoreProxyServiceConfigV1));
+
+fn store_ready_fixture_entries(fixture: &Fixture) -> ProtocolResult<ReadyFixtureEntries> {
+    store_ready_fixture_entries_with(fixture, ReadyBindingMutation::None)
+}
+
+fn store_ready_fixture_entries_with(
+    fixture: &Fixture,
+    mutation: ReadyBindingMutation,
+) -> ProtocolResult<ReadyFixtureEntries> {
+    let max_value_bytes = 1_000_000_u64;
+    let max_manifest_bytes = 1_000_000_u64;
+    let mut admission_set = fixture.admission_set.clone();
+    match mutation {
+        ReadyBindingMutation::AdmissionSet => {
+            admission_set.entries[0].max_request_bytes -= 1;
+        }
+        ReadyBindingMutation::SelectedLimits => {
+            admission_set.entries[0].max_response_bytes -= 1;
+        }
+        _ => {}
+    }
+    if matches!(
+        mutation,
+        ReadyBindingMutation::AdmissionSet | ReadyBindingMutation::SelectedLimits
+    ) {
+        admission_set.admission_set_digest = admission_set.computed_digest()?;
+        admission_set.validate()?;
+    }
+    let maximum_admitted_streams = admission_set.entries.len() as u64;
+    let required_bucket_bytes = 2 * (max_manifest_bytes + 65_536)
+        + maximum_admitted_streams * 2 * (max_value_bytes + 65_536);
+    let mut configuration = WitnessBucketConfigurationV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        nats_server_version: "2.11.17".to_string(),
+        nats_server_image_index_digest:
+            "sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00".to_string(),
+        stream_name: "KV_phase285_service".to_string(),
+        description: "Phase 285 external governance witness".to_string(),
+        subjects: vec!["$KV.phase285_service.>".to_string()],
+        retention: WitnessRetentionPolicyV1::Limits,
+        discard: WitnessDiscardPolicyV1::New,
+        discard_new_per_subject: false,
+        storage: WitnessStorageTypeV1::File,
+        max_messages: -1,
+        max_bytes: i64::try_from(required_bucket_bytes)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?,
+        max_messages_per_subject: 1,
+        max_age_nanos: 0,
+        max_consumers: -1,
+        max_message_size: i32::try_from(max_value_bytes)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?,
+        num_replicas: 1,
+        no_ack: false,
+        duplicate_window_nanos: 120_000_000_000,
+        persistence_semantics: WitnessPersistenceSemanticsV1::Nats21117SynchronousOnly,
+        persist_mode_wire_key_present: false,
+        sealed: false,
+        allow_rollup: false,
+        deny_delete: true,
+        deny_purge: true,
+        allow_direct: false,
+        mirror_direct: false,
+        allow_message_ttl: false,
+        allow_atomic_publish: false,
+        allow_message_schedules: false,
+        allow_message_counter: false,
+        template_owner: String::new(),
+        application_metadata: BTreeMap::new(),
+        server_metadata: BTreeMap::from([
+            ("_nats.level".to_string(), "1".to_string()),
+            ("_nats.req.level".to_string(), "0".to_string()),
+            ("_nats.ver".to_string(), "2.11.17".to_string()),
+        ]),
+        republish_present: false,
+        mirror_present: false,
+        sources_count: 0,
+        subject_transform_present: false,
+        compression: WitnessCompressionV1::Disabled,
+        consumer_limits_present: false,
+        first_sequence: None,
+        placement_present: false,
+        pause_until: None,
+        subject_delete_marker_ttl_nanos: None,
+    };
+    if matches!(mutation, ReadyBindingMutation::Stream) {
+        configuration.stream_name = "KV_phase285_service_alternate".to_string();
+        configuration.subjects = vec!["$KV.phase285_service_alternate.>".to_string()];
+    }
+    configuration.validate()?;
+    let configuration_digest = configuration.digest()?;
+    let mut epoch = WitnessBucketEpochV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        bucket_generation: "a".repeat(64),
+        nats_account: "witness-store".to_string(),
+        stream_name: configuration.stream_name.clone(),
+        bucket_configuration_digest: configuration_digest.clone(),
+        admission_set_digest: admission_set.admission_set_digest.clone(),
+        witness_identity: fixture.witness_identity().to_string(),
+        witness_key_id: fixture.witness.key_id().to_string(),
+    };
+    if matches!(mutation, ReadyBindingMutation::Epoch) {
+        epoch.bucket_generation = "b".repeat(64);
+    }
+    let epoch_digest = epoch.digest()?;
+    let primary = fixture
+        .proxy
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut source_entries = BTreeMap::from([(
+        primary.envelope.stream_id.clone(),
+        (primary.revision, primary.envelope.clone()),
+    )]);
+    drop(primary);
+    if let Some(secondary) = fixture
+        .proxy
+        .secondary_state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+    {
+        source_entries.insert(
+            secondary.envelope.stream_id.clone(),
+            (secondary.revision, secondary.envelope.clone()),
+        );
+    }
+    let mut stream_keys = Vec::with_capacity(admission_set.entries.len());
+    let mut initialized_streams = BTreeMap::new();
+    let mut entries = BTreeMap::new();
+    for admission in &admission_set.entries {
+        let (revision, mut envelope) = source_entries
+            .remove(&admission.stream_id)
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        envelope.admission_digest = admission.admission_digest.clone();
+        envelope.bucket_epoch_digest = epoch_digest.clone();
+        envelope.stream_initialization_digest = WitnessStreamInitializationV1 {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            bucket_epoch_digest: epoch_digest.clone(),
+            admission_digest: admission.admission_digest.clone(),
+            stream_id: admission.stream_id.clone(),
+            witness_identity: admission.witness_identity.clone(),
+            witness_key_id: admission.witness_key_id.clone(),
+        }
+        .digest()?;
+        envelope.signature = fixture.witness.sign(&envelope.signing_bytes()?);
+        envelope.validate()?;
+        let key = witness_stream_key(&admission.stream_id)?;
+        stream_keys.push(key.clone());
+        initialized_streams.insert(
+            key,
+            WitnessStreamInitializationRecordV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                stream_initialization_digest: envelope.stream_initialization_digest.clone(),
+                empty_envelope_digest: envelope.signed_envelope_digest()?,
+            },
+        );
+        entries.insert(admission.stream_id.clone(), (revision, envelope));
+    }
+    stream_keys.sort();
+    let mut manifest = WitnessBucketManifestV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        bucket_epoch_digest: epoch_digest,
+        bucket_configuration_digest: configuration_digest,
+        admission_set_digest: admission_set.admission_set_digest.clone(),
+        stream_keys,
+        initialized_streams,
+        phase: WitnessBucketManifestPhaseV1::Ready,
+        witness_identity: fixture.witness_identity().to_string(),
+        witness_key_id: fixture.witness.key_id().to_string(),
+        signature: fixture.witness.sign(&[]),
+    };
+    manifest.signature = fixture.witness.sign(&manifest.signing_bytes()?);
+    let mut anchor = WitnessBucketAnchorV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        epoch: epoch.clone(),
+        nats_stream_created_at: "2026-08-25T00:00:00.000000000Z".to_string(),
+        raw_stream_configuration_digest: sha256_hex(b"phase285-service-raw-configuration"),
+        ready_manifest_digest: manifest.digest()?,
+        witness_key_id: fixture.witness.key_id().to_string(),
+        signature: fixture.witness.sign(&[]),
+    };
+    if matches!(mutation, ReadyBindingMutation::Anchor) {
+        anchor.raw_stream_configuration_digest =
+            sha256_hex(b"phase285-service-alternate-raw-configuration");
+    }
+    anchor.signature = fixture.witness.sign(&anchor.signing_bytes()?);
+    let ready = WitnessStoreReadyResultV1::new(
+        anchor.nats_stream_created_at.clone(),
+        configuration,
+        epoch,
+        anchor,
+        admission_set,
+        manifest,
+        WitnessStoreDeploymentInputsV1 {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            max_manifest_bytes,
+            maximum_admitted_streams,
+            configured_replica_count: 1,
+        },
+    )
+    .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    Ok((ready, entries))
+}
+
+fn store_service_config(
+    fixture: &Fixture,
+    ready: &WitnessStoreReadyResultV1,
+) -> ProtocolResult<StoreProxyServiceConfigV1> {
+    Ok(StoreProxyServiceConfigV1 {
+        nats_url: std::env::var("SWARM_NATS_STORE_TLS_URL")
+            .unwrap_or_else(|_| "tls://nats.phase285.test:4222".to_string()),
+        nats_credentials_path: std::env::var("SWARM_NATS_STORE_CREDENTIAL_PATH")
+            .unwrap_or_else(|_| "/run/phase285/store.credentials.json".to_string()),
+        credential_invocation_token: std::env::var("SWARM_NATS_TLS_CREDENTIAL_TOKEN")
+            .unwrap_or_else(|_| "b".repeat(64)),
+        stream_name: ready.bucket_configuration.stream_name.clone(),
+        tls_ca_path: std::env::var("SWARM_NATS_TLS_CA_PATH")
+            .unwrap_or_else(|_| "/run/phase285/ca.pem".to_string()),
+        tls_server_name: std::env::var("SWARM_NATS_TLS_SERVER_NAME")
+            .unwrap_or_else(|_| "nats.phase285.test".to_string()),
+        pinned_witness_public_key_hex: fixture.witness.public_key_hex().to_string(),
+        witness_key_id: fixture.witness.key_id().to_string(),
+        bucket_epoch_digest: ready.bucket_epoch.digest()?,
+        bucket_anchor_digest: ready.bucket_anchor.digest()?,
+        admission_set_digest: ready.admission_set.admission_set_digest.clone(),
+        max_request_bytes: MAX_PROTOCOL_RECORD_BYTES,
+        max_response_bytes: MAX_PROTOCOL_RECORD_BYTES,
+        ingress_queue_capacity: 1,
+        max_in_flight: 1,
+        subscription_capacity: 8,
+        client_capacity: 8,
+        read_buffer_capacity: 4_096,
+        request_deadline_millis: 1_000,
+    })
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HarnessRoleCredentialV1 {
+    schema_version: u32,
+    role: String,
+    username: String,
+    password: String,
+    invocation_token: String,
+}
+
+fn mutated_harness_credential<F>(
+    source_variable: &str,
+    label: &str,
+    mutate: F,
+) -> ProtocolResult<std::path::PathBuf>
+where
+    F: FnOnce(&mut HarnessRoleCredentialV1),
+{
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let source = std::env::var(source_variable).map_err(|_| ProtocolError::InvalidField {
+        field: source_variable.to_string(),
+        reason: "wrapped TLS credential is required".to_string(),
+    })?;
+    let raw = std::fs::read(source)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let mut credential: HarnessRoleCredentialV1 = serde_json::from_slice(&raw)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    mutate(&mut credential);
+    let root =
+        std::path::PathBuf::from(std::env::var("SWARM_NATS_HARNESS_SCRATCH").map_err(|_| {
+            ProtocolError::InvalidField {
+                field: "SWARM_NATS_HARNESS_SCRATCH".to_string(),
+                reason: "wrapped scratch is required".to_string(),
+            }
+        })?);
+    let path = root.join(format!("credential-mutant-{label}.json"));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    file.write_all(
+        &serde_json::to_vec(&credential)
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?,
+    )
+    .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    file.sync_all()
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    Ok(path)
+}
+
+async fn connect_harness_role(
+    path_variable: &str,
+    expected_role: &str,
+) -> ProtocolResult<async_nats::Client> {
+    let path = std::env::var(path_variable).map_err(|_| ProtocolError::InvalidField {
+        field: path_variable.to_string(),
+        reason: "wrapped TLS credential is required".to_string(),
+    })?;
+    let raw =
+        std::fs::read(path).map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let credential: HarnessRoleCredentialV1 = serde_json::from_slice(&raw)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let token = std::env::var("SWARM_NATS_TLS_CREDENTIAL_TOKEN").map_err(|_| {
+        ProtocolError::InvalidField {
+            field: "SWARM_NATS_TLS_CREDENTIAL_TOKEN".to_string(),
+            reason: "wrapped TLS credential token is required".to_string(),
+        }
+    })?;
+    if credential.schema_version != PROTOCOL_SCHEMA_VERSION
+        || credential.role != expected_role
+        || credential.invocation_token != token
+    {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    let url =
+        std::env::var("SWARM_NATS_STORE_TLS_URL").map_err(|_| ProtocolError::InvalidField {
+            field: "SWARM_NATS_STORE_TLS_URL".to_string(),
+            reason: "wrapped TLS endpoint is required".to_string(),
+        })?;
+    let ca = std::env::var("SWARM_NATS_TLS_CA_PATH").map_err(|_| ProtocolError::InvalidField {
+        field: "SWARM_NATS_TLS_CA_PATH".to_string(),
+        reason: "wrapped TLS CA is required".to_string(),
+    })?;
+    async_nats::ConnectOptions::with_user_and_password(credential.username, credential.password)
+        .require_tls(true)
+        .add_root_certificates(ca.into())
+        .connection_timeout(std::time::Duration::from_secs(2))
+        .request_timeout(Some(std::time::Duration::from_secs(2)))
+        .connect(url)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))
+}
+
+async fn assert_live_subject_refused(
+    client: &async_nats::Client,
+    subject: &str,
+    payload: &[u8],
+) -> ProtocolResult<()> {
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(1_500),
+        client.request(subject.to_string(), payload.to_vec().into()),
+    )
+    .await
+    {
+        Err(_) | Ok(Err(_)) => Ok(()),
+        Ok(Ok(message)) => {
+            let value: serde_json::Value = serde_json::from_slice(&message.payload)
+                .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+            if value.get("error").is_none() {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn initialize_harness_store_stream() -> ProtocolResult<()> {
+    let client = connect_harness_role("SWARM_NATS_INIT_CREDENTIAL_PATH", "init").await?;
+    let context = async_nats::jetstream::new(client);
+    match context.get_stream("KV_phase285_service").await {
+        Ok(_) => Ok(()),
+        Err(_) => context
+            .create_stream(async_nats::jetstream::stream::Config {
+                name: "KV_phase285_service".to_string(),
+                subjects: vec!["$KV.phase285_service.>".to_string()],
+                max_messages_per_subject: 1,
+                ..Default::default()
+            })
+            .await
+            .map(|_| ())
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string())),
+    }
+}
+
+fn signed_store_request(
+    fixture: &Fixture,
+    ready: &WitnessStoreReadyResultV1,
+    operation: WitnessStoreProxyOperationV1,
+    body: WitnessStoreProxyRequestBodyV1,
+) -> ProtocolResult<WitnessStoreProxyRequestV1> {
+    let admission = ready
+        .entry(&fixture.admission.stream_id)
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    signed_store_request_for_admission(fixture, ready, admission, operation, body)
+}
+
+fn signed_store_request_for_admission(
+    fixture: &Fixture,
+    ready: &WitnessStoreReadyResultV1,
+    admission: &WitnessAdmissionEntryV1,
+    operation: WitnessStoreProxyOperationV1,
+    body: WitnessStoreProxyRequestBodyV1,
+) -> ProtocolResult<WitnessStoreProxyRequestV1> {
+    let mut request = WitnessStoreProxyRequestV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        operation,
+        request_nonce: "a".repeat(64),
+        admission_digest: admission.admission_digest.clone(),
+        bucket_epoch_digest: ready.bucket_epoch.digest()?,
+        bucket_anchor_digest: ready.bucket_anchor.digest()?,
+        body,
+        request_digest: String::new(),
+        witness_key_id: fixture.witness.key_id().to_string(),
+        signature: fixture.witness.sign(&[]),
+    };
+    request.request_digest = request.computed_digest()?;
+    request.signature = fixture.witness.sign(&request.signing_bytes()?);
+    request.validate_structure()?;
+    request.validate_semantics()?;
+    request.validate_signature()?;
+    Ok(request)
+}
+
+struct CountingAtomicStore {
+    inner: InMemoryWitnessStore,
+    calls: Arc<AtomicUsize>,
+}
+
+struct BlockingReadAtomicStore {
+    inner: InMemoryWitnessStore,
+    calls: Arc<AtomicUsize>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl WitnessAtomicStore for BlockingReadAtomicStore {
+    async fn inspect_ready(&self) -> Result<WitnessStoreReadyResultV1, WitnessStoreErrorV1> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.inspect_ready().await
+    }
+
+    async fn read_entry(
+        &self,
+        stream_id: &str,
+    ) -> Result<WitnessStoreReadResultV1, WitnessStoreErrorV1> {
+        let ordinal = self.calls.fetch_add(1, Ordering::SeqCst);
+        if ordinal == 0 {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        self.inner.read_entry(stream_id).await
+    }
+
+    async fn compare_and_swap(
+        &self,
+        stream_id: &str,
+        expected_revision: u64,
+        expected_store_state_digest: &str,
+        proposed_envelope: &WitnessStoreEnvelopeV1,
+    ) -> Result<WitnessStoreCasResultV1, WitnessStoreErrorV1> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .compare_and_swap(
+                stream_id,
+                expected_revision,
+                expected_store_state_digest,
+                proposed_envelope,
+            )
+            .await
+    }
+}
+
+#[async_trait]
+impl WitnessAtomicStore for CountingAtomicStore {
+    async fn inspect_ready(&self) -> Result<WitnessStoreReadyResultV1, WitnessStoreErrorV1> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.inspect_ready().await
+    }
+
+    async fn read_entry(
+        &self,
+        stream_id: &str,
+    ) -> Result<WitnessStoreReadResultV1, WitnessStoreErrorV1> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_entry(stream_id).await
+    }
+
+    async fn compare_and_swap(
+        &self,
+        stream_id: &str,
+        expected_revision: u64,
+        expected_store_state_digest: &str,
+        proposed_envelope: &WitnessStoreEnvelopeV1,
+    ) -> Result<WitnessStoreCasResultV1, WitnessStoreErrorV1> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .compare_and_swap(
+                stream_id,
+                expected_revision,
+                expected_store_state_digest,
+                proposed_envelope,
+            )
+            .await
+    }
+}
+
+fn counting_store(
+    ready: WitnessStoreReadyResultV1,
+    entries: BTreeMap<String, (u64, WitnessStoreEnvelopeV1)>,
+) -> ProtocolResult<(CountingAtomicStore, Arc<AtomicUsize>)> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let inner = InMemoryWitnessStore::new(ready, entries, 2_000_000)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    Ok((
+        CountingAtomicStore {
+            inner,
+            calls: calls.clone(),
+        },
+        calls,
+    ))
+}
+
+async fn secondary_response_bytes_at_limit(
+    limit: Option<u64>,
+) -> ProtocolResult<(Result<Vec<u8>, StoreProxyServiceErrorV1>, usize, usize)> {
+    let mut fixture = Fixture::new(CasMode::Apply)?;
+    fixture.enable_second_stream_with(|entry| {
+        if let Some(limit) = limit {
+            entry.max_response_bytes = limit;
+        }
+    })?;
+    let secondary_stream = fixture
+        .admission_set
+        .entries
+        .iter()
+        .find(|entry| entry.stream_id != fixture.admission.stream_id)
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .stream_id
+        .clone();
+    let (ready, entries) = store_ready_fixture_entries(&fixture)?;
+    let admission = ready
+        .admission_set
+        .entries
+        .iter()
+        .find(|entry| entry.stream_id == secondary_stream)
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    let request = signed_store_request_for_admission(
+        &fixture,
+        &ready,
+        admission,
+        WitnessStoreProxyOperationV1::ReadEntry,
+        WitnessStoreProxyRequestBodyV1::ReadEntry {
+            stream_id: admission.stream_id.clone(),
+        },
+    )?;
+    let raw = canonical_wire_bytes(&request)?;
+    let (store, calls) = counting_store(ready.clone(), entries)?;
+    let mut config = store_service_config(&fixture, &ready)?;
+    config.max_response_bytes = MAX_PROTOCOL_RECORD_BYTES;
+    let service = StoreProxyService::new(config, ready, store)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let result = service
+        .handle_subject_bytes(store_proxy_subjects()[1], &raw)
+        .await;
+    Ok((result, calls.load(Ordering::SeqCst), raw.len()))
+}
+
+async fn selected_overload_response_at_limit(
+    response_limit: u64,
+) -> ProtocolResult<(Option<Vec<u8>>, usize, usize, Vec<u8>)> {
+    let mut fixture = Fixture::new(CasMode::Apply)?;
+    fixture.enable_second_stream_with(|entry| entry.max_response_bytes = response_limit)?;
+    let secondary = fixture
+        .admission_set
+        .entries
+        .iter()
+        .find(|entry| entry.stream_id != fixture.admission.stream_id)
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .clone();
+    let (ready, entries) = store_ready_fixture_entries(&fixture)?;
+    let request = signed_store_request_for_admission(
+        &fixture,
+        &ready,
+        &secondary,
+        WitnessStoreProxyOperationV1::ReadEntry,
+        WitnessStoreProxyRequestBodyV1::ReadEntry {
+            stream_id: secondary.stream_id.clone(),
+        },
+    )?;
+    let expected_overload = WitnessStoreProxyResponseV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        operation: request.operation,
+        request_digest: request.request_digest.clone(),
+        body: WitnessStoreProxyResponseBodyV1::Refused {
+            failure_code: WitnessStoreProxyFailureCodeV1::Unavailable,
+            observed_revision: None,
+            observed_value_digest: None,
+        },
+    }
+    .canonical_bytes()?;
+    let raw = canonical_wire_bytes(&request)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let inner = InMemoryWitnessStore::new(ready.clone(), entries, 2_000_000)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let store = BlockingReadAtomicStore {
+        inner,
+        calls: calls.clone(),
+        entered: entered.clone(),
+        release: release.clone(),
+    };
+    let mut config = store_service_config(&fixture, &ready)?;
+    config.ingress_queue_capacity = 1;
+    config.max_in_flight = 1;
+    let service = StoreProxyService::new(config.clone(), ready.clone(), store)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    initialize_harness_store_stream().await?;
+    let connection = StoreRoleConnectionV1::connect(&config, &ready)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let runner = StoreProxyServiceRunner::start(connection, service)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let client = connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let first_client = client.clone();
+    let first_raw = raw.clone();
+    let first = tokio::spawn(async move {
+        first_client
+            .request(store_proxy_subjects()[1], first_raw.into())
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+        .await
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let second_client = client.clone();
+    let second_raw = raw.clone();
+    let second = tokio::spawn(async move {
+        second_client
+            .request(store_proxy_subjects()[1], second_raw.into())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+    let before = calls.load(Ordering::SeqCst);
+    let overloaded = tokio::time::timeout(
+        std::time::Duration::from_millis(400),
+        client.request(store_proxy_subjects()[1], raw.into()),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|message| message.payload.to_vec());
+    let after = calls.load(Ordering::SeqCst);
+    release.notify_waiters();
+    let _ = first.await.map_err(join_error)?;
+    let _ = second.await.map_err(join_error)?;
+    drop(runner);
+    Ok((overloaded, before, after, expected_overload))
+}
+
+async fn assert_connection_service_ready_mismatch(
+    label: &str,
+    connection_config: &StoreProxyServiceConfigV1,
+    connection_ready: &WitnessStoreReadyResultV1,
+    service_config: StoreProxyServiceConfigV1,
+    service_ready: WitnessStoreReadyResultV1,
+    service_entries: BTreeMap<String, (u64, WitnessStoreEnvelopeV1)>,
+) -> ProtocolResult<()> {
+    service_config.validate_for_ready(&service_ready)?;
+    let (store, calls) = counting_store(service_ready.clone(), service_entries)?;
+    let service = StoreProxyService::new(service_config, service_ready, store)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let connection = StoreRoleConnectionV1::connect(connection_config, connection_ready)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    assert!(
+        matches!(
+            StoreProxyServiceRunner::start(connection, service).await,
+            Err(swarm_governance_witness::StoreProxyRunnerErrorV1::Configuration)
+        ),
+        "connection/service Ready binding mismatch survived: {label}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "binding mismatch touched the raw store: {label}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_service_path_rejects_runtime_private_subject_and_store_raw_api() -> ProtocolResult<()>
+{
+    let fixture = Fixture::new(CasMode::Apply)?;
+    let (ready, entries) = store_ready_fixture_entries(&fixture)?;
+    let (store, calls) = counting_store(ready.clone(), entries)?;
+    let service = StoreProxyService::new(
+        store_service_config(&fixture, &ready)?,
+        ready.clone(),
+        store,
+    )
+    .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let request = signed_store_request(
+        &fixture,
+        &ready,
+        WitnessStoreProxyOperationV1::ReadEntry,
+        WitnessStoreProxyRequestBodyV1::ReadEntry {
+            stream_id: fixture.admission.stream_id.clone(),
+        },
+    )?;
+    let raw = canonical_wire_bytes(&request)?;
+    initialize_harness_store_stream().await?;
+    let connection =
+        StoreRoleConnectionV1::connect(&store_service_config(&fixture, &ready)?, &ready)
+            .await
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let _runner = StoreProxyServiceRunner::start(connection, service)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let runtime = connect_harness_role("SWARM_NATS_RUNTIME_CREDENTIAL_PATH", "runtime").await?;
+    let witness = connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
+    let init = connect_harness_role("SWARM_NATS_INIT_CREDENTIAL_PATH", "init").await?;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let stream_key = witness_stream_key(&fixture.admission.stream_id)?;
+    let raw_subject = format!("$KV.phase285_service.{stream_key}");
+    for (client, role, account, subject, capability, failure) in [
+        (
+            &runtime,
+            "runtime",
+            "PHASE285_RUNTIME",
+            store_proxy_subjects()[1].to_string(),
+            "runtime_private_subject",
+            "no_private_import",
+        ),
+        (
+            &runtime,
+            "runtime",
+            "PHASE285_RUNTIME",
+            raw_subject.clone(),
+            "runtime_raw_kv",
+            "raw_subject_refused",
+        ),
+        (
+            &runtime,
+            "runtime",
+            "PHASE285_RUNTIME",
+            "$JS.API.STREAM.INFO.KV_phase285_service".to_string(),
+            "runtime_js_api",
+            "foreign_stream_invisible",
+        ),
+        (
+            &witness,
+            "witness",
+            "PHASE285_WITNESS",
+            raw_subject,
+            "witness_raw_kv",
+            "raw_subject_refused",
+        ),
+        (
+            &witness,
+            "witness",
+            "PHASE285_WITNESS",
+            "$JS.API.STREAM.INFO.KV_phase285_service".to_string(),
+            "witness_js_api",
+            "raw_api_refused",
+        ),
+        (
+            &init,
+            "init",
+            "PHASE285_WITNESS_STORE",
+            store_proxy_subjects()[1].to_string(),
+            "init_serving_subject",
+            "serving_subject_refused",
+        ),
+    ] {
+        let before = calls.load(Ordering::SeqCst);
+        let payload = if capability == "runtime_js_api" {
+            b"{}".as_slice()
+        } else {
+            raw.as_slice()
+        };
+        assert_live_subject_refused(client, &subject, payload).await?;
+        let after = calls.load(Ordering::SeqCst);
+        assert_eq!(after, before);
+        write_capability_row(capability, role, account, &subject, failure, before, after)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_service_path_rejects_credential_account_and_mount_swaps() -> ProtocolResult<()> {
+    let fixture = Fixture::new(CasMode::Apply)?;
+    let (ready, entries) = store_ready_fixture_entries(&fixture)?;
+    let config = store_service_config(&fixture, &ready)?;
+    config.validate_for_ready(&ready)?;
+    initialize_harness_store_stream().await?;
+    StoreRoleConnectionV1::connect(&config, &ready)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+
+    let config_mutations: [StoreConfigMutation; 10] = [
+        ("credential_path", |value| {
+            value.nats_credentials_path = "/conf/alternate-store.credentials.json".to_string();
+        }),
+        ("credential_token", |value| {
+            value.credential_invocation_token = "c".repeat(64);
+        }),
+        ("tls_url", |value| {
+            value.nats_url = "tls://alternate.phase285.test:4222".to_string();
+        }),
+        ("tls_ca", |value| {
+            value.tls_ca_path = "/conf/alternate-ca.pem".to_string();
+        }),
+        ("tls_server_name", |value| {
+            value.tls_server_name = "alternate.phase285.test".to_string();
+        }),
+        ("subscription_capacity", |value| {
+            value.subscription_capacity += 1;
+        }),
+        ("client_capacity", |value| value.client_capacity += 1),
+        ("read_capacity", |value| value.read_buffer_capacity -= 1),
+        ("deadline", |value| value.request_deadline_millis += 1),
+        ("worker_capacities", |value| {
+            value.ingress_queue_capacity += 1;
+            value.max_in_flight += 1;
+        }),
+    ];
+    for (label, mutate) in config_mutations {
+        let mut service_config = config.clone();
+        mutate(&mut service_config);
+        assert_connection_service_ready_mismatch(
+            label,
+            &config,
+            &ready,
+            service_config,
+            ready.clone(),
+            entries.clone(),
+        )
+        .await?;
+    }
+    for (label, mutation) in [
+        ("stream", ReadyBindingMutation::Stream),
+        ("epoch", ReadyBindingMutation::Epoch),
+        ("anchor", ReadyBindingMutation::Anchor),
+        ("admission_set", ReadyBindingMutation::AdmissionSet),
+        ("selected_limits", ReadyBindingMutation::SelectedLimits),
+    ] {
+        let (service_ready, service_entries) =
+            store_ready_fixture_entries_with(&fixture, mutation)?;
+        let service_config = store_service_config(&fixture, &service_ready)?;
+        assert_connection_service_ready_mismatch(
+            label,
+            &config,
+            &ready,
+            service_config,
+            service_ready,
+            service_entries,
+        )
+        .await?;
+    }
+    let mut plaintext = config.clone();
+    plaintext.nats_url = "nats://nats.phase285.test:4222".to_string();
+    assert!(plaintext.validate_for_ready(&ready).is_err());
+    for (path_variable, credential_role, capability) in [
+        (
+            "SWARM_NATS_RUNTIME_CREDENTIAL_PATH",
+            "runtime",
+            "runtime_credential_swap",
+        ),
+        (
+            "SWARM_NATS_WITNESS_CREDENTIAL_PATH",
+            "witness",
+            "witness_credential_swap",
+        ),
+        (
+            "SWARM_NATS_INIT_CREDENTIAL_PATH",
+            "init",
+            "init_credential_swap",
+        ),
+    ] {
+        let mut mutant = config.clone();
+        mutant.nats_credentials_path =
+            std::env::var(path_variable).map_err(|_| ProtocolError::InvalidField {
+                field: path_variable.to_string(),
+                reason: "wrapped role credential is required".to_string(),
+            })?;
+        assert!(matches!(
+            StoreRoleConnectionV1::connect(&mutant, &ready).await,
+            Err(swarm_governance_witness::StoreProxyRunnerErrorV1::Configuration)
+        ));
+        write_capability_row(
+            capability,
+            credential_role,
+            "PHASE285_WITNESS_STORE",
+            "KV_phase285_service",
+            "credential_role_refused",
+            0,
+            0,
+        )?;
+    }
+    assert!(
+        connect_harness_role("SWARM_NATS_STORE_CREDENTIAL_PATH", "witness")
+            .await
+            .is_err()
+    );
+    write_capability_row(
+        "store_credential_swap",
+        "witness-store",
+        "PHASE285_WITNESS",
+        store_proxy_subjects()[1],
+        "cross_role_login_refused",
+        0,
+        0,
+    )?;
+
+    let account_swap = mutated_harness_credential(
+        "SWARM_NATS_RUNTIME_CREDENTIAL_PATH",
+        "account-swap",
+        |credential| credential.role = "witness-store".to_string(),
+    )?;
+    let mut account_config = config.clone();
+    account_config.nats_credentials_path = account_swap.to_string_lossy().into_owned();
+    let (account_store, account_calls) = counting_store(ready.clone(), entries)?;
+    let account_service =
+        StoreProxyService::new(account_config.clone(), ready.clone(), account_store)
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let account_connection = StoreRoleConnectionV1::connect(&account_config, &ready)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    assert!(matches!(
+        StoreProxyServiceRunner::start(account_connection, account_service).await,
+        Err(swarm_governance_witness::StoreProxyRunnerErrorV1::Authentication)
+    ));
+    assert_eq!(account_calls.load(Ordering::SeqCst), 0);
+    write_capability_row(
+        "account_swap",
+        "witness-store",
+        "PHASE285_RUNTIME",
+        "KV_phase285_service",
+        "account_stream_probe_refused",
+        0,
+        0,
+    )?;
+
+    let mut ca_swap = config.clone();
+    ca_swap.tls_ca_path = std::env::var("SWARM_NATS_RUNTIME_CREDENTIAL_PATH")
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    assert!(matches!(
+        StoreRoleConnectionV1::connect(&ca_swap, &ready).await,
+        Err(swarm_governance_witness::StoreProxyRunnerErrorV1::Authentication)
+    ));
+    write_capability_row(
+        "tls_ca_swap",
+        "witness-store",
+        "PHASE285_WITNESS_STORE",
+        "tls://localhost",
+        "ca_authentication_refused",
+        0,
+        0,
+    )?;
+    let mut name_swap = config.clone();
+    name_swap.tls_server_name = "wrong.phase285.test".to_string();
+    assert!(matches!(
+        StoreRoleConnectionV1::connect(&name_swap, &ready).await,
+        Err(swarm_governance_witness::StoreProxyRunnerErrorV1::Configuration)
+    ));
+    write_capability_row(
+        "tls_server_name_swap",
+        "witness-store",
+        "PHASE285_WITNESS_STORE",
+        "wrong.phase285.test",
+        "server_name_refused",
+        0,
+        0,
+    )?;
+    let capacity_mutations: [fn(&mut StoreProxyServiceConfigV1); 3] = [
+        |value: &mut StoreProxyServiceConfigV1| value.subscription_capacity = 0,
+        |value: &mut StoreProxyServiceConfigV1| value.client_capacity = 0,
+        |value: &mut StoreProxyServiceConfigV1| value.read_buffer_capacity = 0,
+    ];
+    for mutate in capacity_mutations {
+        let mut bounded = config.clone();
+        mutate(&mut bounded);
+        assert!(bounded.validate_for_ready(&ready).is_err());
+    }
+    let compose = include_str!("../../../docker-compose.yml");
+    assert!(compose.contains("phase285-runtime") && compose.contains("phase285-witness"));
+    assert!(compose.contains("phase285-witness-store") && compose.contains("phase285-init"));
+    assert!(compose.contains("cross-role-credential-mount"));
+    write_capability_row(
+        "mount_swap",
+        "witness-store",
+        "PHASE285_WITNESS_STORE",
+        "raw-store-credentials",
+        "cross_role_mount_absent",
+        0,
+        0,
+    )
+}
+
+#[tokio::test]
+async fn full_service_path_validates_proxy_response_before_public_attestation() -> ProtocolResult<()>
+{
+    let fixture = Fixture::new(CasMode::Apply)?;
+    let (ready, entries) = store_ready_fixture_entries(&fixture)?;
+    let (store, calls) = counting_store(ready.clone(), entries)?;
+    let service = StoreProxyService::new(
+        store_service_config(&fixture, &ready)?,
+        ready.clone(),
+        store,
+    )
+    .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let request = signed_store_request(
+        &fixture,
+        &ready,
+        WitnessStoreProxyOperationV1::ReadEntry,
+        WitnessStoreProxyRequestBodyV1::ReadEntry {
+            stream_id: fixture.admission.stream_id.clone(),
+        },
+    )?;
+    let mut raw = canonical_wire_bytes(&request)?;
+    raw.push(b' ');
+    assert_eq!(
+        service
+            .handle_subject_bytes(store_proxy_subjects()[1], &raw)
+            .await,
+        Err(StoreProxyServiceErrorV1::Invalid)
+    );
+    let mut signature = request.clone();
+    signature.signature.signature_hex = "0".repeat(128);
+    assert_eq!(
+        service
+            .handle_subject_bytes(
+                store_proxy_subjects()[1],
+                &canonical_wire_bytes(&signature)?
+            )
+            .await,
+        Err(StoreProxyServiceErrorV1::Invalid)
+    );
+    initialize_harness_store_stream().await?;
+    let store_connection =
+        StoreRoleConnectionV1::connect(&store_service_config(&fixture, &ready)?, &ready)
+            .await
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let witness_client =
+        connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
+    let _runner = StoreProxyServiceRunner::start(store_connection, service)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    witness_client
+        .flush()
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let client = NatsPublicWitnessStoreProxyClient::new(
+        witness_client.clone(),
+        MAX_PROTOCOL_RECORD_BYTES,
+        MAX_PROTOCOL_RECORD_BYTES,
+        1_000,
+    )
+    .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let response = client
+        .read_entry(request)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    assert!(matches!(
+        response.body,
+        WitnessStoreProxyResponseBodyV1::Entry { revision: 7, .. }
+    ));
+    let before = calls.load(Ordering::SeqCst);
+    let valid_request = signed_store_request(
+        &fixture,
+        &ready,
+        WitnessStoreProxyOperationV1::ReadEntry,
+        WitnessStoreProxyRequestBodyV1::ReadEntry {
+            stream_id: fixture.admission.stream_id.clone(),
+        },
+    )?;
+    let mut injected: serde_json::Value =
+        serde_json::from_slice(&canonical_wire_bytes(&valid_request)?)
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    injected
+        .as_object_mut()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+        .insert(
+            "reply_subject".to_string(),
+            serde_json::Value::String("swarm.attacker.controlled.reply".to_string()),
+        );
+    assert_live_subject_refused(
+        &witness_client,
+        store_proxy_subjects()[1],
+        &serde_json::to_vec(&injected)
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?,
+    )
+    .await?;
+    let after = calls.load(Ordering::SeqCst);
+    assert_eq!(after, before);
+    write_capability_row(
+        "reply_subject_injection",
+        "witness",
+        "PHASE285_WITNESS",
+        store_proxy_subjects()[1],
+        "invalid_reply_inbox",
+        before,
+        after,
+    )?;
+    let compose = include_str!("../../../docker-compose.yml");
+    assert!(compose.contains("wildcard-service-import"));
+    write_capability_row(
+        "wildcard_import",
+        "topology",
+        "PHASE285_WITNESS",
+        "swarm.governance.witness.store.v1.>",
+        "wildcard_import_absent",
+        0,
+        0,
+    )?;
+    let service_source = include_str!("../src/store_proxy_service.rs");
+    assert!(!service_source.contains("Ed25519Signer"));
+    write_capability_row(
+        "private_public_signing",
+        "witness-store",
+        "PHASE285_WITNESS_STORE",
+        "StoreProxyService",
+        "public_signer_absent",
+        0,
+        0,
+    )
+}
+
+#[tokio::test]
+async fn full_service_path_fails_closed_on_store_queue_exhaustion() -> ProtocolResult<()> {
+    let (baseline, baseline_calls, request_bytes) = secondary_response_bytes_at_limit(None).await?;
+    let baseline = baseline.map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    assert_eq!(baseline_calls, 1);
+    assert!(request_bytes < MAX_PROTOCOL_RECORD_BYTES);
+    let exact_limit =
+        u64::try_from(baseline.len()).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let (at_limit, at_limit_calls, _) =
+        secondary_response_bytes_at_limit(Some(exact_limit)).await?;
+    assert_eq!(
+        at_limit
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?
+            .len(),
+        baseline.len()
+    );
+    assert_eq!(at_limit_calls, 1);
+    let (over_limit, over_limit_calls, _) =
+        secondary_response_bytes_at_limit(Some(exact_limit - 1)).await?;
+    assert_eq!(over_limit, Err(StoreProxyServiceErrorV1::Bounds));
+    assert_eq!(over_limit_calls, 1);
+
+    let (baseline_overload, baseline_before, baseline_after, baseline_expected) =
+        selected_overload_response_at_limit(MAX_PROTOCOL_RECORD_BYTES as u64).await?;
+    assert_eq!(baseline_before, 1);
+    assert_eq!(baseline_after, baseline_before);
+    assert_eq!(baseline_overload, Some(baseline_expected.clone()));
+    let overload_limit = u64::try_from(baseline_expected.len())
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let (exact_overload, exact_before, exact_after, exact_expected) =
+        selected_overload_response_at_limit(overload_limit).await?;
+    assert_eq!(exact_overload, Some(exact_expected));
+    assert_eq!((exact_before, exact_after), (1, 1));
+    let (bounded_overload, bounded_before, bounded_after, _) =
+        selected_overload_response_at_limit(overload_limit - 1).await?;
+    assert_eq!(bounded_overload, None);
+    assert_eq!((bounded_before, bounded_after), (1, 1));
+
+    let fixture = Fixture::new(CasMode::Apply)?;
+    let (ready, entries) = store_ready_fixture_entries(&fixture)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let inner = InMemoryWitnessStore::new(ready.clone(), entries, 2_000_000)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let store = BlockingReadAtomicStore {
+        inner,
+        calls: calls.clone(),
+        entered: entered.clone(),
+        release: release.clone(),
+    };
+    let mut config = store_service_config(&fixture, &ready)?;
+    config.ingress_queue_capacity = 1;
+    config.max_in_flight = 1;
+    let request = signed_store_request(
+        &fixture,
+        &ready,
+        WitnessStoreProxyOperationV1::ReadEntry,
+        WitnessStoreProxyRequestBodyV1::ReadEntry {
+            stream_id: fixture.admission.stream_id.clone(),
+        },
+    )?;
+    let request_bytes = canonical_wire_bytes(&request)?;
+    let service = StoreProxyService::new(config.clone(), ready.clone(), store)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    initialize_harness_store_stream().await?;
+    let connection = StoreRoleConnectionV1::connect(&config, &ready)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let _runner = StoreProxyServiceRunner::start(connection, service)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let client = connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let first_client = client.clone();
+    let first_bytes = request_bytes.clone();
+    let first = tokio::spawn(async move {
+        first_client
+            .request(store_proxy_subjects()[1], first_bytes.into())
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+        .await
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let second_client = client.clone();
+    let second_bytes = request_bytes.clone();
+    let second = tokio::spawn(async move {
+        second_client
+            .request(store_proxy_subjects()[1], second_bytes.into())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+    let before = calls.load(Ordering::SeqCst);
+    assert_eq!(before, 1);
+    let overload = client
+        .request(store_proxy_subjects()[1], request_bytes.into())
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let overload = WitnessStoreProxyResponseV1::decode(&overload.payload)?;
+    assert!(matches!(
+        overload.body,
+        WitnessStoreProxyResponseBodyV1::Refused {
+            failure_code: WitnessStoreProxyFailureCodeV1::Unavailable,
+            observed_revision: None,
+            observed_value_digest: None,
+        }
+    ));
+    let after = calls.load(Ordering::SeqCst);
+    assert_eq!(after, before);
+    release.notify_waiters();
+    first
+        .await
+        .map_err(join_error)?
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    second
+        .await
+        .map_err(join_error)?
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    assert!(private_store_ingress_overload_control());
+    write_capability_row(
+        "store_queue_exhaustion",
+        "witness",
+        "PHASE285_WITNESS",
+        store_proxy_subjects()[1],
+        "overload_unavailable",
+        before,
+        after,
+    )?;
+    assert_eq!(
+        store_proxy_subjects(),
+        &[
+            "swarm.governance.witness.store.v1.inspect_ready",
+            "swarm.governance.witness.store.v1.read_entry",
+            "swarm.governance.witness.store.v1.compare_and_swap",
+        ]
+    );
+    let service_source = include_str!("../src/store_proxy_service.rs");
+    assert!(!service_source.contains("$KV.") && !service_source.contains("$JS.API."));
+    write_capability_row(
+        "public_store_bypass",
+        "runtime",
+        "PHASE285_RUNTIME",
+        "StoreProxyService",
+        "raw_store_api_absent",
+        0,
+        0,
+    )?;
+    let harness = include_str!("../../../tools/with-nats-jetstream.sh");
+    assert!(harness.contains("cleanup_confined_scratch"));
+    assert!(harness.contains("paths_overlap"));
+    write_capability_row(
+        "hostile_cleanup_preservation",
+        "harness",
+        "confined-project",
+        "cleanup_confined_scratch",
+        "cleanup_fail_closed",
+        0,
+        0,
+    )
 }

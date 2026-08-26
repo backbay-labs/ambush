@@ -6,12 +6,22 @@ BASE_COMPOSE="$ROOT_DIR/docker-compose.yml"
 PINNED_IMAGE="docker.io/library/nats:2.11.17-alpine@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00"
 PINNED_REPO_DIGEST="nats@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00"
 PINNED_VERSION="2.11.17"
-EXPECTED_ACCOUNT="PHASE285_EXPECTED"
-FOREIGN_ACCOUNT="PHASE285_FOREIGN"
-EXPECTED_USER="phase285_expected"
-EXPECTED_PASSWORD="phase285_expected_fixed_password"
-FOREIGN_USER="phase285_foreign"
-FOREIGN_PASSWORD="phase285_foreign_fixed_password"
+RUNTIME_ACCOUNT="PHASE285_RUNTIME"
+WITNESS_ACCOUNT="PHASE285_WITNESS"
+EXPECTED_ACCOUNT="PHASE285_WITNESS_STORE"
+RUNTIME_USER="phase285_foreign"
+RUNTIME_PASSWORD="phase285_foreign_fixed_password"
+WITNESS_USER="phase285_witness"
+WITNESS_PASSWORD="phase285_witness_fixed_password"
+STORE_USER="phase285_witness_store"
+STORE_PASSWORD="phase285_witness_store_fixed_password"
+INIT_USER="phase285_expected"
+INIT_PASSWORD="phase285_expected_fixed_password"
+EXPECTED_USER="$INIT_USER"
+EXPECTED_PASSWORD="$INIT_PASSWORD"
+FOREIGN_ACCOUNT="$RUNTIME_ACCOUNT"
+FOREIGN_USER="$RUNTIME_USER"
+FOREIGN_PASSWORD="$RUNTIME_PASSWORD"
 START_TIMEOUT_SECS="${SWARM_NATS_START_TIMEOUT_SECS:-90}"
 
 paths_overlap() {
@@ -79,16 +89,166 @@ jetstream {
   sync_interval: always
 }
 accounts {
+  $RUNTIME_ACCOUNT {
+    jetstream: enabled
+    users: [ {
+      user: "$RUNTIME_USER", password: "$RUNTIME_PASSWORD",
+      permissions: {
+        publish: [
+          "swarm.governance.witness.v1.fence",
+          "swarm.governance.witness.v1.establish",
+          "swarm.governance.witness.v1.discover",
+          "swarm.governance.witness.v1.prepare",
+          "swarm.governance.witness.v1.commit",
+          "swarm.governance.witness.v1.abort",
+          "swarm.governance.witness.v1.read_prepared",
+          "swarm.governance.witness.v1.read_head",
+          "swarm.governance.witness.v1.fetch_payload",
+          "\$JS.API.>", "\$KV.>"
+        ],
+        subscribe: ["_INBOX.>", "\$JS.EVENT.ADVISORY.>"]
+      }
+    } ]
+    imports: [
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.fence" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.establish" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.discover" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.prepare" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.commit" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.abort" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.read_prepared" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.read_head" } },
+      { service: { account: $WITNESS_ACCOUNT, subject: "swarm.governance.witness.v1.fetch_payload" } }
+    ]
+  }
+  $WITNESS_ACCOUNT {
+    users: [ {
+      user: "$WITNESS_USER", password: "$WITNESS_PASSWORD",
+      permissions: {
+        publish: [
+          "swarm.governance.witness.store.v1.inspect_ready",
+          "swarm.governance.witness.store.v1.read_entry",
+          "swarm.governance.witness.store.v1.compare_and_swap"
+        ],
+        subscribe: [
+          "swarm.governance.witness.v1.fence",
+          "swarm.governance.witness.v1.establish",
+          "swarm.governance.witness.v1.discover",
+          "swarm.governance.witness.v1.prepare",
+          "swarm.governance.witness.v1.commit",
+          "swarm.governance.witness.v1.abort",
+          "swarm.governance.witness.v1.read_prepared",
+          "swarm.governance.witness.v1.read_head",
+          "swarm.governance.witness.v1.fetch_payload",
+          "_INBOX.>"
+        ],
+        allow_responses: { max: 1, expires: "2s" }
+      }
+    } ]
+    exports: [
+      { service: "swarm.governance.witness.v1.fence", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.establish", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.discover", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.prepare", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.commit", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.abort", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.read_prepared", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.read_head", accounts: [$RUNTIME_ACCOUNT] },
+      { service: "swarm.governance.witness.v1.fetch_payload", accounts: [$RUNTIME_ACCOUNT] }
+    ]
+    imports: [
+      { service: { account: $EXPECTED_ACCOUNT, subject: "swarm.governance.witness.store.v1.inspect_ready" } },
+      { service: { account: $EXPECTED_ACCOUNT, subject: "swarm.governance.witness.store.v1.read_entry" } },
+      { service: { account: $EXPECTED_ACCOUNT, subject: "swarm.governance.witness.store.v1.compare_and_swap" } }
+    ]
+  }
   $EXPECTED_ACCOUNT {
     jetstream: enabled
-    users: [ { user: "$EXPECTED_USER", password: "$EXPECTED_PASSWORD" } ]
-  }
-  $FOREIGN_ACCOUNT {
-    jetstream: enabled
-    users: [ { user: "$FOREIGN_USER", password: "$FOREIGN_PASSWORD" } ]
+    users: [
+      {
+        user: "$STORE_USER", password: "$STORE_PASSWORD",
+        permissions: {
+          publish: [
+            "\$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef",
+            "\$JS.API.STREAM.INFO.KV_phase285_service",
+            "\$JS.API.STREAM.MSG.GET.KV_phase285_service"
+          ],
+          subscribe: [
+            "swarm.governance.witness.store.v1.inspect_ready",
+            "swarm.governance.witness.store.v1.read_entry",
+            "swarm.governance.witness.store.v1.compare_and_swap",
+            "_INBOX.>"
+          ],
+          allow_responses: { max: 1, expires: "2s" }
+        }
+      },
+      {
+        user: "$INIT_USER", password: "$INIT_PASSWORD",
+        permissions: {
+          publish: ["\$JS.API.>", "\$KV.>"],
+          subscribe: ["_INBOX.>"]
+        }
+      }
+    ]
+    exports: [
+      { service: "swarm.governance.witness.store.v1.inspect_ready", accounts: [$WITNESS_ACCOUNT] },
+      { service: "swarm.governance.witness.store.v1.read_entry", accounts: [$WITNESS_ACCOUNT] },
+      { service: "swarm.governance.witness.store.v1.compare_and_swap", accounts: [$WITNESS_ACCOUNT] }
+    ]
   }
 }
 EOF
+  TLS_RUNTIME_PASSWORD="$(openssl rand -hex 32)"
+  TLS_WITNESS_PASSWORD="$(openssl rand -hex 32)"
+  TLS_STORE_PASSWORD="$(openssl rand -hex 32)"
+  TLS_INIT_PASSWORD="$(openssl rand -hex 32)"
+  TLS_CREDENTIAL_TOKEN="$(openssl rand -hex 32)"
+  [[ ${#TLS_RUNTIME_PASSWORD} -eq 64 && ${#TLS_WITNESS_PASSWORD} -eq 64 &&
+     ${#TLS_STORE_PASSWORD} -eq 64 && ${#TLS_INIT_PASSWORD} -eq 64 &&
+     ${#TLS_CREDENTIAL_TOKEN} -eq 64 ]] || return 1
+  [[ "$(printf '%s\n' "$TLS_RUNTIME_PASSWORD" "$TLS_WITNESS_PASSWORD" "$TLS_STORE_PASSWORD" "$TLS_INIT_PASSWORD" | LC_ALL=C sort -u | wc -l | tr -d ' ')" == 4 ]] || return 1
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -subj "/CN=phase285-local-ca" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "$scratch/tls-ca-key.pem" -out "$scratch/tls-ca.pem" >/dev/null 2>&1
+  openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost" \
+    -keyout "$scratch/tls-server-key.pem" -out "$scratch/tls-server.csr" >/dev/null 2>&1
+  printf '%s\n' 'subjectAltName=DNS:localhost' 'basicConstraints=critical,CA:FALSE' \
+    'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' \
+    >"$scratch/tls-server.ext"
+  openssl x509 -req -days 1 -in "$scratch/tls-server.csr" \
+    -CA "$scratch/tls-ca.pem" -CAkey "$scratch/tls-ca-key.pem" -CAcreateserial \
+    -extfile "$scratch/tls-server.ext" -out "$scratch/tls-server.pem" >/dev/null 2>&1
+  python3 -I - "$scratch/nats.conf" "$scratch/nats-tls.conf" \
+    "$RUNTIME_PASSWORD" "$TLS_RUNTIME_PASSWORD" \
+    "$WITNESS_PASSWORD" "$TLS_WITNESS_PASSWORD" \
+    "$STORE_PASSWORD" "$TLS_STORE_PASSWORD" \
+    "$INIT_PASSWORD" "$TLS_INIT_PASSWORD" <<'PY'
+import pathlib, sys
+source, target, *pairs = sys.argv[1:]
+value = pathlib.Path(source).read_text()
+for old, new in zip(pairs[::2], pairs[1::2], strict=True):
+    if value.count(old) != 1:
+        raise SystemExit("TLS credential replacement cardinality differs")
+    value = value.replace(old, new, 1)
+tls = '''tls {
+  cert_file: "/etc/nats/tls/server.pem"
+  key_file: "/etc/nats/tls/server-key.pem"
+  timeout: 2
+}
+'''
+pathlib.Path(target).write_text(tls + value)
+PY
+  printf '{"schema_version":1,"role":"runtime","username":"%s","password":"%s","invocation_token":"%s"}' \
+    "$RUNTIME_USER" "$TLS_RUNTIME_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/runtime.credentials.json"
+  printf '{"schema_version":1,"role":"witness","username":"%s","password":"%s","invocation_token":"%s"}' \
+    "$WITNESS_USER" "$TLS_WITNESS_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/witness.credentials.json"
+  printf '{"schema_version":1,"role":"witness-store","username":"%s","password":"%s","invocation_token":"%s"}' \
+    "$STORE_USER" "$TLS_STORE_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/store.credentials.json"
+  printf '{"schema_version":1,"role":"init","username":"%s","password":"%s","invocation_token":"%s"}' \
+    "$INIT_USER" "$TLS_INIT_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/init.credentials.json"
   cat >"$scratch/compose.override.yml" <<EOF
 services:
   nats:
@@ -96,8 +256,93 @@ services:
     volumes:
       - "$scratch/nats.conf:/etc/nats/nats.conf:ro"
       - nats-data:/data
+  nats_tls:
+    image: "$PINNED_IMAGE"
+    profiles: ["nats"]
+    command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      - "127.0.0.1::4222"
+      - "127.0.0.1::8222"
+    volumes:
+      - "$scratch/nats-tls.conf:/etc/nats/nats.conf:ro"
+      - "$scratch/tls-server.pem:/etc/nats/tls/server.pem:ro"
+      - "$scratch/tls-server-key.pem:/etc/nats/tls/server-key.pem:ro"
+      - nats-tls-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz || exit 1"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+volumes:
+  nats-tls-data:
 EOF
-  chmod 600 "$scratch/nats.conf" "$scratch/compose.override.yml"
+  chmod 600 "$scratch/nats.conf" "$scratch/nats-tls.conf" "$scratch/compose.override.yml" \
+    "$scratch/tls-ca-key.pem" "$scratch/tls-server-key.pem" \
+    "$scratch/runtime.credentials.json" "$scratch/witness.credentials.json" \
+    "$scratch/store.credentials.json" "$scratch/init.credentials.json"
+}
+
+validate_authority_topology() {
+  local path="$1" mode="${2:-validate}"
+  python3 -I - "$path" "$mode" <<'PY'
+import hashlib, pathlib, re, sys
+path, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
+source = path.read_text()
+runtime="PHASE285_RUNTIME"; witness="PHASE285_WITNESS"; store="PHASE285_WITNESS_STORE"
+users=["phase285_foreign","phase285_witness","phase285_witness_store","phase285_expected"]
+public=["fence","establish","discover","prepare","commit","abort","read_prepared","read_head","fetch_payload"]
+private=["inspect_ready","read_entry","compare_and_swap"]
+def validate(value):
+    for account in [runtime,witness,store]:
+        if len(re.findall(rf"^  {account} \{{",value,re.M)) != 1: raise ValueError("account inventory differs")
+    if "PHASE285_FOREIGN" in value: raise ValueError("legacy fourth account survived")
+    for user in users:
+        if value.count(f'user: "{user}"') != 1: raise ValueError("principal inventory differs")
+    for suffix in public:
+        if value.count(f'"swarm.governance.witness.v1.{suffix}"') != 4: raise ValueError("public service topology differs")
+    for suffix in private:
+        if value.count(f'"swarm.governance.witness.store.v1.{suffix}"') != 4: raise ValueError("private service topology differs")
+    if re.search(r'(?m)^\s*(?:service|to):\s*"[^"\n]*[*>]',value): raise ValueError("wildcard service authority survived")
+    witness_user=value.index('user: "phase285_witness"')
+    store_account=value.index("  PHASE285_WITNESS_STORE {")
+    witness_block=value[witness_user:store_account]
+    if '"$JS.API.>"' in witness_block or '"$KV.>"' in witness_block:
+        raise ValueError("public witness gained raw authority")
+    store_user=value.index('user: "phase285_witness_store"')
+    init_user=value.index('user: "phase285_expected"')
+    store_block=value[store_user:init_user]
+    store_authority=store_block.replace('"_INBOX.>"','')
+    if 'swarm.governance.witness.v1.' in store_authority or '*' in store_authority or '>' in store_authority:
+        raise ValueError("online store authority broadened")
+    init_block=value[init_user:value.index("    exports:",init_user)]
+    if 'swarm.governance.witness.v1.' in init_block or 'swarm.governance.witness.store.v1.' in init_block:
+        raise ValueError("init gained serving subject")
+validate(source)
+if mode == "validate": print("phase285_authority_topology accounts=3 principals=4 public=9 private=3 passed=1"); raise SystemExit(0)
+if mode != "self-test": raise SystemExit("unknown topology validator mode")
+mutations=[
+ ("missing_runtime_account",'  PHASE285_RUNTIME {','  PHASE285_RUNTIME_MISSING {'),
+ ("account_swap",'  PHASE285_WITNESS {','  PHASE285_RUNTIME {'),
+ ("missing_init",'user: "phase285_expected"','user: "phase285_expected_missing"'),
+ ("credential_swap",'user: "phase285_witness_store"','user: "phase285_witness"'),
+ ("public_omission",'service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence" }','service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence_missing" }'),
+ ("private_omission",'service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready" }','service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready_missing" }'),
+ ("wildcard_import",'service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.>"'),
+ ("runtime_private_import",'service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.establish" }','service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready" }'),
+ ("witness_raw_js",'"swarm.governance.witness.store.v1.compare_and_swap"\n        ],','"swarm.governance.witness.store.v1.compare_and_swap", "$JS.API.>"\n        ],'),
+ ("store_public_subject",'"swarm.governance.witness.store.v1.compare_and_swap",\n            "_INBOX.>"','"swarm.governance.witness.store.v1.compare_and_swap", "swarm.governance.witness.v1.prepare",\n            "_INBOX.>"'),
+ ("init_serving",'subscribe: ["_INBOX.>"]','subscribe: ["_INBOX.>", "swarm.governance.witness.store.v1.>"]'),
+]
+digests=[]
+for label,old,new in mutations:
+    if source.count(old) != 1: raise SystemExit(f"topology mutation anchor differs: {label}")
+    candidate=source.replace(old,new,1); digests.append(hashlib.sha256(candidate.encode()).hexdigest())
+    try: validate(candidate)
+    except ValueError: print(f"phase285_authority_topology_self_test_red mutation={label}")
+    else: raise SystemExit(f"authority topology mutant survived: {label}")
+if len(set(digests)) != len(mutations): raise SystemExit("authority topology mutant digests differ")
+print(f"phase285_authority_topology_self_test mutations={len(mutations)} unique={len(set(digests))} passed=1")
+PY
 }
 
 validate_observation() {
@@ -263,6 +508,11 @@ self_test() (
   scratch="$(create_confined_scratch)"
   trap 'cleanup_confined_scratch "$scratch"' EXIT
   write_configuration "$scratch"
+  validate_authority_topology "$scratch/nats.conf" self-test
+  validate_authority_topology "$scratch/nats-tls.conf"
+  [[ -s "$scratch/tls-ca.pem" && -s "$scratch/tls-server.pem" && -s "$scratch/tls-server-key.pem" ]] || return 1
+  [[ "$TLS_RUNTIME_PASSWORD" != "$RUNTIME_PASSWORD" && "$TLS_WITNESS_PASSWORD" != "$WITNESS_PASSWORD" &&
+     "$TLS_STORE_PASSWORD" != "$STORE_PASSWORD" && "$TLS_INIT_PASSWORD" != "$INIT_PASSWORD" ]] || return 1
 
   nonce="phase285-self-test-nonce"
   cat >"$scratch/observation" <<EOF
@@ -658,7 +908,8 @@ checkpoint_unavailable_control() (
 run_harness() (
   [[ $# -gt 0 ]] || { echo "usage: $0 <command> [args...]" >&2; return 64; }
   local scratch_cleanup=0 stack_started=0 child_status=0 mount_before mount_after
-  local actual_image repo_digest reported_version reported_sync_always expected_test="" expected_filtered=4 transcript index previous
+  local actual_image tls_actual_image repo_digest reported_version reported_sync_always expected_test="" expected_filtered=4 transcript index previous
+  local tls_nats_port tls_nats_http_port tls_nats_http_url tls_deadline
   SCRATCH="$(create_confined_scratch "$(docker_shared_scratch_parent)")"
   PROJECT_NAME="phase285-nats-$PPID-$$"
   NATS_PORT=""
@@ -672,7 +923,7 @@ run_harness() (
         if ! compose_for ps >&2; then
           echo "PHASE285-HARNESS[diagnostic-ps-failed]" >&2
         fi
-        if ! compose_for logs nats >&2; then
+        if ! compose_for logs nats nats_tls >&2; then
           echo "PHASE285-HARNESS[diagnostic-logs-failed]" >&2
         fi
       fi
@@ -693,21 +944,34 @@ run_harness() (
   trap cleanup EXIT
   trap 'exit 130' INT TERM
   write_configuration "$SCRATCH"
+  validate_authority_topology "$SCRATCH/nats.conf"
+  validate_authority_topology "$SCRATCH/nats-tls.conf"
 
   actual_image="$(compose_for config --format json | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["services"]["nats"]["image"])')"
+  tls_actual_image="$(compose_for config --format json | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["services"]["nats_tls"]["image"])')"
   [[ "$actual_image" == "$PINNED_IMAGE" ]] || { echo "PHASE285-HARNESS[wrong-image:$actual_image]" >&2; return 1; }
+  [[ "$tls_actual_image" == "$PINNED_IMAGE" ]] || { echo "PHASE285-HARNESS[wrong-tls-image:$tls_actual_image]" >&2; return 1; }
   if ! docker image inspect "$PINNED_IMAGE" >/dev/null 2>&1; then
     docker pull "$PINNED_IMAGE" >/dev/null
   fi
   repo_digest="$(docker image inspect "$PINNED_IMAGE" --format '{{join .RepoDigests "\n"}}' | grep -Fx "$PINNED_REPO_DIGEST")"
   [[ "$repo_digest" == "$PINNED_REPO_DIGEST" ]] || return 1
-  compose_for up -d nats >/dev/null
+  compose_for up -d nats nats_tls >/dev/null
   stack_started=1
   NATS_PORT="$(compose_for port nats 4222 | awk -F: 'NF {print $NF}')"
   NATS_HTTP_PORT="$(compose_for port nats 8222 | awk -F: 'NF {print $NF}')"
   [[ "$NATS_PORT" =~ ^[0-9]+$ && "$NATS_HTTP_PORT" =~ ^[0-9]+$ ]] || return 1
   NATS_HTTP_URL="http://127.0.0.1:$NATS_HTTP_PORT"
   wait_for_health
+  tls_nats_port="$(compose_for port nats_tls 4222 | awk -F: 'NF {print $NF}')"
+  tls_nats_http_port="$(compose_for port nats_tls 8222 | awk -F: 'NF {print $NF}')"
+  [[ "$tls_nats_port" =~ ^[0-9]+$ && "$tls_nats_http_port" =~ ^[0-9]+$ ]] || return 1
+  tls_nats_http_url="http://127.0.0.1:$tls_nats_http_port"
+  tls_deadline=$((SECONDS + START_TIMEOUT_SECS))
+  until curl -fsS "$tls_nats_http_url/healthz" >/dev/null; do
+    (( SECONDS < tls_deadline )) || return 1
+    sleep 1
+  done
   reported_version="$(curl -fsS "$NATS_HTTP_URL/varz" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
   [[ "$reported_version" == "$PINNED_VERSION" ]] || return 1
   reported_sync_always="$(curl -fsS "$NATS_HTTP_URL/jsz?config=true" | python3 -I -c 'import json,sys; print(str(json.load(sys.stdin).get("config", {}).get("sync_always", False)).lower())')"
@@ -758,11 +1022,31 @@ EOF
     fi
     if [[ "${!index}" == jetstream_checkpoint ]]; then
       expected_filtered=3
+    elif [[ "${!index}" == full_service_path ]]; then
+      expected_filtered=7
     fi
   done
   transcript="$SCRATCH/command.transcript"
   printf 'phase285_harness_nonce=%s\n' "$HARNESS_NONCE" >"$transcript"
   export NATS_URL="nats://$EXPECTED_USER:$EXPECTED_PASSWORD@127.0.0.1:$NATS_PORT"
+  export SWARM_NATS_RUNTIME_URL="nats://$RUNTIME_USER:$RUNTIME_PASSWORD@127.0.0.1:$NATS_PORT"
+  export SWARM_NATS_WITNESS_URL="nats://$WITNESS_USER:$WITNESS_PASSWORD@127.0.0.1:$NATS_PORT"
+  export SWARM_NATS_STORE_URL="nats://$STORE_USER:$STORE_PASSWORD@127.0.0.1:$NATS_PORT"
+  export SWARM_NATS_INIT_URL="nats://$INIT_USER:$INIT_PASSWORD@127.0.0.1:$NATS_PORT"
+  export SWARM_NATS_ROLE_ENDPOINT="nats://127.0.0.1:$NATS_PORT"
+  export SWARM_NATS_WITNESS_USER="$WITNESS_USER"
+  export SWARM_NATS_WITNESS_PASSWORD="$WITNESS_PASSWORD"
+  export SWARM_NATS_STORE_USER="$STORE_USER"
+  export SWARM_NATS_STORE_PASSWORD="$STORE_PASSWORD"
+  export SWARM_NATS_STORE_TLS_URL="tls://localhost:$tls_nats_port"
+  export SWARM_NATS_TLS_CA_PATH="$SCRATCH/tls-ca.pem"
+  export SWARM_NATS_TLS_SERVER_NAME="localhost"
+  export SWARM_NATS_TLS_CREDENTIAL_TOKEN="$TLS_CREDENTIAL_TOKEN"
+  export SWARM_NATS_RUNTIME_CREDENTIAL_PATH="$SCRATCH/runtime.credentials.json"
+  export SWARM_NATS_WITNESS_CREDENTIAL_PATH="$SCRATCH/witness.credentials.json"
+  export SWARM_NATS_STORE_CREDENTIAL_PATH="$SCRATCH/store.credentials.json"
+  export SWARM_NATS_INIT_CREDENTIAL_PATH="$SCRATCH/init.credentials.json"
+  export SWARM_NATS_CAPABILITY_INVOCATION_TOKEN="$HARNESS_NONCE"
   export NATS_HTTP_URL
   export SWARM_NATS_COMPOSE_PROJECT="$PROJECT_NAME"
   export SWARM_NATS_HARNESS_SCRATCH="$SCRATCH"
