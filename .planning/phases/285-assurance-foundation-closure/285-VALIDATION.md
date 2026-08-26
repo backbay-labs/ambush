@@ -48,7 +48,7 @@ created: 2026-08-24
 | 285-03-01 | 03A | 3 | ASSURE-02, ASSURE-06 | dependency/layering negative | `bash tools/check-phase285-witness-conformance.sh transport-layering && bash tools/check-witness-dependency-closure.sh --library-only` | ✅ `cf0ad8b` | ✅ accepted |
 | 285-03-02A | 03B | 4 | ASSURE-06 | closed raw config + pinned two-account harness | `bash tools/with-nats-jetstream.sh --self-test && bash tools/with-nats-jetstream.sh cargo test -p swarm-governance-witness --test jetstream_cas --locked --offline -- jetstream_cas_rejects_raw_config_unknown_field_or_persist_mode --exact && bash tools/with-nats-jetstream.sh cargo test -p swarm-governance-witness --test jetstream_cas --locked --offline -- jetstream_cas_rejects_each_raw_config_mutation --exact` | ❌ W0 | ⬜ pending |
 | 285-03-02B | 03B | 4 | ASSURE-06 | JetStream CAS/header + 19-row differential | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-cas` | ❌ W0 | ⬜ pending |
-| 285-03-03 | 03B | 4 | ASSURE-04, ASSURE-06 | JetStream restart/non-skip | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-checkpoint` | ❌ W0 | ⬜ pending |
+| 285-03-03 | 03B | 4 | ASSURE-04, ASSURE-06 | JetStream restart/non-skip plus root-pinned integrity boundary | `PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh --integrity-self-test && bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh jetstream-checkpoint` | ❌ W0 | ⬜ pending |
 | 285-04-01 | 04 | 5 | ASSURE-06 | nine-operation dispatcher | `bash tools/check-phase285-witness-conformance.sh public-dispatcher` | ❌ W0 | ⬜ pending |
 | 285-04-02 | 04 | 5 | ASSURE-06 | full request/reply isolation | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh full-service-path` | ❌ W0 | ⬜ pending |
 | 285-04-03 | 04 | 5 | ASSURE-04, ASSURE-06 | kill/restart/client attestation | `bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh service-checkpoint && bash tools/check-witness-dependency-closure.sh --all-targets` | ❌ W0 | ⬜ pending |
@@ -260,8 +260,8 @@ bash tools/check-phase285-witness-conformance.sh atomic-store-contract
 bash tools/check-phase285-witness-conformance.sh in-memory-differential
 bash tools/check-phase285-witness-conformance.sh typed-proxy
 bash tools/check-phase285-witness-conformance.sh transport-layering
-bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-cas
-bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh jetstream-checkpoint
+bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh jetstream-cas
+bash tools/with-nats-jetstream.sh env PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=1a8cbcc6dec726b414bbc5a1642a90dd46eed2fe6db9ab218af913839a44d5fb bash tools/check-phase285-witness-integrity.sh jetstream-checkpoint
 bash tools/check-phase285-witness-conformance.sh public-dispatcher
 bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh full-service-path
 bash tools/with-nats-jetstream.sh bash tools/check-phase285-witness-conformance.sh service-checkpoint
