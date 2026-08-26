@@ -1268,7 +1268,7 @@ pub trait WitnessAtomicStore: Send + Sync {
     ) -> Result<WitnessStoreCasResultV1, WitnessStoreErrorV1>;
 }
 
-pub(crate) fn validate_cas_transition(
+pub fn validate_cas_transition(
     ready: &WitnessStoreReadyResultV1,
     stream_id: &str,
     expected_revision: u64,
@@ -1302,7 +1302,7 @@ pub(crate) fn validate_cas_transition(
         .map_err(classify_protocol_error)
 }
 
-pub(crate) fn validate_read_entry(
+pub fn validate_read_entry(
     ready: &WitnessStoreReadyResultV1,
     stream_id: &str,
     revision: u64,

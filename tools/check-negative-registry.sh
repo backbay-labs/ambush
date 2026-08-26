@@ -129,16 +129,201 @@ phase285_scratch_hostile_controls() {
 
 phase285_transport_negative_check() {
   "$PHASE285_PYTHON" -I - "$1" "$2" <<'PY'
-import pathlib, re, sys, tomllib
+import hashlib, pathlib, re, sys, tomllib
 root = pathlib.Path(sys.argv[1])
 case = sys.argv[2]
 if case == "phase285-raw-kv-subject":
     source = root / "crates/swarm-governance-witness/src"
     if not source.is_dir():
         raise SystemExit("PHASE285-NEGATIVE[missing-witness-source]")
+    combined = ""
+    allowed_public_functions = {
+        "phase285_conformance_fixture",
+        "with_wrong_server_version_for_conformance",
+        "with_wrong_image_digest_for_conformance",
+        "raw_configuration",
+        "canonical_raw_configuration",
+        "projected_configuration",
+        "canonical_raw_stream_info",
+        "raw_stream_info",
+        "raw_stream_info_digest",
+        "name",
+        "inspect_raw_stream_info",
+    }
+    approved_open_count = 0
+    approved_debug_open_count = 0
     for path in sorted(source.rglob("*.rs")):
-        if re.search(r"\$KV\.[A-Za-z0-9_.>*-]*", path.read_text()):
-            raise SystemExit("PHASE285-NEGATIVE[raw-kv-subject]")
+        text = path.read_text()
+        relative = path.relative_to(source).as_posix()
+        combined += f"\n// {path.relative_to(source)}\n{text}"
+        for line in text.splitlines():
+            if "$KV." not in line:
+                continue
+            stripped = line.strip()
+            if re.match(r"pub\s+(?:const|static)\b", stripped):
+                raise SystemExit("PHASE285-NEGATIVE[exported-raw-literal]")
+            if relative == "nats_config.rs" and stripped == 'subjects: vec![format!("$KV.{bucket_name}.>")],':
+                continue
+            if relative == "jetstream_store.rs" and stripped == 'format!("$KV.{bucket_name}.{stream_key}")':
+                private_fixed = re.search(
+                    r"(?ms)^\s*fn\s+fixed_kv_subject\s*\([^)]*\)\s*"
+                    r"(?:->[^\{]+)?\{.*?format!\(\"\$KV\.\{bucket_name\}\.\{stream_key\}\"\).*?^\s*\}",
+                    text,
+                )
+                if private_fixed:
+                    continue
+            if relative == "jetstream_store.rs" and stripped == 'format!("$KV.{bucket_name}.>")':
+                private_filter = re.search(
+                    r'(?ms)^\s*fn\s+fixed_kv_subject_filter\s*\([^)]*\)\s*'
+                    r'(?:->[^\{]+)?\{.*?format!\("\$KV\.\{bucket_name\}\.>"\).*?^\s*\}',
+                    text,
+                )
+                if private_filter:
+                    continue
+            if re.search(r"\bpub\s+(?:async\s+)?fn\s+derive\b", line):
+                raise SystemExit("PHASE285-NEGATIVE[public-raw-derivation]")
+            if ".publish" in stripped:
+                continue
+            raise SystemExit("PHASE285-NEGATIVE[raw-literal-outside-allowlist]")
+        public_functions = re.finditer(
+            r"(?ms)^\s*pub\s+(?:async\s+)?fn\s+"
+            r"(?P<name>[A-Za-z0-9_]+)\s*\((?P<params>[^)]*)\)",
+            text,
+        )
+        for function in public_functions:
+            surface = f"{function.group('name')} {function.group('params')}".lower()
+            if "subject" in surface or "header" in surface:
+                raise SystemExit("PHASE285-NEGATIVE[public-raw-builder]")
+            if re.search(r"(?:^|[, :(])(?:raw|subject|header|operation)\s*:\s*&?str", surface):
+                raise SystemExit("PHASE285-NEGATIVE[public-raw-input]")
+        if re.search(
+            r"\bpub\s+struct\s+[A-Za-z0-9_]*(?:Authority|Input|Builder|Request)[A-Za-z0-9_]*\b",
+            text,
+        ):
+            raise SystemExit("PHASE285-NEGATIVE[public-raw-structure]")
+        if re.search(
+            r"(?ms)\bpub\s+struct\s+[A-Za-z0-9_]+\s*\{[^}]*"
+            r"\bpub\s+(?:raw|subject|header|operation)[A-Za-z0-9_]*\s*:",
+            text,
+        ):
+            raise SystemExit("PHASE285-NEGATIVE[public-raw-field]")
+        for public_export in re.findall(r"(?m)^\s*pub\s+(?:const|static|use|type)\b[^\n]*", text):
+            if relative == "lib.rs" and public_export.strip() == "pub use jetstream_store::NatsWitnessStore;":
+                continue
+            raise SystemExit("PHASE285-NEGATIVE[unapproved-public-export]")
+        for exported in re.finditer(
+            r"(?ms)^\s*pub\s+(?:async\s+)?fn\s+(?P<name>[A-Za-z0-9_]+)\s*"
+            r"\((?P<params>[^)]*)\)",
+            text,
+        ):
+            name = exported.group("name")
+            if name == "open":
+                normalized_params = " ".join(exported.group("params").split())
+                expected_params = (
+                    "context: Context, ready: WitnessStoreReadyResultV1, "
+                    "reported_server_version: &str, "
+                    "resolved_server_image_index_digest: &str,"
+                )
+                if relative != "jetstream_store.rs" or normalized_params != expected_params:
+                    raise SystemExit("PHASE285-NEGATIVE[unapproved-public-function]")
+                approved_open_count += 1
+                continue
+            if name == "open_with_post_ack_barrier":
+                normalized_params = " ".join(exported.group("params").split())
+                expected_params = (
+                    "context: Context, ready: WitnessStoreReadyResultV1, "
+                    "reported_server_version: &str, "
+                    "resolved_server_image_index_digest: &str, token: String, "
+                    "acknowledgement_path: PathBuf, release_path: PathBuf,"
+                )
+                gated_constructor = re.compile(
+                    r"(?ms)^\s*#\[cfg\(debug_assertions\)\]\s*\n"
+                    r"\s*#\[doc\(hidden\)\]\s*\n"
+                    r"\s*pub\s+async\s+fn\s+open_with_post_ack_barrier\s*\("
+                    r"\s*context:\s*Context,\s*"
+                    r"ready:\s*WitnessStoreReadyResultV1,\s*"
+                    r"reported_server_version:\s*&str,\s*"
+                    r"resolved_server_image_index_digest:\s*&str,\s*"
+                    r"token:\s*String,\s*"
+                    r"acknowledgement_path:\s*PathBuf,\s*"
+                    r"release_path:\s*PathBuf,\s*"
+                    r"\)\s*->\s*Result<Self,\s*WitnessStoreErrorV1>\s*\{"
+                )
+                if (
+                    relative != "jetstream_store.rs"
+                    or normalized_params != expected_params
+                    or len(gated_constructor.findall(text)) != 1
+                ):
+                    raise SystemExit("PHASE285-NEGATIVE[debug-constructor-gate]")
+                approved_debug_open_count += 1
+                continue
+            if name not in allowed_public_functions:
+                raise SystemExit("PHASE285-NEGATIVE[unapproved-public-function]")
+        if relative == "jetstream_store.rs":
+            debug_only_fragments = (
+                "#[cfg(debug_assertions)]\n"
+                "#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]\n"
+                "#[serde(deny_unknown_fields)]\n"
+                "struct PostAckBarrierEvent {",
+                "#[cfg(debug_assertions)]\n#[derive(Debug)]\nstruct PostAckBarrierControl {",
+                "    #[cfg(debug_assertions)]\n"
+                "    post_ack_barrier: Mutex<Option<PostAckBarrierControl>>,\n",
+                "    #[cfg(debug_assertions)]\n"
+                "    async fn wait_at_post_ack_barrier(",
+                "        #[cfg(debug_assertions)]\n"
+                "        if let Err(error) = self\n"
+                "            .wait_at_post_ack_barrier(",
+            )
+            if any(text.count(fragment) != 1 for fragment in debug_only_fragments):
+                raise SystemExit("PHASE285-NEGATIVE[debug-control-gate]")
+        if relative == "raw_config.rs":
+            snapshot_start_marker = "impl Nats21117TypedSnapshotV1 {"
+            snapshot_end_marker = "\n}\n\nimpl InspectedRawConfigurationV1 {"
+            if text.count(snapshot_start_marker) != 1 or text.count(snapshot_end_marker) != 1:
+                raise SystemExit("PHASE285-NEGATIVE[snapshot-api-shape]")
+            snapshot_start = text.index(snapshot_start_marker)
+            snapshot_end = text.index(snapshot_end_marker, snapshot_start)
+            snapshot_impl = text[snapshot_start:snapshot_end]
+            if re.search(
+                r"(?m)^\s*pub\s+fn\s+canonical_raw_stream_info\s*\(", snapshot_impl
+            ):
+                raise SystemExit("PHASE285-NEGATIVE[public-full-info-bytes]")
+            if re.search(
+                r"(?m)^\s*pub\s+fn\s+raw_stream_info_digest\s*\(", snapshot_impl
+            ):
+                raise SystemExit("PHASE285-NEGATIVE[public-full-info-digest]")
+    if approved_open_count != 1 or approved_debug_open_count != 1:
+        raise SystemExit("PHASE285-NEGATIVE[public-api-inventory]")
+    request_calls = re.findall(r"\.request\s*\(", combined)
+    jetstream_source = (source / "jetstream_store.rs").read_text()
+    if len(request_calls) != 1 or jetstream_source.count(".request(") != 1:
+        raise SystemExit("PHASE285-NEGATIVE[generic-request]")
+    if not re.search(
+        r"(?ms)^\s*async\s+fn\s+closed_snapshot\s*\(&self\).*?"
+        r"request_subject\s*=\s*format!\(.*?STREAM\.INFO\..*?"
+        r"\.request\(request_subject,\s*&serde_json::json!\(\{\}\)\)",
+        jetstream_source,
+    ):
+        raise SystemExit("PHASE285-NEGATIVE[generic-request]")
+    if re.search(r"\.publish\s*\([^)]*(?:\$KV\.|[*>])", combined):
+        raise SystemExit("PHASE285-NEGATIVE[wildcard-writer]")
+    if re.search(
+        r"\.(?:update_stream|delete_stream|purge_stream|delete|purge)\s*\(",
+        combined,
+    ):
+        raise SystemExit("PHASE285-NEGATIVE[management-operation]")
+    expected_stage_a_sources = {
+        "jetstream_store.rs": "7ad46939bc08a9dbe361c1455c9d23b56ed223feb00ce28b9d81ef48fbcaf928",
+        "lib.rs": "17ee2049f9d4cfd65f78f925fe365979bafab9fc6671f6eab2e51b9d05bb764c",
+        "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
+        "raw_config.rs": "a08b15774c72445f20fa36e8c377e81d455da2aa826102ea9d26bf9657908cf6",
+    }
+    observed_stage_a_sources = {
+        path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(source.rglob("*.rs"))
+    }
+    if observed_stage_a_sources != expected_stage_a_sources:
+        raise SystemExit("PHASE285-NEGATIVE[public-api-inventory]")
 elif case == "phase285-unrelated-authority-crate":
     path = root / "crates/swarm-governance-witness/Cargo.toml"
     with path.open("rb") as handle:
@@ -156,18 +341,280 @@ PY
 }
 
 phase285_transport_negative_self_test() (
-  local case="$1" scratch output status=0
+  local case="$1" scratch output status=0 mutant expected killed=0
+  local mapping_repo mapping_target baseline_raw old new mapping_name
+  local mapping_status=0 mapping_killed=0
+  local -a survivors=()
   phase285_transport_negative_check "$ROOT_DIR" "$case"
   phase285_scratch_hostile_controls
   scratch="$(phase285_create_confined_scratch phase285-negative)"
   trap 'phase285_cleanup_confined_scratch "$scratch" || exit 1' EXIT
-  mkdir -p "$scratch/crates/swarm-governance-witness/src"
+  mkdir -p "$scratch/crates/swarm-governance-witness"
   cp "$ROOT_DIR/crates/swarm-governance-witness/Cargo.toml" "$scratch/crates/swarm-governance-witness/Cargo.toml"
-  cp "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "$scratch/crates/swarm-governance-witness/src/lib.rs"
+  cp -R "$ROOT_DIR/crates/swarm-governance-witness/src" "$scratch/crates/swarm-governance-witness/src"
   if [ "$case" = phase285-raw-kv-subject ]; then
-    # The mutant must contain a literal raw subject.
-    # shellcheck disable=SC2016
-    printf '\npub const FORBIDDEN_RAW: &str = "$KV.raw.>";\n' >>"$scratch/crates/swarm-governance-witness/src/lib.rs"
+    while IFS='|' read -r mutant expected; do
+      cp "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "$scratch/crates/swarm-governance-witness/src/lib.rs"
+      printf '\n%s\n' "$mutant" >>"$scratch/crates/swarm-governance-witness/src/lib.rs"
+      status=0
+      output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+      if [ "$status" -eq 0 ]; then
+        survivors+=("$expected")
+      elif [ "$output" = "PHASE285-NEGATIVE[$expected]" ]; then
+        killed=$((killed + 1))
+      else
+        echo "PHASE285-NEGATIVE[unexpected-mutant-result:$expected:$status:$output]" >&2
+        return 1
+      fi
+    done <<'MUTANTS'
+pub fn subject_builder(subject: &str) -> String { subject.to_string() }|public-raw-builder
+pub fn raw_input(raw: &str) -> String { raw.to_string() }|public-raw-input
+pub struct RawAuthority { pub subject: String }|public-raw-structure
+pub struct RawInput { pub raw: String }|public-raw-structure
+pub struct TransportSurface { pub header_bytes: Vec<u8> }|public-raw-field
+pub const EXPORTED_RAW_SUBJECT: &str = "$KV.raw.>";|exported-raw-literal
+pub fn derive(key: &str) -> String { format!("$KV.raw.{key}") }|public-raw-derivation
+pub static EXPORTED_RAW_ALIAS: &str = "$KV.raw.alias";|exported-raw-literal
+pub fn name(key: &str) -> String { crate::nats_config::projected_configuration(key, 1, 1, 1).subjects[0].clone() }|public-api-inventory
+pub async fn open(raw: &str) -> String { raw.to_string() }|public-raw-input
+fn generic(client: &async_nats::jetstream::Context, subject: &str) { let _ = client.request(subject, &()); }|generic-request
+fn wildcard(client: &async_nats::Client) { let _ = client.publish("$KV.raw.>", "x".into()); }|wildcard-writer
+fn management(stream: &async_nats::jetstream::stream::Stream) { let _ = stream.delete(); }|management-operation
+MUTANTS
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "$scratch/crates/swarm-governance-witness/src/lib.rs"
+    while IFS='|' read -r old new expected; do
+      cp "$ROOT_DIR/crates/swarm-governance-witness/src/raw_config.rs" "$scratch/crates/swarm-governance-witness/src/raw_config.rs"
+      "$PHASE285_PYTHON" -I - "$scratch/crates/swarm-governance-witness/src/raw_config.rs" "$old" "$new" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+if text.count(sys.argv[2]) != 1:
+    raise SystemExit("PHASE285-NEGATIVE[seam-mutant-source]")
+path.write_text(text.replace(sys.argv[2], sys.argv[3], 1))
+PY
+      status=0
+      output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+      if [ "$status" -eq 0 ]; then
+        survivors+=("$expected")
+      elif [ "$output" = "PHASE285-NEGATIVE[$expected]" ]; then
+        killed=$((killed + 1))
+      else
+        echo "PHASE285-NEGATIVE[unexpected-seam-mutant-result:$expected:$status:$output]" >&2
+        return 1
+      fi
+    done <<'MUTANTS'
+pub(crate) fn from_validated_deployment|pub fn from_validated_deployment|unapproved-public-function
+pub(crate) fn subjects_count|pub fn subjects_count|public-raw-builder
+pub(crate) fn canonical_raw_stream_info|pub fn canonical_raw_stream_info|public-full-info-bytes
+pub(crate) fn raw_stream_info_digest|pub fn raw_stream_info_digest|public-full-info-digest
+pub(crate) struct Nats21117TypedSnapshotV1|pub struct Nats21117TypedSnapshotV1|public-api-inventory
+MUTANTS
+    while IFS='|' read -r mutation expected; do
+      cp "$ROOT_DIR/crates/swarm-governance-witness/src/jetstream_store.rs" \
+        "$scratch/crates/swarm-governance-witness/src/jetstream_store.rs"
+      "$PHASE285_PYTHON" -I - \
+        "$scratch/crates/swarm-governance-witness/src/jetstream_store.rs" "$mutation" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+mutation = sys.argv[2]
+text = path.read_text()
+def replace_once(old, new):
+    global text
+    if text.count(old) != 1:
+        raise SystemExit("PHASE285-NEGATIVE[debug-mutant-source]")
+    text = text.replace(old, new, 1)
+if mutation == "remove-cfg":
+    replace_once(
+        "    #[cfg(debug_assertions)]\n    #[doc(hidden)]\n"
+        "    pub async fn open_with_post_ack_barrier(",
+        "    #[doc(hidden)]\n    pub async fn open_with_post_ack_barrier(",
+    )
+elif mutation == "change-cfg":
+    replace_once(
+        "    #[cfg(debug_assertions)]\n    #[doc(hidden)]\n"
+        "    pub async fn open_with_post_ack_barrier(",
+        "    #[cfg(test)]\n    #[doc(hidden)]\n"
+        "    pub async fn open_with_post_ack_barrier(",
+    )
+elif mutation == "remove-doc-hidden":
+    replace_once(
+        "    #[cfg(debug_assertions)]\n    #[doc(hidden)]\n"
+        "    pub async fn open_with_post_ack_barrier(",
+        "    #[cfg(debug_assertions)]\n"
+        "    pub async fn open_with_post_ack_barrier(",
+    )
+elif mutation == "rename":
+    replace_once(
+        "pub async fn open_with_post_ack_barrier(",
+        "pub async fn open_with_post_ack_barrier_unbounded(",
+    )
+elif mutation == "broaden-token":
+    replace_once("        token: String,\n", "        token: &str,\n")
+elif mutation == "second-public-function":
+    text += "\npub fn checkpoint_debug_control(token: String) -> String { token }\n"
+elif mutation == "event-remove-cfg":
+    replace_once(
+        "#[cfg(debug_assertions)]\n"
+        "#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]\n"
+        "#[serde(deny_unknown_fields)]\n"
+        "struct PostAckBarrierEvent {",
+        "#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]\n"
+        "#[serde(deny_unknown_fields)]\n"
+        "struct PostAckBarrierEvent {",
+    )
+elif mutation == "control-remove-cfg":
+    replace_once(
+        "#[cfg(debug_assertions)]\n#[derive(Debug)]\nstruct PostAckBarrierControl {",
+        "#[derive(Debug)]\nstruct PostAckBarrierControl {",
+    )
+elif mutation == "field-remove-cfg":
+    replace_once(
+        "    #[cfg(debug_assertions)]\n"
+        "    post_ack_barrier: Mutex<Option<PostAckBarrierControl>>,\n",
+        "    post_ack_barrier: Mutex<Option<PostAckBarrierControl>>,\n",
+    )
+elif mutation == "parser-remove-cfg":
+    replace_once(
+        "    #[cfg(debug_assertions)]\n"
+        "    async fn wait_at_post_ack_barrier(",
+        "    async fn wait_at_post_ack_barrier(",
+    )
+elif mutation == "callsite-remove-cfg":
+    replace_once(
+        "        #[cfg(debug_assertions)]\n"
+        "        if let Err(error) = self\n"
+        "            .wait_at_post_ack_barrier(",
+        "        if let Err(error) = self\n"
+        "            .wait_at_post_ack_barrier(",
+    )
+else:
+    raise SystemExit("PHASE285-NEGATIVE[unknown-debug-mutant]")
+path.write_text(text)
+PY
+      status=0
+      output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+      if [ "$status" -eq 0 ]; then
+        survivors+=("$expected")
+      elif [ "$output" = "PHASE285-NEGATIVE[$expected]" ]; then
+        killed=$((killed + 1))
+      else
+        echo "PHASE285-NEGATIVE[unexpected-debug-mutant-result:$expected:$status:$output]" >&2
+        return 1
+      fi
+    done <<'MUTANTS'
+remove-cfg|debug-constructor-gate
+change-cfg|debug-constructor-gate
+remove-doc-hidden|debug-constructor-gate
+rename|unapproved-public-function
+broaden-token|debug-constructor-gate
+second-public-function|unapproved-public-function
+event-remove-cfg|debug-control-gate
+control-remove-cfg|debug-control-gate
+field-remove-cfg|debug-control-gate
+parser-remove-cfg|debug-control-gate
+callsite-remove-cfg|debug-control-gate
+MUTANTS
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/jetstream_store.rs" \
+      "$scratch/crates/swarm-governance-witness/src/jetstream_store.rs"
+    if [ "${#survivors[@]}" -ne 0 ]; then
+      printf 'PHASE285-NEGATIVE[surviving-mutant:%s]\n' "${survivors[@]}" >&2
+      return 1
+    fi
+    [ "$killed" -eq 29 ] || return 1
+
+    mapping_repo="$scratch/mapping-repo"
+    mapping_target="$scratch/mapping-target"
+    baseline_raw="$scratch/frozen-raw_config.rs"
+    mkdir -p "$mapping_repo"
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/raw_config.rs" "$baseline_raw"
+    cmp "$ROOT_DIR/crates/swarm-governance-witness/src/raw_config.rs" "$baseline_raw"
+    cp "$ROOT_DIR/Cargo.toml" "$mapping_repo/Cargo.toml"
+    cp "$ROOT_DIR/Cargo.lock" "$mapping_repo/Cargo.lock"
+    cp -R "$ROOT_DIR/crates" "$mapping_repo/crates"
+    if [ -d "$ROOT_DIR/.cargo" ]; then
+      cp -R "$ROOT_DIR/.cargo" "$mapping_repo/.cargo"
+    fi
+    cmp "$ROOT_DIR/Cargo.toml" "$mapping_repo/Cargo.toml"
+    cmp "$ROOT_DIR/Cargo.lock" "$mapping_repo/Cargo.lock"
+    diff -qr "$ROOT_DIR/crates" "$mapping_repo/crates" >/dev/null
+
+    phase285_snapshot_mapping_test() {
+      local target_test="$1"
+      (
+        cd "$mapping_repo"
+        CARGO_TARGET_DIR="$mapping_target" CARGO_INCREMENTAL=0 \
+          cargo test -p swarm-governance-witness --lib --locked --offline \
+            "$target_test" -- --exact
+      )
+    }
+
+    phase285_validate_snapshot_transcript() {
+      local transcript="$1" outcome="$2" target_test="$3" target_line result_pattern
+      if [ "$outcome" = ok ]; then
+        target_line="test $target_test ... ok"
+        result_pattern='^test result: ok[.] 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9.]+s$'
+      elif [ "$outcome" = failed ]; then
+        target_line="test $target_test ... FAILED"
+        result_pattern='^test result: FAILED[.] 0 passed; 1 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9.]+s$'
+      else
+        return 1
+      fi
+      printf '%s\n' "$transcript" | awk -v target="$target_line" -v result="$result_pattern" '
+        $0 == "running 1 test" { running_exact += 1 }
+        /^running [0-9]+ tests?$/ { running_any += 1 }
+        $0 == target { target_exact += 1 }
+        /^test raw_config::tests::/ { target_any += 1 }
+        $0 ~ result { result_exact += 1 }
+        /^test result:/ { result_any += 1 }
+        END {
+          if (running_exact != 1 || running_any != 1 || target_exact != 1 ||
+              target_any != 1 || result_exact != 1 || result_any != 1) exit 1
+        }
+      '
+    }
+
+    for mapping_test in \
+      raw_config::tests::typed_snapshot_maps_exact_authenticated_raw_fields \
+      raw_config::tests::typed_snapshot_canonicalizes_nats_created_without_changing_full_evidence
+    do
+      mapping_status=0
+      output="$(phase285_snapshot_mapping_test "$mapping_test" 2>&1)" || mapping_status=$?
+      if [ "$mapping_status" -ne 0 ] \
+        || ! phase285_validate_snapshot_transcript "$output" ok "$mapping_test"; then
+        echo "PHASE285-NEGATIVE[mapping-positive:$mapping_test:$mapping_status:$output]" >&2
+        return 1
+      fi
+    done
+
+    while IFS='^' read -r old new mapping_name mapping_test; do
+      cp "$baseline_raw" "$mapping_repo/crates/swarm-governance-witness/src/raw_config.rs"
+      "$PHASE285_PYTHON" -I - \
+        "$mapping_repo/crates/swarm-governance-witness/src/raw_config.rs" "$old" "$new" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+if text.count(sys.argv[2]) != 1:
+    raise SystemExit("PHASE285-NEGATIVE[mapping-mutant-source]")
+path.write_text(text.replace(sys.argv[2], sys.argv[3], 1))
+PY
+      mapping_status=0
+      output="$(phase285_snapshot_mapping_test "$mapping_test" 2>&1)" || mapping_status=$?
+      if [ "$mapping_status" -ne 101 ] \
+        || ! phase285_validate_snapshot_transcript "$output" failed "$mapping_test"; then
+        echo "PHASE285-NEGATIVE[unexpected-mapping-mutant:$mapping_name:$mapping_status:$output]" >&2
+        return 1
+      fi
+      mapping_killed=$((mapping_killed + 1))
+    done <<'MUTANTS'
+canonical_raw_stream_info: self.canonical_raw_stream_info.clone(),^canonical_raw_stream_info: self.canonical_raw_configuration.clone(),^full-info-bytes^raw_config::tests::typed_snapshot_maps_exact_authenticated_raw_fields
+raw_stream_info_digest: self.raw_stream_info_digest.clone(),^raw_stream_info_digest: self.raw_stream_configuration_digest.clone(),^full-info-digest^raw_config::tests::typed_snapshot_maps_exact_authenticated_raw_fields
+subjects_count: self.raw_stream_info.state.num_subjects,^subjects_count: self.raw_stream_info.state.num_subjects.filter(|count| *count != 0),^subjects-zero-presence^raw_config::tests::typed_snapshot_maps_exact_authenticated_raw_fields
+created_at: self.canonical_created_at.clone(),^created_at: self.raw_stream_info.created.clone(),^raw-created-identity^raw_config::tests::typed_snapshot_canonicalizes_nats_created_without_changing_full_evidence
+let canonical_raw_stream_info = serde_json::to_vec(&info)^let canonical_raw_stream_info = { let mut normalized = info.clone(); normalized.created = canonical_created_at.clone(); serde_json::to_vec(&normalized) }^full-info-created-normalization^raw_config::tests::typed_snapshot_canonicalizes_nats_created_without_changing_full_evidence
+MUTANTS
+    [ "$mapping_killed" -eq 5 ] || return 1
+    echo "phase285_transport_self_test case=$case positive=1 structural_mutations=$killed executable_mapping_mutations=$mapping_killed"
+    return 0
   else
     "$PHASE285_PYTHON" -I - "$scratch/crates/swarm-governance-witness/Cargo.toml" <<'PY'
 import pathlib, sys
