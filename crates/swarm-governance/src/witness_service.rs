@@ -5,12 +5,12 @@
 //! transport, store handle, or witness signing key.
 
 use crate::persistence_protocol::{
-    CandidateV1, MAX_PROTOCOL_RECORD_BYTES, MAX_PROTOCOL_STRING_BYTES, PROTOCOL_SCHEMA_VERSION,
-    ProtocolError, ProtocolResult, RecoveryChallengeV1, WitnessDiscoveryAttestationV1,
-    WitnessHeadV1, WitnessOperationOutcomeV1, WitnessOperationV1, WitnessOutcomeAttestationV1,
-    WitnessReadAttestationV1, WitnessSessionAttestationV1, WitnessSessionAuthorizationV1,
-    WitnessSessionFenceRequestV1, WitnessSessionStateFenceV1, WitnessSessionV1,
-    canonical_wire_bytes, decode_canonical, digest_domain,
+    CandidateV1, GovernanceWitnessSession, MAX_PROTOCOL_RECORD_BYTES, MAX_PROTOCOL_STRING_BYTES,
+    PROTOCOL_SCHEMA_VERSION, ProtocolError, ProtocolResult, RecoveryChallengeV1,
+    WitnessDiscoveryAttestationV1, WitnessHeadV1, WitnessOperationOutcomeV1, WitnessOperationV1,
+    WitnessOutcomeAttestationV1, WitnessReadAttestationV1, WitnessSessionAttestationV1,
+    WitnessSessionAuthorizationV1, WitnessSessionFenceRequestV1, WitnessSessionStateFenceV1,
+    WitnessSessionV1, canonical_wire_bytes, decode_canonical, digest_domain,
 };
 use serde::{Deserialize, Serialize};
 use swarm_crypto::{DetachedSignature, PublicKey, sha256_hex, verify_detached_signature};
@@ -246,6 +246,136 @@ impl WitnessServiceRequestV1 {
 
     pub fn decode(bytes: &[u8]) -> ProtocolResult<Self> {
         let request = decode_canonical::<Self>(bytes)?;
+        request.validate()?;
+        Ok(request)
+    }
+
+    /// Decode the canonical public-service frame before consulting current
+    /// store state. This deliberately validates only the outer request
+    /// identity and admission routing boundary. Nested signature, bounds,
+    /// session, candidate and transition failures are validated after the
+    /// dispatcher authenticates the admitted stream, so they can receive a
+    /// request- and store-bound signed application refusal.
+    pub fn decode_for_public_dispatch(bytes: &[u8]) -> ProtocolResult<Self> {
+        let request = decode_canonical::<Self>(bytes)?;
+        request.validate_public_dispatch_identity()?;
+        Ok(request)
+    }
+
+    /// Validate the immutable outer routing identity without treating nested
+    /// application semantics as successful. This is the only request identity
+    /// accepted when signing or verifying a refusal for invalid nested input.
+    pub fn validate_public_dispatch_identity(&self) -> ProtocolResult<()> {
+        if self.schema_version != PROTOCOL_SCHEMA_VERSION {
+            return Err(ProtocolError::UnsupportedSchema(self.schema_version));
+        }
+        validate_digest("request_nonce", &self.request_nonce)?;
+        validate_digest("admission_digest", &self.admission_digest)?;
+        validate_digest("request_digest", &self.request_digest)?;
+        if self.operation != self.body.operation() {
+            return Err(mismatch("operation", "does not match request body"));
+        }
+        let computed = digest_domain(
+            WITNESS_SERVICE_REQUEST_DOMAIN_V1,
+            &canonical_wire_bytes(&self.preimage())?,
+        )?;
+        if self.request_digest != computed {
+            return Err(ProtocolError::DigestMismatch {
+                field: "request_digest",
+            });
+        }
+        canonical_wire_bytes(self).map(|_| ())
+    }
+}
+
+/// Derive the only accepted public-service nonce from one fresh 32-byte
+/// entropy value. Exact retries reuse the finalized request; callers do not
+/// re-run this function for a retry.
+pub fn witness_service_request_nonce(entropy: [u8; 32]) -> String {
+    sha256_hex(&entropy)
+}
+
+/// Request preimage frozen before session authorization is created.
+///
+/// Private fields prevent callers from changing the nonce, body, admission,
+/// operation, or target between computing the request digest and signing it.
+pub struct WitnessServiceRequestDraftV1 {
+    request_nonce: String,
+    admission_digest: String,
+    body: WitnessServiceRequestBodyV1,
+    request_digest: String,
+}
+
+impl WitnessServiceRequestDraftV1 {
+    pub fn new(
+        request_nonce: String,
+        admission_digest: String,
+        body: WitnessServiceRequestBodyV1,
+    ) -> ProtocolResult<Self> {
+        let request = WitnessServiceRequestV1 {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            operation: body.operation(),
+            request_nonce,
+            admission_digest,
+            body,
+            request_digest: String::new(),
+            authorization: None,
+        };
+        request.validate_preimage()?;
+        let request_digest = request.computed_digest()?;
+        Ok(Self {
+            request_nonce: request.request_nonce,
+            admission_digest: request.admission_digest,
+            body: request.body,
+            request_digest,
+        })
+    }
+
+    pub fn request_digest(&self) -> &str {
+        &self.request_digest
+    }
+
+    pub fn finalize_without_authorization(self) -> ProtocolResult<WitnessServiceRequestV1> {
+        if self.body.authorization_binding().is_some() {
+            return Err(mismatch(
+                "authorization",
+                "session-bound operation requires finalize_with_session",
+            ));
+        }
+        self.finish(None)
+    }
+
+    pub fn finalize_with_session(
+        self,
+        session: &GovernanceWitnessSession,
+    ) -> ProtocolResult<WitnessServiceRequestV1> {
+        let (wire_session, operation, txid) =
+            self.body.authorization_binding().ok_or_else(|| {
+                mismatch(
+                    "authorization",
+                    "fence and session rotation must not carry session authorization",
+                )
+            })?;
+        if wire_session != session.attestation() {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let authorization = session.authorize(operation, txid, &self.request_digest)?;
+        self.finish(Some(authorization))
+    }
+
+    fn finish(
+        self,
+        authorization: Option<WitnessSessionAuthorizationV1>,
+    ) -> ProtocolResult<WitnessServiceRequestV1> {
+        let request = WitnessServiceRequestV1 {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            operation: self.body.operation(),
+            request_nonce: self.request_nonce,
+            admission_digest: self.admission_digest,
+            body: self.body,
+            request_digest: self.request_digest,
+            authorization,
+        };
         request.validate()?;
         Ok(request)
     }
@@ -583,20 +713,28 @@ impl WitnessServiceFailureAttestationV1 {
             .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
     }
 
-    fn validate_for_request(
-        &self,
-        request: &WitnessServiceRequestV1,
-        store_state: &VerifiedWitnessStoreStateV1,
-    ) -> ProtocolResult<()> {
+    fn validate_for_client_request(&self, request: &WitnessServiceRequestV1) -> ProtocolResult<()> {
         self.validate()?;
-        let identity = request_identity(request)?;
+        let identity = public_request_identity(request)?;
         if self.operation != request.operation
             || self.request_digest != request.request_digest
             || self.stream_id != identity.stream_id
             || self.admission_digest != request.admission_digest
             || self.witness_identity != identity.witness_identity
             || self.witness_key_id != identity.witness_key_id
-            || self.stream_id != store_state.stream_id
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_for_request(
+        &self,
+        request: &WitnessServiceRequestV1,
+        store_state: &VerifiedWitnessStoreStateV1,
+    ) -> ProtocolResult<()> {
+        self.validate_for_client_request(request)?;
+        if self.stream_id != store_state.stream_id
             || self.admission_digest != store_state.admission_digest
             || self.witness_identity != store_state.witness_identity
             || self.witness_key_id != store_state.witness_key_id
@@ -605,6 +743,37 @@ impl WitnessServiceFailureAttestationV1 {
             return Err(ProtocolError::WitnessOutcomeMismatch);
         }
         Ok(())
+    }
+
+    /// Service-only signing seam: an application failure cannot be signed
+    /// without an authenticated store-state value.
+    pub fn sign_for_verified_store(
+        request: &WitnessServiceRequestV1,
+        store_state: &VerifiedWitnessStoreStateV1,
+        failure: WitnessServiceFailureV1,
+        witness_signer: &swarm_crypto::Ed25519Signer,
+    ) -> ProtocolResult<Self> {
+        request.validate_public_dispatch_identity()?;
+        failure.validate()?;
+        if witness_signer.key_id() != store_state.witness_key_id {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let mut attestation = Self {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            operation: request.operation,
+            request_digest: request.request_digest.clone(),
+            stream_id: store_state.stream_id.clone(),
+            admission_digest: store_state.admission_digest.clone(),
+            witness_identity: store_state.witness_identity.clone(),
+            witness_key_id: store_state.witness_key_id.clone(),
+            store_state_digest: store_state.store_state_digest.clone(),
+            failure_code: failure.failure_code,
+            retryable: failure.retryable,
+            signature: witness_signer.sign(&[]),
+        };
+        attestation.signature = witness_signer.sign(&attestation.signing_bytes()?);
+        attestation.validate_for_request(request, store_state)?;
+        Ok(attestation)
     }
 }
 
@@ -631,8 +800,10 @@ struct RequestIdentity<'a> {
     witness_key_id: &'a str,
 }
 
-fn request_identity(request: &WitnessServiceRequestV1) -> ProtocolResult<RequestIdentity<'_>> {
-    request.validate()?;
+fn public_request_identity(
+    request: &WitnessServiceRequestV1,
+) -> ProtocolResult<RequestIdentity<'_>> {
+    request.validate_public_dispatch_identity()?;
     let identity = match &request.body {
         WitnessServiceRequestBodyV1::Fence { request } => RequestIdentity {
             stream_id: &request.stream_id,
@@ -686,11 +857,38 @@ impl WitnessServiceResponseV1 {
         Ok(response)
     }
 
+    /// Client-safe response validation. Failure attestations remain fully
+    /// signed and request-bound, but the runtime client is not required to
+    /// possess the service's authenticated raw-store proof.
+    pub fn decode_for_client_request(
+        bytes: &[u8],
+        request: &WitnessServiceRequestV1,
+    ) -> ProtocolResult<Self> {
+        let response = decode_canonical::<Self>(bytes)?;
+        match &response {
+            Self::Failure(failure) => failure.validate_for_client_request(request)?,
+            _ => {
+                request.validate()?;
+                response.validate_for_request(request, None)?;
+            }
+        }
+        Ok(response)
+    }
+
     pub fn validate_for_request(
         &self,
         request: &WitnessServiceRequestV1,
         store_state: Option<&VerifiedWitnessStoreStateV1>,
     ) -> ProtocolResult<()> {
+        if let Self::Failure(failure) = self {
+            let proof = store_state.ok_or_else(|| {
+                mismatch(
+                    "store_state_proof",
+                    "signed application failure requires authenticated current or absent state",
+                )
+            })?;
+            return failure.validate_for_request(request, proof);
+        }
         request.validate()?;
         match (self, &request.body) {
             (Self::Fence(response), WitnessServiceRequestBodyV1::Fence { request: fence }) => {
@@ -789,15 +987,7 @@ impl WitnessServiceResponseV1 {
                     &request.request_digest,
                 )?
             }
-            (Self::Failure(failure), _) => {
-                let proof = store_state.ok_or_else(|| {
-                    mismatch(
-                        "store_state_proof",
-                        "signed application failure requires authenticated current or absent state",
-                    )
-                })?;
-                failure.validate_for_request(request, proof)?;
-            }
+            (Self::Failure(_), _) => unreachable!("failure handled before success validation"),
             _ => {
                 return Err(mismatch(
                     "response",
@@ -894,8 +1084,9 @@ pub mod witness_candidate_verifier {
     include!("witness_candidate_verifier.rs");
 }
 pub use witness_candidate_verifier::{
-    VerifiedCandidateAdmissionV1, VerifiedPrepareTransitionV1, WITNESS_ADMISSION_DOMAIN_V1,
-    WitnessAdmissionRecordV1, WitnessCandidateVerifier, prepare_verified_candidate,
+    VerifiedCandidateAdmissionV1, VerifiedPrepareResolutionV1, VerifiedPrepareTransitionV1,
+    WITNESS_ADMISSION_DOMAIN_V1, WitnessAdmissionRecordV1, WitnessCandidateVerifier,
+    WitnessPrepareVerificationV1, prepare_verified_candidate, verify_public_prepare,
 };
 
 #[cfg(test)]

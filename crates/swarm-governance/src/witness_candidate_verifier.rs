@@ -1,17 +1,23 @@
 // Independent service-side candidate admission and pure Prepare transition.
 
 use crate::persistence_protocol::{
-    AuthorityPairIdentityV1, CandidateV1, PROTOCOL_SCHEMA_VERSION, ProtocolError, ProtocolLimitsV1,
-    ProtocolResult, PublicationRoleIdentitiesV1, VerifiedWitnessOutcomeV1, WitnessOperationV1,
-    WitnessPreparedV1, WitnessSessionAuthorizationV1, WitnessSessionV1, canonical_wire_bytes,
-    checked_add_size, digest_domain,
+    AuthorityPairIdentityV1, CandidateV1, GenesisPredecessorV1, PROTOCOL_SCHEMA_VERSION,
+    ProtocolError, ProtocolLimitsV1, ProtocolResult, PublicationMappingV1,
+    PublicationRoleIdentitiesV1, VerifiedWitnessOutcomeV1, WitnessAbortOutcomeV1,
+    WitnessOperationOutcomeV1, WitnessOperationV1, WitnessOutcomeAttestationV1,
+    WitnessPrepareOutcomeV1, WitnessPreparedV1, WitnessSessionAuthorizationV1, WitnessSessionV1,
+    canonical_wire_bytes, checked_add_size, checked_next_intent, digest_domain,
 };
+use crate::witness_engine::store::WitnessAdmissionEntryV1;
 use crate::witness_engine::{
     WitnessStoreEnvelopeV1, WitnessStoreExpectationV1, WitnessStoredPreparedV1,
     WitnessStoreTransitionV1, validate_store_transition,
 };
+use super::{
+    WitnessServiceFailureCodeV1, WitnessServiceRequestBodyV1, WitnessServiceRequestV1,
+};
 use serde::{Deserialize, Serialize};
-use swarm_crypto::DetachedSignature;
+use swarm_crypto::{DetachedSignature, Ed25519Signer};
 
 pub const WITNESS_ADMISSION_DOMAIN_V1: &[u8] = b"swarm.governance.witness-admission.v1";
 
@@ -111,6 +117,412 @@ impl WitnessAdmissionRecordV1 {
     }
 }
 
+/// Closed public-Prepare classification. Only `New` carries transition authority,
+/// and that value remains non-serializable with no public constructor.
+pub enum WitnessPrepareVerificationV1 {
+    New(Box<VerifiedCandidateAdmissionV1>),
+    AlreadyPrepared(Box<VerifiedPrepareResolutionV1>),
+    Conflict(Box<VerifiedPrepareResolutionV1>),
+    Rejected(WitnessServiceFailureCodeV1),
+}
+
+/// The single public-service Prepare verifier. The dispatcher supplies only
+/// an outer-identity-validated request plus independently authenticated store
+/// state. This function alone validates the nested Prepare body, session
+/// authorization, candidate signatures and transition relations.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_public_prepare(
+    admission_entry: &WitnessAdmissionEntryV1,
+    expected_bucket_epoch_digest: &str,
+    expected_stream_initialization_digest: &str,
+    current_envelope: &WitnessStoreEnvelopeV1,
+    request: &WitnessServiceRequestV1,
+    witness_signer: &Ed25519Signer,
+) -> WitnessPrepareVerificationV1 {
+    match verify_public_prepare_inner(
+        admission_entry,
+        expected_bucket_epoch_digest,
+        expected_stream_initialization_digest,
+        current_envelope,
+        request,
+        witness_signer,
+    ) {
+        Ok(verification) => verification,
+        Err(code) => WitnessPrepareVerificationV1::Rejected(code),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_public_prepare_inner(
+    admission_entry: &WitnessAdmissionEntryV1,
+    expected_bucket_epoch_digest: &str,
+    expected_stream_initialization_digest: &str,
+    current_envelope: &WitnessStoreEnvelopeV1,
+    request: &WitnessServiceRequestV1,
+    witness_signer: &Ed25519Signer,
+) -> Result<WitnessPrepareVerificationV1, WitnessServiceFailureCodeV1> {
+    request
+        .validate_public_dispatch_identity()
+        .map_err(|_| WitnessServiceFailureCodeV1::InvalidSignature)?;
+    admission_entry
+        .validate()
+        .map_err(|_| WitnessServiceFailureCodeV1::AdmissionMismatch)?;
+    if request.admission_digest != admission_entry.admission_digest {
+        return Err(WitnessServiceFailureCodeV1::AdmissionMismatch);
+    }
+    current_envelope
+        .validate_for(WitnessStoreExpectationV1 {
+            admission_digest: &admission_entry.admission_digest,
+            bucket_epoch_digest: expected_bucket_epoch_digest,
+            stream_initialization_digest: expected_stream_initialization_digest,
+            stream_id: &admission_entry.stream_id,
+            witness_identity: &admission_entry.witness_identity,
+            witness_key_id: &admission_entry.witness_key_id,
+            authority_pair: admission_entry.authority_pair,
+            binding_generation: &admission_entry.binding_generation,
+            binding_digest: &admission_entry.binding_digest,
+            signer_key_id: &admission_entry.signer_key_id,
+        })
+        .map_err(|_| WitnessServiceFailureCodeV1::InvalidSignature)?;
+    if witness_signer.key_id() != admission_entry.witness_key_id {
+        return Err(WitnessServiceFailureCodeV1::AdmissionMismatch);
+    }
+
+    let WitnessServiceRequestBodyV1::Prepare {
+        session,
+        expected_head,
+        candidate,
+    } = &request.body
+    else {
+        return Err(WitnessServiceFailureCodeV1::AdmissionMismatch);
+    };
+    let authorization = request
+        .authorization
+        .as_ref()
+        .ok_or(WitnessServiceFailureCodeV1::InvalidSignature)?;
+    session
+        .validate()
+        .map_err(|_| WitnessServiceFailureCodeV1::InvalidSignature)?;
+
+    let expected = expected_prepare_relations(
+        &admission_entry.admission,
+        current_envelope,
+        expected_head.as_deref(),
+    )?;
+    let intent_matches = candidate
+        .validate_for_expected_intent(expected.intent_counter)
+        .map_err(classify_candidate_error)?;
+
+    let binding = &candidate.preimage.publication_binding;
+    if candidate.preimage.stream_id != admission_entry.stream_id
+        || binding.stream_id != admission_entry.stream_id
+        || binding.signer_key_id != admission_entry.signer_key_id
+        || binding.witness_identity != admission_entry.witness_identity
+        || binding.witness_key_id != admission_entry.witness_key_id
+        || binding.generation != admission_entry.binding_generation
+        || binding.binding_digest != admission_entry.binding_digest
+        || binding.authority_pair != admission_entry.authority_pair
+        || binding.publication_roles != admission_entry.publication_roles
+        || binding.limits != admission_entry.limits
+    {
+        return Err(WitnessServiceFailureCodeV1::AdmissionMismatch);
+    }
+
+    authorization
+        .verify_for_session_record(
+            session,
+            WitnessOperationV1::Prepare,
+            &candidate.txid,
+            &request.request_digest,
+        )
+        .map_err(|_| WitnessServiceFailureCodeV1::InvalidSignature)?;
+    if current_envelope.session.as_ref() != Some(session) {
+        return Err(WitnessServiceFailureCodeV1::StaleSession);
+    }
+    if expected_head.as_deref()
+        != current_envelope.current.as_ref().map(|stored| &stored.head)
+        || candidate.preimage.predecessor_head.as_ref() != expected_head.as_deref()
+    {
+        return Err(WitnessServiceFailureCodeV1::ExpectedHeadMismatch);
+    }
+    if candidate.preimage.epoch != expected.epoch
+        || candidate.preimage.sequence != expected.sequence
+        || candidate.preimage.predecessor_head_digest != expected.predecessor_head_digest
+        || candidate.preimage.predecessor_data_head_digest != expected.predecessor_data_head_digest
+        || candidate.preimage.publication_mapping_before != expected.publication_mapping
+    {
+        return Err(WitnessServiceFailureCodeV1::AdmissionMismatch);
+    }
+
+    enforce_selected_candidate_bounds(admission_entry, current_envelope, candidate)
+        .map_err(|_| WitnessServiceFailureCodeV1::BoundsExceeded)?;
+    if !intent_matches {
+        return Ok(WitnessPrepareVerificationV1::Rejected(
+            WitnessServiceFailureCodeV1::StaleIntent,
+        ));
+    }
+
+    let stored_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {
+        current_envelope
+            .prepared
+            .as_ref()
+            .and_then(|stored| stored.prepared.genesis_abort.as_ref())
+    });
+    let verified_abort = match stored_genesis_abort {
+        Some(expected_abort) => Some(
+            verified_stored_genesis_abort(current_envelope, expected_abort, witness_signer)
+                .map_err(|_| WitnessServiceFailureCodeV1::InvalidSignature)?,
+        ),
+        None => None,
+    };
+    let verified = WitnessCandidateVerifier::verify_prepare(
+        &admission_entry.admission,
+        current_envelope,
+        session,
+        authorization,
+        expected_head.as_deref(),
+        candidate,
+        &request.request_digest,
+        verified_abort.as_ref(),
+    )
+    .map_err(classify_transition_error)?;
+    let Some(stored) = current_envelope.prepared.as_ref() else {
+        return Ok(WitnessPrepareVerificationV1::New(Box::new(verified)));
+    };
+    let kind = if stored.prepared.head.txid == verified.candidate.txid
+        && stored.prepared.head.candidate_digest == verified.candidate.candidate_digest
+    {
+        VerifiedPrepareResolutionKindV1::AlreadyPrepared
+    } else {
+        VerifiedPrepareResolutionKindV1::Conflict
+    };
+    let resolution = VerifiedPrepareResolutionV1 {
+        session: verified.session,
+        txid: verified.candidate.txid,
+        candidate_digest: verified.candidate.candidate_digest,
+        store_state_digest: verified.store_state_digest,
+        kind,
+    };
+    Ok(match resolution.kind {
+        VerifiedPrepareResolutionKindV1::AlreadyPrepared => {
+            WitnessPrepareVerificationV1::AlreadyPrepared(Box::new(resolution))
+        }
+        VerifiedPrepareResolutionKindV1::Conflict => {
+            WitnessPrepareVerificationV1::Conflict(Box::new(resolution))
+        }
+    })
+}
+
+struct ExpectedPrepareRelationsV1 {
+    intent_counter: u64,
+    epoch: u64,
+    sequence: u64,
+    predecessor_head_digest: String,
+    predecessor_data_head_digest: String,
+    publication_mapping: PublicationMappingV1,
+}
+
+fn expected_prepare_relations(
+    admission: &WitnessAdmissionRecordV1,
+    current: &WitnessStoreEnvelopeV1,
+    expected_head: Option<&crate::persistence_protocol::WitnessHeadV1>,
+) -> Result<ExpectedPrepareRelationsV1, WitnessServiceFailureCodeV1> {
+    if expected_head != current.current.as_ref().map(|stored| &stored.head) {
+        return Err(WitnessServiceFailureCodeV1::ExpectedHeadMismatch);
+    }
+    if let Some(stored) = current.prepared.as_ref() {
+        if stored.prepared.predecessor_head.as_ref() != expected_head {
+            return Err(WitnessServiceFailureCodeV1::AdmissionMismatch);
+        }
+        return Ok(ExpectedPrepareRelationsV1 {
+            intent_counter: stored.candidate.intent_counter,
+            epoch: stored.candidate.epoch,
+            sequence: stored.candidate.sequence,
+            predecessor_head_digest: stored.candidate.predecessor_head_digest.clone(),
+            predecessor_data_head_digest: stored.candidate.predecessor_data_head_digest.clone(),
+            publication_mapping: stored.candidate.publication_mapping_before,
+        });
+    }
+    if let Some(head) = expected_head {
+        return Ok(ExpectedPrepareRelationsV1 {
+            intent_counter: checked_next_intent(head.intent_counter)
+                .map_err(|_| WitnessServiceFailureCodeV1::BoundsExceeded)?,
+            epoch: head.epoch,
+            sequence: head
+                .sequence
+                .checked_add(1)
+                .ok_or(WitnessServiceFailureCodeV1::BoundsExceeded)?,
+            predecessor_head_digest: head
+                .head_digest()
+                .map_err(|_| WitnessServiceFailureCodeV1::InvalidSignature)?,
+            predecessor_data_head_digest: head
+                .data_head_digest()
+                .map_err(|_| WitnessServiceFailureCodeV1::InvalidSignature)?,
+            publication_mapping: head.publication_mapping,
+        });
+    }
+    if current.current.is_some() {
+        return Err(WitnessServiceFailureCodeV1::ExpectedHeadMismatch);
+    }
+
+    let genesis = GenesisPredecessorV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        stream_id: admission.stream_id.clone(),
+        binding_generation: admission.binding_generation.clone(),
+        binding_digest: admission.binding_digest.clone(),
+        signer_key_id: admission.signer_key_id.clone(),
+        witness_key_id: admission.witness_key_id.clone(),
+        authority_pair: admission.authority_pair,
+        epoch: 0,
+        sequence: 0,
+        intent_counter: 0,
+    };
+    let expected_mapping = PublicationMappingV1 {
+        state_canonical: admission.publication_roles.state_canonical,
+        state_staging: admission.publication_roles.state_staging,
+        checkpoint_canonical: admission.publication_roles.checkpoint_canonical,
+        checkpoint_staging: admission.publication_roles.checkpoint_staging,
+        journal_primary: admission.publication_roles.journal_primary,
+        journal_secondary: admission.publication_roles.journal_secondary,
+    };
+    let (intent, predecessor_digest, data_digest, mapping) =
+        if let Some(aborted) = current.genesis_abort.as_ref() {
+            if aborted.stream_id != admission.stream_id
+                || aborted.binding_generation != admission.binding_generation
+                || aborted.binding_digest != admission.binding_digest
+                || aborted.signer_key_id != admission.signer_key_id
+                || aborted.witness_key_id != admission.witness_key_id
+                || aborted.authority_pair != admission.authority_pair
+                || aborted.predecessor_head_digest
+                    != genesis
+                        .digest()
+                        .map_err(|_| WitnessServiceFailureCodeV1::AdmissionMismatch)?
+                || aborted.resulting_data_head_digest
+                    != genesis
+                        .data_head_digest()
+                        .map_err(|_| WitnessServiceFailureCodeV1::AdmissionMismatch)?
+                || aborted.publication_mapping != expected_mapping
+            {
+                return Err(WitnessServiceFailureCodeV1::AdmissionMismatch);
+            }
+            (
+                checked_next_intent(aborted.intent_counter)
+                    .map_err(|_| WitnessServiceFailureCodeV1::BoundsExceeded)?,
+                aborted.predecessor_head_digest.clone(),
+                aborted.resulting_data_head_digest.clone(),
+                aborted.publication_mapping,
+            )
+        } else {
+            (
+                admission.initial_intent_counter,
+                genesis
+                    .digest()
+                    .map_err(|_| WitnessServiceFailureCodeV1::AdmissionMismatch)?,
+                genesis
+                    .data_head_digest()
+                    .map_err(|_| WitnessServiceFailureCodeV1::AdmissionMismatch)?,
+                expected_mapping,
+            )
+        };
+    Ok(ExpectedPrepareRelationsV1 {
+        intent_counter: intent,
+        epoch: admission.initial_epoch,
+        sequence: admission.initial_sequence,
+        predecessor_head_digest: predecessor_digest,
+        predecessor_data_head_digest: data_digest,
+        publication_mapping: mapping,
+    })
+}
+
+fn verified_stored_genesis_abort(
+    current: &WitnessStoreEnvelopeV1,
+    expected_abort: &crate::persistence_protocol::WitnessGenesisAbortedV1,
+    witness_signer: &Ed25519Signer,
+) -> ProtocolResult<VerifiedWitnessOutcomeV1> {
+    let session = current
+        .session
+        .as_ref()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    let outcome = WitnessOperationOutcomeV1::Abort(Box::new(
+        WitnessAbortOutcomeV1::GenesisAborted(expected_abort.clone()),
+    ));
+    let mut attestation = WitnessOutcomeAttestationV1 {
+        schema_version: PROTOCOL_SCHEMA_VERSION,
+        operation: WitnessOperationV1::Abort,
+        stream_id: session.stream_id.clone(),
+        binding_generation: session.binding_generation.clone(),
+        binding_digest: session.binding_digest.clone(),
+        signer_key_id: session.signer_key_id.clone(),
+        authority_pair: session.authority_pair,
+        txid: expected_abort.txid.clone(),
+        candidate_digest: expected_abort.candidate_digest.clone(),
+        session_generation: session.session_generation,
+        session_commitment: session.session_commitment.clone(),
+        witness_key_id: session.witness_key_id.clone(),
+        outcome,
+        signature: witness_signer.sign(&[]),
+    };
+    attestation.signature = witness_signer.sign(&attestation.signing_bytes()?);
+    VerifiedWitnessOutcomeV1::from_authenticated_store_genesis_abort(
+        attestation,
+        session,
+        expected_abort,
+    )
+}
+
+fn enforce_selected_candidate_bounds(
+    admission: &WitnessAdmissionEntryV1,
+    envelope: &WitnessStoreEnvelopeV1,
+    candidate: &CandidateV1,
+) -> ProtocolResult<()> {
+    let binding_bytes = canonical_wire_bytes(&candidate.preimage.publication_binding)?.len() as u64;
+    if candidate.preimage.state_byte_len > admission.max_state_bytes
+        || candidate.preimage.checkpoint_byte_len > admission.max_checkpoint_bytes
+        || binding_bytes > admission.max_binding_bytes
+    {
+        return Err(ProtocolError::Bounds {
+            field: "selected_admission_candidate".to_string(),
+            observed: usize::try_from(
+                candidate
+                    .preimage
+                    .state_byte_len
+                    .max(candidate.preimage.checkpoint_byte_len)
+                    .max(binding_bytes),
+            )
+            .unwrap_or(usize::MAX),
+            maximum: usize::try_from(
+                admission
+                    .max_state_bytes
+                    .max(admission.max_checkpoint_bytes)
+                    .max(admission.max_binding_bytes),
+            )
+            .unwrap_or(usize::MAX),
+        });
+    }
+    enforce_retained_bound(&admission.admission, envelope, candidate)
+}
+
+fn classify_candidate_error(error: ProtocolError) -> WitnessServiceFailureCodeV1 {
+    match error {
+        ProtocolError::Bounds { .. } | ProtocolError::Overflow { .. } => {
+            WitnessServiceFailureCodeV1::BoundsExceeded
+        }
+        ProtocolError::AuthorityPairMismatch
+        | ProtocolError::RoleIdentityAlias { .. }
+        | ProtocolError::InvalidField { .. } => WitnessServiceFailureCodeV1::AdmissionMismatch,
+        _ => WitnessServiceFailureCodeV1::InvalidSignature,
+    }
+}
+
+fn classify_transition_error(error: ProtocolError) -> WitnessServiceFailureCodeV1 {
+    match error {
+        ProtocolError::Bounds { .. } | ProtocolError::Overflow { .. } => {
+            WitnessServiceFailureCodeV1::BoundsExceeded
+        }
+        _ => WitnessServiceFailureCodeV1::StoreTransitionRefused,
+    }
+}
+
 /// Non-forgeable result of complete candidate admission. It is neither
 /// serializable nor cloneable and has no public constructor.
 pub struct VerifiedCandidateAdmissionV1 {
@@ -119,6 +531,56 @@ pub struct VerifiedCandidateAdmissionV1 {
     session: WitnessSessionV1,
     prepared: WitnessPreparedV1,
     store_state_digest: String,
+}
+
+#[derive(Clone, Copy)]
+enum VerifiedPrepareResolutionKindV1 {
+    AlreadyPrepared,
+    Conflict,
+}
+
+/// Opaque result of complete Prepare verification against an authenticated
+/// store that already contains a live successor. It can only be consumed
+/// against the exact store-state digest that authorized its classification.
+pub struct VerifiedPrepareResolutionV1 {
+    session: WitnessSessionV1,
+    txid: String,
+    candidate_digest: String,
+    store_state_digest: String,
+    kind: VerifiedPrepareResolutionKindV1,
+}
+
+impl VerifiedPrepareResolutionV1 {
+    pub fn into_outcome_for_store(
+        self,
+        current: &WitnessStoreEnvelopeV1,
+    ) -> ProtocolResult<(
+        WitnessSessionV1,
+        String,
+        String,
+        WitnessPrepareOutcomeV1,
+    )> {
+        current.validate()?;
+        if current.store_state_digest()? != self.store_state_digest {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let stored = current
+            .prepared
+            .as_ref()
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let same = stored.prepared.head.txid == self.txid
+            && stored.prepared.head.candidate_digest == self.candidate_digest;
+        let outcome = match self.kind {
+            VerifiedPrepareResolutionKindV1::AlreadyPrepared if same => {
+                WitnessPrepareOutcomeV1::AlreadyPrepared(stored.prepared.clone())
+            }
+            VerifiedPrepareResolutionKindV1::Conflict if !same => {
+                WitnessPrepareOutcomeV1::Conflict
+            }
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        };
+        Ok((self.session, self.txid, self.candidate_digest, outcome))
+    }
 }
 
 impl VerifiedCandidateAdmissionV1 {
@@ -189,10 +651,13 @@ impl WitnessCandidateVerifier {
             return Err(ProtocolError::WitnessOutcomeMismatch);
         }
 
-        let prepared = match (
-            current_envelope.genesis_abort.as_ref(),
-            genesis_abort_outcome,
-        ) {
+        let authenticated_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {
+            current_envelope
+                .prepared
+                .as_ref()
+                .and_then(|stored| stored.prepared.genesis_abort.as_ref())
+        });
+        let prepared = match (authenticated_genesis_abort, genesis_abort_outcome) {
             (None, None) => {
                 if expected_head.is_none()
                     && (candidate.preimage.epoch != admission.initial_epoch

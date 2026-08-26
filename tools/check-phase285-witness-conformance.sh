@@ -306,6 +306,9 @@ materialized_inventory_for_target() {
     swarm-governance-witness/jetstream_checkpoint)
       selector_rows jetstream-checkpoint
       ;;
+    swarm-governance-witness/full_service_path)
+      selector_rows public-dispatcher
+      ;;
     *) return 1 ;;
   esac
 }
@@ -443,8 +446,1290 @@ run_self_tests() {
   run_inner_ledger_validator_self_test
 }
 
+dispatcher_source_guard() {
+  local source="$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs"
+  local integration="$ROOT_DIR/crates/swarm-governance-witness/tests/full_service_path.rs"
+  local config="$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs"
+  local service="$ROOT_DIR/crates/swarm-governance/src/witness_service.rs"
+  local protocol="$ROOT_DIR/crates/swarm-governance/src/persistence_protocol.rs"
+  local verifier="$ROOT_DIR/crates/swarm-governance/src/witness_candidate_verifier.rs"
+  python3 -I - "$source" "$integration" "$config" "$service" "$protocol" "$verifier" "${1:-normal}" <<'PY'
+import hashlib
+import re
+import sys
+
+source_path, integration_path, config_path, service_path, protocol_path, verifier_path, mode = sys.argv[1:]
+source = open(source_path, encoding="utf-8").read()
+integration = open(integration_path, encoding="utf-8").read()
+config = open(config_path, encoding="utf-8").read()
+service = open(service_path, encoding="utf-8").read()
+protocol = open(protocol_path, encoding="utf-8").read()
+verifier = open(verifier_path, encoding="utf-8").read()
+
+def validate(
+    text,
+    integration_text=integration,
+    config_text=config,
+    service_text=service,
+    protocol_text=protocol,
+    verifier_text=verifier,
+):
+    if "PublicWitnessBackend" in text:
+        raise ValueError("legacy public-response backend survived")
+    if "_early_public_sign" in text:
+        raise ValueError("public signing occurred before durable confirmation")
+    for fragment, count in [
+        ("pub admission_set: WitnessAdmissionSetV1,", 1),
+        ("self.admission_set.validate()?;", 1),
+        ("self.admission_set.admission_set_digest != self.admission_set_digest", 1),
+        ("for admission in &self.admission_set.entries {", 1),
+        ("admission.witness_identity != self.witness_identity", 1),
+        ("admission.witness_key_id != self.witness_key_id", 1),
+    ]:
+        if config_text.count(fragment) != count:
+            raise ValueError(f"admission-set config boundary differs: {fragment}")
+    if "pub admission: WitnessAdmissionRecordV1" in config_text:
+        raise ValueError("singleton admission config survived")
+    if integration_text.count("assert!(public_witness_ingress_overload_control());") != 1:
+        raise ValueError("registered overload case is not bound exactly once to production ingress")
+    for fragment, count in [
+        ("assert_pre_store_admission_fences().await?;", 1),
+        ("assert_multistream_startup_controls().await?;", 1),
+        ("assert_prepare_admission_classification().await?;", 1),
+        ("assert_bound_taxonomy_is_seam_specific().await?;", 1),
+        ("assert_current_head_intent_classification().await?;", 1),
+        ("assert_authenticated_entry_limits_are_enforced().await?;", 1),
+        ("const FIELDS: [&str; 7]", 1),
+        ('"stream",', 1),
+        ('"signer",', 1),
+        ('"witness_identity",', 1),
+        ('"witness_key",', 1),
+        ('"binding_generation",', 1),
+        ('"binding_digest",', 1),
+        ('"authority_pair",', 1),
+        ("ReadyMutation::CrossStreamSummaries", 2),
+        ("fixture.enable_second_stream()?;", 1),
+        ("two_stream.enable_second_stream()?;", 1),
+        ("WitnessServiceFailureCodeV1::AdmissionMismatch", 7),
+        ("WitnessServiceFailureCodeV1::StaleIntent", 5),
+    ]:
+        if integration_text.count(fragment) != count:
+            raise ValueError(f"admission/multistream executable projection differs: {fragment}")
+    ready_table = re.search(
+        r"for \(mutation, expected_startup_reads\) in \[(.*?)\n    \] \{",
+        integration_text,
+        re.S,
+    )
+    expected_ready = [
+        "WrongOperation", "WrongRequestDigest", "WrongBucketConfiguration",
+        "WrongManifestDigest", "WrongManifestPhase", "WrongManifestEpoch",
+        "WrongWitnessIdentity", "WrongWitnessKey", "MissingStream", "ExtraStream",
+        "WrongInitializationDigest", "WrongSummaryRevision", "WrongStoreDigest",
+    ]
+    if ready_table is None or re.findall(r"ReadyMutation::([A-Za-z]+)", ready_table.group(1)) != expected_ready:
+        raise ValueError("Ready response mutation inventory differs")
+    request_bindings = re.search(
+        r'for field in \[(.*?)\] \{\n        let ready_fixture',
+        integration_text,
+        re.S,
+    )
+    if request_bindings is None or re.findall(r'"([a-z_]+)"', request_bindings.group(1)) != [
+        "bucket_anchor", "bucket_epoch", "admission"
+    ]:
+        raise ValueError("Ready signed-request binding inventory differs")
+    classification_block = re.search(
+        r"async fn assert_prepare_admission_classification\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_authenticated_entry_limits_are_enforced",
+        integration_text,
+        re.S,
+    )
+    if classification_block is None:
+        raise ValueError("Prepare classification corpus absent")
+    if classification_block.group(1).count("for (initial_epoch, initial_sequence) in [(1, 0), (0, 1)]") != 1:
+        raise ValueError("Prepare initial epoch/sequence mixed inventory differs")
+    corruption_inventory = re.search(
+        r"for corruption in \[(.*?)\] \{",
+        classification_block.group(1),
+        re.S,
+    )
+    if corruption_inventory is None or re.findall(r'"([a-z_]+)"', corruption_inventory.group(1)) != [
+        "authorization_signature", "state_signature", "checkpoint_signature", "predecessor_digest"
+    ]:
+        raise ValueError("Prepare mixed cryptographic relation inventory differs")
+    for fragment, count in [
+        ("Fixture::new_with_initial_values(", 1),
+        ('"authorization_signature",', 1),
+        ('"state_signature",', 1),
+        ('"checkpoint_signature",', 1),
+        ('"predecessor_digest",', 1),
+        ("std::mem::swap(", 2),
+        ("WitnessServiceFailureCodeV1::AdmissionMismatch", 7),
+        ("WitnessServiceFailureCodeV1::InvalidSignature", 2),
+        ('assert_eq!(fixture.proxy.events(), vec!["read"]);', 7),
+    ]:
+        if classification_block.group(1).count(fragment) != count:
+            raise ValueError(f"Prepare classification executable projection differs: {fragment}")
+    entry_bounds_block = re.search(
+        r"async fn assert_authenticated_entry_limits_are_enforced\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_multistream_startup_controls",
+        integration_text,
+        re.S,
+    )
+    if entry_bounds_block is None:
+        raise ValueError("selected-entry bound corpus absent")
+    if re.findall(r'\("([a-z]+)", [a-z_]+\)', entry_bounds_block.group(1)) != [
+        "state", "checkpoint", "binding", "retained"
+    ]:
+        raise ValueError("selected-entry candidate bound inventory differs")
+    for fragment, count in [
+        ("enable_second_stream_with(|entry|", 3),
+        ("for exceeds in [false, true]", 3),
+        ('vec!["read", "cas", "read"]', 2),
+        ('assert_eq!(fixture.secondary_events()?, vec!["read"]);', 4),
+        ('assert_eq!(fixture.proxy.calls.load(Ordering::SeqCst), 0);', 1),
+        ("PublicWitnessDispatchErrorV1::ResponseBounds", 1),
+        ("entry.max_state_bytes = ceiling", 1),
+        ("entry.max_checkpoint_bytes = ceiling", 1),
+        ("entry.max_binding_bytes = ceiling", 1),
+        ("entry.admission.max_retained_bytes = ceiling", 1),
+        ("entry.max_request_bytes = ceiling", 1),
+        ("entry.max_response_bytes = ceiling", 1),
+        ("let ceiling = exact - u64::from(exceeds);", 1),
+        ("let ceiling = request_len - u64::from(exceeds);", 1),
+        ("let ceiling = response_len - u64::from(exceeds);", 1),
+    ]:
+        if entry_bounds_block.group(1).count(fragment) != count:
+            raise ValueError(f"selected-entry executable projection differs: {fragment}")
+    taxonomy_block = re.search(
+        r"async fn assert_bound_taxonomy_is_seam_specific\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nfn bound_candidate",
+        integration_text,
+        re.S,
+    )
+    if taxonomy_block is None:
+        raise ValueError("six-boundary taxonomy corpus absent")
+    for fragment, count in [
+        ('for field in ["state", "checkpoint", "binding", "retained"]', 1),
+        ("for exceeds in [false, true]", 1),
+        ('"startup {field}"', 1),
+        ("WitnessServiceFailureCodeV1::BoundsExceeded", 3),
+        ("WitnessServiceFailureCodeV1::Conflict", 1),
+        ("PublicWitnessDispatchErrorV1::OutcomeUnknown", 1),
+        ('vec!["read"]', 3),
+        ('vec!["read", "cas"]', 1),
+        ('vec!["read", "cas", "read"]', 2),
+        ("cas_attempted.load(Ordering::SeqCst), 0", 3),
+        ("cas_attempted.load(Ordering::SeqCst), 1", 3),
+        ("cas_applied.load(Ordering::SeqCst), 0", 3),
+        ("cas_applied.load(Ordering::SeqCst), 1", 2),
+    ]:
+        if taxonomy_block.group(1).count(fragment) != count:
+            raise ValueError(f"six-boundary taxonomy projection differs: {fragment}")
+    failure_block = re.search(
+        r"async fn assert_complete_signed_application_failures\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}",
+        integration_text,
+        re.S,
+    )
+    if failure_block is None:
+        raise ValueError("signed application failure corpus absent")
+    rotation_operations = re.search(
+        r"for operation in \[(.*?)\] \{\n        let invalid_rotation",
+        failure_block.group(1),
+        re.S,
+    )
+    if rotation_operations is None or re.findall(
+        r"WitnessServiceOperationV1::([A-Za-z]+)", rotation_operations.group(1)
+    ) != ["Establish", "Discover"]:
+        raise ValueError("signed rotation failure operation inventory differs")
+    for fragment, count in [
+        ("WitnessServiceFailureCodeV1::InvalidSignature", 2),
+        ("WitnessServiceFailureCodeV1::StaleIntent", 1),
+        ("WitnessServiceFailureCodeV1::BoundsExceeded", 2),
+        ("WitnessServiceFailureCodeV1::ExpectedHeadMismatch", 1),
+        ("max_payload_bytes = 1;", 1),
+        ("Fixture::new_with_initial_intent(CasMode::Apply, 2)?", 1),
+        ('assert_eq!(verifier_only.proxy.events(), vec!["read"]);', 1),
+        ("exhaust_current_session_generation()?;", 1),
+        ('assert_eq!(invalid_authorization.proxy.events(), vec!["read"]);', 1),
+        ('assert_eq!(bounds.proxy.events(), vec!["read"]);', 1),
+        ('assert_eq!(expected_head.proxy.events(), vec!["read"]);', 1),
+        ('assert_eq!(exhausted.proxy.events(), vec!["read"]);', 1),
+    ]:
+        if failure_block.group(1).count(fragment) != count:
+            raise ValueError(f"signed failure executable projection differs: {fragment}")
+    cross_block = re.search(
+        r"async fn assert_cross_operation_winners\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_genesis_abort_successor_after_restart",
+        integration_text,
+        re.S,
+    )
+    if cross_block is None:
+        raise ValueError("cross-operation winner corpus absent")
+    for fragment, count in [
+        ("WitnessCommitOutcomeV1::GenesisAborted", 2),
+        ("WitnessAbortOutcomeV1::Committed", 2),
+        ("set_conflict_observed(revision, envelope);", 2),
+        ("WitnessServiceFailureCodeV1::StaleIntent", 1),
+    ]:
+        if cross_block.group(1).count(fragment) != count:
+            raise ValueError(f"cross-operation executable projection differs: {fragment}")
+    genesis_block = re.search(
+        r"async fn assert_genesis_abort_successor_after_restart\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_typed_conflict",
+        integration_text,
+        re.S,
+    )
+    if genesis_block is None:
+        raise ValueError("genesis-abort successor corpus absent")
+    if integration_text.count("assert_genesis_abort_successor_after_restart().await?;") != 1:
+        raise ValueError("genesis-abort successor corpus is not executed exactly once")
+    for fragment, count in [
+        ("drop(first_dispatcher);", 1),
+        ("let restarted_dispatcher = fixture.dispatcher()", 1),
+        ("aborted.intent_counter,", 1),
+        (".intent_counter\n        .checked_add(1)", 1),
+        ("next_intent.checked_add(1)", 1),
+        ("WitnessServiceFailureCodeV1::StaleIntent", 1),
+        ("verify_public_prepare(", 5),
+        ("&foreign_witness,", 1),
+        ("corrupt_envelope.signature.signature_hex", 1),
+        ('("f".repeat(64), stream_initialization_digest.clone())', 1),
+        ('(aborted_envelope.bucket_epoch_digest.clone(), "f".repeat(64))', 1),
+        ("assert!(confirmed.genesis_abort.is_none());", 1),
+        (".prepared\n            .genesis_abort", 1),
+        ("Some(&aborted)", 1),
+        ('assert_eq!(fixture.proxy.events(), vec!["read", "cas", "read"]);', 1),
+    ]:
+        if genesis_block.group(1).count(fragment) != count:
+            raise ValueError(f"genesis-abort executable projection differs: {fragment}")
+    current_head_block = re.search(
+        r"async fn assert_current_head_intent_classification\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_authenticated_entry_limits_are_enforced",
+        integration_text,
+        re.S,
+    )
+    if current_head_block is None:
+        raise ValueError("current-head Prepare intent corpus absent")
+    for fragment, count in [
+        ("for intent in [\n        head.intent_counter,", 1),
+        ("expected_intent\n            .checked_add(1)", 1),
+        ("build_candidate_without_intent_relation", 1),
+        ("WitnessServiceFailureCodeV1::StaleIntent", 1),
+        ("mixed.preimage.state_attestation.signature_hex", 1),
+        ("WitnessServiceFailureCodeV1::InvalidSignature", 1),
+        ('assert_eq!(fixture.proxy.events(), vec!["read"]);', 2),
+    ]:
+        if current_head_block.group(1).count(fragment) != count:
+            raise ValueError(f"current-head Prepare intent projection differs: {fragment}")
+    post_cas_block = re.search(
+        r"async fn assert_post_cas_acknowledgements_remain_unknown\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_cross_operation_winners",
+        integration_text,
+        re.S,
+    )
+    if post_cas_block is None:
+        raise ValueError("post-CAS acknowledgement corpus absent")
+    lost_calls = re.findall(
+        r"assert_lost_response_remains_unknown\(OperationCase::([A-Za-z]+)\)\.await\?;",
+        integration_text,
+    )
+    if lost_calls != ["Establish", "Discover", "Prepare", "Commit", "Abort"]:
+        raise ValueError("lost-response operation inventory differs")
+    prepare_recovery = re.search(
+        r"async fn assert_prepare_idempotency_and_recovery\(\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_lost_response_remains_unknown",
+        integration_text,
+        re.S,
+    )
+    if prepare_recovery is None:
+        raise ValueError("Prepare idempotency/recovery corpus absent")
+    for fragment, count in [
+        ("assert_prepare_idempotency_and_recovery().await?;", 1),
+        ("WitnessPrepareOutcomeV1::Prepared", 1),
+        ("WitnessPrepareOutcomeV1::AlreadyPrepared", 3),
+        ("WitnessPrepareOutcomeV1::Conflict", 2),
+        ("WitnessServiceFailureCodeV1::InvalidSignature", 2),
+        ("CasMode::ApplyThenUnavailable", 1),
+        ("Err(PublicWitnessDispatchErrorV1::OutcomeUnknown)", 1),
+        ('&["read"]', 5),
+        ('vec!["read", "cas"]', 1),
+        ("set_conflict_observed", 1),
+        ("for (same_winner, expected_already) in [(true, true), (false, false)]", 1),
+        ("lost.dispatch_request(&lost_dispatcher, &original).await?", 1),
+        ("let mut invalid_conflict = different_request.clone();", 1),
+        ("let mut invalid_retry = request.clone();", 1),
+        ("cas_attempted.load(Ordering::SeqCst)", 8),
+        ("cas_applied.load(Ordering::SeqCst)", 8),
+        ("fixture.proxy.cas_attempted.load(Ordering::SeqCst),\n        attempted", 4),
+        ("fixture.proxy.cas_applied.load(Ordering::SeqCst), applied", 4),
+        ("lost.proxy.cas_attempted.load(Ordering::SeqCst),\n        lost_attempted", 1),
+        ("lost.proxy.cas_applied.load(Ordering::SeqCst), lost_applied", 1),
+        ("winner.proxy.cas_attempted.load(Ordering::SeqCst), 1", 1),
+        ("winner.proxy.cas_applied.load(Ordering::SeqCst), 0", 1),
+    ]:
+        target = integration_text if fragment.startswith("assert_prepare") else prepare_recovery.group(1)
+        if target.count(fragment) != count:
+            raise ValueError(f"Prepare idempotency/recovery projection differs: {fragment}")
+    if "attempted + 1" in prepare_recovery.group(1) or "applied + 1" in prepare_recovery.group(1):
+        raise ValueError("Prepare idempotency retries compare-and-swap")
+    lost_block = re.search(
+        r"async fn assert_lost_response_remains_unknown\(operation: OperationCase\) -> ProtocolResult<\(\)> \{(.*?)\n\}\n\nasync fn assert_post_cas_acknowledgements_remain_unknown",
+        integration_text,
+        re.S,
+    )
+    if lost_block is None:
+        raise ValueError("lost-response uncertainty corpus absent")
+    for fragment, count in [
+        ("CasMode::ApplyThenUnavailable", 1),
+        ("Err(PublicWitnessDispatchErrorV1::OutcomeUnknown)", 1),
+        ('&["read", "cas", "read"]', 1),
+        ("before_attempted + 1", 1),
+        ("before_applied + 1", 1),
+    ]:
+        if lost_block.group(1).count(fragment) != count:
+            raise ValueError(f"lost-response uncertainty projection differs: {fragment}")
+    expected_post_cas = [
+        "malformed", "duplicate", "lower", "wrong_kind", "wrong_stream",
+        "wrong_previous_revision", "wrong_new_revision", "wrong_digest",
+        "wrong_request_digest", "unknown", "wrong_value",
+    ]
+    if re.findall(r'\(\s*"([a-z_]+)",\s*CasMode::', post_cas_block.group(1), re.S) != expected_post_cas:
+        raise ValueError("post-CAS acknowledgement inventory differs")
+    for fragment, count in [
+        ("assert_post_cas_acknowledgements_remain_unknown().await?;", 1),
+        ("Err(PublicWitnessDispatchErrorV1::OutcomeUnknown)", 1),
+        ('vec!["read", "cas", "read"]', 1),
+        ('vec!["read", "cas"]', 1),
+        ("cas_attempted.load(Ordering::SeqCst), 1", 1),
+        ("cas_applied.load(Ordering::SeqCst), 1", 1),
+    ]:
+        target = integration_text if fragment.startswith("assert_post_cas") else post_cas_block.group(1)
+        if target.count(fragment) != count:
+            raise ValueError(f"post-CAS acknowledgement projection differs: {fragment}")
+    for fragment, count in [
+        ("pub fn validate_public_dispatch_identity(&self)", 1),
+        ("request.validate_public_dispatch_identity()?;", 3),
+        ("let identity = public_request_identity(request)?;", 1),
+        ("request.validate()?;", 4),
+        ("if self.request_digest != computed {", 1),
+        ("canonical_wire_bytes(self).map(|_| ())", 1),
+    ]:
+        if service_text.count(fragment) != count:
+            raise ValueError(f"outer failure identity seam differs: {fragment}")
+    service_prepare = re.search(
+        r"pub fn verify_public_prepare\((.*?)\n\}\n\n#\[allow\(clippy::too_many_arguments\)\]",
+        verifier_text,
+        re.S,
+    )
+    if service_prepare is None:
+        raise ValueError("single public Prepare verifier absent")
+    verification_enum = re.search(
+        r"pub enum WitnessPrepareVerificationV1 \{(.*?)\n\}",
+        verifier_text,
+        re.S,
+    )
+    if verification_enum is None or re.findall(
+        r"^    ([A-Za-z]+)\(", verification_enum.group(1), re.M
+    ) != ["New", "AlreadyPrepared", "Conflict", "Rejected"]:
+        raise ValueError("closed Prepare verification inventory differs")
+    for fragment, count in [
+        ("verify_public_prepare_inner(", 1),
+        ("WitnessPrepareVerificationV1::Rejected(code)", 1),
+    ]:
+        if service_prepare.group(1).count(fragment) != count:
+            raise ValueError(f"public Prepare verifier entry differs: {fragment}")
+    verifier_inner = re.search(
+        r"fn verify_public_prepare_inner\((.*?)\n\}\n\nstruct ExpectedPrepareRelationsV1",
+        verifier_text,
+        re.S,
+    )
+    if verifier_inner is None:
+        raise ValueError("public Prepare verifier implementation absent")
+    for fragment, count in [
+        ("request\n        .validate_public_dispatch_identity()", 1),
+        ("current_envelope\n        .validate_for(WitnessStoreExpectationV1 {", 1),
+        ("request.admission_digest != admission_entry.admission_digest", 1),
+        ("bucket_epoch_digest: expected_bucket_epoch_digest,", 1),
+        ("stream_initialization_digest: expected_stream_initialization_digest,", 1),
+        ("witness_signer.key_id() != admission_entry.witness_key_id", 1),
+        ("let WitnessServiceRequestBodyV1::Prepare {", 1),
+        ("candidate\n        .validate_for_expected_intent(expected.intent_counter)", 1),
+        ("binding.publication_roles != admission_entry.publication_roles", 1),
+        ("binding.limits != admission_entry.limits", 1),
+        ("authorization\n        .verify_for_session_record(", 1),
+        ("current_envelope.session.as_ref() != Some(session)", 1),
+        ("candidate.preimage.predecessor_head.as_ref() != expected_head.as_deref()", 1),
+        ("candidate.preimage.epoch != expected.epoch", 1),
+        ("candidate.preimage.sequence != expected.sequence", 1),
+        ("candidate.preimage.predecessor_head_digest != expected.predecessor_head_digest", 1),
+        ("candidate.preimage.predecessor_data_head_digest != expected.predecessor_data_head_digest", 1),
+        ("candidate.preimage.publication_mapping_before != expected.publication_mapping", 1),
+        ("enforce_selected_candidate_bounds(admission_entry, current_envelope, candidate)", 1),
+        ("if !intent_matches {", 1),
+        ("WitnessServiceFailureCodeV1::StaleIntent", 1),
+        ("verified_stored_genesis_abort(current_envelope, expected_abort, witness_signer)", 1),
+        ("WitnessCandidateVerifier::verify_prepare(", 1),
+        ("verified_abort.as_ref(),", 1),
+        ("let stored_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {\n        current_envelope\n            .prepared", 1),
+        ("let Some(stored) = current_envelope.prepared.as_ref() else", 1),
+        ("WitnessPrepareVerificationV1::New(Box::new(verified))", 1),
+        ("stored.prepared.head.txid == verified.candidate.txid", 1),
+        ("stored.prepared.head.candidate_digest == verified.candidate.candidate_digest", 1),
+        ("VerifiedPrepareResolutionKindV1::AlreadyPrepared", 2),
+        ("VerifiedPrepareResolutionKindV1::Conflict", 2),
+        ("WitnessPrepareVerificationV1::AlreadyPrepared(Box::new(resolution))", 1),
+        ("WitnessPrepareVerificationV1::Conflict(Box::new(resolution))", 1),
+    ]:
+        if verifier_inner.group(1).count(fragment) != count:
+            raise ValueError(f"public Prepare verifier relation differs: {fragment}")
+    if verifier_inner.group(1).index("enforce_selected_candidate_bounds(") \
+            > verifier_inner.group(1).index("if !intent_matches {"):
+        raise ValueError("StaleIntent precedes selected candidate bounds")
+    if verifier_inner.group(1).index("authorization\n        .verify_for_session_record(") \
+            > verifier_inner.group(1).index("if !intent_matches {"):
+        raise ValueError("StaleIntent precedes session authorization")
+    if verifier_inner.group(1).index("WitnessCandidateVerifier::verify_prepare(") \
+            > verifier_inner.group(1).index("let Some(stored) = current_envelope.prepared.as_ref() else"):
+        raise ValueError("Prepare idempotency classification precedes full verification")
+    prepared_relations = re.search(
+        r"fn expected_prepare_relations\((.*?)\n\}\n\nfn verified_stored_genesis_abort",
+        verifier_text,
+        re.S,
+    )
+    if prepared_relations is None:
+        raise ValueError("Prepare relation classifier absent")
+    for fragment, count in [
+        ("if let Some(stored) = current.prepared.as_ref()", 1),
+        ("stored.prepared.predecessor_head.as_ref() != expected_head", 1),
+        ("intent_counter: stored.candidate.intent_counter", 1),
+        ("epoch: stored.candidate.epoch", 1),
+        ("sequence: stored.candidate.sequence", 1),
+        ("predecessor_head_digest: stored.candidate.predecessor_head_digest.clone()", 1),
+        ("predecessor_data_head_digest: stored.candidate.predecessor_data_head_digest.clone()", 1),
+        ("publication_mapping: stored.candidate.publication_mapping_before", 1),
+    ]:
+        if prepared_relations.group(1).count(fragment) != count:
+            raise ValueError(f"stored Prepare relation differs: {fragment}")
+    resolution = re.search(
+        r"impl VerifiedPrepareResolutionV1 \{(.*?)\n\}\n\nimpl VerifiedCandidateAdmissionV1",
+        verifier_text,
+        re.S,
+    )
+    if resolution is None:
+        raise ValueError("opaque Prepare resolution absent")
+    for fragment, count in [
+        ("current.validate()?;", 1),
+        ("current.store_state_digest()? != self.store_state_digest", 1),
+        ("current\n            .prepared\n            .as_ref()", 1),
+        ("stored.prepared.head.txid == self.txid", 1),
+        ("stored.prepared.head.candidate_digest == self.candidate_digest", 1),
+        ("VerifiedPrepareResolutionKindV1::AlreadyPrepared if same", 1),
+        ("WitnessPrepareOutcomeV1::AlreadyPrepared(stored.prepared.clone())", 1),
+        ("VerifiedPrepareResolutionKindV1::Conflict if !same", 1),
+        ("WitnessPrepareOutcomeV1::Conflict", 1),
+    ]:
+        if resolution.group(1).count(fragment) != count:
+            raise ValueError(f"opaque Prepare resolution differs: {fragment}")
+    lower_verifier = re.search(
+        r"pub fn verify_prepare\((.*?)\n    \}\n\}\n\n/// Pure, unsigned one-step transition",
+        verifier_text,
+        re.S,
+    )
+    if lower_verifier is None:
+        raise ValueError("lower Prepare verifier absent")
+    for fragment, count in [
+        ("let authenticated_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(||", 1),
+        ("let authenticated_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {\n            current_envelope\n                .prepared", 1),
+        (".and_then(|stored| stored.prepared.genesis_abort.as_ref())", 1),
+        ("let prepared = match (authenticated_genesis_abort, genesis_abort_outcome)", 1),
+    ]:
+        if lower_verifier.group(1).count(fragment) != count:
+            raise ValueError(f"prepared retry genesis authority differs: {fragment}")
+    for forbidden in [
+        "candidate.validate()?",
+        "verify_for_session_record(",
+    ]:
+        prefix = text[text.index("async fn execute("):text.index("let verified = match verify_public_prepare(")]
+        if forbidden in prefix:
+            raise ValueError(f"dispatcher performs early complete Prepare validation: {forbidden}")
+    opaque_abort = re.search(
+        r"pub\(crate\) fn from_authenticated_store_genesis_abort\((.*?)\n    \}\n\n    pub fn attestation",
+        protocol_text,
+        re.S,
+    )
+    if opaque_abort is None:
+        raise ValueError("stored genesis-abort opaque constructor absent")
+    for fragment, count in [
+        ("session.validate()?;", 1),
+        ("expected_abort.validate()?;", 1),
+        ("attestation.validate()?;", 1),
+        ("attestation.operation != WitnessOperationV1::Abort", 1),
+        ("attestation.stream_id != session.stream_id", 1),
+        ("attestation.binding_generation != session.binding_generation", 1),
+        ("attestation.binding_digest != session.binding_digest", 1),
+        ("attestation.signer_key_id != session.signer_key_id", 1),
+        ("attestation.authority_pair != session.authority_pair", 1),
+        ("attestation.session_generation != session.session_generation", 1),
+        ("attestation.session_commitment != session.session_commitment", 1),
+        ("attestation.witness_key_id != session.witness_key_id", 1),
+        ("attestation.outcome != expected_outcome", 1),
+    ]:
+        if opaque_abort.group(1).count(fragment) != count:
+            raise ValueError(f"stored genesis-abort opaque constructor differs: {fragment}")
+    normalized_candidate = re.search(
+        r"pub\(crate\) fn validate_for_expected_intent\((.*?)\n    \}\n\}",
+        protocol_text,
+        re.S,
+    )
+    if normalized_candidate is None:
+        raise ValueError("normalized Prepare candidate validator absent")
+    for fragment, count in [
+        ("normalized.intent_counter = expected_intent_counter;", 1),
+        ("normalized.validate()?;", 1),
+        ("let preimage_bytes = canonical_wire_bytes(&self.preimage)?;", 1),
+        ("digest_domain(CANDIDATE_DOMAIN_V1, &preimage_bytes)?", 1),
+        ("if self.candidate_digest != candidate_digest", 1),
+        ("let txid = TxidPreimageV1 {", 1),
+        ("if self.txid != txid", 1),
+        ("Ok(self.preimage.intent_counter == expected_intent_counter)", 1),
+    ]:
+        if normalized_candidate.group(1).count(fragment) != count:
+            raise ValueError(f"normalized Prepare candidate validator differs: {fragment}")
+    queue_subjects = re.findall(r'\.queue_subscribe\(\s*"([^"]+)"\s*,', text)
+    expected_subjects = [
+        "swarm.governance.witness.v1.fence",
+        "swarm.governance.witness.v1.establish",
+        "swarm.governance.witness.v1.discover",
+        "swarm.governance.witness.v1.prepare",
+        "swarm.governance.witness.v1.commit",
+        "swarm.governance.witness.v1.abort",
+        "swarm.governance.witness.v1.read_prepared",
+        "swarm.governance.witness.v1.read_head",
+        "swarm.governance.witness.v1.fetch_payload",
+    ]
+    if queue_subjects != expected_subjects:
+        raise ValueError(f"runner subscription inventory differs: {queue_subjects}")
+    if text.count('const PUBLIC_WITNESS_QUEUE_GROUP: &str = "swarm-governance-witness-v1";') != 1:
+        raise ValueError("runner queue group differs")
+    proxy_builder = re.search(
+        r"fn proxy_request_for_digest\((.*?)\n    \}\n\n    fn stream_initialization_digest",
+        text,
+        re.S,
+    )
+    if proxy_builder is None:
+        raise ValueError("closed proxy request builder absent")
+    for fragment in [
+        "admission_digest: admission.admission_digest.clone(),",
+        "bucket_epoch_digest: self.config.bucket_epoch_digest.clone(),",
+        "bucket_anchor_digest: self.config.bucket_anchor_digest.clone(),",
+    ]:
+        if proxy_builder.group(1).count(fragment) != 1:
+            raise ValueError(f"proxy request binding differs: {fragment}")
+    for fragment in [
+        "let capacity = dispatcher.config.ingress_queue_capacity;",
+        "let worker_count = dispatcher.config.max_in_flight;",
+        "let Some(reply) = message.reply else {",
+        "if !is_bounded_inbox_reply(&reply)",
+        "payload: message.payload.to_vec(),",
+        "if !try_enqueue_public_message(&ingress, ingress_message)",
+        "ingress.try_send(message).is_ok()",
+        "pub fn public_witness_ingress_overload_control() -> bool",
+    ]:
+        if text.count(fragment) != 1:
+            raise ValueError(f"runner boundary differs: {fragment}")
+    trait = re.search(
+        r"pub trait PublicWitnessStoreProxyClient: Send \+ Sync \{(.*?)\n\}",
+        text,
+        re.S,
+    )
+    if trait is None:
+        raise ValueError("closed proxy trait absent")
+    methods = re.findall(r"async fn ([a-z_]+)\(", trait.group(1))
+    if methods != ["inspect_ready", "read_entry", "compare_and_swap"]:
+        raise ValueError(f"proxy method inventory differs: {methods}")
+    for forbidden in ["Ed25519Signer", "WitnessServiceResponseV1", "String"]:
+        if forbidden in trait.group(1):
+            raise ValueError(f"proxy trait leaks {forbidden}")
+    required = [
+        "struct VerifiedPublicWitnessCompletionV1 {",
+        "enum UnsignedPublicWitnessSuccessV1 {",
+        "pub async fn new(",
+        "dispatcher.validate_startup_ready().await?;",
+        "WitnessServiceFailureV1::from_protocol_error(&error).failure_code",
+        "let verified = match verify_public_prepare(",
+        "WitnessPrepareVerificationV1::New(verified)",
+        "WitnessPrepareVerificationV1::AlreadyPrepared(resolution)",
+        "WitnessPrepareVerificationV1::Conflict(resolution)",
+        "WitnessPrepareVerificationV1::Rejected(code)",
+        "self.sign_prepare_resolution(",
+        "prepare_verified_candidate(&current.envelope, *verified)",
+        "if !matches!(request.body, WitnessServiceRequestBodyV1::Prepare { .. })",
+        "validate_selected_entry_bounds(admission, &proposed)",
+        "validate_selected_entry_bounds(admission, &current.envelope).map_err(invalid)?;",
+        "if validate_selected_entry_bounds(admission, &current.envelope).is_err()",
+        "if validate_selected_entry_bounds(admission, &observed.envelope).is_err()",
+        "if validate_selected_entry_bounds(admission, &confirmed.envelope).is_err()",
+        "usize::try_from(selected.max_request_bytes)",
+        "usize::try_from(selected.max_response_bytes)",
+        ".min(selected_max_response)",
+        "candidate.state_payload.len() as u64 > admission.max_state_bytes",
+        "candidate.checkpoint_payload.len() as u64 > admission.max_checkpoint_bytes",
+        "binding_bytes > admission.max_binding_bytes",
+        "retained_wire > admission.max_retained_bytes",
+        "retained_payload > admission.max_retained_bytes",
+        "PublicWitnessDispatchErrorV1::OutcomeUnknown",
+        "self.selected_admission(&request)?",
+        ".admission_set\n            .entry(stream_id)",
+        "challenge.state_fence.witness_identity != challenge.witness_identity",
+        "challenge.state_fence.witness_key_id != challenge.witness_key_id",
+        "if request_session(&request)",
+        "self.handle_establish(",
+        "self.handle_discover(&request, &current, challenge).await",
+        "self.handle_commit(&request, &current, session, txid).await",
+        "self.handle_abort(&request, &current, session, txid).await",
+        ".validate_challenge_freshness(current, challenge)",
+        'response.operation != WitnessStoreProxyOperationV1::ReadEntry',
+        'response.operation != WitnessStoreProxyOperationV1::CompareAndSwap',
+        "response.request_digest != expected_digest",
+        "stream_id == admission.stream_id",
+        "previous_revision == current.revision",
+        "new_revision > previous_revision",
+        "acknowledged_value_digest == proposed_digest",
+        '.read_authenticated(service_request, "confirm")',
+        "confirmed.revision <= current.revision",
+        "expected_revision.is_some_and(|revision| confirmed.revision != revision)",
+        "confirmed.envelope.canonical_bytes().map_err(invalid)?",
+        ".signed_envelope_digest()",
+        "confirmed.envelope.store_state_digest().map_err(invalid)?",
+        "WitnessStoreProxyResponseBodyV1::Conflict {",
+        ".confirm_proposed(service_request, current, &proposed, None)",
+        "if summary.txid == txid",
+        "commit_winner(&current.envelope, txid)",
+        "abort_winner(&current.envelope, txid)",
+        "commit_winner(&observed.envelope, txid)",
+        "abort_winner(&observed.envelope, txid)",
+        ".validate_for(WitnessStoreExpectationV1 {",
+        ".sign_for_request(&request, &self.signer)",
+    ]
+    for fragment in required:
+        if text.count(fragment) == 0:
+            raise ValueError(f"dispatcher verification fragment absent: {fragment}")
+    for fragment, count in [
+        ("response.request_digest != expected_digest", 3),
+        ("response.operation != WitnessStoreProxyOperationV1::InspectReady", 1),
+        ("self.selected_admission(&request)?;", 2),
+        ("|| signer_key_id != admission.signer_key_id", 1),
+        ("|| witness_identity != admission.witness_identity", 1),
+        ("|| witness_key_id != admission.witness_key_id", 1),
+        ("|| binding_generation != admission.binding_generation", 1),
+        ("|| binding_digest != admission.binding_digest", 1),
+        ("|| authority_pair != admission.authority_pair", 1),
+        ("|| challenge.state_fence.witness_identity != challenge.witness_identity", 1),
+        ("|| challenge.state_fence.witness_key_id != challenge.witness_key_id", 1),
+        ("stream_id == admission.stream_id", 2),
+        ("dispatcher.validate_startup_ready().await?;", 1),
+        ("if request_session(&request)", 1),
+        ("self.handle_establish(", 1),
+        ("self.handle_discover(&request, &current, challenge).await", 1),
+        ("self.handle_commit(&request, &current, session, txid).await", 1),
+        ("self.handle_abort(&request, &current, session, txid).await", 1),
+        (".validate_challenge_freshness(current, challenge)", 2),
+        ("if summary.txid == txid", 2),
+        ('.read_authenticated(service_request, "confirm")', 1),
+        (".validate_for(WitnessStoreExpectationV1 {", 2),
+        ("validated_streams.len() != self.config.admission_set.entries.len()", 1),
+        ("|| bucket_configuration_digest != self.config.bucket_configuration_digest", 1),
+        ("ready_manifest.digest().map_err(invalid)? != self.config.ready_manifest_digest", 1),
+        ("ready_manifest.bucket_epoch_digest != self.config.bucket_epoch_digest", 1),
+        ("ready_manifest.bucket_configuration_digest != self.config.bucket_configuration_digest", 1),
+        ("ready_manifest.admission_set_digest != self.config.admission_set_digest", 1),
+        ("ready_manifest.phase != WitnessBucketManifestPhaseV1::Ready", 1),
+        ("ready_manifest.witness_identity != self.config.witness_identity", 1),
+        ("ready_manifest.witness_key_id != self.config.witness_key_id", 1),
+        ("ready_manifest.stream_keys != expected_stream_keys", 1),
+        ("ready_manifest.initialized_streams.len() != self.config.admission_set.entries.len()", 1),
+        ("for admission in &self.config.admission_set.entries {", 1),
+        ("record.stream_initialization_digest != initialization_digest", 1),
+        ("summary.stream_initialization_digest != initialization_digest", 1),
+        ("summary.revision != current.revision", 1),
+        ("summary.store_state_digest", 1),
+        ("WitnessServiceFailureV1::from_protocol_error(&error).failure_code", 1),
+        ("WitnessServiceFailureCodeV1::StaleRotationFence", 2),
+        ("WitnessServiceFailureCodeV1::ExpectedHeadMismatch", 1),
+        ("WitnessServiceFailureCodeV1::StoreTransitionRefused", 1),
+        ("failure_code_for_protocol(&error)", 5),
+        ("let verified = match verify_public_prepare(", 1),
+        ("WitnessPrepareVerificationV1::New(", 2),
+        ("WitnessPrepareVerificationV1::AlreadyPrepared(", 2),
+        ("WitnessPrepareVerificationV1::Conflict(", 2),
+        ("WitnessPrepareVerificationV1::Rejected(code)", 2),
+        ("self.sign_prepare_resolution(", 2),
+        ("verify_public_prepare(", 2),
+        ("prepare_verified_candidate(&current.envelope, *verified)", 1),
+        ("if !matches!(request.body, WitnessServiceRequestBodyV1::Prepare { .. })", 1),
+        ("validate_selected_entry_bounds(admission, &proposed)", 1),
+        ("usize::try_from(selected.max_request_bytes)", 1),
+        ("usize::try_from(selected.max_response_bytes)", 1),
+        (".min(selected_max_response)", 1),
+        ("candidate.state_payload.len() as u64 > admission.max_state_bytes", 1),
+        ("candidate.checkpoint_payload.len() as u64 > admission.max_checkpoint_bytes", 1),
+        ("binding_bytes > admission.max_binding_bytes", 1),
+        ("retained_wire > admission.max_retained_bytes", 1),
+        ("retained_payload > admission.max_retained_bytes", 1),
+        ("PublicWitnessDispatchErrorV1::OutcomeUnknown", 8),
+        ("&self.config.bucket_epoch_digest,", 4),
+        ("&stream_initialization_digest,", 3),
+    ]:
+        if text.count(fragment) != count:
+            raise ValueError(f"dispatcher verification cardinality differs: {fragment}")
+    prepare_dispatch = re.search(
+        r"WitnessServiceRequestBodyV1::Prepare \{(.*?)\n            WitnessServiceRequestBodyV1::Establish \{",
+        text,
+        re.S,
+    )
+    if prepare_dispatch is None:
+        raise ValueError("Prepare dispatcher arm absent")
+    for fragment, count in [
+        ("verify_public_prepare(", 2),
+        ("WitnessPrepareVerificationV1::New(", 2),
+        ("WitnessPrepareVerificationV1::AlreadyPrepared(", 2),
+        ("WitnessPrepareVerificationV1::Conflict(", 2),
+        ("WitnessPrepareVerificationV1::Rejected(code)", 2),
+        ("self.sign_prepare_resolution(", 2),
+        ("prepare_verified_candidate(&current.envelope, *verified)", 1),
+        (".apply_and_confirm(&request, &current, proposed)", 1),
+    ]:
+        if prepare_dispatch.group(1).count(fragment) != count:
+            raise ValueError(f"Prepare dispatcher classification differs: {fragment}")
+    resolution_signer = re.search(
+        r"fn sign_prepare_resolution\((.*?)\n    \}\n\n    fn validate_transition",
+        text,
+        re.S,
+    )
+    if resolution_signer is None:
+        raise ValueError("Prepare resolution signer absent")
+    for fragment, count in [
+        (".into_outcome_for_store(&current.envelope)", 1),
+        ("self.sign_outcome(", 1),
+        ("WitnessOperationOutcomeV1::Prepare(Box::new(outcome))", 1),
+    ]:
+        if resolution_signer.group(1).count(fragment) != count:
+            raise ValueError(f"Prepare resolution signing differs: {fragment}")
+    for forbidden in ["apply_and_confirm", "compare_and_swap", "prepare_verified_candidate"]:
+        if forbidden in resolution_signer.group(1):
+            raise ValueError(f"Prepare resolution retries mutation: {forbidden}")
+    if "pub struct VerifiedPublicWitnessCompletionV1" in text \
+            or "pub enum UnsignedPublicWitnessSuccessV1" in text:
+        raise ValueError("completion capability became public")
+    durable = text.index(".apply_and_confirm(&request, &current, proposed)")
+    terminal = text.index(".sign_for_request(&request, &self.signer)", durable)
+    if terminal <= durable:
+        raise ValueError("public response signing precedes confirming read")
+    post_cas = re.search(
+        r"let response = match self\.proxy\.compare_and_swap\(request\)\.await \{(.*?)\n        \};(.*?)\n    async fn confirm_proposed",
+        text,
+        re.S,
+    )
+    if post_cas is None:
+        raise ValueError("post-CAS classifier absent")
+    classifier = post_cas.group(0)
+    if classifier.count("self.proxy.compare_and_swap(") != 1:
+        raise ValueError("post-CAS classifier retries compare-and-swap")
+    transport_error = re.search(r"Err\(error\) => \{(.*?)\n            \}", post_cas.group(1), re.S)
+    if transport_error is None:
+        raise ValueError("post-CAS transport error arm absent")
+    for fragment in [
+        "let _diagnostic = self",
+        ".confirm_proposed(service_request, current, &proposed, None)",
+        "return Err(PublicWitnessDispatchErrorV1::OutcomeUnknown);",
+    ]:
+        if transport_error.group(1).count(fragment) != 1:
+            raise ValueError(f"post-CAS transport uncertainty differs: {fragment}")
+    if "MutationStoreResult::Confirmed" in transport_error.group(1):
+        raise ValueError("diagnostic read upgrades transport uncertainty")
+    for fragment in [
+        "response\n            .validate()\n            .map_err(|_| PublicWitnessDispatchErrorV1::OutcomeUnknown)?;",
+        "response.operation != WitnessStoreProxyOperationV1::CompareAndSwap",
+        "response.request_digest != expected_digest",
+        "&& previous_revision == current.revision",
+        "&& new_revision > previous_revision",
+        "&& acknowledged_value_digest == proposed_digest",
+        "_ => Err(PublicWitnessDispatchErrorV1::OutcomeUnknown)",
+    ]:
+        if classifier.count(fragment) != 1:
+            raise ValueError(f"post-CAS acknowledgement classifier differs: {fragment}")
+    conflict = re.search(
+        r"WitnessStoreProxyResponseBodyV1::Conflict \{(.*?)\n            WitnessStoreProxyResponseBodyV1::Refused",
+        classifier,
+        re.S,
+    )
+    if conflict is None or "confirm_proposed" in conflict.group(1) \
+            or "MutationStoreResult::Confirmed" in conflict.group(1):
+        raise ValueError("non-CasApplied response upgrades to confirmed")
+
+validate(source)
+if mode != "self-test":
+    print("dispatcher_source_guard passed=1")
+    raise SystemExit(0)
+
+mutations = [
+    ("backend_public_response", "pub trait PublicWitnessStoreProxyClient", "pub trait PublicWitnessBackend"),
+    ("startup_ready_bypassed", "dispatcher.validate_startup_ready().await?;", "/* startup Ready bypassed */"),
+    ("prestore_admission_selection_bypassed", "self.selected_admission(&request)?;", "self.config.admission_set.entries.first().ok_or(PublicWitnessDispatchErrorV1::Invalid)?;"),
+    ("admission_stream_lookup_bypassed", ".admission_set\n            .entry(stream_id)", ".admission_set\n            .entries.first()"),
+    ("admission_signer_relation_bypassed", "|| signer_key_id != admission.signer_key_id", "|| false"),
+    ("admission_witness_identity_relation_bypassed", "|| witness_identity != admission.witness_identity", "|| false"),
+    ("admission_witness_key_relation_bypassed", "|| witness_key_id != admission.witness_key_id", "|| false"),
+    ("admission_binding_generation_relation_bypassed", "|| binding_generation != admission.binding_generation", "|| false"),
+    ("admission_binding_digest_relation_bypassed", "|| binding_digest != admission.binding_digest", "|| false"),
+    ("admission_authority_relation_bypassed", "|| authority_pair != admission.authority_pair", "|| false"),
+    ("challenge_fence_witness_identity_bypassed", "|| challenge.state_fence.witness_identity != challenge.witness_identity", "|| false"),
+    ("challenge_fence_witness_key_bypassed", "|| challenge.state_fence.witness_key_id != challenge.witness_key_id", "|| false"),
+    ("ready_all_admissions_bypassed", "for admission in &self.config.admission_set.entries {", "for admission in &self.config.admission_set.entries[..1] {"),
+    ("stored_session_bypassed", "if request_session(&request)", "if false && request_session(&request)"),
+    ("establish_placeholder", "self.handle_establish(", "self.placeholder_establish("),
+    ("discover_placeholder", "self.handle_discover(&request, &current, challenge).await", "self.placeholder_discover(&request, &current, challenge).await"),
+    ("commit_placeholder", "self.handle_commit(&request, &current, session, txid).await", "self.placeholder_commit(&request, &current, session, txid).await"),
+    ("abort_placeholder", "self.handle_abort(&request, &current, session, txid).await", "self.placeholder_abort(&request, &current, session, txid).await"),
+    ("prepare_existing_resolution_bypassed", "WitnessPrepareVerificationV1::AlreadyPrepared(resolution)", "WitnessPrepareVerificationV1::New(resolution)"),
+    ("prepare_conflict_observed_reverification_omitted", "return match verify_public_prepare(", "return match classify_observed_without_full_verification("),
+    ("prepare_resolution_recas_added", ".into_outcome_for_store(&current.envelope)\n            .map_err(invalid)?;", ".into_outcome_for_store(&current.envelope)\n            .map_err(invalid)?; let _retry = self.proxy.compare_and_swap(placeholder_request()).await;"),
+    ("challenge_freshness_omitted", ".validate_challenge_freshness(current, challenge)", ".placeholder_validate_challenge_freshness(current, challenge)"),
+    ("omitted_confirming_read", '.read_authenticated(service_request, "confirm")', '.read_authenticated(service_request, "initial")'),
+    ("wrong_response_digest", "response.request_digest != expected_digest", "false"),
+    ("wrong_response_operation", "response.operation != WitnessStoreProxyOperationV1::CompareAndSwap", "false"),
+    ("wrong_response_stream", "stream_id == admission.stream_id", "true"),
+    ("wrong_previous_revision", "previous_revision == current.revision", "true"),
+    ("wrong_new_revision", "new_revision > previous_revision", "true"),
+    ("wrong_ack_digest", "acknowledged_value_digest == proposed_digest", "true"),
+    ("confirm_revision_mismatch", "confirmed.revision <= current.revision", "false"),
+    ("confirm_expected_revision_omitted", "expected_revision.is_some_and(|revision| confirmed.revision != revision)", "false"),
+    ("confirm_envelope_substitution", "confirmed.envelope.canonical_bytes().map_err(invalid)?", "proposed.canonical_bytes().map_err(invalid)?"),
+    ("lost_response_confirm_omitted", ".confirm_proposed(service_request, current, &proposed, None)", ".read_authenticated(service_request, \"confirm\")"),
+    (
+        "diagnostic_read_upgrades_transport_error",
+        "let _diagnostic = self\n                    .confirm_proposed(service_request, current, &proposed, None)\n                    .await;\n                let _ = error;\n                return Err(PublicWitnessDispatchErrorV1::OutcomeUnknown);",
+        "if let Ok(confirmed) = self\n                    .confirm_proposed(service_request, current, &proposed, None)\n                    .await\n                {\n                    return Ok(MutationStoreResult::Confirmed(Box::new(confirmed)));\n                }\n                let _ = error;\n                return Err(PublicWitnessDispatchErrorV1::OutcomeUnknown);",
+    ),
+    (
+        "malformed_ack_downgraded_to_invalid",
+        "response\n            .validate()\n            .map_err(|_| PublicWitnessDispatchErrorV1::OutcomeUnknown)?;",
+        "response.validate().map_err(invalid)?;",
+    ),
+    (
+        "wrong_ack_header_downgraded_to_invalid",
+        "return Err(PublicWitnessDispatchErrorV1::OutcomeUnknown);\n        }\n        match response.body",
+        "return Err(PublicWitnessDispatchErrorV1::Invalid);\n        }\n        match response.body",
+    ),
+    (
+        "unknown_ack_downgraded_to_invalid",
+        "_ => Err(PublicWitnessDispatchErrorV1::OutcomeUnknown),",
+        "_ => Err(PublicWitnessDispatchErrorV1::Invalid),",
+    ),
+    (
+        "conflict_ack_upgraded_to_confirmed",
+        "Ok(MutationStoreResult::ObservedConflict(Box::new(observed)))",
+        "Ok(MutationStoreResult::Confirmed(Box::new(observed)))",
+    ),
+    (
+        "post_cas_retry_added",
+        "let _diagnostic = self",
+        "let _retry = self.proxy.compare_and_swap(request).await; let _diagnostic = self",
+    ),
+    ("confirm_store_digest_omitted", "confirmed.envelope.store_state_digest().map_err(invalid)?", "proposed.store_state_digest().map_err(invalid)?"),
+    ("abort_retry_txid_bypassed", "if summary.txid == txid", "if true"),
+    ("corrupt_key_unchecked", ".validate_for(WitnessStoreExpectationV1 {", ".validate_for(/* removed exact expectation */ WitnessStoreExpectationV1 {"),
+    ("early_public_sign", "let confirmed = match self", "let _early_public_sign = self.signer.sign(&[]); let confirmed = match self"),
+    ("signer_leakage", "request: WitnessStoreProxyRequestV1,", "request: WitnessStoreProxyRequestV1, signer: &Ed25519Signer,"),
+    ("runner_wildcard_subject", '"swarm.governance.witness.v1.fence", queue.clone()', '"swarm.governance.witness.v1.>", queue.clone()'),
+    ("runner_extra_subscription", "let establish = client", 'let extra = client.queue_subscribe("swarm.governance.witness.v1.extra", queue.clone()).await;\n        let establish = client'),
+    ("runner_queue_group_substitution", 'const PUBLIC_WITNESS_QUEUE_GROUP: &str = "swarm-governance-witness-v1";', 'const PUBLIC_WITNESS_QUEUE_GROUP: &str = "foreign";'),
+    ("runner_capacity_constant", "let capacity = dispatcher.config.ingress_queue_capacity;", "let capacity = 1024;"),
+    ("runner_worker_bound_constant", "let worker_count = dispatcher.config.max_in_flight;", "let worker_count = 1024;"),
+    ("runner_reply_from_payload", "let Some(reply) = message.reply else {", 'let Some(reply) = Some(async_nats::Subject::from("payload.reply")) else {'),
+    ("runner_reply_namespace_bypassed", "if !is_bounded_inbox_reply(&reply)", "if false"),
+    ("runner_queue_bypassed", "if !try_enqueue_public_message(&ingress, ingress_message)", "if false"),
+    ("runner_try_send_bypassed", "ingress.try_send(message).is_ok()", "true"),
+    ("ready_operation_bypassed", "response.operation != WitnessStoreProxyOperationV1::InspectReady", "false"),
+    ("ready_stream_cardinality_bypassed", "validated_streams.len() != self.config.admission_set.entries.len()", "false"),
+    ("ready_bucket_configuration_bypassed", "|| bucket_configuration_digest != self.config.bucket_configuration_digest", "|| false"),
+    ("ready_manifest_digest_bypassed", "ready_manifest.digest().map_err(invalid)? != self.config.ready_manifest_digest", "false"),
+    ("ready_manifest_epoch_bypassed", "ready_manifest.bucket_epoch_digest != self.config.bucket_epoch_digest", "false"),
+    ("ready_manifest_configuration_bypassed", "ready_manifest.bucket_configuration_digest != self.config.bucket_configuration_digest", "false"),
+    ("ready_manifest_admission_bypassed", "ready_manifest.admission_set_digest != self.config.admission_set_digest", "false"),
+    ("ready_manifest_phase_bypassed", "ready_manifest.phase != WitnessBucketManifestPhaseV1::Ready", "false"),
+    ("ready_witness_identity_bypassed", "ready_manifest.witness_identity != self.config.witness_identity", "false"),
+    ("ready_witness_key_bypassed", "ready_manifest.witness_key_id != self.config.witness_key_id", "false"),
+    ("ready_stream_set_bypassed", "ready_manifest.stream_keys != expected_stream_keys", "false"),
+    ("ready_initialized_cardinality_bypassed", "ready_manifest.initialized_streams.len() != self.config.admission_set.entries.len()", "false"),
+    ("ready_initialization_record_bypassed", "record.stream_initialization_digest != initialization_digest", "false"),
+    ("ready_summary_initialization_bypassed", "summary.stream_initialization_digest != initialization_digest", "false"),
+    ("ready_summary_revision_bypassed", "summary.revision != current.revision", "false"),
+    ("ready_summary_digest_bypassed", "summary.store_state_digest", "current.envelope.store_state_digest().map_err(invalid)?"),
+    ("proxy_admission_binding_bypassed", "admission_digest: admission.admission_digest.clone(),", 'admission_digest: "0".repeat(64),'),
+    ("proxy_epoch_binding_bypassed", "bucket_epoch_digest: self.config.bucket_epoch_digest.clone(),", 'bucket_epoch_digest: "0".repeat(64),'),
+    ("proxy_anchor_binding_bypassed", "bucket_anchor_digest: self.config.bucket_anchor_digest.clone(),", 'bucket_anchor_digest: "0".repeat(64),'),
+    ("commit_preobserved_winner_bypassed", "commit_winner(&current.envelope, txid)", "None::<(String, WitnessCommitOutcomeV1)>.ok_or(ProtocolError::WitnessOutcomeMismatch)"),
+    ("abort_preobserved_winner_bypassed", "abort_winner(&current.envelope, txid)", "None::<(String, WitnessAbortOutcomeV1)>.ok_or(ProtocolError::WitnessOutcomeMismatch)"),
+    ("commit_conflict_winner_bypassed", "commit_winner(&observed.envelope, txid)", "None::<(String, WitnessCommitOutcomeV1)>.ok_or(ProtocolError::WitnessOutcomeMismatch)"),
+    ("abort_conflict_winner_bypassed", "abort_winner(&observed.envelope, txid)", "None::<(String, WitnessAbortOutcomeV1)>.ok_or(ProtocolError::WitnessOutcomeMismatch)"),
+    ("application_validation_unsigned", "WitnessServiceFailureV1::from_protocol_error(&error).failure_code", "WitnessServiceFailureCodeV1::InternalUnavailable"),
+    ("stale_rotation_failure_substituted", "WitnessServiceFailureCodeV1::StaleRotationFence", "WitnessServiceFailureCodeV1::InternalUnavailable"),
+    ("expected_head_failure_substituted", "WitnessServiceFailureCodeV1::ExpectedHeadMismatch", "WitnessServiceFailureCodeV1::InternalUnavailable"),
+    ("prepare_transition_failure_substituted", "WitnessServiceFailureCodeV1::StoreTransitionRefused", "WitnessServiceFailureCodeV1::InternalUnavailable"),
+    ("protocol_failure_conversion_bypassed", "failure_code_for_protocol(&error)", "WitnessServiceFailureCodeV1::InternalUnavailable"),
+    ("candidate_verifier_call_bypassed", "let verified = match verify_public_prepare(", "let verified = match placeholder_prepare_candidate("),
+    ("prepare_complete_validation_reintroduced", "if !matches!(request.body, WitnessServiceRequestBodyV1::Prepare { .. }) {", "if true {") ,
+    ("selected_request_ceiling_bypassed", "usize::try_from(selected.max_request_bytes)", "usize::try_from(self.config.max_request_bytes as u64)"),
+    ("selected_response_ceiling_bypassed", "usize::try_from(selected.max_response_bytes)", "usize::try_from(self.config.max_response_bytes as u64)"),
+    ("selected_state_ceiling_bypassed", "candidate.state_payload.len() as u64 > admission.max_state_bytes", "false"),
+    ("selected_checkpoint_ceiling_bypassed", "candidate.checkpoint_payload.len() as u64 > admission.max_checkpoint_bytes", "false"),
+    ("selected_binding_ceiling_bypassed", "binding_bytes > admission.max_binding_bytes", "false"),
+    ("selected_retained_wire_ceiling_bypassed", "retained_wire > admission.max_retained_bytes", "false"),
+    ("selected_retained_payload_ceiling_bypassed", "retained_payload > admission.max_retained_bytes", "false"),
+    ("proposed_entry_bounds_bypassed", "if validate_selected_entry_bounds(admission, &proposed).is_err()", "if false"),
+    ("startup_entry_bounds_bypassed", "validate_selected_entry_bounds(admission, &current.envelope).map_err(invalid)?;", "/* startup entry bounds omitted */"),
+    ("initial_entry_bounds_bypassed", "if validate_selected_entry_bounds(admission, &current.envelope).is_err()", "if false"),
+    ("conflict_winner_bounds_bypassed", "if validate_selected_entry_bounds(admission, &observed.envelope).is_err()", "if false"),
+    ("confirmation_bounds_bypassed", "if validate_selected_entry_bounds(admission, &confirmed.envelope).is_err()", "if false"),
+    ("confirmation_unknown_collapsed", "return Err(PublicWitnessDispatchErrorV1::OutcomeUnknown);", "return Err(PublicWitnessDispatchErrorV1::Invalid);"),
+]
+digests = set()
+for label, old, new in mutations:
+    if old not in source:
+        raise SystemExit(f"dispatcher source mutation target absent: {label}")
+    mutant = source.replace(old, new, 1)
+    digest = hashlib.sha256(mutant.encode()).hexdigest()
+    if digest in digests:
+        raise SystemExit(f"duplicate dispatcher source mutation: {label}")
+    digests.add(digest)
+    try:
+        validate(mutant)
+    except ValueError:
+        print(f"dispatcher_source_mutation_red mutation={label}")
+    else:
+        raise SystemExit(f"dispatcher source mutation survived: {label}")
+
+integration_mutations = [
+    (
+        "registered_overload_ingress_binding_omitted",
+        "assert!(public_witness_ingress_overload_control());",
+        "assert!(true);",
+    ),
+    ("signed_bounds_case_omitted", ".max_payload_bytes = 1;", ".max_payload_bytes = candidate.preimage.publication_binding.limits.max_payload_bytes;"),
+    ("signed_verifier_only_case_omitted", "let verifier_only = Fixture::new_with_initial_intent(CasMode::Apply, 2)?;", "let verifier_only = Fixture::new(CasMode::Apply)?;"),
+    ("signed_rotation_exhaustion_omitted", "exhausted.exhaust_current_session_generation()?;", "/* exhaustion omitted */"),
+    ("signed_rotation_validation_case_omitted", "for operation in [\n        WitnessServiceOperationV1::Establish,\n        WitnessServiceOperationV1::Discover,\n    ] {", "for operation in [\n        WitnessServiceOperationV1::Establish,\n        WitnessServiceOperationV1::Establish,\n    ] {"),
+    ("signed_expected_head_code_substituted", "WitnessServiceFailureCodeV1::ExpectedHeadMismatch", "WitnessServiceFailureCodeV1::InvalidSignature"),
+    ("signed_failure_store_read_assertion_omitted", 'assert_eq!(bounds.proxy.events(), vec!["read"]);', "assert!(true);"),
+    ("cross_commit_winner_substituted", "WitnessCommitOutcomeV1::GenesisAborted", "WitnessCommitOutcomeV1::Committed"),
+    ("cross_abort_winner_substituted", "WitnessAbortOutcomeV1::Committed", "WitnessAbortOutcomeV1::AlreadyAborted"),
+    ("cross_conflict_execution_omitted", "set_conflict_observed(revision, envelope);", "set_cas_mode(CasMode::Conflict);"),
+    ("cross_stale_intent_substituted", "WitnessServiceFailureCodeV1::StaleIntent", "WitnessServiceFailureCodeV1::Conflict"),
+    ("genesis_successor_execution_omitted", "assert_genesis_abort_successor_after_restart().await?;", "/* successor corpus omitted */"),
+    ("genesis_successor_restart_bypassed", "let restarted_dispatcher = fixture.dispatcher()", "let restarted_dispatcher = first_dispatcher"),
+    ("genesis_successor_next_intent_substituted", "let next_intent = aborted\n        .intent_counter\n        .checked_add(1)", "let next_intent = aborted\n        .intent_counter\n        .checked_add(2)"),
+    ("genesis_successor_old_intent_control_omitted", "aborted.intent_counter,", "next_intent,"),
+    ("genesis_successor_skipped_intent_control_omitted", "next_intent.checked_add(1)", "next_intent.checked_add(0)"),
+    ("genesis_successor_outer_clear_assertion_omitted", "assert!(confirmed.genesis_abort.is_none());", "assert!(true);"),
+    ("genesis_successor_persisted_receipt_assertion_substituted", "Some(&aborted)", "None"),
+    ("ready_request_binding_substituted", '["bucket_anchor", "bucket_epoch", "admission"]', '["bucket_anchor", "bucket_epoch", "bucket_epoch"]'),
+    ("prestore_fence_corpus_omitted", "assert_pre_store_admission_fences().await?;", "/* pre-store corpus omitted */"),
+    ("prestore_field_inventory_substituted", '"authority_pair",', '"binding_digest",'),
+    ("multistream_corpus_omitted", "assert_multistream_startup_controls().await?;", "/* multistream corpus omitted */"),
+    ("multistream_positive_omitted", "two_stream.enable_second_stream()?;", "/* second stream omitted */"),
+    ("multistream_cross_summary_omitted", "ReadyMutation::CrossStreamSummaries,", "ReadyMutation::MissingStream,"),
+    ("prepare_classification_corpus_omitted", "assert_prepare_admission_classification().await?;", "/* classification corpus omitted */"),
+    ("entry_bounds_corpus_omitted", "assert_authenticated_entry_limits_are_enforced().await?;", "/* entry bounds corpus omitted */"),
+    ("taxonomy_corpus_omitted", "assert_bound_taxonomy_is_seam_specific().await?;", "/* taxonomy corpus omitted */"),
+    ("taxonomy_field_substituted", 'for field in ["state", "checkpoint", "binding", "retained"]', 'for field in ["state", "checkpoint", "binding", "binding"]'),
+    ("taxonomy_max_plus_one_omitted", "for exceeds in [false, true]", "for exceeds in [false, false]"),
+    ("taxonomy_startup_assertion_omitted", 'assert_eq!(startup_result.is_err(), exceeds, "startup {field}");', "assert!(true);"),
+    ("taxonomy_initial_code_substituted", "assert_eq!(\n                    failure.failure_code,\n                    WitnessServiceFailureCodeV1::BoundsExceeded\n                );\n                assert_eq!(failure.store_state_digest, Some(observed_digest));", "assert_eq!(\n                    failure.failure_code,\n                    WitnessServiceFailureCodeV1::Conflict\n                );\n                assert_eq!(failure.store_state_digest, Some(observed_digest));"),
+    ("taxonomy_proposed_zero_cas_omitted", "assert_eq!(proposed.proxy.cas_attempted.load(Ordering::SeqCst), 0);", "assert!(true);"),
+    ("taxonomy_conflict_winner_code_substituted", "WitnessServiceFailureCodeV1::BoundsExceeded\n                } else {\n                    WitnessServiceFailureCodeV1::Conflict", "WitnessServiceFailureCodeV1::Conflict\n                } else {\n                    WitnessServiceFailureCodeV1::Conflict"),
+    ("taxonomy_confirmation_unknown_substituted", "Err(PublicWitnessDispatchErrorV1::OutcomeUnknown)", "Err(PublicWitnessDispatchErrorV1::Invalid)"),
+    ("taxonomy_no_retry_assertion_omitted", "assert_eq!(confirmation.proxy.cas_attempted.load(Ordering::SeqCst), 1);", "assert!(true);"),
+    ("lost_response_operation_omitted", "assert_lost_response_remains_unknown(OperationCase::Abort).await?;", "assert_lost_response_remains_unknown(OperationCase::Commit).await?;"),
+    ("lost_response_prepare_omitted", "assert_lost_response_remains_unknown(OperationCase::Prepare).await?;", "assert_lost_response_remains_unknown(OperationCase::Discover).await?;"),
+    ("lost_response_unknown_substituted", "async fn assert_lost_response_remains_unknown", "async fn assert_lost_response_is_confirmed"),
+    ("lost_response_diagnostic_read_assertion_omitted", '&["read", "cas", "read"]', '&["read", "cas"]'),
+    ("lost_response_attempt_count_omitted", "before_attempted + 1", "before_attempted"),
+    ("lost_response_applied_count_omitted", "before_applied + 1", "before_applied"),
+    ("post_cas_corpus_omitted", "assert_post_cas_acknowledgements_remain_unknown().await?;", "/* post-CAS corpus omitted */"),
+    ("post_cas_event_sequence_omitted", 'if confirmation_attempted {\n                vec!["read", "cas", "read"]', 'if confirmation_attempted {\n                vec!["read", "cas"]'),
+    ("post_cas_attempt_count_omitted", "assert_eq!(fixture.proxy.cas_attempted.load(Ordering::SeqCst), 1);\n        assert_eq!(fixture.proxy.cas_applied.load(Ordering::SeqCst), 1);", "assert_eq!(fixture.proxy.cas_attempted.load(Ordering::SeqCst), 0);\n        assert_eq!(fixture.proxy.cas_applied.load(Ordering::SeqCst), 1);"),
+    ("post_cas_applied_count_omitted", "assert_eq!(fixture.proxy.cas_attempted.load(Ordering::SeqCst), 1);\n        assert_eq!(fixture.proxy.cas_applied.load(Ordering::SeqCst), 1);", "assert_eq!(fixture.proxy.cas_attempted.load(Ordering::SeqCst), 1);\n        assert_eq!(fixture.proxy.cas_applied.load(Ordering::SeqCst), 0);"),
+    ("prepare_recovery_corpus_omitted", "assert_prepare_idempotency_and_recovery().await?;", "/* Prepare recovery corpus omitted */"),
+    ("prepare_retry_outcome_substituted", "WitnessPrepareOutcomeV1::AlreadyPrepared(_)", "WitnessPrepareOutcomeV1::Prepared(_)"),
+    ("prepare_conflict_outcome_substituted", "WitnessPrepareOutcomeV1::Conflict", "WitnessPrepareOutcomeV1::AlreadyPrepared(_)"),
+    ("prepare_replay_after_unknown_omitted", "lost.dispatch_request(&lost_dispatcher, &original).await?", "placeholder_replay(&lost_dispatcher, &original).await?"),
+    ("prepare_mixed_conflict_control_omitted", "let mut invalid_conflict = different_request.clone();", "let mut invalid_conflict = request.clone();"),
+    ("prepare_mixed_retry_control_omitted", "let mut invalid_retry = request.clone();", "let mut invalid_retry = different_request.clone();"),
+    ("prepare_preexisting_zero_cas_omitted", "fixture.proxy.cas_attempted.load(Ordering::SeqCst),\n        attempted", "fixture.proxy.cas_attempted.load(Ordering::SeqCst),\n        attempted + 1"),
+    ("prepare_preexisting_applied_count_omitted", "fixture.proxy.cas_applied.load(Ordering::SeqCst), applied", "fixture.proxy.cas_applied.load(Ordering::SeqCst), applied + 1"),
+    ("prepare_conflict_winner_loop_omitted", "for (same_winner, expected_already) in [(true, true), (false, false)]", "for (same_winner, expected_already) in [(true, true)]"),
+    ("prepare_conflict_winner_retry_added", "assert_eq!(winner.proxy.cas_attempted.load(Ordering::SeqCst), 1);", "assert_eq!(winner.proxy.cas_attempted.load(Ordering::SeqCst), 2);"),
+    ("current_head_corpus_omitted", "assert_current_head_intent_classification().await?;", "/* current-head intent corpus omitted */"),
+    ("current_head_old_intent_omitted", "for intent in [\n        head.intent_counter,", "for intent in [\n        expected_intent,"),
+    ("current_head_skipped_intent_omitted", "expected_intent\n            .checked_add(1)", "expected_intent\n            .checked_add(0)"),
+    ("current_head_mixed_signature_control_substituted", "mixed.preimage.state_attestation.signature_hex", "mixed.preimage.state_attestation.key_id"),
+    ("prepare_roles_code_substituted", "true,\n            false,\n            1,\n            WitnessServiceFailureCodeV1::AdmissionMismatch", "false,\n            false,\n            1,\n            WitnessServiceFailureCodeV1::StaleIntent"),
+    ("prepare_mixed_code_substituted", "true,\n            false,\n            2,\n            WitnessServiceFailureCodeV1::AdmissionMismatch", "true,\n            false,\n            2,\n            WitnessServiceFailureCodeV1::StaleIntent"),
+    ("prepare_mixed_authorization_control_omitted", '"authorization_signature",', '"state_signature",'),
+    ("prepare_mixed_state_signature_control_omitted", '"state_signature",', '"checkpoint_signature",'),
+    ("prepare_mixed_checkpoint_signature_control_omitted", '"checkpoint_signature",', '"predecessor_digest",'),
+    ("prepare_mixed_predecessor_control_omitted", '"predecessor_digest",', '"authorization_signature",'),
+    ("prepare_mixed_genesis_epoch_control_omitted", "(1, 0), (0, 1)", "(0, 0), (0, 1)"),
+    ("prepare_mixed_genesis_sequence_control_omitted", "(1, 0), (0, 1)", "(1, 0), (0, 0)"),
+    ("prepare_mixed_mapping_control_omitted", "std::mem::swap(", "placeholder_mapping_swap("),
+    ("selected_state_case_substituted", '("state", state_len)', '("checkpoint", checkpoint_len)'),
+    ("selected_checkpoint_case_substituted", '("checkpoint", checkpoint_len)', '("state", state_len)'),
+    ("selected_binding_case_substituted", '("binding", binding_len)', '("state", state_len)'),
+    ("selected_retained_case_substituted", '("retained", retained_len)', '("state", state_len)'),
+    ("selected_candidate_max_plus_one_bypassed", "let ceiling = exact - u64::from(exceeds);", "let ceiling = exact;"),
+    ("selected_request_max_plus_one_bypassed", "let ceiling = request_len - u64::from(exceeds);", "let ceiling = request_len;"),
+    ("selected_response_max_plus_one_bypassed", "let ceiling = response_len - u64::from(exceeds);", "let ceiling = response_len;"),
+    ("selected_precas_event_assertion_omitted", 'assert_eq!(fixture.secondary_events()?, vec!["read"]);', "assert!(true);"),
+    ("selected_request_zero_call_assertion_omitted", "assert_eq!(fixture.proxy.calls.load(Ordering::SeqCst), 0);", "assert!(true);"),
+    ("selected_response_code_substituted", "PublicWitnessDispatchErrorV1::ResponseBounds", "PublicWitnessDispatchErrorV1::Invalid"),
+]
+for ack_label in [
+    "malformed", "duplicate", "lower", "wrong_kind", "wrong_stream",
+    "wrong_previous_revision", "wrong_new_revision", "wrong_digest",
+    "wrong_request_digest", "unknown", "wrong_value",
+]:
+    integration_mutations.append((
+        f"post_cas_case_omitted_{ack_label}",
+        f'"{ack_label}",',
+        '"duplicate",' if ack_label == "malformed" else '"malformed",',
+    ))
+for ready_name in [
+    "WrongOperation", "WrongRequestDigest", "WrongBucketConfiguration",
+    "WrongManifestDigest", "WrongManifestPhase", "WrongManifestEpoch",
+    "WrongWitnessIdentity", "WrongWitnessKey", "MissingStream", "ExtraStream",
+    "WrongInitializationDigest", "WrongSummaryRevision", "WrongStoreDigest",
+]:
+    integration_mutations.append((
+        f"ready_case_omitted_{ready_name}",
+        f"(ReadyMutation::{ready_name}, ",
+        "(ReadyMutation::None, ",
+    ))
+for label, old, new in integration_mutations:
+    if old not in integration:
+        raise SystemExit(f"dispatcher integration mutation target absent: {label}")
+    mutant = integration.replace(old, new, 1)
+    digest = hashlib.sha256((source + mutant + service).encode()).hexdigest()
+    if digest in digests:
+        raise SystemExit(f"duplicate dispatcher integration mutation: {label}")
+    digests.add(digest)
+    try:
+        validate(source, mutant, config, service)
+    except ValueError:
+        print(f"dispatcher_source_mutation_red mutation={label}")
+    else:
+        raise SystemExit(f"dispatcher integration mutation survived: {label}")
+
+config_mutations = [
+    ("config_admission_set_validation_bypassed", "self.admission_set.validate()?;", "/* admission set validation omitted */"),
+    ("config_admission_set_digest_bypassed", "self.admission_set.admission_set_digest != self.admission_set_digest", "false"),
+    ("config_shared_witness_iteration_bypassed", "for admission in &self.admission_set.entries {", "for admission in &self.admission_set.entries[..1] {"),
+    ("config_shared_witness_identity_bypassed", "admission.witness_identity != self.witness_identity", "false"),
+    ("config_shared_witness_key_bypassed", "admission.witness_key_id != self.witness_key_id", "false"),
+]
+for label, old, new in config_mutations:
+    if config.count(old) != 1:
+        raise SystemExit(f"dispatcher config mutation target absent: {label}")
+    mutant = config.replace(old, new, 1)
+    digest = hashlib.sha256((source + integration + mutant + service).encode()).hexdigest()
+    if digest in digests:
+        raise SystemExit(f"duplicate dispatcher config mutation: {label}")
+    digests.add(digest)
+    try:
+        validate(source, integration, mutant, service, protocol)
+    except ValueError:
+        print(f"dispatcher_source_mutation_red mutation={label}")
+    else:
+        raise SystemExit(f"dispatcher config mutation survived: {label}")
+
+service_mutations = [
+    (
+        "outer_identity_dispatch_decode_bypassed",
+        "request.validate_public_dispatch_identity()?;",
+        "request.validate()?;",
+    ),
+    (
+        "outer_identity_signing_bypassed",
+        "request.validate_public_dispatch_identity()?;",
+        "request.validate()?;",
+    ),
+    (
+        "outer_identity_extractor_bypassed",
+        "request.validate_public_dispatch_identity()?;",
+        "request.validate()?;",
+    ),
+    (
+        "outer_identity_failure_client_bypassed",
+        "let identity = public_request_identity(request)?;",
+        "let identity = request_identity(request)?;",
+    ),
+    (
+        "outer_identity_digest_bypassed",
+        "if self.request_digest != computed {",
+        "if false {",
+    ),
+]
+for index, (label, old, new) in enumerate(service_mutations):
+    occurrences = [match.start() for match in re.finditer(re.escape(old), service)]
+    if not occurrences:
+        raise SystemExit(f"dispatcher service mutation target absent: {label}")
+    if old.startswith("request.validate_public"):
+        occurrence = min(index, len(occurrences) - 1)
+    else:
+        occurrence = 0
+    position = occurrences[occurrence]
+    mutant = service[:position] + new + service[position + len(old):]
+    digest = hashlib.sha256((source + integration + mutant).encode()).hexdigest()
+    if digest in digests:
+        raise SystemExit(f"duplicate dispatcher service mutation: {label}")
+    digests.add(digest)
+    try:
+        validate(source, integration, config, mutant, protocol)
+    except ValueError:
+        print(f"dispatcher_source_mutation_red mutation={label}")
+    else:
+        raise SystemExit(f"dispatcher service mutation survived: {label}")
+
+verifier_mutations = [
+    ("prepare_outer_identity_bypassed", "request\n        .validate_public_dispatch_identity()", "request\n        .validate()"),
+    ("prepare_admission_digest_bypassed", "request.admission_digest != admission_entry.admission_digest", "false"),
+    ("prepare_current_authentication_bypassed", "current_envelope\n        .validate_for(WitnessStoreExpectationV1 {", "current_envelope\n        .validate(); if false { WitnessStoreExpectationV1 {"),
+    ("prepare_epoch_pin_self_bound", "bucket_epoch_digest: expected_bucket_epoch_digest,", "bucket_epoch_digest: &current_envelope.bucket_epoch_digest,"),
+    ("prepare_initialization_pin_self_bound", "stream_initialization_digest: expected_stream_initialization_digest,", "stream_initialization_digest: &current_envelope.stream_initialization_digest,"),
+    ("prepare_signer_key_bypassed", "witness_signer.key_id() != admission_entry.witness_key_id", "false"),
+    ("prepare_body_match_bypassed", "let WitnessServiceRequestBodyV1::Prepare {", "let WitnessServiceRequestBodyV1::Commit {"),
+    ("prepare_normalized_candidate_validation_bypassed", "candidate\n        .validate_for_expected_intent(expected.intent_counter)", "Ok(true)"),
+    ("prepare_roles_relation_bypassed", "binding.publication_roles != admission_entry.publication_roles", "false"),
+    ("prepare_limits_relation_bypassed", "binding.limits != admission_entry.limits", "false"),
+    ("prepare_session_authorization_bypassed", "authorization\n        .verify_for_session_record(", "authorization\n        .placeholder_verify_for_session_record("),
+    ("prepare_stored_session_bypassed", "if current_envelope.session.as_ref() != Some(session) {\n        return Err(WitnessServiceFailureCodeV1::StaleSession);", "if false {\n        return Err(WitnessServiceFailureCodeV1::StaleSession);"),
+    ("prepare_expected_head_bypassed", "candidate.preimage.predecessor_head.as_ref() != expected_head.as_deref()", "false"),
+    ("prepare_epoch_relation_bypassed", "candidate.preimage.epoch != expected.epoch", "false"),
+    ("prepare_sequence_relation_bypassed", "candidate.preimage.sequence != expected.sequence", "false"),
+    ("prepare_predecessor_digest_bypassed", "candidate.preimage.predecessor_head_digest != expected.predecessor_head_digest", "false"),
+    ("prepare_predecessor_data_bypassed", "candidate.preimage.predecessor_data_head_digest != expected.predecessor_data_head_digest", "false"),
+    ("prepare_mapping_bypassed", "candidate.preimage.publication_mapping_before != expected.publication_mapping", "false"),
+    ("prepare_selected_bounds_bypassed", "enforce_selected_candidate_bounds(admission_entry, current_envelope, candidate)", "Ok(())"),
+    ("prepare_intent_classifier_bypassed", "if !intent_matches {", "if false {"),
+    ("prepare_genesis_proof_bypassed", "verified_stored_genesis_abort(current_envelope, expected_abort, witness_signer)", "placeholder_stored_genesis_abort(current_envelope, expected_abort, witness_signer)"),
+    ("prepare_lower_verifier_bypassed", "WitnessCandidateVerifier::verify_prepare(", "WitnessCandidateVerifier::placeholder_verify_prepare("),
+    ("prepare_classification_before_stronger_checks", "let verified = WitnessCandidateVerifier::verify_prepare(", "let verified = classify_existing_prepare_before_full_verification("),
+    ("prepare_genesis_proof_omitted", "verified_abort.as_ref(),", "None,"),
+    ("prepare_existing_branch_bypassed", "let Some(stored) = current_envelope.prepared.as_ref() else", "let Some(stored) = None else"),
+    ("prepare_different_candidate_treated_idempotent", "} else {\n        VerifiedPrepareResolutionKindV1::Conflict\n    };", "} else {\n        VerifiedPrepareResolutionKindV1::AlreadyPrepared\n    };"),
+    ("prepare_same_candidate_treated_conflict", "{\n        VerifiedPrepareResolutionKindV1::AlreadyPrepared\n    } else", "{\n        VerifiedPrepareResolutionKindV1::Conflict\n    } else"),
+    ("prepare_resolution_store_digest_bypassed", "if current.store_state_digest()? != self.store_state_digest", "if false"),
+    ("prepare_resolution_prepared_state_bypassed", "let stored = current\n            .prepared\n            .as_ref()", "let stored = placeholder_current()\n            .prepared\n            .as_ref()"),
+    ("prepare_resolution_same_relation_constant", "let same = stored.prepared.head.txid == self.txid\n            && stored.prepared.head.candidate_digest == self.candidate_digest;", "let same = true;"),
+    ("prepare_resolution_idempotent_outcome_substituted", "WitnessPrepareOutcomeV1::AlreadyPrepared(stored.prepared.clone())", "WitnessPrepareOutcomeV1::Conflict"),
+    ("prepare_retry_slot_relations_bypassed", "if let Some(stored) = current.prepared.as_ref() {", "if false && let Some(stored) = current.prepared.as_ref() {"),
+    ("prepare_retry_predecessor_relation_bypassed", "if stored.prepared.predecessor_head.as_ref() != expected_head", "if false"),
+    ("prepare_retry_genesis_authority_bypassed", "let stored_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {\n        current_envelope\n            .prepared", "let stored_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {\n        placeholder_current_envelope()\n            .prepared"),
+    ("prepare_lower_retry_genesis_authority_bypassed", "let authenticated_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {\n            current_envelope\n                .prepared", "let authenticated_genesis_abort = current_envelope.genesis_abort.as_ref().or_else(|| {\n            placeholder_current_envelope()\n                .prepared"),
+]
+for label, old, new in verifier_mutations:
+    if verifier.count(old) != 1:
+        raise SystemExit(f"dispatcher verifier mutation target absent: {label}")
+    mutant = verifier.replace(old, new, 1)
+    digest = hashlib.sha256((source + integration + service + protocol + mutant).encode()).hexdigest()
+    if digest in digests:
+        raise SystemExit(f"duplicate dispatcher verifier mutation: {label}")
+    digests.add(digest)
+    try:
+        validate(source, integration, config, service, protocol, mutant)
+    except ValueError:
+        print(f"dispatcher_source_mutation_red mutation={label}")
+    else:
+        raise SystemExit(f"dispatcher verifier mutation survived: {label}")
+
+protocol_mutations = [
+    ("genesis_stored_session_validation_omitted", "session.validate()?;", "/* stored session validation omitted */"),
+    ("genesis_stored_receipt_validation_omitted", "expected_abort.validate()?;", "/* stored receipt validation omitted */"),
+    ("genesis_attestation_signature_unchecked", "attestation.validate()?;", "/* signature validation omitted */"),
+    ("genesis_attestation_operation_unchecked", "attestation.operation != WitnessOperationV1::Abort", "false"),
+    ("genesis_attestation_stream_unchecked", "attestation.stream_id != session.stream_id", "false"),
+    ("genesis_attestation_binding_generation_unchecked", "attestation.binding_generation != session.binding_generation", "false"),
+    ("genesis_attestation_binding_digest_unchecked", "attestation.binding_digest != session.binding_digest", "false"),
+    ("genesis_attestation_signer_unchecked", "attestation.signer_key_id != session.signer_key_id", "false"),
+    ("genesis_attestation_authority_unchecked", "attestation.authority_pair != session.authority_pair", "false"),
+    ("genesis_attestation_generation_unchecked", "attestation.session_generation != session.session_generation", "false"),
+    ("genesis_attestation_commitment_unchecked", "attestation.session_commitment != session.session_commitment", "false"),
+    ("genesis_attestation_key_unchecked", "attestation.witness_key_id != session.witness_key_id", "false"),
+    ("genesis_attestation_receipt_unchecked", "attestation.outcome != expected_outcome", "false"),
+]
+for label, old, new in protocol_mutations:
+    start = protocol.index("    pub(crate) fn from_authenticated_store_genesis_abort(")
+    end = protocol.index("    pub fn attestation", start)
+    segment = protocol[start:end]
+    if segment.count(old) != 1:
+        raise SystemExit(f"dispatcher protocol mutation target absent: {label}")
+    segment = segment.replace(old, new, 1)
+    mutant = protocol[:start] + segment + protocol[end:]
+    digest = hashlib.sha256((source + integration + service + mutant).encode()).hexdigest()
+    if digest in digests:
+        raise SystemExit(f"duplicate dispatcher protocol mutation: {label}")
+    digests.add(digest)
+    try:
+        validate(source, integration, config, service, mutant)
+    except ValueError:
+        print(f"dispatcher_source_mutation_red mutation={label}")
+    else:
+        raise SystemExit(f"dispatcher protocol mutation survived: {label}")
+
+normalized_protocol_mutations = [
+    ("normalized_intent_substitution_omitted", "normalized.intent_counter = expected_intent_counter;", "normalized.intent_counter = self.preimage.intent_counter;"),
+    ("normalized_semantics_bypassed", "normalized.validate()?;", "/* normalized semantics omitted */"),
+    ("actual_candidate_preimage_bypassed", "let preimage_bytes = canonical_wire_bytes(&self.preimage)?;", "let preimage_bytes = canonical_wire_bytes(&normalized)?;"),
+    ("actual_candidate_digest_bypassed", "if self.candidate_digest != candidate_digest", "if false"),
+    ("actual_candidate_txid_bypassed", "if self.txid != txid", "if false"),
+    ("intent_relation_constant", "Ok(self.preimage.intent_counter == expected_intent_counter)", "Ok(true)"),
+]
+for label, old, new in normalized_protocol_mutations:
+    if protocol.count(old) != 1:
+        raise SystemExit(f"dispatcher normalized protocol mutation target absent: {label}")
+    mutant = protocol.replace(old, new, 1)
+    digest = hashlib.sha256((source + integration + service + verifier + mutant).encode()).hexdigest()
+    if digest in digests:
+        raise SystemExit(f"duplicate dispatcher normalized protocol mutation: {label}")
+    digests.add(digest)
+    try:
+        validate(source, integration, config, service, mutant, verifier)
+    except ValueError:
+        print(f"dispatcher_source_mutation_red mutation={label}")
+    else:
+        raise SystemExit(f"dispatcher normalized protocol mutation survived: {label}")
+
+expected_mutations = (
+    len(mutations)
+    + len(integration_mutations)
+    + len(config_mutations)
+    + len(service_mutations)
+    + len(verifier_mutations)
+    + len(protocol_mutations)
+    + len(normalized_protocol_mutations)
+)
+if len(digests) != expected_mutations:
+    raise SystemExit("dispatcher source mutation digest cardinality differs")
+print(f"dispatcher_source_guard_self_test mutations={expected_mutations} unique={len(digests)} passed=1")
+PY
+}
+
 inner_ids_for_case() {
   case "$1" in
+    dispatcher-mapping) cat <<'EOF'
+issue_session_fence
+establish_session
+discover_stream
+prepare_successor
+commit_prepared
+abort_prepared
+read_prepared_for_stream
+read_head
+fetch_payload
+EOF
+      ;;
     jetstream_cas_rejects_raw_config_unknown_field_or_persist_mode) cat <<'EOF'
 raw.binding.anchor_digest
 raw.binding.epoch_digest
@@ -3783,7 +5068,7 @@ run_selector() {
     return
   fi
   case "$selector" in
-    response-failure-wire|candidate-verifier|protocol-checkpoint|atomic-store-contract|in-memory-differential|typed-proxy|jetstream-cas|jetstream-checkpoint) ;;
+    response-failure-wire|candidate-verifier|protocol-checkpoint|atomic-store-contract|in-memory-differential|typed-proxy|jetstream-cas|jetstream-checkpoint|public-dispatcher) ;;
     *)
       echo "missing target for selector $selector: its later owning Phase 285 slice has not materialized the target inventory" >&2
       return 1
@@ -3843,6 +5128,11 @@ PY
     checkpoint_tree="$(git write-tree)"
     : >"$observed_union"
     : >"$checkpoint_token_registry"
+  elif [ "$selector" = public-dispatcher ]; then
+    expected_union="$temp_dir/dispatcher-mapping.expected.tsv"
+    observed_union="$temp_dir/dispatcher-mapping.ledger.tsv"
+    write_expected_inner_ledger dispatcher-mapping "$expected_union"
+    [ ! -e "$observed_union" ] || return 1
   fi
   while IFS= read -r case_name; do
     [ -n "$case_name" ] || continue
@@ -3870,6 +5160,14 @@ PY
         PHASE285_CHECKPOINT_LEDGER="$inner_ledger" \
         PHASE285_CHECKPOINT_INVOCATION_TOKEN="$checkpoint_invocation_token" \
         PHASE285_CHECKPOINT_TREE="$checkpoint_tree" \
+        cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
+        cat "$output_file" >&2
+        echo "named case failed: selector=$selector case=$case_name" >&2
+        return 1
+      fi
+    elif [ "$selector" = public-dispatcher ] && [ "$executed" -eq 0 ]; then
+      if ! PHASE285_DISPATCHER_MAPPING_LEDGER_REQUIRED=1 \
+        PHASE285_DISPATCHER_MAPPING_LEDGER="$observed_union" \
         cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
         cat "$output_file" >&2
         echo "named case failed: selector=$selector case=$case_name" >&2
@@ -4013,6 +5311,11 @@ PY
     echo "inner_ledger_self_test_red mutation=unit_ledger_cross_case"
     echo "supplemental=jetstream-cas-scenarios running=1 passed=1 failed=0 ignored=0 inner_rows=19"
   fi
+  if [ "$selector" = public-dispatcher ]; then
+    dispatcher_source_guard self-test
+    inner_ledger_validator "$expected_union" "$observed_union" self-test
+    echo "dispatcher_mapping rows=9 passed=9 failed=0 ignored=0"
+  fi
   if [ "$selector" = jetstream-checkpoint ]; then
     local checkpoint_chain_output checkpoint_selector_output
     checkpoint_chain_output="$temp_dir/checkpoint-chain-output.txt"
@@ -4037,6 +5340,8 @@ PY
   fi
   if [ "$selector" = jetstream-cas ]; then
     echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 registry_mutation_failure_count=8 inner_ledger_mutation_failure_count=11"
+  elif [ "$selector" = public-dispatcher ]; then
+    echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 registry_mutation_failure_count=8 inner_ledger_mutation_failure_count=9 dispatcher_source_mutation_failure_count=262"
   else
     echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 mutation_failure_count=8"
   fi

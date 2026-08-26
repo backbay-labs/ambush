@@ -588,6 +588,119 @@ fn canonical_response_round_trip_preserves_signing_preimage() -> ProtocolResult<
     Ok(())
 }
 
+#[test]
+fn service_request_draft_derives_nonce_operation_target_and_authorization_once()
+-> ProtocolResult<()> {
+    let fixture = Fixture::new(4_096)?;
+    let nonce = witness_service_request_nonce([41; 32]);
+    assert_eq!(nonce, sha256_hex(&[41; 32]));
+
+    let fence = WitnessServiceRequestDraftV1::new(
+        nonce.clone(),
+        fixture.admission.admission_digest.clone(),
+        WitnessServiceRequestBodyV1::Fence {
+            request: Box::new(fixture.fence.request.clone()),
+        },
+    )?
+    .finalize_without_authorization()?;
+    assert_eq!(fence.operation, WitnessServiceOperationV1::Fence);
+    assert_eq!(fence.request_nonce, nonce);
+    assert!(fence.authorization.is_none());
+
+    let governance_session = fixture.governance_session()?;
+    let wire_session = governance_session.attestation().clone();
+    let cases = [
+        (
+            WitnessServiceOperationV1::Prepare,
+            WitnessOperationV1::Prepare,
+            WitnessServiceRequestBodyV1::Prepare {
+                session: Box::new(wire_session.clone()),
+                expected_head: None,
+                candidate: Box::new(fixture.candidate.clone()),
+            },
+        ),
+        (
+            WitnessServiceOperationV1::Commit,
+            WitnessOperationV1::Commit,
+            WitnessServiceRequestBodyV1::Commit {
+                session: Box::new(wire_session.clone()),
+                txid: fixture.candidate.txid.clone(),
+            },
+        ),
+        (
+            WitnessServiceOperationV1::Abort,
+            WitnessOperationV1::Abort,
+            WitnessServiceRequestBodyV1::Abort {
+                session: Box::new(wire_session.clone()),
+                txid: fixture.candidate.txid.clone(),
+            },
+        ),
+        (
+            WitnessServiceOperationV1::ReadPrepared,
+            WitnessOperationV1::ReadPrepared,
+            WitnessServiceRequestBodyV1::ReadPrepared {
+                session: Box::new(wire_session.clone()),
+                target_txid: fixture.candidate.txid.clone(),
+            },
+        ),
+        (
+            WitnessServiceOperationV1::ReadHead,
+            WitnessOperationV1::ReadHead,
+            WitnessServiceRequestBodyV1::ReadHead {
+                session: Box::new(wire_session.clone()),
+                target_txid: fixture.candidate.txid.clone(),
+            },
+        ),
+        (
+            WitnessServiceOperationV1::FetchPayload,
+            WitnessOperationV1::FetchPayload,
+            WitnessServiceRequestBodyV1::FetchPayload {
+                session: Box::new(wire_session.clone()),
+                txid: fixture.candidate.txid.clone(),
+            },
+        ),
+    ];
+    for (service_operation, authorization_operation, body) in cases {
+        let draft = WitnessServiceRequestDraftV1::new(
+            witness_service_request_nonce([service_operation as u8; 32]),
+            fixture.admission.admission_digest.clone(),
+            body,
+        )?;
+        let digest = draft.request_digest().to_string();
+        let request = draft.finalize_with_session(&governance_session)?;
+        assert_eq!(request.operation, service_operation);
+        let authorization = request
+            .authorization
+            .as_ref()
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        assert_eq!(authorization.operation, authorization_operation);
+        assert_eq!(authorization.txid, fixture.candidate.txid);
+        assert_eq!(authorization.request_digest, digest);
+    }
+    Ok(())
+}
+
+#[test]
+fn client_failure_decoder_is_request_bound_without_raw_store_proof() -> ProtocolResult<()> {
+    let fixture = Fixture::new(4_096)?;
+    let request = fixture.fence_service_request()?;
+    let failure = fixture.signed_failure(&request, Some(fixture.envelope.store_state_digest()?))?;
+    let bytes = WitnessServiceResponseV1::Failure(failure.clone()).canonical_bytes()?;
+    assert_eq!(
+        WitnessServiceResponseV1::decode_for_client_request(&bytes, &request)?,
+        WitnessServiceResponseV1::Failure(failure.clone())
+    );
+    assert!(
+        WitnessServiceResponseV1::decode_for_request(&bytes, &request, None).is_err(),
+        "server-side failure validation must retain authenticated store proof"
+    );
+    let mut changed = request;
+    changed.request_nonce = "d".repeat(64);
+    changed.request_digest = changed.computed_digest()?;
+    assert!(WitnessServiceResponseV1::decode_for_client_request(&bytes, &changed).is_err());
+    Ok(())
+}
+
 struct Fixture {
     witness: Ed25519Signer,
     binding: PublicationBindingV1,
@@ -679,6 +792,50 @@ impl Fixture {
             candidate,
             &self.request_digest,
             None,
+        )
+    }
+
+    fn governance_session(&self) -> ProtocolResult<GovernanceWitnessSession> {
+        let governance = Ed25519Signer::from_secret_material("phase285-plan01-governance");
+        let secret = [7_u8; 32];
+        let ephemeral = swarm_crypto::Keypair::from_seed(&secret).public_key();
+        let mut challenge = self.challenge.clone();
+        challenge.ephemeral_key_id = sha256_hex(ephemeral.as_bytes());
+        challenge.session_commitment = sha256_hex(&secret);
+        challenge.signature = governance.sign(&challenge.signing_bytes()?);
+        challenge.validate()?;
+
+        let mut session = self.session.clone();
+        session.ephemeral_key_id = challenge.ephemeral_key_id.clone();
+        session.session_commitment = challenge.session_commitment.clone();
+        session.validate()?;
+        let session_digest = digest_domain(
+            WITNESS_SESSION_STATE_DOMAIN_V1,
+            &canonical_wire_bytes(&session)?,
+        )?;
+        let external_marker = digest_domain(
+            WITNESS_EXTERNAL_MARKER_DOMAIN_V1,
+            &canonical_wire_bytes(&ExternalMarkerPreimage {
+                accepted_challenge_digest: &challenge.challenge_digest()?,
+                resulting_session_digest: &session_digest,
+                response_kind: WitnessSessionRotationResponseKindV1::Establish,
+            })?,
+        )?;
+        let mut attestation = WitnessSessionAttestationV1 {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            challenge: challenge.clone(),
+            session,
+            committed_head: None,
+            external_marker,
+            witness_key_id: self.witness.key_id().to_string(),
+            signature: self.witness.sign(&[]),
+        };
+        attestation.signature = self.witness.sign(&attestation.signing_bytes()?);
+        GovernanceWitnessSession::from_verified_attestation(
+            GovernanceWitnessSessionRequest::from_secret(challenge, secret)?,
+            attestation,
+            None,
+            &self.binding,
         )
     }
 

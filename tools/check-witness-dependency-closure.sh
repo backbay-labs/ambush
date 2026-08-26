@@ -37,9 +37,9 @@ PACKAGE = "swarm-governance-witness"
 LIBRARY = "swarm_governance_witness"
 NORMAL = {
     "async-nats", "async-trait", "futures-util", "hex", "serde", "serde_json",
-    "sha2", "swarm-governance", "thiserror", "tokio", "tracing",
+    "sha2", "swarm-crypto", "swarm-governance", "thiserror", "tokio", "tracing",
 }
-DEV = {"swarm-crypto"}
+DEV = set()
 BUILD = set()
 ALLOWED_INTERNAL = {
     "swarm-governance-witness", "swarm-governance", "swarm-consensus",
@@ -65,7 +65,8 @@ CASES = (
     "forbidden-resolved-normal",
     "forbidden-resolved-dev",
     "forbidden-resolved-build",
-    "missing-dev-root-edge",
+    "missing-normal-signer-edge",
+    "signer-remains-dev-only",
     "partial-cargo-tree-omission",
     "metadata-harness-boundary",
     "reverse-governance-edge",
@@ -83,7 +84,8 @@ EXPECTED_DIAGNOSTIC = {
     "forbidden-resolved-normal": "violation=resolved-normal",
     "forbidden-resolved-dev": "violation=resolved-dev",
     "forbidden-resolved-build": "violation=resolved-build",
-    "missing-dev-root-edge": "resolved-dev-root",
+    "missing-normal-signer-edge": "violation=declared-normal",
+    "signer-remains-dev-only": "violation=declared-dev",
     "partial-cargo-tree-omission": "cargo-tree-normal",
     "metadata-harness-boundary": "metadata harness boundary refusal before write",
     "reverse-governance-edge": "reverse governance dependency",
@@ -100,7 +102,8 @@ STRUCTURED_VIOLATION_CASES = {
     "forbidden-resolved-normal",
     "forbidden-resolved-dev",
     "forbidden-resolved-build",
-    "missing-dev-root-edge",
+    "missing-normal-signer-edge",
+    "signer-remains-dev-only",
     "partial-cargo-tree-omission",
 }
 
@@ -695,7 +698,8 @@ def evaluate(root, all_targets=False, tree_output_overrides=None):
     for kind in ("normal", "dev", "build", "dev-root"):
         metadata_ids = closures[kind]
         tree_ids = tree_closures[kind]
-        if metadata_ids != tree_ids or len(metadata_ids) <= 1 or len(tree_ids) <= 1:
+        minimum = 1 if kind == "dev-root" else 2
+        if metadata_ids != tree_ids or len(metadata_ids) < minimum or len(tree_ids) < minimum:
             record_violation(
                 f"cargo-tree-{kind}",
                 f"metadata/tree ID mismatch: metadata={len(metadata_ids)} "
@@ -727,9 +731,7 @@ def evaluate(root, all_targets=False, tree_output_overrides=None):
                     continue
                 observed_internal.add(identifier)
         expected_internal_ids = (
-            {allowed_ids[PACKAGE], allowed_ids["swarm-crypto"]}
-            if kind == "dev-root"
-            else set(allowed_ids.values())
+            {allowed_ids[PACKAGE]} if kind == "dev-root" else set(allowed_ids.values())
         )
         if observed_internal != expected_internal_ids:
             missing = sorted(expected_internal_ids - observed_internal)
@@ -999,11 +1001,23 @@ def mutate(root, container, case):
         with governance_manifest.open("a", encoding="utf-8") as handle:
             handle.write("\n[build-dependencies]\nswarm-whisker.workspace = true\n")
         refresh_lock(root)
-    elif case == "missing-dev-root-edge":
+    elif case == "missing-normal-signer-edge":
         replace_once(
             witness_manifest,
-            "[dev-dependencies]\nswarm-crypto.workspace = true\n",
+            "swarm-crypto.workspace = true\n",
+            "",
+        )
+        refresh_lock(root)
+    elif case == "signer-remains-dev-only":
+        replace_once(
+            witness_manifest,
+            "swarm-crypto.workspace = true\n",
+            "",
+        )
+        replace_once(
+            witness_manifest,
             "[dev-dependencies]\n",
+            "[dev-dependencies]\nswarm-crypto.workspace = true\n",
         )
         refresh_lock(root)
     elif case == "reverse-governance-edge":

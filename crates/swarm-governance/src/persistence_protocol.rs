@@ -1248,6 +1248,53 @@ impl CandidateV1 {
         }
         Ok(())
     }
+
+    /// Authenticate the complete candidate while treating the predecessor's
+    /// expected intent counter as an externally supplied relation. This seam
+    /// exists only for the public Prepare verifier: it proves that every
+    /// signed payload, binding, mapping, predecessor, digest, and transaction
+    /// identity is valid before classifying an otherwise coherent old or
+    /// skipped intent. It does not authorize a transition.
+    pub(crate) fn validate_for_expected_intent(
+        &self,
+        expected_intent_counter: u64,
+    ) -> ProtocolResult<bool> {
+        let mut normalized = self.preimage.clone();
+        normalized.intent_counter = expected_intent_counter;
+        normalized.validate()?;
+
+        let preimage_bytes = canonical_wire_bytes(&self.preimage)?;
+        if preimage_bytes.len() as u64 > self.preimage.publication_binding.limits.max_record_bytes {
+            return Err(ProtocolError::Bounds {
+                field: "candidate_preimage".to_string(),
+                observed: preimage_bytes.len(),
+                maximum: bounded_usize(self.preimage.publication_binding.limits.max_record_bytes),
+            });
+        }
+        let candidate_digest = digest_domain(CANDIDATE_DOMAIN_V1, &preimage_bytes)?;
+        if self.candidate_digest != candidate_digest {
+            return Err(ProtocolError::DigestMismatch {
+                field: "candidate_digest",
+            });
+        }
+        let txid = TxidPreimageV1 {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            stream_id: self.preimage.stream_id.clone(),
+            predecessor_head_digest: self.preimage.predecessor_head_digest.clone(),
+            candidate_digest,
+            binding_generation: self.preimage.publication_binding.generation.clone(),
+            binding_digest: self.preimage.publication_binding.binding_digest.clone(),
+            authority_pair: self.preimage.publication_binding.authority_pair,
+            epoch: self.preimage.epoch,
+            sequence: self.preimage.sequence,
+            intent_counter: self.preimage.intent_counter,
+        }
+        .txid()?;
+        if self.txid != txid {
+            return Err(ProtocolError::DigestMismatch { field: "txid" });
+        }
+        Ok(self.preimage.intent_counter == expected_intent_counter)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3836,6 +3883,42 @@ impl VerifiedWitnessOutcomeV1 {
         })
     }
 
+    /// Re-authorize an authenticated bootstrap-abort receipt for the public
+    /// witness service after restart.  This is deliberately crate-private:
+    /// callers cannot turn a raw receipt or boolean into transaction
+    /// authority.  The public service must first authenticate the admitted
+    /// store envelope, then sign this exact receipt with the pinned witness
+    /// key.  The resulting value is consumed only by candidate admission.
+    pub(crate) fn from_authenticated_store_genesis_abort(
+        attestation: WitnessOutcomeAttestationV1,
+        session: &WitnessSessionV1,
+        expected_abort: &WitnessGenesisAbortedV1,
+    ) -> ProtocolResult<Self> {
+        session.validate()?;
+        expected_abort.validate()?;
+        attestation.validate()?;
+        let expected_outcome = WitnessOperationOutcomeV1::Abort(Box::new(
+            WitnessAbortOutcomeV1::GenesisAborted(expected_abort.clone()),
+        ));
+        if attestation.operation != WitnessOperationV1::Abort
+            || attestation.stream_id != session.stream_id
+            || attestation.binding_generation != session.binding_generation
+            || attestation.binding_digest != session.binding_digest
+            || attestation.signer_key_id != session.signer_key_id
+            || attestation.authority_pair != session.authority_pair
+            || attestation.session_generation != session.session_generation
+            || attestation.session_commitment != session.session_commitment
+            || attestation.witness_key_id != session.witness_key_id
+            || attestation.outcome != expected_outcome
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(Self {
+            attestation,
+            outcome: expected_outcome,
+        })
+    }
+
     pub fn attestation(&self) -> &WitnessOutcomeAttestationV1 {
         &self.attestation
     }
@@ -4441,7 +4524,7 @@ pub trait GovernanceDurabilityWitness: Send + Sync {
 
     async fn issue_session_fence(
         &self,
-        request: WitnessSessionFenceRequestV1,
+        request: crate::witness_service::WitnessServiceRequestV1,
     ) -> Result<WitnessSessionStateFenceV1, Self::Error>;
 
     /// Adapters return a signed wire response.  They cannot construct the
@@ -4449,58 +4532,43 @@ pub trait GovernanceDurabilityWitness: Send + Sync {
     /// `GovernanceWitnessSession::from_verified_attestation` first.
     async fn establish_session(
         &self,
-        challenge: RecoveryChallengeV1,
-        expected_head: Option<&WitnessHeadV1>,
+        request: crate::witness_service::WitnessServiceRequestV1,
     ) -> Result<WitnessSessionAttestationV1, Self::Error>;
 
     async fn discover_stream(
         &self,
-        challenge: RecoveryChallengeV1,
+        request: crate::witness_service::WitnessServiceRequestV1,
     ) -> Result<WitnessDiscoveryAttestationV1, Self::Error>;
 
     async fn prepare_successor(
         &self,
-        session: &GovernanceWitnessSession,
-        expected_head: Option<&WitnessHeadV1>,
-        candidate: &CandidateV1,
-        authorization: &WitnessSessionAuthorizationV1,
+        request: crate::witness_service::WitnessServiceRequestV1,
+    ) -> Result<WitnessOutcomeAttestationV1, Self::Error>;
+
+    async fn commit_prepared(
+        &self,
+        request: crate::witness_service::WitnessServiceRequestV1,
+    ) -> Result<WitnessOutcomeAttestationV1, Self::Error>;
+
+    async fn abort_prepared(
+        &self,
+        request: crate::witness_service::WitnessServiceRequestV1,
     ) -> Result<WitnessOutcomeAttestationV1, Self::Error>;
 
     /// A session-bound read cannot be authorized by a raw stream identifier.
     async fn read_prepared_for_stream(
         &self,
-        session: &GovernanceWitnessSession,
-        authorization: &WitnessSessionAuthorizationV1,
-        request_digest: &str,
+        request: crate::witness_service::WitnessServiceRequestV1,
     ) -> Result<WitnessReadAttestationV1, Self::Error>;
-
-    async fn commit_prepared(
-        &self,
-        session: &GovernanceWitnessSession,
-        txid: &str,
-        authorization: &WitnessSessionAuthorizationV1,
-    ) -> Result<WitnessOutcomeAttestationV1, Self::Error>;
-
-    async fn abort_prepared(
-        &self,
-        session: &GovernanceWitnessSession,
-        txid: &str,
-        authorization: &WitnessSessionAuthorizationV1,
-    ) -> Result<WitnessOutcomeAttestationV1, Self::Error>;
 
     async fn read_head(
         &self,
-        session: &GovernanceWitnessSession,
-        authorization: &WitnessSessionAuthorizationV1,
-        request_digest: &str,
+        request: crate::witness_service::WitnessServiceRequestV1,
     ) -> Result<WitnessReadAttestationV1, Self::Error>;
 
     async fn fetch_payload(
         &self,
-        session: &GovernanceWitnessSession,
-        txid: &str,
-        authorization: &WitnessSessionAuthorizationV1,
-        request_digest: &str,
+        request: crate::witness_service::WitnessServiceRequestV1,
     ) -> Result<WitnessReadAttestationV1, Self::Error>;
 }
 
