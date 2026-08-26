@@ -1134,8 +1134,8 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Close the assurance foundation on a truthful local-plus-hosted evidence boundary while explicitly deferring provenance-distinct external GitHub App/repository protected-check enforcement.
 **Requirements:** ASSURE-01, ASSURE-02, ASSURE-03, ASSURE-04, ASSURE-05, ASSURE-06
 **Depends on:** Phase 284
-**Status:** Reopened 2026-08-24; in progress. The 2026-08-21 pass claim did not include the subsequently reopened governance/detector integration gate.
-**Plans:** Accepted clean checkpoints: approval/voters `f2eb791d`, persistence architecture `5be011a0`, production protocol slice `27b64174`, reviewed witness-adapter contract `eacadf6b`, session fence `3a584882`, witness-envelope model `296bb983`, witness-service wire `a9837f21`, Plan 01 response/candidate-verifier slice `f29f2832`, Plan 02 revision-CAS store/reference/proxy slice `ff762236`, and Plan 03A transport/dependency boundary `cf0ad8b`. Plan 03B pinned JetStream CAS/restart work is next; production witness persistence/service exposure, fixed-lane and recovery completion, detector integration, the frozen combined-tree gate, hosted CI, and closure evidence remain open.
+**Status:** Reopened 2026-08-24; in progress with 4 of 13 plans accepted. The 2026-08-21 pass claim did not include the subsequently reopened governance/detector integration gate.
+**Plans:** Accepted clean checkpoints: approval/voters `f2eb791d`, persistence architecture `5be011a0`, production protocol slice `27b64174`, reviewed witness-adapter contract `eacadf6b`, session fence `3a584882`, witness-envelope model `296bb983`, witness-service wire `a9837f21`, Plan 01 response/candidate-verifier slice `f29f2832`, Plan 02 revision-CAS store/reference/proxy slice `ff762236`, Plan 03A transport/dependency boundary `cf0ad8b`, and Plan 03B pinned JetStream CAS/restart slice `8abe28d`. Plan 04 service exposure is next; fixed-lane and recovery completion, detector integration, the frozen combined-tree gate, hosted CI, and closure evidence remain open.
 **Success Criteria**:
 1. Local combined-tree mapping, negative-registry, fixture, and locked-SBOM evidence are reproducible.
 2. Fresh hosted Linux evidence is commit-bound and credential-free.
@@ -2018,7 +2018,7 @@ The original DST/FUZZ/LOOM/SUPPLY sequence and its MAPPING/FALSIFY protected-che
 
 ---
 *Active milestone: v1.79 Collective Cyber Reasoning.*
-*v1.79 status (corrected 2026-08-24): Phase 284 is complete. Phase 285 is reopened for governance/detector integration; external GitHub App enforcement remains deferred. Phase 286 Plan 04 is checkpointed but sequenced behind Phase 285. Phase 287-289 plans are reviewed and parked; none is executing.*
+*v1.79 status (updated 2026-08-26): Phase 284 is complete. Phase 285 remains reopened for governance/detector integration with Plans 01-03B accepted (4/13) and Plan 04 next; external GitHub App enforcement remains deferred. Phase 286 Plan 04 is checkpointed but sequenced behind Phase 285. Phase 287-289 plans are reviewed and parked; none is executing.*
 *v1.77 and v1.78 complete: phases 276-279 shipped 2026-04-13; phases 280-283 completed as scoped by 2026-08-13.*
 *v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83.*
 *v1.80 Red Swarm is historical/superseded; v1.81-v1.87 retain their original queued phase numbering (292-319).*
