@@ -135,7 +135,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Session Continuity**
 
 Last Date: 2026-08-27 — A2b immutable candidate rejected; production stopped; r35 mechanical planning correction active
-Stopped At: Rejected immutable A2b commit `ef4c043e0039d77282683fab5b99fbe9f3ed34c2` / tree `02d8fc929c8661d410a31c8b13aea68658b33eb4` failed independent review P0/P1/P2=`0/3/0` and is unpushed. The accepted production frontier remains A2a `bbfa4b150b486953e43bc4d22d373b36a0c1a76e`. No production edit is authorized until r34 planning passes independently and is pushed.
+Stopped At: Rejected immutable A2b commit `ef4c043e0039d77282683fab5b99fbe9f3ed34c2` / tree `02d8fc929c8661d410a31c8b13aea68658b33eb4` failed independent review P0/P1/P2=`0/3/0` and is unpushed. The accepted production frontier remains A2a `bbfa4b150b486953e43bc4d22d373b36a0c1a76e`. No production edit is authorized until r35 planning passes independently and is pushed.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
