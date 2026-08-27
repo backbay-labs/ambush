@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted. Rejected A2b `ef4c043` and rejected A2b1 candidates `5ad200f`, `8a7df5d`, and `096e57e` remain immutable, unpushed, read-only evidence; the stopped r37 partial tree is uncommitted diagnostic evidence. R39 is a bounded A2b1-only planning redesign awaiting independent review. Production is frozen with no active hard-stop clock. A2b2, A2b3, A2c, A3, 03B, Plan 05A, and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted. Rejected A2b `ef4c043` and rejected A2b1 candidates `5ad200f`, `8a7df5d`, and `096e57e` remain immutable, unpushed, read-only evidence; rejected r39 planning commit `056e3ce` is also immutable and unpushed. R40 is a signal-contract-only A2b1 planning correction awaiting independent review. Production is frozen with no active hard-stop clock. A2b2, A2b3, A2c, A3, 03B, Plan 05A, and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-27
-**Last Activity Description:** Immutable r38 production candidate `096e57eb3e8b59d711c0446905d58868f32805b0` passed its local gates but was independently rejected P0/P1/P2=`0/3/0` for missing current-invocation binding, incomplete proxy/publisher reconciliation, and a separate signal-cleanup helper that did not exercise the real focused-flow trap. R39 freezes production and corrects only those A2b1 contracts before another attempt.
+**Last Activity Description:** Immutable r39 planning commit `056e3ce9d880904c951d5a9adcff0f1b44cc31ad` closed the private/external validator findings but was independently rejected P0/P1/P2=`0/1/0` because the real-flow signal test still lacked an executable positional readiness, PID/inode, and signal-specific-termination contract. R40 corrects only that contract; no production is authorized.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2a (`bbfa4b1`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Rejected production objects `ef4c043`, `5ad200f`, `8a7df5d`, and `096e57e` remain immutable and unpushed; the stopped r37 partial tree is uncommitted diagnostic evidence. R39 planning is awaiting independent review and does not authorize production. A2b2, A2b3, A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2a (`bbfa4b1`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Rejected production objects `ef4c043`, `5ad200f`, `8a7df5d`, and `096e57e` plus rejected planning object `056e3ce` remain immutable and unpushed. R40 planning is awaiting independent review and does not authorize production. A2b2, A2b3, A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-27 — `096e57e` rejected `0/3/0`; r39 A2b1-only redesign awaiting review
-Stopped At: Immutable production candidate `096e57eb3e8b59d711c0446905d58868f32805b0` / tree `7ad4ccb2ed1d47dba4a2e81a783f4fbac74793e7` is rejected, unpushed, and read-only. The accepted production frontier remains A2a `bbfa4b150b486953e43bc4d22d373b36a0c1a76e`. Production is frozen with no active hard-stop clock pending immutable r39 planning review and push.
+Last Date: 2026-08-27 — r39 planning `056e3ce` rejected `0/1/0`; r40 signal-contract correction awaiting review
+Stopped At: Immutable production candidate `096e57eb3e8b59d711c0446905d58868f32805b0` and planning candidate `056e3ce9d880904c951d5a9adcff0f1b44cc31ad` are rejected, unpushed, and read-only. The accepted production frontier remains A2a `bbfa4b150b486953e43bc4d22d373b36a0c1a76e`. Production is frozen with no active hard-stop clock pending immutable r40 planning review and push.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Freeze the five-file r39 planning candidate, verify its exact planning scope and structure, and obtain immutable independent P0/P1/P2=`0/0/0`. Only after the reviewed r39 object is pushed/fetched to the planning work ref and a dedicated r39 checkpoint may root record a fresh two-hour A2b1 window in the existing implementation worktree. Do not edit production, start A2b2, or create a worktree.
+Freeze the five-file r40 planning candidate, verify its exact planning scope and structure, and obtain immutable independent P0/P1/P2=`0/0/0`. Only after the reviewed r40 object is pushed/fetched to the planning work ref and a dedicated r40 checkpoint may root record a fresh two-hour A2b1 window in the existing implementation worktree. Do not edit production, start A2b2, or create a worktree.
