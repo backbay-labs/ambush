@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-27T18:12:42Z"
+last_updated: "2026-08-27T18:34:00Z"
 last_activity: 2026-08-27
 progress:
   total_phases: 6
@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted. A2b candidate `ef4c043e0039d77282683fab5b99fbe9f3ed34c2` is clean and immutable but independently rejected P0/P1/P2=`0/3/0`; it remains unpushed read-only evidence. Production stopped before the `2026-08-27T18:53:44Z` boundary because repair plus full live validation/review was not credible. Planning r34 now decomposes A2b into A2b1 complete-receipt suppression, A2b2 owner-block topology, and A2b3 live relay/grant/timing integration. No production slice is authorized until r34 independently passes and is pushed. A2c, A3, 03B, Plan 05A, and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted. A2b candidate `ef4c043e0039d77282683fab5b99fbe9f3ed34c2` is clean and immutable but independently rejected P0/P1/P2=`0/3/0`; it remains unpushed read-only evidence. Production stopped before the `2026-08-27T18:53:44Z` boundary. Planning r34 `87d3d53` was rejected P0/P1/P2=`0/3/0` only for mechanical gate omissions. r35 preserves the A2b1/A2b2/A2b3 semantics and adds exact commit/tree/parent pins, root-pinned integrity execution, and overlapping-predecessor reruns. No production slice is authorized until r35 independently passes and is pushed. A2c, A3, 03B, Plan 05A, and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-27
-**Last Activity Description:** A2b reached a clean frozen commit `ef4c043e0039d77282683fab5b99fbe9f3ed34c2` / tree `02d8fc929c8661d410a31c8b13aea68658b33eb4`, with exact eleven-path digest `4d9d95a9...`, fourteen-path cumulative digest `4e662973...`, green live relay/grant/observation/deadline/static gates, and zero runtime residue. Hostile immutable review nevertheless rejected it P0/P1/P2=`0/3/0`: completeness was validated after suppression rather than before reservation; topology tuples were counted globally instead of bound to owner account/principal blocks; and the `<50 ms` oracle measured first-response-to-second-publish rather than first-publish-to-second-publish. The commit is not accepted or pushed. Production is frozen while r34 receives independent planning review.
+**Last Activity Description:** r34 planning commit `87d3d535e150fb2dc50c7de85bdc6017ebe9bdad` truthfully split the three production findings into independently bankable seams and passed semantic/path/wave/bijection review, but immutable audit rejected it P0/P1/P2=`0/3/0`: its literal commands did not pin candidate commit/tree/one-parent identity completely, omitted the root-pinned launcher/manifest boundary, and did not rerun every overlapping predecessor gate. r35 changes only those mechanical acceptance commands and revision ledgers. Production remains frozen.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2a (`bbfa4b1`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Accepted r33 planning is pushed at `2cb699c`; rejected A2b production `ef4c043` joins earlier rejected objects as immutable read-only evidence. r34 is planning-only and splits the next production work into three serial independently bankable checkpoints: A2b1, A2b2, A2b3. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2a (`bbfa4b1`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Accepted r33 planning is pushed at `2cb699c`; rejected A2b production `ef4c043` and rejected r34 planning `87d3d53` remain immutable read-only evidence. r35 is planning-only and preserves three serial checkpoints: A2b1, A2b2, A2b3. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,7 +134,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-27 — A2b immutable candidate rejected; production stopped; r34 bounded redesign active
+Last Date: 2026-08-27 — A2b immutable candidate rejected; production stopped; r35 mechanical planning correction active
 Stopped At: Rejected immutable A2b commit `ef4c043e0039d77282683fab5b99fbe9f3ed34c2` / tree `02d8fc929c8661d410a31c8b13aea68658b33eb4` failed independent review P0/P1/P2=`0/3/0` and is unpushed. The accepted production frontier remains A2a `bbfa4b150b486953e43bc4d22d373b36a0c1a76e`. No production edit is authorized until r34 planning passes independently and is pushed.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
@@ -142,4 +142,4 @@ Interrupted agent: None. The former broad swarm is stopped; one owner and one ho
 
 ## Next Command
 
-Finish and independently audit r34 planning only. It must bind A2b1 to the four-path pre-suppression complete-receipt predicate, A2b2 to the five-path owner-block topology validator, and A2b3 to the eleven-path live relay/grant/true-publish-delta integration. Each production slice requires its own exact RED, clean immutable direct-child commit, P0/P1/P2=`0/0/0` review, pushed work/checkpoint refs, and fresh two-hour window. Reuse `.claude/worktrees/v179-phase285-plan04-task03a-r14`; reconstruct A2b1 from accepted A2a and never amend/cherry-pick `ef4c043`. Do not start A2c or create a worktree.
+Finish and independently audit r35 planning only. It must preserve r34's A2b1/A2b2/A2b3 boundaries while mechanically pinning candidate commit/tree/one-parent identity, root-supplied launcher/manifest hashes, integrity self-tests, and every overlapping predecessor gate. Each production slice requires its own exact RED, clean immutable direct-child commit, P0/P1/P2=`0/0/0` review, pushed work/checkpoint refs, and fresh two-hour window. Reuse `.claude/worktrees/v179-phase285-plan04-task03a-r14`; reconstruct A2b1 from accepted A2a and never amend/cherry-pick `ef4c043`. Do not start A2c or create a worktree.
