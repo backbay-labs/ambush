@@ -1,10 +1,292 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use swarm_governance::persistence_protocol::{
     MAX_PROTOCOL_RECORD_BYTES, MAX_PROTOCOL_STRING_BYTES, ProtocolError, ProtocolResult,
 };
 use swarm_governance::witness_engine::store::WitnessAdmissionSetV1;
 use swarm_governance::witness_engine::store::WitnessStoreReadyResultV1;
 use swarm_governance::witness_service::WitnessServiceOperationV1;
+use tokio::time::{Duration, Instant, timeout_at};
+
+pub(crate) const STORE_HANDLER_DEADLINE_MILLIS: u64 = 2_000;
+pub(crate) const STORE_RESPONSE_GRANT_MILLIS: u64 = 3_000;
+pub(crate) const PUBLIC_HANDLER_DEADLINE_MILLIS: u64 = 10_000;
+pub(crate) const PUBLIC_RESPONSE_GRANT_MILLIS: u64 = 12_000;
+pub(crate) const STORE_HANDLER_RESERVE_MILLIS: u64 =
+    STORE_RESPONSE_GRANT_MILLIS - STORE_HANDLER_DEADLINE_MILLIS;
+pub(crate) const PUBLIC_PRIVATE_RESERVE_MILLIS: u64 =
+    PUBLIC_HANDLER_DEADLINE_MILLIS - 3 * STORE_RESPONSE_GRANT_MILLIS;
+pub(crate) const PUBLIC_HANDLER_RESERVE_MILLIS: u64 =
+    PUBLIC_RESPONSE_GRANT_MILLIS - PUBLIC_HANDLER_DEADLINE_MILLIS;
+pub(crate) const RESPONSE_GRANT_MAXIMUM: usize = 1;
+
+const _: () = assert!(STORE_HANDLER_DEADLINE_MILLIS == 2_000);
+const _: () = assert!(STORE_RESPONSE_GRANT_MILLIS == 3_000);
+const _: () = assert!(PUBLIC_HANDLER_DEADLINE_MILLIS == 10_000);
+const _: () = assert!(PUBLIC_RESPONSE_GRANT_MILLIS == 12_000);
+const _: () = assert!(STORE_HANDLER_RESERVE_MILLIS == 1_000);
+const _: () = assert!(PUBLIC_PRIVATE_RESERVE_MILLIS == 1_000);
+const _: () = assert!(PUBLIC_HANDLER_RESERVE_MILLIS == 2_000);
+const _: () = assert!(RESPONSE_GRANT_MAXIMUM == 1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkerKindV1 {
+    Private,
+    Public,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct SubscriberAdmissionReceiptV1 {
+    pub(crate) worker: WorkerKindV1,
+    pub(crate) subject: String,
+    pub(crate) payload_sha256: String,
+    pub(crate) reply: String,
+    pub(crate) deadline_millis: u64,
+}
+
+pub(crate) trait SubscriberAdmissionObserverV1: Send + Sync {
+    fn accepted(&self, receipt: SubscriberAdmissionReceiptV1);
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct NoopSubscriberAdmissionObserverV1;
+
+impl SubscriberAdmissionObserverV1 for NoopSubscriberAdmissionObserverV1 {
+    fn accepted(&self, _receipt: SubscriberAdmissionReceiptV1) {}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub(crate) enum WorkerTransitionEventV1 {
+    Dequeued {
+        worker: WorkerKindV1,
+    },
+    PostPreflight {
+        worker: WorkerKindV1,
+    },
+    ProxyStoreBegin {
+        worker: WorkerKindV1,
+        operation: &'static str,
+        cas_attempted: bool,
+    },
+    ProxyStoreEnd {
+        worker: WorkerKindV1,
+        operation: &'static str,
+        succeeded: bool,
+        cas_applied: bool,
+    },
+    #[cfg(test)]
+    CasAppliedObservation {
+        worker: WorkerKindV1,
+    },
+    ResponseEnqueueAttempt {
+        worker: WorkerKindV1,
+        accepted: bool,
+    },
+    PublishAttempt {
+        worker: WorkerKindV1,
+        published: bool,
+    },
+    OutcomeUnknown,
+}
+
+pub(crate) trait WorkerTransitionObserverV1: Send + Sync {
+    fn observe(&self, event: WorkerTransitionEventV1);
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct NoopWorkerTransitionObserverV1;
+
+impl WorkerTransitionObserverV1 for NoopWorkerTransitionObserverV1 {
+    fn observe(&self, _event: WorkerTransitionEventV1) {}
+}
+
+#[async_trait]
+pub(crate) trait WorkerPublisherV1: Send + Sync {
+    async fn publish(&self, reply: async_nats::Subject, payload: Vec<u8>) -> bool;
+}
+
+#[derive(Clone)]
+pub(crate) struct NatsWorkerPublisherV1(pub(crate) async_nats::Client);
+
+#[async_trait]
+impl WorkerPublisherV1 for NatsWorkerPublisherV1 {
+    async fn publish(&self, reply: async_nats::Subject, payload: Vec<u8>) -> bool {
+        self.0.publish(reply, payload.into()).await.is_ok()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReceiptDeadlineV1 {
+    at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReceiptExpiredV1;
+
+#[derive(Clone, Copy)]
+pub(crate) struct WorkerTransitionV1<'a> {
+    worker: WorkerKindV1,
+    deadline: ReceiptDeadlineV1,
+    observer: &'a dyn WorkerTransitionObserverV1,
+}
+
+impl<'a> WorkerTransitionV1<'a> {
+    pub(crate) fn new(
+        worker: WorkerKindV1,
+        deadline: ReceiptDeadlineV1,
+        observer: &'a dyn WorkerTransitionObserverV1,
+    ) -> Self {
+        Self {
+            worker,
+            deadline,
+            observer,
+        }
+    }
+
+    pub(crate) fn dequeued(self) -> Result<(), ReceiptExpiredV1> {
+        self.observer.observe(WorkerTransitionEventV1::Dequeued {
+            worker: self.worker,
+        });
+        self.deadline.ensure_open()
+    }
+
+    pub(crate) fn post_preflight(self) {
+        self.observer
+            .observe(WorkerTransitionEventV1::PostPreflight {
+                worker: self.worker,
+            });
+    }
+
+    pub(crate) async fn proxy_store<T, F, C>(
+        self,
+        operation: &'static str,
+        cas_attempted: bool,
+        future: F,
+        classify: C,
+    ) -> Result<T, ReceiptExpiredV1>
+    where
+        F: Future<Output = T>,
+        C: FnOnce(&T) -> (bool, bool),
+    {
+        self.deadline.ensure_open()?;
+        self.observer
+            .observe(WorkerTransitionEventV1::ProxyStoreBegin {
+                worker: self.worker,
+                operation,
+                cas_attempted,
+            });
+        let output = self.deadline.run(future).await?;
+        let (succeeded, cas_applied) = classify(&output);
+        self.observer
+            .observe(WorkerTransitionEventV1::ProxyStoreEnd {
+                worker: self.worker,
+                operation,
+                succeeded,
+                cas_applied,
+            });
+        Ok(output)
+    }
+
+    pub(crate) fn response_enqueue(self) -> Result<(), ReceiptExpiredV1> {
+        let accepted = self.deadline.ensure_open().is_ok();
+        self.observer
+            .observe(WorkerTransitionEventV1::ResponseEnqueueAttempt {
+                worker: self.worker,
+                accepted,
+            });
+        accepted.then_some(()).ok_or(ReceiptExpiredV1)
+    }
+
+    pub(crate) async fn publish<P: WorkerPublisherV1>(
+        self,
+        publisher: &P,
+        reply: async_nats::Subject,
+        payload: Vec<u8>,
+    ) -> bool {
+        let published = self
+            .deadline
+            .run(publisher.publish(reply, payload))
+            .await
+            .is_ok_and(|published| published);
+        self.observer
+            .observe(WorkerTransitionEventV1::PublishAttempt {
+                worker: self.worker,
+                published,
+            });
+        published
+    }
+
+    pub(crate) fn outcome_unknown(self) {
+        self.observer
+            .observe(WorkerTransitionEventV1::OutcomeUnknown);
+    }
+
+    pub(crate) fn ensure_open(self) -> Result<(), ReceiptExpiredV1> {
+        self.deadline.ensure_open()
+    }
+}
+
+pub(crate) async fn run_observed_worker_message<'a, P, H, F, E>(
+    worker: WorkerKindV1,
+    deadline: ReceiptDeadlineV1,
+    observer: &'a dyn WorkerTransitionObserverV1,
+    publisher: &P,
+    reply: async_nats::Subject,
+    handler: H,
+) where
+    P: WorkerPublisherV1,
+    H: FnOnce(WorkerTransitionV1<'a>) -> F,
+    F: Future<Output = Result<Vec<u8>, E>>,
+{
+    let transition = WorkerTransitionV1::new(worker, deadline, observer);
+    if transition.dequeued().is_err() {
+        return;
+    }
+    let Ok(bytes) = handler(transition).await else {
+        return;
+    };
+    // Preserve a scheduling boundary between completed handler work and the
+    // response enqueue. The deadline remains receipt-anchored; a task that
+    // consumed the remainder of its budget while completing may not enqueue a
+    // stale response merely because both operations happened in one poll.
+    tokio::task::yield_now().await;
+    if transition.response_enqueue().is_err() {
+        return;
+    }
+    transition.publish(publisher, reply, bytes).await;
+}
+
+impl ReceiptDeadlineV1 {
+    pub(crate) fn private() -> Self {
+        Self::from_now(STORE_HANDLER_DEADLINE_MILLIS)
+    }
+
+    pub(crate) fn public() -> Self {
+        Self::from_now(PUBLIC_HANDLER_DEADLINE_MILLIS)
+    }
+
+    pub(crate) fn from_now(millis: u64) -> Self {
+        Self {
+            at: Instant::now() + Duration::from_millis(millis),
+        }
+    }
+
+    pub(crate) fn ensure_open(self) -> Result<(), ReceiptExpiredV1> {
+        (Instant::now() < self.at)
+            .then_some(())
+            .ok_or(ReceiptExpiredV1)
+    }
+
+    pub(crate) async fn run<F: Future>(self, future: F) -> Result<F::Output, ReceiptExpiredV1> {
+        self.ensure_open()?;
+        timeout_at(self.at, future)
+            .await
+            .map_err(|_| ReceiptExpiredV1)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

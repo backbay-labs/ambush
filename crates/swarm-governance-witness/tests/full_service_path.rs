@@ -828,9 +828,12 @@ async fn public_dispatcher_rejects_unknown_subject_operation_or_body() -> Protoc
     Ok(())
 }
 
-#[tokio::test]
-async fn public_dispatcher_returns_overload_without_spawning_or_touching_store()
--> ProtocolResult<()> {
+#[test]
+fn public_dispatcher_returns_overload_without_spawning_or_touching_store() -> ProtocolResult<()> {
+    run_corpus_on_bounded_test_stack(public_dispatcher_overload_corpus)
+}
+
+async fn public_dispatcher_overload_corpus() -> ProtocolResult<()> {
     assert!(public_witness_ingress_overload_control());
     let fixture = Fixture::new(CasMode::Apply)?;
     let release = Arc::new(Notify::new());
@@ -4726,6 +4729,108 @@ struct HarnessRoleCredentialV1 {
     invocation_token: String,
 }
 
+#[derive(Serialize)]
+struct ConstructorDeadlineObservationV1 {
+    input_millis: u64,
+    result: &'static str,
+}
+
+#[derive(Serialize)]
+struct ConstructorDeadlineReceiptV1<'a> {
+    schema_version: u8,
+    tree: &'a str,
+    invocation_token: &'a str,
+    case: &'a str,
+    inner_id: &'static str,
+    status: &'static str,
+    live_nats_grants_proved: bool,
+    launcher_sha256: &'a str,
+    manifest_sha256: &'a str,
+    observations: &'a [ConstructorDeadlineObservationV1; 5],
+    observations_sha256: String,
+    store_calls: u64,
+}
+
+fn write_constructor_deadline_receipt(
+    observations: &[ConstructorDeadlineObservationV1; 5],
+) -> ProtocolResult<()> {
+    let Some(path) = std::env::var_os("PHASE285_DEADLINE_CONSTRUCTOR_RECEIPT") else {
+        return Ok(());
+    };
+    let tree = std::env::var("PHASE285_DEADLINE_TREE")
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let token = std::env::var("PHASE285_DEADLINE_INVOCATION_TOKEN")
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let case = std::env::var("PHASE285_DEADLINE_CASE")
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let launcher_sha256 = std::env::var("PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256")
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let manifest_sha256 = std::env::var("PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256")
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    let observations_sha256 = sha256_hex(&canonical_wire_bytes(observations)?);
+    let receipt = ConstructorDeadlineReceiptV1 {
+        schema_version: 1,
+        tree: &tree,
+        invocation_token: &token,
+        case: &case,
+        inner_id: "deadline_budget_constructor_exact",
+        status: "passed",
+        live_nats_grants_proved: false,
+        launcher_sha256: &launcher_sha256,
+        manifest_sha256: &manifest_sha256,
+        observations,
+        observations_sha256,
+        store_calls: 0,
+    };
+    let bytes = canonical_wire_bytes(&receipt)?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+    use std::io::Write as _;
+    output
+        .write_all(&bytes)
+        .and_then(|()| output.write_all(b"\n"))
+        .and_then(|()| output.sync_all())
+        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
+}
+
+#[tokio::test]
+async fn full_service_path_constructor_deadline_is_exact_and_receipt_bound() -> ProtocolResult<()> {
+    let client = connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
+    let observations = [0, 2_999, 3_000, 3_001, u64::MAX].map(|input_millis| {
+        let result = NatsPublicWitnessStoreProxyClient::new(
+            client.clone(),
+            MAX_PROTOCOL_RECORD_BYTES,
+            MAX_PROTOCOL_RECORD_BYTES,
+            input_millis,
+        );
+        ConstructorDeadlineObservationV1 {
+            input_millis,
+            result: if result.is_ok() {
+                "accepted"
+            } else {
+                "refused"
+            },
+        }
+    });
+    assert_eq!(
+        observations
+            .each_ref()
+            .map(|observation| (observation.input_millis, observation.result)),
+        [
+            (0, "refused"),
+            (2_999, "refused"),
+            (3_000, "accepted"),
+            (3_001, "refused"),
+            (u64::MAX, "refused"),
+        ],
+        "deadline_r24_constructor_results"
+    );
+    write_constructor_deadline_receipt(&observations)
+}
+
 fn mutated_harness_credential<F>(
     source_variable: &str,
     label: &str,
@@ -5525,11 +5630,30 @@ async fn full_service_path_validates_proxy_response_before_public_attestation() 
         .await
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    for (deadline_millis, accepted) in [
+        (0, false),
+        (2_999, false),
+        (3_000, true),
+        (3_001, false),
+        (u64::MAX, false),
+    ] {
+        assert_eq!(
+            NatsPublicWitnessStoreProxyClient::new(
+                witness_client.clone(),
+                MAX_PROTOCOL_RECORD_BYTES,
+                MAX_PROTOCOL_RECORD_BYTES,
+                deadline_millis,
+            )
+            .is_ok(),
+            accepted,
+            "private response grant constructor oracle differs at {deadline_millis}"
+        );
+    }
     let client = NatsPublicWitnessStoreProxyClient::new(
         witness_client.clone(),
         MAX_PROTOCOL_RECORD_BYTES,
         MAX_PROTOCOL_RECORD_BYTES,
-        1_000,
+        3_000,
     )
     .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
     let response = client

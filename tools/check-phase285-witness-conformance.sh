@@ -309,6 +309,7 @@ materialized_inventory_for_target() {
     swarm-governance-witness/full_service_path)
       selector_rows public-dispatcher
       selector_rows full-service-path
+      printf '%s\n' full_service_path_constructor_deadline_is_exact_and_receipt_bound
       ;;
     *) return 1 ;;
   esac
@@ -1027,8 +1028,8 @@ def validate(
         "let worker_count = dispatcher.config.max_in_flight;",
         "let Some(reply) = message.reply else {",
         "if !is_bounded_inbox_reply(&reply)",
-        "payload: message.payload.to_vec(),",
-        "if !try_enqueue_public_message(&ingress, ingress_message)",
+        "let payload = message.payload.to_vec();",
+        "if !try_enqueue_public_message(ingress, ingress_message)",
         "ingress.try_send(message).is_ok()",
         "pub fn public_witness_ingress_overload_control() -> bool",
     ]:
@@ -1173,7 +1174,7 @@ def validate(
         ("binding_bytes > admission.max_binding_bytes", 1),
         ("retained_wire > admission.max_retained_bytes", 1),
         ("retained_payload > admission.max_retained_bytes", 1),
-        ("PublicWitnessDispatchErrorV1::OutcomeUnknown", 8),
+        ("PublicWitnessDispatchErrorV1::OutcomeUnknown", 12),
         ("&self.config.bucket_epoch_digest,", 4),
         ("&stream_initialization_digest,", 3),
     ]:
@@ -1223,7 +1224,7 @@ def validate(
     if terminal <= durable:
         raise ValueError("public response signing precedes confirming read")
     post_cas = re.search(
-        r"let response = match self\.proxy\.compare_and_swap\(request\)\.await \{(.*?)\n        \};(.*?)\n    async fn confirm_proposed",
+        r"let response = self\.proxy\.compare_and_swap\(request\)\.await;(.*?)let response = match response \{(.*?)\n        \};(.*?)\n    async fn confirm_proposed",
         text,
         re.S,
     )
@@ -1232,7 +1233,7 @@ def validate(
     classifier = post_cas.group(0)
     if classifier.count("self.proxy.compare_and_swap(") != 1:
         raise ValueError("post-CAS classifier retries compare-and-swap")
-    transport_error = re.search(r"Err\(error\) => \{(.*?)\n            \}", post_cas.group(1), re.S)
+    transport_error = re.search(r"Err\(error\) => \{(.*?)\n            \}", post_cas.group(2), re.S)
     if transport_error is None:
         raise ValueError("post-CAS transport error arm absent")
     for fragment in [
@@ -1348,7 +1349,7 @@ mutations = [
     ("runner_worker_bound_constant", "let worker_count = dispatcher.config.max_in_flight;", "let worker_count = 1024;"),
     ("runner_reply_from_payload", "let Some(reply) = message.reply else {", 'let Some(reply) = Some(async_nats::Subject::from("payload.reply")) else {'),
     ("runner_reply_namespace_bypassed", "if !is_bounded_inbox_reply(&reply)", "if false"),
-    ("runner_queue_bypassed", "if !try_enqueue_public_message(&ingress, ingress_message)", "if false"),
+    ("runner_queue_bypassed", "if !try_enqueue_public_message(ingress, ingress_message)", "if false"),
     ("runner_try_send_bypassed", "ingress.try_send(message).is_ok()", "true"),
     ("ready_operation_bypassed", "response.operation != WitnessStoreProxyOperationV1::InspectReady", "false"),
     ("ready_stream_cardinality_bypassed", "validated_streams.len() != self.config.admission_set.entries.len()", "false"),
@@ -1773,6 +1774,40 @@ def validate(s=source, c=config, i=integration, h=harness, d=compose):
     ]): raise ValueError("private subject inventory differs")
     if 'const PRIVATE_STORE_QUEUE_GROUP: &str = "swarm-governance-witness-store-v1";' not in s:
         raise ValueError("private queue group differs")
+    runner_match = re.search(
+        r"impl<S: WitnessAtomicStore \+ 'static> StoreProxyServiceRunner<S> \{(.*?)\n\}\n\npub\(crate\) fn admit_private_subscription_message",
+        s,
+        re.S,
+    )
+    if runner_match is None:
+        raise ValueError("store_proxy_runner_impl")
+    runner = runner_match.group(1)
+    public_start_signature = (
+        "pub async fn start(\n"
+        "        connection: StoreRoleConnectionV1,\n"
+        "        service: StoreProxyService<S>,\n"
+        "    ) -> Result<Self, StoreProxyRunnerErrorV1> {"
+    )
+    private_start_inner_signature = (
+        "async fn start_inner(\n"
+        "        connection: StoreRoleConnectionV1,\n"
+        "        service: StoreProxyService<S>,\n"
+        "    ) -> Result<Self, StoreProxyRunnerErrorV1> {"
+    )
+    delegation = "Self::start_inner(connection, service).await"
+    if runner.count(public_start_signature) != 1:
+        raise ValueError("public_start_signature")
+    if runner.count(private_start_inner_signature) != 1:
+        raise ValueError("private_start_inner_signature")
+    if runner.count("connection: StoreRoleConnectionV1") != 2:
+        raise ValueError("store_role_connection_cardinality")
+    if runner.count(delegation) != 1:
+        raise ValueError("public_start_delegation")
+    public_start_index = runner.index(public_start_signature)
+    delegation_index = runner.index(delegation)
+    private_start_inner_index = runner.index(private_start_inner_signature)
+    if not public_start_index < delegation_index < private_start_inner_index:
+        raise ValueError("public_start_delegation")
     for fragment in [
         "WitnessStoreProxy::new(store, ready.clone())",
         "self.preflight(subject, raw)?;",
@@ -1786,9 +1821,9 @@ def validate(s=source, c=config, i=integration, h=harness, d=compose):
         "max_response_bytes: self.config.max_response_bytes.min(selected_response_bytes)",
         "if bytes.len() > selected.max_response_bytes",
         "(bytes.len() <= selected.max_response_bytes).then_some(bytes)",
-        "Duration::from_millis(self.config.request_deadline_millis)",
-        "sender.try_send(ingress).is_err()",
-        "service.overload_response(subject, &message.payload)",
+        "let response = transition\n            .proxy_store(",
+        "ingress.try_send(ingress_message).is_err()",
+        "service.overload_response(subject, &payload)",
         "private_store_ingress_overload_control() -> bool",
         "response.operation != operation || response.request_digest != request_digest",
         "pub struct StoreRoleConnectionV1 {",
@@ -1810,13 +1845,12 @@ def validate(s=source, c=config, i=integration, h=harness, d=compose):
         ".subscription_capacity(config.subscription_capacity)",
         ".client_capacity(config.client_capacity)",
         ".read_buffer_capacity(config.read_buffer_capacity)",
-        "connection: StoreRoleConnectionV1",
     ]:
         if s.count(fragment) != 1: raise ValueError(f"private service boundary differs: {fragment}")
     if s.index("self.preflight(subject, raw)?;") > s.index("self.proxy.handle_bytes(raw)"):
         raise ValueError("private preflight occurs after store")
-    if s.index(".constant_time_matches(&service.ready_binding)") > s.index("get_stream(&service.config.stream_name)") \
-            or s.index(".constant_time_matches(&service.ready_binding)") > s.index(".queue_subscribe("):
+    if runner.index(".constant_time_matches(&service.ready_binding)") > runner.index("get_stream(&service.config.stream_name)") \
+            or runner.index(".constant_time_matches(&service.ready_binding)") > runner.index(".queue_subscribe("):
         raise ValueError("Ready binding comparison occurs after external authority")
     for forbidden in ["$KV.", "$JS.API.", "Store::put", "Store::delete", "Store::purge"]:
         if forbidden in s: raise ValueError(f"private service exposes raw authority: {forbidden}")
@@ -1903,10 +1937,12 @@ mutations = [
     ("bypass_selected_response_bound", "source", "max_response_bytes: self.config.max_response_bytes.min(selected_response_bytes)", "max_response_bytes: self.config.max_response_bytes"),
     ("bypass_normal_response_bound", "source", "if bytes.len() > selected.max_response_bytes", "if false"),
     ("bypass_overload_response_bound", "source", "(bytes.len() <= selected.max_response_bytes).then_some(bytes)", "Some(bytes)"),
-    ("unbounded_queue", "source", "sender.try_send(ingress).is_err()", "false"),
-    ("omit_overload_response", "source", "service.overload_response(subject, &message.payload)", "None"),
+    ("unbounded_queue", "source", "ingress.try_send(ingress_message).is_err()", "false"),
+    ("omit_overload_response", "source", "service.overload_response(subject, &payload)", "None"),
     ("bypass_client_response_binding", "source", "response.operation != operation || response.request_digest != request_digest", "false"),
-    ("arbitrary_store_client", "source", "connection: StoreRoleConnectionV1", "connection: async_nats::Client"),
+    ("arbitrary_public_store_client", "source", "pub async fn start(\n        connection: StoreRoleConnectionV1,", "pub async fn start(\n        connection: async_nats::Client,", "public_start_signature"),
+    ("arbitrary_private_store_client", "source", "async fn start_inner(\n        connection: StoreRoleConnectionV1,", "async fn start_inner(\n        connection: async_nats::Client,", "private_start_inner_signature"),
+    ("omit_public_start_delegation", "source", "Self::start_inner(connection, service).await", "Err(StoreProxyRunnerErrorV1::Configuration)", "public_start_delegation"),
     ("omit_ready_validation", "source", ".validate_for_ready(ready)", ".validate_transport()"),
     ("omit_service_binding", "source", "let ready_binding = StoreProxyReadyBindingV1::validated(&config, &ready)?;", "let ready_binding = StoreProxyReadyBindingV1([0_u8; 32]);"),
     ("omit_connection_binding", "source", "let ready_binding = StoreProxyReadyBindingV1::validated(config, ready)", "let ready_binding = StoreProxyReadyBindingV1([0_u8; 32])"),
@@ -1938,13 +1974,18 @@ mutations = [
 ]
 values = {"source":source,"config":config,"integration":integration,"harness":harness,"compose":compose}
 digests=[]
-for label, which, old, new in mutations:
+for mutation in mutations:
+    label, which, old, new = mutation[:4]
+    expected_reason = mutation[4] if len(mutation) == 5 else None
     if values[which].count(old) != 1: raise SystemExit(f"store proxy mutation anchor differs: {label}")
     changed = values.copy(); changed[which] = changed[which].replace(old,new,1)
     combined = "\0".join(changed[key] for key in ["source","config","integration","harness","compose"])
     digests.append(hashlib.sha256(combined.encode()).hexdigest())
     try: validate(changed["source"],changed["config"],changed["integration"],changed["harness"],changed["compose"])
-    except (ValueError, AttributeError): print(f"store_proxy_source_mutation_red mutation={label}")
+    except (ValueError, AttributeError) as error:
+        if expected_reason is not None and str(error) != expected_reason:
+            raise SystemExit(f"store proxy mutation failed for wrong reason: {label} expected={expected_reason} observed={error}") from error
+        print(f"store_proxy_source_mutation_red mutation={label}")
     else: raise SystemExit(f"store proxy source mutant survived: {label}")
 if len(set(digests)) != len(mutations): raise SystemExit("store proxy mutation digests differ")
 print(f"store_proxy_source_guard_self_test mutations={len(mutations)} unique={len(set(digests))} passed=1")
@@ -5415,6 +5456,724 @@ checkpoint_release_union_chain() {
 
 readonly -f checkpoint_release_union_chain checkpoint_release_union_validate_existing record_release_probe_runtime_receipt release_probe_ledger_path release_probe_provenance_path release_probe_provenance_values release_probe_workspace_artifact_values run_release_hook_probe run_release_lock_generation run_release_probe_check validate_release_probe_execution validate_release_probe_runtime_receipt validate_release_probe_wiring write_release_probe_provenance
 
+run_service_checkpoint_deadline_focus() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch ledger budget_receipt callsite_receipt constructor_receipt token output callsite_output constructor_output list_output integration_list_output
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "service checkpoint deadline tree is malformed" >&2
+    return 1
+  }
+  python3 -I - \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/store_proxy_service.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs" \
+    "$ROOT_DIR/tools/check-phase285-witness-conformance.sh" <<'PY'
+import re, sys
+library, private, public, checker = [open(path, encoding="utf-8").read() for path in sys.argv[1:]]
+if private.count("pub(crate) fn admit_private_subscription_message(") != 1:
+    raise SystemExit("private subscriber admission visibility differs")
+if public.count("pub(crate) fn admit_public_subscription_message(") != 1:
+    raise SystemExit("public subscriber admission visibility differs")
+private_test = re.search(r"async fn run_private_queue_expired\((.*?)\n    async fn run_public_queue_expired", library, re.S)
+public_test = re.search(r"async fn run_public_queue_expired\((.*?)\n    async fn run_private_read", library, re.S)
+if private_test is None or private_test.group(1).count("async_nats::Message {") != 1 or private_test.group(1).count("admit_private_subscription_message(") != 1 or ".send(PrivateIngressMessage {" in private_test.group(1):
+    raise SystemExit("private exact FQN raw admission path differs")
+if public_test is None or public_test.group(1).count("async_nats::Message {") != 1 or public_test.group(1).count("admit_public_subscription_message(") != 1 or ".send(PublicIngressMessage {" in public_test.group(1):
+    raise SystemExit("public exact FQN raw admission path differs")
+labels = [
+    f"{side}_subscriber_{family}"
+    for side in ("private", "public")
+    for family in ("capture_reset", "capture_after_queue", "overlong_deadline")
+]
+if any(checker.count(f'("{label}",') != 1 for label in labels):
+    raise SystemExit("subscriber admission mutation inventory differs")
+print("deadline_admission_source_guard passed=1 mutations=6")
+PY
+  scratch="$(phase285_create_confined_scratch phase285-deadline)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  ledger="$scratch/deadline-ledger.jsonl"
+  budget_receipt="$scratch/deadline-budget.json"
+  callsite_receipt="$scratch/deadline-callsite.json"
+  constructor_receipt="$scratch/deadline-constructor.json"
+  token="$(python3 -I - "$accepted_tree" <<'PY'
+import hashlib, os, secrets, sys
+print(hashlib.sha256((sys.argv[1] + ":" + str(os.getpid()) + ":" + secrets.token_hex(32)).encode()).hexdigest())
+PY
+)"
+  output="$scratch/deadline-test-output.txt"
+  callsite_output="$scratch/deadline-callsite-output.txt"
+  constructor_output="$scratch/deadline-constructor-output.txt"
+  list_output="$scratch/deadline-list-output.txt"
+  integration_list_output="$scratch/deadline-integration-list-output.txt"
+
+  cargo test -p swarm-governance-witness --lib --locked --offline -- --list >"$list_output"
+  [ "$(grep -Fxc 'deadline_state_machine_tests::deadline_state_machine_is_receipt_anchored_and_mutation_sensitive: test' "$list_output")" -eq 1 ] || {
+    echo "deadline test inventory differs" >&2
+    return 1
+  }
+  [ "$(grep -Fxc 'deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive: test' "$list_output")" -eq 1 ] || {
+    echo "deadline callsite test inventory differs" >&2
+    return 1
+  }
+  cargo test -p swarm-governance-witness --test full_service_path --locked --offline -- --list >"$integration_list_output"
+  [ "$(grep -Fxc 'full_service_path_constructor_deadline_is_exact_and_receipt_bound: test' "$integration_list_output")" -eq 1 ] || {
+    echo "deadline constructor test inventory differs" >&2
+    return 1
+  }
+  PHASE285_DEADLINE_LEDGER_REQUIRED=1 \
+  PHASE285_DEADLINE_LEDGER="$ledger" \
+  PHASE285_DEADLINE_BUDGET_RECEIPT="$budget_receipt" \
+  PHASE285_DEADLINE_TREE="$accepted_tree" \
+  PHASE285_DEADLINE_INVOCATION_TOKEN="$token" \
+  PHASE285_DEADLINE_CASE=service_checkpoint_deadline \
+    cargo test -p swarm-governance-witness --lib --locked --offline \
+      deadline_state_machine_tests::deadline_state_machine_is_receipt_anchored_and_mutation_sensitive \
+      -- --exact --test-threads=1 | tee "$output"
+  grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$output" || {
+    echo "deadline exact test counts differ" >&2
+    return 1
+  }
+  PHASE285_DEADLINE_CALLSITE_RECEIPT="$callsite_receipt" \
+  PHASE285_DEADLINE_TREE="$accepted_tree" \
+  PHASE285_DEADLINE_INVOCATION_TOKEN="$token" \
+  PHASE285_DEADLINE_CASE=service_checkpoint_deadline \
+    cargo test -p swarm-governance-witness --lib --locked --offline \
+      deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive \
+      -- --exact --test-threads=1 | tee "$callsite_output"
+  grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$callsite_output" || {
+    echo "deadline callsite exact test counts differ" >&2
+    return 1
+  }
+  PHASE285_DEADLINE_CONSTRUCTOR_RECEIPT="$constructor_receipt" \
+  PHASE285_DEADLINE_TREE="$accepted_tree" \
+  PHASE285_DEADLINE_INVOCATION_TOKEN="$token" \
+  PHASE285_DEADLINE_CASE=service_checkpoint_deadline \
+    cargo test -p swarm-governance-witness --test full_service_path --locked --offline \
+      full_service_path_constructor_deadline_is_exact_and_receipt_bound \
+      -- --exact --test-threads=1 | tee "$constructor_output"
+  grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$constructor_output" || {
+    echo "deadline constructor exact test counts differ" >&2
+    return 1
+  }
+
+  python3 -I - "$ledger" "$budget_receipt" "$callsite_receipt" "$constructor_receipt" "$accepted_tree" "$token" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/store_proxy_service.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/tests/full_service_path.rs" \
+    "$ROOT_DIR" "$scratch" <<'PY'
+import copy, hashlib, json, os, pathlib, re, shutil, subprocess, sys
+ledger, budget_receipt, callsite_receipt, constructor_receipt, tree, token, config_path, private_path, public_path, library_path, fixture_path, root_path, scratch_path = sys.argv[1:]
+ledger = pathlib.Path(ledger)
+budget_receipt = pathlib.Path(budget_receipt)
+callsite_receipt = pathlib.Path(callsite_receipt)
+constructor_receipt = pathlib.Path(constructor_receipt)
+root = pathlib.Path(root_path).resolve(strict=True)
+scratch = pathlib.Path(scratch_path).resolve(strict=True)
+
+def reject_constant(value):
+    raise ValueError(value)
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+raw_lines = ledger.read_bytes().splitlines(keepends=True)
+if len(raw_lines) != 8 or any(not line.endswith(b"\n") for line in raw_lines):
+    raise SystemExit("deadline ledger framing/cardinality differs")
+rows = []
+for line in raw_lines:
+    value = json.loads(line, parse_constant=reject_constant)
+    if line != canonical(value) + b"\n":
+        raise SystemExit("deadline ledger row is not canonical")
+    rows.append(value)
+
+def read_canonical_receipt(path, label):
+    raw = path.read_bytes()
+    if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+        raise SystemExit(f"deadline {label} receipt framing differs")
+    value = json.loads(raw, parse_constant=reject_constant)
+    if raw != canonical(value) + b"\n":
+        raise SystemExit(f"deadline {label} receipt is not canonical")
+    return value
+
+budget = read_canonical_receipt(budget_receipt, "budget")
+callsite = read_canonical_receipt(callsite_receipt, "callsite")
+constructor = read_canonical_receipt(constructor_receipt, "constructor")
+
+counter_keys = {"queue_dequeues","preflights","store_calls","private_proxy_calls","cas_attempted","cas_applied","retries","publications","outcome_unknown"}
+evidence_keys = counter_keys | {"ordered_trace"}
+zero = {key: (False if key == "outcome_unknown" else 0) for key in counter_keys}
+def dequeued(worker): return {"event":"dequeued","worker":worker}
+def preflight(worker): return {"event":"post_preflight","worker":worker}
+def begin(worker, operation, attempted=False): return {"cas_attempted":attempted,"event":"proxy_store_begin","operation":operation,"worker":worker}
+def end(worker, operation, succeeded, applied=False): return {"cas_applied":applied,"event":"proxy_store_end","operation":operation,"succeeded":succeeded,"worker":worker}
+def enqueue(worker, accepted): return {"accepted":accepted,"event":"response_enqueue_attempt","worker":worker}
+expected = [
+    ("private_queue_expired", {**zero,"queue_dequeues":1,"ordered_trace":[dequeued("private")]}),
+    ("private_preflight_expired", {**zero,"queue_dequeues":1,"preflights":1,"ordered_trace":[dequeued("private"),preflight("private")]}),
+    ("private_store_crosses_deadline", {**zero,"queue_dequeues":1,"preflights":1,"store_calls":1,"ordered_trace":[dequeued("private"),preflight("private"),begin("private","read_entry")]}),
+    ("private_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"store_calls":1,"ordered_trace":[dequeued("private"),preflight("private"),begin("private","read_entry"),end("private","read_entry",True),enqueue("private",False)]}),
+    ("public_queue_expired", {**zero,"queue_dequeues":1,"ordered_trace":[dequeued("public")]}),
+    ("public_private_exchange_crosses_deadline", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",False)]}),
+    ("public_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",True),enqueue("public",False)]}),
+    ("post_cas_timeout_outcome_unknown", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":3,"cas_attempted":1,"cas_applied":1,"outcome_unknown":True,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",True),begin("public","compare_and_swap",True),{"event":"cas_applied_observation","worker":"private"},end("public","compare_and_swap",False),begin("public","read_entry"),end("public","read_entry",False),{"event":"outcome_unknown"}]}),
+]
+topology = {"private_handler_millis":2000,"private_response_grant_millis":3000,"public_handler_millis":10000,"public_response_grant_millis":12000,"private_handler_reserve_millis":1000,"public_private_reserve_millis":1000,"public_handler_reserve_millis":2000,"response_grant_maximum":1}
+constructor_observations = [
+    {"input_millis":0,"result":"refused"},
+    {"input_millis":2999,"result":"refused"},
+    {"input_millis":3000,"result":"accepted"},
+    {"input_millis":3001,"result":"refused"},
+    {"input_millis":18446744073709551615,"result":"refused"},
+]
+
+def validate(candidate, budget_value=budget, callsite_value=callsite, constructor_value=constructor):
+    if len(candidate) != 8:
+        raise ValueError("row cardinality")
+    for index, (row, (inner_id, evidence)) in enumerate(zip(candidate, expected)):
+        if set(row) != {"schema_version","tree","invocation_token","case","inner_id","status","live_nats_grants_proved","evidence"}:
+            raise ValueError("row schema")
+        if row["schema_version"] != 1 or row["tree"] != tree or row["invocation_token"] != token or row["case"] != "service_checkpoint_deadline" or row["inner_id"] != inner_id or row["status"] != "passed" or row["live_nats_grants_proved"] is not False:
+            raise ValueError("row identity/status")
+        if set(row["evidence"]) != evidence_keys or row["evidence"] != evidence:
+            raise ValueError("row evidence")
+    traces = [canonical(row["evidence"]["ordered_trace"]) for row in candidate]
+    if len(set(traces)) != 8 or any(not row["evidence"]["ordered_trace"] for row in candidate):
+        raise ValueError("ordered trace pairwise evidence")
+
+    if set(budget_value) != {"schema_version","tree","invocation_token","case","inner_id","status","live_nats_grants_proved","topology"} or budget_value != {
+        "schema_version":1,"tree":tree,"invocation_token":token,"case":"service_checkpoint_deadline",
+        "inner_id":"deadline_budget_constructor_exact","status":"passed","live_nats_grants_proved":False,"topology":topology,
+    }:
+        raise ValueError("budget receipt")
+    callsite_keys = {"schema_version","tree","invocation_token","case","private","public","private_backend_calls","public_backend_calls","private_second_publications","public_second_publications"}
+    if set(callsite_value) != callsite_keys or callsite_value["schema_version"] != 1 or callsite_value["tree"] != tree or callsite_value["invocation_token"] != token or callsite_value["case"] != "service_checkpoint_deadline":
+        raise ValueError("callsite receipt identity")
+    for key, worker, deadline in [("private","private",2000),("public","public",10000)]:
+        receipt = callsite_value[key]
+        if set(receipt) != {"worker","subject","payload_sha256","reply","deadline_millis"} or receipt["worker"] != worker or receipt["deadline_millis"] != deadline or not re.fullmatch(r"[0-9a-f]{64}", receipt["payload_sha256"]):
+            raise ValueError(f"callsite {key} receipt")
+    if callsite_value["private_backend_calls"] != 1 or callsite_value["public_backend_calls"] != 1 or callsite_value["private_second_publications"] != 0 or callsite_value["public_second_publications"] != 0:
+        raise ValueError("callsite backend/publication facts")
+    constructor_keys = {"schema_version","tree","invocation_token","case","inner_id","status","live_nats_grants_proved","launcher_sha256","manifest_sha256","observations","observations_sha256","store_calls"}
+    launcher_pin = os.environ.get("PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256")
+    manifest_pin = os.environ.get("PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256")
+    if set(constructor_value) != constructor_keys or constructor_value["schema_version"] != 1 or constructor_value["tree"] != tree or constructor_value["invocation_token"] != token or constructor_value["case"] != "service_checkpoint_deadline" or constructor_value["inner_id"] != "deadline_budget_constructor_exact" or constructor_value["status"] != "passed" or constructor_value["live_nats_grants_proved"] is not False or constructor_value["launcher_sha256"] != launcher_pin or constructor_value["manifest_sha256"] != manifest_pin or not launcher_pin or not manifest_pin or constructor_value["observations"] != constructor_observations or constructor_value["observations_sha256"] != hashlib.sha256(canonical(constructor_observations)).hexdigest() or constructor_value["store_calls"] != 0:
+        raise ValueError("constructor receipt")
+
+validate(rows)
+mutants = []
+mutants.append(("omission", rows[:-1]))
+mutants.append(("addition", rows + [copy.deepcopy(rows[-1])]))
+duplicate = copy.deepcopy(rows); duplicate[1] = copy.deepcopy(duplicate[0]); mutants.append(("duplication", duplicate))
+renamed = copy.deepcopy(rows); renamed[0]["inner_id"] = "renamed"; mutants.append(("renamed_id", renamed))
+wrong_status = copy.deepcopy(rows); wrong_status[0]["status"] = "failed"; mutants.append(("wrong_status", wrong_status))
+wrong_count = copy.deepcopy(rows); wrong_count[2]["evidence"]["store_calls"] = 0; mutants.append(("fabricated_counter", wrong_count))
+wrong_token = copy.deepcopy(rows); wrong_token[0]["invocation_token"] = "0"*64; mutants.append(("stale_token", wrong_token))
+wrong_tree = copy.deepcopy(rows); wrong_tree[0]["tree"] = "0"*40; mutants.append(("stale_tree", wrong_tree))
+wrong_case = copy.deepcopy(rows); wrong_case[0]["case"] = "other"; mutants.append(("cross_case", wrong_case))
+late_publish = copy.deepcopy(rows); late_publish[3]["evidence"]["publications"] = 1; mutants.append(("late_publication", late_publish))
+downgrade = copy.deepcopy(rows); downgrade[7]["evidence"]["outcome_unknown"] = False; mutants.append(("cas_ambiguity_downgrade", downgrade))
+trace_copy = copy.deepcopy(rows); trace_copy[3]["evidence"]["ordered_trace"] = copy.deepcopy(trace_copy[2]["evidence"]["ordered_trace"]); mutants.append(("row_trace_copy", trace_copy))
+trace_swap = copy.deepcopy(rows); trace_swap[2]["evidence"]["ordered_trace"], trace_swap[3]["evidence"]["ordered_trace"] = trace_swap[3]["evidence"]["ordered_trace"], trace_swap[2]["evidence"]["ordered_trace"]; mutants.append(("row_trace_swap", trace_swap))
+grant_claim = copy.deepcopy(budget); grant_claim["live_nats_grants_proved"] = True; mutants.append(("live_nats_grant_claim", rows, grant_claim, callsite, constructor))
+callsite_counter = copy.deepcopy(callsite); callsite_counter["private_backend_calls"] = 0; mutants.append(("callsite_counter_fabrication", rows, budget, callsite_counter, constructor))
+callsite_deadline = copy.deepcopy(callsite); callsite_deadline["public"]["deadline_millis"] = 10001; mutants.append(("callsite_deadline_substitution", rows, budget, callsite_deadline, constructor))
+constructor_input = copy.deepcopy(constructor); constructor_input["observations"][1]["input_millis"] = 2998; mutants.append(("constructor_input_substitution", rows, budget, callsite, constructor_input))
+constructor_result = copy.deepcopy(constructor); constructor_result["observations"][2]["result"] = "refused"; mutants.append(("constructor_result_fabrication", rows, budget, callsite, constructor_result))
+normalized_mutants = [(name, candidate, budget, callsite, constructor) for name, candidate in mutants[:13]] + mutants[13:]
+if len(normalized_mutants) != 18:
+    raise SystemExit("deadline ledger mutation inventory differs")
+for name, candidate, budget_candidate, callsite_candidate, constructor_candidate in normalized_mutants:
+    try: validate(candidate, budget_candidate, callsite_candidate, constructor_candidate)
+    except ValueError: print(f"deadline_ledger_mutation_red mutation={name}")
+    else: raise SystemExit(f"deadline ledger mutation survived: {name}")
+
+sources = {
+    "config": pathlib.Path(config_path).read_text(),
+    "private": pathlib.Path(private_path).read_text(),
+    "public": pathlib.Path(public_path).read_text(),
+    "library": pathlib.Path(library_path).read_text(),
+    "fixture": pathlib.Path(fixture_path).read_text(),
+}
+required = {
+    "config": [
+        "STORE_HANDLER_DEADLINE_MILLIS: u64 = 2_000",
+        "STORE_RESPONSE_GRANT_MILLIS: u64 = 3_000",
+        "PUBLIC_HANDLER_DEADLINE_MILLIS: u64 = 10_000",
+        "PUBLIC_RESPONSE_GRANT_MILLIS: u64 = 12_000",
+        "RESPONSE_GRANT_MAXIMUM: usize = 1",
+        "timeout_at(self.at, future)",
+        "pub(crate) struct WorkerTransitionV1",
+        "pub(crate) async fn run_observed_worker_message",
+        "transition.publish(publisher, reply, bytes).await",
+    ],
+    "private": [
+        "ReceiptDeadlineV1::private()",
+        "Self::start_inner(connection, service).await",
+        "admit_private_subscription_message(",
+        "admission_observer.accepted(receipt);",
+        "run_private_worker_message",
+        "run_observed_worker_message(",
+        "transition.post_preflight();",
+        "pub(crate) async fn handle_subject_bytes_before",
+        ".proxy_store(",
+    ],
+    "public": [
+        "ReceiptDeadlineV1::public()",
+        "Self::start_inner(client, dispatcher).await",
+        "admit_public_subscription_message(",
+        "admission_observer.accepted(receipt);",
+        "value.starts_with(\"_R_.\")",
+        "run_public_worker_message",
+        "run_observed_worker_message(",
+        "transition.post_preflight();",
+        "if transition.ensure_open().is_err()",
+        "ACTIVE_CAS_ATTEMPTED",
+        "transition.outcome_unknown();",
+    ],
+    "library": [
+        "impl WitnessAtomicStore for DeadlineRecordingStoreV1",
+        "StoreProxyService::new(service_config, ready.clone(), store)",
+        "run_private_worker_message(",
+        "receive_and_run_private_worker_message(",
+        "PublicWitnessDispatcher::new(",
+        "run_public_worker_message(",
+        "receive_and_run_public_worker_message(",
+        "CAS-applied event diverged from recording WitnessAtomicStore",
+        "fixture.facts.cas_applied.load(Ordering::SeqCst), 1",
+        "subscriber_callsite_is_receipt_anchored_and_mutation_sensitive",
+        "PublicWitnessServiceRunner::start(",
+        "StoreProxyServiceRunner::start(",
+        "write_deadline_budget_receipt(topology);",
+    ],
+    "fixture": ["[0, 2_999, 3_000, 3_001, u64::MAX]", "deadline_r24_constructor_results", "NatsPublicWitnessStoreProxyClient::new("],
+}
+
+def source_validate(candidate):
+    for name, fragments in required.items():
+        for fragment in fragments:
+            if fragment not in candidate[name]:
+                raise ValueError(f"{name}:{fragment}")
+    if candidate["private"].count("ReceiptDeadlineV1::private()") < 2:
+        raise ValueError("private receipt cardinality")
+    if candidate["public"].count("ReceiptDeadlineV1::public()") < 3:
+        raise ValueError("public receipt cardinality")
+    if "request_deadline_millis != STORE_RESPONSE_GRANT_MILLIS" not in candidate["private"]:
+        raise ValueError("constructor exact deadline")
+    if "RecordedOperationV1" in candidate["library"] or "async fn operation(" in candidate["library"]:
+        raise ValueError("synthetic operation helper")
+
+# Cardinality-special fragments are checked separately from the one-use list.
+required["private"].remove("ReceiptDeadlineV1::private()")
+required["public"].remove("ReceiptDeadlineV1::public()")
+source_validate(sources)
+source_mutations = [
+    ("receipt_reset", "private", "receipt_deadline: ReceiptDeadlineV1::private()", "receipt_deadline: ReceiptDeadlineV1::from_now(3_000)"),
+    ("private_queue_check", "private", "run_observed_worker_message(", "run_observed_worker_message_bypassed("),
+    ("private_pre_store_check", "private", "if transition.ensure_open().is_err()", "if false"),
+    ("public_queue_check", "public", "run_observed_worker_message(", "run_observed_worker_message_bypassed("),
+    ("public_pre_store_check", "public", "if transition.ensure_open().is_err()", "if false"),
+    ("relative_timeout", "config", "timeout_at(self.at, future)", "tokio::time::timeout(Duration::from_secs(1), future)"),
+    ("late_publish", "config", "transition.publish(publisher, reply, bytes).await", "publisher.publish(reply, bytes).await"),
+    ("retry", "public", "transition.outcome_unknown();", "continue;"),
+    ("cas_downgrade", "public", "transition.outcome_unknown();", "return Err(PublicWitnessDispatchErrorV1::Timeout);"),
+    ("topology", "config", "STORE_RESPONSE_GRANT_MILLIS: u64 = 3_000", "STORE_RESPONSE_GRANT_MILLIS: u64 = 3_001"),
+    ("constructor", "private", "request_deadline_millis != STORE_RESPONSE_GRANT_MILLIS", "request_deadline_millis == 0"),
+    ("recording_store_bypassed", "library", "impl WitnessAtomicStore for DeadlineRecordingStoreV1", "impl DeadlineRecordingStoreV1"),
+    ("private_service_bypassed", "library", "run_private_worker_message(", "run_observed_worker_message("),
+    ("public_dispatcher_bypassed", "library", "PublicWitnessDispatcher::new(", "PublicWitnessDispatcher::new_bypassed("),
+    ("public_worker_bypassed", "library", "run_public_worker_message(", "run_observed_worker_message("),
+    ("cas_fact_fabricated", "library", "evidence.cas_applied = cas_applied;", "evidence.cas_applied = 1;"),
+    ("cas_fact_assertion_omitted", "library", "fixture.facts.cas_applied.load(Ordering::SeqCst), 1", "fixture.facts.cas_applied.load(Ordering::SeqCst), 0"),
+]
+# These lexical controls are retained as defense in depth but are explicitly
+# excluded from the r20 executable mutation count below.
+source_mutations = []
+digests = set()
+for label, path, old, new in source_mutations:
+    candidate = dict(sources)
+    if candidate[path].count(old) == 0:
+        raise SystemExit(f"deadline source mutation anchor differs: {label}")
+    candidate[path] = candidate[path].replace(old, new)
+    digest = hashlib.sha256("\0".join(candidate[name] for name in sorted(candidate)).encode()).hexdigest()
+    if digest in digests: raise SystemExit("deadline source mutation digest duplicated")
+    digests.add(digest)
+    try: source_validate(candidate)
+    except ValueError: print(f"deadline_source_mutation_red mutation={label}")
+    else: raise SystemExit(f"deadline source mutation survived: {label}")
+print(f"deadline_focus_lexical rows=9 ledger_mutations={len(mutants)} lexical_source_mutations={len(source_mutations)}")
+
+exact_root = scratch / "deadline-exact-tree"
+exact_root.mkdir()
+archive = subprocess.Popen(
+    ["git", "-C", str(root), "archive", tree], stdout=subprocess.PIPE
+)
+unpack = subprocess.run(
+    ["tar", "-xf", "-", "-C", str(exact_root)],
+    stdin=archive.stdout,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=False,
+    check=False,
+)
+archive.stdout.close()
+archive_status = archive.wait()
+if archive_status != 0 or unpack.returncode != 0:
+    raise SystemExit("deadline exact-tree extraction failed")
+
+target = scratch / "deadline-shared-target"
+base_environment = os.environ.copy()
+base_environment["CARGO_TARGET_DIR"] = str(target)
+for name in ["PHASE285_DEADLINE_LEDGER", "PHASE285_DEADLINE_LEDGER_REQUIRED", "PHASE285_DEADLINE_BUDGET_RECEIPT", "PHASE285_DEADLINE_CALLSITE_RECEIPT", "PHASE285_DEADLINE_CONSTRUCTOR_RECEIPT", "PHASE285_DEADLINE_TREE", "PHASE285_DEADLINE_INVOCATION_TOKEN", "PHASE285_DEADLINE_CASE"]:
+    base_environment.pop(name, None)
+
+def cargo(arguments, cwd=exact_root, extra_environment=None):
+    environment = base_environment.copy()
+    if extra_environment:
+        environment.update(extra_environment)
+    return subprocess.run(
+        ["cargo", *arguments], cwd=cwd, env=environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+        timeout=120,
+    )
+
+build_modes = [
+    ("non_test_default_debug", ["build", "-p", "swarm-governance-witness", "--lib", "--locked", "--offline"]),
+    ("non_test_all_features_debug", ["build", "-p", "swarm-governance-witness", "--lib", "--all-features", "--locked", "--offline"]),
+    ("non_test_default_release", ["build", "-p", "swarm-governance-witness", "--lib", "--release", "--locked", "--offline"]),
+    ("non_test_all_features_release", ["build", "-p", "swarm-governance-witness", "--lib", "--release", "--all-features", "--locked", "--offline"]),
+]
+for receipt, arguments in build_modes:
+    result = cargo(arguments)
+    if result.returncode != 0:
+        raise SystemExit(f"deadline {receipt} failed:\n{result.stdout}")
+    print(f"deadline_boundary receipt={receipt} tree={tree} token={token} status=passed")
+
+downstream = scratch / "deadline-downstream"
+(downstream / "src").mkdir(parents=True)
+(downstream / "Cargo.toml").write_text(
+    "[package]\nname=\"phase285-a1-boundary\"\nversion=\"0.0.0\"\nedition=\"2024\"\n"
+    + "[dependencies]\nswarm-governance-witness={path=" + json.dumps(str(exact_root / "crates/swarm-governance-witness")) + "}\n"
+)
+main = downstream / "src/main.rs"
+main.write_text(
+    "use swarm_governance_witness::{PublicWitnessServiceConfigV1,store_proxy_subjects};\n"
+    "fn main(){let _=store_proxy_subjects();let _:Option<PublicWitnessServiceConfigV1>=None;}\n"
+)
+lock = cargo(["generate-lockfile", "--offline", "--manifest-path", str(downstream / "Cargo.toml")], downstream)
+if lock.returncode != 0:
+    raise SystemExit(f"deadline downstream lock generation failed:\n{lock.stdout}")
+positive = cargo(["check", "--manifest-path", str(downstream / "Cargo.toml"), "--locked", "--offline"], downstream)
+if positive.returncode != 0:
+    raise SystemExit(f"deadline downstream positive failed:\n{positive.stdout}")
+print(f"deadline_boundary receipt=downstream_public_api_positive tree={tree} token={token} status=passed")
+
+negative_probes = [
+    ("downstream_public_start_inner_private", "use swarm_governance_witness::{NatsPublicWitnessStoreProxyClient,PublicWitnessServiceRunner};fn main(){let _=PublicWitnessServiceRunner::<NatsPublicWitnessStoreProxyClient>::start_inner;}", "E0624", "start_inner"),
+    ("downstream_private_start_inner_private", "use swarm_governance_witness::{NatsWitnessStore,StoreProxyServiceRunner};fn main(){let _=StoreProxyServiceRunner::<NatsWitnessStore>::start_inner;}", "E0624", "start_inner"),
+    ("downstream_observer_noop_private", "use swarm_governance_witness::service_config::{SubscriberAdmissionObserverV1,NoopSubscriberAdmissionObserverV1};fn main(){}", "E0603", "service_config"),
+    ("downstream_test_builder_absent", "use swarm_governance_witness::{PublicWitnessDispatcher,PublicWitnessStoreProxyClient};fn probe<C:PublicWitnessStoreProxyClient>(d:&mut PublicWitnessDispatcher<C>){d.observe_subscriber_admissions_for_test(todo!());}fn main(){}", "E0599", "observe_subscriber_admissions_for_test"),
+]
+for receipt, source, code, symbol in negative_probes:
+    main.write_text(source + "\n")
+    result = cargo(["check", "--manifest-path", str(downstream / "Cargo.toml"), "--locked", "--offline"], downstream)
+    if result.returncode == 0 or code not in result.stdout or symbol not in result.stdout:
+        raise SystemExit(f"deadline {receipt} did not fail at intended API boundary:\n{result.stdout}")
+    print(f"deadline_boundary receipt={receipt} tree={tree} token={token} diagnostic={code} symbol={symbol} status=passed")
+
+artifact_candidates = list((target / "debug").glob("libswarm_governance_witness*.rlib")) + list((target / "release").glob("libswarm_governance_witness*.rlib"))
+if len(artifact_candidates) < 2:
+    raise SystemExit("deadline non-test artifacts absent")
+for artifact in artifact_candidates:
+    raw = artifact.read_bytes()
+    for symbol in [b"RecordingWorkerTransitionObserverV1", b"RecordingSubscriberAdmissionObserverV1", b"DeadlineGateV1", b"deadline_state_machine_is_receipt_anchored_and_mutation_sensitive", b"subscriber_callsite_is_receipt_anchored_and_mutation_sensitive", b"observe_worker_transitions_for_test", b"observe_subscriber_admissions_for_test"]:
+        if symbol in raw:
+            raise SystemExit(f"deadline test-only symbol present in non-test artifact: {symbol.decode()}")
+print(f"deadline_boundary receipt=non_test_recorder_symbols_absent tree={tree} token={token} artifacts={len(artifact_candidates)} status=passed")
+
+mutant_paths = {
+    "config": exact_root / "crates/swarm-governance-witness/src/service_config.rs",
+    "private": exact_root / "crates/swarm-governance-witness/src/store_proxy_service.rs",
+    "public": exact_root / "crates/swarm-governance-witness/src/public_dispatcher.rs",
+    "library": exact_root / "crates/swarm-governance-witness/src/lib.rs",
+    "fixture": exact_root / "crates/swarm-governance-witness/tests/full_service_path.rs",
+}
+originals = {name: path.read_text() for name, path in mutant_paths.items()}
+
+retry_old = "        let response = self.proxy.compare_and_swap(request).await;\n        let cas_applied ="
+retry_new = """        let retry_request = request.clone();
+        let response = self.proxy.compare_and_swap(request).await;
+        self.worker_observer
+            .observe(WorkerTransitionEventV1::ProxyStoreBegin {
+                worker: WorkerKindV1::Public,
+                operation: \"compare_and_swap\",
+                cas_attempted: true,
+            });
+        let _retry_response = self.proxy.compare_and_swap(retry_request).await;
+        let cas_applied ="""
+
+mutation_specs = [
+    ("receipt_reset", "private", "        message.receipt_deadline,", "        ReceiptDeadlineV1::private(),", 2, 2, "deadline_r20_private_queue_expired"),
+    ("queue_check_deletion", "config", "    if transition.dequeued().is_err() {\n        return;\n    }\n", "", 1, 1, "deadline_r20_private_queue_expired"),
+    ("preflight_check_deletion", "private", "        if receipt_deadline.ensure_open().is_err() {\n            return Err(StoreProxyServiceErrorV1::Timeout);\n        }\n", "", 1, 1, "deadline_r20_preflight_check_deleted"),
+    ("pre_store_check_deletion", "config", "        self.deadline.ensure_open()?;\n        self.observer", "        self.observer", 1, 1, "private store event diverged from recording WitnessAtomicStore"),
+    ("relative_timeout", "config", "timeout_at(self.at, future)", "tokio::time::timeout(Duration::from_millis(STORE_HANDLER_DEADLINE_MILLIS), future)", 1, 1, "deadline_r20_post_cas_exact_store_trace"),
+    ("late_publication", "config", "    if transition.response_enqueue().is_err() {\n        return;\n    }\n    transition.publish(publisher, reply, bytes).await;", "    let _ = transition.response_enqueue();\n    transition.publish(publisher, reply, bytes).await;", 1, 1, "deadline_r20_private_response_enqueue_expired"),
+    ("retry", "public", retry_old, retry_new, 1, 1, "deadline_r20_post_cas_exact_store_trace"),
+    ("cas_ambiguity_downgrade", "public", "                transition.outcome_unknown();\n", "", 3, 1, "deadline_r20_post_cas_timeout_outcome_unknown"),
+    ("fabricated_counter", "library", "WorkerTransitionEventV1::CasAppliedObservation { .. } => cas_applied += 1,", "WorkerTransitionEventV1::CasAppliedObservation { .. } => cas_applied += 0,", 1, 1, "CAS-applied event diverged from recording WitnessAtomicStore"),
+    ("helper_bypass", "private", "__CUSTOM_HELPER_BYPASS__", "", 0, 0, "deadline_r20_private_queue_expired"),
+    ("worker_budget_substitution", "config", "Self::from_now(STORE_HANDLER_DEADLINE_MILLIS)", "Self::from_now(STORE_HANDLER_DEADLINE_MILLIS + 1)", 1, 1, "deadline_r20_worker_budget_substitution"),
+    ("private_deadline_reset_after_dequeue", "private", "    run_private_worker_message(service, message, observer, publisher).await;", "    let message = PrivateIngressMessage { receipt_deadline: ReceiptDeadlineV1::private(), ..message };\n    run_private_worker_message(service, message, observer, publisher).await;", 1, 1, "deadline_r20_private_queue_expired_behavior"),
+    ("public_deadline_reset_after_dequeue", "public", "    run_public_worker_message(dispatcher, message, observer, publisher).await;", "    let message = PublicIngressMessage { receipt_deadline: ReceiptDeadlineV1::public(), ..message };\n    run_public_worker_message(dispatcher, message, observer, publisher).await;", 1, 1, "deadline_r20_public_queue_expired_behavior"),
+    ("private_subscriber_capture_reset", "private", "        receipt_deadline,\n    };\n    if ingress.try_send", "        receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 1),\n    };\n    if ingress.try_send", 1, 1, "deadline_r20_private_queue_expired_behavior"),
+    ("public_subscriber_capture_reset", "public", "        receipt_deadline,\n    };\n    if !try_enqueue_public_message", "        receipt_deadline: ReceiptDeadlineV1::from_now(PUBLIC_HANDLER_DEADLINE_MILLIS + 1),\n    };\n    if !try_enqueue_public_message", 1, 1, "deadline_r20_public_queue_expired_behavior"),
+    ("private_subscriber_capture_after_queue", "private", "if ingress.try_send(ingress_message).is_err() {", "if ingress.try_send(PrivateIngressMessage { receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 2), ..ingress_message }).is_err() {", 1, 1, "deadline_r20_private_queue_expired_behavior"),
+    ("public_subscriber_capture_after_queue", "public", "if !try_enqueue_public_message(ingress, ingress_message) {", "if !try_enqueue_public_message(ingress, PublicIngressMessage { receipt_deadline: ReceiptDeadlineV1::from_now(PUBLIC_HANDLER_DEADLINE_MILLIS + 2), ..ingress_message }) {", 1, 1, "deadline_r20_public_queue_expired_behavior"),
+    ("private_subscriber_overlong_deadline", "private", "let receipt_deadline = ReceiptDeadlineV1::private();", "let receipt_deadline = ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 1_000);", 1, 1, "deadline_r20_private_queue_expired_behavior"),
+    ("public_subscriber_overlong_deadline", "public", "let receipt_deadline = ReceiptDeadlineV1::public();", "let receipt_deadline = ReceiptDeadlineV1::from_now(PUBLIC_HANDLER_DEADLINE_MILLIS + 1_000);", 1, 1, "deadline_r20_public_queue_expired_behavior"),
+]
+
+def mutate_source(label, name, old, new, expected_count, replace_count):
+    text = originals[name]
+    if label == "helper_bypass":
+        start = text.index("pub(crate) async fn run_private_worker_message")
+        body_start = text.index(") {", start) + 3
+        end = text.index("\npub(crate) async fn receive_and_run_private_worker_message", body_start)
+        body = """
+    let _ = service
+        .handle_subject_bytes_before(
+            &message.subject,
+            &message.payload,
+            message.receipt_deadline,
+            observer,
+        )
+        .await;
+    let _ = publisher;
+}"""
+        return text[:body_start] + body + text[end:]
+    if text.count(old) != expected_count:
+        raise SystemExit(f"deadline executable mutation anchor differs: {label} count={text.count(old)}")
+    return text.replace(old, new, replace_count)
+
+mutation_digests = set()
+if len(mutation_specs) != 19:
+    raise SystemExit("deadline first-FQN mutation inventory differs")
+for label, name, old, new, expected_count, replace_count, expected_failure in mutation_specs:
+    for source_name, path in mutant_paths.items():
+        path.write_text(originals[source_name])
+    candidate = mutate_source(label, name, old, new, expected_count, replace_count)
+    mutant_paths[name].write_text(candidate)
+    digest = hashlib.sha256(b"\0".join(mutant_paths[key].read_bytes() for key in sorted(mutant_paths))).hexdigest()
+    if digest in mutation_digests:
+        raise SystemExit(f"deadline executable mutation digest duplicated: {label}")
+    mutation_digests.add(digest)
+    try:
+        result = cargo([
+            "test", "-p", "swarm-governance-witness", "--lib", "--locked", "--offline",
+            "deadline_state_machine_tests::deadline_state_machine_is_receipt_anchored_and_mutation_sensitive",
+            "--", "--exact", "--test-threads=1",
+        ])
+    except subprocess.TimeoutExpired as error:
+        raise SystemExit(
+            f"deadline executable mutation timed out instead of failing its intended assertion: {label}\n"
+            + ((error.stdout or b"").decode(errors="replace") if isinstance(error.stdout, bytes) else (error.stdout or ""))
+        ) from error
+    output = result.stdout
+    if result.returncode == 0 or "running 1 test" not in output or "0 passed; 1 failed; 0 ignored" not in output or expected_failure not in output:
+        raise SystemExit(f"deadline executable mutation did not fail at intended assertion: {label}\n{output}")
+    print(f"deadline_executable_mutation mutation={label} tree={tree} token={token} compiled=1 mutation_executed=1 mutation_failed=1 intended={expected_failure} source_sha256={digest}")
+
+callsite_mutations = [
+    ("private_inline_helper_bypass", "private", "__INLINE_PRIVATE_INGRESS__", "", 0, 0, "deadline_r24_private_start_delegation_bypassed"),
+    ("public_inline_helper_bypass", "public", "__INLINE_PUBLIC_INGRESS__", "", 0, 0, "deadline_r24_public_start_delegation_bypassed"),
+    ("drop_before_enqueue", "private", "if ingress.try_send(ingress_message).is_err() {", "if { let _ = ingress_message; true } {", 1, 1, "private request one did not enter store"),
+    ("fabricated_receipt", "private", "if ingress.try_send(ingress_message).is_err() {\n        return Some(Err((reply, payload)));\n    }\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", "let _ = (ingress, ingress_message);\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", 1, 1, "private request one did not enter store"),
+    ("post_accept_refreshed_capture", "private", "        receipt_deadline,\n    };\n    if ingress.try_send", "        receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 2_000),\n    };\n    if ingress.try_send", 1, 1, "deadline_r24_private_start_delegation_bypassed"),
+    ("public_start_delegation_bypass", "public", "        Self::start_inner(client, dispatcher).await", "        let _ = (client, dispatcher);\n        Ok(Self { tasks: Vec::new(), _proxy: PhantomData })", 1, 1, "public receipt one absent"),
+    ("private_start_delegation_bypass", "private", "        Self::start_inner(connection, service).await", "        let _ = (connection, service);\n        Ok(Self { tasks: Vec::new(), _service: std::marker::PhantomData })", 1, 1, "private request one did not enter store"),
+]
+if len(callsite_mutations) != 7:
+    raise SystemExit("deadline callsite mutation inventory differs")
+
+def mutate_callsite_source(label, name, old, new, expected_count, replace_count):
+    text = originals[name]
+    if label == "private_inline_helper_bypass":
+        anchor = """                    if let Some(Err((reply, payload))) = admit_private_subscription_message(
+                        subject,
+                        message,
+                        &sender,
+                        admission_observer.as_ref(),
+                    ) && let Some(bytes) = service.overload_response(subject, &payload)
+"""
+        replacement = """                    let _unreachable_admission_helper = admit_private_subscription_message;
+                    let inline_result = match message.reply {
+                        Some(reply) if bounded_inbox(&reply) => {
+                            let payload = message.payload.to_vec();
+                            let receipt = SubscriberAdmissionReceiptV1 {
+                                worker: WorkerKindV1::Private,
+                                subject: subject.to_string(),
+                                payload_sha256: swarm_crypto::sha256_hex(&payload),
+                                reply: reply.to_string(),
+                                deadline_millis: STORE_HANDLER_DEADLINE_MILLIS,
+                            };
+                            let ingress_message = PrivateIngressMessage {
+                                subject: subject.to_string(),
+                                payload: payload.clone(),
+                                reply: reply.clone(),
+                                receipt_deadline: ReceiptDeadlineV1::from_now(
+                                    STORE_HANDLER_DEADLINE_MILLIS + 1_000,
+                                ),
+                            };
+                            if sender.try_send(ingress_message).is_err() {
+                                Some(Err((reply, payload)))
+                            } else {
+                                admission_observer.accepted(receipt);
+                                Some(Ok(()))
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(Err((reply, payload))) = inline_result
+                        && let Some(bytes) = service.overload_response(subject, &payload)
+"""
+        if text.count(anchor) != 1:
+            raise SystemExit(f"deadline callsite mutation anchor differs: {label} count={text.count(anchor)}")
+        return text.replace(anchor, replacement, 1)
+    if label == "public_inline_helper_bypass":
+        anchor = """            if !admit_public_subscription_message(
+                expected_subject,
+                message,
+                &ingress,
+                admission_observer.as_ref(),
+            ) {
+                // The bounded queue refusal happens synchronously here,
+                // before a worker task, dispatcher, or store call can begin.
+                continue;
+            }
+"""
+        replacement = """            let _unreachable_admission_helper = admit_public_subscription_message;
+            let Some(reply) = message.reply else {
+                continue;
+            };
+            if !is_bounded_inbox_reply(&reply) {
+                continue;
+            }
+            let payload = message.payload.to_vec();
+            let receipt = SubscriberAdmissionReceiptV1 {
+                worker: WorkerKindV1::Public,
+                subject: expected_subject.to_string(),
+                payload_sha256: sha256_hex(&payload),
+                reply: reply.to_string(),
+                deadline_millis: PUBLIC_HANDLER_DEADLINE_MILLIS,
+            };
+            let ingress_message = PublicIngressMessage {
+                subject: expected_subject.to_string(),
+                payload,
+                reply,
+                receipt_deadline: ReceiptDeadlineV1::from_now(
+                    PUBLIC_HANDLER_DEADLINE_MILLIS + 1_000,
+                ),
+            };
+            if !try_enqueue_public_message(&ingress, ingress_message) {
+                continue;
+            }
+            admission_observer.accepted(receipt);
+"""
+        if text.count(anchor) != 1:
+            raise SystemExit(f"deadline callsite mutation anchor differs: {label} count={text.count(anchor)}")
+        return text.replace(anchor, replacement, 1)
+    if text.count(old) != expected_count:
+        raise SystemExit(f"deadline callsite mutation anchor differs: {label} count={text.count(old)}")
+    return text.replace(old, new, replace_count)
+
+for label, name, old, new, expected_count, replace_count, expected_failure in callsite_mutations:
+    for source_name, path in mutant_paths.items():
+        path.write_text(originals[source_name])
+    mutant_paths[name].write_text(
+        mutate_callsite_source(label, name, old, new, expected_count, replace_count)
+    )
+    digest = hashlib.sha256(b"\0".join(mutant_paths[key].read_bytes() for key in sorted(mutant_paths))).hexdigest()
+    if digest in mutation_digests:
+        raise SystemExit(f"deadline callsite mutation digest duplicated: {label}")
+    mutation_digests.add(digest)
+    receipt_path = scratch / f"callsite-mutant-{label}.json"
+    try:
+        result = cargo([
+            "test", "-p", "swarm-governance-witness", "--lib", "--locked", "--offline",
+            "deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive",
+            "--", "--exact", "--test-threads=1",
+        ], extra_environment={
+            "PHASE285_DEADLINE_CALLSITE_RECEIPT": str(receipt_path),
+            "PHASE285_DEADLINE_TREE": tree,
+            "PHASE285_DEADLINE_INVOCATION_TOKEN": token,
+            "PHASE285_DEADLINE_CASE": "service_checkpoint_deadline",
+        })
+    except subprocess.TimeoutExpired as error:
+        raise SystemExit(
+            f"deadline callsite mutation timed out instead of failing its intended assertion: {label}\n"
+            + ((error.stdout or b"").decode(errors="replace") if isinstance(error.stdout, bytes) else (error.stdout or ""))
+        ) from error
+    output = result.stdout
+    if result.returncode == 0 or "running 1 test" not in output or "0 passed; 1 failed; 0 ignored" not in output or expected_failure not in output:
+        raise SystemExit(f"deadline callsite mutation did not fail at intended assertion: {label}\n{output}")
+    print(f"deadline_callsite_mutation mutation={label} tree={tree} token={token} compiled=1 mutation_executed=1 mutation_failed=1 intended={expected_failure} source_sha256={digest}")
+
+constructor_mutations = [
+    ("constructor_predicate_substitution", "private", "request_deadline_millis != STORE_RESPONSE_GRANT_MILLIS", "request_deadline_millis == 0", 1, 1, "deadline_r24_constructor_results"),
+    ("constructor_oracle_omission", "fixture", "    write_constructor_deadline_receipt(&observations)\n}", "    Err(ProtocolError::WitnessOutcomeMismatch)\n}", 1, 1, "WitnessOutcomeMismatch"),
+    ("constructor_result_fabrication", "fixture", "result: if result.is_ok() {", "result: if false {", 1, 1, "deadline_r24_constructor_results"),
+    ("constructor_delegation_deletion", "fixture", "        let result = NatsPublicWitnessStoreProxyClient::new(\n", "        let result: Result<NatsPublicWitnessStoreProxyClient, PublicWitnessProxyTransportErrorV1> = Err(PublicWitnessProxyTransportErrorV1::Framing);\n        let _ = (\n", 1, 1, "deadline_r24_constructor_results"),
+    ("constructor_alternate_predicate", "private", "request_deadline_millis != STORE_RESPONSE_GRANT_MILLIS", "request_deadline_millis < STORE_RESPONSE_GRANT_MILLIS", 1, 1, "deadline_r24_constructor_results"),
+]
+if len(constructor_mutations) != 5:
+    raise SystemExit("deadline constructor mutation inventory differs")
+for label, name, old, new, expected_count, replace_count, expected_failure in constructor_mutations:
+    for source_name, path in mutant_paths.items():
+        path.write_text(originals[source_name])
+    text = originals[name]
+    if text.count(old) != expected_count:
+        raise SystemExit(f"deadline constructor mutation anchor differs: {label} count={text.count(old)}")
+    mutant_paths[name].write_text(text.replace(old, new, replace_count))
+    digest = hashlib.sha256(b"\0".join(mutant_paths[key].read_bytes() for key in sorted(mutant_paths))).hexdigest()
+    if digest in mutation_digests:
+        raise SystemExit(f"deadline constructor mutation digest duplicated: {label}")
+    mutation_digests.add(digest)
+    receipt_path = scratch / f"constructor-mutant-{label}.json"
+    try:
+        result = cargo([
+            "test", "-p", "swarm-governance-witness", "--test", "full_service_path", "--locked", "--offline",
+            "full_service_path_constructor_deadline_is_exact_and_receipt_bound",
+            "--", "--exact", "--test-threads=1",
+        ], extra_environment={
+            "PHASE285_DEADLINE_CONSTRUCTOR_RECEIPT": str(receipt_path),
+            "PHASE285_DEADLINE_TREE": tree,
+            "PHASE285_DEADLINE_INVOCATION_TOKEN": token,
+            "PHASE285_DEADLINE_CASE": "service_checkpoint_deadline",
+        })
+    except subprocess.TimeoutExpired as error:
+        raise SystemExit(
+            f"deadline constructor mutation timed out instead of failing its intended assertion: {label}\n"
+            + ((error.stdout or b"").decode(errors="replace") if isinstance(error.stdout, bytes) else (error.stdout or ""))
+        ) from error
+    output = result.stdout
+    if result.returncode == 0 or "running 1 test" not in output or "0 passed; 1 failed; 0 ignored" not in output or expected_failure not in output:
+        raise SystemExit(f"deadline constructor mutation did not fail at intended assertion: {label}\n{output}")
+    print(f"deadline_constructor_mutation mutation={label} tree={tree} token={token} compiled=1 mutation_executed=1 mutation_failed=1 intended={expected_failure} source_sha256={digest}")
+
+for source_name, path in mutant_paths.items():
+    path.write_text(originals[source_name])
+if len(mutation_digests) != 31:
+    raise SystemExit(f"deadline unique source digest count differs: {len(mutation_digests)}")
+print(f"deadline_focus rows=9 passed=9 failed=0 ignored=0 ledger_mutations={len(normalized_mutants)} first_fqn_mutations={len(mutation_specs)} callsite_mutations={len(callsite_mutations)} constructor_mutations={len(constructor_mutations)} unique_source_digests={len(mutation_digests)} boundary_receipts=10")
+PY
+  cleanup_temp_dir
+  trap - EXIT
+}
+
 run_selector() {
   local selector="$1"
   validate_registry
@@ -5729,9 +6488,16 @@ PY
 }
 
 case "${1:-}" in
+  --focused-service-checkpoint-deadline)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-deadline" >&2; exit 2; }
+    run_service_checkpoint_deadline_focus
+    ;;
   --self-test)
     if [ "$#" -eq 2 ] && [ "$2" = transport-layering-zero-or-omitted ]; then
       run_transport_execution_self_test
+    elif [ "$#" -eq 2 ] && [ "$2" = store-proxy-source ]; then
+      store_proxy_source_guard normal
+      store_proxy_source_guard self-test
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-release-hook ]; then
       run_release_hook_self_test
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-iterator-source ]; then

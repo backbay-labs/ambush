@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use swarm_crypto::{DetachedSignature, Ed25519Signer};
+use std::sync::atomic::{AtomicBool, Ordering};
+use swarm_crypto::{DetachedSignature, Ed25519Signer, sha256_hex};
 use swarm_governance::persistence_protocol::{
     MAX_PROTOCOL_STRING_BYTES, PROTOCOL_SCHEMA_VERSION, ProtocolError, ProtocolResult,
     RecoveryChallengeV1, WITNESS_PREPARED_STATE_DOMAIN_V1, WITNESS_SESSION_STATE_DOMAIN_V1,
@@ -30,9 +31,18 @@ use swarm_governance::witness_service::{
     WitnessServiceResponseV1, prepare_verified_candidate, verify_public_prepare,
 };
 use tokio::sync::{Mutex, Semaphore, mpsc};
-use tokio::time::{Duration, timeout};
 
 use crate::PublicWitnessServiceConfigV1;
+use crate::service_config::{
+    NatsWorkerPublisherV1, NoopSubscriberAdmissionObserverV1, NoopWorkerTransitionObserverV1,
+    PUBLIC_HANDLER_DEADLINE_MILLIS, ReceiptDeadlineV1, SubscriberAdmissionObserverV1,
+    SubscriberAdmissionReceiptV1, WorkerKindV1, WorkerPublisherV1, WorkerTransitionEventV1,
+    WorkerTransitionObserverV1, WorkerTransitionV1, run_observed_worker_message,
+};
+
+tokio::task_local! {
+    static ACTIVE_CAS_ATTEMPTED: Arc<AtomicBool>;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PublicWitnessProxyTransportErrorV1 {
@@ -171,10 +181,53 @@ pub enum PublicWitnessRunnerErrorV1 {
     Subscription,
 }
 
-struct PublicIngressMessage {
-    subject: String,
-    payload: Vec<u8>,
-    reply: async_nats::Subject,
+pub(crate) struct PublicIngressMessage {
+    pub(crate) subject: String,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) reply: async_nats::Subject,
+    pub(crate) receipt_deadline: ReceiptDeadlineV1,
+}
+
+pub(crate) async fn run_public_worker_message<
+    C: PublicWitnessStoreProxyClient,
+    P: WorkerPublisherV1,
+>(
+    dispatcher: &PublicWitnessDispatcher<C>,
+    message: PublicIngressMessage,
+    observer: &dyn WorkerTransitionObserverV1,
+    publisher: &P,
+) {
+    run_observed_worker_message(
+        WorkerKindV1::Public,
+        message.receipt_deadline,
+        observer,
+        publisher,
+        message.reply,
+        |_| {
+            dispatcher.dispatch_before(&message.subject, &message.payload, message.receipt_deadline)
+        },
+    )
+    .await;
+}
+
+pub(crate) async fn receive_and_run_public_worker_message<
+    C: PublicWitnessStoreProxyClient,
+    P: WorkerPublisherV1,
+>(
+    receiver: &Mutex<mpsc::Receiver<PublicIngressMessage>>,
+    dispatcher: &PublicWitnessDispatcher<C>,
+    observer: &dyn WorkerTransitionObserverV1,
+    publisher: &P,
+) -> bool {
+    let message = {
+        let mut guard = receiver.lock().await;
+        guard.recv().await
+    };
+    let Some(message) = message else {
+        return false;
+    };
+    run_public_worker_message(dispatcher, message, observer, publisher).await;
+    true
 }
 
 /// Running public NATS service. The only subscriptions and queue group are
@@ -191,6 +244,14 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
         client: async_nats::Client,
         dispatcher: PublicWitnessDispatcher<C>,
     ) -> Result<Self, PublicWitnessRunnerErrorV1> {
+        Self::start_inner(client, dispatcher).await
+    }
+
+    async fn start_inner(
+        client: async_nats::Client,
+        dispatcher: PublicWitnessDispatcher<C>,
+    ) -> Result<Self, PublicWitnessRunnerErrorV1> {
+        let admission_observer = dispatcher.subscriber_admission_observer.clone();
         let queue = PUBLIC_WITNESS_QUEUE_GROUP.to_string();
         let fence = client
             .queue_subscribe("swarm.governance.witness.v1.fence", queue.clone())
@@ -228,6 +289,10 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
             .queue_subscribe("swarm.governance.witness.v1.fetch_payload", queue)
             .await
             .map_err(|_| PublicWitnessRunnerErrorV1::Subscription)?;
+        client
+            .flush()
+            .await
+            .map_err(|_| PublicWitnessRunnerErrorV1::Subscription)?;
 
         let capacity = dispatcher.config.ingress_queue_capacity;
         let worker_count = dispatcher.config.max_in_flight;
@@ -250,26 +315,26 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
                 subject,
                 subscriber,
                 sender.clone(),
+                admission_observer.clone(),
             ));
         }
         drop(sender);
+        let observer = Arc::new(NoopWorkerTransitionObserverV1);
+        let publisher = Arc::new(NatsWorkerPublisherV1(client.clone()));
         for _ in 0..worker_count {
             let receiver = receiver.clone();
             let dispatcher = dispatcher.clone();
-            let client = client.clone();
+            let observer = observer.clone();
+            let publisher = publisher.clone();
             tasks.push(tokio::spawn(async move {
-                loop {
-                    let message = receiver.lock().await.recv().await;
-                    let Some(message): Option<PublicIngressMessage> = message else {
-                        return;
-                    };
-                    if let Ok(response) = dispatcher
-                        .dispatch(&message.subject, &message.payload)
-                        .await
-                    {
-                        let _ = client.publish(message.reply, response.into()).await;
-                    }
-                }
+                while receive_and_run_public_worker_message(
+                    receiver.as_ref(),
+                    dispatcher.as_ref(),
+                    observer.as_ref(),
+                    publisher.as_ref(),
+                )
+                .await
+                {}
             }));
         }
         Ok(Self {
@@ -291,30 +356,59 @@ fn spawn_public_subscription(
     expected_subject: &'static str,
     mut subscriber: async_nats::Subscriber,
     ingress: mpsc::Sender<PublicIngressMessage>,
+    admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(message) = subscriber.next().await {
-            if message.subject.as_str() != expected_subject {
-                continue;
-            }
-            let Some(reply) = message.reply else {
-                continue;
-            };
-            if !is_bounded_inbox_reply(&reply) {
-                continue;
-            }
-            let ingress_message = PublicIngressMessage {
-                subject: expected_subject.to_string(),
-                payload: message.payload.to_vec(),
-                reply,
-            };
-            if !try_enqueue_public_message(&ingress, ingress_message) {
+            if !admit_public_subscription_message(
+                expected_subject,
+                message,
+                &ingress,
+                admission_observer.as_ref(),
+            ) {
                 // The bounded queue refusal happens synchronously here,
                 // before a worker task, dispatcher, or store call can begin.
                 continue;
             }
         }
     })
+}
+
+pub(crate) fn admit_public_subscription_message(
+    expected_subject: &'static str,
+    message: async_nats::Message,
+    ingress: &mpsc::Sender<PublicIngressMessage>,
+    admission_observer: &dyn SubscriberAdmissionObserverV1,
+) -> bool {
+    let receipt_deadline = ReceiptDeadlineV1::public();
+    if message.subject.as_str() != expected_subject {
+        return false;
+    }
+    let Some(reply) = message.reply else {
+        return false;
+    };
+    if !is_bounded_inbox_reply(&reply) {
+        return false;
+    }
+    let payload = message.payload.to_vec();
+    let receipt = SubscriberAdmissionReceiptV1 {
+        worker: WorkerKindV1::Public,
+        subject: expected_subject.to_string(),
+        payload_sha256: sha256_hex(&payload),
+        reply: reply.to_string(),
+        deadline_millis: PUBLIC_HANDLER_DEADLINE_MILLIS,
+    };
+    let ingress_message = PublicIngressMessage {
+        subject: expected_subject.to_string(),
+        payload,
+        reply,
+        receipt_deadline,
+    };
+    if !try_enqueue_public_message(ingress, ingress_message) {
+        return false;
+    }
+    admission_observer.accepted(receipt);
+    true
 }
 
 fn try_enqueue_public_message(
@@ -326,7 +420,7 @@ fn try_enqueue_public_message(
 
 fn is_bounded_inbox_reply(reply: &async_nats::Subject) -> bool {
     let value = reply.as_str();
-    value.starts_with("_INBOX.")
+    (value.starts_with("_INBOX.") || value.starts_with("_R_."))
         && value.len() <= MAX_PROTOCOL_STRING_BYTES
         && !value.contains(['*', '>'])
 }
@@ -341,6 +435,7 @@ pub fn public_witness_ingress_overload_control() -> bool {
             .to_string(),
         payload: vec![1],
         reply: "_INBOX.phase285".into(),
+        receipt_deadline: ReceiptDeadlineV1::public(),
     };
     try_enqueue_public_message(&sender, message())
         && !try_enqueue_public_message(&sender, message())
@@ -351,6 +446,8 @@ pub struct PublicWitnessDispatcher<C> {
     signer: Ed25519Signer,
     proxy: C,
     in_flight: Semaphore,
+    worker_observer: Arc<dyn WorkerTransitionObserverV1>,
+    subscriber_admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
 }
 
 impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
@@ -369,9 +466,27 @@ impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
             signer,
             proxy,
             in_flight: Semaphore::new(max_in_flight),
+            worker_observer: Arc::new(NoopWorkerTransitionObserverV1),
+            subscriber_admission_observer: Arc::new(NoopSubscriberAdmissionObserverV1),
         };
         dispatcher.validate_startup_ready().await?;
         Ok(dispatcher)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_worker_transitions_for_test(
+        &mut self,
+        observer: Arc<dyn WorkerTransitionObserverV1>,
+    ) {
+        self.worker_observer = observer;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_subscriber_admissions_for_test(
+        &mut self,
+        observer: Arc<dyn SubscriberAdmissionObserverV1>,
+    ) {
+        self.subscriber_admission_observer = observer;
     }
 
     async fn validate_startup_ready(&self) -> Result<(), PublicWitnessDispatchErrorV1> {
@@ -469,6 +584,19 @@ impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
         subject: &str,
         payload: &[u8],
     ) -> Result<Vec<u8>, PublicWitnessDispatchErrorV1> {
+        self.dispatch_before(subject, payload, ReceiptDeadlineV1::public())
+            .await
+    }
+
+    async fn dispatch_before(
+        &self,
+        subject: &str,
+        payload: &[u8],
+        receipt_deadline: ReceiptDeadlineV1,
+    ) -> Result<Vec<u8>, PublicWitnessDispatchErrorV1> {
+        if receipt_deadline.ensure_open().is_err() {
+            return Err(PublicWitnessDispatchErrorV1::Timeout);
+        }
         if payload.len() > self.config.max_request_bytes {
             return Err(PublicWitnessDispatchErrorV1::Invalid);
         }
@@ -492,10 +620,39 @@ impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
             .in_flight
             .try_acquire()
             .map_err(|_| PublicWitnessDispatchErrorV1::Overloaded)?;
-        let duration = Duration::from_millis(self.config.request_deadline_millis);
-        let response = timeout(duration, self.execute(request.clone()))
-            .await
-            .map_err(|_| PublicWitnessDispatchErrorV1::Timeout)??;
+        let transition = WorkerTransitionV1::new(
+            WorkerKindV1::Public,
+            receipt_deadline,
+            self.worker_observer.as_ref(),
+        );
+        transition.post_preflight();
+        tokio::task::yield_now().await;
+        if transition.ensure_open().is_err() {
+            return Err(PublicWitnessDispatchErrorV1::Timeout);
+        }
+        let cas_attempted = Arc::new(AtomicBool::new(false));
+        let execution =
+            ACTIVE_CAS_ATTEMPTED.scope(cas_attempted.clone(), self.execute(request.clone()));
+        let response = match receipt_deadline.run(execution).await {
+            Ok(Err(PublicWitnessDispatchErrorV1::OutcomeUnknown)) => {
+                transition.outcome_unknown();
+                return Err(PublicWitnessDispatchErrorV1::OutcomeUnknown);
+            }
+            Ok(result) => result?,
+            Err(_) if cas_attempted.load(Ordering::SeqCst) => {
+                transition.outcome_unknown();
+                return Err(PublicWitnessDispatchErrorV1::OutcomeUnknown);
+            }
+            Err(_) => return Err(PublicWitnessDispatchErrorV1::Timeout),
+        };
+        if transition.ensure_open().is_err() {
+            return Err(if cas_attempted.load(Ordering::SeqCst) {
+                transition.outcome_unknown();
+                PublicWitnessDispatchErrorV1::OutcomeUnknown
+            } else {
+                PublicWitnessDispatchErrorV1::Timeout
+            });
+        }
         let bytes = response.canonical_bytes().map_err(invalid)?;
         if bytes.len() > self.config.max_response_bytes.min(selected_max_response) {
             return Err(PublicWitnessDispatchErrorV1::ResponseBounds);
@@ -1510,7 +1667,21 @@ impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
             )
             .map_err(invalid)?;
         let expected_digest = request.request_digest.clone();
-        let response = self.proxy.read_entry(request).await.map_err(transport)?;
+        self.worker_observer
+            .observe(WorkerTransitionEventV1::ProxyStoreBegin {
+                worker: WorkerKindV1::Public,
+                operation: "read_entry",
+                cas_attempted: false,
+            });
+        let response = self.proxy.read_entry(request).await;
+        self.worker_observer
+            .observe(WorkerTransitionEventV1::ProxyStoreEnd {
+                worker: WorkerKindV1::Public,
+                operation: "read_entry",
+                succeeded: response.is_ok(),
+                cas_applied: false,
+            });
+        let response = response.map_err(transport)?;
         response.validate().map_err(invalid)?;
         if response.operation != WitnessStoreProxyOperationV1::ReadEntry
             || response.request_digest != expected_digest
@@ -1593,7 +1764,28 @@ impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
             )
             .map_err(invalid)?;
         let expected_digest = request.request_digest.clone();
-        let response = match self.proxy.compare_and_swap(request).await {
+        let _ = ACTIVE_CAS_ATTEMPTED.try_with(|attempted| attempted.store(true, Ordering::SeqCst));
+        self.worker_observer
+            .observe(WorkerTransitionEventV1::ProxyStoreBegin {
+                worker: WorkerKindV1::Public,
+                operation: "compare_and_swap",
+                cas_attempted: true,
+            });
+        let response = self.proxy.compare_and_swap(request).await;
+        let cas_applied = response.as_ref().is_ok_and(|response| {
+            matches!(
+                &response.body,
+                WitnessStoreProxyResponseBodyV1::CasApplied { .. }
+            )
+        });
+        self.worker_observer
+            .observe(WorkerTransitionEventV1::ProxyStoreEnd {
+                worker: WorkerKindV1::Public,
+                operation: "compare_and_swap",
+                succeeded: response.is_ok(),
+                cas_applied,
+            });
+        let response = match response {
             Ok(response) => response,
             Err(error) => {
                 // A diagnostic read can retain evidence for a later fenced

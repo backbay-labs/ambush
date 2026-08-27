@@ -14,6 +14,12 @@ use swarm_governance::witness_engine::store::{
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::{Duration, timeout};
 
+use crate::service_config::{
+    NatsWorkerPublisherV1, NoopSubscriberAdmissionObserverV1, NoopWorkerTransitionObserverV1,
+    ReceiptDeadlineV1, STORE_HANDLER_DEADLINE_MILLIS, STORE_RESPONSE_GRANT_MILLIS,
+    SubscriberAdmissionObserverV1, SubscriberAdmissionReceiptV1, WorkerKindV1, WorkerPublisherV1,
+    WorkerTransitionObserverV1, WorkerTransitionV1, run_observed_worker_message,
+};
 use crate::{
     PublicWitnessProxyTransportErrorV1, PublicWitnessStoreProxyClient, StoreProxyServiceConfigV1,
 };
@@ -57,6 +63,7 @@ pub struct StoreProxyService<S> {
     config: StoreProxyServiceConfigV1,
     ready: WitnessStoreReadyResultV1,
     ready_binding: StoreProxyReadyBindingV1,
+    subscriber_admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
 }
 
 #[derive(Clone)]
@@ -111,7 +118,16 @@ impl<S: WitnessAtomicStore> StoreProxyService<S> {
             config,
             ready,
             ready_binding,
+            subscriber_admission_observer: Arc::new(NoopSubscriberAdmissionObserverV1),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_subscriber_admissions_for_test(
+        &mut self,
+        observer: Arc<dyn SubscriberAdmissionObserverV1>,
+    ) {
+        self.subscriber_admission_observer = observer;
     }
 
     pub async fn handle_subject_bytes(
@@ -119,17 +135,57 @@ impl<S: WitnessAtomicStore> StoreProxyService<S> {
         subject: &str,
         raw: &[u8],
     ) -> Result<Vec<u8>, StoreProxyServiceErrorV1> {
+        self.handle_subject_bytes_before(
+            subject,
+            raw,
+            ReceiptDeadlineV1::private(),
+            &NoopWorkerTransitionObserverV1,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_subject_bytes_before(
+        &self,
+        subject: &str,
+        raw: &[u8],
+        receipt_deadline: ReceiptDeadlineV1,
+        observer: &dyn WorkerTransitionObserverV1,
+    ) -> Result<Vec<u8>, StoreProxyServiceErrorV1> {
+        if receipt_deadline.ensure_open().is_err() {
+            return Err(StoreProxyServiceErrorV1::Timeout);
+        }
         if raw.len() > self.config.max_request_bytes {
             return Err(StoreProxyServiceErrorV1::Bounds);
         }
         let selected = self.preflight(subject, raw)?;
-        let response = timeout(
-            Duration::from_millis(self.config.request_deadline_millis),
-            self.proxy.handle_bytes(raw),
-        )
-        .await
-        .map_err(|_| StoreProxyServiceErrorV1::Timeout)?
-        .map_err(map_store_error)?;
+        let transition = WorkerTransitionV1::new(WorkerKindV1::Private, receipt_deadline, observer);
+        transition.post_preflight();
+        tokio::task::yield_now().await;
+        let operation = operation_label(selected.request.operation);
+        let cas_attempted =
+            selected.request.operation == WitnessStoreProxyOperationV1::CompareAndSwap;
+        let response = transition
+            .proxy_store(
+                operation,
+                cas_attempted,
+                self.proxy.handle_bytes(raw),
+                |response| {
+                    let succeeded = response.is_ok();
+                    let cas_applied = response.as_ref().is_ok_and(|response| {
+                        matches!(
+                            &response.body,
+                            WitnessStoreProxyResponseBodyV1::CasApplied { .. }
+                        )
+                    });
+                    (succeeded, cas_applied)
+                },
+            )
+            .await
+            .map_err(|_| StoreProxyServiceErrorV1::Timeout)?;
+        let response = response.map_err(map_store_error)?;
+        if transition.ensure_open().is_err() {
+            return Err(StoreProxyServiceErrorV1::Timeout);
+        }
         let bytes = response
             .canonical_bytes()
             .map_err(|_| StoreProxyServiceErrorV1::Invalid)?;
@@ -202,6 +258,14 @@ impl<S: WitnessAtomicStore> StoreProxyService<S> {
     }
 }
 
+const fn operation_label(operation: WitnessStoreProxyOperationV1) -> &'static str {
+    match operation {
+        WitnessStoreProxyOperationV1::InspectReady => "inspect_ready",
+        WitnessStoreProxyOperationV1::ReadEntry => "read_entry",
+        WitnessStoreProxyOperationV1::CompareAndSwap => "compare_and_swap",
+    }
+}
+
 fn map_store_error(error: WitnessStoreErrorV1) -> StoreProxyServiceErrorV1 {
     match error {
         WitnessStoreErrorV1::Bounds => StoreProxyServiceErrorV1::Bounds,
@@ -212,10 +276,55 @@ fn map_store_error(error: WitnessStoreErrorV1) -> StoreProxyServiceErrorV1 {
     }
 }
 
-struct PrivateIngressMessage {
-    subject: String,
-    payload: Vec<u8>,
-    reply: async_nats::Subject,
+pub(crate) struct PrivateIngressMessage {
+    pub(crate) subject: String,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) reply: async_nats::Subject,
+    pub(crate) receipt_deadline: ReceiptDeadlineV1,
+}
+
+pub(crate) async fn run_private_worker_message<S: WitnessAtomicStore, P: WorkerPublisherV1>(
+    service: &StoreProxyService<S>,
+    message: PrivateIngressMessage,
+    observer: &dyn WorkerTransitionObserverV1,
+    publisher: &P,
+) {
+    run_observed_worker_message(
+        WorkerKindV1::Private,
+        message.receipt_deadline,
+        observer,
+        publisher,
+        message.reply,
+        |_| {
+            service.handle_subject_bytes_before(
+                &message.subject,
+                &message.payload,
+                message.receipt_deadline,
+                observer,
+            )
+        },
+    )
+    .await;
+}
+
+pub(crate) async fn receive_and_run_private_worker_message<
+    S: WitnessAtomicStore,
+    P: WorkerPublisherV1,
+>(
+    receiver: &Mutex<mpsc::Receiver<PrivateIngressMessage>>,
+    service: &StoreProxyService<S>,
+    observer: &dyn WorkerTransitionObserverV1,
+    publisher: &P,
+) -> bool {
+    let message = {
+        let mut guard = receiver.lock().await;
+        guard.recv().await
+    };
+    let Some(message) = message else {
+        return false;
+    };
+    run_private_worker_message(service, message, observer, publisher).await;
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -327,6 +436,13 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
         connection: StoreRoleConnectionV1,
         service: StoreProxyService<S>,
     ) -> Result<Self, StoreProxyRunnerErrorV1> {
+        Self::start_inner(connection, service).await
+    }
+
+    async fn start_inner(
+        connection: StoreRoleConnectionV1,
+        service: StoreProxyService<S>,
+    ) -> Result<Self, StoreProxyRunnerErrorV1> {
         if !connection
             .ready_binding
             .constant_time_matches(&service.ready_binding)
@@ -368,6 +484,7 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             .map_err(|_| StoreProxyRunnerErrorV1::Subscription)?;
         let capacity = service.config.ingress_queue_capacity;
         let worker_count = service.config.max_in_flight;
+        let admission_observer = service.subscriber_admission_observer.clone();
         let service = Arc::new(service);
         let (sender, receiver) = mpsc::channel(capacity);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -380,20 +497,16 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             let sender = sender.clone();
             let client = client.clone();
             let service = service.clone();
+            let admission_observer = admission_observer.clone();
             tasks.push(tokio::spawn(async move {
                 let mut subscriber = subscriber;
                 while let Some(message) = subscriber.next().await {
-                    let Some(reply) = message.reply else { continue };
-                    if !bounded_inbox(&reply) {
-                        continue;
-                    }
-                    let ingress = PrivateIngressMessage {
-                        subject: subject.to_string(),
-                        payload: message.payload.to_vec(),
-                        reply: reply.clone(),
-                    };
-                    if sender.try_send(ingress).is_err()
-                        && let Some(bytes) = service.overload_response(subject, &message.payload)
+                    if let Some(Err((reply, payload))) = admit_private_subscription_message(
+                        subject,
+                        message,
+                        &sender,
+                        admission_observer.as_ref(),
+                    ) && let Some(bytes) = service.overload_response(subject, &payload)
                     {
                         let _ = client.publish(reply, bytes.into()).await;
                     }
@@ -401,24 +514,22 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             }));
         }
         drop(sender);
+        let observer = Arc::new(NoopWorkerTransitionObserverV1);
+        let publisher = Arc::new(NatsWorkerPublisherV1(client.clone()));
         for _ in 0..worker_count {
             let receiver = receiver.clone();
             let service = service.clone();
-            let client = client.clone();
+            let observer = observer.clone();
+            let publisher = publisher.clone();
             tasks.push(tokio::spawn(async move {
-                loop {
-                    let message = {
-                        let mut guard = receiver.lock().await;
-                        guard.recv().await
-                    };
-                    let Some(message) = message else { break };
-                    if let Ok(bytes) = service
-                        .handle_subject_bytes(&message.subject, &message.payload)
-                        .await
-                    {
-                        let _ = client.publish(message.reply, bytes.into()).await;
-                    }
-                }
+                while receive_and_run_private_worker_message(
+                    receiver.as_ref(),
+                    service.as_ref(),
+                    observer.as_ref(),
+                    publisher.as_ref(),
+                )
+                .await
+                {}
             }));
         }
         Ok(Self {
@@ -426,6 +537,41 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             _service: std::marker::PhantomData,
         })
     }
+}
+
+pub(crate) fn admit_private_subscription_message(
+    expected_subject: &'static str,
+    message: async_nats::Message,
+    ingress: &mpsc::Sender<PrivateIngressMessage>,
+    admission_observer: &dyn SubscriberAdmissionObserverV1,
+) -> Option<Result<(), (async_nats::Subject, Vec<u8>)>> {
+    let receipt_deadline = ReceiptDeadlineV1::private();
+    if message.subject.as_str() != expected_subject {
+        return None;
+    }
+    let reply = message.reply?;
+    if !bounded_inbox(&reply) {
+        return None;
+    }
+    let payload = message.payload.to_vec();
+    let receipt = SubscriberAdmissionReceiptV1 {
+        worker: WorkerKindV1::Private,
+        subject: expected_subject.to_string(),
+        payload_sha256: swarm_crypto::sha256_hex(&payload),
+        reply: reply.to_string(),
+        deadline_millis: STORE_HANDLER_DEADLINE_MILLIS,
+    };
+    let ingress_message = PrivateIngressMessage {
+        subject: expected_subject.to_string(),
+        payload: payload.clone(),
+        reply: reply.clone(),
+        receipt_deadline,
+    };
+    if ingress.try_send(ingress_message).is_err() {
+        return Some(Err((reply, payload)));
+    }
+    admission_observer.accepted(receipt);
+    Some(Ok(()))
 }
 
 impl<S> Drop for StoreProxyServiceRunner<S> {
@@ -454,7 +600,6 @@ pub struct NatsPublicWitnessStoreProxyClient {
     client: async_nats::Client,
     max_request_bytes: usize,
     max_response_bytes: usize,
-    request_deadline_millis: u64,
 }
 
 impl NatsPublicWitnessStoreProxyClient {
@@ -464,14 +609,14 @@ impl NatsPublicWitnessStoreProxyClient {
         max_response_bytes: usize,
         request_deadline_millis: u64,
     ) -> Result<Self, PublicWitnessProxyTransportErrorV1> {
-        if max_request_bytes == 0 || max_response_bytes == 0 || request_deadline_millis == 0 {
+        if max_request_bytes == 0 || max_response_bytes == 0 {
             return Err(PublicWitnessProxyTransportErrorV1::Framing);
         }
+        validate_store_proxy_client_deadline(request_deadline_millis)?;
         Ok(Self {
             client,
             max_request_bytes,
             max_response_bytes,
-            request_deadline_millis,
         })
     }
 
@@ -490,7 +635,7 @@ impl NatsPublicWitnessStoreProxyClient {
             return Err(PublicWitnessProxyTransportErrorV1::Framing);
         }
         let message = timeout(
-            Duration::from_millis(self.request_deadline_millis),
+            Duration::from_millis(STORE_RESPONSE_GRANT_MILLIS),
             self.client.request(subject_for(operation), bytes.into()),
         )
         .await
@@ -506,6 +651,15 @@ impl NatsPublicWitnessStoreProxyClient {
         }
         Ok(response)
     }
+}
+
+pub(crate) fn validate_store_proxy_client_deadline(
+    request_deadline_millis: u64,
+) -> Result<(), PublicWitnessProxyTransportErrorV1> {
+    if request_deadline_millis != STORE_RESPONSE_GRANT_MILLIS {
+        return Err(PublicWitnessProxyTransportErrorV1::Framing);
+    }
+    Ok(())
 }
 
 #[async_trait]
