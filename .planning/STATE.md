@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted. Rejected A2b `ef4c043` and rejected A2b1 candidates `5ad200f` and `8a7df5d` remain unpushed read-only evidence. A2b1 production is stopped while bounded revision r36 replaces the helper-owned evidence oracle and removes the Rust-owned NATS handoff. A2b2, A2b3, A2c, A3, 03B, Plan 05A, and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted. Rejected A2b `ef4c043` and rejected A2b1 candidates `5ad200f` and `8a7df5d` remain unpushed read-only evidence. A2b1 production is stopped while r37 corrects only the three harness command rows rejected in r36 planning candidate `8615228`. A2b2, A2b3, A2c, A3, 03B, Plan 05A, and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-27
-**Last Activity Description:** Fresh A2b1 candidate `8a7df5d30fa3cf02c9aa127e4ac7d08f07e36d6c` / tree `9e8d758e8d036803c13c4235f4bde61bd16ddd97` closed all three `5ad200f` findings but was independently rejected P0/P1/P2=`0/2/0`: it copied helper-owned evidence instead of consuming and independently reconciling the accepted A2a ledger, and its in-Rust NATS environment handoff was unbounded and failure-leaky. Production is stopped. Revision r36 is limited to consuming the accepted ledger, adding coherent producer-plus-receipt controls, and keeping NATS lifecycle entirely in the accepted external harness.
+**Last Activity Description:** Immutable r36 planning candidate `8615228962cafbd8d5f2efd81d45ee198875b8be` closed both `8a7df5d` production findings but was independently rejected P0/P1/P2=`0/2/0` for two mechanical execution defects: A2b1's external target omitted the explicit harness transcript prefix, and A2b2/A2b3 retained stale direct inherited A2b1 commands. Revision r37 changes only those three command rows plus current revision ledgers; production remains stopped pending another immutable review.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2a (`bbfa4b1`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Rejected production objects `ef4c043`, `5ad200f`, and `8a7df5d` remain immutable and unpushed. A2b1 r36 planning alone is active; A2b2, A2b3, A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2a (`bbfa4b1`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, and 04-03A2a are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Rejected production objects `ef4c043`, `5ad200f`, and `8a7df5d` remain immutable and unpushed. A2b1 r37 planning alone is active; A2b2, A2b3, A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-27 — A2b1 `8a7df5d` rejected `0/2/0`; production stopped for bounded r36 redesign
-Stopped At: Rejected A2b1 `8a7df5d30fa3cf02c9aa127e4ac7d08f07e36d6c` remains immutable and unpushed. The accepted production frontier remains A2a `bbfa4b150b486953e43bc4d22d373b36a0c1a76e`. Production is unauthorized until r36 receives independent zero-finding review and a new root-recorded window.
+Last Date: 2026-08-27 — r36 planning `8615228` rejected `0/2/0`; r37 mechanical command correction active
+Stopped At: Rejected A2b1 `8a7df5d30fa3cf02c9aa127e4ac7d08f07e36d6c` remains immutable and unpushed. The accepted production frontier remains A2a `bbfa4b150b486953e43bc4d22d373b36a0c1a76e`. Production is unauthorized until r37 receives independent zero-finding review and a new root-recorded window.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Freeze one r36 planning-only commit containing the exact A2b1 accepted-ledger/harness redesign; run structural checks, shell syntax, task-validation bijection, and hostile review against that immutable commit. Push/fetch a new r36 planning checkpoint only after P0/P1/P2=`0/0/0`. Then root may authorize one fresh A2b1 direct child of accepted A2a in the existing implementation worktree with a new two-hour window. Do not edit production, start A2b2, reuse either rejected A2b1 tree, or create a worktree before that gate.
+Freeze one r37 planning-only commit containing the three corrected A2b1/A2b2/A2b3 harness command rows and current ledgers; rerun structural checks, shell syntax, task-validation bijection, and hostile review against that immutable commit. Push/fetch a new r37 planning checkpoint only after P0/P1/P2=`0/0/0`. Then root may authorize one fresh A2b1 direct child of accepted A2a in the existing implementation worktree with a new two-hour window. Do not edit production, start A2b2, reuse either rejected A2b1 tree, or create a worktree before that gate.
