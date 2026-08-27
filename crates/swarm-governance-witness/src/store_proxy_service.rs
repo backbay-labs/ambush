@@ -64,6 +64,7 @@ pub struct StoreProxyService<S> {
     ready: WitnessStoreReadyResultV1,
     ready_binding: StoreProxyReadyBindingV1,
     subscriber_admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
+    worker_observer: Arc<dyn WorkerTransitionObserverV1>,
 }
 
 #[derive(Clone)]
@@ -119,6 +120,7 @@ impl<S: WitnessAtomicStore> StoreProxyService<S> {
             ready,
             ready_binding,
             subscriber_admission_observer: Arc::new(NoopSubscriberAdmissionObserverV1),
+            worker_observer: Arc::new(NoopWorkerTransitionObserverV1),
         })
     }
 
@@ -128,6 +130,14 @@ impl<S: WitnessAtomicStore> StoreProxyService<S> {
         observer: Arc<dyn SubscriberAdmissionObserverV1>,
     ) {
         self.subscriber_admission_observer = observer;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_worker_transitions_for_test(
+        &mut self,
+        observer: Arc<dyn WorkerTransitionObserverV1>,
+    ) {
+        self.worker_observer = observer;
     }
 
     pub async fn handle_subject_bytes(
@@ -416,6 +426,11 @@ impl StoreRoleConnectionV1 {
             ready_binding,
         })
     }
+
+    #[cfg(test)]
+    pub(crate) fn server_client_id_for_test(&self) -> u64 {
+        self.client.server_info().client_id
+    }
 }
 
 fn tls_authority(url: &str) -> Option<&str> {
@@ -485,6 +500,7 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
         let capacity = service.config.ingress_queue_capacity;
         let worker_count = service.config.max_in_flight;
         let admission_observer = service.subscriber_admission_observer.clone();
+        let observer = service.worker_observer.clone();
         let service = Arc::new(service);
         let (sender, receiver) = mpsc::channel(capacity);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -514,7 +530,6 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             }));
         }
         drop(sender);
-        let observer = Arc::new(NoopWorkerTransitionObserverV1);
         let publisher = Arc::new(NatsWorkerPublisherV1(client.clone()));
         for _ in 0..worker_count {
             let receiver = receiver.clone();

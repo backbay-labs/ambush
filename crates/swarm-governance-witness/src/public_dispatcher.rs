@@ -296,6 +296,7 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
 
         let capacity = dispatcher.config.ingress_queue_capacity;
         let worker_count = dispatcher.config.max_in_flight;
+        let observer = dispatcher.worker_observer.clone();
         let dispatcher = Arc::new(dispatcher);
         let (sender, receiver) = mpsc::channel(capacity);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -319,7 +320,6 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
             ));
         }
         drop(sender);
-        let observer = Arc::new(NoopWorkerTransitionObserverV1);
         let publisher = Arc::new(NatsWorkerPublisherV1(client.clone()));
         for _ in 0..worker_count {
             let receiver = receiver.clone();

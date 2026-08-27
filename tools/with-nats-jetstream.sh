@@ -374,6 +374,34 @@ validate_test_transcript() {
   ! grep -Eq 'running 0 tests|\.\.\. ignored|test result: FAILED|test result: ok\. 0 passed' "$path"
 }
 
+parse_exact_test_prefix() {
+  EXPECTED_EXACT_TEST=""
+  EXPECTED_EXACT_FILTERED=""
+  HARNESS_COMMAND=("$@")
+  [[ "${1:-}" == --expect-exact-test ]] || return 0
+  [[ $# -ge 5 ]] || return 1
+  [[ "$2" =~ ^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+$ ]] || return 1
+  [[ "$3" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  [[ "$4" == -- ]] || return 1
+  EXPECTED_EXACT_TEST="$2"
+  EXPECTED_EXACT_FILTERED="$3"
+  shift 4
+  HARNESS_COMMAND=("$@")
+  [[ ${#HARNESS_COMMAND[@]} -gt 0 ]] || return 1
+
+  local index previous exact_markers=0
+  for ((index = 0; index < ${#HARNESS_COMMAND[@]}; index++)); do
+    [[ "${HARNESS_COMMAND[index]}" != --expect-exact-test ]] || return 1
+    if [[ "${HARNESS_COMMAND[index]}" == --exact ]]; then
+      (( exact_markers += 1 ))
+      (( index > 0 )) || return 1
+      previous=$((index - 1))
+      [[ "${HARNESS_COMMAND[previous]}" == "$EXPECTED_EXACT_TEST" ]] || return 1
+    fi
+  done
+  [[ "$exact_markers" -eq 1 ]]
+}
+
 validate_checkpoint_test_environment() {
   [[ $# -eq 5 ]] || return 64
   local token="$1" tree="$2" threads="$3" expected_token="$4" expected_tree="$5"
@@ -501,9 +529,9 @@ mutate_line() {
 }
 
 self_test() (
-  local scratch hostile scratch_link output status mutation key nonce test_name targeted=0
+  local scratch hostile scratch_link output status mutation key nonce test_name prefix_test_name last_index targeted=0
   local checkpoint_tree checkpoint_token environment_killed=0 binding_killed=0 matcher_killed=0
-  local transcript_killed=0
+  local transcript_killed=0 exact_prefix_killed=0 pre_nats_prefix_refusals=0
   local -a transcript_survivors=()
   scratch="$(create_confined_scratch)"
   trap 'cleanup_confined_scratch "$scratch"' EXIT
@@ -594,6 +622,57 @@ EOF
   fi
   [[ "$transcript_killed" -eq 10 ]] || return 1
 
+  prefix_test_name="phase285_tests::$test_name"
+  sed "s/test $test_name/test $prefix_test_name/" "$scratch/transcript" >"$scratch/exact-transcript"
+  validate_test_transcript "$scratch/exact-transcript" "$prefix_test_name" "$nonce" 4
+  parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 4 -- \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- \
+    --test-threads=1 "$prefix_test_name" --exact
+  [[ "$EXPECTED_EXACT_TEST" == "$prefix_test_name" && "$EXPECTED_EXACT_FILTERED" == 4 ]] || return 1
+  last_index=$((${#HARNESS_COMMAND[@]} - 1))
+  [[ "${HARNESS_COMMAND[0]}" == cargo && "${HARNESS_COMMAND[last_index]}" == --exact ]] || return 1
+  [[ " ${HARNESS_COMMAND[*]} " != *" --expect-exact-test "* ]] || return 1
+  for mutation in missing-fqn empty-fqn malformed-fqn missing-count nondecimal-count \
+    noncanonical-count wrong-delimiter missing-command missing-exact duplicate-exact \
+    wrong-exact-fqn duplicate-prefix; do
+    if case "$mutation" in
+      missing-fqn) parse_exact_test_prefix --expect-exact-test ;;
+      empty-fqn) parse_exact_test_prefix --expect-exact-test "" 4 -- cargo test "$prefix_test_name" --exact ;;
+      malformed-fqn) parse_exact_test_prefix --expect-exact-test invalid-fqn 4 -- cargo test invalid-fqn --exact ;;
+      missing-count) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" ;;
+      nondecimal-count) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" four -- cargo test "$prefix_test_name" --exact ;;
+      noncanonical-count) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 04 -- cargo test "$prefix_test_name" --exact ;;
+      wrong-delimiter) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 4 --- cargo test "$prefix_test_name" --exact ;;
+      missing-command) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 4 -- ;;
+      missing-exact) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 4 -- cargo test "$prefix_test_name" ;;
+      duplicate-exact) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 4 -- cargo test "$prefix_test_name" --exact "$prefix_test_name" --exact ;;
+      wrong-exact-fqn) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 4 -- cargo test wrong::test --exact ;;
+      duplicate-prefix) parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 4 -- cargo test --expect-exact-test "$prefix_test_name" --exact ;;
+    esac; then
+      echo "PHASE285-HARNESS[exact-prefix-mutant-survived:$mutation]" >&2
+      return 1
+    fi
+    echo "phase285_harness_exact_prefix_self_test_red mutation=$mutation"
+    exact_prefix_killed=$((exact_prefix_killed + 1))
+  done
+  [[ "$exact_prefix_killed" -eq 12 ]] || return 1
+  parse_exact_test_prefix --expect-exact-test "$prefix_test_name" 3 -- cargo test "$prefix_test_name" --exact
+  if validate_test_transcript "$scratch/exact-transcript" "$EXPECTED_EXACT_TEST" "$nonce" "$EXPECTED_EXACT_FILTERED"; then
+    echo "PHASE285-HARNESS[exact-prefix-count-mutant-survived]" >&2
+    return 1
+  fi
+  echo "phase285_harness_exact_prefix_self_test_red mutation=wrong-filtered-count"
+  exact_prefix_killed=$((exact_prefix_killed + 1))
+  [[ "$exact_prefix_killed" -eq 13 ]] || return 1
+  status=0
+  output="$(DOCKER_HOST="tcp://127.0.0.1:1" \
+    PHASE285_EXPECT_EXACT_TEST="ambient::wrong" \
+    PHASE285_EXPECTED_FILTERED_OUT=0 \
+    "$ROOT_DIR/tools/with-nats-jetstream.sh" \
+      --expect-exact-test malformed-fqn 4 -- cargo test malformed-fqn --exact 2>&1)" || status=$?
+  [[ "$status" -eq 64 && "$output" == "PHASE285-HARNESS[exact-test-prefix]" ]] || return 1
+  pre_nats_prefix_refusals=$((pre_nats_prefix_refusals + 1))
+
   checkpoint_tree="$(git -C "$ROOT_DIR" write-tree)"
   checkpoint_token="phase285-package-$nonce"
   validate_checkpoint_test_environment \
@@ -680,7 +759,7 @@ EOF
     return 1
   fi
   cleanup_confined_scratch "$scratch/cleanup-control"
-  echo "phase285_nats_harness_self_test observation_mutants=12 targeted_mutants=$targeted transcript_mutants=$transcript_killed environment_mutants=$environment_killed binding_mutants=$binding_killed matcher_mutants=$matcher_killed wiring_mutants=11 hostile_boundaries=4 cleanup_failure=1 passed=1"
+  echo "phase285_nats_harness_self_test observation_mutants=12 targeted_mutants=$targeted transcript_mutants=$transcript_killed exact_prefix_mutants=$exact_prefix_killed pre_nats_prefix_refusals=$pre_nats_prefix_refusals environment_mutants=$environment_killed binding_mutants=$binding_killed matcher_mutants=$matcher_killed wiring_mutants=11 hostile_boundaries=4 cleanup_failure=1 passed=1"
 )
 
 compose_for() {
@@ -910,6 +989,16 @@ run_harness() (
   local scratch_cleanup=0 stack_started=0 child_status=0 mount_before mount_after
   local actual_image tls_actual_image repo_digest reported_version reported_sync_always expected_test="" expected_filtered=4 transcript index previous
   local tls_nats_port tls_nats_http_port tls_nats_http_url tls_deadline
+  parse_exact_test_prefix "$@" || {
+    echo "PHASE285-HARNESS[exact-test-prefix]" >&2
+    return 64
+  }
+  set -- "${HARNESS_COMMAND[@]}"
+  [[ $# -gt 0 ]] || { echo "PHASE285-HARNESS[exact-test-command]" >&2; return 64; }
+  if [[ -n "$EXPECTED_EXACT_TEST" ]]; then
+    expected_test="$EXPECTED_EXACT_TEST"
+    expected_filtered="$EXPECTED_EXACT_FILTERED"
+  fi
   SCRATCH="$(create_confined_scratch "$(docker_shared_scratch_parent)")"
   PROJECT_NAME="phase285-nats-$PPID-$$"
   NATS_PORT=""
@@ -1016,7 +1105,7 @@ EOF
   fi
 
   for ((index = 1; index <= $#; index++)); do
-    if [[ "${!index}" == --exact && $index -gt 1 ]]; then
+    if [[ -z "$EXPECTED_EXACT_TEST" && "${!index}" == --exact && $index -gt 1 ]]; then
       previous=$((index - 1))
       expected_test="${!previous}"
     fi
@@ -1039,6 +1128,7 @@ EOF
   export SWARM_NATS_STORE_USER="$STORE_USER"
   export SWARM_NATS_STORE_PASSWORD="$STORE_PASSWORD"
   export SWARM_NATS_STORE_TLS_URL="tls://localhost:$tls_nats_port"
+  export SWARM_NATS_TLS_HTTP_URL="$tls_nats_http_url"
   export SWARM_NATS_TLS_CA_PATH="$SCRATCH/tls-ca.pem"
   export SWARM_NATS_TLS_SERVER_NAME="localhost"
   export SWARM_NATS_TLS_CREDENTIAL_TOKEN="$TLS_CREDENTIAL_TOKEN"

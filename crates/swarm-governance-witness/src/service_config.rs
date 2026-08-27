@@ -30,6 +30,22 @@ const _: () = assert!(PUBLIC_PRIVATE_RESERVE_MILLIS == 1_000);
 const _: () = assert!(PUBLIC_HANDLER_RESERVE_MILLIS == 2_000);
 const _: () = assert!(RESPONSE_GRANT_MAXIMUM == 1);
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeWitnessClientConfigV1 {
+    pub nats_url: String,
+    pub nats_credentials_path: String,
+    pub credential_invocation_token: String,
+    pub tls_ca_path: String,
+    pub tls_server_name: String,
+    pub max_request_bytes: usize,
+    pub max_response_bytes: usize,
+    pub subscription_capacity: usize,
+    pub client_capacity: usize,
+    pub read_buffer_capacity: u16,
+    pub request_deadline_millis: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WorkerKindV1 {
@@ -371,10 +387,7 @@ impl StoreProxyServiceConfigV1 {
             ("max_in_flight", self.max_in_flight),
             ("subscription_capacity", self.subscription_capacity),
             ("client_capacity", self.client_capacity),
-            (
-                "read_buffer_capacity",
-                usize::from(self.read_buffer_capacity),
-            ),
+            ("read_buffer_capacity", self.read_buffer_capacity.into()),
         ] {
             if value == 0 || value > MAX_PROTOCOL_RECORD_BYTES {
                 return Err(ProtocolError::Bounds {
@@ -522,6 +535,44 @@ impl PublicWitnessServiceConfigV1 {
             WitnessServiceOperationV1::ReadHead => "swarm.governance.witness.v1.read_head",
             WitnessServiceOperationV1::FetchPayload => "swarm.governance.witness.v1.fetch_payload",
         }
+    }
+}
+
+impl RuntimeWitnessClientConfigV1 {
+    pub fn validate(&self) -> ProtocolResult<()> {
+        for (field, value) in [
+            ("nats_url", self.nats_url.as_str()),
+            ("nats_credentials_path", self.nats_credentials_path.as_str()),
+            (
+                "credential_invocation_token",
+                self.credential_invocation_token.as_str(),
+            ),
+            ("tls_ca_path", self.tls_ca_path.as_str()),
+            ("tls_server_name", self.tls_server_name.as_str()),
+        ] {
+            if value.is_empty() || value.len() > MAX_PROTOCOL_STRING_BYTES {
+                return Err(invalid(field, "must be nonempty and bounded"));
+            }
+        }
+        let authority = self
+            .nats_url
+            .strip_prefix("tls://")
+            .and_then(|value| value.rsplit_once(':').map(|(host, _)| host));
+        if authority != Some(self.tls_server_name.as_str())
+            || [
+                self.max_request_bytes,
+                self.max_response_bytes,
+                self.subscription_capacity,
+                self.client_capacity,
+                usize::from(self.read_buffer_capacity),
+            ]
+            .into_iter()
+            .any(|value| value == 0 || value > MAX_PROTOCOL_RECORD_BYTES)
+            || self.request_deadline_millis != PUBLIC_RESPONSE_GRANT_MILLIS
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(())
     }
 }
 

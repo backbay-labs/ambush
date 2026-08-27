@@ -6,6 +6,7 @@ mod jetstream_store;
 mod nats_config;
 mod public_dispatcher;
 pub mod raw_config;
+mod runtime_client;
 mod service_config;
 mod store_proxy_service;
 
@@ -15,8 +16,10 @@ pub use public_dispatcher::{
     PublicWitnessProxyTransportErrorV1, PublicWitnessRunnerErrorV1, PublicWitnessServiceRunner,
     PublicWitnessStoreProxyClient, dispatcher_mapping, public_witness_ingress_overload_control,
 };
-pub use service_config::PublicWitnessServiceConfigV1;
-pub use service_config::StoreProxyServiceConfigV1;
+pub use runtime_client::{RuntimeWitnessClient, RuntimeWitnessClientErrorV1};
+pub use service_config::{
+    PublicWitnessServiceConfigV1, RuntimeWitnessClientConfigV1, StoreProxyServiceConfigV1,
+};
 pub use store_proxy_service::{
     NatsPublicWitnessStoreProxyClient, StoreProxyRunnerErrorV1, StoreProxyService,
     StoreProxyServiceErrorV1, StoreProxyServiceRunner, StoreRoleConnectionV1,
@@ -42,10 +45,11 @@ mod deadline_state_machine_tests {
         receive_and_run_private_worker_message, run_private_worker_message, store_proxy_subjects,
     };
     use super::{
-        PublicWitnessDispatchErrorV1, PublicWitnessDispatcher, PublicWitnessProxyTransportErrorV1,
-        PublicWitnessServiceConfigV1, PublicWitnessServiceRunner, PublicWitnessStoreProxyClient,
-        StoreProxyService, StoreProxyServiceConfigV1, StoreProxyServiceErrorV1,
-        StoreProxyServiceRunner, StoreRoleConnectionV1,
+        NatsPublicWitnessStoreProxyClient, PublicWitnessDispatchErrorV1, PublicWitnessDispatcher,
+        PublicWitnessProxyTransportErrorV1, PublicWitnessServiceConfigV1,
+        PublicWitnessServiceRunner, PublicWitnessStoreProxyClient, RuntimeWitnessClient,
+        RuntimeWitnessClientConfigV1, StoreProxyService, StoreProxyServiceConfigV1,
+        StoreProxyServiceErrorV1, StoreProxyServiceRunner, StoreRoleConnectionV1,
     };
     use async_trait::async_trait;
     use futures_util::StreamExt;
@@ -72,7 +76,7 @@ mod deadline_state_machine_tests {
     use swarm_governance::witness_engine::{WitnessStoreEnvelopeV1, witness_stream_key};
     use swarm_governance::witness_service::{
         WitnessAdmissionRecordV1, WitnessServiceOperationV1, WitnessServiceRequestBodyV1,
-        WitnessServiceRequestV1,
+        WitnessServiceRequestV1, WitnessServiceResponseV1,
     };
     use tokio::sync::{Mutex as TokioMutex, Notify, mpsc};
     use tokio::time::{Duration, advance, sleep};
@@ -307,6 +311,137 @@ mod deadline_state_machine_tests {
         cas_attempted: AtomicUsize,
         cas_applied: AtomicUsize,
         inspect_ready: AtomicUsize,
+        records: Mutex<Vec<StoreObservationV1>>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct StoreObservationV1 {
+        operation: &'static str,
+        stream_id: Option<String>,
+        input_canonical_hex: String,
+        input_sha256: String,
+        result_canonical_hex: String,
+        result_sha256: String,
+        revision: Option<u64>,
+        store_generation: Option<u64>,
+        store_state_digest: Option<String>,
+        cas_attempted: bool,
+        cas_applied: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct ProxyObservationV1 {
+        operation: WitnessStoreProxyOperationV1,
+        subject: String,
+        request_nonce: String,
+        request_digest: String,
+        request_canonical_hex: String,
+        request_sha256: String,
+        response_canonical_hex: String,
+        response_sha256: String,
+        stream_id: Option<String>,
+        revision: Option<u64>,
+        store_generation: Option<u64>,
+        store_state_digest: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct RecordingNatsProxyV1 {
+        inner: NatsPublicWitnessStoreProxyClient,
+        records: Arc<Mutex<Vec<ProxyObservationV1>>>,
+    }
+
+    impl RecordingNatsProxyV1 {
+        async fn call(
+            &self,
+            request: WitnessStoreProxyRequestV1,
+            operation: WitnessStoreProxyOperationV1,
+        ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
+            let request_bytes = canonical_wire_bytes(&request)
+                .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+            let request_nonce = request.request_nonce.clone();
+            let request_digest = request.request_digest.clone();
+            let response = match operation {
+                WitnessStoreProxyOperationV1::InspectReady => {
+                    self.inner.inspect_ready(request).await?
+                }
+                WitnessStoreProxyOperationV1::ReadEntry => self.inner.read_entry(request).await?,
+                WitnessStoreProxyOperationV1::CompareAndSwap => {
+                    self.inner.compare_and_swap(request).await?
+                }
+            };
+            let response_bytes = canonical_wire_bytes(&response)
+                .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+            let (stream_id, revision, store_generation, store_state_digest) =
+                match &response.body {
+                    swarm_governance::witness_engine::store::WitnessStoreProxyResponseBodyV1::Entry {
+                        stream_id,
+                        revision,
+                        envelope,
+                    } => (
+                        Some(stream_id.clone()),
+                        Some(*revision),
+                        Some(envelope.store_generation),
+                        envelope.store_state_digest().ok(),
+                    ),
+                    swarm_governance::witness_engine::store::WitnessStoreProxyResponseBodyV1::CasApplied {
+                        stream_id,
+                        new_revision,
+                        ..
+                    } => (Some(stream_id.clone()), Some(*new_revision), None, None),
+                    _ => (None, None, None, None),
+                };
+            self.records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(ProxyObservationV1 {
+                    operation,
+                    subject: match operation {
+                        WitnessStoreProxyOperationV1::InspectReady => store_proxy_subjects()[0],
+                        WitnessStoreProxyOperationV1::ReadEntry => store_proxy_subjects()[1],
+                        WitnessStoreProxyOperationV1::CompareAndSwap => store_proxy_subjects()[2],
+                    }
+                    .to_string(),
+                    request_nonce,
+                    request_digest,
+                    request_canonical_hex: hex::encode(&request_bytes),
+                    request_sha256: sha256_hex(&request_bytes),
+                    response_canonical_hex: hex::encode(&response_bytes),
+                    response_sha256: sha256_hex(&response_bytes),
+                    stream_id,
+                    revision,
+                    store_generation,
+                    store_state_digest,
+                });
+            Ok(response)
+        }
+    }
+
+    #[async_trait]
+    impl PublicWitnessStoreProxyClient for RecordingNatsProxyV1 {
+        async fn inspect_ready(
+            &self,
+            request: WitnessStoreProxyRequestV1,
+        ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
+            self.call(request, WitnessStoreProxyOperationV1::InspectReady)
+                .await
+        }
+
+        async fn read_entry(
+            &self,
+            request: WitnessStoreProxyRequestV1,
+        ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
+            self.call(request, WitnessStoreProxyOperationV1::ReadEntry)
+                .await
+        }
+
+        async fn compare_and_swap(
+            &self,
+            request: WitnessStoreProxyRequestV1,
+        ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
+            self.call(request, WitnessStoreProxyOperationV1::CompareAndSwap)
+                .await
+        }
     }
 
     struct DeadlineRecordingStoreV1 {
@@ -323,7 +458,31 @@ mod deadline_state_machine_tests {
     impl WitnessAtomicStore for DeadlineRecordingStoreV1 {
         async fn inspect_ready(&self) -> Result<WitnessStoreReadyResultV1, WitnessStoreErrorV1> {
             self.facts.inspect_ready.fetch_add(1, Ordering::SeqCst);
-            self.inner.inspect_ready().await
+            let result = self.inner.inspect_ready().await;
+            if let Ok(ready) = &result {
+                let result_bytes = must(
+                    canonical_wire_bytes(ready),
+                    "store InspectReady observation serialization",
+                );
+                self.facts
+                    .records
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(StoreObservationV1 {
+                        operation: "inspect_ready",
+                        stream_id: None,
+                        input_canonical_hex: hex::encode(b"inspect_ready"),
+                        input_sha256: sha256_hex(b"inspect_ready"),
+                        result_canonical_hex: hex::encode(&result_bytes),
+                        result_sha256: sha256_hex(&result_bytes),
+                        revision: None,
+                        store_generation: None,
+                        store_state_digest: None,
+                        cas_attempted: false,
+                        cas_applied: false,
+                    });
+            }
+            result
         }
 
         async fn read_entry(
@@ -351,7 +510,36 @@ mod deadline_state_machine_tests {
             {
                 sleep(Duration::from_millis(STORE_HANDLER_DEADLINE_MILLIS + 1)).await;
             }
-            self.inner.read_entry(stream_id).await
+            let result = self.inner.read_entry(stream_id).await;
+            if let Ok(read) = &result {
+                let (_, revision, envelope) = read.parts();
+                let input_bytes = must(
+                    canonical_wire_bytes(&stream_id),
+                    "store ReadEntry input observation serialization",
+                );
+                let result_bytes = must(
+                    canonical_wire_bytes(read),
+                    "store ReadEntry result observation serialization",
+                );
+                self.facts
+                    .records
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(StoreObservationV1 {
+                        operation: "read_entry",
+                        stream_id: Some(stream_id.to_string()),
+                        input_canonical_hex: hex::encode(&input_bytes),
+                        input_sha256: sha256_hex(&input_bytes),
+                        result_canonical_hex: hex::encode(&result_bytes),
+                        result_sha256: sha256_hex(&result_bytes),
+                        revision: Some(revision),
+                        store_generation: Some(envelope.store_generation),
+                        store_state_digest: envelope.store_state_digest().ok(),
+                        cas_attempted: false,
+                        cas_applied: false,
+                    });
+            }
+            result
         }
 
         async fn compare_and_swap(
@@ -378,6 +566,46 @@ mod deadline_state_machine_tests {
                         worker: WorkerKindV1::Private,
                     });
             }
+            let input_bytes = must(
+                canonical_wire_bytes(&(
+                    stream_id,
+                    expected_revision,
+                    expected_store_state_digest,
+                    proposed_envelope,
+                )),
+                "store CAS input observation serialization",
+            );
+            let result_bytes = must(
+                canonical_wire_bytes(&result),
+                "store CAS result observation serialization",
+            );
+            self.facts
+                .records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(StoreObservationV1 {
+                    operation: "compare_and_swap",
+                    stream_id: Some(stream_id.to_string()),
+                    input_canonical_hex: hex::encode(&input_bytes),
+                    input_sha256: sha256_hex(&input_bytes),
+                    result_canonical_hex: hex::encode(&result_bytes),
+                    result_sha256: sha256_hex(&result_bytes),
+                    revision: match &result {
+                        WitnessStoreCasResultV1::Applied { new_revision, .. } => {
+                            Some(*new_revision)
+                        }
+                        WitnessStoreCasResultV1::Conflict {
+                            observed_revision, ..
+                        } => Some(*observed_revision),
+                        WitnessStoreCasResultV1::Ambiguous {
+                            observed_revision, ..
+                        } => *observed_revision,
+                    },
+                    store_generation: Some(proposed_envelope.store_generation),
+                    store_state_digest: proposed_envelope.store_state_digest().ok(),
+                    cas_attempted: true,
+                    cas_applied: matches!(result, WitnessStoreCasResultV1::Applied { .. }),
+                });
             Ok(result)
         }
     }
@@ -483,7 +711,10 @@ mod deadline_state_machine_tests {
     }
 
     struct AuthenticatedDeadlineFixtureV1 {
+        governance: Ed25519Signer,
         witness: Ed25519Signer,
+        ephemeral: Ed25519Signer,
+        binding: PublicationBindingV1,
         admission: WitnessAdmissionRecordV1,
         ready: WitnessStoreReadyResultV1,
         challenge: RecoveryChallengeV1,
@@ -619,7 +850,10 @@ mod deadline_state_machine_tests {
             };
             public_config.validate()?;
             Ok(Self {
+                governance,
                 witness,
+                ephemeral,
+                binding,
                 admission,
                 ready,
                 challenge,
@@ -657,6 +891,11 @@ mod deadline_state_machine_tests {
             self.facts.cas_attempted.store(0, Ordering::SeqCst);
             self.facts.cas_applied.store(0, Ordering::SeqCst);
             self.facts.inspect_ready.store(0, Ordering::SeqCst);
+            self.facts
+                .records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
             self.mode.store(0, Ordering::SeqCst);
         }
 
@@ -703,6 +942,196 @@ mod deadline_state_machine_tests {
                     expected_head: None,
                 },
             )
+        }
+
+        fn read_head_request(
+            ephemeral: &Ed25519Signer,
+            admission: &WitnessAdmissionRecordV1,
+            session: WitnessSessionV1,
+            target_txid: String,
+        ) -> ProtocolResult<WitnessServiceRequestV1> {
+            let mut request = WitnessServiceRequestV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation: WitnessServiceOperationV1::ReadHead,
+                request_nonce: "d".repeat(64),
+                admission_digest: admission.admission_digest.clone(),
+                body: WitnessServiceRequestBodyV1::ReadHead {
+                    session: Box::new(session.clone()),
+                    target_txid: target_txid.clone(),
+                },
+                request_digest: String::new(),
+                authorization: None,
+            };
+            request.request_digest = request.computed_digest()?;
+            #[derive(Serialize)]
+            struct AuthorizationPreimageV1<'a> {
+                schema_version: u32,
+                operation: WitnessOperationV1,
+                stream_id: &'a str,
+                binding_digest: &'a str,
+                txid: &'a str,
+                request_digest: &'a str,
+                session_generation: u64,
+                session_commitment: &'a str,
+                ephemeral_key_id: &'a str,
+            }
+            let preimage = AuthorizationPreimageV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation: WitnessOperationV1::ReadHead,
+                stream_id: &session.stream_id,
+                binding_digest: &session.binding_digest,
+                txid: &target_txid,
+                request_digest: &request.request_digest,
+                session_generation: session.session_generation,
+                session_commitment: &session.session_commitment,
+                ephemeral_key_id: &session.ephemeral_key_id,
+            };
+            let authorization_bytes = canonical_wire_bytes(&preimage)?;
+            request.authorization = Some(WitnessSessionAuthorizationV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation: WitnessOperationV1::ReadHead,
+                stream_id: session.stream_id.clone(),
+                binding_digest: session.binding_digest.clone(),
+                txid: target_txid.clone(),
+                request_digest: request.request_digest.clone(),
+                session_generation: session.session_generation,
+                session_commitment: session.session_commitment.clone(),
+                ephemeral_key_id: session.ephemeral_key_id.clone(),
+                signature: ephemeral.sign(&authorization_bytes),
+            });
+            request.validate()?;
+            Ok(request)
+        }
+
+        fn candidate(&self) -> ProtocolResult<CandidateV1> {
+            let before = PublicationMappingV1 {
+                state_canonical: self.binding.publication_roles.state_canonical,
+                state_staging: self.binding.publication_roles.state_staging,
+                checkpoint_canonical: self.binding.publication_roles.checkpoint_canonical,
+                checkpoint_staging: self.binding.publication_roles.checkpoint_staging,
+                journal_primary: self.binding.publication_roles.journal_primary,
+                journal_secondary: self.binding.publication_roles.journal_secondary,
+            };
+            let state_payload = br#"{"state":1}"#.to_vec();
+            let checkpoint_payload = br#"{"checkpoint":1}"#.to_vec();
+            let state_digest = sha256_hex(&state_payload);
+            let checkpoint_digest = sha256_hex(&checkpoint_payload);
+            let genesis = GenesisPredecessorV1::for_binding(&self.binding);
+            CandidatePreimageV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                stream_id: self.binding.stream_id.clone(),
+                predecessor_head: None,
+                predecessor_head_digest: genesis.digest()?,
+                predecessor_data_head_digest: genesis.data_head_digest()?,
+                state_payload: state_payload.clone(),
+                state_byte_len: state_payload.len() as u64,
+                state_digest: state_digest.clone(),
+                state_attestation: self.sign_payload(
+                    STATE_PAYLOAD_DOMAIN_V1,
+                    state_payload,
+                    state_digest,
+                )?,
+                checkpoint_payload: checkpoint_payload.clone(),
+                checkpoint_byte_len: checkpoint_payload.len() as u64,
+                checkpoint_digest: checkpoint_digest.clone(),
+                checkpoint_attestation: self.sign_payload(
+                    CHECKPOINT_PAYLOAD_DOMAIN_V1,
+                    checkpoint_payload,
+                    checkpoint_digest,
+                )?,
+                publication_binding: self.binding.clone(),
+                publication_mapping_before: before,
+                publication_mapping_after: PublicationMappingV1 {
+                    state_canonical: before.state_staging,
+                    state_staging: before.state_canonical,
+                    checkpoint_canonical: before.checkpoint_staging,
+                    checkpoint_staging: before.checkpoint_canonical,
+                    journal_primary: before.journal_primary,
+                    journal_secondary: before.journal_secondary,
+                },
+                epoch: 0,
+                sequence: 0,
+                intent_counter: 1,
+            }
+            .build()
+        }
+
+        fn sign_payload(
+            &self,
+            domain: &str,
+            payload: Vec<u8>,
+            digest: String,
+        ) -> ProtocolResult<swarm_crypto::DetachedSignature> {
+            let preimage = SignedPayloadPreimageV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                domain: domain.to_string(),
+                stream_id: self.binding.stream_id.clone(),
+                binding_generation: self.binding.generation.clone(),
+                binding_digest: self.binding.binding_digest.clone(),
+                authority_pair: self.binding.authority_pair,
+                byte_len: payload.len() as u64,
+                digest,
+                payload,
+            };
+            Ok(self.governance.sign(&preimage.canonical_bytes()?))
+        }
+
+        fn mutation_request(
+            ephemeral: &Ed25519Signer,
+            admission: &WitnessAdmissionRecordV1,
+            operation: WitnessServiceOperationV1,
+            witness_operation: WitnessOperationV1,
+            session: &WitnessSessionV1,
+            txid: &str,
+            body: WitnessServiceRequestBodyV1,
+        ) -> ProtocolResult<WitnessServiceRequestV1> {
+            let mut request = WitnessServiceRequestV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation,
+                request_nonce: "e".repeat(64),
+                admission_digest: admission.admission_digest.clone(),
+                body,
+                request_digest: "0".repeat(64),
+                authorization: None,
+            };
+            request.request_digest = request.computed_digest()?;
+            #[derive(Serialize)]
+            struct AuthorizationPreimageV1<'a> {
+                schema_version: u32,
+                operation: WitnessOperationV1,
+                stream_id: &'a str,
+                binding_digest: &'a str,
+                txid: &'a str,
+                request_digest: &'a str,
+                session_generation: u64,
+                session_commitment: &'a str,
+                ephemeral_key_id: &'a str,
+            }
+            let preimage = AuthorizationPreimageV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation: witness_operation,
+                stream_id: &session.stream_id,
+                binding_digest: &session.binding_digest,
+                txid,
+                request_digest: &request.request_digest,
+                session_generation: session.session_generation,
+                session_commitment: &session.session_commitment,
+                ephemeral_key_id: &session.ephemeral_key_id,
+            };
+            request.authorization = Some(WitnessSessionAuthorizationV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation: witness_operation,
+                stream_id: session.stream_id.clone(),
+                binding_digest: session.binding_digest.clone(),
+                txid: txid.to_string(),
+                request_digest: request.request_digest.clone(),
+                session_generation: session.session_generation,
+                session_commitment: session.session_commitment.clone(),
+                ephemeral_key_id: session.ephemeral_key_id.clone(),
+                signature: ephemeral.sign(&canonical_wire_bytes(&preimage)?),
+            });
+            request.validate()?;
+            Ok(request)
         }
     }
 
@@ -2209,5 +2638,686 @@ mod deadline_state_machine_tests {
                 .publish(&publisher, "_INBOX.phase285-deadline".into(), Vec::new())
                 .await
         );
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct ConnectionObservationV1 {
+        runner_role: &'static str,
+        account: String,
+        authenticated_user: String,
+        server_client_id: u64,
+        server_evidence_canonical_hex: String,
+        server_evidence_sha256: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    struct ServerConnectionAuthorityV1 {
+        account: String,
+        authenticated_user: String,
+        server_client_id: u64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct PublisherObservationV1 {
+        ordinal: usize,
+        worker: WorkerKindV1,
+        published: bool,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ObservationCountsV1 {
+        worker_events: usize,
+        proxy_exchanges: usize,
+        store_operations: usize,
+        publisher_attempts: usize,
+        connections: usize,
+        cas_attempted: usize,
+        cas_applied: usize,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ObservationDigestsV1 {
+        request_sha256: String,
+        response_sha256: String,
+        worker_events_sha256: String,
+        proxy_exchanges_sha256: String,
+        store_operations_sha256: String,
+        publisher_attempts_sha256: String,
+        connections_sha256: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ObservationLedgerV1<'a> {
+        schema_version: u8,
+        tree: &'a str,
+        invocation_token: &'a str,
+        case: &'a str,
+        status: &'static str,
+        operation: WitnessServiceOperationV1,
+        public_subject: &'static str,
+        request_nonce: String,
+        request_digest: String,
+        request_canonical_hex: String,
+        response_canonical_hex: String,
+        selected_store_revision: u64,
+        selected_store_generation: u64,
+        selected_store_state_digest: String,
+        selected_envelope_digest: String,
+        selected_head_txid: String,
+        worker_events: Vec<WorkerTransitionEventV1>,
+        proxy_exchanges: Vec<ProxyObservationV1>,
+        store_operations: Vec<StoreObservationV1>,
+        publisher_attempts: Vec<PublisherObservationV1>,
+        connections: Vec<ConnectionObservationV1>,
+        counts: ObservationCountsV1,
+        digests: ObservationDigestsV1,
+    }
+
+    fn observation_identity() -> Option<(PathBuf, String, String, String)> {
+        let required = std::env::var_os("PHASE285_OBSERVATION_LEDGER_REQUIRED").is_some();
+        let path = std::env::var("PHASE285_OBSERVATION_LEDGER").ok();
+        let tree = std::env::var("PHASE285_OBSERVATION_TREE").ok();
+        let token = std::env::var("PHASE285_OBSERVATION_INVOCATION_TOKEN").ok();
+        let case = std::env::var("PHASE285_OBSERVATION_CASE").ok();
+        if !required && path.is_none() && tree.is_none() && token.is_none() && case.is_none() {
+            return None;
+        }
+        let path = PathBuf::from(must_some(path, "observation ledger path absent"));
+        assert!(
+            path.is_absolute(),
+            "observation ledger path must be absolute"
+        );
+        let tree = must_some(tree, "observation tree absent");
+        let token = must_some(token, "observation invocation token absent");
+        let case = must_some(case, "observation case absent");
+        assert!(
+            [tree.as_str(), token.as_str(), case.as_str()]
+                .into_iter()
+                .all(|value| !value.is_empty() && value.len() <= 256),
+            "observation identity is not closed and bounded"
+        );
+        Some((path, tree, token, case))
+    }
+
+    fn credential_user(path_variable: &str, role: &str) -> String {
+        let path = must(
+            std::env::var(path_variable),
+            "observation credential path absent",
+        );
+        let raw = must(std::fs::read(path), "observation credential unreadable");
+        let credential: HarnessCredentialV1 = must(
+            serde_json::from_slice(&raw),
+            "observation credential invalid",
+        );
+        assert_eq!(
+            credential.role, role,
+            "observation credential role mismatch"
+        );
+        credential.username
+    }
+
+    fn server_connection_observation(
+        runner_role: &'static str,
+        expected_account: &str,
+        credential_path_variable: &str,
+        credential_role: &str,
+        server_client_id: u64,
+    ) -> ConnectionObservationV1 {
+        assert!(server_client_id > 0, "observation server client ID absent");
+        let monitor_url = must(
+            std::env::var("SWARM_NATS_TLS_HTTP_URL"),
+            "observation monitor URL absent",
+        );
+        let output = must(
+            std::process::Command::new("curl")
+                .args([
+                    "--fail",
+                    "--silent",
+                    "--show-error",
+                    "--max-time",
+                    "2",
+                    &format!("{monitor_url}/connz?auth=1&subs=0"),
+                ])
+                .output(),
+            "observation monitor request",
+        );
+        assert!(
+            output.status.success(),
+            "observation monitor refused request"
+        );
+        assert!(
+            !output.stdout.is_empty() && output.stdout.len() <= MAX_PROTOCOL_RECORD_BYTES,
+            "observation monitor response is not bounded"
+        );
+        let response: serde_json::Value = must(
+            serde_json::from_slice(&output.stdout),
+            "observation monitor response invalid",
+        );
+        let connections = must_some(
+            response
+                .get("connections")
+                .and_then(serde_json::Value::as_array),
+            "observation monitor connections absent",
+        );
+        let record = must_some(
+            connections.iter().find(|record| {
+                record.get("cid").and_then(serde_json::Value::as_u64) == Some(server_client_id)
+            }),
+            "observation server connection absent",
+        );
+        let authority = ServerConnectionAuthorityV1 {
+            account: must_some(
+                record.get("account").and_then(serde_json::Value::as_str),
+                "observation server account absent",
+            )
+            .to_string(),
+            authenticated_user: must_some(
+                record
+                    .get("authorized_user")
+                    .and_then(serde_json::Value::as_str),
+                "observation server authenticated user absent",
+            )
+            .to_string(),
+            server_client_id,
+        };
+        assert_eq!(
+            authority.account, expected_account,
+            "observation server account differs"
+        );
+        assert_eq!(
+            authority.authenticated_user,
+            credential_user(credential_path_variable, credential_role),
+            "observation server user is not credential-bound"
+        );
+        let canonical = must(
+            canonical_wire_bytes(&authority),
+            "observation server evidence serialization",
+        );
+        ConnectionObservationV1 {
+            runner_role,
+            account: authority.account,
+            authenticated_user: authority.authenticated_user,
+            server_client_id,
+            server_evidence_canonical_hex: hex::encode(&canonical),
+            server_evidence_sha256: sha256_hex(&canonical),
+        }
+    }
+
+    fn runtime_observation_config() -> RuntimeWitnessClientConfigV1 {
+        RuntimeWitnessClientConfigV1 {
+            nats_url: must(
+                std::env::var("SWARM_NATS_STORE_TLS_URL"),
+                "runtime NATS URL absent",
+            ),
+            nats_credentials_path: must(
+                std::env::var("SWARM_NATS_RUNTIME_CREDENTIAL_PATH"),
+                "runtime credential path absent",
+            ),
+            credential_invocation_token: must(
+                std::env::var("SWARM_NATS_TLS_CREDENTIAL_TOKEN"),
+                "runtime credential token absent",
+            ),
+            tls_ca_path: must(
+                std::env::var("SWARM_NATS_TLS_CA_PATH"),
+                "runtime CA path absent",
+            ),
+            tls_server_name: must(
+                std::env::var("SWARM_NATS_TLS_SERVER_NAME"),
+                "runtime TLS server name absent",
+            ),
+            max_request_bytes: MAX_PROTOCOL_RECORD_BYTES,
+            max_response_bytes: MAX_PROTOCOL_RECORD_BYTES,
+            subscription_capacity: 8,
+            client_capacity: 8,
+            read_buffer_capacity: 4_096,
+            request_deadline_millis: PUBLIC_RESPONSE_GRANT_MILLIS,
+        }
+    }
+
+    pub(super) fn run_worker_observation_test() {
+        let thread = must(
+            std::thread::Builder::new()
+                .name("phase285-a2a-worker-observations".to_string())
+                .stack_size(64 * 1024 * 1024)
+                .spawn(|| {
+                    let runtime = must(
+                        tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(4)
+                            .thread_stack_size(64 * 1024 * 1024)
+                            .enable_all()
+                            .build(),
+                        "observation runtime",
+                    );
+                    runtime.block_on(Box::pin(run_worker_observation_test_async()));
+                }),
+            "observation thread",
+        );
+        must(thread.join(), "observation thread panicked");
+    }
+
+    async fn run_worker_observation_test_async() {
+        must(
+            initialize_deadline_stream().await,
+            "observation stream initialization",
+        );
+        let observer = Arc::new(RecordingWorkerTransitionObserverV1::default());
+        let mut fixture = must(
+            AuthenticatedDeadlineFixtureV1::new(observer.clone()),
+            "observation fixture",
+        );
+        must_some(
+            Arc::get_mut(&mut fixture.service),
+            "observation private service ownership",
+        )
+        .observe_worker_transitions_for_test(observer.clone());
+        let store_config = must(
+            deadline_store_config(&fixture.witness, &fixture.ready),
+            "observation store config",
+        );
+        let store_connection = must(
+            StoreRoleConnectionV1::connect(&store_config, &fixture.ready).await,
+            "observation store connection",
+        );
+        let store_client_id = store_connection.server_client_id_for_test();
+        let establish_request = must(fixture.establish_request(), "observation establish request");
+        let public_config = fixture.public_config.clone();
+        let witness_signer = fixture.witness.clone();
+        let evidence_signer = fixture.witness.clone();
+        let _ = &evidence_signer;
+        let ephemeral_signer = fixture.ephemeral.clone();
+        let admission = fixture.admission.clone();
+        let candidate = must(fixture.candidate(), "observation candidate");
+        let facts = fixture.facts.clone();
+        let mode = fixture.mode.clone();
+        let store_service = must_some(
+            Arc::try_unwrap(fixture.service).ok(),
+            "observation private service still shared",
+        );
+        let _store_runner = must(
+            StoreProxyServiceRunner::start(store_connection, store_service).await,
+            "observation shipping private start",
+        );
+
+        let witness_client = must(
+            connect_deadline_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await,
+            "observation witness connection",
+        );
+        let witness_client_id = witness_client.server_info().client_id;
+        let proxy_records = Arc::new(Mutex::new(Vec::new()));
+        let proxy = RecordingNatsProxyV1 {
+            inner: must(
+                NatsPublicWitnessStoreProxyClient::new(
+                    witness_client.clone(),
+                    MAX_PROTOCOL_RECORD_BYTES,
+                    MAX_PROTOCOL_RECORD_BYTES,
+                    STORE_RESPONSE_GRANT_MILLIS,
+                ),
+                "observation NATS proxy",
+            ),
+            records: proxy_records.clone(),
+        };
+        let mut dispatcher = must(
+            PublicWitnessDispatcher::new(public_config, witness_signer, proxy).await,
+            "observation dispatcher startup",
+        );
+        dispatcher.observe_worker_transitions_for_test(observer.clone());
+        let _public_runner = must(
+            PublicWitnessServiceRunner::start(witness_client, dispatcher).await,
+            "observation shipping public start",
+        );
+
+        let runtime_client = must(
+            RuntimeWitnessClient::connect(runtime_observation_config()).await,
+            "observation runtime connection",
+        );
+        let session = must(
+            runtime_client.establish_session(establish_request).await,
+            "observation establish response",
+        )
+        .session;
+        let prepare_request = must(
+            AuthenticatedDeadlineFixtureV1::mutation_request(
+                &ephemeral_signer,
+                &admission,
+                WitnessServiceOperationV1::Prepare,
+                WitnessOperationV1::Prepare,
+                &session,
+                &candidate.txid,
+                WitnessServiceRequestBodyV1::Prepare {
+                    session: Box::new(session.clone()),
+                    expected_head: None,
+                    candidate: Box::new(candidate.clone()),
+                },
+            ),
+            "observation Prepare request",
+        );
+        let prepared = must(
+            runtime_client.prepare_successor(prepare_request).await,
+            "observation Prepare response",
+        );
+        must(prepared.validate(), "observation Prepare attestation");
+        let commit_request = must(
+            AuthenticatedDeadlineFixtureV1::mutation_request(
+                &ephemeral_signer,
+                &admission,
+                WitnessServiceOperationV1::Commit,
+                WitnessOperationV1::Commit,
+                &session,
+                &candidate.txid,
+                WitnessServiceRequestBodyV1::Commit {
+                    session: Box::new(session.clone()),
+                    txid: candidate.txid.clone(),
+                },
+            ),
+            "observation Commit request",
+        );
+        let committed = must(
+            runtime_client.commit_prepared(commit_request).await,
+            "observation Commit response",
+        );
+        must(committed.validate(), "observation Commit attestation");
+
+        observer.clear();
+        facts.reads.store(0, Ordering::SeqCst);
+        facts.cas_attempted.store(0, Ordering::SeqCst);
+        facts.cas_applied.store(0, Ordering::SeqCst);
+        facts.inspect_ready.store(0, Ordering::SeqCst);
+        facts
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        mode.store(0, Ordering::SeqCst);
+        proxy_records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        let request = must(
+            AuthenticatedDeadlineFixtureV1::read_head_request(
+                &ephemeral_signer,
+                &admission,
+                session,
+                candidate.txid,
+            ),
+            "observation ReadHead request",
+        );
+        let response = must(
+            runtime_client.read_head(request.clone()).await,
+            "observation ReadHead response",
+        );
+        must(response.validate(), "observation ReadHead attestation");
+        assert_eq!(response.request_digest, request.request_digest);
+        assert_eq!(response.operation, WitnessOperationV1::ReadHead);
+
+        let worker_events = observer
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let proxy_exchanges = proxy_records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let store_operations = facts
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let publisher_attempts: Vec<_> = worker_events
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, event)| match event {
+                WorkerTransitionEventV1::PublishAttempt { worker, published } => {
+                    Some(PublisherObservationV1 {
+                        ordinal,
+                        worker: *worker,
+                        published: *published,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        let runtime_client_id = runtime_client.connection_client_id();
+        let connections = vec![
+            server_connection_observation(
+                "runtime-client",
+                "PHASE285_RUNTIME",
+                "SWARM_NATS_RUNTIME_CREDENTIAL_PATH",
+                "runtime",
+                runtime_client_id,
+            ),
+            server_connection_observation(
+                "public-witness",
+                "PHASE285_WITNESS",
+                "SWARM_NATS_WITNESS_CREDENTIAL_PATH",
+                "witness",
+                witness_client_id,
+            ),
+            server_connection_observation(
+                "private-store",
+                "PHASE285_WITNESS_STORE",
+                "SWARM_NATS_STORE_CREDENTIAL_PATH",
+                "witness-store",
+                store_client_id,
+            ),
+        ];
+        assert_eq!(
+            connections[0].authenticated_user,
+            runtime_client.authenticated_user(),
+            "observation runtime connection is not credential-bound"
+        );
+        assert!(connections.iter().all(|record| record.server_client_id > 0));
+        assert_eq!(
+            connections
+                .iter()
+                .map(|record| record.server_client_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            connections.len(),
+            "observation connection identities are not fresh and distinct"
+        );
+        assert_eq!(proxy_exchanges.len(), 1, "observation proxy count");
+        assert_eq!(store_operations.len(), 1, "observation store count");
+        assert_eq!(publisher_attempts.len(), 2, "observation publisher count");
+        assert!(publisher_attempts.iter().all(|record| record.published));
+        assert_eq!(
+            proxy_exchanges[0].operation,
+            WitnessStoreProxyOperationV1::ReadEntry
+        );
+        assert_eq!(proxy_exchanges[0].stream_id.as_deref(), Some("tom-primary"));
+        assert_eq!(store_operations[0].operation, "read_entry");
+        assert_eq!(
+            store_operations[0].stream_id.as_deref(),
+            Some("tom-primary")
+        );
+        assert_eq!(facts.cas_attempted.load(Ordering::SeqCst), 0);
+        assert_eq!(facts.cas_applied.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            proxy_exchanges[0].store_generation,
+            store_operations[0].store_generation
+        );
+        assert_eq!(
+            proxy_exchanges[0].store_state_digest,
+            store_operations[0].store_state_digest
+        );
+
+        let store_result_bytes = must(
+            hex::decode(&store_operations[0].result_canonical_hex),
+            "observation store result hex",
+        );
+        let store_result: WitnessStoreReadResultV1 = must(
+            serde_json::from_slice(&store_result_bytes),
+            "observation store result decode",
+        );
+        assert_eq!(
+            must(
+                canonical_wire_bytes(&store_result),
+                "observation decoded store result serialization",
+            ),
+            store_result_bytes,
+            "observation store result is not canonical"
+        );
+        let (selected_store_stream, selected_store_revision, selected_envelope) =
+            store_result.parts();
+        let proxy_response_bytes = must(
+            hex::decode(&proxy_exchanges[0].response_canonical_hex),
+            "observation proxy response hex",
+        );
+        let proxy_response = must(
+            WitnessStoreProxyResponseV1::decode(&proxy_response_bytes),
+            "observation proxy response decode",
+        );
+        let (proxy_stream, proxy_revision, proxy_envelope) = match &proxy_response.body {
+            swarm_governance::witness_engine::store::WitnessStoreProxyResponseBodyV1::Entry {
+                stream_id,
+                revision,
+                envelope,
+            } => (stream_id.as_str(), *revision, envelope.as_ref()),
+            _ => panic!("observation proxy response is not Entry"),
+        };
+        assert_eq!(
+            proxy_stream, selected_store_stream,
+            "observation proxy/store stream"
+        );
+        assert_eq!(
+            proxy_revision, selected_store_revision,
+            "observation proxy/store revision"
+        );
+        assert_eq!(
+            proxy_envelope, selected_envelope,
+            "observation proxy/store envelope"
+        );
+        let selected_current = must_some(
+            selected_envelope.current.as_ref(),
+            "observation selected current state absent",
+        );
+        let selected_head = &selected_current.head;
+        let public_head = match &response.response {
+            WitnessReadResponseV1::Head(head) => must_some(
+                head.as_ref().as_ref(),
+                "observation public ReadHead is absent",
+            ),
+            _ => panic!("observation public response is not ReadHead"),
+        };
+        assert_eq!(
+            public_head, selected_head,
+            "observation public head differs from authenticated store head"
+        );
+        let requested_txid = match &request.body {
+            WitnessServiceRequestBodyV1::ReadHead { target_txid, .. } => target_txid,
+            _ => panic!("observation request is not ReadHead"),
+        };
+        assert_eq!(
+            response.target_txid, selected_head.txid,
+            "observation response target differs from selected head"
+        );
+        assert_eq!(
+            requested_txid, &selected_head.txid,
+            "observation request target differs from selected head"
+        );
+
+        let request_bytes = must(request.canonical_bytes(), "observation request bytes");
+        let response_bytes = must(
+            WitnessServiceResponseV1::Read(response.clone()).canonical_bytes(),
+            "observation response bytes",
+        );
+        let worker_bytes = must(
+            canonical_wire_bytes(&worker_events),
+            "observation worker bytes",
+        );
+        let proxy_bytes = must(
+            canonical_wire_bytes(&proxy_exchanges),
+            "observation proxy bytes",
+        );
+        let store_bytes = must(
+            canonical_wire_bytes(&store_operations),
+            "observation store bytes",
+        );
+        let publisher_bytes = must(
+            canonical_wire_bytes(&publisher_attempts),
+            "observation publisher bytes",
+        );
+        let connection_bytes = must(
+            canonical_wire_bytes(&connections),
+            "observation connection bytes",
+        );
+        let counts = ObservationCountsV1 {
+            worker_events: worker_events.len(),
+            proxy_exchanges: proxy_exchanges.len(),
+            store_operations: store_operations.len(),
+            publisher_attempts: publisher_attempts.len(),
+            connections: connections.len(),
+            cas_attempted: facts.cas_attempted.load(Ordering::SeqCst),
+            cas_applied: facts.cas_applied.load(Ordering::SeqCst),
+        };
+        let selected_store_generation = selected_envelope.store_generation;
+        let selected_store_state_digest = must(
+            selected_envelope.store_state_digest(),
+            "observation selected store digest",
+        );
+        let selected_envelope_digest = must(
+            selected_envelope.signed_envelope_digest(),
+            "observation selected envelope digest",
+        );
+        let digests = ObservationDigestsV1 {
+            request_sha256: sha256_hex(&request_bytes),
+            response_sha256: sha256_hex(&response_bytes),
+            worker_events_sha256: sha256_hex(&worker_bytes),
+            proxy_exchanges_sha256: sha256_hex(&proxy_bytes),
+            store_operations_sha256: sha256_hex(&store_bytes),
+            publisher_attempts_sha256: sha256_hex(&publisher_bytes),
+            connections_sha256: sha256_hex(&connection_bytes),
+        };
+        let Some((path, tree, token, case)) = observation_identity() else {
+            return;
+        };
+        let row = ObservationLedgerV1 {
+            schema_version: 1,
+            tree: &tree,
+            invocation_token: &token,
+            case: &case,
+            status: "passed",
+            operation: request.operation,
+            public_subject: PublicWitnessServiceConfigV1::subject_for(request.operation),
+            request_nonce: request.request_nonce.clone(),
+            request_digest: request.request_digest.clone(),
+            request_canonical_hex: hex::encode(request_bytes),
+            response_canonical_hex: hex::encode(response_bytes),
+            selected_store_revision,
+            selected_store_generation,
+            selected_store_state_digest,
+            selected_envelope_digest,
+            selected_head_txid: selected_head.txid.clone(),
+            worker_events,
+            proxy_exchanges,
+            store_operations,
+            publisher_attempts,
+            connections,
+            counts,
+            digests,
+        };
+        let bytes = must(
+            canonical_wire_bytes(&row),
+            "observation ledger canonical bytes",
+        );
+        let mut file = must(
+            OpenOptions::new().write(true).create_new(true).open(path),
+            "observation ledger is not fresh",
+        );
+        must(file.write_all(&bytes), "observation ledger write");
+        must(file.write_all(b"\n"), "observation ledger frame");
+        must(file.sync_all(), "observation ledger sync");
+    }
+}
+
+#[cfg(test)]
+mod service_checkpoint_observation_tests {
+    #[test]
+    fn worker_observations_are_real_and_reconciled() {
+        assert!(
+            std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
+            "normal NATS harness is required"
+        );
+        super::deadline_state_machine_tests::run_worker_observation_test();
     }
 }

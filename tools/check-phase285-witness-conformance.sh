@@ -5456,6 +5456,208 @@ checkpoint_release_union_chain() {
 
 readonly -f checkpoint_release_union_chain checkpoint_release_union_validate_existing record_release_probe_runtime_receipt release_probe_ledger_path release_probe_provenance_path release_probe_provenance_values release_probe_workspace_artifact_values run_release_hook_probe run_release_lock_generation run_release_probe_check validate_release_probe_execution validate_release_probe_runtime_receipt validate_release_probe_wiring write_release_probe_provenance
 
+observation_source_guard() {
+  python3 -I - "$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/store_proxy_service.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "${1:-normal}" <<'PY'
+import pathlib, sys
+public_path, private_path, library_path, mode = map(str, sys.argv[1:])
+sources = {"public": pathlib.Path(public_path).read_text(), "private": pathlib.Path(private_path).read_text(), "library": pathlib.Path(library_path).read_text()}
+anchors = [
+    ("public_observer", "public", "let observer = dispatcher.worker_observer.clone();"),
+    ("private_observer", "private", "let observer = service.worker_observer.clone();"),
+    ("public_shipping_start", "library", "PublicWitnessServiceRunner::start(witness_client, dispatcher)"),
+    ("private_shipping_start", "library", "StoreProxyServiceRunner::start(store_connection, store_service)"),
+    ("runtime_read_head", "library", ".read_head(request.clone())"),
+    ("typed_nats_proxy", "library", "NatsPublicWitnessStoreProxyClient::new("),
+    ("store_records", "library", "records: Mutex<Vec<StoreObservationV1>>"),
+    ("server_identity", "library", "server_client_id_for_test()"),
+    ("server_authority", "library", "fn server_connection_observation("),
+    ("public_store_head", "library", '"observation public head differs from authenticated store head"'),
+    ("proxy_store_envelope", "library", '"observation proxy/store envelope"'),
+]
+def validate(candidate):
+    for label, source, anchor in anchors:
+        if candidate[source].count(anchor) != 1: raise ValueError(label)
+    if "Arc::new(NoopWorkerTransitionObserverV1)" in candidate["public"].split("async fn start_inner",1)[1].split("fn spawn_public_subscription",1)[0]: raise ValueError("public_observer_relabel")
+    if "Arc::new(NoopWorkerTransitionObserverV1)" in candidate["private"].split("async fn start_inner",1)[1].split("pub(crate) fn admit_private_subscription_message",1)[0]: raise ValueError("private_observer_relabel")
+    recording_store = candidate["library"].split("impl WitnessAtomicStore for DeadlineRecordingStoreV1",1)[1].split("struct AuthenticatedDeadlineFixtureV1",1)[0]
+    if "unwrap_or_default()" in recording_store: raise ValueError("store_observation_default")
+validate(sources)
+if mode == "self-test":
+    killed = 0
+    for label, source, anchor in anchors:
+        mutant = dict(sources); mutant[source] = mutant[source].replace(anchor, "/* omitted observation anchor */", 1)
+        try: validate(mutant)
+        except ValueError as error:
+            if str(error) != label: raise SystemExit(f"observation source mutation reason differs: {label}:{error}")
+            killed += 1
+        else: raise SystemExit(f"observation source mutation survived: {label}")
+    mutant = dict(sources); mutant["library"] = mutant["library"].replace('must(\n                    canonical_wire_bytes(ready),\n                    "store InspectReady observation serialization",\n                )', 'canonical_wire_bytes(ready).unwrap_or_default()', 1)
+    try: validate(mutant)
+    except ValueError as error:
+        if str(error) != "store_observation_default": raise SystemExit(f"observation source mutation reason differs: store_observation_default:{error}")
+        killed += 1
+    else: raise SystemExit("observation source mutation survived: store_observation_default")
+    print(f"observation_source_guard mutations={killed} passed=1")
+else: print("observation_source_guard passed=1")
+PY
+}
+
+run_service_checkpoint_observation_focus() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch ledger token output
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint observation tree is malformed" >&2; return 1; }
+  observation_source_guard normal
+  observation_source_guard self-test
+  scratch="$(phase285_create_confined_scratch phase285-observations)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  ledger="$scratch/observations.json"
+  output="$scratch/observations-test-output.txt"
+  token="$(python3 -I - "$accepted_tree" <<'PY'
+import hashlib, os, secrets, sys
+print(hashlib.sha256((sys.argv[1] + ":" + str(os.getpid()) + ":" + secrets.token_hex(32)).encode()).hexdigest())
+PY
+)"
+  PHASE285_OBSERVATION_LEDGER_REQUIRED=1 PHASE285_OBSERVATION_LEDGER="$ledger" \
+  PHASE285_OBSERVATION_TREE="$accepted_tree" PHASE285_OBSERVATION_INVOCATION_TOKEN="$token" \
+  PHASE285_OBSERVATION_CASE=service_checkpoint_observations \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+      service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled --exact | tee "$output"
+  grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$output" || { echo "observation exact test counts differ" >&2; return 1; }
+  python3 -I - "$ledger" "$accepted_tree" "$token" "$ROOT_DIR" "$scratch" <<'PY'
+import copy, hashlib, json, os, pathlib, subprocess, sys
+path, tree, token, root_text, scratch_text = sys.argv[1:]
+root, scratch = pathlib.Path(root_text), pathlib.Path(scratch_text)
+raw = open(path, "rb").read()
+def reject(value): raise ValueError(value)
+def canonical(value): return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+if not raw.endswith(b"\n") or raw.count(b"\n") != 1: raise SystemExit("observation ledger framing differs")
+row = json.loads(raw, parse_constant=reject)
+if raw != canonical(row) + b"\n": raise SystemExit("observation ledger is not canonical")
+expected_events = [
+ {"event":"dequeued","worker":"public"},{"event":"post_preflight","worker":"public"},{"cas_attempted":False,"event":"proxy_store_begin","operation":"read_entry","worker":"public"},
+ {"event":"dequeued","worker":"private"},{"event":"post_preflight","worker":"private"},{"cas_attempted":False,"event":"proxy_store_begin","operation":"read_entry","worker":"private"},
+ {"cas_applied":False,"event":"proxy_store_end","operation":"read_entry","succeeded":True,"worker":"private"},{"accepted":True,"event":"response_enqueue_attempt","worker":"private"},{"event":"publish_attempt","published":True,"worker":"private"},
+ {"cas_applied":False,"event":"proxy_store_end","operation":"read_entry","succeeded":True,"worker":"public"},{"accepted":True,"event":"response_enqueue_attempt","worker":"public"},{"event":"publish_attempt","published":True,"worker":"public"},
+]
+def digest(value): return hashlib.sha256(canonical(value)).hexdigest()
+def domain_digest(domain,value):
+    encoded=canonical(value)
+    return hashlib.sha256(domain + len(encoded).to_bytes(8,"big") + encoded).hexdigest()
+def validate(candidate):
+    keys={"case","connections","counts","digests","invocation_token","operation","proxy_exchanges","public_subject","publisher_attempts","request_canonical_hex","request_digest","request_nonce","response_canonical_hex","schema_version","selected_envelope_digest","selected_head_txid","selected_store_generation","selected_store_revision","selected_store_state_digest","status","store_operations","tree","worker_events"}
+    if set(candidate) != keys: raise ValueError("schema")
+    if candidate["schema_version"] != 1 or candidate["tree"] != tree or candidate["invocation_token"] != token or candidate["case"] != "service_checkpoint_observations" or candidate["status"] != "passed": raise ValueError("identity")
+    request=json.loads(bytes.fromhex(candidate["request_canonical_hex"]),parse_constant=reject); response=json.loads(bytes.fromhex(candidate["response_canonical_hex"]),parse_constant=reject)
+    if request.get("operation") != "ReadHead" or request.get("request_nonce") != candidate["request_nonce"] or request.get("request_digest") != candidate["request_digest"] or request.get("authorization",{}).get("request_digest") != candidate["request_digest"]: raise ValueError("request")
+    read=response.get("Read") if isinstance(response,dict) else None
+    if not isinstance(read,dict) or read.get("operation") != "ReadHead" or read.get("request_digest") != candidate["request_digest"]: raise ValueError("response")
+    if candidate["operation"] != "ReadHead" or candidate["public_subject"] != "swarm.governance.witness.v1.read_head": raise ValueError("routing")
+    if candidate["worker_events"] != expected_events: raise ValueError("worker_order")
+    proxy,store=candidate["proxy_exchanges"],candidate["store_operations"]
+    if len(proxy)!=1 or proxy[0]["operation"]!="ReadEntry" or proxy[0]["subject"]!="swarm.governance.witness.store.v1.read_entry" or proxy[0]["stream_id"]!="tom-primary": raise ValueError("proxy")
+    if len(store)!=1 or store[0]["operation"]!="read_entry" or store[0]["stream_id"]!="tom-primary" or store[0]["cas_attempted"] or store[0]["cas_applied"]: raise ValueError("store")
+    proxy_request=bytes.fromhex(proxy[0]["request_canonical_hex"]); proxy_response=bytes.fromhex(proxy[0]["response_canonical_hex"])
+    if hashlib.sha256(proxy_request).hexdigest()!=proxy[0]["request_sha256"] or hashlib.sha256(proxy_response).hexdigest()!=proxy[0]["response_sha256"]: raise ValueError("proxy_digest")
+    proxy_request_value=json.loads(proxy_request,parse_constant=reject); proxy_response_value=json.loads(proxy_response,parse_constant=reject)
+    if canonical(proxy_request_value)!=proxy_request or canonical(proxy_response_value)!=proxy_response or proxy_request_value.get("operation")!="ReadEntry" or proxy_request_value.get("request_nonce")!=proxy[0]["request_nonce"] or proxy_request_value.get("request_digest")!=proxy[0]["request_digest"] or proxy_response_value.get("operation")!="ReadEntry" or proxy_response_value.get("request_digest")!=proxy[0]["request_digest"]: raise ValueError("proxy_canonical")
+    store_input=bytes.fromhex(store[0]["input_canonical_hex"]); store_result=bytes.fromhex(store[0]["result_canonical_hex"])
+    store_input_value=json.loads(store_input,parse_constant=reject); store_result_value=json.loads(store_result,parse_constant=reject)
+    if hashlib.sha256(store_input).hexdigest()!=store[0]["input_sha256"] or hashlib.sha256(store_result).hexdigest()!=store[0]["result_sha256"] or canonical(store_input_value)!=store_input or canonical(store_result_value)!=store_result: raise ValueError("store_digest")
+    for field in ("revision","store_generation","store_state_digest"):
+        if proxy[0][field] != store[0][field]: raise ValueError("proxy_store_binding")
+    store_entry=store_result_value.get("Entry") if isinstance(store_result_value,dict) else None
+    proxy_entry=proxy_response_value.get("body",{}).get("Entry") if isinstance(proxy_response_value,dict) else None
+    if not isinstance(store_entry,dict) or not isinstance(proxy_entry,dict): raise ValueError("proxy_store_envelope")
+    if proxy_entry != store_entry: raise ValueError("proxy_store_envelope")
+    envelope=store_entry.get("envelope")
+    if not isinstance(envelope,dict): raise ValueError("proxy_store_envelope")
+    preimage_keys=("schema_version","admission_digest","bucket_epoch_digest","stream_initialization_digest","stream_id","witness_identity","witness_key_id","session","last_session_rotation","current","predecessor","prepared","genesis_abort","store_generation")
+    if any(key not in envelope for key in preimage_keys): raise ValueError("selected_store_binding")
+    preimage={key:envelope[key] for key in preimage_keys}
+    selected_state_digest=domain_digest(b"swarm.governance.witness-store.v1",preimage)
+    selected_envelope_digest=domain_digest(b"swarm.governance.witness-store-signed.v1",envelope)
+    if candidate["selected_store_revision"]!=store_entry.get("revision") or candidate["selected_store_generation"]!=envelope.get("store_generation") or candidate["selected_store_state_digest"]!=selected_state_digest or candidate["selected_envelope_digest"]!=selected_envelope_digest: raise ValueError("selected_store_binding")
+    current=envelope.get("current")
+    selected_head=current.get("head") if isinstance(current,dict) else None
+    public_response=read.get("response")
+    public_head=public_response.get("Head") if isinstance(public_response,dict) else None
+    if not isinstance(selected_head,dict) or public_head != selected_head or candidate["selected_head_txid"]!=selected_head.get("txid") or read.get("target_txid")!=selected_head.get("txid"):
+        raise ValueError("public_store_head")
+    request_body=request.get("body",{}).get("ReadHead") if isinstance(request.get("body"),dict) else None
+    if not isinstance(request_body,dict) or request_body.get("target_txid")!=selected_head.get("txid"): raise ValueError("public_store_head")
+    publishers=candidate["publisher_attempts"]
+    if publishers != [{"ordinal":8,"published":True,"worker":"private"},{"ordinal":11,"published":True,"worker":"public"}]: raise ValueError("publisher")
+    connections=candidate["connections"]
+    roles=[("runtime-client","PHASE285_RUNTIME","phase285_foreign"),("public-witness","PHASE285_WITNESS","phase285_witness"),("private-store","PHASE285_WITNESS_STORE","phase285_witness_store")]
+    if len(connections)!=3 or [(x["runner_role"],x["account"],x["authenticated_user"]) for x in connections]!=roles or any(not isinstance(x["server_client_id"],int) or x["server_client_id"]<=0 for x in connections) or len({x["server_client_id"] for x in connections})!=3: raise ValueError("connections")
+    for connection in connections:
+        evidence=bytes.fromhex(connection["server_evidence_canonical_hex"])
+        if hashlib.sha256(evidence).hexdigest()!=connection["server_evidence_sha256"]: raise ValueError("connections")
+        value=json.loads(evidence,parse_constant=reject)
+        if canonical(value)!=evidence or value!={"account":connection["account"],"authenticated_user":connection["authenticated_user"],"server_client_id":connection["server_client_id"]}: raise ValueError("connections")
+    arrays={"worker_events":candidate["worker_events"],"proxy_exchanges":proxy,"store_operations":store,"publisher_attempts":publishers,"connections":connections}
+    counts={key:len(value) for key,value in arrays.items()}; counts.update({"cas_attempted":0,"cas_applied":0})
+    if candidate["counts"] != counts: raise ValueError("counts")
+    digests={key+"_sha256":digest(value) for key,value in arrays.items()}; digests.update({"request_sha256":hashlib.sha256(bytes.fromhex(candidate["request_canonical_hex"])).hexdigest(),"response_sha256":hashlib.sha256(bytes.fromhex(candidate["response_canonical_hex"])).hexdigest()})
+    if candidate["digests"] != digests: raise ValueError("digests")
+validate(row)
+mutations=[]
+value=copy.deepcopy(row); value["worker_events"].pop(3); mutations.append(("missing","worker_order",value))
+value=copy.deepcopy(row); value["worker_events"][3],value["worker_events"][4]=value["worker_events"][4],value["worker_events"][3]; mutations.append(("reordered","worker_order",value))
+value=copy.deepcopy(row); value["store_operations"].append(copy.deepcopy(value["store_operations"][0])); mutations.append(("duplicated","store",value))
+value=copy.deepcopy(row); value["connections"][0]["server_client_id"]=0; mutations.append(("synthetic","connections",value))
+value=copy.deepcopy(row); value["proxy_exchanges"][0]["operation"]="InspectReady"; mutations.append(("relabeled","proxy",value))
+value=copy.deepcopy(row); value["request_digest"]="0"*64; mutations.append(("cross_request","request",value))
+value=copy.deepcopy(row); response=json.loads(bytes.fromhex(value["response_canonical_hex"]),parse_constant=reject); response["Read"]["response"]["Head"]=None; encoded=canonical(response); value["response_canonical_hex"]=encoded.hex(); value["digests"]["response_sha256"]=hashlib.sha256(encoded).hexdigest(); mutations.append(("public_head_absent","public_store_head",value))
+for name,index,field,replacement in (("account_substitution",0,"account","PHASE285_WITNESS"),("user_substitution",1,"authenticated_user","phase285_witness_store"),("client_id_substitution",2,"server_client_id",value["connections"][0]["server_client_id"])):
+    mutant=copy.deepcopy(row); mutant["connections"][index][field]=replacement
+    evidence={"account":mutant["connections"][index]["account"],"authenticated_user":mutant["connections"][index]["authenticated_user"],"server_client_id":mutant["connections"][index]["server_client_id"]}; encoded=canonical(evidence); mutant["connections"][index]["server_evidence_canonical_hex"]=encoded.hex(); mutant["connections"][index]["server_evidence_sha256"]=hashlib.sha256(encoded).hexdigest(); mutant["digests"]["connections_sha256"]=digest(mutant["connections"]); mutations.append((name,"connections",mutant))
+for name,reason,mutant in mutations:
+    try: validate(mutant)
+    except ValueError as error:
+        if str(error)!=reason: raise SystemExit(f"observation mutation reason differs: {name}:{error}")
+    else: raise SystemExit(f"observation mutation survived: {name}")
+exact_root=scratch/"observation-exact-tree"
+exact_root.mkdir()
+archive=subprocess.Popen(["git","-C",str(root),"archive",tree],stdout=subprocess.PIPE)
+unpack=subprocess.run(["tar","-xf","-","-C",str(exact_root)],stdin=archive.stdout,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False)
+archive.stdout.close()
+if archive.wait()!=0 or unpack.returncode!=0: raise SystemExit("observation exact-tree extraction failed")
+library=exact_root/"crates/swarm-governance-witness/src/lib.rs"
+source=library.read_text()
+immutable='''        let response = must(
+            runtime_client.read_head(request.clone()).await,
+            "observation ReadHead response",
+        );'''
+mutable=immutable.replace("let response =", "let mut response =")
+validation='''        must(response.validate(), "observation ReadHead attestation");'''
+mutation='''        must(response.validate(), "observation ReadHead attestation");
+        response.response = WitnessReadResponseV1::Head(Box::new(None));
+        response.signature = evidence_signer.sign(&must(
+            response.signing_bytes(),
+            "observation mutated ReadHead signing bytes",
+        ));
+        must(response.validate(), "observation mutated ReadHead attestation");'''
+if source.count(immutable)!=1 or source.count(validation)!=1: raise SystemExit("observation compiled head mutation anchor differs")
+library.write_text(source.replace(immutable,mutable,1).replace(validation,mutation,1))
+environment=os.environ.copy()
+environment["CARGO_TARGET_DIR"]=str(scratch/"observation-mutant-target")
+for key in ("PHASE285_OBSERVATION_LEDGER_REQUIRED","PHASE285_OBSERVATION_LEDGER","PHASE285_OBSERVATION_TREE","PHASE285_OBSERVATION_INVOCATION_TOKEN","PHASE285_OBSERVATION_CASE"):
+    environment.pop(key,None)
+try:
+    result=subprocess.run(["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled","--exact"],cwd=exact_root,env=environment,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False,timeout=120)
+except subprocess.TimeoutExpired as error:
+    raise SystemExit("observation compiled public-head mutation timed out") from error
+if result.returncode==0 or "running 1 test" not in result.stdout or "0 passed; 1 failed; 0 ignored" not in result.stdout or "observation public ReadHead is absent" not in result.stdout:
+    raise SystemExit("observation compiled public-head mutation did not fail at intended relation:\n"+result.stdout)
+print("service_checkpoint_observation_compiled_mutation mutation=public_head_absent compiled=1 executed=1 failed=1 intended=public_store_head")
+print("service_checkpoint_observations rows=1 worker=12 proxy=1 store=1 publisher=2 connections=3 cas_attempted=0 cas_applied=0 validator_mutations=10 compiled_mutations=1 passed=1")
+PY
+}
+
 run_service_checkpoint_deadline_focus() {
   local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
   local scratch ledger budget_receipt callsite_receipt constructor_receipt token output callsite_output constructor_output list_output integration_list_output
@@ -5549,6 +5751,8 @@ PY
   PHASE285_DEADLINE_TREE="$accepted_tree" \
   PHASE285_DEADLINE_INVOCATION_TOKEN="$token" \
   PHASE285_DEADLINE_CASE=service_checkpoint_deadline \
+  PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$(shasum -a 256 "$ROOT_DIR/tools/check-phase285-witness-integrity.sh" | awk '{print $1}')" \
+  PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$(shasum -a 256 "$ROOT_DIR/tools/fixtures/phase285-witness-integrity.json" | awk '{print $1}')" \
     cargo test -p swarm-governance-witness --test full_service_path --locked --offline \
       full_service_path_constructor_deadline_is_exact_and_receipt_bound \
       -- --exact --test-threads=1 | tee "$constructor_output"
@@ -5563,9 +5767,11 @@ PY
     "$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs" \
     "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" \
     "$ROOT_DIR/crates/swarm-governance-witness/tests/full_service_path.rs" \
-    "$ROOT_DIR" "$scratch" <<'PY'
+    "$ROOT_DIR" "$scratch" \
+    "$(shasum -a 256 "$ROOT_DIR/tools/check-phase285-witness-integrity.sh" | awk '{print $1}')" \
+    "$(shasum -a 256 "$ROOT_DIR/tools/fixtures/phase285-witness-integrity.json" | awk '{print $1}')" <<'PY'
 import copy, hashlib, json, os, pathlib, re, shutil, subprocess, sys
-ledger, budget_receipt, callsite_receipt, constructor_receipt, tree, token, config_path, private_path, public_path, library_path, fixture_path, root_path, scratch_path = sys.argv[1:]
+ledger, budget_receipt, callsite_receipt, constructor_receipt, tree, token, config_path, private_path, public_path, library_path, fixture_path, root_path, scratch_path, launcher_pin, manifest_pin = sys.argv[1:]
 ledger = pathlib.Path(ledger)
 budget_receipt = pathlib.Path(budget_receipt)
 callsite_receipt = pathlib.Path(callsite_receipt)
@@ -5658,8 +5864,6 @@ def validate(candidate, budget_value=budget, callsite_value=callsite, constructo
     if callsite_value["private_backend_calls"] != 1 or callsite_value["public_backend_calls"] != 1 or callsite_value["private_second_publications"] != 0 or callsite_value["public_second_publications"] != 0:
         raise ValueError("callsite backend/publication facts")
     constructor_keys = {"schema_version","tree","invocation_token","case","inner_id","status","live_nats_grants_proved","launcher_sha256","manifest_sha256","observations","observations_sha256","store_calls"}
-    launcher_pin = os.environ.get("PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256")
-    manifest_pin = os.environ.get("PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256")
     if set(constructor_value) != constructor_keys or constructor_value["schema_version"] != 1 or constructor_value["tree"] != tree or constructor_value["invocation_token"] != token or constructor_value["case"] != "service_checkpoint_deadline" or constructor_value["inner_id"] != "deadline_budget_constructor_exact" or constructor_value["status"] != "passed" or constructor_value["live_nats_grants_proved"] is not False or constructor_value["launcher_sha256"] != launcher_pin or constructor_value["manifest_sha256"] != manifest_pin or not launcher_pin or not manifest_pin or constructor_value["observations"] != constructor_observations or constructor_value["observations_sha256"] != hashlib.sha256(canonical(constructor_observations)).hexdigest() or constructor_value["store_calls"] != 0:
         raise ValueError("constructor receipt")
 
@@ -6488,6 +6692,10 @@ PY
 }
 
 case "${1:-}" in
+  --focused-service-checkpoint-observations)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-observations" >&2; exit 2; }
+    run_service_checkpoint_observation_focus
+    ;;
   --focused-service-checkpoint-deadline)
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-deadline" >&2; exit 2; }
     run_service_checkpoint_deadline_focus
@@ -6498,6 +6706,9 @@ case "${1:-}" in
     elif [ "$#" -eq 2 ] && [ "$2" = store-proxy-source ]; then
       store_proxy_source_guard normal
       store_proxy_source_guard self-test
+    elif [ "$#" -eq 2 ] && [ "$2" = service-checkpoint-observation-source ]; then
+      observation_source_guard normal
+      observation_source_guard self-test
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-release-hook ]; then
       run_release_hook_self_test
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-iterator-source ]; then
@@ -6514,7 +6725,7 @@ case "${1:-}" in
     elif [ "$#" -eq 1 ]; then
       run_self_tests
     else
-      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
+      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
       exit 2
     fi
     ;;
