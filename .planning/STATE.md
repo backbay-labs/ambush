@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-27T04:11:19Z"
+last_updated: "2026-08-27T06:28:00Z"
 last_activity: 2026-08-27
 progress:
   total_phases: 6
@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01 and 04-02 are accepted. Revision r20 preserves serial Tasks 04-03A1/A2/A3, keeps A1's truthful worker-budget/client-constructor boundary, gives A2 separate literal normal/relay live gates with fixed 3,000/12,000-ms max-one NATS response-grant schedules, and makes A3 rerun both. A1 production commit `ba0929d` was independently rejected P0/P1/P2=`0/4/0` and remains unpushed; A2 is blocked behind both pushed refs for a later accepted A1 commit, A3 behind A2, and 04-03B behind A3.
+**Current Plan:** Plan 04 — Tasks 04-01 and 04-02 are accepted. Revision r24 redesigns only Task 04-03A1 after r23 planning commit `692cecb` was rejected P0/P1/P2=`0/1/1`; all rejected planning and production objects remain unpushed. A1 now requires the live internal target to call the shipping public `start` entrypoints with only crate-private cfg(test) recorder injection, plus the joined real-constructor row. A2 is blocked behind both pushed refs for a later accepted A1 commit, A3 behind A2, and 04-03B behind A3.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-27
-**Last Activity Description:** Revision r19 planning commit `6badc93` closed r18's direct grant-gate defects but was independently rejected P0/P1/P2=`0/1/1`: A3 omitted A2's new normal grant projection, and STATE retained stale timestamps. Revision r20 adds the exact root-pinned A3 normal grant invocation before relay projections and refreshes both timestamps. Rejected A1 commit `ba0929d` remains clean and unpushed; its three bounded implementation findings remain open.
+**Last Activity Description:** Revision r23 planning commit `692cecb` was independently rejected P0/P1/P2=`0/1/1`: its live target called private `start_inner` rather than the shipping public `start`, and its boundary language incorrectly required production-private symbols to be absent from artifacts. Revision r24 makes the target invoke both public production entrypoints, injects the recorder only through crate-private cfg(test) runner builders, adds private/public compiled `start`-delegation bypass mutants, and distinguishes private/unnameable production seams from absent test-only symbols. The two-hour implementation window is closed; no production edit is authorized until r24 independently passes and is pushed.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-02 (`5ade791`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01 and 04-02 are accepted; completed-plan count remains 4/13. Rejected r10 tree `80e0739`, incomplete r12 tree `6df92b9`, and rejected A1 commit `ba0929d` remain read-only diagnostic evidence. Revision r17 passed planning review and is pushed; r18 was rejected P0/P1/P2=`0/2/1`; r19 was rejected P0/P1/P2=`0/1/1`; r20 is the mechanical A3-projection/timestamp correction awaiting review. No A1 production delivery is accepted. A2, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-02 (`5ade791`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01 and 04-02 are accepted; completed-plan count remains 4/13. Rejected production commits `ba0929d`, `15be9c9`, `2640f55` and rejected planning commits `cb9d10b`, `6ceca62`, `692cecb` remain read-only diagnostic evidence. Revision r20 passed independent planning review and is pushed at `e298a74`; revision r24 is the bounded A1 redesign awaiting immutable review. No A1 production candidate is accepted. A2, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-27 — r20 A3 projection and planning-ledger timestamp repair
-Stopped At: Task 04-02 production checkpoint `5ade79141a2f8249ef084d24fcfd5ef12251e48e` / tree `3e52c75335c693cc46e10a5e23248cb5d9b7e694` remains the accepted base. Revision r17 planning passed and was pushed; r18 was rejected P0/P1/P2=`0/2/1`; r19 was rejected P0/P1/P2=`0/1/1`; r20 corrects only A3's missing normal-grant projection and stale timestamps. A1 production commit `ba0929d83743e0b46a4dc6cd452c5db19466e677` / tree `ab0fd9199e34a0fe40775bd9e23054a9107e5e9a` remains rejected, clean, and unpushed immutable diagnostic evidence.
+Last Date: 2026-08-27 — r24 public-start wiring and boundary repair
+Stopped At: Task 04-02 production checkpoint `5ade79141a2f8249ef084d24fcfd5ef12251e48e` / tree `3e52c75335c693cc46e10a5e23248cb5d9b7e694` remains the accepted base. Audited r20 planning is pushed at `e298a74`. All later production/planning candidates through r23 remain rejected, clean, unpushed immutable diagnostic evidence. Revision r24 has no verdict or remote ref yet.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Review revision r20 as a five-file mechanical planning amendment and require P0/P1/P2=`0/0/0`. Verify A3's literal automated gate and validation row rerun the exact root-pinned normal `--focused-service-checkpoint-grants` command against the A3 tree before relay projections, and verify all activity timestamps are current. If accepted, push r20 to planning work/checkpoint refs. Then repair only the three remaining A1 findings in the existing worktree: executable exact-FQN Rust mutants, non-overwriting/distinct event evidence with observed retry semantics, and non-test default/all-feature debug/release API-absence probes. Produce a new single direct-child A1 commit on accepted base `5ade791`; independently review it before either A1 ref is pushed. Do not begin A2 until both origin refs resolve to the reviewed A1 commit; A3, 04-03B, Plans 05A-07B, the quarantined integration tree, and Phases 286-289 remain blocked.
+Review immutable revision r24 as exactly five planning files and require P0/P1/P2=`0/0/0`. Verify the second exact library-internal target invokes the shipping public `PublicWitnessServiceRunner::start` and `StoreProxyServiceRunner::start`; crate-private cfg(test) builders inject the bounded recorder into private runner state; public construction always selects Noop; and seven live-callsite mutants include both public-start delegation bypasses. Verify production-private seams are downstream-unnameable while only cfg(test) recorders/events/setters are absent from non-test artifacts. If accepted, atomically push r24 to planning work/checkpoint refs, then authorize one fresh two-hour A1 candidate from `5ade791` in the existing worktree. Independently review before production push; all later work remains blocked.
