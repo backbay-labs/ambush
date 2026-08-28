@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T15:32:00Z"
+last_updated: "2026-08-28T15:36:23Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b3 is durably banked at immutable commit `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, but remains unaccepted after r66's exact fresh-target RED. R67 was rejected `0/2/0`; uncommitted r68 is abandoned after cumulative review found `0/5/3`; immutable r69 `2bcd25b1616425c9c681ab62255b7fe356d8ad9c` was rejected `0/5/0`. The r70 review candidate preserves r69's four serial cumulative candidates and corrects only five execution-contract defects. Only R1a is next after immutable r70 acceptance. A2c's three dirty paths remain frozen and unaccepted; A3 and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b3 is durably banked at immutable commit `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, but remains unaccepted after r66's exact fresh-target RED. R67 was rejected `0/2/0`; uncommitted r68 is abandoned after cumulative review found `0/5/3`; immutable r69 `2bcd25b1616425c9c681ab62255b7fe356d8ad9c` was rejected `0/5/0`; immutable r70 `f7dc0c5a228bed248326101bdfea9db1071417e0` was rejected `0/2/0`. The r71 review candidate changes only the final taxonomy sentence and current routing labels. Only R1a is next after immutable r71 acceptance. A2c's three dirty paths remain frozen and unaccepted; A3 and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
 **Last Activity Description:** Cumulative review of exact A2b3 confirmed five P1 and three P2 defects. Exact source inspection proved async-nats `Other` can occur after its command was accepted and must not be `Unavailable`; NATS starts the response grant before the responder sees the message and exposes no remaining duration; both service processes wait forever without observing runner/connection loss; canonical workspace/dependency/wiring gates are red; relay recreation remains abort-only and exact fresh replay remains red. It also confirmed byte constants used as count ceilings, local enqueue labelled publication, and ordinary secret/config reads. R69 records one executable cumulative sequence. No production file was changed; A2c stayed frozen.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`); A2b3 `ed77183` is banked but unaccepted. Plans 01, 02, 03A, and 03B are complete; completed-plan count remains 4/13 because Plan 04 is open. The next production slice is only R1a after immutable r69 planning acceptance. R1b, R1c, R1d, A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted closure, and Phase 285 closure remain serially blocked. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`); A2b3 `ed77183` is banked but unaccepted. Plans 01, 02, 03A, and 03B are complete; completed-plan count remains 4/13 because Plan 04 is open. The next production slice is only R1a after immutable r71 planning acceptance. R1b, R1c, R1d, A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted closure, and Phase 285 closure remain serially blocked. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,7 +134,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — immutable r69 rejected 0/5/0; bounded r70 execution-contract correction drafted
+Last Date: 2026-08-28 — immutable r70 rejected 0/2/0; final r71 taxonomy/routing correction drafted
 Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` is the accepted frontier. A2b3 `ed77183d3d13d046e446d2837e8c5d21d1d1765d` remains durably banked but unaccepted after the exact fresh-target replay failed `Unavailable` following abort-only relay recreation. A2c is uncommitted and frozen at three dirty owned paths. No implementation window is active.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
@@ -142,4 +142,4 @@ Interrupted agent: None. The former broad swarm is stopped; one owner and one ho
 
 ## Next Command
 
-Freeze the six-path r70 direct-child planning correction and obtain immutable hostile P0/P1/P2=`0/0/0`. R70 changes no architecture or task scope: it narrows the NoResponders wording, requires idempotent SIGINT/SIGTERM drain, supervises exact test inventory, braces every Git object expression, and rejects/pins ambient indexes. Only then authorize R1a in one ephemeral unregistered clone based on exact banked A2b3 refs. Review and push R1a only as a candidate. Do not touch A2c, create a registered worktree, start R1b, retry r66, or call any intermediate object accepted production.
+Freeze the six-path r71 direct-child planning correction and obtain immutable hostile P0/P1/P2=`0/0/0`. R71 changes only two literals: `Unavailable` is exclusive to server-issued `NoResponders` while `InvalidSubject` remains `Configuration`, and current authorization routes through r71 rather than rejected r69/r70. Only then authorize R1a in one ephemeral unregistered clone based on exact banked A2b3 refs. Review and push R1a only as a candidate. Do not touch A2c, create a registered worktree, start R1b, retry r66, or call any intermediate object accepted production.
