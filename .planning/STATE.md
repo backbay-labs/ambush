@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T09:41:55Z"
+last_updated: "2026-08-28T09:45:50Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R55 final11 stopped at a topology command precondition. Draft r56 restores the already accepted harness-wrapped topology producer→consumer selector, carries only completed exact-final11 receipts, and authorizes no production-byte change. Production remains frozen pending immutable r56 review and push/fetch. A2c and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. Immutable r56 planning `9e884d1ce87563abde983e122d77e2d670eaba88` passed hostile P0/P1/P2=`0/0/0` and is pushed/fetched at both planning refs. One unchanged-final11 continuation is active from `2026-08-28T09:45:50Z` through hard stop `2026-08-28T11:45:50Z`. No production edit is authorized. A2c and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Read-only command audit traced the failure to r55 splitting the accepted topology gate. The correct A2b2 command runs `check-phase285-witness-integrity.sh --self-test topology-owner-blocks` inside `with-nats-jetstream.sh`; the wrapper exports the canonical config, four credential paths, scratch root, and invocation identity before the selector creates probe/projection artifacts and runs the exact external target plus all 33 controls. Draft r56 replaces the invalid direct+unwrapped pair with that single atomic command. Final11 remains exact and untouched.
+**Last Activity Description:** Immutable r56 planning commit/tree `9e884d1c` / `bac09578` received independent P0/P1/P2=`0/0/0`, confidence high. The reviewer verified exactly one harness-wrapped topology selector, zero direct/unwrapped variants, one execution of every incomplete gate, thirteen final11 identity brackets, the complete artifact producer→consumer chain, and unchanged final11 identities. Both planning refs fetch exactly. A fresh no-edit continuation window is recorded.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — r56 command-only continuation planning
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R55 production stopped before topology semantics. R56 is planning-only and awaits immutable hostile review. Final11 remains exact and unaccepted; no production continuation is authorized.
+Last Date: 2026-08-28 — r56 unchanged-final11 continuation authorized
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R56 planning is independently accepted and remotely banked. Final11 continuation may run once until `2026-08-28T11:45:50Z`; A2c remains blocked.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Freeze exactly the five r56 planning paths, verify the literal continuation command contains one harness-wrapped topology selector and no direct/unwrapped topology invocation, verify exact final11 identities and command syntax, obtain immutable hostile P0/P1/P2=`0/0/0`, and push/fetch `checkpoint/v179-phase285-plan04-task03a-plan-r56` plus the planning work ref. Only then record a fresh two-hour continuation. No production edit, retry before authorization, extension, new worktree, A2c, or later work.
+In the existing production worktree, reverify exact unchanged final11 and execute immutable `<r56_continuation_automated>` once before hard stop `2026-08-28T11:45:50Z`. Stop at the first nonzero result without retry/edit/commit/push. If completely green, stage exactly eleven paths, require real-index final11, commit one direct child of A2b2, and obtain immutable hostile production review before either A2b3 push. Do not create a worktree or start A2c.
