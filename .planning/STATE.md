@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T10:06:44Z"
+last_updated: "2026-08-28T10:18:02Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R56 advanced exact final11 through topology, observations, deadline, and normal grants, then relay topology failed in `2.03s` at an ambiguous pre-worker grant delivery. R57 is a plan-only, one-run diagnostic projection to classify public/private, transport stage, and concurrency before any causal fix. Final11 remains exact, uncommitted, unpushed, and unaccepted. No production process or edit authority is active. A2c and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R56 advanced exact final11 through topology, observations, deadline, and normal grants, then relay topology failed in `2.03s` at an ambiguous pre-worker grant delivery. R57 planning was rejected `0/3/0`. R58 moves the one-run classified diagnostic into a bounded ephemeral clone with an exact transcript contract; it grants no production edit. Final11 remains exact, uncommitted, unpushed, and unaccepted. A2c and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Root banked the r56 stop ledger at `6762e25` and fetched the exact work ref without moving the r56 checkpoint. Retained transcript audit proves relay-positive failed after `2.03s`, before receipt/worker/replay semantics, with no permission/disconnect event and no public/private attribution. Source audit found five transport failures and both joined cases collapse to the same error. R57 therefore authorizes only a temporary test-only classified diagnostic after hostile plan review; it cannot commit or repair production.
+**Last Activity Description:** Immutable r57 `17d9cfb` / tree `84d21ff8` was rejected P0/P1/P2=`0/3/0`: wrong harness filtered-count contract, unsafe in-place restoration, and unbounded/unparsed output. R58 corrects all three with exact `18` prefix, an ephemeral shared clone reset to final11, a 300-second/4-MiB supervisor, one canonical terminal record, and seven parser negative controls. Production remains frozen pending immutable r58 review.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — r57 causal diagnostic drafted
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. Final11 is exact and unaccepted. R56 failure is localized only to an ambiguous pre-worker relay-grant delivery; no production continuation is authorized until immutable r57 review/push. A2c remains blocked.
+Last Date: 2026-08-28 — r58 causal diagnostic drafted
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. Final11 is exact and unaccepted. R57 is rejected. No diagnostic or production continuation is authorized until immutable r58 zero-finding review/push. A2c remains blocked.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Freeze the r57 planning object and obtain one immutable hostile plan review. Only a zero-finding review and exact pushed/fetched planning refs may authorize its one-run temporary diagnostic projection. That projection must classify the first failing grant case/stage, restore exact final11, and stop. Do not implement a production fix, rerun relay-positive, create a worktree, or start A2c.
+Freeze the r58 planning object and obtain one immutable hostile plan review. Only a zero-finding review and exact pushed/fetched planning refs may authorize its one-run bounded diagnostic clone. The production worktree must remain untouched. Record one classified or invalid result, clean the validated scratch, and stop. Do not implement a production fix, rerun relay-positive, create a registered worktree, or start A2c.
