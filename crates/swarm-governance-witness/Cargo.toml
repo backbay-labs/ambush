@@ -9,6 +9,14 @@ license.workspace = true
 name = "swarm_governance_witness"
 path = "src/lib.rs"
 
+[[bin]]
+name = "swarm-governance-witness"
+path = "src/bin/swarm-governance-witness.rs"
+
+[[bin]]
+name = "swarm-governance-witness-store"
+path = "src/bin/swarm-governance-witness-store.rs"
+
 [dependencies]
 async-nats.workspace = true
 async-trait.workspace = true

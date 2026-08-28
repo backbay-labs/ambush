@@ -11,7 +11,10 @@ use swarm_governance::witness_service::{
     WitnessServiceOperationV1, WitnessServiceRequestBodyV1, WitnessServiceRequestV1,
     WitnessServiceResponseV1,
 };
-use swarm_governance_witness::RuntimeWitnessClientConfigV1;
+use swarm_governance_witness::{
+    RuntimeWitnessClientConfigV1, public_response_grant_millis, response_grant_maximum,
+    store_response_grant_millis,
+};
 
 fn must<T, E: std::fmt::Debug>(result: Result<T, E>, context: &str) -> T {
     result.unwrap_or_else(|error| panic!("{context}: {error:?}"))
@@ -640,6 +643,10 @@ fn independently_validate_artifacts(ledger_bytes: &[u8], receipt_bytes: &[u8]) {
 
 #[test]
 fn service_checkpoint_runtime_client_transport_is_closed() {
+    assert_eq!(store_response_grant_millis(), 3_000);
+    assert_eq!(public_response_grant_millis(), 12_000);
+    assert_eq!(response_grant_maximum(), 1);
+    assert!(store_response_grant_millis() < public_response_grant_millis());
     let config = RuntimeWitnessClientConfigV1 {
         nats_url: "tls://localhost:4222".to_string(),
         nats_credentials_path: "/run/phase285/runtime.credentials.json".to_string(),

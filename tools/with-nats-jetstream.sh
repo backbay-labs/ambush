@@ -17,6 +17,8 @@ STORE_USER="phase285_witness_store"
 STORE_PASSWORD="phase285_witness_store_fixed_password"
 INIT_USER="phase285_expected"
 INIT_PASSWORD="phase285_expected_fixed_password"
+RELAY_USER="phase285_relay"
+RELAY_PASSWORD="phase285_relay_fixed_password"
 EXPECTED_USER="$INIT_USER"
 EXPECTED_PASSWORD="$INIT_PASSWORD"
 FOREIGN_ACCOUNT="$RUNTIME_ACCOUNT"
@@ -79,7 +81,7 @@ cleanup_confined_scratch() {
 }
 
 write_configuration() {
-  local scratch="$1"
+  local scratch="$1" topology_mode="${2:-normal}"
   cat >"$scratch/nats.conf" <<EOF
 server_name: phase285-nats-harness
 port: 4222
@@ -142,7 +144,7 @@ accounts {
           "swarm.governance.witness.v1.fetch_payload",
           "_INBOX.>"
         ],
-        allow_responses: { max: 1, expires: "2s" }
+        allow_responses: { max: 1, expires: "12s" }
       }
     } ]
     exports: [
@@ -179,7 +181,7 @@ accounts {
             "swarm.governance.witness.store.v1.compare_and_swap",
             "_INBOX.>"
           ],
-          allow_responses: { max: 1, expires: "2s" }
+          allow_responses: { max: 1, expires: "3s" }
         }
       },
       {
@@ -205,15 +207,91 @@ accounts {
   }
 }
 EOF
+  if [[ "$topology_mode" == relay ]]; then
+    python3 -I - "$scratch/nats.conf" <<'PY'
+import pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+public = ["fence", "establish", "discover", "prepare", "commit", "abort", "read_prepared", "read_head", "fetch_payload"]
+private = ["inspect_ready", "read_entry", "compare_and_swap"]
+runtime_raw = ',\n          "$JS.API.>", "$KV.>"'
+if text.count(runtime_raw) != 1:
+    raise SystemExit("relay runtime raw-authority anchor differs")
+text = text.replace(runtime_raw, "", 1)
+runtime_advisory = ', "$JS.EVENT.ADVISORY.>"'
+if text.count(runtime_advisory) != 1:
+    raise SystemExit("relay runtime advisory anchor differs")
+text = text.replace(runtime_advisory, "", 1)
+
+for name in public:
+    ordinary = f"swarm.governance.witness.v1.{name}"
+    routed = f"swarm.governance.witness.relay.v1.{name}"
+    imported = f'{{ service: {{ account: PHASE285_WITNESS, subject: "{ordinary}" }} }}'
+    replacement = f'{{ service: {{ account: PHASE285_RELAY, subject: "{routed}" }}, to: "{ordinary}" }}'
+    exported = f'{{ service: "{ordinary}", accounts: [PHASE285_RUNTIME] }}'
+    if text.count(imported) != 1 or text.count(exported) != 1:
+        raise SystemExit(f"relay public topology anchor differs: {name}")
+    text = text.replace(imported, replacement, 1)
+    text = text.replace(exported, exported.replace("PHASE285_RUNTIME", "PHASE285_RELAY"), 1)
+
+for name in private:
+    ordinary = f"swarm.governance.witness.store.v1.{name}"
+    routed = f"swarm.governance.witness.relay.store.v1.{name}"
+    imported = f'{{ service: {{ account: PHASE285_WITNESS_STORE, subject: "{ordinary}" }} }}'
+    replacement = f'{{ service: {{ account: PHASE285_RELAY, subject: "{routed}" }}, to: "{ordinary}" }}'
+    exported = f'{{ service: "{ordinary}", accounts: [PHASE285_WITNESS] }}'
+    if text.count(imported) != 1 or text.count(exported) != 1:
+        raise SystemExit(f"relay private topology anchor differs: {name}")
+    text = text.replace(imported, replacement, 1)
+    text = text.replace(exported, exported.replace("PHASE285_WITNESS", "PHASE285_RELAY"), 1)
+
+def rows(prefix, names):
+    return [f'"{prefix}{name}"' for name in names]
+
+public_routed = rows("swarm.governance.witness.relay.v1.", public)
+public_forward = rows("swarm.governance.witness.relay.forward.v1.", public)
+private_routed = rows("swarm.governance.witness.relay.store.v1.", private)
+private_forward = rows("swarm.governance.witness.relay.forward.store.v1.", private)
+exports = [f'      {{ service: {subject}, accounts: [PHASE285_RUNTIME] }}' for subject in public_routed]
+exports += [f'      {{ service: {subject}, accounts: [PHASE285_WITNESS] }}' for subject in private_routed]
+imports = []
+for name in public:
+    imports.append(f'      {{ service: {{ account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.{name}" }}, to: "swarm.governance.witness.relay.forward.v1.{name}" }}')
+for name in private:
+    imports.append(f'      {{ service: {{ account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.{name}" }}, to: "swarm.governance.witness.relay.forward.store.v1.{name}" }}')
+relay = """
+  PHASE285_RELAY {
+    users: [ {
+      user: "phase285_relay", password: "phase285_relay_fixed_password",
+      permissions: {
+        publish: [\n          %s\n        ],
+        subscribe: [\n          %s,\n          "_INBOX.>"\n        ],
+        allow_responses: { max: 1, expires: "12s" }
+      }
+    } ]
+    exports: [\n%s\n    ]
+    imports: [\n%s\n    ]
+  }
+""" % (",\n          ".join(public_forward + private_forward), ",\n          ".join(public_routed + private_routed), ",\n".join(exports), ",\n".join(imports))
+needle = "\n  PHASE285_WITNESS_STORE {"
+if text.count(needle) != 1:
+    raise SystemExit("relay account insertion anchor differs")
+path.write_text(text.replace(needle, relay + needle, 1))
+PY
+  elif [[ "$topology_mode" != normal ]]; then
+    return 64
+  fi
   TLS_RUNTIME_PASSWORD="$(openssl rand -hex 32)"
   TLS_WITNESS_PASSWORD="$(openssl rand -hex 32)"
   TLS_STORE_PASSWORD="$(openssl rand -hex 32)"
   TLS_INIT_PASSWORD="$(openssl rand -hex 32)"
+  TLS_RELAY_PASSWORD="$(openssl rand -hex 32)"
   TLS_CREDENTIAL_TOKEN="$(openssl rand -hex 32)"
   [[ ${#TLS_RUNTIME_PASSWORD} -eq 64 && ${#TLS_WITNESS_PASSWORD} -eq 64 &&
-     ${#TLS_STORE_PASSWORD} -eq 64 && ${#TLS_INIT_PASSWORD} -eq 64 &&
+     ${#TLS_STORE_PASSWORD} -eq 64 && ${#TLS_INIT_PASSWORD} -eq 64 && ${#TLS_RELAY_PASSWORD} -eq 64 &&
      ${#TLS_CREDENTIAL_TOKEN} -eq 64 ]] || return 1
-  [[ "$(printf '%s\n' "$TLS_RUNTIME_PASSWORD" "$TLS_WITNESS_PASSWORD" "$TLS_STORE_PASSWORD" "$TLS_INIT_PASSWORD" | LC_ALL=C sort -u | wc -l | tr -d ' ')" == 4 ]] || return 1
+  [[ "$(printf '%s\n' "$TLS_RUNTIME_PASSWORD" "$TLS_WITNESS_PASSWORD" "$TLS_STORE_PASSWORD" "$TLS_INIT_PASSWORD" "$TLS_RELAY_PASSWORD" | LC_ALL=C sort -u | wc -l | tr -d ' ')" == 5 ]] || return 1
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -subj "/CN=phase285-local-ca" \
     -addext "basicConstraints=critical,CA:TRUE" \
@@ -248,6 +326,16 @@ tls = '''tls {
 '''
 pathlib.Path(target).write_text(tls + value)
 PY
+  if [[ "$topology_mode" == relay ]]; then
+    python3 -I - "$scratch/nats-tls.conf" "$RELAY_PASSWORD" "$TLS_RELAY_PASSWORD" <<'PY'
+import pathlib, sys
+path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+value = path.read_text()
+if value.count(old) != 1:
+    raise SystemExit("relay TLS credential replacement cardinality differs")
+path.write_text(value.replace(old, new, 1))
+PY
+  fi
   printf '{"schema_version":1,"role":"runtime","username":"%s","password":"%s","invocation_token":"%s"}' \
     "$RUNTIME_USER" "$TLS_RUNTIME_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/runtime.credentials.json"
   printf '{"schema_version":1,"role":"witness","username":"%s","password":"%s","invocation_token":"%s"}' \
@@ -256,6 +344,8 @@ PY
     "$STORE_USER" "$TLS_STORE_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/store.credentials.json"
   printf '{"schema_version":1,"role":"init","username":"%s","password":"%s","invocation_token":"%s"}' \
     "$INIT_USER" "$TLS_INIT_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/init.credentials.json"
+  printf '{"schema_version":1,"role":"relay","username":"%s","password":"%s","invocation_token":"%s"}' \
+    "$RELAY_USER" "$TLS_RELAY_PASSWORD" "$TLS_CREDENTIAL_TOKEN" >"$scratch/relay.credentials.json"
   cat >"$scratch/compose.override.yml" <<EOF
 services:
   nats:
@@ -286,7 +376,7 @@ EOF
   chmod 600 "$scratch/nats.conf" "$scratch/nats-tls.conf" "$scratch/compose.override.yml" \
     "$scratch/tls-ca-key.pem" "$scratch/tls-server-key.pem" \
     "$scratch/runtime.credentials.json" "$scratch/witness.credentials.json" \
-    "$scratch/store.credentials.json" "$scratch/init.credentials.json"
+    "$scratch/store.credentials.json" "$scratch/init.credentials.json" "$scratch/relay.credentials.json"
 }
 
 validate_authority_topology() {
@@ -300,11 +390,13 @@ source = path.read_text()
 PUBLIC=[f"swarm.governance.witness.v1.{suffix}" for suffix in ["fence","establish","discover","prepare","commit","abort","read_prepared","read_head","fetch_payload"]]
 PRIVATE=[f"swarm.governance.witness.store.v1.{suffix}" for suffix in ["inspect_ready","read_entry","compare_and_swap"]]
 INIT=["$JS.API.STREAM.CREATE.KV_phase285_service","$JS.API.STREAM.UPDATE.KV_phase285_service","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_service.__witness_bucket_manifest","$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"]
-ACCOUNTS=["PHASE285_RUNTIME","PHASE285_WITNESS","PHASE285_WITNESS_STORE"]
-PRINCIPALS=[("PHASE285_RUNTIME","phase285_foreign"),("PHASE285_WITNESS","phase285_witness"),("PHASE285_WITNESS_STORE","phase285_witness_store"),("PHASE285_WITNESS_STORE","phase285_expected")]
+RELAY_PRESENT="PHASE285_RELAY {" in source
+ACCOUNTS=["PHASE285_RUNTIME","PHASE285_WITNESS"] + (["PHASE285_RELAY"] if RELAY_PRESENT else []) + ["PHASE285_WITNESS_STORE"]
+PRINCIPALS=[("PHASE285_RUNTIME","phase285_foreign"),("PHASE285_WITNESS","phase285_witness")] + ([('PHASE285_RELAY','phase285_relay')] if RELAY_PRESENT else []) + [("PHASE285_WITNESS_STORE","phase285_witness_store"),("PHASE285_WITNESS_STORE","phase285_expected")]
 EXPECTED_PRINCIPALS={
   "PHASE285_RUNTIME":["phase285_foreign"],
   "PHASE285_WITNESS":["phase285_witness"],
+  **({"PHASE285_RELAY":["phase285_relay"]} if RELAY_PRESENT else {}),
   "PHASE285_WITNESS_STORE":["phase285_witness_store","phase285_expected"],
 }
 
@@ -372,7 +464,7 @@ def optional_authority_array(account,name):
 def imports(account):
     block=optional_authority_array(account,"imports")
     if block is None: return []
-    rows=re.findall(r'\{\s*service:\s*\{\s*account:\s*([A-Z][A-Z0-9_]*),\s*subject:\s*"([^"]+)"(?:,\s*to:\s*"([^"]+)")?\s*\}\s*\}',block,re.S)
+    rows=re.findall(r'\{\s*service:\s*\{\s*account:\s*([A-Z][A-Z0-9_]*),\s*subject:\s*"([^"]+)"\s*\}(?:,\s*to:\s*"([^"]+)")?\s*\}',block,re.S)
     if len(rows)!=len(re.findall(r'\{\s*service\s*:',block)): raise ValueError("topology[imports-malformed]")
     return [(subject,to or subject,owner) for owner,subject,to in rows]
 
@@ -395,10 +487,15 @@ def parse_topology(text):
 
 def validate(value):
     graph=parse_topology(value)
+    public_routed=[subject.replace("swarm.governance.witness.v1.","swarm.governance.witness.relay.v1.") for subject in PUBLIC]
+    public_forward=[subject.replace("swarm.governance.witness.v1.","swarm.governance.witness.relay.forward.v1.") for subject in PUBLIC]
+    private_routed=[subject.replace("swarm.governance.witness.store.v1.","swarm.governance.witness.relay.store.v1.") for subject in PRIVATE]
+    private_forward=[subject.replace("swarm.governance.witness.store.v1.","swarm.governance.witness.relay.forward.store.v1.") for subject in PRIVATE]
     expected_permissions={
-      "phase285_foreign":(PUBLIC+["$JS.API.>","$KV.>"],["_INBOX.>","$JS.EVENT.ADVISORY.>"],[]),
-      "phase285_witness":(PRIVATE,PUBLIC+["_INBOX.>"],[["1","2s"]]),
-      "phase285_witness_store":(["$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service"],PRIVATE+["_INBOX.>"],[["1","2s"]]),
+      "phase285_foreign":(PUBLIC+([] if RELAY_PRESENT else ["$JS.API.>","$KV.>"]),["_INBOX.>"]+([] if RELAY_PRESENT else ["$JS.EVENT.ADVISORY.>"]),[]),
+      "phase285_witness":(PRIVATE,PUBLIC+["_INBOX.>"],[["1","12s"]]),
+      **({"phase285_relay":(public_forward+private_forward,public_routed+private_routed+["_INBOX.>"],[["1","12s"]])} if RELAY_PRESENT else {}),
+      "phase285_witness_store":(["$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service"],PRIVATE+["_INBOX.>"],[["1","3s"]]),
       "phase285_expected":(INIT,["_INBOX.>"],[]),
     }
     for row in graph["principals"]:
@@ -406,8 +503,22 @@ def validate(value):
         if row["publish"]!=publish: raise ValueError(f'topology[publish:{row["username"]}]')
         if row["subscribe"]!=subscribe: raise ValueError(f'topology[subscribe:{row["username"]}]')
         if row["response_grant"]!=grant: raise ValueError(f'topology[response-grant:{row["username"]}]')
-    expected_imports={"PHASE285_RUNTIME":[(subject,subject,"PHASE285_WITNESS") for subject in PUBLIC],"PHASE285_WITNESS":[(subject,subject,"PHASE285_WITNESS_STORE") for subject in PRIVATE],"PHASE285_WITNESS_STORE":[]}
-    expected_exports={"PHASE285_RUNTIME":[],"PHASE285_WITNESS":[(subject,"service","PHASE285_RUNTIME") for subject in PUBLIC],"PHASE285_WITNESS_STORE":[(subject,"service","PHASE285_WITNESS") for subject in PRIVATE]}
+    if RELAY_PRESENT:
+        expected_imports={
+          "PHASE285_RUNTIME":[(routed,ordinary,"PHASE285_RELAY") for routed,ordinary in zip(public_routed,PUBLIC,strict=True)],
+          "PHASE285_WITNESS":[(routed,ordinary,"PHASE285_RELAY") for routed,ordinary in zip(private_routed,PRIVATE,strict=True)],
+          "PHASE285_RELAY":[(ordinary,forward,"PHASE285_WITNESS") for ordinary,forward in zip(PUBLIC,public_forward,strict=True)]+[(ordinary,forward,"PHASE285_WITNESS_STORE") for ordinary,forward in zip(PRIVATE,private_forward,strict=True)],
+          "PHASE285_WITNESS_STORE":[],
+        }
+        expected_exports={
+          "PHASE285_RUNTIME":[],
+          "PHASE285_WITNESS":[(subject,"service","PHASE285_RELAY") for subject in PUBLIC],
+          "PHASE285_RELAY":[(subject,"service","PHASE285_RUNTIME") for subject in public_routed]+[(subject,"service","PHASE285_WITNESS") for subject in private_routed],
+          "PHASE285_WITNESS_STORE":[(subject,"service","PHASE285_RELAY") for subject in PRIVATE],
+        }
+    else:
+        expected_imports={"PHASE285_RUNTIME":[(subject,subject,"PHASE285_WITNESS") for subject in PUBLIC],"PHASE285_WITNESS":[(subject,subject,"PHASE285_WITNESS_STORE") for subject in PRIVATE],"PHASE285_WITNESS_STORE":[]}
+        expected_exports={"PHASE285_RUNTIME":[],"PHASE285_WITNESS":[(subject,"service","PHASE285_RUNTIME") for subject in PUBLIC],"PHASE285_WITNESS_STORE":[(subject,"service","PHASE285_WITNESS") for subject in PRIVATE]}
     for owner in ACCOUNTS:
         if graph["imports"][owner]!=expected_imports[owner]: raise ValueError(f"topology[imports:{owner}]")
         if graph["exports"][owner]!=expected_exports[owner]: raise ValueError(f"topology[exports:{owner}]")
@@ -415,7 +526,7 @@ def validate(value):
 # PHASE285_TOPOLOGY_VALIDATOR_END
 
 validate(source)
-if mode == "validate": print("phase285_authority_topology accounts=3 principals=4 public=9 private=3 init=6 passed=1"); raise SystemExit(0)
+if mode == "validate": print(f"phase285_authority_topology accounts={len(ACCOUNTS)} principals={len(PRINCIPALS)} public=9 private=3 init=6 relay={int(RELAY_PRESENT)} passed=1"); raise SystemExit(0)
 if mode != "self-test": raise SystemExit("unknown topology validator mode")
 
 def once(text,old,new,label):
@@ -451,7 +562,7 @@ mutations.extend([
  ("import_to_substitution",once(source,runtime_fence,runtime_fence[:-2]+', to: "swarm.governance.witness.v1.wrong" }',"import_to_substitution")),
  ("import_source_account_substitution",once(source,runtime_fence,runtime_fence.replace("PHASE285_WITNESS","PHASE285_WITNESS_STORE"),"import_source_account_substitution")),
  ("export_allowed_account_substitution",once(source,'{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME] }','{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE] }',"export_allowed_account_substitution")),
- ("response_grant_move",once_after(source,'user: "phase285_witness"','allow_responses: { max: 1, expires: "2s" }','allow_responses: { max: 2, expires: "2s" }',"response_grant_move")),
+ ("response_grant_move",once_after(source,'user: "phase285_witness"','allow_responses: { max: 1, expires: "12s" }','allow_responses: { max: 2, expires: "12s" }',"response_grant_move")),
  ("cross_principal_permission_swap",swap(source,'"swarm.governance.witness.store.v1.inspect_ready",\n          "swarm.governance.witness.store.v1.read_entry",\n          "swarm.governance.witness.store.v1.compare_and_swap"','"$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef",\n            "$JS.API.STREAM.INFO.KV_phase285_service",\n            "$JS.API.STREAM.MSG.GET.KV_phase285_service"',"PERMISSION_SWAP")),
 ])
 mutations.extend([
@@ -486,7 +597,7 @@ for label,candidate in mutations:
             matches=[line for line in validator_source.splitlines(keepends=True) if f'raise ValueError("{reason}")' in line]
             if len(matches)!=1: raise SystemExit(f"authority topology row-shape anchor differs: {label}")
             predicate=matches[0]
-            namespace={"re":re}; exec(validator_source.replace(predicate,"",1),namespace); namespace["validate"](candidate)
+            namespace={"re":re,"source":candidate}; exec(validator_source.replace(predicate,"",1),namespace); namespace["validate"](candidate)
         print(f"phase285_authority_topology_self_test_red mutation={label} reason={error} digest={digest}")
     else: raise SystemExit(f"authority topology mutant survived: {label}")
 if len(mutations)!=23 or len(set(digests))!=23: raise SystemExit("authority topology mutant inventory/digests differ")
@@ -1138,7 +1249,7 @@ run_harness() (
   [[ $# -gt 0 ]] || { echo "usage: $0 <command> [args...]" >&2; return 64; }
   local scratch_cleanup=0 stack_started=0 child_status=0 mount_before mount_after
   local actual_image tls_actual_image repo_digest reported_version reported_sync_always expected_test="" expected_filtered=4 transcript index previous
-  local tls_nats_port tls_nats_http_port tls_nats_http_url tls_deadline
+  local tls_nats_port tls_nats_http_port tls_nats_http_url tls_deadline topology_mode="${PHASE285_NATS_TOPOLOGY_MODE:-normal}"
   parse_exact_test_prefix "$@" || {
     echo "PHASE285-HARNESS[exact-test-prefix]" >&2
     return 64
@@ -1182,7 +1293,7 @@ run_harness() (
   }
   trap cleanup EXIT
   trap 'exit 130' INT TERM
-  write_configuration "$SCRATCH"
+  write_configuration "$SCRATCH" "$topology_mode"
   validate_authority_topology "$SCRATCH/nats.conf"
   validate_authority_topology "$SCRATCH/nats-tls.conf"
 
@@ -1218,7 +1329,9 @@ run_harness() (
   validate_nats_login "$NATS_PORT" "$EXPECTED_USER" "$EXPECTED_PASSWORD" success
   validate_nats_login "$NATS_PORT" "$FOREIGN_USER" "$FOREIGN_PASSWORD" success
   validate_nats_login "$NATS_PORT" "$EXPECTED_USER" "$FOREIGN_PASSWORD" refusal
-  validate_account_isolation "$NATS_PORT" create
+  if [[ "$topology_mode" == normal ]]; then
+    validate_account_isolation "$NATS_PORT" create
+  fi
   mount_before="$(compose_for ps -q nats | xargs docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}:{{.RW}}{{end}}{{end}}')"
   [[ -n "$mount_before" ]] || return 1
   compose_for stop nats >/dev/null
@@ -1228,7 +1341,9 @@ run_harness() (
   [[ "$NATS_PORT" =~ ^[0-9]+$ && "$NATS_HTTP_PORT" =~ ^[0-9]+$ ]] || return 1
   NATS_HTTP_URL="http://127.0.0.1:$NATS_HTTP_PORT"
   wait_for_health
-  validate_account_isolation "$NATS_PORT" inspect
+  if [[ "$topology_mode" == normal ]]; then
+    validate_account_isolation "$NATS_PORT" inspect
+  fi
   mount_after="$(compose_for ps -q nats | xargs docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}:{{.RW}}{{end}}{{end}}')"
   [[ "$mount_after" == "$mount_before" ]] || return 1
   [[ "$(compose_for ps -q nats | xargs docker inspect --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/nats.conf"}}{{.RW}}{{end}}{{end}}')" == false ]] || return 1
@@ -1286,6 +1401,12 @@ EOF
   export SWARM_NATS_WITNESS_CREDENTIAL_PATH="$SCRATCH/witness.credentials.json"
   export SWARM_NATS_STORE_CREDENTIAL_PATH="$SCRATCH/store.credentials.json"
   export SWARM_NATS_INIT_CREDENTIAL_PATH="$SCRATCH/init.credentials.json"
+  if [[ "$topology_mode" == relay ]]; then
+    export SWARM_NATS_RELAY_CREDENTIAL_PATH="$SCRATCH/relay.credentials.json"
+    export PHASE285_RELAY_TOPOLOGY_TOKEN="relay-phase285-$HARNESS_NONCE"
+  else
+    unset SWARM_NATS_RELAY_CREDENTIAL_PATH PHASE285_RELAY_TOPOLOGY_TOKEN
+  fi
   export PHASE285_TOPOLOGY_CONFIG_PATH="$SCRATCH/nats-tls.conf"
   export PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH="$SCRATCH/runtime.credentials.json"
   export PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH="$SCRATCH/witness.credentials.json"
@@ -1327,6 +1448,10 @@ elif [[ "${1:-}" == --self-test ]]; then
 elif [[ "${1:-}" == --topology-validator ]]; then
   [[ $# -eq 3 && "$3" =~ ^(validate|self-test)$ ]] || { echo "usage: $0 --topology-validator <config> <validate|self-test>" >&2; exit 64; }
   validate_authority_topology "$2" "$3"
+elif [[ "${1:-}" == --relay-service-checkpoint ]]; then
+  shift
+  [[ $# -gt 0 ]] || { echo "usage: $0 --relay-service-checkpoint <command> [args...]" >&2; exit 64; }
+  PHASE285_NATS_TOPOLOGY_MODE=relay run_harness "$@"
 else
   run_harness "$@"
 fi

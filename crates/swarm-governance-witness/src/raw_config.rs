@@ -30,6 +30,14 @@ pub enum RawConfigurationError {
     TypedBindingMismatch,
 }
 
+pub(crate) fn relay_topology_token_is_closed(value: &str) -> bool {
+    value.starts_with("relay-phase285-")
+        && value.len() <= 512
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Nats21117ExpectedConfigurationV1 {
     reported_server_version: String,

@@ -5682,10 +5682,7 @@ archive.stdout.close()
 if archive.wait()!=0 or unpack.returncode!=0: raise SystemExit("observation exact-tree extraction failed")
 library=exact_root/"crates/swarm-governance-witness/src/lib.rs"
 source=library.read_text()
-immutable='''        let response = must(
-            runtime_client.read_head(request.clone()).await,
-            "observation ReadHead response",
-        );'''
+immutable='''        let response = if let Some(relay) = relay_legs.as_mut() {'''
 mutable=immutable.replace("let response =", "let mut response =")
 validation='''        must(response.validate(), "observation ReadHead attestation");'''
 mutation='''        must(response.validate(), "observation ReadHead attestation");
@@ -6857,16 +6854,85 @@ for label, name, old, new, expected_count, replace_count, expected_failure in mu
     print(f"deadline_executable_mutation mutation={label} tree={tree} token={token} compiled=1 mutation_executed=1 mutation_failed=1 intended={expected_failure} source_sha256={digest}")
 
 callsite_mutations = [
-    ("private_inline_helper_bypass", "private", "__INLINE_PRIVATE_INGRESS__", "", 0, 0, "deadline_r24_private_start_delegation_bypassed"),
-    ("public_inline_helper_bypass", "public", "__INLINE_PUBLIC_INGRESS__", "", 0, 0, "deadline_r24_public_start_delegation_bypassed"),
-    ("drop_before_enqueue", "private", "if ingress.try_send(ingress_message).is_err() {", "if { let _ = ingress_message; true } {", 1, 1, "private request one did not enter store"),
-    ("fabricated_receipt", "private", "if ingress.try_send(ingress_message).is_err() {\n        return Some(Err((reply, payload)));\n    }\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", "let _ = (ingress, ingress_message);\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", 1, 1, "private request one did not enter store"),
-    ("post_accept_refreshed_capture", "private", "        receipt_deadline,\n    };\n    if ingress.try_send", "        receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 2_000),\n    };\n    if ingress.try_send", 1, 1, "deadline_r24_private_start_delegation_bypassed"),
+    ("private_inline_helper_bypass", "private", "__INLINE_PRIVATE_INGRESS__", "", 0, 0, "deadline_r24_private_late_first_publication"),
+    ("public_inline_helper_bypass", "public", "__INLINE_PUBLIC_INGRESS__", "", 0, 0, "deadline_r24_public_second_publication"),
+    ("drop_before_enqueue", "private", "if ingress.try_send(ingress_message).is_err() {", "if { let _ = ingress_message; true } {", 1, 1, "private request one did not enter store: Elapsed(())"),
+    ("fabricated_receipt", "private", "if ingress.try_send(ingress_message).is_err() {\n        return Some(Err((reply, payload)));\n    }\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", "let _ = (ingress, ingress_message);\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", 1, 1, "private request one did not enter store: Elapsed(())"),
+    ("post_accept_refreshed_capture", "private", "        receipt_deadline,\n    };\n    if ingress.try_send", "        receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 2_000),\n    };\n    if ingress.try_send", 1, 1, "deadline_r24_private_late_first_publication"),
     ("public_start_delegation_bypass", "public", "        Self::start_inner(client, dispatcher).await", "        let _ = (client, dispatcher);\n        Ok(Self { tasks: Vec::new(), _proxy: PhantomData })", 1, 1, "public receipt one absent"),
-    ("private_start_delegation_bypass", "private", "        Self::start_inner(connection, service).await", "        let _ = (connection, service);\n        Ok(Self { tasks: Vec::new(), _service: std::marker::PhantomData })", 1, 1, "private request one did not enter store"),
+    ("private_start_delegation_bypass", "private", "        Self::start_inner(connection, service).await", "        let _ = (connection, service);\n        Ok(Self { tasks: Vec::new(), _service: std::marker::PhantomData })", 1, 1, "private request one did not enter store: Elapsed(())"),
 ]
 if len(callsite_mutations) != 7:
     raise SystemExit("deadline callsite mutation inventory differs")
+
+callsite_panic_header = re.compile(r"^thread '([^']+)'(?: \([0-9]+\))? panicked at .+:$")
+callsite_test_thread = "deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive"
+
+def callsite_panic_records(output):
+    records = []
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
+        header = callsite_panic_header.fullmatch(line)
+        if header is None:
+            continue
+        message = None
+        for following in lines[index + 1:]:
+            if callsite_panic_header.fullmatch(following):
+                break
+            if following.strip():
+                message = following
+                break
+        if message is None:
+            return None
+        records.append((header.group(1), message))
+    return records
+
+def callsite_failure_oracle(output, expected_failure):
+    return (
+        callsite_panic_records(output) == [
+            ("phase285-a1-subscriber-callsite", expected_failure),
+            (callsite_test_thread, "subscriber thread panicked: Any { .. }"),
+        ]
+        and output.count(expected_failure) == 1
+    )
+
+oracle_control_count = 0
+oracle_timeout_abbreviated_count = 0
+for oracle_label, _, _, _, _, _, oracle_message in callsite_mutations:
+    oracle_canonical = f"""thread 'phase285-a1-subscriber-callsite' panicked at src/lib.rs:1:
+{oracle_message}
+thread '{callsite_test_thread}' panicked at src/lib.rs:2:
+subscriber thread panicked: Any {{ .. }}
+"""
+    oracle_appended = oracle_canonical.replace(oracle_message, "different_first_relation", 1) + oracle_message + "\n"
+    oracle_swapped = f"""thread '{callsite_test_thread}' panicked at src/lib.rs:2:
+subscriber thread panicked: Any {{ .. }}
+thread 'phase285-a1-subscriber-callsite' panicked at src/lib.rs:1:
+{oracle_message}
+"""
+    oracle_extra = oracle_canonical + "thread 'collateral' panicked at src/lib.rs:3:\ncollateral relation\n"
+    if (
+        not callsite_failure_oracle(oracle_canonical, oracle_message)
+        or callsite_failure_oracle(oracle_appended, oracle_message)
+        or callsite_failure_oracle(oracle_swapped, oracle_message)
+        or callsite_failure_oracle(oracle_extra, oracle_message)
+    ):
+        raise SystemExit(f"deadline callsite failure oracle self-test failed: {oracle_label}")
+    oracle_control_count += 4
+    timeout_suffix = ": Elapsed(())"
+    if oracle_message.endswith(timeout_suffix):
+        oracle_abbreviated = oracle_canonical.replace(
+            oracle_message,
+            oracle_message.removesuffix(timeout_suffix),
+            1,
+        )
+        if callsite_failure_oracle(oracle_abbreviated, oracle_message):
+            raise SystemExit(f"deadline callsite abbreviated timeout oracle passed: {oracle_label}")
+        oracle_control_count += 1
+        oracle_timeout_abbreviated_count += 1
+if oracle_control_count != 31 or oracle_timeout_abbreviated_count != 3:
+    raise SystemExit("deadline callsite failure oracle control inventory differs")
+print("deadline_callsite_failure_oracle_self_test controls=31 canonical=7 timeout_abbreviated=3")
 
 def mutate_callsite_source(label, name, old, new, expected_count, replace_count):
     text = originals[name]
@@ -6987,7 +7053,25 @@ for label, name, old, new, expected_count, replace_count, expected_failure in ca
             + ((error.stdout or b"").decode(errors="replace") if isinstance(error.stdout, bytes) else (error.stdout or ""))
         ) from error
     output = result.stdout
-    if result.returncode == 0 or "running 1 test" not in output or "0 passed; 1 failed; 0 ignored" not in output or expected_failure not in output:
+    running = re.findall(r"^running (\d+) test$", output, re.M)
+    summaries = re.findall(
+        r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in .+$",
+        output,
+        re.M,
+    )
+    test_lines = re.findall(
+        r"^test deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive \.\.\. FAILED$",
+        output,
+        re.M,
+    )
+    if (
+        result.returncode != 101
+        or running != ["1"]
+        or len(summaries) != 1
+        or len(test_lines) != 1
+        or not callsite_failure_oracle(output, expected_failure)
+        or receipt_path.exists()
+    ):
         raise SystemExit(f"deadline callsite mutation did not fail at intended assertion: {label}\n{output}")
     print(f"deadline_callsite_mutation mutation={label} tree={tree} token={token} compiled=1 mutation_executed=1 mutation_failed=1 intended={expected_failure} source_sha256={digest}")
 
@@ -7727,7 +7811,7 @@ run_complete_receipt_mutants() {
 import hashlib, json, os, pathlib, shutil, subprocess, sys, time, urllib.request
 root=pathlib.Path(sys.argv[1]).resolve(); parent=pathlib.Path(sys.argv[2]).resolve(); tree=sys.argv[3]
 exact=parent/"exact-tree"; exact.mkdir()
-archive=subprocess.Popen(["git","-C",str(root),"archive","HEAD"],stdout=subprocess.PIPE)
+archive=subprocess.Popen(["git","-C",str(root),"archive",tree],stdout=subprocess.PIPE)
 unpack=subprocess.run(["tar","-xf","-","-C",str(exact)],stdin=archive.stdout,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False)
 archive.stdout.close()
 if archive.wait()!=0 or unpack.returncode!=0: raise SystemExit("complete_receipt_mutant[extract]")
@@ -7743,10 +7827,7 @@ insert_anchor='''        let worker_bytes = must(
             "observation worker bytes",
         );'''
 request_bytes_anchor='''        let request_bytes = must(request.canonical_bytes(), "observation request bytes");'''
-response_binding='''        let response = must(
-            runtime_client.read_head(request.clone()).await,
-            "observation ReadHead response",
-        );'''
+response_binding='''        let response = if let Some(relay) = relay_legs.as_mut() {'''
 worker_binding='''        let worker_events = observer
             .events
             .lock()
@@ -8110,10 +8191,10 @@ start=harness.index("# PHASE285_TOPOLOGY_VALIDATOR_BEGIN")
 end=harness.index("# PHASE285_TOPOLOGY_VALIDATOR_END",start)
 validator=harness[start:end]
 def load(source):
-    namespace={"re":re}; exec(source,namespace); return namespace["validate"]
+    namespace={"re":re,"source":canonical}; exec(source,namespace); return namespace["validate"]
 current=load(validator); current(canonical)
 rows=[
- ("delete_response_grant_comparator",'        if row["response_grant"]!=grant: raise ValueError(f\'topology[response-grant:{row["username"]}]\')\n','',canonical.replace('allow_responses: { max: 1, expires: "2s" }','allow_responses: { max: 2, expires: "2s" }',1),"topology[response-grant:phase285_witness]"),
+ ("delete_response_grant_comparator",'        if row["response_grant"]!=grant: raise ValueError(f\'topology[response-grant:{row["username"]}]\')\n','',canonical.replace('allow_responses: { max: 1, expires: "12s" }','allow_responses: { max: 2, expires: "12s" }',1),"topology[response-grant:phase285_witness]"),
  ("delete_import_account_comparator",'        if graph["imports"][owner]!=expected_imports[owner]: raise ValueError(f"topology[imports:{owner}]")\n','',canonical.replace('account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.v1.fence"',1),"topology[imports:PHASE285_RUNTIME]"),
  ("delete_export_account_comparator",'        if graph["exports"][owner]!=expected_exports[owner]: raise ValueError(f"topology[exports:{owner}]")\n','',canonical.replace('service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME]','service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE]',1),"topology[exports:PHASE285_WITNESS]"),
 ]
@@ -8140,7 +8221,7 @@ rust_canonical,rust_probe,shell_canonical,shell_probe=map(pathlib.Path,sys.argv[
 values=[json.loads(path.read_text()) for path in [rust_canonical,rust_probe,shell_canonical,shell_probe]]
 if values[0]!=values[2] or values[1]!=values[3]: raise SystemExit("topology_projection[positive]")
 exact=scratch/"topology-exact-tree"; exact.mkdir()
-archive=subprocess.Popen(["git","-C",str(root),"archive","HEAD"],stdout=subprocess.PIPE)
+archive=subprocess.Popen(["git","-C",str(root),"archive",tree],stdout=subprocess.PIPE)
 unpack=subprocess.run(["tar","-xf","-","-C",str(exact)],stdin=archive.stdout,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False)
 archive.stdout.close()
 if archive.wait()!=0 or unpack.returncode!=0: raise SystemExit("topology_projection[extract]")
@@ -8592,7 +8673,153 @@ PY
   fi
 }
 
+validate_service_checkpoint_exact_test() {
+  local transcript="$1" expected_filtered="$2" expected_marker="$3"
+  python3 -I - "$transcript" "$expected_filtered" "$expected_marker" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+expected_filtered, marker = sys.argv[2:]
+running = re.findall(r"^running (\d+) test$", text, re.MULTILINE)
+summary = re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;", text, re.MULTILINE)
+if running != ["1"] or summary != [("1", "0", "0", "0", expected_filtered)]:
+    raise SystemExit("service checkpoint live transcript counts differ")
+if text.count(marker) != 1:
+    raise SystemExit("service checkpoint live transcript marker differs")
+PY
+}
+
+validate_service_checkpoint_grant_ledger() {
+  local ledger="$1" tree="$2" mode="$3"
+  python3 -I - "$ledger" "$tree" "$mode" <<'PY'
+import hashlib, json, pathlib, re, sys
+path, tree, mode = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+raw = path.read_bytes()
+def reject(value): raise ValueError(value)
+def canonical(value): return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+    raise SystemExit("response_grant[framing]")
+value = json.loads(raw[:-1], parse_constant=reject)
+if canonical(value) + b"\n" != raw:
+    raise SystemExit("response_grant[canonical]")
+if value.get("schema_version") != 1 or value.get("tree") != tree or value.get("case") != "service_checkpoint_response_grants" or value.get("mode") != mode:
+    raise SystemExit("response_grant[identity]")
+if mode == "normal":
+    if value.get("invocation_token") != "normal-" + tree:
+        raise SystemExit("response_grant[token]")
+else:
+    token = value.get("invocation_token", "")
+    if not re.fullmatch(r"relay-phase285-[A-Za-z0-9._-]+", token) or len(token) > 512:
+        raise SystemExit("response_grant[token]")
+rows = value.get("rows")
+if not isinstance(rows, list) or [row.get("label") for row in rows] != ["private", "public"]:
+    raise SystemExit("response_grant[rows]")
+expected = {
+    "private": (3000, 2500, 3500, "PHASE285_WITNESS_STORE", "witness-store"),
+    "public": (12000, 10500, 12500, "PHASE285_RELAY" if mode == "relay" else "PHASE285_WITNESS", "relay" if mode == "relay" else "witness"),
+}
+ids = set()
+for row in rows:
+    grant, accepted, rejected, account, user = expected[row["label"]]
+    if (row.get("grant_millis"), row.get("accepted_delay_millis"), row.get("rejected_delay_millis")) != (grant, accepted, rejected):
+        raise SystemExit("response_grant[schedule]")
+    first, second, delta = row.get("first_publish_at_micros"), row.get("second_publish_at_micros"), row.get("second_publish_delta_micros")
+    if not all(isinstance(item, int) for item in (first, second, delta)) or first < accepted * 1000 or second - first != delta or not 0 <= delta < 50000 or second >= grant * 1000:
+        raise SystemExit("response_grant[publish-timing]")
+    if row.get("response_grant_expires_at_micros") != grant * 1000 or row.get("requester_response_count") != 1 or row.get("delayed_control_delta_micros", 0) < 50000:
+        raise SystemExit("response_grant[grant-bound]")
+    for name in ("maximum_rejection", "expiry_rejection", "delayed_control_rejection"):
+        event = row.get(name, "")
+        if "Permissions Violation for Publish to" not in event:
+            raise SystemExit("response_grant[server-refusal]")
+    for connection_name in ("responder_connection", "requester_connection"):
+        connection = row.get(connection_name, {})
+        client_id = connection.get("server_client_id")
+        if not isinstance(client_id, int) or client_id <= 0 or client_id in ids:
+            raise SystemExit("response_grant[connection-id]")
+        ids.add(client_id)
+        evidence = bytes.fromhex(connection.get("server_evidence_canonical_hex", ""))
+        if hashlib.sha256(evidence).hexdigest() != connection.get("server_evidence_sha256"):
+            raise SystemExit("response_grant[server-evidence-digest]")
+        decoded = json.loads(evidence, parse_constant=reject)
+        if canonical(decoded) != evidence or decoded.get("server_client_id") != client_id or decoded.get("account") != connection.get("account") or decoded.get("authenticated_user") != connection.get("authenticated_user"):
+            raise SystemExit("response_grant[server-evidence]")
+    responder = row["responder_connection"]
+    if responder.get("account") != account or responder.get("authenticated_user") != ("phase285_relay" if user == "relay" else "phase285_witness_store" if user == "witness-store" else "phase285_witness"):
+        raise SystemExit("response_grant[responder-authority]")
+print("service_checkpoint_grants rows=2 private_grant_millis=3000 public_grant_millis=12000 max_responses=1 timing_controls=2 passed=1")
+PY
+}
+
+run_service_checkpoint_grant_focus() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch ledger output
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint grant tree is malformed" >&2; return 1; }
+  scratch="$(phase285_create_confined_scratch phase285-grants)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  ledger="$scratch/grants.json"
+  output="$scratch/grants.txt"
+  PHASE285_GRANT_ONLY=1 PHASE285_GRANT_LEDGER="$ledger" \
+  PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+      service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
+  validate_service_checkpoint_exact_test "$output" 18 \
+    'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
+  validate_service_checkpoint_grant_ledger "$ledger" "$accepted_tree" normal
+}
+
+run_service_checkpoint_relay_positive_focus() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch grant_ledger relay_ledger output
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint relay tree is malformed" >&2; return 1; }
+  [[ "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" == relay-phase285-* ]] || { echo "service checkpoint relay token is absent" >&2; return 1; }
+  scratch="$(phase285_create_confined_scratch phase285-relay-positive)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  grant_ledger="$scratch/grants.json"
+  relay_ledger="$scratch/relay.json"
+  output="$scratch/relay.txt"
+  PHASE285_GRANT_LEDGER="$grant_ledger" PHASE285_RELAY_LEDGER="$relay_ledger" \
+  PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+      service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
+  validate_service_checkpoint_exact_test "$output" 18 \
+    'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
+  validate_service_checkpoint_grant_ledger "$grant_ledger" "$accepted_tree" relay
+  python3 -I - "$relay_ledger" "$accepted_tree" "$PHASE285_RELAY_TOPOLOGY_TOKEN" <<'PY'
+import hashlib, json, pathlib, sys
+path, tree, token = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+raw = path.read_bytes()
+def reject(value): raise ValueError(value)
+def canonical(value): return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+if not raw.endswith(b"\n") or raw.count(b"\n") != 1: raise SystemExit("relay_positive[framing]")
+value = json.loads(raw[:-1], parse_constant=reject)
+if canonical(value) + b"\n" != raw: raise SystemExit("relay_positive[canonical]")
+if value.get("schema_version") != 1 or value.get("tree") != tree or value.get("invocation_token") != token or value.get("case") != "service_checkpoint_relay_positive" or value.get("operation") != "ReadHead": raise SystemExit("relay_positive[identity]")
+for prefix in ("request", "response", "complete_receipt"):
+    encoded = bytes.fromhex(value.get(prefix + "_canonical_hex", ""))
+    if hashlib.sha256(encoded).hexdigest() != value.get(prefix + "_sha256"): raise SystemExit("relay_positive[" + prefix + "-digest]")
+if value.get("requester_timeout") is not True or value.get("replay_forwarded") is not True or not 0 < value.get("first_publish_at_micros", 0) < value.get("replay_publish_at_micros", 0): raise SystemExit("relay_positive[replay]")
+connections = value.get("relay_connections")
+ids = value.get("relay_connection_client_ids")
+if not isinstance(connections, list) or len(connections) != 4 or not isinstance(ids, list) or len(ids) != 4 or len(set(ids)) != 4: raise SystemExit("relay_positive[connections]")
+for connection, client_id in zip(connections, ids):
+    if connection.get("server_client_id") != client_id or connection.get("account") != "PHASE285_RELAY" or connection.get("authenticated_user") != "phase285_relay": raise SystemExit("relay_positive[authority]")
+    evidence = bytes.fromhex(connection.get("server_evidence_canonical_hex", ""))
+    if hashlib.sha256(evidence).hexdigest() != connection.get("server_evidence_sha256"): raise SystemExit("relay_positive[server-evidence]")
+print("service_checkpoint_relay_positive public_legs=2 private_legs=2 identities=4 receipt=1 timeout=1 replay=1 passed=1")
+PY
+}
+
 case "${1:-}" in
+  --focused-service-checkpoint-grants)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-grants" >&2; exit 2; }
+    run_service_checkpoint_grant_focus
+    ;;
+  --focused-service-checkpoint-relay-positive)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-relay-positive" >&2; exit 2; }
+    run_service_checkpoint_relay_positive_focus
+    ;;
   --focused-service-checkpoint-observations)
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-observations" >&2; exit 2; }
     run_service_checkpoint_observation_focus

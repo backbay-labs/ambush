@@ -21,6 +21,18 @@ pub(crate) const PUBLIC_HANDLER_RESERVE_MILLIS: u64 =
     PUBLIC_RESPONSE_GRANT_MILLIS - PUBLIC_HANDLER_DEADLINE_MILLIS;
 pub(crate) const RESPONSE_GRANT_MAXIMUM: usize = 1;
 
+pub const fn store_response_grant_millis() -> u64 {
+    STORE_RESPONSE_GRANT_MILLIS
+}
+
+pub const fn public_response_grant_millis() -> u64 {
+    PUBLIC_RESPONSE_GRANT_MILLIS
+}
+
+pub const fn response_grant_maximum() -> usize {
+    RESPONSE_GRANT_MAXIMUM
+}
+
 const _: () = assert!(STORE_HANDLER_DEADLINE_MILLIS == 2_000);
 const _: () = assert!(STORE_RESPONSE_GRANT_MILLIS == 3_000);
 const _: () = assert!(PUBLIC_HANDLER_DEADLINE_MILLIS == 10_000);
@@ -44,6 +56,25 @@ pub struct RuntimeWitnessClientConfigV1 {
     pub client_capacity: usize,
     pub read_buffer_capacity: u16,
     pub request_deadline_millis: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicWitnessProcessConfigV1 {
+    pub service: PublicWitnessServiceConfigV1,
+    pub credential_invocation_token: String,
+    pub subscription_capacity: usize,
+    pub client_capacity: usize,
+    pub read_buffer_capacity: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreProxyProcessConfigV1 {
+    pub service: StoreProxyServiceConfigV1,
+    pub ready: WitnessStoreReadyResultV1,
+    pub reported_server_version: String,
+    pub resolved_server_image_index_digest: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -574,6 +605,82 @@ impl RuntimeWitnessClientConfigV1 {
         }
         Ok(())
     }
+}
+
+impl PublicWitnessProcessConfigV1 {
+    pub fn validate(&self) -> ProtocolResult<()> {
+        self.service.validate()?;
+        validate_process_transport(
+            &self.service.nats_url,
+            &self.service.nats_credentials_path,
+            &self.credential_invocation_token,
+            &self.service.tls_ca_path,
+            &self.service.tls_server_name,
+            self.subscription_capacity,
+            self.client_capacity,
+            self.read_buffer_capacity,
+        )
+    }
+}
+
+impl StoreProxyProcessConfigV1 {
+    pub fn validate(&self) -> ProtocolResult<()> {
+        self.service.validate_for_ready(&self.ready)?;
+        for (field, value) in [
+            (
+                "reported_server_version",
+                self.reported_server_version.as_str(),
+            ),
+            (
+                "resolved_server_image_index_digest",
+                self.resolved_server_image_index_digest.as_str(),
+            ),
+        ] {
+            if value.is_empty() || value.len() > MAX_PROTOCOL_STRING_BYTES {
+                return Err(invalid(field, "must be nonempty and bounded"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_process_transport(
+    nats_url: &str,
+    credentials_path: &str,
+    invocation_token: &str,
+    tls_ca_path: &str,
+    tls_server_name: &str,
+    subscription_capacity: usize,
+    client_capacity: usize,
+    read_buffer_capacity: u16,
+) -> ProtocolResult<()> {
+    for (field, value) in [
+        ("nats_url", nats_url),
+        ("nats_credentials_path", credentials_path),
+        ("credential_invocation_token", invocation_token),
+        ("tls_ca_path", tls_ca_path),
+        ("tls_server_name", tls_server_name),
+    ] {
+        if value.is_empty() || value.len() > MAX_PROTOCOL_STRING_BYTES {
+            return Err(invalid(field, "must be nonempty and bounded"));
+        }
+    }
+    let host = nats_url
+        .strip_prefix("tls://")
+        .and_then(|authority| authority.rsplit_once(':').map(|(host, _)| host));
+    if host != Some(tls_server_name)
+        || [
+            subscription_capacity,
+            client_capacity,
+            usize::from(read_buffer_capacity),
+        ]
+        .into_iter()
+        .any(|value| value == 0 || value > MAX_PROTOCOL_RECORD_BYTES)
+    {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    Ok(())
 }
 
 fn invalid(field: &'static str, reason: &'static str) -> ProtocolError {

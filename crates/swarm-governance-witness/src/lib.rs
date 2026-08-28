@@ -16,9 +16,14 @@ pub use public_dispatcher::{
     PublicWitnessProxyTransportErrorV1, PublicWitnessRunnerErrorV1, PublicWitnessServiceRunner,
     PublicWitnessStoreProxyClient, dispatcher_mapping, public_witness_ingress_overload_control,
 };
-pub use runtime_client::{RuntimeWitnessClient, RuntimeWitnessClientErrorV1};
+pub use runtime_client::{
+    RuntimeWitnessClient, RuntimeWitnessClientErrorV1, WitnessProcessErrorV1,
+    run_public_witness_process, run_store_proxy_process,
+};
 pub use service_config::{
-    PublicWitnessServiceConfigV1, RuntimeWitnessClientConfigV1, StoreProxyServiceConfigV1,
+    PublicWitnessProcessConfigV1, PublicWitnessServiceConfigV1, RuntimeWitnessClientConfigV1,
+    StoreProxyProcessConfigV1, StoreProxyServiceConfigV1, public_response_grant_millis,
+    response_grant_maximum, store_response_grant_millis,
 };
 pub use store_proxy_service::{
     NatsPublicWitnessStoreProxyClient, StoreProxyRunnerErrorV1, StoreProxyService,
@@ -48,8 +53,9 @@ mod deadline_state_machine_tests {
         NatsPublicWitnessStoreProxyClient, PublicWitnessDispatchErrorV1, PublicWitnessDispatcher,
         PublicWitnessProxyTransportErrorV1, PublicWitnessServiceConfigV1,
         PublicWitnessServiceRunner, PublicWitnessStoreProxyClient, RuntimeWitnessClient,
-        RuntimeWitnessClientConfigV1, StoreProxyService, StoreProxyServiceConfigV1,
-        StoreProxyServiceErrorV1, StoreProxyServiceRunner, StoreRoleConnectionV1,
+        RuntimeWitnessClientConfigV1, RuntimeWitnessClientErrorV1, StoreProxyService,
+        StoreProxyServiceConfigV1, StoreProxyServiceErrorV1, StoreProxyServiceRunner,
+        StoreRoleConnectionV1,
     };
     use async_trait::async_trait;
     use futures_util::StreamExt;
@@ -59,7 +65,7 @@ mod deadline_state_machine_tests {
     use std::io::Write;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Instant as MonotonicInstant;
     use swarm_crypto::{Ed25519Signer, sha256_hex};
@@ -80,7 +86,7 @@ mod deadline_state_machine_tests {
         WitnessAdmissionRecordV1, WitnessServiceOperationV1, WitnessServiceRequestBodyV1,
         WitnessServiceRequestV1, WitnessServiceResponseV1,
     };
-    use tokio::sync::{Mutex as TokioMutex, Notify, mpsc};
+    use tokio::sync::{Mutex as TokioMutex, Notify, mpsc, oneshot};
     use tokio::time::{Duration, advance, sleep};
 
     const LEDGER_PATH_ENV: &str = "PHASE285_DEADLINE_LEDGER";
@@ -2949,6 +2955,515 @@ mod deadline_state_machine_tests {
         }
     }
 
+    struct HeldPublicRelayResponseV1 {
+        request_bytes: Vec<u8>,
+        response_bytes: Vec<u8>,
+        decision: oneshot::Sender<bool>,
+    }
+
+    struct LiveRelayLegsV1 {
+        public_client_id: u64,
+        private_client_id: u64,
+        held_response: mpsc::Receiver<HeldPublicRelayResponseV1>,
+        tasks: Vec<tokio::task::JoinHandle<()>>,
+    }
+
+    impl LiveRelayLegsV1 {
+        async fn start(hold_first_read_head: bool) -> ProtocolResult<Self> {
+            let public_client =
+                connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?;
+            let private_client =
+                connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?;
+            let public_client_id = public_client.server_info().client_id;
+            let private_client_id = private_client.server_info().client_id;
+            if public_client_id == 0
+                || private_client_id == 0
+                || public_client_id == private_client_id
+            {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            let (held_sender, held_response) = mpsc::channel(1);
+            let held_once = Arc::new(AtomicBool::new(false));
+            let mut tasks = Vec::new();
+            for operation in [
+                WitnessServiceOperationV1::Fence,
+                WitnessServiceOperationV1::Establish,
+                WitnessServiceOperationV1::Discover,
+                WitnessServiceOperationV1::Prepare,
+                WitnessServiceOperationV1::Commit,
+                WitnessServiceOperationV1::Abort,
+                WitnessServiceOperationV1::ReadPrepared,
+                WitnessServiceOperationV1::ReadHead,
+                WitnessServiceOperationV1::FetchPayload,
+            ] {
+                let ordinary = PublicWitnessServiceConfigV1::subject_for(operation);
+                let suffix = ordinary
+                    .strip_prefix("swarm.governance.witness.v1.")
+                    .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+                let routed = format!("swarm.governance.witness.relay.v1.{suffix}");
+                let forward = format!("swarm.governance.witness.relay.forward.v1.{suffix}");
+                let mut subscriber = public_client
+                    .subscribe(routed)
+                    .await
+                    .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                let client = public_client.clone();
+                let held_sender = held_sender.clone();
+                let held_once = held_once.clone();
+                tasks.push(tokio::spawn(async move {
+                    while let Some(message) = subscriber.next().await {
+                        let Some(reply) = message.reply.clone() else {
+                            continue;
+                        };
+                        let request_bytes = message.payload.to_vec();
+                        let Ok(response) = client.request(forward.clone(), message.payload).await
+                        else {
+                            continue;
+                        };
+                        let response_bytes = response.payload.to_vec();
+                        let should_hold = hold_first_read_head
+                            && operation == WitnessServiceOperationV1::ReadHead
+                            && !held_once.swap(true, Ordering::SeqCst);
+                        if should_hold {
+                            let (decision, decision_receiver) = oneshot::channel();
+                            if held_sender
+                                .send(HeldPublicRelayResponseV1 {
+                                    request_bytes,
+                                    response_bytes: response_bytes.clone(),
+                                    decision,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                continue;
+                            }
+                            if !matches!(decision_receiver.await, Ok(true)) {
+                                continue;
+                            }
+                        }
+                        if client.publish(reply, response_bytes.into()).await.is_ok() {
+                            let _ = client.flush().await;
+                        }
+                    }
+                }));
+            }
+            for (index, ordinary) in store_proxy_subjects().iter().enumerate() {
+                let suffix = ordinary
+                    .strip_prefix("swarm.governance.witness.store.v1.")
+                    .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+                let routed = format!("swarm.governance.witness.relay.store.v1.{suffix}");
+                let forward = format!("swarm.governance.witness.relay.forward.store.v1.{suffix}");
+                let mut subscriber = private_client
+                    .subscribe(routed)
+                    .await
+                    .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                let client = private_client.clone();
+                tasks.push(tokio::spawn(async move {
+                    while let Some(message) = subscriber.next().await {
+                        let Some(reply) = message.reply.clone() else {
+                            continue;
+                        };
+                        let Ok(response) = client.request(forward.clone(), message.payload).await
+                        else {
+                            continue;
+                        };
+                        if client.publish(reply, response.payload).await.is_ok() {
+                            let _ = client.flush().await;
+                        }
+                    }
+                    let _ = index;
+                }));
+            }
+            public_client
+                .flush()
+                .await
+                .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+            private_client
+                .flush()
+                .await
+                .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+            Ok(Self {
+                public_client_id,
+                private_client_id,
+                held_response,
+                tasks,
+            })
+        }
+
+        fn stop(self) {
+            for task in self.tasks {
+                task.abort();
+            }
+        }
+    }
+
+    async fn connect_grant_role(
+        path_variable: &str,
+        expected_role: &str,
+    ) -> ProtocolResult<(
+        async_nats::Client,
+        mpsc::UnboundedReceiver<async_nats::Event>,
+    )> {
+        let path =
+            std::env::var(path_variable).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let raw = std::fs::read(path).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let credential: HarnessCredentialV1 =
+            serde_json::from_slice(&raw).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let token = std::env::var("SWARM_NATS_TLS_CREDENTIAL_TOKEN")
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if credential.schema_version != PROTOCOL_SCHEMA_VERSION
+            || credential.role != expected_role
+            || credential.invocation_token != token
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let url = std::env::var("SWARM_NATS_STORE_TLS_URL")
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let ca = std::env::var("SWARM_NATS_TLS_CA_PATH")
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let (events_sender, events_receiver) = mpsc::unbounded_channel();
+        let options = async_nats::ConnectOptions::with_user_and_password(
+            credential.username,
+            credential.password,
+        )
+        .require_tls(true)
+        .add_root_certificates(ca.into())
+        .event_callback(move |event| {
+            let sender = events_sender.clone();
+            async move {
+                let _ = sender.send(event);
+            }
+        });
+        let client = options
+            .connect(url)
+            .await
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        Ok((client, events_receiver))
+    }
+
+    async fn next_grant_request(
+        requester: &async_nats::Client,
+        responder: &mut async_nats::Subscriber,
+        subject: &str,
+    ) -> ProtocolResult<(async_nats::Message, async_nats::Subscriber, String)> {
+        let reply = requester.new_inbox();
+        let replies = requester
+            .subscribe(reply.clone())
+            .await
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        requester
+            .publish_with_reply(
+                subject.to_string(),
+                reply.clone(),
+                b"grant-probe".to_vec().into(),
+            )
+            .await
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        requester
+            .flush()
+            .await
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let request = tokio::time::timeout(Duration::from_secs(2), responder.next())
+            .await
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        Ok((request, replies, reply))
+    }
+
+    async fn permission_event(
+        events: &mut mpsc::UnboundedReceiver<async_nats::Event>,
+        reply: &str,
+    ) -> ProtocolResult<String> {
+        let deadline = MonotonicInstant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(MonotonicInstant::now())
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            let event = tokio::time::timeout(remaining, events.recv())
+                .await
+                .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            let text = event.to_string();
+            if text.contains("Permissions Violation for Publish to") && text.contains(reply) {
+                return Ok(text);
+            }
+        }
+    }
+
+    struct GrantCaseV1 {
+        label: &'static str,
+        responder_path: &'static str,
+        responder_role: &'static str,
+        responder_account: &'static str,
+        requester_path: &'static str,
+        requester_role: &'static str,
+        requester_account: &'static str,
+        requester_subject: String,
+        responder_subject: String,
+        grant_millis: u64,
+        accepted_delay_millis: u64,
+        rejected_delay_millis: u64,
+    }
+
+    async fn run_grant_case(case: GrantCaseV1) -> serde_json::Value {
+        let (responder, mut events) = must(
+            connect_grant_role(case.responder_path, case.responder_role).await,
+            "grant responder connection",
+        );
+        let requester = must(
+            connect_deadline_role(case.requester_path, case.requester_role).await,
+            "grant requester connection",
+        );
+        let responder_client_id = responder.server_info().client_id;
+        let requester_client_id = requester.server_info().client_id;
+        let mut incoming = must(
+            responder.subscribe(case.responder_subject.clone()).await,
+            "grant responder subscription",
+        );
+        must(responder.flush().await, "grant responder flush");
+        let (accepted, mut accepted_replies, accepted_reply) = must(
+            next_grant_request(&requester, &mut incoming, &case.requester_subject).await,
+            "grant accepted request",
+        );
+        let accepted_origin = MonotonicInstant::now();
+        sleep(Duration::from_millis(case.accepted_delay_millis)).await;
+        let response_subject = must_some(accepted.reply.clone(), "grant accepted reply absent");
+        let first_publish_at_micros = u64::try_from(accepted_origin.elapsed().as_micros())
+            .unwrap_or_else(|_| panic!("grant first publish timestamp overflow"));
+        must(
+            responder
+                .publish(response_subject.clone(), b"accepted".to_vec().into())
+                .await,
+            "grant first publish",
+        );
+        let second_publish_at_micros = u64::try_from(accepted_origin.elapsed().as_micros())
+            .unwrap_or_else(|_| panic!("grant second publish timestamp overflow"));
+        must(
+            responder
+                .publish(response_subject.clone(), b"duplicate".to_vec().into())
+                .await,
+            "grant duplicate publish",
+        );
+        must(responder.flush().await, "grant duplicate flush");
+        let first_response = must(
+            tokio::time::timeout(Duration::from_secs(2), accepted_replies.next()).await,
+            "grant first response deadline",
+        );
+        assert_eq!(
+            must_some(first_response, "grant first response absent").payload,
+            b"accepted".as_slice(),
+            "grant first response bytes differ"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), accepted_replies.next())
+                .await
+                .is_err(),
+            "grant requester received more than one response"
+        );
+        let maximum_rejection = must(
+            permission_event(&mut events, response_subject.as_str()).await,
+            "grant maximum permission event",
+        );
+        assert!(
+            second_publish_at_micros >= first_publish_at_micros
+                && second_publish_at_micros - first_publish_at_micros < 50_000,
+            "grant publish-to-publish delta differs"
+        );
+        assert!(
+            second_publish_at_micros < case.grant_millis * 1_000,
+            "grant duplicate was not strictly pre-expiry"
+        );
+
+        let (expired, mut expired_replies, _) = must(
+            next_grant_request(&requester, &mut incoming, &case.requester_subject).await,
+            "grant expiry request",
+        );
+        let expired_reply = must_some(expired.reply.clone(), "grant expiry reply absent");
+        sleep(Duration::from_millis(case.rejected_delay_millis)).await;
+        must(
+            responder
+                .publish(expired_reply.clone(), b"expired".to_vec().into())
+                .await,
+            "grant expired publish",
+        );
+        must(responder.flush().await, "grant expired flush");
+        let expiry_rejection = must(
+            permission_event(&mut events, expired_reply.as_str()).await,
+            "grant expiry permission event",
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), expired_replies.next())
+                .await
+                .is_err(),
+            "expired grant produced a response"
+        );
+
+        let (delayed, mut delayed_replies, _) = must(
+            next_grant_request(&requester, &mut incoming, &case.requester_subject).await,
+            "grant delayed control request",
+        );
+        let delayed_reply = must_some(delayed.reply.clone(), "grant delayed reply absent");
+        let delayed_origin = MonotonicInstant::now();
+        must(
+            responder
+                .publish(delayed_reply.clone(), b"delayed-first".to_vec().into())
+                .await,
+            "grant delayed first publish",
+        );
+        sleep(Duration::from_millis(60)).await;
+        let delayed_second_publish_at_micros = u64::try_from(delayed_origin.elapsed().as_micros())
+            .unwrap_or_else(|_| panic!("grant delayed timestamp overflow"));
+        must(
+            responder
+                .publish(delayed_reply.clone(), b"delayed-second".to_vec().into())
+                .await,
+            "grant delayed second publish",
+        );
+        must(responder.flush().await, "grant delayed flush");
+        let delayed_first = must(
+            tokio::time::timeout(Duration::from_secs(2), delayed_replies.next()).await,
+            "grant delayed response deadline",
+        );
+        assert_eq!(
+            must_some(delayed_first, "grant delayed response absent").payload,
+            b"delayed-first".as_slice(),
+            "grant delayed response bytes differ"
+        );
+        let delayed_rejection = must(
+            permission_event(&mut events, delayed_reply.as_str()).await,
+            "grant delayed permission event",
+        );
+        assert!(
+            delayed_second_publish_at_micros >= 50_000,
+            "grant delayed-first-response control did not cross 50ms"
+        );
+
+        let responder_connection = server_connection_observation(
+            case.label,
+            case.responder_account,
+            case.responder_path,
+            case.responder_role,
+            responder_client_id,
+        );
+        let requester_connection = server_connection_observation(
+            "grant-requester",
+            case.requester_account,
+            case.requester_path,
+            case.requester_role,
+            requester_client_id,
+        );
+        serde_json::json!({
+            "label": case.label,
+            "grant_millis": case.grant_millis,
+            "accepted_delay_millis": case.accepted_delay_millis,
+            "rejected_delay_millis": case.rejected_delay_millis,
+            "first_publish_at_micros": first_publish_at_micros,
+            "second_publish_at_micros": second_publish_at_micros,
+            "second_publish_delta_micros": second_publish_at_micros - first_publish_at_micros,
+            "response_grant_expires_at_micros": case.grant_millis * 1_000,
+            "requester_response_count": 1,
+            "maximum_rejection": maximum_rejection,
+            "expiry_rejection": expiry_rejection,
+            "delayed_control_rejection": delayed_rejection,
+            "delayed_control_delta_micros": delayed_second_publish_at_micros,
+            "responder_connection": responder_connection,
+            "requester_connection": requester_connection,
+            "requester_subject": case.requester_subject,
+            "responder_subject": case.responder_subject,
+            "accepted_reply": accepted_reply.to_string(),
+        })
+    }
+
+    async fn run_response_grants_are_live_and_exact() {
+        let relay = std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some();
+        let public = GrantCaseV1 {
+            label: "public",
+            responder_path: if relay {
+                "SWARM_NATS_RELAY_CREDENTIAL_PATH"
+            } else {
+                "SWARM_NATS_WITNESS_CREDENTIAL_PATH"
+            },
+            responder_role: if relay { "relay" } else { "witness" },
+            responder_account: if relay {
+                "PHASE285_RELAY"
+            } else {
+                "PHASE285_WITNESS"
+            },
+            requester_path: "SWARM_NATS_RUNTIME_CREDENTIAL_PATH",
+            requester_role: "runtime",
+            requester_account: "PHASE285_RUNTIME",
+            requester_subject: "swarm.governance.witness.v1.fence".to_string(),
+            responder_subject: if relay {
+                "swarm.governance.witness.relay.v1.fence".to_string()
+            } else {
+                "swarm.governance.witness.v1.fence".to_string()
+            },
+            grant_millis: 12_000,
+            accepted_delay_millis: 10_500,
+            rejected_delay_millis: 12_500,
+        };
+        let private = GrantCaseV1 {
+            label: "private",
+            responder_path: "SWARM_NATS_STORE_CREDENTIAL_PATH",
+            responder_role: "witness-store",
+            responder_account: "PHASE285_WITNESS_STORE",
+            requester_path: if relay {
+                "SWARM_NATS_RELAY_CREDENTIAL_PATH"
+            } else {
+                "SWARM_NATS_WITNESS_CREDENTIAL_PATH"
+            },
+            requester_role: if relay { "relay" } else { "witness" },
+            requester_account: if relay {
+                "PHASE285_RELAY"
+            } else {
+                "PHASE285_WITNESS"
+            },
+            requester_subject: if relay {
+                "swarm.governance.witness.relay.forward.store.v1.inspect_ready".to_string()
+            } else {
+                "swarm.governance.witness.store.v1.inspect_ready".to_string()
+            },
+            responder_subject: "swarm.governance.witness.store.v1.inspect_ready".to_string(),
+            grant_millis: 3_000,
+            accepted_delay_millis: 2_500,
+            rejected_delay_millis: 3_500,
+        };
+        let (public_row, private_row) =
+            tokio::join!(run_grant_case(public), run_grant_case(private));
+        if let Ok(path) = std::env::var("PHASE285_GRANT_LEDGER") {
+            let tree = must(
+                std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE")
+                    .or_else(|_| std::env::var("PHASE285_CHECKPOINT_TREE")),
+                "grant tree absent",
+            );
+            let token = std::env::var("PHASE285_RELAY_TOPOLOGY_TOKEN")
+                .unwrap_or_else(|_| format!("normal-{}", tree));
+            let ledger = serde_json::json!({
+                "schema_version": 1,
+                "tree": tree,
+                "invocation_token": token,
+                "case": "service_checkpoint_response_grants",
+                "mode": if relay { "relay" } else { "normal" },
+                "rows": [private_row, public_row],
+            });
+            let bytes = must(canonical_wire_bytes(&ledger), "grant ledger serialization");
+            let mut file = must(
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(path),
+                "grant ledger freshness",
+            );
+            must(file.write_all(&bytes), "grant ledger write");
+            must(file.write_all(b"\n"), "grant ledger frame");
+            must(file.sync_all(), "grant ledger sync");
+        }
+        println!(
+            "response_grants mode={} rows=2 max_one=2 pre_expiry=2 expiry_refusal=2 delayed_control=2 server_bound=4 passed=1",
+            if relay { "relay" } else { "normal" }
+        );
+    }
+
     pub(super) fn run_worker_observation_test() {
         let thread = must(
             std::thread::Builder::new()
@@ -2975,6 +3490,15 @@ mod deadline_state_machine_tests {
             initialize_deadline_stream().await,
             "observation stream initialization",
         );
+        let relay_enabled = std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some();
+        let mut relay_legs = if relay_enabled {
+            Some(must(
+                LiveRelayLegsV1::start(true).await,
+                "relay legs startup",
+            ))
+        } else {
+            None
+        };
         let observer = Arc::new(RecordingWorkerTransitionObserverV1::default());
         let mut fixture = must(
             AuthenticatedDeadlineFixtureV1::new(observer.clone()),
@@ -3057,10 +3581,10 @@ mod deadline_state_machine_tests {
             "observation shipping public start",
         );
 
-        let runtime_client = must(
+        let runtime_client = Arc::new(must(
             RuntimeWitnessClient::connect(runtime_observation_config()).await,
             "observation runtime connection",
-        );
+        ));
         let session = must(
             runtime_client.establish_session(establish_request).await,
             "observation establish response",
@@ -3137,10 +3661,53 @@ mod deadline_state_machine_tests {
             ),
             "observation ReadHead request",
         );
-        let response = must(
-            runtime_client.read_head(request.clone()).await,
-            "observation ReadHead response",
-        );
+        let relay_origin = Arc::new(MonotonicInstant::now());
+        let first_publish_at_micros = Arc::new(AtomicU64::new(0));
+        let mut held_relay_response = None;
+        let mut first_request_task = None;
+        let response = if let Some(relay) = relay_legs.as_mut() {
+            let client = runtime_client.clone();
+            let spawned_request = request.clone();
+            let origin = relay_origin.clone();
+            let published = first_publish_at_micros.clone();
+            first_request_task = Some(tokio::spawn(async move {
+                client
+                    .read_head_with_publish_observation(
+                        spawned_request,
+                        origin.as_ref(),
+                        published.as_ref(),
+                    )
+                    .await
+            }));
+            let held = must(
+                tokio::time::timeout(
+                    Duration::from_millis(PUBLIC_HANDLER_DEADLINE_MILLIS),
+                    relay.held_response.recv(),
+                )
+                .await,
+                "relay held response deadline",
+            );
+            let held = must_some(held, "relay held response absent");
+            assert_eq!(
+                held.request_bytes,
+                must(request.canonical_bytes(), "relay held request bytes"),
+                "relay held request differs"
+            );
+            let decoded = must(
+                WitnessServiceResponseV1::decode_for_client_request(&held.response_bytes, &request),
+                "relay held response decode",
+            );
+            held_relay_response = Some(held);
+            match decoded {
+                WitnessServiceResponseV1::Read(value) => value,
+                _ => panic!("relay held response kind differs"),
+            }
+        } else {
+            must(
+                runtime_client.read_head(request.clone()).await,
+                "observation ReadHead response",
+            )
+        };
         let response_received_at_nanos = observation_clock.now();
         must(response.validate(), "observation ReadHead attestation");
         assert_eq!(response.request_digest, request.request_digest);
@@ -3441,6 +4008,19 @@ mod deadline_state_machine_tests {
                 ),
                 "service_checkpoint_complete_receipt".to_string(),
             ))
+        } else if identity.is_none() && relay_enabled {
+            Some((
+                must(
+                    std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE")
+                        .or_else(|_| std::env::var("PHASE285_CHECKPOINT_TREE")),
+                    "relay tree absent",
+                ),
+                must(
+                    std::env::var("PHASE285_RELAY_TOPOLOGY_TOKEN"),
+                    "relay invocation token absent",
+                ),
+                "service_checkpoint_complete_receipt".to_string(),
+            ))
         } else {
             None
         };
@@ -3467,8 +4047,8 @@ mod deadline_state_machine_tests {
             public_subject: PublicWitnessServiceConfigV1::subject_for(request.operation),
             request_nonce: request.request_nonce.clone(),
             request_digest: request.request_digest.clone(),
-            request_canonical_hex: hex::encode(request_bytes),
-            response_canonical_hex: hex::encode(response_bytes),
+            request_canonical_hex: hex::encode(&request_bytes),
+            response_canonical_hex: hex::encode(&response_bytes),
             selected_store_revision,
             selected_store_generation,
             selected_store_state_digest,
@@ -3498,6 +4078,168 @@ mod deadline_state_machine_tests {
             must(file.write_all(&bytes), "observation ledger write");
             must(file.write_all(b"\n"), "observation ledger frame");
             must(file.sync_all(), "observation ledger sync");
+        }
+        if relay_enabled {
+            let expected_tree = must(
+                std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE")
+                    .or_else(|_| std::env::var("PHASE285_CHECKPOINT_TREE")),
+                "relay tree absent",
+            );
+            let expected_token = must(
+                std::env::var("PHASE285_RELAY_TOPOLOGY_TOKEN"),
+                "relay invocation token absent",
+            );
+            let receipt = LedgerBoundCompleteReceiptV1 {
+                schema_version: 1,
+                observation_ledger_canonical_hex: hex::encode(&bytes),
+                observation_ledger_sha256: sha256_hex(&bytes),
+            };
+            let (receipt_sender, mut receipt_receiver) = mpsc::channel(1);
+            assert_eq!(
+                complete_receipt_disposition(
+                    Some(receipt.clone()),
+                    Some(&receipt_sender),
+                    &expected_tree,
+                    &expected_token,
+                    "service_checkpoint_complete_receipt",
+                ),
+                CompleteReceiptDispositionV1::Suppress,
+                "live relay complete receipt did not reserve before loss"
+            );
+            assert_eq!(
+                must(receipt_receiver.try_recv(), "live relay receipt absent"),
+                receipt,
+            );
+            let held = must_some(held_relay_response.take(), "live relay response absent");
+            assert_eq!(
+                held.response_bytes, response_bytes,
+                "live relay response bytes"
+            );
+            assert!(
+                held.decision.send(false).is_ok(),
+                "live relay suppression decision was not delivered"
+            );
+            let first = must_some(first_request_task.take(), "live relay request task absent");
+            let first = must(first.await, "live relay request task panicked");
+            assert!(
+                matches!(first, Err(RuntimeWitnessClientErrorV1::OutcomeUnknown)),
+                "live relay loss was not requester-observed timeout"
+            );
+            let first_legs = must_some(relay_legs.take(), "live relay legs absent");
+            let first_public_client_id = first_legs.public_client_id;
+            let first_private_client_id = first_legs.private_client_id;
+            let first_public_connection = server_connection_observation(
+                "public-relay-first",
+                "PHASE285_RELAY",
+                "SWARM_NATS_RELAY_CREDENTIAL_PATH",
+                "relay",
+                first_public_client_id,
+            );
+            let first_private_connection = server_connection_observation(
+                "private-relay-first",
+                "PHASE285_RELAY",
+                "SWARM_NATS_RELAY_CREDENTIAL_PATH",
+                "relay",
+                first_private_client_id,
+            );
+            first_legs.stop();
+            tokio::task::yield_now().await;
+            let replay_legs = must(
+                LiveRelayLegsV1::start(false).await,
+                "replay relay legs startup",
+            );
+            let replay_public_client_id = replay_legs.public_client_id;
+            let replay_private_client_id = replay_legs.private_client_id;
+            assert_eq!(
+                [
+                    first_public_client_id,
+                    first_private_client_id,
+                    replay_public_client_id,
+                    replay_private_client_id,
+                ]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+                4,
+                "relay leg identities were not recreated"
+            );
+            let second_publish_at_micros = AtomicU64::new(0);
+            let replay = must(
+                runtime_client
+                    .read_head_with_publish_observation(
+                        request.clone(),
+                        relay_origin.as_ref(),
+                        &second_publish_at_micros,
+                    )
+                    .await,
+                "live relay replay response",
+            );
+            must(replay.validate(), "live relay replay attestation");
+            assert_eq!(replay, response, "live relay replay response differs");
+            let first_publish = first_publish_at_micros.load(Ordering::SeqCst);
+            let second_publish = second_publish_at_micros.load(Ordering::SeqCst);
+            assert!(
+                first_publish > 0 && second_publish > first_publish,
+                "live relay request publish order differs"
+            );
+            let relay_connections = vec![
+                first_public_connection,
+                first_private_connection,
+                server_connection_observation(
+                    "public-relay-replay",
+                    "PHASE285_RELAY",
+                    "SWARM_NATS_RELAY_CREDENTIAL_PATH",
+                    "relay",
+                    replay_public_client_id,
+                ),
+                server_connection_observation(
+                    "private-relay-replay",
+                    "PHASE285_RELAY",
+                    "SWARM_NATS_RELAY_CREDENTIAL_PATH",
+                    "relay",
+                    replay_private_client_id,
+                ),
+            ];
+            if let Ok(path) = std::env::var("PHASE285_RELAY_LEDGER") {
+                let relay_value = serde_json::json!({
+                    "schema_version": 1,
+                    "tree": expected_tree,
+                    "invocation_token": expected_token,
+                    "case": "service_checkpoint_relay_positive",
+                    "operation": "ReadHead",
+                    "request_canonical_hex": hex::encode(&request_bytes),
+                    "request_sha256": sha256_hex(&request_bytes),
+                    "response_canonical_hex": hex::encode(&response_bytes),
+                    "response_sha256": sha256_hex(&response_bytes),
+                    "complete_receipt_canonical_hex": hex::encode(must(canonical_wire_bytes(&receipt), "relay receipt bytes")),
+                    "complete_receipt_sha256": sha256_hex(&must(canonical_wire_bytes(&receipt), "relay receipt digest bytes")),
+                    "first_publish_at_micros": first_publish,
+                    "replay_publish_at_micros": second_publish,
+                    "relay_connections": relay_connections,
+                    "relay_connection_client_ids": [first_public_client_id, first_private_client_id, replay_public_client_id, replay_private_client_id],
+                    "requester_timeout": true,
+                    "replay_forwarded": true,
+                });
+                let relay_bytes = must(
+                    canonical_wire_bytes(&relay_value),
+                    "relay ledger serialization",
+                );
+                let mut file = must(
+                    OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(path),
+                    "relay ledger freshness",
+                );
+                must(file.write_all(&relay_bytes), "relay ledger write");
+                must(file.write_all(b"\n"), "relay ledger frame");
+                must(file.sync_all(), "relay ledger sync");
+            }
+            replay_legs.stop();
+            println!(
+                "relay_positive public_legs=2 private_legs=2 complete_receipt=1 requester_timeout=1 replay=1 typed_read_head=1 passed=1"
+            );
         }
         bytes
     }
@@ -4402,7 +5144,16 @@ mod deadline_state_machine_tests {
                             .build(),
                         "complete receipt runtime",
                     );
-                    runtime.block_on(Box::pin(run_complete_receipt_suppression_test_async()));
+                    if std::env::var_os("PHASE285_GRANT_ONLY").is_some() {
+                        runtime.block_on(Box::pin(run_response_grants_are_live_and_exact()));
+                    } else {
+                        if std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some()
+                            && std::env::var_os("PHASE285_GRANT_LEDGER").is_some()
+                        {
+                            runtime.block_on(Box::pin(run_response_grants_are_live_and_exact()));
+                        }
+                        runtime.block_on(Box::pin(run_complete_receipt_suppression_test_async()));
+                    }
                 }),
             "complete receipt thread",
         );
@@ -4410,6 +5161,10 @@ mod deadline_state_machine_tests {
     }
 
     async fn run_complete_receipt_suppression_test_async() {
+        if std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some() {
+            let _ = run_worker_observation_test_async().await;
+            return;
+        }
         let expected_tree = must(
             std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE"),
             "complete receipt tree absent",
@@ -4653,7 +5408,7 @@ mod deadline_state_machine_tests {
         println!(
             "complete_receipt_ledger rows=1 private=3 proxy=1 publisher=2 worker=12 current_invocation=bound capacity=0,1,2,2-partial full=forward closed=forward passed=1"
         );
-        if std::env::var_os("PHASE285_TOPOLOGY_CONFIG_PATH").is_some() {
+        if std::env::var_os("PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH").is_some() {
             run_topology_projection_test();
         }
     }
