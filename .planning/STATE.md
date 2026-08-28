@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T08:28:19Z"
+last_updated: "2026-08-28T08:40:50Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R52 is a draft validation-only continuation for exact uncommitted A2b3 final9 tree `9657a2799126ce79d69185ad0139eac3c27cfb62`; it permits no production edits and awaits independent planning review. No production process or hard-stop clock is active. A2c, A3, 03B, Plan 05A, and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R52 planning `cc92f856` was rejected P0/P1/P2=`0/2/0`; r53 is the two-defect planning-only correction for exact uncommitted A2b3 final9 tree `9657a2799126ce79d69185ad0139eac3c27cfb62`. It permits no production edits and awaits independent planning review. No production process or hard-stop clock is active. A2c, A3, 03B, Plan 05A, and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Root drafted r52 as a no-edit continuation against exact final9. Completed exact-tree gates may carry, partial deadline progress is uncredited, and every incomplete gate must run freshly between exact identity/residue checks. R52 itself is pending immutable hostile planning review and remote checkpoint; final9 remains uncommitted/unpushed/unaccepted.
+**Last Activity Description:** Immutable r52 was rejected 0/2/0 because Docker command failure could masquerade as empty residue and its prose misattributed A2b3 authority to r51. R53 corrects only those two planning defects with fail-closed output assignment and exact `814a40f` authority lineage. Final9 remains unmodified, uncommitted, unpushed, and unaccepted.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -135,11 +135,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Session Continuity**
 
 Last Date: 2026-08-28 — A2b3 stopped unaccepted at hard boundary
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R52 draft changes exactly five planning paths and authorizes no production work until independent P0/P1/P2=`0/0/0`, exact push/fetch, and a fresh root-recorded two-hour window.
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R53 draft corrects rejected r52 in exactly five planning paths and authorizes no production work until independent P0/P1/P2=`0/0/0`, exact push/fetch, and a fresh root-recorded two-hour window.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Freeze the exact five-path r52 planning diff, obtain immutable hostile P0/P1/P2=`0/0/0`, and push/fetch `checkpoint/v179-phase285-plan04-task03a-plan-r52` plus `work/v179-phase285-planning`. Only then record one fresh two-hour validation-only window for exact final9. Do not edit production bytes, create a worktree, retry a failed gate, or start A2c.
+Freeze the exact five-path r53 planning correction, obtain immutable hostile P0/P1/P2=`0/0/0`, and push/fetch `checkpoint/v179-phase285-plan04-task03a-plan-r53` plus `work/v179-phase285-planning`. Only then record one fresh two-hour validation-only window for exact final9. Do not edit production bytes, create a worktree, retry a failed gate, or start A2c.
