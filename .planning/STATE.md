@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-27T18:37:06Z"
+last_updated: "2026-08-28T06:18:02Z"
 last_activity: 2026-08-27
 progress:
   total_phases: 6
@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, and 04-03A2b1 are accepted. Rejected/stopped A2b2 trees through `4f04081` are diagnostic-only. Accepted A2b1 remains `a4b01038e5e33e5b3901dcaca1c82f7ca1db65c1` / tree `0da809e552441608f41f652ee21602fac3c3d35c`, fetched exactly at both origin refs. Immutable r51 planning `3deb5e3ccf3e9c14cb3ea735150ed4ced419cb39` / tree `b842e1e59d99db44e41a50d43961132aa1c83022` passed independent P0/P1/P2=`0/0/0`, confidence high, and was pushed/fetched exactly at both planning refs. One A2b2 continuation in the existing worktree is authorized through `2026-08-28T07:43:40Z`. A2b3, A2c, A3, 03B, Plan 05A, and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 is immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f`, direct parent accepted A2b1 `a4b01038e5e33e5b3901dcaca1c82f7ca1db65c1`; independent review returned P0/P1/P2=`0/0/0`, confidence high, and both A2b2 origin refs were fetched exactly. One A2b3 execution in the existing worktree is authorized through `2026-08-28T08:18:02Z`. A2c, A3, 03B, Plan 05A, and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Immutable r51 planning `3deb5e3` retains/revalidates the cold seed fd, preserves full per-invocation inode/race proof, and records rather than trusts Cargo's cross-invocation publication inode. Independent review returned P0/P1/P2=`0/0/0`, confidence high; both planning refs were pushed/fetched exactly. One A2b2 continuation is authorized in the existing worktree from `2026-08-28T05:43:40Z` through `2026-08-28T07:43:40Z`; it may change only checker publication-identity/diagnostic code and the integrity manifest, then rerun the complete final-byte chain once.
+**Last Activity Description:** A2b2 commit `30eb13c` banks the account/principal-scoped topology validator and Cargo publication-identity proof. Its exact five-path tree passed the complete r51 chain after correction of the outer wrapper's temporary-index scope, then immutable review returned P0/P1/P2=`0/0/0`, confidence high. Both production refs were pushed and fetched exactly. A2b3 alone is authorized in the existing worktree from `2026-08-28T06:18:02Z` through `2026-08-28T08:18:02Z`.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b1 (`a4b0103`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, and 04-03A2b1 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Rejected/stopped production objects remain unpushed and have no acceptance authority. R51 planning is accepted/pushed; A2b2 alone is active through `2026-08-28T07:43:40Z`. A2b3, A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. Rejected/stopped production objects remain unpushed and have no acceptance authority. A2b3 alone is active through `2026-08-28T08:18:02Z`. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — r51 planning accepted/pushed; fresh A2b2 continuation authorized
-Stopped At: Accepted A2b1 `a4b01038e5e33e5b3901dcaca1c82f7ca1db65c1` resolves exactly at both required origin refs, and accepted r51 planning `3deb5e3ccf3e9c14cb3ea735150ed4ced419cb39` resolves exactly at its checkpoint and work refs. One A2b2 continuation may proceed in the existing worktree through hard stop `2026-08-28T07:43:40Z`.
+Last Date: 2026-08-28 — A2b2 accepted, reviewed, and pushed; A2b3 authorized
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` resolves exactly at both required origin refs after immutable P0/P1/P2=`0/0/0` review. One A2b3 execution may proceed in the existing worktree through hard stop `2026-08-28T08:18:02Z`.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-In `.claude/worktrees/v179-phase285-plan04-task03a-r14`, preserve accepted A2b1, the exact five production paths/digest, and stopped tree `4f04081` except for checker publication-identity/diagnostic and integrity-manifest changes required by r51. Run the complete final-byte chain once, freeze one direct child, independently review it, and push both A2b2 refs before `2026-08-28T07:43:40Z`. Do not start A2b3 or create a worktree.
+In `.claude/worktrees/v179-phase285-plan04-task03a-r14`, begin at exact accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` after proving both A2b2 origin refs resolve to it. Execute A2b3 only: record the exact relay RED, change only the eleven owned paths/digest `4d9d95a9253af2cede7f42175322169a4deb3fafebc8fb0d58bcb845cd992adf`, preserve the accepted A2b1/A2b2 seams, run the complete A2b3 final-tree chain, freeze one direct child, independently review it, and push both A2b3 refs before `2026-08-28T08:18:02Z`. Rejected `ef4c043` is diagnostic-only; do not cherry-pick it, create a worktree, or start A2c.
