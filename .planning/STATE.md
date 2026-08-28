@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T09:45:50Z"
+last_updated: "2026-08-28T09:58:20Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. Immutable r56 planning `9e884d1ce87563abde983e122d77e2d670eaba88` passed hostile P0/P1/P2=`0/0/0` and is pushed/fetched at both planning refs. One unchanged-final11 continuation is active from `2026-08-28T09:45:50Z` through hard stop `2026-08-28T11:45:50Z`. No production edit is authorized. A2c and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R56 corrected topology and advanced exact final11 through topology, observations, deadline, and normal grants. Relay-positive then reached the real worker and failed `grant accepted request: WitnessOutcomeMismatch`. Final11 remains exact, uncommitted, unpushed, and unaccepted. The r56 window is closed. No production process or edit authority is active. A2b3-only causal planning is required; A2c and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Immutable r56 planning commit/tree `9e884d1c` / `bac09578` received independent P0/P1/P2=`0/0/0`, confidence high. The reviewer verified exactly one harness-wrapped topology selector, zero direct/unwrapped variants, one execution of every incomplete gate, thirteen final11 identity brackets, the complete artifact producer→consumer chain, and unchanged final11 identities. Both planning refs fetch exactly. A fresh no-edit continuation window is recorded.
+**Last Activity Description:** R56 topology passed with receipt internal/external `1/1`, lifecycle `25`, receipt mutants `10`, topology `23+3+7=33` unique/vacuous `0`; observations passed with worker/proxy/store/publisher/connections `12/1/1/2/3`, validator `10`, compiled `1`; deadline passed rows `9`, ledger `18`, first-FQN `19`, callsite `7`, constructor `5`, unique `31`, boundary `10`; grants passed private/public `3000/12000`, max `1`, timing controls `2`. Relay-positive exact FQN then ran `1/0/1/18`, exit 101: first worker panic `grant accepted request: WitnessOutcomeMismatch`, then outer `complete receipt thread panicked: Any { .. }`. Execution stopped without retry/edit; later gates unrun. Root reverified exact final11, empty real index, and zero Docker residue.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — r56 unchanged-final11 continuation authorized
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R56 planning is independently accepted and remotely banked. Final11 continuation may run once until `2026-08-28T11:45:50Z`; A2c remains blocked.
+Last Date: 2026-08-28 — r56 stopped at relay-positive semantic failure
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R56 planning is remotely banked, but final11 relay-positive failed after all earlier semantic gates passed. Final11 remains exact and unaccepted. No production continuation is authorized; A2c remains blocked.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-In the existing production worktree, reverify exact unchanged final11 and execute immutable `<r56_continuation_automated>` once before hard stop `2026-08-28T11:45:50Z`. Stop at the first nonzero result without retry/edit/commit/push. If completely green, stage exactly eleven paths, require real-index final11, commit one direct child of A2b2, and obtain immutable hostile production review before either A2b3 push. Do not create a worktree or start A2c.
+In `.claude/worktrees/v179-phase285-planning`, perform one read-only A2b3 causal audit of relay-positive `WitnessOutcomeMismatch`. Trace the exact accepted complete receipt, replay request, typed ReadHead/state/generation, observation ledger, grant, relay identity, and worker verifier relation to identify the first mismatched field and whether final11 production or the relay fixture/oracle is wrong. Do not rerun relay and do not edit production. Any proposed r57 must name an executable RED/control, exact owned paths/tree transition if bytes are needed, completed receipts that may carry, every incomplete gate, no-retry two-hour stop, immutable review/push, and A2c block.
