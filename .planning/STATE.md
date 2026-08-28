@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T11:08:43Z"
+last_updated: "2026-08-28T11:16:36Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R56 advanced exact final11 through topology, observations, deadline, and normal grants, then relay topology failed in `2.03s` at an ambiguous pre-worker grant delivery. The corrected r62 clone diagnostic ran exactly once and validly returned `not_reproduced`: both solo deliveries and the concurrent delivery passed under a fresh relay token, with exact child/harness `1/0/0/18`, exit `0`. This is causal evidence only, not relay-positive or A2b3 acceptance. Draft r63 is a no-edit decision for one original relay-positive replay and, only if green, the remaining final11 freeze chain. It has no execution authority pending immutable review/push. Production remains exact; final11 is uncommitted, unpushed, and unaccepted. A2c and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R56 advanced exact final11 through topology, observations, deadline, and normal grants, then relay topology failed in `2.03s` at an ambiguous pre-worker grant delivery. The corrected r62 clone diagnostic ran exactly once and validly returned `not_reproduced`: both solo deliveries and the concurrent delivery passed under a fresh relay token, with exact child/harness `1/0/0/18`, exit `0`. This is causal evidence only, not relay-positive or A2b3 acceptance. Immutable r63 `a3ed1cc4e004a5cfeba2a3432aaf6d2ed733e53d` / tree `1a7962352565f2dec1ca6e912a33e2d3d46bf981` passed hostile P0/P1/P2=`0/0/0`, confidence high, and its checkpoint ref fetched exactly. One no-edit original relay-positive replay and, only if green, the remaining final11 freeze chain are authorized through `2026-08-28T13:16:36Z`. Production remains exact; final11 is uncommitted, unpushed, and unaccepted. A2c and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** R62's valid non-reproduction ledger is committed/pushed at `4c1445380e981888d9d3cd436858eb4268275133`. Draft r63 carries only exact-tree r56 receipts through normal grants, consumes r62 solely as authority for one no-edit original replay, and requires the replay plus every remaining r56 gate to pass once before final11 may be committed for immutable review. Any nonzero result stops without edit, retry, commit, push, or successor work.
+**Last Activity Description:** Immutable r63 changes exactly five planning paths/digest `65cd1bd16b725227d25f6445521c4389dcc7314a76f4decfcc9499793a2e78c1`, is a direct child of the r62 result ledger `4c1445380e981888d9d3cd436858eb4268275133`, received independent P0/P1/P2=`0/0/0`, and is pushed/fetched at `origin/checkpoint/v179-phase285-plan04-task03a-plan-r63`. This root-authored authorization ledger permits the exact no-edit chain once; its commit will be the exact fetched work-ref tip used at execution. Any nonzero result stops without edit, retry, commit, production push, or successor work.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — r63 no-edit replay decision drafted
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. Final11 is exact and unaccepted. R62's valid `not_reproduced` result is not relay acceptance. Draft r63 has no execution authority before immutable P0/P1/P2=`0/0/0` review and exact push/fetch.
+Last Date: 2026-08-28 — r63 no-edit replay authorized
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. Final11 is exact and unaccepted. Immutable r63 is accepted and checkpointed. One no-edit relay-positive replay plus its success-contingent remaining gates may execute before `2026-08-28T13:16:36Z`; no production edit, retry, or A2c work is authorized.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Freeze the five-path r63 planning candidate, run one immutable hostile plan review, and push/fetch only after P0/P1/P2=`0/0/0`. Do not replay relay-positive, edit production, rerun any diagnostic, create a registered worktree, or start A2c before that gate and a fresh root-authored window.
+Commit this three-path root authorization ledger, push/fetch the work ref exactly, and execute the r63 no-edit chain once before `2026-08-28T13:16:36Z`. Stop on the first nonzero, vacuity, residue, or identity defect without retry or edit. Only a completely green chain may stage exact final11, create one direct-child production commit, and request immutable hostile review. Do not push A2b3 or start A2c before that review returns P0/P1/P2=`0/0/0`.
