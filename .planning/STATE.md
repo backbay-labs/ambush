@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T09:23:37Z"
+last_updated: "2026-08-28T09:29:18Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. Immutable r54 planning was rejected P0/P1/P2=`0/1/0` because three timeout mutants used abbreviated panic strings. Draft r55 pins their full `: Elapsed(())` messages, 31 table-driven transcript controls, and prospective final11 tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`. Production remains frozen pending immutable r55 review and push/fetch. A2c, A3, 03B, Plan 05A, and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. Immutable r55 planning `20c3616e69d7334a8b974474ff79d5da5796be02` passed hostile P0/P1/P2=`0/0/0` and is pushed/fetched at both planning refs. One A2b3 final11 production window is active from `2026-08-28T09:29:18Z` through hard stop `2026-08-28T11:29:18Z` in the existing worktree. Exactly the two pinned checker/manifest bytes and one full no-retry chain are authorized. A2c, A3, 03B, Plan 05A, and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Hostile review accepted r54's causal conclusion, tree math, fail-closed Docker gate, and sequencing, but rejected its exact-message oracle: `must` appends the locked Tokio timeout debug value. Draft r55 changes exactly three row messages to `private request one did not enter store: Elapsed(())` and replaces four single-marker controls with 31 table-driven controls covering all seven rows plus three abbreviated-timeout negatives. Prospective checker/manifest bytes and final11 tree reproduce; actual production remains exact final9 and untouched.
+**Last Activity Description:** Immutable r55 planning commit/tree `20c3616e` / `1bd4973e` received independent P0/P1/P2=`0/0/0`, confidence high. The reviewer reproduced all seven complete messages, exact 31 controls, locked Tokio rendering, checker/manifest hashes and blobs, prospective final11, full command, fail-closed identity gates, hard stop, and A2c block. Both planning refs fetch exactly. A fresh two-hour final11 production window is now recorded; no production byte had changed when the window opened.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — r54 rejected; r55 planning before production authorization
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R54 is immutable, rejected, and unpushed. R55 is planning-only and awaits immutable hostile review. Final9 remains exact but unaccepted; no production continuation is authorized.
+Last Date: 2026-08-28 — r55 accepted/pushed; final11 production validation authorized
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R55 planning is independently accepted and remotely banked. A2b3 final11 production validation may run once until `2026-08-28T11:29:18Z`; A2c remains blocked.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Freeze exactly the five r55 planning paths, verify all 31 checker self-controls plus the prospective two-file repair/tree/hashes and r55 command syntax, obtain immutable hostile P0/P1/P2=`0/0/0`, and push/fetch `checkpoint/v179-phase285-plan04-task03a-plan-r55` plus the planning work ref. Only then record one fresh two-hour window, apply exactly the pinned checker/manifest bytes in the existing production worktree, and run the full final11 chain once. No retry, extension, new worktree, Rust edit, A2c, or later work.
+In the existing `.claude/worktrees/v179-phase285-plan04-task03a-r14` only, require exact final9 preflight, apply exactly the r55 checker/manifest patch, require working bytes and prospective index to equal final11 `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, then execute `<r55_continuation_automated>` once before hard stop `2026-08-28T11:29:18Z`. Stop at the first nonzero result without retry/edit/commit/push. If completely green, stage exactly eleven paths, require real-index final11, commit one direct child of A2b2, and obtain immutable hostile production review before either A2b3 push. Do not create a worktree or start A2c.
