@@ -1,13 +1,14 @@
 # Phase 285 External Governance Witness Contract
 
-status: architecture-reviewed
-contract_version: 1
+status: architecture-review-pending
+contract_version: 2
 protocol_architecture_commit: 5be011a07690a63a297d5bba8fbf740bb659c19d
 protocol_code_commit: 27b64174e2c7ceef7c203f357f543e4950e4c27c
-implementation_status: not implemented
-reviewed_at: 2026-08-24T16:06:22Z
-reviewed_content_sha256: f9b7dee9872d566878ad3db89333d9236182d2defb65f7e6c0f5b7fdf3b6d43a
-review_verdict: P0=0 P1=0 P2=0
+implementation_status: partial-through-plan04-task03a2b2-a2b3-red
+pending_revision: r69
+prior_reviewed_at: 2026-08-24T16:06:22Z
+prior_reviewed_content_sha256: f9b7dee9872d566878ad3db89333d9236182d2defb65f7e6c0f5b7fdf3b6d43a
+prior_review_verdict: P0=0 P1=0 P2=0
 
 ## Decision
 
@@ -170,6 +171,18 @@ No witness-side user receives a `$KV.>` or `$JS.API.>` wildcard. All dynamic
 reply permission is server-issued, single-response, and deadline-bounded after
 receipt of an allowed request; a client-supplied reply subject does not widen
 ordinary publish authority.
+
+The NATS server starts that response-permission clock before the responder's
+async-nats subscription channel yields the request. NATS exposes no remaining
+grant duration to responder code. `ReceiptDeadlineV1` therefore begins at the
+first responder-observable dequeue and bounds local processing; it is not
+claimed to be the same clock or to expire before the server grant. If transport
+or scheduling delay consumes the server grant first, a later local publish can
+only enqueue a client command. It is a lost response: the requester returns
+`OutcomeUnknown`, then resolves the already-applied or unapplied decision by
+exact replay. No evidence may label local enqueue as server publication or
+delivery. `NoResponders` remains definitely unavailable; async-nats `Other` is
+ambiguous after command acceptance and is therefore `OutcomeUnknown`.
 
 Every production NATS connection uses `tls://`, validates a mounted pinned CA
 and exact server name, and rejects plaintext, an untrusted chain, an expired
@@ -762,6 +775,10 @@ The client uses one bounded deadline for request publication and response. A
 timeout is `OutcomeUnknown`, never success. The caller resolves mutation
 ambiguity through the fenced discovery/read protocol. The adapter does not
 retry a mutation under a new request digest or session automatically.
+The same rule covers reply-grant expiry before responder-local processing: a
+request may apply exactly once after the caller's response wait has expired,
+but exact replay must return the authenticated retained result without another
+CAS. Treating that path as `Unavailable` is forbidden.
 
 NATS `max_payload` must exceed the largest public envelope, private store-proxy
 envelope, or KV publish including its fixed headers. Configuration arithmetic
