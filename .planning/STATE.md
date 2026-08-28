@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T11:31:22Z"
+last_updated: "2026-08-28T11:50:02Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, 04-03A2b2, and 04-03A2b3 are accepted. A2b3 is immutable commit `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, a direct child of A2b2, and both origin refs fetch exactly. Its one r63 relay-positive replay passed exact `1/0/0/18`, the remaining frozen-tree chain passed, and independent hostile production review returned P0/P1/P2=`0/0/0`, confidence high. A2c alone is authorized in the same clean worktree through `2026-08-28T13:31:22Z`; A3 and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b3 is durably banked at immutable commit `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, a direct child of A2b2, with both refs exact; its acceptance is suspended because the r63 live replay executed cached unit-test binary SHA-256 `ab563048ba9f3410e6bf2f77524621cdae81ef61478ec45332a425f72c4d5c52`, which contains diagnostic-only `DeliveryTimeout` absent from accepted `lib.rs` SHA-256 `3dac41d81b30b5b30b10327c410b015843685baf5dbf0c62ff01b9cb1584a139`. The first A2c pass is stopped and unaccepted. Draft r64 permits no execution; it specifies one fresh-target immutable A2b3 provenance replay, then a corrected A2c split of four compiled real-seam reservation controls plus 34 artifact-oracle controls. A3 and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** A2b3 `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4` changes exactly eleven paths/digest `4d9d95a9253af2cede7f42175322169a4deb3fafebc8fb0d58bcb845cd992adf`; the Task02 cumulative set is fourteen paths/digest `4e6629733654f7b4b6f1233bfaaef96a0fede0368620380c8b97f9d75bb18664`. Both A2b3 refs are pushed/fetched after independent 0/0/0 review. The next bounded slice is A2c's four-path, no-production-behavior independent oracle and exact 38-mutant corpus.
+**Last Activity Description:** A2c's genuine exact RED ran `1/0/1/3`, exit `101`, proving `positive_oracle_executes_first=false` and `ambient_corpus_controls_are_rejected=false`. The partial three-path candidate then produced one apparent live positive and one apparent `DeliveryTimeout`, but both used an unproven cached unit-test binary and the wrong commit-as-tree pin, so neither carries evidence. The run stopped before any of 38 mutations. The uncommitted candidate remains read-only at three paths/digest `37cbd6eb4f8b3e00f2459a6260cbf9c674bca64b4d933296acbd55aa038dbe49`; it is incomplete because its four reservation controls mutate artifacts rather than the actual capacity-one seam and its manifest is unchanged. No commit or production push occurred.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b3 (`ed77183`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, 04-03A2b2, and 04-03A2b3 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2c is the only active production slice. A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`); A2b3 `ed77183` is banked but its acceptance is suspended pending exact source-to-binary live revalidation. Plans 01, 02, 03A, and 03B are complete; completed-plan count remains 4/13 because Plan 04 is still open. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — A2b3 accepted/pushed; A2c authorized
-Stopped At: Accepted A2b3 `ed77183d3d13d046e446d2837e8c5d21d1d1765d` is the durable frontier at both origin refs. A2c alone may execute in the same clean worktree before `2026-08-28T13:31:22Z`; A3 and later work are blocked.
+Last Date: 2026-08-28 — A2c stopped; A2b3 live evidence provenance invalidated
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` is the accepted frontier. A2b3 `ed77183d3d13d046e446d2837e8c5d21d1d1765d` remains durably banked at both refs but is not accepted until fresh-target replay and independent review. A2c is uncommitted and frozen at three dirty owned paths. No execution window is active.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Commit/push/fetch this root authorization ledger, then execute only Task 285-04-03A2c in the existing clean worktree. First record the exact RED proving the rejected oracle's positive-row and ambient-selection defects. Modify only the four owned paths, require the immutable positive ledger before all 38 coherent real-target mutants, freeze one direct child of A2b3, and stop at the first failed gate or `2026-08-28T13:31:22Z`. Do not push A2c before immutable P0/P1/P2=`0/0/0`; do not start A3.
+Freeze the five-path r64 planning correction, obtain immutable hostile P0/P1/P2=`0/0/0`, and push/fetch its checkpoint. Do not rerun A2b3, edit the three-path A2c candidate, refresh the manifest, create a registered worktree, or start A3 before a later fresh root window. R64 must bind the exact ephemeral-clone source, absent fresh Cargo target, executed unit-test binary path/hash, correct tree pin, four compiled reservation-seam mutants, and 34 remaining artifact-oracle mutants.
