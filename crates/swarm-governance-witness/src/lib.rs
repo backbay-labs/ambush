@@ -60,6 +60,7 @@ mod deadline_state_machine_tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Instant as MonotonicInstant;
     use swarm_crypto::{Ed25519Signer, sha256_hex};
     use swarm_governance::persistence_protocol::*;
     use swarm_governance::witness_engine::store::{
@@ -343,12 +344,34 @@ mod deadline_state_machine_tests {
         revision: Option<u64>,
         store_generation: Option<u64>,
         store_state_digest: Option<String>,
+        request_at_nanos: u64,
+        response_at_nanos: u64,
+    }
+
+    struct ObservationClockV1 {
+        origin: MonotonicInstant,
+    }
+
+    impl ObservationClockV1 {
+        fn new() -> Self {
+            Self {
+                origin: MonotonicInstant::now(),
+            }
+        }
+
+        fn now(&self) -> u64 {
+            must(
+                u64::try_from(self.origin.elapsed().as_nanos()),
+                "observation timestamp overflow",
+            )
+        }
     }
 
     #[derive(Clone)]
     struct RecordingNatsProxyV1 {
         inner: NatsPublicWitnessStoreProxyClient,
         records: Arc<Mutex<Vec<ProxyObservationV1>>>,
+        clock: Arc<ObservationClockV1>,
     }
 
     impl RecordingNatsProxyV1 {
@@ -359,6 +382,7 @@ mod deadline_state_machine_tests {
         ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
             let request_bytes = canonical_wire_bytes(&request)
                 .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+            let request_at_nanos = self.clock.now();
             let request_nonce = request.request_nonce.clone();
             let request_digest = request.request_digest.clone();
             let response = match operation {
@@ -372,6 +396,7 @@ mod deadline_state_machine_tests {
             };
             let response_bytes = canonical_wire_bytes(&response)
                 .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+            let response_at_nanos = self.clock.now();
             let (stream_id, revision, store_generation, store_state_digest) =
                 match &response.body {
                     swarm_governance::witness_engine::store::WitnessStoreProxyResponseBodyV1::Entry {
@@ -412,6 +437,8 @@ mod deadline_state_machine_tests {
                     revision,
                     store_generation,
                     store_state_digest,
+                    request_at_nanos,
+                    response_at_nanos,
                 });
             Ok(response)
         }
@@ -2664,10 +2691,49 @@ mod deadline_state_machine_tests {
         published: bool,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct TimestampedPublicAdmissionV1 {
+        subject: String,
+        payload_sha256: String,
+        reply_subject: String,
+        deadline_millis: u64,
+        received_at_nanos: u64,
+    }
+
+    struct RecordingPublicAdmissionObserverV1 {
+        clock: Arc<ObservationClockV1>,
+        records: Mutex<Vec<TimestampedPublicAdmissionV1>>,
+    }
+
+    impl SubscriberAdmissionObserverV1 for RecordingPublicAdmissionObserverV1 {
+        fn accepted(&self, receipt: SubscriberAdmissionReceiptV1) {
+            self.records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(TimestampedPublicAdmissionV1 {
+                    subject: receipt.subject,
+                    payload_sha256: receipt.payload_sha256,
+                    reply_subject: receipt.reply,
+                    deadline_millis: receipt.deadline_millis,
+                    received_at_nanos: self.clock.now(),
+                });
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct CompletePublisherObservationV1 {
+        reply_subject: String,
+        response_canonical_hex: String,
+        response_sha256: String,
+        request_received_at_nanos: u64,
+        response_received_at_nanos: u64,
+    }
+
     #[derive(Debug, Serialize)]
     struct ObservationCountsV1 {
         worker_events: usize,
         proxy_exchanges: usize,
+        private_exchanges: usize,
         store_operations: usize,
         publisher_attempts: usize,
         connections: usize,
@@ -2681,9 +2747,13 @@ mod deadline_state_machine_tests {
         response_sha256: String,
         worker_events_sha256: String,
         proxy_exchanges_sha256: String,
+        private_exchanges_sha256: String,
         store_operations_sha256: String,
         publisher_attempts_sha256: String,
+        public_admission_sha256: String,
+        publisher_sha256: String,
         connections_sha256: String,
+        connection_client_ids_sha256: String,
     }
 
     #[derive(Debug, Serialize)]
@@ -2706,9 +2776,13 @@ mod deadline_state_machine_tests {
         selected_head_txid: String,
         worker_events: Vec<WorkerTransitionEventV1>,
         proxy_exchanges: Vec<ProxyObservationV1>,
+        private_exchanges: Vec<ProxyObservationV1>,
         store_operations: Vec<StoreObservationV1>,
         publisher_attempts: Vec<PublisherObservationV1>,
+        public_admission: TimestampedPublicAdmissionV1,
+        publisher: CompletePublisherObservationV1,
         connections: Vec<ConnectionObservationV1>,
+        connection_client_ids: Vec<u64>,
         counts: ObservationCountsV1,
         digests: ObservationDigestsV1,
     }
@@ -2895,7 +2969,7 @@ mod deadline_state_machine_tests {
         must(thread.join(), "observation thread panicked");
     }
 
-    async fn run_worker_observation_test_async() {
+    async fn run_worker_observation_test_async() -> Vec<u8> {
         must(
             initialize_deadline_stream().await,
             "observation stream initialization",
@@ -2943,6 +3017,7 @@ mod deadline_state_machine_tests {
             "observation witness connection",
         );
         let witness_client_id = witness_client.server_info().client_id;
+        let observation_clock = Arc::new(ObservationClockV1::new());
         let proxy_records = Arc::new(Mutex::new(Vec::new()));
         let proxy = RecordingNatsProxyV1 {
             inner: must(
@@ -2955,12 +3030,27 @@ mod deadline_state_machine_tests {
                 "observation NATS proxy",
             ),
             records: proxy_records.clone(),
+            clock: observation_clock.clone(),
         };
         let mut dispatcher = must(
             PublicWitnessDispatcher::new(public_config, witness_signer, proxy).await,
             "observation dispatcher startup",
         );
+        let startup_private_exchanges = proxy_records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(
+            startup_private_exchanges.len(),
+            2,
+            "observation startup private exchange count"
+        );
+        let public_admissions = Arc::new(RecordingPublicAdmissionObserverV1 {
+            clock: observation_clock.clone(),
+            records: Mutex::new(Vec::new()),
+        });
         dispatcher.observe_worker_transitions_for_test(observer.clone());
+        dispatcher.observe_subscriber_admissions_for_test(public_admissions.clone());
         let _public_runner = must(
             PublicWitnessServiceRunner::start(witness_client, dispatcher).await,
             "observation shipping public start",
@@ -3032,6 +3122,11 @@ mod deadline_state_machine_tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        public_admissions
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         let request = must(
             AuthenticatedDeadlineFixtureV1::read_head_request(
                 &ephemeral_signer,
@@ -3045,6 +3140,7 @@ mod deadline_state_machine_tests {
             runtime_client.read_head(request.clone()).await,
             "observation ReadHead response",
         );
+        let response_received_at_nanos = observation_clock.now();
         must(response.validate(), "observation ReadHead attestation");
         assert_eq!(response.request_digest, request.request_digest);
         assert_eq!(response.operation, WitnessOperationV1::ReadHead);
@@ -3058,6 +3154,24 @@ mod deadline_state_machine_tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        let mut private_exchanges = startup_private_exchanges;
+        private_exchanges.extend(proxy_exchanges.clone());
+        assert_eq!(
+            private_exchanges.len(),
+            3,
+            "observation complete private exchange count"
+        );
+        let public_admissions = public_admissions
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(
+            public_admissions.len(),
+            1,
+            "observation public admission count"
+        );
+        let public_admission = public_admissions[0].clone();
         let store_operations = facts
             .records
             .lock()
@@ -3078,6 +3192,7 @@ mod deadline_state_machine_tests {
             })
             .collect();
         let runtime_client_id = runtime_client.connection_client_id();
+        let connection_client_ids = vec![runtime_client_id, witness_client_id, store_client_id];
         let connections = vec![
             server_connection_observation(
                 "runtime-client",
@@ -3221,6 +3336,27 @@ mod deadline_state_machine_tests {
             WitnessServiceResponseV1::Read(response.clone()).canonical_bytes(),
             "observation response bytes",
         );
+        assert_eq!(
+            public_admission.subject,
+            PublicWitnessServiceConfigV1::subject_for(request.operation),
+            "observation publisher subject differs"
+        );
+        assert_eq!(
+            public_admission.payload_sha256,
+            sha256_hex(&request_bytes),
+            "observation publisher request bytes differ"
+        );
+        assert_eq!(
+            public_admission.deadline_millis, PUBLIC_HANDLER_DEADLINE_MILLIS,
+            "observation publisher deadline differs"
+        );
+        let publisher = CompletePublisherObservationV1 {
+            reply_subject: public_admission.reply_subject.clone(),
+            response_canonical_hex: hex::encode(&response_bytes),
+            response_sha256: sha256_hex(&response_bytes),
+            request_received_at_nanos: public_admission.received_at_nanos,
+            response_received_at_nanos,
+        };
         let worker_bytes = must(
             canonical_wire_bytes(&worker_events),
             "observation worker bytes",
@@ -3228,6 +3364,10 @@ mod deadline_state_machine_tests {
         let proxy_bytes = must(
             canonical_wire_bytes(&proxy_exchanges),
             "observation proxy bytes",
+        );
+        let private_exchange_bytes = must(
+            canonical_wire_bytes(&private_exchanges),
+            "observation private exchange bytes",
         );
         let store_bytes = must(
             canonical_wire_bytes(&store_operations),
@@ -3237,13 +3377,26 @@ mod deadline_state_machine_tests {
             canonical_wire_bytes(&publisher_attempts),
             "observation publisher bytes",
         );
+        let complete_publisher_bytes = must(
+            canonical_wire_bytes(&publisher),
+            "observation complete publisher bytes",
+        );
+        let public_admission_bytes = must(
+            canonical_wire_bytes(&public_admission),
+            "observation public admission bytes",
+        );
         let connection_bytes = must(
             canonical_wire_bytes(&connections),
             "observation connection bytes",
         );
+        let connection_client_id_bytes = must(
+            canonical_wire_bytes(&connection_client_ids),
+            "observation connection client-id bytes",
+        );
         let counts = ObservationCountsV1 {
             worker_events: worker_events.len(),
             proxy_exchanges: proxy_exchanges.len(),
+            private_exchanges: private_exchanges.len(),
             store_operations: store_operations.len(),
             publisher_attempts: publisher_attempts.len(),
             connections: connections.len(),
@@ -3264,18 +3417,50 @@ mod deadline_state_machine_tests {
             response_sha256: sha256_hex(&response_bytes),
             worker_events_sha256: sha256_hex(&worker_bytes),
             proxy_exchanges_sha256: sha256_hex(&proxy_bytes),
+            private_exchanges_sha256: sha256_hex(&private_exchange_bytes),
             store_operations_sha256: sha256_hex(&store_bytes),
             publisher_attempts_sha256: sha256_hex(&publisher_bytes),
+            public_admission_sha256: sha256_hex(&public_admission_bytes),
+            publisher_sha256: sha256_hex(&complete_publisher_bytes),
             connections_sha256: sha256_hex(&connection_bytes),
+            connection_client_ids_sha256: sha256_hex(&connection_client_id_bytes),
         };
-        let Some((path, tree, token, case)) = observation_identity() else {
-            return;
+        let identity = observation_identity();
+        let complete_identity = if identity.is_none()
+            && std::env::var_os("PHASE285_COMPLETE_RECEIPT_LEDGER_PATH").is_some()
+        {
+            Some((
+                must(
+                    std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE"),
+                    "complete receipt tree absent",
+                ),
+                must(
+                    std::env::var("PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN"),
+                    "complete receipt invocation token absent",
+                ),
+                "service_checkpoint_complete_receipt".to_string(),
+            ))
+        } else {
+            None
         };
+        let (tree, token, case) = identity
+            .as_ref()
+            .map(|(_, tree, token, case)| (tree.as_str(), token.as_str(), case.as_str()))
+            .or_else(|| {
+                complete_identity
+                    .as_ref()
+                    .map(|(tree, token, case)| (tree.as_str(), token.as_str(), case.as_str()))
+            })
+            .unwrap_or((
+                "direct-a2b1-tree",
+                "direct-a2b1-invocation",
+                "service_checkpoint_complete_receipt",
+            ));
         let row = ObservationLedgerV1 {
             schema_version: 1,
-            tree: &tree,
-            invocation_token: &token,
-            case: &case,
+            tree,
+            invocation_token: token,
+            case,
             status: "passed",
             operation: request.operation,
             public_subject: PublicWitnessServiceConfigV1::subject_for(request.operation),
@@ -3290,9 +3475,13 @@ mod deadline_state_machine_tests {
             selected_head_txid: selected_head.txid.clone(),
             worker_events,
             proxy_exchanges,
+            private_exchanges,
             store_operations,
             publisher_attempts,
+            public_admission,
+            publisher,
             connections,
+            connection_client_ids,
             counts,
             digests,
         };
@@ -3300,13 +3489,961 @@ mod deadline_state_machine_tests {
             canonical_wire_bytes(&row),
             "observation ledger canonical bytes",
         );
-        let mut file = must(
-            OpenOptions::new().write(true).create_new(true).open(path),
-            "observation ledger is not fresh",
+        if let Some((path, _, _, _)) = identity {
+            let mut file = must(
+                OpenOptions::new().write(true).create_new(true).open(path),
+                "observation ledger is not fresh",
+            );
+            must(file.write_all(&bytes), "observation ledger write");
+            must(file.write_all(b"\n"), "observation ledger frame");
+            must(file.sync_all(), "observation ledger sync");
+        }
+        bytes
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    struct LedgerBoundCompleteReceiptV1 {
+        schema_version: u8,
+        observation_ledger_canonical_hex: String,
+        observation_ledger_sha256: String,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum CompleteReceiptDispositionV1 {
+        Forward,
+        Suppress,
+    }
+
+    fn ledger_field<'a>(
+        value: &'a serde_json::Value,
+        name: &str,
+        reason: &'static str,
+    ) -> Result<&'a serde_json::Value, &'static str> {
+        value.get(name).ok_or(reason)
+    }
+
+    fn ledger_string<'a>(
+        value: &'a serde_json::Value,
+        name: &str,
+        reason: &'static str,
+    ) -> Result<&'a str, &'static str> {
+        ledger_field(value, name, reason)?.as_str().ok_or(reason)
+    }
+
+    fn ledger_u64(
+        value: &serde_json::Value,
+        name: &str,
+        reason: &'static str,
+    ) -> Result<u64, &'static str> {
+        ledger_field(value, name, reason)?.as_u64().ok_or(reason)
+    }
+
+    fn ledger_hex(
+        value: &serde_json::Value,
+        name: &str,
+        reason: &'static str,
+    ) -> Result<Vec<u8>, &'static str> {
+        hex::decode(ledger_string(value, name, reason)?).map_err(|_| reason)
+    }
+
+    fn ledger_digest_matches(
+        value: &serde_json::Value,
+        bytes_name: &str,
+        digest_name: &str,
+        reason: &'static str,
+    ) -> Result<Vec<u8>, &'static str> {
+        let bytes = ledger_hex(value, bytes_name, reason)?;
+        if sha256_hex(&bytes) != ledger_string(value, digest_name, reason)? {
+            return Err(reason);
+        }
+        Ok(bytes)
+    }
+
+    fn canonical_value_bytes(
+        value: &serde_json::Value,
+        reason: &'static str,
+    ) -> Result<Vec<u8>, &'static str> {
+        canonical_wire_bytes(value).map_err(|_| reason)
+    }
+
+    fn validate_complete_worker_events(events: &[serde_json::Value]) -> Result<(), &'static str> {
+        let expected = [
+            ("dequeued", "public", None),
+            ("post_preflight", "public", None),
+            ("proxy_store_begin", "public", Some("read_entry")),
+            ("dequeued", "private", None),
+            ("post_preflight", "private", None),
+            ("proxy_store_begin", "private", Some("read_entry")),
+            ("proxy_store_end", "private", Some("read_entry")),
+            ("response_enqueue_attempt", "private", None),
+            ("publish_attempt", "private", None),
+            ("proxy_store_end", "public", Some("read_entry")),
+            ("response_enqueue_attempt", "public", None),
+            ("publish_attempt", "public", None),
+        ];
+        if events.len() != expected.len() {
+            return Err("worker_operation");
+        }
+        for (event, (kind, worker, operation)) in events.iter().zip(expected) {
+            if ledger_string(event, "event", "worker_operation")? != kind
+                || ledger_string(event, "worker", "worker_operation")? != worker
+                || operation.is_some_and(|operation| {
+                    ledger_string(event, "operation", "worker_operation") != Ok(operation)
+                })
+            {
+                return Err("worker_operation");
+            }
+        }
+        for index in [2_usize, 5] {
+            if ledger_field(&events[index], "cas_attempted", "worker_cas")?.as_bool() != Some(false)
+            {
+                return Err("worker_cas");
+            }
+        }
+        for index in [6_usize, 9] {
+            if ledger_field(&events[index], "cas_applied", "worker_cas")?.as_bool() != Some(false) {
+                return Err("worker_cas");
+            }
+            if ledger_field(&events[index], "succeeded", "worker_operation")?.as_bool()
+                != Some(true)
+            {
+                return Err("worker_operation");
+            }
+        }
+        for index in [7_usize, 10] {
+            if ledger_field(&events[index], "accepted", "worker_operation")?.as_bool() != Some(true)
+            {
+                return Err("worker_operation");
+            }
+        }
+        for index in [8_usize, 11] {
+            if ledger_field(&events[index], "published", "worker_operation")?.as_bool()
+                != Some(true)
+            {
+                return Err("worker_operation");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_complete_publisher_attempts(
+        attempts: &[serde_json::Value],
+        events: &[serde_json::Value],
+    ) -> Result<(), &'static str> {
+        let expected = [(8_u64, "private"), (11_u64, "public")];
+        if attempts.len() != expected.len() {
+            return Err("publisher_fabrication");
+        }
+        for (attempt, (ordinal, worker)) in attempts.iter().zip(expected) {
+            let ordinal_index = usize::try_from(ordinal).map_err(|_| "publisher_fabrication")?;
+            let event = events.get(ordinal_index).ok_or("publisher_fabrication")?;
+            if ledger_u64(attempt, "ordinal", "publisher_fabrication")? != ordinal
+                || ledger_string(attempt, "worker", "publisher_fabrication")? != worker
+                || ledger_field(attempt, "published", "publisher_fabrication")?.as_bool()
+                    != Some(true)
+                || ledger_string(event, "event", "publisher_fabrication")? != "publish_attempt"
+                || ledger_string(event, "worker", "publisher_fabrication")? != worker
+                || ledger_field(event, "published", "publisher_fabrication")?.as_bool()
+                    != Some(true)
+            {
+                return Err("publisher_fabrication");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_complete_connections(
+        connections: &[serde_json::Value],
+    ) -> Result<(), &'static str> {
+        let expected = [
+            ("runtime-client", "PHASE285_RUNTIME", "phase285_foreign"),
+            ("public-witness", "PHASE285_WITNESS", "phase285_witness"),
+            (
+                "private-store",
+                "PHASE285_WITNESS_STORE",
+                "phase285_witness_store",
+            ),
+        ];
+        if connections.len() != expected.len() {
+            return Err("connection_identity");
+        }
+        let mut client_ids = std::collections::BTreeSet::new();
+        for (connection, (role, account, user)) in connections.iter().zip(expected) {
+            let client_id = ledger_u64(connection, "server_client_id", "connection_identity")?;
+            if client_id == 0
+                || !client_ids.insert(client_id)
+                || ledger_string(connection, "runner_role", "connection_identity")? != role
+                || ledger_string(connection, "account", "connection_identity")? != account
+                || ledger_string(connection, "authenticated_user", "connection_identity")? != user
+            {
+                return Err("connection_identity");
+            }
+            let evidence = ledger_digest_matches(
+                connection,
+                "server_evidence_canonical_hex",
+                "server_evidence_sha256",
+                "connection_identity",
+            )?;
+            let authority: ServerConnectionAuthorityV1 =
+                serde_json::from_slice(&evidence).map_err(|_| "connection_identity")?;
+            if canonical_wire_bytes(&authority).map_err(|_| "connection_identity")? != evidence
+                || authority.account != account
+                || authority.authenticated_user != user
+                || authority.server_client_id != client_id
+            {
+                return Err("connection_identity");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_complete_receipt(
+        receipt: &LedgerBoundCompleteReceiptV1,
+        expected_tree: &str,
+        expected_invocation_token: &str,
+        expected_case: &str,
+    ) -> Result<(), &'static str> {
+        if receipt.schema_version != 1 {
+            return Err("receipt_schema");
+        }
+        let ledger = hex::decode(&receipt.observation_ledger_canonical_hex)
+            .map_err(|_| "ledger_canonical")?;
+        if sha256_hex(&ledger) != receipt.observation_ledger_sha256 {
+            return Err("ledger_digest");
+        }
+        let row: serde_json::Value =
+            serde_json::from_slice(&ledger).map_err(|_| "ledger_canonical")?;
+        if canonical_value_bytes(&row, "ledger_canonical")? != ledger
+            || ledger_u64(&row, "schema_version", "ledger_identity")? != 1
+            || ledger_string(&row, "status", "ledger_identity")? != "passed"
+            || ledger_string(&row, "operation", "public_request")? != "ReadHead"
+            || ledger_string(&row, "public_subject", "public_request")?
+                != "swarm.governance.witness.v1.read_head"
+        {
+            return Err("ledger_identity");
+        }
+        if ledger_string(&row, "tree", "current_invocation")? != expected_tree
+            || ledger_string(&row, "invocation_token", "current_invocation")?
+                != expected_invocation_token
+            || ledger_string(&row, "case", "current_invocation")? != expected_case
+        {
+            return Err("current_invocation");
+        }
+
+        let request_bytes = ledger_hex(&row, "request_canonical_hex", "public_request")?;
+        let request =
+            WitnessServiceRequestV1::decode(&request_bytes).map_err(|_| "public_request")?;
+        if request.canonical_bytes().map_err(|_| "public_request")? != request_bytes
+            || request.operation != WitnessServiceOperationV1::ReadHead
+            || request.request_nonce != ledger_string(&row, "request_nonce", "public_request")?
+            || request.request_digest != ledger_string(&row, "request_digest", "public_request")?
+        {
+            return Err("public_request");
+        }
+        let response_bytes = ledger_hex(&row, "response_canonical_hex", "public_response")?;
+        let response =
+            WitnessServiceResponseV1::decode_for_client_request(&response_bytes, &request)
+                .map_err(|_| "public_response")?;
+
+        let events = ledger_field(&row, "worker_events", "worker_operation")?
+            .as_array()
+            .ok_or("worker_operation")?;
+        validate_complete_worker_events(events)?;
+
+        let private = ledger_field(&row, "private_exchanges", "private_exchange")?
+            .as_array()
+            .ok_or("private_exchange")?;
+        let expected_operations = [
+            WitnessStoreProxyOperationV1::InspectReady,
+            WitnessStoreProxyOperationV1::ReadEntry,
+            WitnessStoreProxyOperationV1::ReadEntry,
+        ];
+        if private.len() != expected_operations.len() {
+            return Err("private_exchange");
+        }
+        let mut previous_response_at = 0;
+        let mut final_private_response = None;
+        for (exchange, expected_operation) in private.iter().zip(expected_operations) {
+            let request_bytes = ledger_digest_matches(
+                exchange,
+                "request_canonical_hex",
+                "request_sha256",
+                "private_request_digest",
+            )?;
+            let response_bytes = ledger_digest_matches(
+                exchange,
+                "response_canonical_hex",
+                "response_sha256",
+                "private_response_digest",
+            )?;
+            let private_request = WitnessStoreProxyRequestV1::decode(&request_bytes)
+                .map_err(|_| "private_request_digest")?;
+            private_request
+                .validate_semantics()
+                .and_then(|()| private_request.validate_signature())
+                .map_err(|_| "private_request_digest")?;
+            let private_response = WitnessStoreProxyResponseV1::decode(&response_bytes)
+                .map_err(|_| "private_response_digest")?;
+            if private_request.operation != expected_operation
+                || private_response.operation != expected_operation
+                || private_response.request_digest != private_request.request_digest
+                || ledger_string(exchange, "request_nonce", "private_exchange")?
+                    != private_request.request_nonce
+                || ledger_string(exchange, "request_digest", "private_exchange")?
+                    != private_request.request_digest
+            {
+                return Err("private_exchange");
+            }
+            let request_at = ledger_u64(exchange, "request_at_nanos", "causal_timestamps")?;
+            let response_at = ledger_u64(exchange, "response_at_nanos", "causal_timestamps")?;
+            if request_at < previous_response_at || response_at < request_at {
+                return Err("causal_timestamps");
+            }
+            previous_response_at = response_at;
+            final_private_response = Some(private_response);
+        }
+
+        let proxy = ledger_field(&row, "proxy_exchanges", "proxy_cross_copy")?
+            .as_array()
+            .ok_or("proxy_cross_copy")?;
+        if proxy.len() != 1
+            || canonical_value_bytes(&proxy[0], "proxy_cross_copy")?
+                != canonical_value_bytes(&private[2], "proxy_cross_copy")?
+        {
+            return Err("proxy_cross_copy");
+        }
+
+        let publisher_attempts = ledger_field(&row, "publisher_attempts", "publisher_fabrication")?
+            .as_array()
+            .ok_or("publisher_fabrication")?;
+        validate_complete_publisher_attempts(publisher_attempts, events)?;
+
+        let store = ledger_field(&row, "store_operations", "store_result_digest")?
+            .as_array()
+            .ok_or("store_result_digest")?;
+        if store.len() != 1
+            || ledger_string(&store[0], "operation", "store_result_digest")? != "read_entry"
+            || ledger_field(&store[0], "cas_attempted", "worker_cas")?.as_bool() != Some(false)
+            || ledger_field(&store[0], "cas_applied", "worker_cas")?.as_bool() != Some(false)
+        {
+            return Err("store_result_digest");
+        }
+        let store_input = ledger_digest_matches(
+            &store[0],
+            "input_canonical_hex",
+            "input_sha256",
+            "store_input_digest",
+        )?;
+        let stream: String =
+            serde_json::from_slice(&store_input).map_err(|_| "store_input_digest")?;
+        if stream != "tom-primary"
+            || canonical_wire_bytes(&stream).map_err(|_| "store_input_digest")? != store_input
+        {
+            return Err("store_input_digest");
+        }
+        let store_result_bytes = ledger_digest_matches(
+            &store[0],
+            "result_canonical_hex",
+            "result_sha256",
+            "store_result_digest",
+        )?;
+        let store_result: WitnessStoreReadResultV1 =
+            serde_json::from_slice(&store_result_bytes).map_err(|_| "store_result_digest")?;
+        if canonical_wire_bytes(&store_result).map_err(|_| "store_result_digest")?
+            != store_result_bytes
+        {
+            return Err("store_result_digest");
+        }
+        let (store_stream, store_revision, store_envelope) = store_result.parts();
+        if store_stream != stream
+            || ledger_string(&store[0], "stream_id", "store_result_digest")? != store_stream
+            || ledger_u64(&store[0], "revision", "store_result_digest")? != store_revision
+            || ledger_u64(&store[0], "store_generation", "store_result_digest")?
+                != store_envelope.store_generation
+            || ledger_string(&store[0], "store_state_digest", "store_result_digest")?
+                != store_envelope
+                    .store_state_digest()
+                    .map_err(|_| "store_result_digest")?
+        {
+            return Err("store_result_digest");
+        }
+        let final_private_response = final_private_response.ok_or("private_store_entry")?;
+        match final_private_response.body {
+            swarm_governance::witness_engine::store::WitnessStoreProxyResponseBodyV1::Entry {
+                stream_id,
+                revision,
+                envelope,
+            } if stream_id == store_stream
+                && revision == store_revision
+                && envelope.as_ref() == store_envelope => {}
+            _ => return Err("private_store_entry"),
+        }
+
+        if ledger_u64(&row, "selected_store_revision", "store_result_digest")? != store_revision
+            || ledger_u64(&row, "selected_store_generation", "store_result_digest")?
+                != store_envelope.store_generation
+            || ledger_string(&row, "selected_store_state_digest", "store_result_digest")?
+                != store_envelope
+                    .store_state_digest()
+                    .map_err(|_| "store_result_digest")?
+            || ledger_string(&row, "selected_envelope_digest", "store_result_digest")?
+                != store_envelope
+                    .signed_envelope_digest()
+                    .map_err(|_| "store_result_digest")?
+        {
+            return Err("store_result_digest");
+        }
+        let selected_head = &store_envelope
+            .current
+            .as_ref()
+            .ok_or("public_store_head")?
+            .head;
+        let WitnessServiceResponseV1::Read(read) = response else {
+            return Err("public_store_head");
+        };
+        let WitnessReadResponseV1::Head(head) = &read.response else {
+            return Err("public_store_head");
+        };
+        if head.as_ref().as_ref() != Some(selected_head)
+            || read.target_txid != selected_head.txid
+            || ledger_string(&row, "selected_head_txid", "public_store_head")? != selected_head.txid
+        {
+            return Err("public_store_head");
+        }
+        let WitnessServiceRequestBodyV1::ReadHead { target_txid, .. } = &request.body else {
+            return Err("public_store_head");
+        };
+        if target_txid != &selected_head.txid {
+            return Err("public_store_head");
+        }
+
+        let publisher = ledger_field(&row, "publisher", "publisher_reply_subject")?;
+        let admission = ledger_field(&row, "public_admission", "publisher_reply_subject")?;
+        let reply = ledger_string(publisher, "reply_subject", "publisher_reply_subject")?;
+        if reply.len() > 512
+            || !(reply.starts_with("_INBOX.") || reply.starts_with("_R_."))
+            || reply.contains('*')
+            || reply.contains('>')
+        {
+            return Err("publisher_reply_subject");
+        }
+        if ledger_string(admission, "reply_subject", "publisher_reply_subject")? != reply
+            || ledger_string(admission, "subject", "publisher_reply_subject")?
+                != "swarm.governance.witness.v1.read_head"
+            || ledger_string(admission, "payload_sha256", "publisher_reply_subject")?
+                != sha256_hex(&request_bytes)
+            || ledger_u64(admission, "deadline_millis", "publisher_reply_subject")?
+                != PUBLIC_HANDLER_DEADLINE_MILLIS
+        {
+            return Err("publisher_reply_subject");
+        }
+        let publisher_response = ledger_digest_matches(
+            publisher,
+            "response_canonical_hex",
+            "response_sha256",
+            "publisher_response",
+        )?;
+        if publisher_response != response_bytes {
+            return Err("publisher_response");
+        }
+        let request_received =
+            ledger_u64(publisher, "request_received_at_nanos", "causal_timestamps")?;
+        if ledger_u64(admission, "received_at_nanos", "causal_timestamps")? != request_received {
+            return Err("causal_timestamps");
+        }
+        let response_received =
+            ledger_u64(publisher, "response_received_at_nanos", "causal_timestamps")?;
+        let final_private = private.last().ok_or("causal_timestamps")?;
+        if ledger_u64(final_private, "request_at_nanos", "causal_timestamps")? < request_received
+            || ledger_u64(final_private, "response_at_nanos", "causal_timestamps")?
+                > response_received
+            || response_received < request_received
+        {
+            return Err("causal_timestamps");
+        }
+
+        let connections = ledger_field(&row, "connections", "connection_identity")?
+            .as_array()
+            .ok_or("connection_identity")?;
+        validate_complete_connections(connections)?;
+        let connection_client_ids =
+            ledger_field(&row, "connection_client_ids", "connection_identity")?
+                .as_array()
+                .ok_or("connection_identity")?;
+        if connection_client_ids.len() != connections.len()
+            || connection_client_ids
+                .iter()
+                .zip(connections)
+                .any(|(client_id, connection)| {
+                    client_id.as_u64()
+                        != connection
+                            .get("server_client_id")
+                            .and_then(serde_json::Value::as_u64)
+                })
+        {
+            return Err("connection_identity");
+        }
+
+        let counts = ledger_field(&row, "counts", "ledger_counts")?;
+        for (name, expected) in [
+            ("worker_events", events.len()),
+            (
+                "proxy_exchanges",
+                ledger_field(&row, "proxy_exchanges", "ledger_counts")?
+                    .as_array()
+                    .ok_or("ledger_counts")?
+                    .len(),
+            ),
+            ("private_exchanges", private.len()),
+            ("store_operations", store.len()),
+            (
+                "publisher_attempts",
+                ledger_field(&row, "publisher_attempts", "ledger_counts")?
+                    .as_array()
+                    .ok_or("ledger_counts")?
+                    .len(),
+            ),
+            ("connections", connections.len()),
+        ] {
+            if ledger_u64(counts, name, "ledger_counts")? != expected as u64 {
+                return Err("ledger_counts");
+            }
+        }
+        if ledger_u64(counts, "cas_attempted", "worker_cas")? != 0
+            || ledger_u64(counts, "cas_applied", "worker_cas")? != 0
+        {
+            return Err("worker_cas");
+        }
+
+        let digests = ledger_field(&row, "digests", "ledger_digests")?;
+        for (name, value) in [
+            (
+                "worker_events_sha256",
+                ledger_field(&row, "worker_events", "ledger_digests")?,
+            ),
+            (
+                "proxy_exchanges_sha256",
+                ledger_field(&row, "proxy_exchanges", "ledger_digests")?,
+            ),
+            (
+                "private_exchanges_sha256",
+                ledger_field(&row, "private_exchanges", "ledger_digests")?,
+            ),
+            (
+                "store_operations_sha256",
+                ledger_field(&row, "store_operations", "ledger_digests")?,
+            ),
+            (
+                "publisher_attempts_sha256",
+                ledger_field(&row, "publisher_attempts", "ledger_digests")?,
+            ),
+            ("publisher_sha256", publisher),
+            ("public_admission_sha256", admission),
+            (
+                "connections_sha256",
+                ledger_field(&row, "connections", "ledger_digests")?,
+            ),
+            (
+                "connection_client_ids_sha256",
+                ledger_field(&row, "connection_client_ids", "ledger_digests")?,
+            ),
+        ] {
+            if sha256_hex(&canonical_value_bytes(value, "ledger_digests")?)
+                != ledger_string(digests, name, "ledger_digests")?
+            {
+                return Err("ledger_digests");
+            }
+        }
+        if sha256_hex(&request_bytes) != ledger_string(digests, "request_sha256", "ledger_digests")?
+            || sha256_hex(&response_bytes)
+                != ledger_string(digests, "response_sha256", "ledger_digests")?
+        {
+            return Err("ledger_digests");
+        }
+        Ok(())
+    }
+
+    fn complete_receipt_disposition(
+        receipt: Option<LedgerBoundCompleteReceiptV1>,
+        sender: Option<&mpsc::Sender<LedgerBoundCompleteReceiptV1>>,
+        expected_tree: &str,
+        expected_invocation_token: &str,
+        expected_case: &str,
+    ) -> CompleteReceiptDispositionV1 {
+        let Some(receipt) = receipt else {
+            return CompleteReceiptDispositionV1::Forward;
+        };
+        if validate_complete_receipt(
+            &receipt,
+            expected_tree,
+            expected_invocation_token,
+            expected_case,
+        )
+        .is_err()
+        {
+            return CompleteReceiptDispositionV1::Forward;
+        }
+        let Some(sender) = sender else {
+            return CompleteReceiptDispositionV1::Forward;
+        };
+        if sender.max_capacity() != 1 {
+            return CompleteReceiptDispositionV1::Forward;
+        }
+        match sender.try_send(receipt) {
+            Ok(()) => CompleteReceiptDispositionV1::Suppress,
+            Err(_) => CompleteReceiptDispositionV1::Forward,
+        }
+    }
+
+    fn complete_receipt_file_path(variable: &str) -> PathBuf {
+        assert!(
+            matches!(
+                variable,
+                "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH" | "PHASE285_COMPLETE_RECEIPT_PATH"
+            ),
+            "complete receipt path selector is not closed"
         );
-        must(file.write_all(&bytes), "observation ledger write");
-        must(file.write_all(b"\n"), "observation ledger frame");
-        must(file.sync_all(), "observation ledger sync");
+        let path = PathBuf::from(must(
+            std::env::var(variable),
+            "checker-owned complete receipt artifact path absent",
+        ));
+        assert!(
+            path.is_absolute(),
+            "complete receipt artifact path is relative"
+        );
+        path
+    }
+
+    fn persist_and_reopen(variable: &str, bytes: &[u8]) -> Vec<u8> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let path = complete_receipt_file_path(variable);
+        let mut file = must(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path),
+            "complete receipt evidence is not fresh",
+        );
+        must(file.write_all(bytes), "complete receipt evidence write");
+        must(file.write_all(b"\n"), "complete receipt evidence frame");
+        must(file.sync_all(), "complete receipt evidence sync");
+        drop(file);
+        let framed = must(std::fs::read(&path), "complete receipt evidence reopen");
+        assert_eq!(
+            framed.last(),
+            Some(&b'\n'),
+            "complete receipt evidence frame absent"
+        );
+        assert_eq!(
+            framed[..framed.len() - 1],
+            *bytes,
+            "complete receipt reopened bytes differ"
+        );
+        bytes.to_vec()
+    }
+
+    fn complete_receipt_from_ledger_value(
+        value: &serde_json::Value,
+    ) -> LedgerBoundCompleteReceiptV1 {
+        let bytes = must(
+            canonical_wire_bytes(value),
+            "coherent complete receipt ledger bytes",
+        );
+        LedgerBoundCompleteReceiptV1 {
+            schema_version: 1,
+            observation_ledger_sha256: sha256_hex(&bytes),
+            observation_ledger_canonical_hex: hex::encode(bytes),
+        }
+    }
+
+    fn refresh_ledger_array_digest(
+        value: &mut serde_json::Value,
+        array_name: &str,
+        digest_name: &str,
+    ) {
+        let bytes = must(
+            canonical_wire_bytes(must_some(value.get(array_name), "coherent array absent")),
+            "coherent array bytes",
+        );
+        must_some(
+            value
+                .get_mut("digests")
+                .and_then(serde_json::Value::as_object_mut),
+            "coherent ledger digests absent",
+        )
+        .insert(
+            digest_name.to_string(),
+            serde_json::Value::String(sha256_hex(&bytes)),
+        );
+    }
+
+    pub(super) fn run_complete_receipt_suppression_test() {
+        let thread = must(
+            std::thread::Builder::new()
+                .name("phase285-a2b1-complete-receipt".to_string())
+                .stack_size(64 * 1024 * 1024)
+                .spawn(|| {
+                    let runtime = must(
+                        tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(4)
+                            .thread_stack_size(64 * 1024 * 1024)
+                            .enable_all()
+                            .build(),
+                        "complete receipt runtime",
+                    );
+                    runtime.block_on(Box::pin(run_complete_receipt_suppression_test_async()));
+                }),
+            "complete receipt thread",
+        );
+        must(thread.join(), "complete receipt thread panicked");
+    }
+
+    async fn run_complete_receipt_suppression_test_async() {
+        let expected_tree = must(
+            std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE"),
+            "complete receipt tree absent",
+        );
+        let expected_invocation_token = must(
+            std::env::var("PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN"),
+            "complete receipt invocation token absent",
+        );
+        let expected_case = "service_checkpoint_complete_receipt";
+        let produced_ledger = run_worker_observation_test_async().await;
+        let reopened_ledger =
+            persist_and_reopen("PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", &produced_ledger);
+        let receipt = LedgerBoundCompleteReceiptV1 {
+            schema_version: 1,
+            observation_ledger_sha256: sha256_hex(&reopened_ledger),
+            observation_ledger_canonical_hex: hex::encode(&reopened_ledger),
+        };
+        must(
+            validate_complete_receipt(
+                &receipt,
+                &expected_tree,
+                &expected_invocation_token,
+                expected_case,
+            ),
+            "complete receipt validation",
+        );
+        let receipt_bytes = must(
+            canonical_wire_bytes(&receipt),
+            "complete receipt serialization",
+        );
+        let reopened_receipt = persist_and_reopen("PHASE285_COMPLETE_RECEIPT_PATH", &receipt_bytes);
+        let receipt: LedgerBoundCompleteReceiptV1 = must(
+            serde_json::from_slice(&reopened_receipt),
+            "complete receipt reopen decode",
+        );
+        assert_eq!(
+            must(
+                canonical_wire_bytes(&receipt),
+                "complete receipt reopen serialization",
+            ),
+            reopened_receipt,
+            "complete receipt reopened canonical bytes differ"
+        );
+
+        let (capacity_one_sender, mut capacity_one_receiver) = mpsc::channel(1);
+        assert_eq!(
+            complete_receipt_disposition(
+                Some(receipt.clone()),
+                Some(&capacity_one_sender),
+                &expected_tree,
+                &expected_invocation_token,
+                expected_case,
+            ),
+            CompleteReceiptDispositionV1::Suppress,
+            "complete capacity-one reservation must suppress"
+        );
+        assert_eq!(
+            must(capacity_one_receiver.try_recv(), "complete receipt absent"),
+            receipt
+        );
+        let (cross_invocation_sender, mut cross_invocation_receiver) = mpsc::channel(1);
+        let different_invocation = format!("{expected_invocation_token}-different");
+        assert_eq!(
+            complete_receipt_disposition(
+                Some(receipt.clone()),
+                Some(&cross_invocation_sender),
+                &expected_tree,
+                &different_invocation,
+                expected_case,
+            ),
+            CompleteReceiptDispositionV1::Forward,
+            "cross invocation complete receipt suppressed"
+        );
+        assert!(
+            cross_invocation_receiver.try_recv().is_err(),
+            "cross invocation receiver was not empty"
+        );
+        assert_eq!(
+            complete_receipt_disposition(
+                Some(receipt.clone()),
+                None,
+                &expected_tree,
+                &expected_invocation_token,
+                expected_case,
+            ),
+            CompleteReceiptDispositionV1::Forward,
+            "zero-capacity receipt must forward"
+        );
+        let (capacity_two_sender, mut capacity_two_receiver) = mpsc::channel(2);
+        assert_eq!(
+            complete_receipt_disposition(
+                Some(receipt.clone()),
+                Some(&capacity_two_sender),
+                &expected_tree,
+                &expected_invocation_token,
+                expected_case,
+            ),
+            CompleteReceiptDispositionV1::Forward,
+            "capacity-two receipt must forward"
+        );
+        assert!(capacity_two_receiver.try_recv().is_err());
+        must(
+            capacity_two_sender.try_send(receipt.clone()),
+            "capacity-two partial occupancy",
+        );
+        assert_eq!(
+            complete_receipt_disposition(
+                Some(receipt.clone()),
+                Some(&capacity_two_sender),
+                &expected_tree,
+                &expected_invocation_token,
+                expected_case,
+            ),
+            CompleteReceiptDispositionV1::Forward,
+            "partially occupied capacity-two receipt must forward"
+        );
+        assert_eq!(
+            must(capacity_two_receiver.try_recv(), "occupied receipt absent"),
+            receipt
+        );
+        let (full_sender, mut full_receiver) = mpsc::channel(1);
+        must(full_sender.try_send(receipt.clone()), "full receipt setup");
+        assert_eq!(
+            complete_receipt_disposition(
+                Some(receipt.clone()),
+                Some(&full_sender),
+                &expected_tree,
+                &expected_invocation_token,
+                expected_case,
+            ),
+            CompleteReceiptDispositionV1::Forward,
+            "full capacity-one receipt must forward"
+        );
+        assert_eq!(
+            must(full_receiver.try_recv(), "full receipt missing"),
+            receipt
+        );
+        let (closed_sender, closed_receiver) = mpsc::channel(1);
+        drop(closed_receiver);
+        assert_eq!(
+            complete_receipt_disposition(
+                Some(receipt.clone()),
+                Some(&closed_sender),
+                &expected_tree,
+                &expected_invocation_token,
+                expected_case,
+            ),
+            CompleteReceiptDispositionV1::Forward,
+            "closed capacity-one receipt must forward"
+        );
+
+        let mut missing = receipt.clone();
+        missing.observation_ledger_canonical_hex.clear();
+        let mut invalid = receipt.clone();
+        invalid.observation_ledger_sha256 = "0".repeat(64);
+        let mut partial_value: serde_json::Value = must(
+            serde_json::from_slice(&reopened_ledger),
+            "partial ledger decode",
+        );
+        must_some(
+            partial_value
+                .get_mut("private_exchanges")
+                .and_then(serde_json::Value::as_array_mut),
+            "partial private exchanges",
+        )
+        .pop();
+        let partial_bytes = must(canonical_wire_bytes(&partial_value), "partial ledger bytes");
+        let partial = LedgerBoundCompleteReceiptV1 {
+            schema_version: 1,
+            observation_ledger_sha256: sha256_hex(&partial_bytes),
+            observation_ledger_canonical_hex: hex::encode(partial_bytes),
+        };
+        let mut proxy_cross_copy_value: serde_json::Value = must(
+            serde_json::from_slice(&reopened_ledger),
+            "proxy cross-copy ledger decode",
+        );
+        let substitute_proxy = must_some(
+            proxy_cross_copy_value
+                .get("private_exchanges")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|rows| rows.get(1)),
+            "proxy cross-copy substitute absent",
+        )
+        .clone();
+        must_some(
+            proxy_cross_copy_value
+                .get_mut("proxy_exchanges")
+                .and_then(serde_json::Value::as_array_mut)
+                .and_then(|rows| rows.get_mut(0)),
+            "proxy cross-copy target absent",
+        )
+        .clone_from(&substitute_proxy);
+        refresh_ledger_array_digest(
+            &mut proxy_cross_copy_value,
+            "proxy_exchanges",
+            "proxy_exchanges_sha256",
+        );
+        let proxy_cross_copy = complete_receipt_from_ledger_value(&proxy_cross_copy_value);
+
+        let mut publisher_fabrication_value: serde_json::Value = must(
+            serde_json::from_slice(&reopened_ledger),
+            "publisher fabrication ledger decode",
+        );
+        must_some(
+            publisher_fabrication_value
+                .get_mut("publisher_attempts")
+                .and_then(serde_json::Value::as_array_mut)
+                .and_then(|rows| rows.get_mut(0))
+                .and_then(serde_json::Value::as_object_mut),
+            "publisher fabrication target absent",
+        )
+        .insert("ordinal".to_string(), serde_json::Value::from(9_u64));
+        refresh_ledger_array_digest(
+            &mut publisher_fabrication_value,
+            "publisher_attempts",
+            "publisher_attempts_sha256",
+        );
+        let publisher_fabrication =
+            complete_receipt_from_ledger_value(&publisher_fabrication_value);
+        for (label, candidate) in [
+            ("missing", missing),
+            ("invalid", invalid),
+            ("partial", partial),
+            ("proxy cross-copy", proxy_cross_copy),
+            ("publisher fabrication", publisher_fabrication),
+        ] {
+            let (sender, mut receiver) = mpsc::channel(1);
+            assert_eq!(
+                complete_receipt_disposition(
+                    Some(candidate),
+                    Some(&sender),
+                    &expected_tree,
+                    &expected_invocation_token,
+                    expected_case,
+                ),
+                CompleteReceiptDispositionV1::Forward,
+                "{label} complete receipt suppressed"
+            );
+            assert!(receiver.try_recv().is_err());
+        }
+        println!(
+            "complete_receipt_ledger rows=1 private=3 proxy=1 publisher=2 worker=12 current_invocation=bound capacity=0,1,2,2-partial full=forward closed=forward passed=1"
+        );
     }
 }
 
@@ -3319,5 +4456,17 @@ mod service_checkpoint_observation_tests {
             "normal NATS harness is required"
         );
         super::deadline_state_machine_tests::run_worker_observation_test();
+    }
+}
+
+#[cfg(test)]
+mod service_checkpoint_relay_tests {
+    #[test]
+    fn complete_receipt_authority_and_grants_are_observed() {
+        assert!(
+            std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
+            "normal NATS harness is required"
+        );
+        super::deadline_state_machine_tests::run_complete_receipt_suppression_test();
     }
 }

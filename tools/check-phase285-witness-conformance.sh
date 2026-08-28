@@ -6,12 +6,27 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PHASE285_WITNESS_TEMP_DIR=""
+PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE=""
+PHASE285_COMPLETE_RECEIPT_BOUND_INODE=""
 PHASE285_RELEASE_PROBE_RECEIPT_ROOT=""
 PHASE285_RELEASE_PROBE_RECEIPT_TOKEN=""
 PHASE285_RELEASE_PROBE_RECEIPT_SHA=""
 cleanup_temp_dir() {
   if [ -n "$PHASE285_WITNESS_TEMP_DIR" ]; then
     local target="$PHASE285_WITNESS_TEMP_DIR"
+    if [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE" ] || [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ]; then
+      local observed_identity
+      observed_identity="$(stat -f '%d:%i' -- "$target" 2>/dev/null)" || {
+        echo "Phase 285 scratch bound inode is absent: $target" >&2
+        return 1
+      }
+      [ "$observed_identity" = "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE:$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ] || {
+        echo "Phase 285 scratch bound inode was replaced: $target" >&2
+        return 1
+      }
+      PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE=""
+      PHASE285_COMPLETE_RECEIPT_BOUND_INODE=""
+    fi
     PHASE285_WITNESS_TEMP_DIR=""
     rm -rf -- "$target" || {
       echo "Phase 285 scratch cleanup failed: $target" >&2
@@ -29,6 +44,29 @@ cleanup_temp_dir_on_exit() {
   cleanup_temp_dir || exit_code=1
   trap - EXIT
   exit "$exit_code"
+}
+
+complete_receipt_cleanup_on_exit() {
+  local exit_code=$?
+  trap - EXIT HUP INT TERM
+  cleanup_temp_dir || exit_code=1
+  exit "$exit_code"
+}
+
+complete_receipt_cleanup_on_signal() {
+  local requested_signal="$1"
+  trap - EXIT HUP INT TERM
+  cleanup_temp_dir || exit 1
+  trap - "$requested_signal"
+  kill -s "$requested_signal" "$$"
+  exit 1
+}
+
+complete_receipt_arm_cleanup_traps() {
+  trap complete_receipt_cleanup_on_exit EXIT
+  trap 'complete_receipt_cleanup_on_signal HUP' HUP
+  trap 'complete_receipt_cleanup_on_signal INT' INT
+  trap 'complete_receipt_cleanup_on_signal TERM' TERM
 }
 
 phase285_create_confined_scratch() {
@@ -5547,7 +5585,7 @@ def domain_digest(domain,value):
     encoded=canonical(value)
     return hashlib.sha256(domain + len(encoded).to_bytes(8,"big") + encoded).hexdigest()
 def validate(candidate):
-    keys={"case","connections","counts","digests","invocation_token","operation","proxy_exchanges","public_subject","publisher_attempts","request_canonical_hex","request_digest","request_nonce","response_canonical_hex","schema_version","selected_envelope_digest","selected_head_txid","selected_store_generation","selected_store_revision","selected_store_state_digest","status","store_operations","tree","worker_events"}
+    keys={"case","connection_client_ids","connections","counts","digests","invocation_token","operation","private_exchanges","proxy_exchanges","public_admission","public_subject","publisher","publisher_attempts","request_canonical_hex","request_digest","request_nonce","response_canonical_hex","schema_version","selected_envelope_digest","selected_head_txid","selected_store_generation","selected_store_revision","selected_store_state_digest","status","store_operations","tree","worker_events"}
     if set(candidate) != keys: raise ValueError("schema")
     if candidate["schema_version"] != 1 or candidate["tree"] != tree or candidate["invocation_token"] != token or candidate["case"] != "service_checkpoint_observations" or candidate["status"] != "passed": raise ValueError("identity")
     request=json.loads(bytes.fromhex(candidate["request_canonical_hex"]),parse_constant=reject); response=json.loads(bytes.fromhex(candidate["response_canonical_hex"]),parse_constant=reject)
@@ -5598,10 +5636,26 @@ def validate(candidate):
         if hashlib.sha256(evidence).hexdigest()!=connection["server_evidence_sha256"]: raise ValueError("connections")
         value=json.loads(evidence,parse_constant=reject)
         if canonical(value)!=evidence or value!={"account":connection["account"],"authenticated_user":connection["authenticated_user"],"server_client_id":connection["server_client_id"]}: raise ValueError("connections")
-    arrays={"worker_events":candidate["worker_events"],"proxy_exchanges":proxy,"store_operations":store,"publisher_attempts":publishers,"connections":connections}
+    if candidate["connection_client_ids"] != [item["server_client_id"] for item in connections]: raise ValueError("connections")
+    private=candidate["private_exchanges"]
+    if len(private)!=3 or [item["operation"] for item in private] != ["InspectReady","ReadEntry","ReadEntry"] or private[-1] != proxy[0]: raise ValueError("private_exchange")
+    previous=0
+    for item in private:
+        private_request=bytes.fromhex(item["request_canonical_hex"]); private_response=bytes.fromhex(item["response_canonical_hex"])
+        if hashlib.sha256(private_request).hexdigest()!=item["request_sha256"] or hashlib.sha256(private_response).hexdigest()!=item["response_sha256"]: raise ValueError("private_exchange")
+        if item["request_at_nanos"] < previous or item["response_at_nanos"] < item["request_at_nanos"]: raise ValueError("private_exchange")
+        previous=item["response_at_nanos"]
+    admission=candidate["public_admission"]; publisher=candidate["publisher"]
+    reply=publisher["reply_subject"]
+    if reply!=admission["reply_subject"] or admission["subject"]!=candidate["public_subject"] or admission["payload_sha256"]!=hashlib.sha256(bytes.fromhex(candidate["request_canonical_hex"])).hexdigest() or admission["deadline_millis"]!=10000: raise ValueError("publisher_reply_subject")
+    if not (reply.startswith("_INBOX.") or reply.startswith("_R_.")) or len(reply)>512 or "*" in reply or ">" in reply: raise ValueError("publisher_reply_subject")
+    publisher_response=bytes.fromhex(publisher["response_canonical_hex"])
+    if hashlib.sha256(publisher_response).hexdigest()!=publisher["response_sha256"] or publisher_response!=bytes.fromhex(candidate["response_canonical_hex"]): raise ValueError("publisher_response")
+    if admission["received_at_nanos"]!=publisher["request_received_at_nanos"] or private[-1]["request_at_nanos"]<publisher["request_received_at_nanos"] or private[-1]["response_at_nanos"]>publisher["response_received_at_nanos"]: raise ValueError("causal_timestamps")
+    arrays={"worker_events":candidate["worker_events"],"proxy_exchanges":proxy,"private_exchanges":private,"store_operations":store,"publisher_attempts":publishers,"connections":connections}
     counts={key:len(value) for key,value in arrays.items()}; counts.update({"cas_attempted":0,"cas_applied":0})
     if candidate["counts"] != counts: raise ValueError("counts")
-    digests={key+"_sha256":digest(value) for key,value in arrays.items()}; digests.update({"request_sha256":hashlib.sha256(bytes.fromhex(candidate["request_canonical_hex"])).hexdigest(),"response_sha256":hashlib.sha256(bytes.fromhex(candidate["response_canonical_hex"])).hexdigest()})
+    digests={key+"_sha256":digest(value) for key,value in arrays.items()}; digests.update({"request_sha256":hashlib.sha256(bytes.fromhex(candidate["request_canonical_hex"])).hexdigest(),"response_sha256":hashlib.sha256(bytes.fromhex(candidate["response_canonical_hex"])).hexdigest(),"public_admission_sha256":digest(admission),"publisher_sha256":digest(publisher),"connection_client_ids_sha256":digest(candidate["connection_client_ids"])})
     if candidate["digests"] != digests: raise ValueError("digests")
 validate(row)
 mutations=[]
@@ -5902,6 +5956,7 @@ sources = {
     "library": pathlib.Path(library_path).read_text(),
     "fixture": pathlib.Path(fixture_path).read_text(),
 }
+
 required = {
     "config": [
         "STORE_HANDLER_DEADLINE_MILLIS: u64 = 2_000",
@@ -6378,6 +6433,883 @@ PY
   trap - EXIT
 }
 
+complete_receipt_artifact_snapshot() {
+  local directory="$1" ledger="$2" receipt="$3" snapshot="$4" mode="$5"
+  python3 -I - "$directory" "$ledger" "$receipt" "$snapshot" "$mode" <<'PY'
+import hashlib, json, os, pathlib, stat, sys
+directory, ledger, receipt, snapshot = map(pathlib.Path, sys.argv[1:5])
+mode = sys.argv[5]
+def reject(value): raise ValueError(value)
+def canonical(value): return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+directory = directory.resolve(strict=True)
+if ledger.parent.resolve(strict=True) != directory or receipt.parent.resolve(strict=True) != directory:
+    raise SystemExit("complete_receipt_artifact[parent]")
+if not ledger.exists() or not receipt.exists():
+    raise SystemExit("complete_receipt_artifact[absent]")
+expected_names = sorted([ledger.name, receipt.name] + ([snapshot.name] if snapshot.exists() else []))
+if sorted(item.name for item in directory.iterdir()) != expected_names:
+    raise SystemExit("complete_receipt_artifact[extra]")
+parent = directory.stat()
+records = {}
+for name, path, maximum in (("ledger", ledger, 1048576), ("receipt", receipt, 2097152)):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or path.is_symlink() or stat.S_IMODE(info.st_mode) != 0o600:
+        raise SystemExit(f"complete_receipt_artifact[{name}-type-mode]")
+    raw = path.read_bytes()
+    if not raw or len(raw) > maximum or raw.count(b"\n") != 1 or not raw.endswith(b"\n"):
+        raise SystemExit(f"complete_receipt_artifact[{name}-framing-bound]")
+    value = json.loads(raw[:-1], parse_constant=reject)
+    if canonical(value) != raw[:-1]:
+        raise SystemExit(f"complete_receipt_artifact[{name}-canonical]")
+    records[name] = {"device":info.st_dev,"inode":info.st_ino,"size":info.st_size,"sha256":hashlib.sha256(raw).hexdigest()}
+if records["ledger"]["device"] == records["receipt"]["device"] and records["ledger"]["inode"] == records["receipt"]["inode"]:
+    raise SystemExit("complete_receipt_artifact[alias]")
+ledger_raw = ledger.read_bytes()[:-1]
+receipt_value = json.loads(receipt.read_bytes()[:-1], parse_constant=reject)
+if bytes.fromhex(receipt_value.get("observation_ledger_canonical_hex", "")) != ledger_raw or receipt_value.get("observation_ledger_sha256") != hashlib.sha256(ledger_raw).hexdigest():
+    raise SystemExit("complete_receipt_artifact[binding]")
+record = {"parent_device":parent.st_dev,"parent_inode":parent.st_ino,"files":records}
+if mode == "record":
+    snapshot.write_bytes(canonical(record) + b"\n")
+    os.chmod(snapshot, 0o600)
+elif mode == "verify":
+    expected = json.loads(snapshot.read_bytes(), parse_constant=reject)
+    if expected != record:
+        raise SystemExit("complete_receipt_artifact[handoff-mutated]")
+else:
+    raise SystemExit("complete_receipt_artifact[mode]")
+print(f"complete_receipt_artifact mode={mode} ledger_bytes={records['ledger']['size']} receipt_bytes={records['receipt']['size']} passed=1")
+PY
+}
+
+complete_receipt_artifact_hostile_controls() {
+  local scratch="$1" source_ledger="$2" source_receipt="$3" root case_dir output
+  root="$scratch/artifact-hostile"
+  mkdir -m 700 "$root"
+  expect_refusal() {
+    local label="$1" expected="$2"
+    shift 2
+    output="$({ complete_receipt_artifact_snapshot "$@"; } 2>&1)" && {
+      echo "complete receipt artifact mutation survived: $label" >&2
+      return 1
+    }
+    [[ "$output" == *"$expected"* ]] || {
+      echo "complete receipt artifact mutation reason differs: $label:$output" >&2
+      return 1
+    }
+    echo "complete_receipt_artifact_mutation mutation=$label intended=$expected killed=1"
+  }
+
+  case_dir="$root/absent"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"
+  expect_refusal absent 'complete_receipt_artifact[absent]' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record
+
+  case_dir="$root/precreated"; mkdir -m 700 "$case_dir"; : >"$case_dir/ledger.json"; chmod 600 "$case_dir/ledger.json"
+  output="$root/precreated.txt"
+  if PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$case_dir/ledger.json" \
+    PHASE285_COMPLETE_RECEIPT_PATH="$case_dir/receipt.json" \
+    PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$(printf precreated | shasum -a 256 | awk '{print $1}')" \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+      service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact >"$output" 2>&1; then
+    echo "complete receipt precreated mutation survived" >&2; return 1
+  fi
+  grep -Fq 'complete receipt evidence is not fresh' "$output" || { cat "$output" >&2; return 1; }
+  grep -Fq 'running 1 test' "$output" || { cat "$output" >&2; return 1; }
+  echo 'complete_receipt_artifact_mutation mutation=precreated intended=fresh-path-refusal executed=1 killed=1'
+
+  case_dir="$root/aliased"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"; ln "$case_dir/ledger.json" "$case_dir/receipt.json"
+  expect_refusal aliased 'complete_receipt_artifact[alias]' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record
+
+  case_dir="$root/partial"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"; cp "$source_receipt" "$case_dir/receipt.json"; truncate -s 32 "$case_dir/receipt.json"
+  expect_refusal partial 'complete_receipt_artifact[receipt-framing-bound]' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record
+
+  case_dir="$root/oversized"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"; cp "$source_receipt" "$case_dir/receipt.json"; truncate -s 2097153 "$case_dir/receipt.json"
+  expect_refusal oversized 'complete_receipt_artifact[receipt-framing-bound]' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record
+
+  case_dir="$root/extra"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"; cp "$source_receipt" "$case_dir/receipt.json"; : >"$case_dir/extra"
+  expect_refusal extra 'complete_receipt_artifact[extra]' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record
+
+  for label in replaced post_internal_mutated; do
+    case_dir="$root/$label"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"; cp "$source_receipt" "$case_dir/receipt.json"
+    complete_receipt_artifact_snapshot "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record >/dev/null
+    if [ "$label" = replaced ]; then
+      cp "$source_receipt" "$case_dir/replacement"; mv "$case_dir/replacement" "$case_dir/receipt.json"
+    else
+      printf ' ' >>"$case_dir/receipt.json"
+    fi
+    expect_refusal "$label" 'complete_receipt_artifact[' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" verify
+  done
+
+  case_dir="$root/stale"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"; cp "$source_receipt" "$case_dir/receipt.json"
+  output="$case_dir/stale.txt"
+  if PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$case_dir/ledger.json" PHASE285_COMPLETE_RECEIPT_PATH="$case_dir/receipt.json" \
+    PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$(printf stale | shasum -a 256 | awk '{print $1}')" \
+    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 \
+      complete_receipt_validation_precedes_suppression_and_failures_forward --exact >"$output" 2>&1; then
+    echo "complete receipt stale identity mutation survived" >&2; return 1
+  fi
+  grep -Fq 'ledger identity' "$output" || { cat "$output" >&2; return 1; }
+  grep -Fq 'running 1 test' "$output" || { cat "$output" >&2; return 1; }
+  echo 'complete_receipt_artifact_mutation mutation=stale intended=ledger-identity killed=1'
+  echo 'complete_receipt_artifact_self_test mutations=9 executed=2 killed=9 passed=1'
+}
+
+complete_receipt_source_guard() {
+  local mode="${1:-normal}" library="$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs"
+  local external="$ROOT_DIR/crates/swarm-governance-witness/tests/service_checkpoint.rs"
+  python3 -I - "$library" "$external" <<'PY'
+import pathlib, sys
+library, external = [pathlib.Path(path).read_text() for path in sys.argv[1:]]
+start = library.index("fn validate_complete_receipt(")
+end = library.index("\n}\n\n#[cfg(test)]\nmod service_checkpoint_observation_tests", start)
+owned = library[start:end]
+required = [
+    '"PHASE285_COMPLETE_RECEIPT_LEDGER_PATH" | "PHASE285_COMPLETE_RECEIPT_PATH"',
+    ".write(true)", ".create_new(true)", ".mode(0o600)", "file.sync_all()",
+    "fn validate_complete_receipt(", "expected_invocation_token: &str",
+    'return Err("current_invocation")', 'return Err("proxy_cross_copy")',
+    "validate_complete_publisher_attempts(",
+    "if validate_complete_receipt(",
+    "if sender.max_capacity() != 1", "match sender.try_send(receipt)",
+    "run_worker_observation_test_async().await",
+]
+for fragment in required:
+    if fragment not in owned: raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
+for fragment in ('return Err("publisher_fabrication")', "fn validate_complete_publisher_attempts("):
+    if fragment not in library: raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
+for forbidden in ("std::process::Command", "with-nats-jetstream", "bash", "temp_dir()", "remove_file", "create_dir", "remove_dir"):
+    if forbidden in owned: raise SystemExit(f"complete_receipt_source[forbidden:{forbidden}]")
+if library.count("fn validate_complete_receipt(") != 1 or "pub fn validate_complete_receipt(" in library:
+    raise SystemExit("complete_receipt_source[closed-validator]")
+for fragment in ("fn independently_validate_artifacts(", "WitnessServiceResponseV1::decode_for_client_request", "WitnessStoreProxyRequestV1::decode", "WitnessStoreReadResultV1", "proxy cross-copy", "publisher fabrication", "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", "PHASE285_COMPLETE_RECEIPT_PATH"):
+    if fragment not in external: raise SystemExit(f"complete_receipt_external[missing:{fragment}]")
+for forbidden in ("run_complete_receipt_suppression_test", "validate_complete_receipt", "std::process::Command"):
+    if forbidden in external: raise SystemExit(f"complete_receipt_external[forbidden:{forbidden}]")
+print("complete_receipt_source_guard passed=1")
+PY
+  [ "$mode" = self-test ] || return 0
+}
+
+complete_receipt_write_signal_readiness() {
+  local requested_signal="$1" control_root="$2" scratch="$3" artifact_dir="$4"
+  local accepted_tree="$5" token="$6" readiness="$control_root/readiness.json"
+  local release="$control_root/release.json"
+  python3 -I - "$requested_signal" "$control_root" "$scratch" "$artifact_dir" \
+    "$accepted_tree" "$token" "$readiness" "$release" "$$" <<'PY'
+import json, os, pathlib, secrets, stat, sys
+
+signal, root_raw, scratch_raw, artifact_raw, tree, token, readiness_raw, release_raw, pid_raw = sys.argv[1:]
+root = pathlib.Path(root_raw).resolve(strict=True)
+scratch = pathlib.Path(scratch_raw).resolve(strict=True)
+artifact = pathlib.Path(artifact_raw).resolve(strict=True)
+readiness = pathlib.Path(readiness_raw)
+release = pathlib.Path(release_raw)
+
+def directory_identity(path, expected_parent, reason):
+    info = path.lstat()
+    if path.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+        raise SystemExit(f"complete_receipt_signal[{reason}]")
+    if path.resolve(strict=True) != path or path.parent.resolve(strict=True) != expected_parent:
+        raise SystemExit(f"complete_receipt_signal[{reason}]")
+    return {"device": info.st_dev, "inode": info.st_ino, "mode": 0o700, "path": str(path), "type": "directory"}
+
+if not root.is_absolute() or readiness.parent != root or release.parent != root:
+    raise SystemExit("complete_receipt_signal[control-root-snapshot]")
+if readiness.exists() or readiness.is_symlink() or release.exists() or release.is_symlink():
+    raise SystemExit("complete_receipt_signal[coordination-fresh]")
+root_identity = directory_identity(root, root.parent.resolve(strict=True), "control-root-snapshot")
+scratch_identity = directory_identity(scratch, root, "scratch-snapshot")
+artifact_identity = directory_identity(artifact, scratch, "artifact-snapshot")
+record = {
+    "artifact": artifact_identity,
+    "case": f"complete_receipt_real_signal:{signal}",
+    "child_pid": int(pid_raw),
+    "control_root": root_identity,
+    "invocation_token": token,
+    "record_type": "readiness",
+    "release_nonce": secrets.token_hex(32),
+    "requested_signal": signal,
+    "schema_version": 1,
+    "scratch": scratch_identity,
+    "tree": tree,
+}
+raw = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+fd = os.open(readiness, flags, 0o600)
+with os.fdopen(fd, "wb", closefd=True) as handle:
+    handle.write(raw)
+    handle.flush()
+    os.fsync(handle.fileno())
+parent_fd = os.open(root, os.O_RDONLY)
+try:
+    os.fsync(parent_fd)
+finally:
+    os.close(parent_fd)
+info = readiness.lstat()
+if not stat.S_ISREG(info.st_mode) or readiness.is_symlink() or stat.S_IMODE(info.st_mode) != 0o600:
+    raise SystemExit("complete_receipt_signal[readiness-mode]")
+if readiness.read_bytes() != raw:
+    raise SystemExit("complete_receipt_signal[readiness-reopen]")
+PY
+}
+
+complete_receipt_validate_signal_release() {
+  local control_root="$1" scratch="$2" artifact_dir="$3"
+  local readiness="$control_root/readiness.json" release="$control_root/release.json"
+  python3 -I - "$control_root" "$scratch" "$artifact_dir" "$readiness" "$release" "$$" <<'PY'
+import json, pathlib, stat, sys
+
+root, scratch, artifact, readiness, release = map(pathlib.Path, sys.argv[1:6])
+pid = int(sys.argv[6])
+
+def reject(value):
+    raise ValueError(value)
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+def decode(path, reason):
+    info = path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        raise SystemExit(f"complete_receipt_signal[{reason}]")
+    raw = path.read_bytes()
+    if raw.count(b"\n") != 1 or not raw.endswith(b"\n"):
+        raise SystemExit(f"complete_receipt_signal[{reason}]")
+    value = json.loads(raw[:-1], parse_constant=reject)
+    if canonical(value) != raw[:-1]:
+        raise SystemExit(f"complete_receipt_signal[{reason}]")
+    return value, info
+
+def validate_directory(path, promised, reason):
+    info = path.lstat()
+    if path.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+        raise SystemExit(f"complete_receipt_signal[{reason}]")
+    if promised != {"device": info.st_dev, "inode": info.st_ino, "mode": 0o700, "path": str(path), "type": "directory"}:
+        raise SystemExit(f"complete_receipt_signal[{reason}]")
+
+ready, ready_info = decode(readiness, "readiness-identity")
+released, release_info = decode(release, "release-identity")
+if ready_info.st_dev == release_info.st_dev and ready_info.st_ino == release_info.st_ino:
+    raise SystemExit("complete_receipt_signal[release-identity]")
+expected = dict(ready)
+expected["record_type"] = "release"
+if released != expected or released.get("child_pid") != pid:
+    raise SystemExit("complete_receipt_signal[release-identity]")
+validate_directory(root, ready.get("control_root"), "control-root-snapshot")
+validate_directory(scratch, ready.get("scratch"), "scratch-snapshot")
+validate_directory(artifact, ready.get("artifact"), "artifact-snapshot")
+PY
+}
+
+complete_receipt_wait_for_signal_release() {
+  local requested_signal="$1" control_root="$2" scratch="$3" artifact_dir="$4"
+  local release="$control_root/release.json"
+  if [ "$requested_signal" = EXIT ]; then
+    while [ ! -e "$release" ]; do :; done
+    complete_receipt_validate_signal_release "$control_root" "$scratch" "$artifact_dir"
+    exit 0
+  fi
+  while :; do :; done
+}
+
+complete_receipt_real_signal_controls() {
+  local scratch="$1" accepted_tree="$2"
+  python3 -I - "$ROOT_DIR" "$scratch" "$accepted_tree" <<'PY'
+import hashlib, json, os, pathlib, shutil, signal, stat, subprocess, sys, time
+
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+scratch = pathlib.Path(sys.argv[2]).resolve(strict=True)
+tree = sys.argv[3]
+checker = root / "tools/check-phase285-witness-conformance.sh"
+control_parent = scratch / "real-signal"
+control_parent.mkdir(mode=0o700)
+
+class RelationError(Exception):
+    pass
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+def directory_record(path):
+    info = path.lstat()
+    return {"device": info.st_dev, "inode": info.st_ino, "mode": stat.S_IMODE(info.st_mode), "path": str(path), "type": "directory" if stat.S_ISDIR(info.st_mode) else "other"}
+
+def wait_for_readiness(process, path):
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        if process.poll() is not None:
+            raise RelationError("readiness-process-exit")
+        time.sleep(0.01)
+    raise RelationError("readiness-timeout")
+
+def decode_canonical_file(path, reason):
+    info = path.lstat()
+    raw = path.read_bytes()
+    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        raise RelationError(reason)
+    if raw.count(b"\n") != 1 or not raw.endswith(b"\n"):
+        raise RelationError(reason)
+    value = json.loads(raw[:-1])
+    if canonical(value) != raw[:-1]:
+        raise RelationError(reason)
+    return value, info, raw
+
+def revalidate_readiness(record, process, requested, case_root, root_before):
+    expected_keys = {"artifact","case","child_pid","control_root","invocation_token","record_type","release_nonce","requested_signal","schema_version","scratch","tree"}
+    if set(record) != expected_keys or record["schema_version"] != 1 or record["record_type"] != "readiness":
+        raise RelationError("create-new-identity")
+    if record["child_pid"] != process.pid or record["tree"] != tree or record["requested_signal"] != requested or record["case"] != f"complete_receipt_real_signal:{requested}":
+        raise RelationError("create-new-identity")
+    for name in ("invocation_token", "release_nonce"):
+        value = record[name]
+        if not isinstance(value, str) or len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+            raise RelationError("create-new-identity")
+    if directory_record(case_root) != record["control_root"] or (case_root.stat().st_dev, case_root.stat().st_ino) != root_before:
+        raise RelationError("control-root-snapshot")
+    scratch_path = pathlib.Path(record["scratch"].get("path", ""))
+    artifact_path = pathlib.Path(record["artifact"].get("path", ""))
+    if scratch_path.parent != case_root or artifact_path.parent != scratch_path:
+        raise RelationError("create-new-identity")
+    try:
+        if directory_record(scratch_path) != record["scratch"]:
+            raise RelationError("scratch-snapshot")
+    except FileNotFoundError as error:
+        raise RelationError("exit-before-release") from error
+    try:
+        if directory_record(artifact_path) != record["artifact"]:
+            raise RelationError("artifact-snapshot")
+    except FileNotFoundError as error:
+        raise RelationError("artifact-snapshot") from error
+    if record["control_root"]["mode"] != 0o700 or record["scratch"]["mode"] != 0o700 or record["artifact"]["mode"] != 0o700:
+        raise RelationError("create-new-identity")
+    return scratch_path, artifact_path
+
+def write_release(case_root, readiness, mutate_case=False):
+    release = case_root / "release.json"
+    if release.exists() or release.is_symlink():
+        raise RelationError("release-identity")
+    value = dict(readiness)
+    value["record_type"] = "release"
+    if mutate_case:
+        value["case"] = value["case"] + ":stale"
+    raw = canonical(value) + b"\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(release, flags, 0o600)
+    with os.fdopen(fd, "wb", closefd=True) as handle:
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+    reopened, info, reopened_raw = decode_canonical_file(release, "release-identity")
+    if reopened != value or reopened_raw != raw:
+        raise RelationError("release-identity")
+    parent_fd = os.open(case_root, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+    return info
+
+def wait_status(process, timeout=2.0):
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RelationError("signal-specific-termination") from error
+
+def signal_and_validate(process, requested, scratch_path):
+    process.send_signal(getattr(signal, f"SIG{requested}"))
+    status = wait_status(process)
+    if status != -getattr(signal, f"SIG{requested}"):
+        raise RelationError("signal-specific-termination")
+    if scratch_path.exists():
+        raise RelationError("residue")
+
+def launch(case_checker, requested, label):
+    case_root = control_parent / label
+    case_root.mkdir(mode=0o700)
+    root_before = (case_root.stat().st_dev, case_root.stat().st_ino)
+    readiness_path, release_path = case_root / "readiness.json", case_root / "release.json"
+    if readiness_path.exists() or release_path.exists():
+        raise RelationError("coordination-fresh")
+    environment = os.environ.copy()
+    environment["PHASE285_SERVICE_CHECKPOINT_TREE"] = tree
+    process = subprocess.Popen(
+        ["bash", str(case_checker), "--self-test", "complete-receipt-real-signal", requested, str(case_root)],
+        cwd=case_checker.parent.parent,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    scratch_path = None
+    try:
+        wait_for_readiness(process, readiness_path)
+        readiness, _, _ = decode_canonical_file(readiness_path, "create-new-identity")
+        promised_scratch = readiness.get("scratch", {}).get("path")
+        if isinstance(promised_scratch, str) and promised_scratch:
+            scratch_path = pathlib.Path(promised_scratch)
+        scratch_path, artifact_path = revalidate_readiness(readiness, process, requested, case_root, root_before)
+        return process, case_root, readiness, scratch_path, artifact_path
+    except Exception:
+        if process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2.0)
+        if scratch_path is not None and scratch_path.exists():
+            shutil.rmtree(scratch_path)
+        raise
+
+def finish_failure(process, scratch_path):
+    if process.poll() is None:
+        signal_and_validate(process, "TERM", scratch_path)
+    elif scratch_path.exists():
+        shutil.rmtree(scratch_path)
+
+def run_action(case_checker, requested, label, action):
+    process = None
+    scratch_path = None
+    try:
+        process, case_root, readiness, scratch_path, artifact_path = launch(case_checker, requested, label)
+        if action == "baseline":
+            if requested == "EXIT":
+                write_release(case_root, readiness)
+                if wait_status(process) != 0:
+                    raise RelationError("exit-status")
+                if scratch_path.exists():
+                    raise RelationError("residue")
+            else:
+                signal_and_validate(process, requested, scratch_path)
+            return None
+        if action == "omission":
+            deadline = time.monotonic() + 0.25
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    raise RelationError("exit-before-release")
+                if directory_record(scratch_path) != readiness["scratch"]:
+                    raise RelationError("residue")
+                time.sleep(0.01)
+            signal_and_validate(process, "TERM", scratch_path)
+            return "release-timeout"
+        if action == "stale_release":
+            write_release(case_root, readiness, mutate_case=True)
+            status = wait_status(process)
+            output = process.stdout.read() if process.stdout is not None else ""
+            if status == 0 or "complete_receipt_signal[release-identity]" not in output or scratch_path.exists():
+                raise RelationError("release-identity")
+            return "release-identity"
+        if action == "root_mode":
+            case_root.chmod(0o755)
+            try:
+                revalidate_readiness(readiness, process, requested, case_root, (readiness["control_root"]["device"], readiness["control_root"]["inode"]))
+                raise RelationError("root-mode-survived")
+            except RelationError as error:
+                if str(error) != "control-root-snapshot":
+                    raise
+            finally:
+                case_root.chmod(0o700)
+            signal_and_validate(process, "TERM", scratch_path)
+            return "control-root-snapshot"
+        if action == "artifact_mode":
+            artifact_path.chmod(0o755)
+            try:
+                revalidate_readiness(readiness, process, requested, case_root, (readiness["control_root"]["device"], readiness["control_root"]["inode"]))
+                raise RelationError("artifact-mode-survived")
+            except RelationError as error:
+                if str(error) != "artifact-snapshot":
+                    raise
+            finally:
+                artifact_path.chmod(0o700)
+            signal_and_validate(process, "TERM", scratch_path)
+            return "artifact-snapshot"
+        if action == "early_exit":
+            status = wait_status(process, 1.0)
+            if status != 0 or scratch_path.exists():
+                raise RelationError("exit-before-release")
+            return "exit-before-release"
+        if action == "signal":
+            try:
+                signal_and_validate(process, requested, scratch_path)
+            except RelationError as error:
+                return str(error)
+            return None
+        raise RelationError("unknown-action")
+    except RelationError as error:
+        if process is not None and scratch_path is not None and process.poll() is None:
+            finish_failure(process, scratch_path)
+        return str(error)
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=2.0)
+        if scratch_path is not None and scratch_path.exists():
+            shutil.rmtree(scratch_path)
+
+for requested in ("EXIT", "HUP", "INT", "TERM"):
+    reason = run_action(checker, requested, f"baseline-{requested.lower()}", "baseline")
+    if reason is not None:
+        raise SystemExit(f"complete_receipt_real_signal[{requested}:{reason}]")
+    print(f"complete_receipt_real_signal signal={requested} release={'1' if requested == 'EXIT' else '0'} cleaned=1 passed=1")
+
+source = checker.read_text()
+control_start = source.index("complete_receipt_real_signal_controls() {")
+control_end = source.index("\n}\n\nrun_complete_receipt_focus()", control_start) + 3
+control_block = source[control_start:control_end]
+control_marker = "__PHASE285_COMPLETE_RECEIPT_SIGNAL_CONTROL_BLOCK__"
+mutation_template = source[:control_start] + control_marker + source[control_end:]
+
+def source_mutant(label, old, new):
+    if mutation_template.count(old) != 1:
+        raise SystemExit(f"complete_receipt_real_signal_mutant[{label}:anchor:{mutation_template.count(old)}]")
+    mutant = mutation_template.replace(old, new, 1).replace(control_marker, control_block, 1)
+    digest = hashlib.sha256(mutant.encode()).hexdigest()
+    mutant_root = control_parent / f"mutant-root-{label}"
+    (mutant_root / "tools").mkdir(parents=True, mode=0o700)
+    for relative in ("crates/swarm-governance-witness/src/lib.rs", "crates/swarm-governance-witness/tests/service_checkpoint.rs"):
+        destination = mutant_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / relative, destination)
+    subprocess.run(["git", "init", "-q"], cwd=mutant_root, check=True)
+    mutant_checker = mutant_root / "tools/check-phase285-witness-conformance.sh"
+    mutant_checker.write_text(mutant)
+    mutant_checker.chmod(0o700)
+    return mutant_checker, digest
+
+inherited = [
+    ("checkpoint_before_trap", "TERM", "  complete_receipt_arm_cleanup_traps\n  artifact_dir=\"$scratch/artifacts\"", "  artifact_dir=\"$scratch/artifacts\"", "residue"),
+    ("fabricated_readiness", "TERM", '"child_pid": int(pid_raw),', '"child_pid": int(pid_raw) + 1,', "create-new-identity"),
+    ("ignored_signal", "HUP", "  trap 'complete_receipt_cleanup_on_signal HUP' HUP", "  trap '' HUP", "signal-specific-termination"),
+    ("normal_exit", "TERM", "  trap 'complete_receipt_cleanup_on_signal TERM' TERM", "  trap 'exit 0' TERM", "signal-specific-termination"),
+    ("trap_removal", "TERM", "  complete_receipt_arm_cleanup_traps", "  : # cleanup trap arm removed", "residue"),
+    ("trap_substitution", "HUP", "  trap 'complete_receipt_cleanup_on_signal HUP' HUP", "  trap 'complete_receipt_cleanup_on_signal TERM' HUP", "signal-specific-termination"),
+]
+digests = set()
+for label, requested, old, new, expected in inherited:
+    mutant_checker, digest = source_mutant(label, old, new)
+    if label == "checkpoint_before_trap":
+        mutant_text = mutant_checker.read_text()
+        wait_call = '    complete_receipt_wait_for_signal_release "$requested_signal" "$control_root" "$scratch" "$artifact_dir"'
+        focus_start = mutant_text.index("\nrun_complete_receipt_focus() {\n") + 1
+        focus_end = mutant_text.index("\n}\n\nrun_complete_receipt_mutants()", focus_start) + 3
+        focus = mutant_text[focus_start:focus_end]
+        if focus.count(wait_call) != 1:
+            raise SystemExit("complete_receipt_real_signal_mutant[checkpoint-before-trap-call]")
+        focus = focus.replace(wait_call, '    while [ ! -e "$control_root/release.json" ]; do :; done\n    complete_receipt_arm_cleanup_traps\n' + wait_call, 1)
+        mutant_checker.write_text(mutant_text[:focus_start] + focus + mutant_text[focus_end:])
+        digest = hashlib.sha256(mutant_checker.read_bytes()).hexdigest()
+    if digest in digests:
+        raise SystemExit("complete_receipt_real_signal_mutant[duplicate]")
+    digests.add(digest)
+    observed = run_action(mutant_checker, requested, f"mutant-{label}", "signal")
+    if observed != expected:
+        raise SystemExit(f"complete_receipt_real_signal_mutant[{label}:expected={expected}:observed={observed}]")
+    print(f"complete_receipt_real_signal_mutation mutation={label} intended={expected} source_sha256={digest} executed=1 killed=1 vacuous=0")
+
+release_controls = [
+    ("release_omission", checker, "EXIT", "omission", "release-timeout"),
+    ("stale_cross_case_release", checker, "EXIT", "stale_release", "release-identity"),
+    ("control_root_mode_widening", checker, "EXIT", "root_mode", "control-root-snapshot"),
+    ("artifact_mode_widening", checker, "EXIT", "artifact_mode", "artifact-snapshot"),
+]
+early_checker, early_digest = source_mutant(
+    "early_exit",
+    '    complete_receipt_wait_for_signal_release "$requested_signal" "$control_root" "$scratch" "$artifact_dir"',
+    "    exit 0",
+)
+fixed_checker, fixed_digest = source_mutant(
+    "fixed_sleep",
+    '    while [ ! -e "$release" ]; do :; done',
+    "    sleep 0.25\n    exit 0",
+)
+release_controls.extend([
+    ("early_exit", early_checker, "EXIT", "early_exit", "exit-before-release"),
+    ("fixed_sleep_substitution", fixed_checker, "EXIT", "early_exit", "exit-before-release"),
+])
+for label, case_checker, requested, action, expected in release_controls:
+    observed = run_action(case_checker, requested, f"release-{label}", action)
+    if observed != expected:
+        raise SystemExit(f"complete_receipt_release_mutant[{label}:expected={expected}:observed={observed}]")
+    print(f"complete_receipt_release_mutation mutation={label} intended={expected} executed=1 killed=1 vacuous=0")
+print(f"complete_receipt_real_signal_self_test cases=4 inherited_mutations=6 release_metadata=6 lifecycle=25 unique_source_mutations={len(digests)+2} passed=1")
+PY
+}
+
+run_complete_receipt_focus() {
+  local requested_signal="${1:-}" control_root="${2:-}"
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch artifact_dir ledger receipt snapshot internal_output external_output token
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "complete receipt tree is malformed" >&2; return 1; }
+  complete_receipt_source_guard normal
+  if [ -n "$requested_signal" ]; then
+    [[ "$control_root" = /* ]] || { echo "complete receipt signal control root must be absolute" >&2; return 2; }
+    [ -d "$control_root" ] && [ ! -L "$control_root" ] && [ "$(stat -f '%Lp' "$control_root")" = 700 ] \
+      && [ ! -e "$control_root/readiness.json" ] && [ ! -L "$control_root/readiness.json" ] \
+      && [ ! -e "$control_root/release.json" ] && [ ! -L "$control_root/release.json" ] || {
+      echo "complete receipt signal control root is invalid" >&2; return 2;
+    }
+    scratch="$(phase285_create_confined_scratch phase285-complete-receipt "$control_root")"
+  else
+    scratch="$(phase285_create_confined_scratch phase285-complete-receipt)"
+  fi
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  IFS=: read -r PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE PHASE285_COMPLETE_RECEIPT_BOUND_INODE \
+    < <(stat -f '%d:%i' -- "$scratch")
+  [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE" ] && [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ] || {
+    echo "complete receipt scratch identity is absent" >&2; return 1;
+  }
+  complete_receipt_arm_cleanup_traps
+  artifact_dir="$scratch/artifacts"
+  mkdir -m 700 "$artifact_dir"
+  ledger="$artifact_dir/ledger.json"
+  receipt="$artifact_dir/receipt.json"
+  snapshot="$artifact_dir/snapshot.json"
+  internal_output="$scratch/internal.txt"
+  external_output="$scratch/external.txt"
+  token="$(python3 -I - "$accepted_tree" <<'PY'
+import hashlib, os, secrets, sys
+print(hashlib.sha256((sys.argv[1]+":"+str(os.getpid())+":"+secrets.token_hex(32)).encode()).hexdigest())
+PY
+)"
+  if [ -n "$requested_signal" ]; then
+    complete_receipt_write_signal_readiness "$requested_signal" "$control_root" "$scratch" \
+      "$artifact_dir" "$accepted_tree" "$token"
+    complete_receipt_wait_for_signal_release "$requested_signal" "$control_root" "$scratch" "$artifact_dir"
+  fi
+  umask 077
+  [ ! -e "$ledger" ] && [ ! -e "$receipt" ] || return 1
+  PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$ledger" PHASE285_COMPLETE_RECEIPT_PATH="$receipt" \
+  PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$token" \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+      service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$internal_output"
+  python3 -I - "$internal_output" <<'PY'
+import re, sys
+text=open(sys.argv[1],encoding="utf-8").read()
+if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","18")]: raise SystemExit("complete receipt internal transcript differs")
+PY
+  complete_receipt_artifact_snapshot "$artifact_dir" "$ledger" "$receipt" "$snapshot" record
+  PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$ledger" PHASE285_COMPLETE_RECEIPT_PATH="$receipt" \
+  PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$token" \
+    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 \
+      complete_receipt_validation_precedes_suppression_and_failures_forward --exact | tee "$external_output"
+  python3 -I - "$external_output" <<'PY'
+import re, sys
+text=open(sys.argv[1],encoding="utf-8").read()
+if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","1")]: raise SystemExit("complete receipt external transcript differs")
+PY
+  complete_receipt_artifact_snapshot "$artifact_dir" "$ledger" "$receipt" "$snapshot" verify
+  complete_receipt_artifact_hostile_controls "$scratch" "$ledger" "$receipt"
+  complete_receipt_real_signal_controls "$scratch" "$accepted_tree"
+  run_complete_receipt_mutants "$accepted_tree" "$scratch"
+  echo "complete_receipt_execution internal=1 external=1 mutants=10 lifecycle=25 vacuous=0 passed=1"
+  cleanup_temp_dir
+  trap - EXIT HUP INT TERM
+}
+
+run_complete_receipt_mutants() {
+  local accepted_tree="$1" parent_scratch="$2"
+  python3 -I - "$ROOT_DIR" "$parent_scratch" "$accepted_tree" <<'PY'
+import hashlib, json, os, pathlib, shutil, subprocess, sys, time, urllib.request
+root=pathlib.Path(sys.argv[1]).resolve(); parent=pathlib.Path(sys.argv[2]).resolve(); tree=sys.argv[3]
+exact=parent/"exact-tree"; exact.mkdir()
+archive=subprocess.Popen(["git","-C",str(root),"archive","HEAD"],stdout=subprocess.PIPE)
+unpack=subprocess.run(["tar","-xf","-","-C",str(exact)],stdin=archive.stdout,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False)
+archive.stdout.close()
+if archive.wait()!=0 or unpack.returncode!=0: raise SystemExit("complete_receipt_mutant[extract]")
+owned=["crates/swarm-governance-witness/src/lib.rs","crates/swarm-governance-witness/tests/service_checkpoint.rs","tools/check-phase285-witness-conformance.sh","tools/fixtures/phase285-witness-integrity.json"]
+for relative in owned:
+    destination=exact/relative; destination.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(root/relative,destination)
+library=exact/"crates/swarm-governance-witness/src/lib.rs"; original=library.read_text()
+def replace_once(text,old,new,label):
+    if text.count(old)!=1: raise SystemExit(f"complete_receipt_mutant[{label}:anchor:{text.count(old)}]")
+    return text.replace(old,new,1)
+insert_anchor='''        let worker_bytes = must(
+            canonical_wire_bytes(&worker_events),
+            "observation worker bytes",
+        );'''
+request_bytes_anchor='''        let request_bytes = must(request.canonical_bytes(), "observation request bytes");'''
+response_binding='''        let response = must(
+            runtime_client.read_head(request.clone()).await,
+            "observation ReadHead response",
+        );'''
+worker_binding='''        let worker_events = observer
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();'''
+store_binding='''        let store_operations = facts
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();'''
+publisher_binding='''        let publisher = CompletePublisherObservationV1 {'''
+connections_binding='''        let connections = vec!['''
+mutations=[]
+# Mutants alter the accepted producer, rederive ledger/receipt digests, and bypass only the matching private relation so the external decoder is the stable kill point.
+text=replace_once(original,response_binding,response_binding.replace("let response =","let mut response ="),"public_store_head")
+injected='''        response.response = WitnessReadResponseV1::Head(Box::new(None));
+        response.signature = evidence_signer.sign(&must(response.signing_bytes(), "mutated public head signing bytes"));
+'''+request_bytes_anchor
+text=replace_once(text,request_bytes_anchor,injected,"public_store_head")
+old='''        if head.as_ref().as_ref() != Some(selected_head)
+            || read.target_txid != selected_head.txid
+            || ledger_string(&row, "selected_head_txid", "public_store_head")? != selected_head.txid
+        {
+            return Err("public_store_head");
+        }'''
+text=replace_once(text,old,"        let _ = (head, &read, selected_head);","public_store_head")
+mutations.append(("public_store_head",text,"public/store Head"))
+for label,replacement,reason in [
+ ("worker_operation",'''        worker_events[2] = WorkerTransitionEventV1::ProxyStoreBegin { worker: WorkerKindV1::Public, operation: "inspect_ready", cas_attempted: false };\n''',"worker operation"),
+ ("worker_cas",'''        worker_events[2] = WorkerTransitionEventV1::ProxyStoreBegin { worker: WorkerKindV1::Public, operation: "read_entry", cas_attempted: true };\n''',"worker CAS"),
+]:
+    text=replace_once(original,worker_binding,worker_binding.replace("let worker_events =","let mut worker_events ="),label)
+    text=replace_once(text,insert_anchor,replacement+insert_anchor,label)
+    text=replace_once(text,"        validate_complete_worker_events(events)?;","        let _ = events;",label)
+    mutations.append((label,text,reason))
+for label,field_name,reason in [("store_input_digest","input_sha256","store input digest"),("store_result_digest","result_sha256","store result digest")]:
+    text=replace_once(original,store_binding,store_binding.replace("let store_operations =","let mut store_operations ="),label)
+    text=replace_once(text,insert_anchor,f'''        store_operations[0].{field_name} = "0".repeat(64);\n'''+insert_anchor,label)
+    if label=="store_input_digest":
+        old='''        let store_input = ledger_digest_matches(
+            &store[0],
+            "input_canonical_hex",
+            "input_sha256",
+            "store_input_digest",
+        )?;'''; new='''        let store_input = ledger_hex(&store[0], "input_canonical_hex", "store_input_digest")?;'''
+    else:
+        old='''        let store_result_bytes = ledger_digest_matches(
+            &store[0],
+            "result_canonical_hex",
+            "result_sha256",
+            "store_result_digest",
+        )?;'''; new='''        let store_result_bytes = ledger_hex(&store[0], "result_canonical_hex", "store_result_digest")?;'''
+    text=replace_once(text,old,new,label); mutations.append((label,text,reason))
+text=replace_once(original,publisher_binding,publisher_binding.replace("let publisher =","let mut publisher ="),"publisher_reply_subject")
+text=replace_once(text,insert_anchor,'        publisher.reply_subject = "_R_.phase285-mutant".to_string();\n'+insert_anchor,"publisher_reply_subject")
+old='''        if ledger_string(admission, "reply_subject", "publisher_reply_subject")? != reply
+            || ledger_string(admission, "subject", "publisher_reply_subject")?
+                != "swarm.governance.witness.v1.read_head"
+            || ledger_string(admission, "payload_sha256", "publisher_reply_subject")?
+                != sha256_hex(&request_bytes)
+            || ledger_u64(admission, "deadline_millis", "publisher_reply_subject")?
+                != PUBLIC_HANDLER_DEADLINE_MILLIS
+        {
+            return Err("publisher_reply_subject");
+        }'''
+text=replace_once(text,old,"        let _ = admission;","publisher_reply_subject"); mutations.append(("publisher_reply_subject",text,"publisher reply subject"))
+text=replace_once(original,connections_binding,connections_binding.replace("let connections =","let mut connections ="),"connection_identity")
+text=replace_once(text,insert_anchor,"        connections[0].server_client_id += 1;\n"+insert_anchor,"connection_identity")
+text=replace_once(text,"        validate_complete_connections(connections)?;","        let _ = connections;","connection_identity")
+old='''        if connection_client_ids.len() != connections.len()
+            || connection_client_ids
+                .iter()
+                .zip(connections)
+                .any(|(client_id, connection)| {
+                    client_id.as_u64()
+                        != connection
+                            .get("server_client_id")
+                            .and_then(serde_json::Value::as_u64)
+                })
+        {
+            return Err("connection_identity");
+        }'''
+text=replace_once(text,old,"        let _ = connection_client_ids;","connection_identity"); mutations.append(("connection_identity",text,"connection identity"))
+
+proxy_binding='''        let proxy_exchanges = proxy_records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();'''
+text=replace_once(original,proxy_binding,proxy_binding.replace("let proxy_exchanges =","let mut proxy_exchanges ="),"proxy_cross_copy")
+text=replace_once(text,insert_anchor,'        proxy_exchanges[0] = private_exchanges[0].clone();\n'+insert_anchor,"proxy_cross_copy")
+old='''        if proxy.len() != 1
+            || canonical_value_bytes(&proxy[0], "proxy_cross_copy")?
+                != canonical_value_bytes(&private[2], "proxy_cross_copy")?
+        {
+            return Err("proxy_cross_copy");
+        }'''
+new='''        if proxy.len() != 1
+            || (canonical_value_bytes(&proxy[0], "proxy_cross_copy")?
+                != canonical_value_bytes(&private[2], "proxy_cross_copy")?
+                && canonical_value_bytes(&proxy[0], "proxy_cross_copy")?
+                    != canonical_value_bytes(&private[0], "proxy_cross_copy")?)
+        {
+            return Err("proxy_cross_copy");
+        }'''
+text=replace_once(text,old,new,"proxy_cross_copy")
+mutations.append(("proxy_cross_copy",text,"proxy cross-copy"))
+
+publisher_collection='''        let publisher_attempts: Vec<_> = worker_events'''
+text=replace_once(original,publisher_collection,publisher_collection.replace("let publisher_attempts", "let mut publisher_attempts"),"publisher_fabrication")
+text=replace_once(text,insert_anchor,'        publisher_attempts[0].ordinal = 11;\n        publisher_attempts[0].worker = WorkerKindV1::Public;\n'+insert_anchor,"publisher_fabrication")
+text=replace_once(text,'        let expected = [(8_u64, "private"), (11_u64, "public")];','        let expected = [(11_u64, "public"), (11_u64, "public")];',"publisher_fabrication")
+mutations.append(("publisher_fabrication",text,"publisher fabrication"))
+
+identity_guard='''        if ledger_string(&row, "tree", "current_invocation")? != expected_tree
+            || ledger_string(&row, "invocation_token", "current_invocation")?
+                != expected_invocation_token
+            || ledger_string(&row, "case", "current_invocation")? != expected_case
+        {
+            return Err("current_invocation");
+        }'''
+identity_bypass='''        let _ = (expected_tree, expected_invocation_token, expected_case);'''
+current_invocation_mutant=replace_once(original,identity_guard,identity_bypass,"current_invocation")
+if len(mutations)!=9: raise SystemExit("complete_receipt_mutant[inventory-external]")
+digests=set(); target=parent/"compiled-target"; base=os.environ.copy(); base["CARGO_TARGET_DIR"]=str(target); base["CARGO_NET_OFFLINE"]="true"
+nats_http_url=base.get("NATS_HTTP_URL")
+if not nats_http_url: raise SystemExit("complete_receipt_mutant[nats-monitor-absent]")
+def connection_count():
+    with urllib.request.urlopen(nats_http_url+"/connz", timeout=1.0) as response:
+        return int(json.load(response)["num_connections"])
+baseline_connections=connection_count()
+def await_connection_quiescence():
+    deadline=time.monotonic()+3.0
+    while time.monotonic()<deadline:
+        if connection_count()<=baseline_connections: return
+        time.sleep(0.02)
+    raise SystemExit("complete_receipt_mutant[nats-connections-not-quiescent]")
+for name,source,reason in mutations:
+    digest=hashlib.sha256(source.encode()).hexdigest()
+    if digest in digests: raise SystemExit("complete_receipt_mutant[duplicate]")
+    # Cargo checks local source freshness by timestamp. Separate rewrites by a
+    # full filesystem timestamp tick so one mutant cannot execute another's
+    # cached binary.
+    time.sleep(1.05); digests.add(digest); library.write_text(source)
+    artifacts=parent/f"mutant-{name}"; artifacts.mkdir(); ledger=artifacts/"ledger.json"; receipt=artifacts/"receipt.json"
+    env=base.copy(); env["PHASE285_COMPLETE_RECEIPT_LEDGER_PATH"]=str(ledger); env["PHASE285_COMPLETE_RECEIPT_PATH"]=str(receipt); env["PHASE285_SERVICE_CHECKPOINT_TREE"]=tree; env["PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN"]=hashlib.sha256((tree+":"+name).encode()).hexdigest()
+    internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
+    external=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","complete_receipt_validation_precedes_suppression_and_failures_forward","--exact"]
+    await_connection_quiescence()
+    try: first=subprocess.run(internal,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+    except subprocess.TimeoutExpired as error: raise SystemExit(f"complete_receipt_mutant[{name}:internal-timeout]") from error
+    if first.returncode!=0 or "running 1 test" not in first.stdout or "1 passed; 0 failed" not in first.stdout: raise SystemExit(f"complete_receipt_mutant[{name}:internal-vacuous]\n{first.stdout}")
+    try: second=subprocess.run(external,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+    except subprocess.TimeoutExpired as error: raise SystemExit(f"complete_receipt_mutant[{name}:external-timeout]") from error
+    if second.returncode==0 or "running 1 test" not in second.stdout or "0 passed; 1 failed" not in second.stdout or reason not in second.stdout: raise SystemExit(f"complete_receipt_mutant[{name}:wrong-reason]\n{second.stdout}")
+    await_connection_quiescence()
+    print(f"complete_receipt_mutant name={name} internal=1 external=1 intended={reason} source_sha256={digest} compiled=1 killed=1 vacuous=0")
+name="current_invocation"; source=current_invocation_mutant; digest=hashlib.sha256(source.encode()).hexdigest()
+if digest in digests: raise SystemExit("complete_receipt_mutant[current_invocation:duplicate]")
+time.sleep(1.05); digests.add(digest); library.write_text(source)
+artifacts=parent/"mutant-current-invocation"; artifacts.mkdir(); ledger=artifacts/"ledger.json"; receipt=artifacts/"receipt.json"
+env=base.copy(); env["PHASE285_COMPLETE_RECEIPT_LEDGER_PATH"]=str(ledger); env["PHASE285_COMPLETE_RECEIPT_PATH"]=str(receipt); env["PHASE285_SERVICE_CHECKPOINT_TREE"]=tree; env["PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN"]=hashlib.sha256((tree+":"+name).encode()).hexdigest()
+internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
+await_connection_quiescence()
+try: result=subprocess.run(internal,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+except subprocess.TimeoutExpired as error: raise SystemExit("complete_receipt_mutant[current_invocation:timeout]") from error
+if result.returncode==0 or "running 1 test" not in result.stdout or "0 passed; 1 failed" not in result.stdout or "cross invocation complete receipt suppressed" not in result.stdout: raise SystemExit(f"complete_receipt_mutant[current_invocation:wrong-reason]\n{result.stdout}")
+print(f"complete_receipt_mutant name={name} internal=1 external=0 intended=current-invocation source_sha256={digest} compiled=1 killed=1 vacuous=0")
+library.write_text(original)
+if len(digests)!=10: raise SystemExit(f"complete_receipt_mutant[unique:{len(digests)}]")
+print(f"complete_receipt_source_guard_self_test mutations=10 unique={len(digests)} compiled=10 executed_internal=10 executed_external=9 killed=10 vacuous=0 tree={tree} passed=1")
+PY
+}
+
 run_selector() {
   local selector="$1"
   validate_registry
@@ -6701,7 +7633,11 @@ case "${1:-}" in
     run_service_checkpoint_deadline_focus
     ;;
   --self-test)
-    if [ "$#" -eq 2 ] && [ "$2" = transport-layering-zero-or-omitted ]; then
+    if [ "$#" -eq 4 ] && [ "$2" = complete-receipt-real-signal ]; then
+      case "$3" in EXIT|HUP|INT|TERM) ;; *) echo "complete receipt signal is invalid" >&2; exit 2 ;; esac
+      [[ "$4" = /* ]] || { echo "complete receipt signal root must be absolute" >&2; exit 2; }
+      run_complete_receipt_focus "$3" "$4"
+    elif [ "$#" -eq 2 ] && [ "$2" = transport-layering-zero-or-omitted ]; then
       run_transport_execution_self_test
     elif [ "$#" -eq 2 ] && [ "$2" = store-proxy-source ]; then
       store_proxy_source_guard normal
@@ -6709,6 +7645,8 @@ case "${1:-}" in
     elif [ "$#" -eq 2 ] && [ "$2" = service-checkpoint-observation-source ]; then
       observation_source_guard normal
       observation_source_guard self-test
+    elif [ "$#" -eq 2 ] && [ "$2" = complete-receipt-suppression ]; then
+      run_complete_receipt_focus
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-release-hook ]; then
       run_release_hook_self_test
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-iterator-source ]; then
@@ -6725,7 +7663,7 @@ case "${1:-}" in
     elif [ "$#" -eq 1 ]; then
       run_self_tests
     else
-      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
+      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|complete-receipt-suppression|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
       exit 2
     fi
     ;;
