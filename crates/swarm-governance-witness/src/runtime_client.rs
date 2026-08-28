@@ -66,6 +66,37 @@ pub enum WitnessProcessErrorV1 {
     Startup,
 }
 
+fn map_request_error_kind(kind: async_nats::RequestErrorKind) -> RuntimeWitnessClientErrorV1 {
+    match kind {
+        async_nats::RequestErrorKind::TimedOut => RuntimeWitnessClientErrorV1::OutcomeUnknown,
+        async_nats::RequestErrorKind::Other => RuntimeWitnessClientErrorV1::OutcomeUnknown,
+        async_nats::RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::Unavailable,
+        async_nats::RequestErrorKind::InvalidSubject => RuntimeWitnessClientErrorV1::Configuration,
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeRequestObservationV1 {
+    Response,
+    TimedOut,
+    NoResponders,
+    InvalidSubject,
+    Other,
+}
+
+#[cfg(test)]
+impl From<async_nats::RequestErrorKind> for RuntimeRequestObservationV1 {
+    fn from(value: async_nats::RequestErrorKind) -> Self {
+        match value {
+            async_nats::RequestErrorKind::TimedOut => Self::TimedOut,
+            async_nats::RequestErrorKind::NoResponders => Self::NoResponders,
+            async_nats::RequestErrorKind::InvalidSubject => Self::InvalidSubject,
+            async_nats::RequestErrorKind::Other => Self::Other,
+        }
+    }
+}
+
 struct RoleTransportConfigV1<'a> {
     nats_url: &'a str,
     credentials_path: &'a str,
@@ -313,14 +344,14 @@ impl RuntimeWitnessClient {
     }
 
     #[cfg(test)]
-    pub(crate) async fn read_head_with_publish_observation(
+    pub(crate) async fn read_head_with_request_start_observation(
         &self,
         request: WitnessServiceRequestV1,
         origin: &Instant,
-        published_at_micros: &AtomicU64,
+        request_started_at_micros: &AtomicU64,
     ) -> Result<WitnessReadAttestationV1, RuntimeWitnessClientErrorV1> {
         match self
-            .request_observed(&request, Some((origin, published_at_micros)))
+            .request_observed(&request, Some((origin, request_started_at_micros)))
             .await?
         {
             WitnessServiceResponseV1::Read(value) => Ok(value),
@@ -343,8 +374,8 @@ impl RuntimeWitnessClient {
     async fn request_observed(
         &self,
         request: &WitnessServiceRequestV1,
-        #[cfg(test)] publish_observation: Option<(&Instant, &AtomicU64)>,
-        #[cfg(not(test))] _publish_observation: Option<()>,
+        #[cfg(test)] request_start_observation: Option<(&Instant, &AtomicU64)>,
+        #[cfg(not(test))] _request_start_observation: Option<()>,
     ) -> Result<WitnessServiceResponseV1, RuntimeWitnessClientErrorV1> {
         let bytes = request
             .canonical_bytes()
@@ -353,24 +384,19 @@ impl RuntimeWitnessClient {
             return Err(RuntimeWitnessClientErrorV1::RequestBounds);
         }
         #[cfg(test)]
-        if let Some((origin, published_at_micros)) = publish_observation {
+        if let Some((origin, request_started_at_micros)) = request_start_observation {
             let observed = u64::try_from(origin.elapsed().as_micros())
                 .map_err(|_| RuntimeWitnessClientErrorV1::Unavailable)?;
-            published_at_micros.store(observed, Ordering::SeqCst);
+            request_started_at_micros.store(observed, Ordering::SeqCst);
         }
-        let message = timeout(
-            Duration::from_millis(self.config.request_deadline_millis),
-            self.client.request(
+        let message = self
+            .request_transport(
                 PublicWitnessServiceConfigV1::subject_for(request.operation),
-                bytes.into(),
-            ),
-        )
-        .await
-        .map_err(|_| RuntimeWitnessClientErrorV1::OutcomeUnknown)?
-        .map_err(|error| match error.kind() {
-            async_nats::RequestErrorKind::TimedOut => RuntimeWitnessClientErrorV1::OutcomeUnknown,
-            _ => RuntimeWitnessClientErrorV1::Unavailable,
-        })?;
+                bytes,
+                Duration::from_millis(self.config.request_deadline_millis),
+            )
+            .await
+            .map_err(map_request_error_kind)?;
         if message.payload.len() > self.config.max_response_bytes {
             return Err(RuntimeWitnessClientErrorV1::ResponseBounds);
         }
@@ -381,6 +407,80 @@ impl RuntimeWitnessClient {
             return Err(RuntimeWitnessClientErrorV1::Application(Box::new(failure)));
         }
         Ok(response)
+    }
+
+    async fn request_transport(
+        &self,
+        subject: &str,
+        payload: Vec<u8>,
+        deadline: Duration,
+    ) -> Result<async_nats::Message, async_nats::RequestErrorKind> {
+        let request = async_nats::Request::new()
+            .payload(payload.into())
+            .timeout(Some(deadline));
+        timeout(
+            deadline,
+            self.client.send_request(subject.to_owned(), request),
+        )
+        .await
+        .map_err(|_| async_nats::RequestErrorKind::TimedOut)?
+        .map_err(|error| error.kind())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn observe_transport_for_test(
+        &self,
+        subject: &str,
+        payload: Vec<u8>,
+        deadline: Duration,
+    ) -> Result<
+        RuntimeRequestObservationV1,
+        (RuntimeRequestObservationV1, RuntimeWitnessClientErrorV1),
+    > {
+        match self.request_transport(subject, payload, deadline).await {
+            Ok(_) => Ok(RuntimeRequestObservationV1::Response),
+            Err(kind) => Err((kind.into(), map_request_error_kind(kind))),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn observe_response_bytes_for_test(
+        &self,
+        request: &WitnessServiceRequestV1,
+    ) -> Result<(WitnessServiceResponseV1, Vec<u8>), RuntimeWitnessClientErrorV1> {
+        let bytes = request
+            .canonical_bytes()
+            .map_err(|_| RuntimeWitnessClientErrorV1::RequestBounds)?;
+        if bytes.len() > self.config.max_request_bytes {
+            return Err(RuntimeWitnessClientErrorV1::RequestBounds);
+        }
+        let message = self
+            .request_transport(
+                PublicWitnessServiceConfigV1::subject_for(request.operation),
+                bytes,
+                Duration::from_millis(self.config.request_deadline_millis),
+            )
+            .await
+            .map_err(map_request_error_kind)?;
+        if message.payload.len() > self.config.max_response_bytes {
+            return Err(RuntimeWitnessClientErrorV1::ResponseBounds);
+        }
+        let response_bytes = message.payload.to_vec();
+        let response =
+            WitnessServiceResponseV1::decode_for_client_request(&response_bytes, request)
+                .map_err(|_| RuntimeWitnessClientErrorV1::InvalidResponse)?;
+        if let WitnessServiceResponseV1::Failure(failure) = response {
+            return Err(RuntimeWitnessClientErrorV1::Application(Box::new(failure)));
+        }
+        Ok((response, response_bytes))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn drain_for_test(&self) -> Result<(), RuntimeWitnessClientErrorV1> {
+        self.client
+            .drain()
+            .await
+            .map_err(|_| RuntimeWitnessClientErrorV1::OutcomeUnknown)
     }
 }
 
@@ -468,5 +568,32 @@ impl GovernanceDurabilityWitness for RuntimeWitnessClient {
             WitnessServiceResponseV1::Read(value) => Ok(value),
             _ => Err(Self::Error::InvalidResponse),
         }
+    }
+}
+
+#[cfg(test)]
+mod request_error_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn request_error_mapping_is_closed_and_truthful() {
+        use async_nats::RequestErrorKind::{InvalidSubject, NoResponders, Other, TimedOut};
+
+        assert!(matches!(
+            map_request_error_kind(TimedOut),
+            RuntimeWitnessClientErrorV1::OutcomeUnknown
+        ));
+        assert!(matches!(
+            map_request_error_kind(Other),
+            RuntimeWitnessClientErrorV1::OutcomeUnknown
+        ));
+        assert!(matches!(
+            map_request_error_kind(NoResponders),
+            RuntimeWitnessClientErrorV1::Unavailable
+        ));
+        assert!(matches!(
+            map_request_error_kind(InvalidSubject),
+            RuntimeWitnessClientErrorV1::Configuration
+        ));
     }
 }

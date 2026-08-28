@@ -39,6 +39,8 @@ use crate::service_config::{
     SubscriberAdmissionReceiptV1, WorkerKindV1, WorkerPublisherV1, WorkerTransitionEventV1,
     WorkerTransitionObserverV1, WorkerTransitionV1, run_observed_worker_message,
 };
+#[cfg(test)]
+use crate::service_config::{ResponsePreEnqueueObserverV1, SubscriberPollGateV1};
 
 tokio::task_local! {
     static ACTIVE_CAS_ATTEMPTED: Arc<AtomicBool>;
@@ -52,6 +54,8 @@ pub enum PublicWitnessProxyTransportErrorV1 {
     Timeout,
     #[error("proxy unavailable")]
     Unavailable,
+    #[error("proxy mutation outcome is unknown")]
+    OutcomeUnknown,
 }
 
 #[async_trait]
@@ -252,6 +256,8 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
         dispatcher: PublicWitnessDispatcher<C>,
     ) -> Result<Self, PublicWitnessRunnerErrorV1> {
         let admission_observer = dispatcher.subscriber_admission_observer.clone();
+        #[cfg(test)]
+        let subscriber_poll_gate = dispatcher.subscriber_poll_gate.clone();
         let queue = PUBLIC_WITNESS_QUEUE_GROUP.to_string();
         let fence = client
             .queue_subscribe("swarm.governance.witness.v1.fence", queue.clone())
@@ -317,10 +323,19 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
                 subscriber,
                 sender.clone(),
                 admission_observer.clone(),
+                #[cfg(test)]
+                subscriber_poll_gate.clone(),
             ));
         }
         drop(sender);
-        let publisher = Arc::new(NatsWorkerPublisherV1(client.clone()));
+        #[cfg(not(test))]
+        let publisher = Arc::new(NatsWorkerPublisherV1::new(client.clone()));
+        #[cfg(test)]
+        let publisher = Arc::new(NatsWorkerPublisherV1::observed(
+            client.clone(),
+            WorkerKindV1::Public,
+            dispatcher.response_pre_enqueue_observer.clone(),
+        ));
         for _ in 0..worker_count {
             let receiver = receiver.clone();
             let dispatcher = dispatcher.clone();
@@ -357,8 +372,13 @@ fn spawn_public_subscription(
     mut subscriber: async_nats::Subscriber,
     ingress: mpsc::Sender<PublicIngressMessage>,
     admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
+    #[cfg(test)] mut subscriber_poll_gate: Option<SubscriberPollGateV1>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        #[cfg(test)]
+        if let Some(gate) = subscriber_poll_gate.as_mut() {
+            gate.before_first_poll(expected_subject).await;
+        }
         while let Some(message) = subscriber.next().await {
             if !admit_public_subscription_message(
                 expected_subject,
@@ -395,6 +415,10 @@ pub(crate) fn admit_public_subscription_message(
         worker: WorkerKindV1::Public,
         subject: expected_subject.to_string(),
         payload_sha256: sha256_hex(&payload),
+        #[cfg(test)]
+        payload: payload.clone(),
+        #[cfg(test)]
+        deadline_identity: receipt_deadline.identity_for_test(),
         reply: reply.to_string(),
         deadline_millis: PUBLIC_HANDLER_DEADLINE_MILLIS,
     };
@@ -448,6 +472,10 @@ pub struct PublicWitnessDispatcher<C> {
     in_flight: Semaphore,
     worker_observer: Arc<dyn WorkerTransitionObserverV1>,
     subscriber_admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
+    #[cfg(test)]
+    subscriber_poll_gate: Option<SubscriberPollGateV1>,
+    #[cfg(test)]
+    response_pre_enqueue_observer: Arc<dyn ResponsePreEnqueueObserverV1>,
 }
 
 impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
@@ -468,6 +496,12 @@ impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
             in_flight: Semaphore::new(max_in_flight),
             worker_observer: Arc::new(NoopWorkerTransitionObserverV1),
             subscriber_admission_observer: Arc::new(NoopSubscriberAdmissionObserverV1),
+            #[cfg(test)]
+            subscriber_poll_gate: None,
+            #[cfg(test)]
+            response_pre_enqueue_observer: Arc::new(
+                crate::service_config::NoopResponsePreEnqueueObserverV1,
+            ),
         };
         dispatcher.validate_startup_ready().await?;
         Ok(dispatcher)
@@ -487,6 +521,19 @@ impl<C: PublicWitnessStoreProxyClient> PublicWitnessDispatcher<C> {
         observer: Arc<dyn SubscriberAdmissionObserverV1>,
     ) {
         self.subscriber_admission_observer = observer;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_first_subscription_poll_for_test(&mut self, gate: SubscriberPollGateV1) {
+        self.subscriber_poll_gate = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_response_pre_enqueue_for_test(
+        &mut self,
+        observer: Arc<dyn ResponsePreEnqueueObserverV1>,
+    ) {
+        self.response_pre_enqueue_observer = observer;
     }
 
     async fn validate_startup_ready(&self) -> Result<(), PublicWitnessDispatchErrorV1> {
@@ -2410,12 +2457,22 @@ fn invalid<T>(_: T) -> PublicWitnessDispatchErrorV1 {
 
 fn transport(error: PublicWitnessProxyTransportErrorV1) -> PublicWitnessDispatchErrorV1 {
     match error {
+        PublicWitnessProxyTransportErrorV1::Framing => PublicWitnessDispatchErrorV1::Invalid,
         PublicWitnessProxyTransportErrorV1::Timeout => PublicWitnessDispatchErrorV1::Timeout,
-        PublicWitnessProxyTransportErrorV1::Framing
-        | PublicWitnessProxyTransportErrorV1::Unavailable => {
+        PublicWitnessProxyTransportErrorV1::OutcomeUnknown => {
+            PublicWitnessDispatchErrorV1::OutcomeUnknown
+        }
+        PublicWitnessProxyTransportErrorV1::Unavailable => {
             PublicWitnessDispatchErrorV1::Unavailable
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn classify_proxy_transport_for_test(
+    error: PublicWitnessProxyTransportErrorV1,
+) -> PublicWitnessDispatchErrorV1 {
+    transport(error)
 }
 
 #[cfg(test)]

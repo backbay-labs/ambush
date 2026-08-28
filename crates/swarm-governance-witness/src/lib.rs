@@ -34,14 +34,16 @@ pub use store_proxy_service::{
 #[cfg(test)]
 mod deadline_state_machine_tests {
     use super::public_dispatcher::{
-        PublicIngressMessage, admit_public_subscription_message,
+        PublicIngressMessage, admit_public_subscription_message, classify_proxy_transport_for_test,
         receive_and_run_public_worker_message, run_public_worker_message,
     };
+    use super::runtime_client::RuntimeRequestObservationV1;
     use super::service_config::{
         PUBLIC_HANDLER_DEADLINE_MILLIS, PUBLIC_HANDLER_RESERVE_MILLIS,
         PUBLIC_PRIVATE_RESERVE_MILLIS, PUBLIC_RESPONSE_GRANT_MILLIS, RESPONSE_GRANT_MAXIMUM,
-        ReceiptDeadlineV1, STORE_HANDLER_DEADLINE_MILLIS, STORE_HANDLER_RESERVE_MILLIS,
-        STORE_RESPONSE_GRANT_MILLIS, SubscriberAdmissionObserverV1, SubscriberAdmissionReceiptV1,
+        ReceiptDeadlineV1, ResponsePreEnqueueCaptureV1, ResponsePreEnqueueObserverV1,
+        STORE_HANDLER_DEADLINE_MILLIS, STORE_HANDLER_RESERVE_MILLIS, STORE_RESPONSE_GRANT_MILLIS,
+        SubscriberAdmissionObserverV1, SubscriberAdmissionReceiptV1, SubscriberPollGateV1,
         WorkerKindV1, WorkerPublisherV1, WorkerTransitionEventV1, WorkerTransitionObserverV1,
         WorkerTransitionV1,
     };
@@ -76,10 +78,11 @@ mod deadline_state_machine_tests {
         WitnessBucketManifestV1, WitnessCompressionV1, WitnessDiscardPolicyV1,
         WitnessPersistenceSemanticsV1, WitnessRetentionPolicyV1, WitnessStorageTypeV1,
         WitnessStoreCasResultV1, WitnessStoreDeploymentInputsV1, WitnessStoreErrorV1,
-        WitnessStoreProxyOperationV1, WitnessStoreProxyRequestBodyV1, WitnessStoreProxyRequestV1,
-        WitnessStoreProxyResponseV1, WitnessStoreReadResultV1, WitnessStoreReadyResultV1,
-        WitnessStreamInitializationRecordV1, WitnessStreamInitializationV1,
-        in_memory::InMemoryWitnessStore,
+        WitnessStoreProxyFailureCodeV1, WitnessStoreProxyOperationV1,
+        WitnessStoreProxyRequestBodyV1, WitnessStoreProxyRequestV1,
+        WitnessStoreProxyResponseBodyV1, WitnessStoreProxyResponseV1, WitnessStoreReadResultV1,
+        WitnessStoreReadyResultV1, WitnessStreamInitializationRecordV1,
+        WitnessStreamInitializationV1, in_memory::InMemoryWitnessStore,
     };
     use swarm_governance::witness_engine::{WitnessStoreEnvelopeV1, witness_stream_key};
     use swarm_governance::witness_service::{
@@ -103,6 +106,13 @@ mod deadline_state_machine_tests {
         value.unwrap_or_else(|| panic!("{label}"))
     }
 
+    fn must_err<T, E>(result: Result<T, E>, label: &str) -> E {
+        match result {
+            Ok(_) => panic!("{label}"),
+            Err(error) => error,
+        }
+    }
+
     #[derive(Default)]
     struct RecordingWorkerTransitionObserverV1 {
         events: Mutex<Vec<WorkerTransitionEventV1>>,
@@ -117,6 +127,18 @@ mod deadline_state_machine_tests {
     }
 
     impl RecordingWorkerTransitionObserverV1 {
+        fn sequence(&self) -> u64 {
+            must(
+                u64::try_from(
+                    self.events
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .len(),
+                ),
+                "worker-transition sequence overflow",
+            )
+        }
+
         fn clear(&self) {
             self.events
                 .lock()
@@ -149,10 +171,11 @@ mod deadline_state_machine_tests {
             let mut cas_attempted = 0;
             let mut cas_applied = 0;
             let mut retries = 0;
-            let mut publications = 0;
+            let mut response_enqueues = 0;
             let mut outcome_unknown = false;
             for event in events.iter() {
                 match event {
+                    WorkerTransitionEventV1::ReceiptDeadlineIdentity { .. } => {}
                     WorkerTransitionEventV1::Dequeued { .. } => queue_dequeues += 1,
                     WorkerTransitionEventV1::PostPreflight { .. } => preflights += 1,
                     WorkerTransitionEventV1::ProxyStoreBegin {
@@ -173,15 +196,24 @@ mod deadline_state_machine_tests {
                     }
                     WorkerTransitionEventV1::ProxyStoreEnd { .. } => {}
                     WorkerTransitionEventV1::CasAppliedObservation { .. } => cas_applied += 1,
-                    WorkerTransitionEventV1::PublishAttempt { published, .. } => {
-                        publications += u64::from(*published);
+                    WorkerTransitionEventV1::ResponseEnqueueAttempt { enqueued, .. } => {
+                        response_enqueues += u64::from(*enqueued);
                     }
                     WorkerTransitionEventV1::OutcomeUnknown => outcome_unknown = true,
-                    WorkerTransitionEventV1::ResponseEnqueueAttempt { .. } => {}
+                    WorkerTransitionEventV1::ResponseDeadlineCheck { .. } => {}
                 }
             }
             DeadlineEvidenceV1 {
-                ordered_trace: events.clone(),
+                ordered_trace: events
+                    .iter()
+                    .filter(|event| {
+                        !matches!(
+                            event,
+                            WorkerTransitionEventV1::ReceiptDeadlineIdentity { .. }
+                        )
+                    })
+                    .cloned()
+                    .collect(),
                 queue_dequeues,
                 preflights,
                 store_calls,
@@ -189,7 +221,7 @@ mod deadline_state_machine_tests {
                 cas_attempted,
                 cas_applied,
                 retries,
-                publications,
+                response_enqueues,
                 outcome_unknown,
             }
         }
@@ -205,9 +237,9 @@ mod deadline_state_machine_tests {
             let cas_attempted = facts.cas_attempted.load(Ordering::SeqCst) as u64;
             let cas_applied = facts.cas_applied.load(Ordering::SeqCst) as u64;
             assert_eq!(
-                evidence.publications,
-                publisher.publications.load(Ordering::SeqCst) as u64,
-                "publisher event diverged from recording publisher"
+                evidence.response_enqueues,
+                publisher.response_enqueues.load(Ordering::SeqCst) as u64,
+                "response-enqueue event diverged from recording publisher"
             );
             assert_eq!(
                 evidence.cas_attempted, cas_attempted,
@@ -287,14 +319,14 @@ mod deadline_state_machine_tests {
 
     struct RecordingPublisherV1 {
         delay_millis: u64,
-        publications: Arc<AtomicUsize>,
+        response_enqueues: Arc<AtomicUsize>,
     }
 
     #[async_trait]
     impl WorkerPublisherV1 for RecordingPublisherV1 {
         async fn publish(&self, _reply: async_nats::Subject, _payload: Vec<u8>) -> bool {
             sleep(Duration::from_millis(self.delay_millis)).await;
-            self.publications.fetch_add(1, Ordering::SeqCst);
+            self.response_enqueues.fetch_add(1, Ordering::SeqCst);
             true
         }
     }
@@ -309,7 +341,7 @@ mod deadline_state_machine_tests {
         cas_attempted: u64,
         cas_applied: u64,
         retries: u64,
-        publications: u64,
+        response_enqueues: u64,
         outcome_unknown: bool,
     }
 
@@ -337,6 +369,35 @@ mod deadline_state_machine_tests {
         cas_applied: bool,
     }
 
+    fn verified_cas_evidence(
+        records: &[StoreObservationV1],
+    ) -> Result<(usize, usize), &'static str> {
+        let mut attempted = 0;
+        let mut applied = 0;
+        for record in records
+            .iter()
+            .filter(|record| record.operation == "compare_and_swap")
+        {
+            attempted += 1;
+            let bytes =
+                hex::decode(&record.result_canonical_hex).map_err(|_| "store CAS result hex")?;
+            if sha256_hex(&bytes) != record.result_sha256 {
+                return Err("store CAS result digest");
+            }
+            let result: WitnessStoreCasResultV1 =
+                serde_json::from_slice(&bytes).map_err(|_| "store CAS result decode")?;
+            if canonical_wire_bytes(&result).map_err(|_| "store CAS result canonical")? != bytes {
+                return Err("store CAS result canonical");
+            }
+            let result_applied = matches!(result, WitnessStoreCasResultV1::Applied { .. });
+            if record.cas_applied != result_applied {
+                return Err("store CAS evidence disagrees with authoritative result");
+            }
+            applied += usize::from(result_applied);
+        }
+        Ok((attempted, applied))
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
     struct ProxyObservationV1 {
         operation: WitnessStoreProxyOperationV1,
@@ -353,6 +414,14 @@ mod deadline_state_machine_tests {
         store_state_digest: Option<String>,
         request_at_nanos: u64,
         response_at_nanos: u64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct ProxyRequestObservationV1 {
+        operation: WitnessStoreProxyOperationV1,
+        request_digest: String,
+        request_canonical_hex: String,
+        request_sha256: String,
     }
 
     struct ObservationClockV1 {
@@ -378,6 +447,7 @@ mod deadline_state_machine_tests {
     struct RecordingNatsProxyV1 {
         inner: NatsPublicWitnessStoreProxyClient,
         records: Arc<Mutex<Vec<ProxyObservationV1>>>,
+        request_records: Arc<Mutex<Vec<ProxyRequestObservationV1>>>,
         clock: Arc<ObservationClockV1>,
     }
 
@@ -392,6 +462,15 @@ mod deadline_state_machine_tests {
             let request_at_nanos = self.clock.now();
             let request_nonce = request.request_nonce.clone();
             let request_digest = request.request_digest.clone();
+            self.request_records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(ProxyRequestObservationV1 {
+                    operation,
+                    request_digest: request_digest.clone(),
+                    request_canonical_hex: hex::encode(&request_bytes),
+                    request_sha256: sha256_hex(&request_bytes),
+                });
             let response = match operation {
                 WitnessStoreProxyOperationV1::InspectReady => {
                     self.inner.inspect_ready(request).await?
@@ -1450,10 +1529,35 @@ mod deadline_state_machine_tests {
             bucket_anchor_digest: anchor_digest.to_string(),
             ready_manifest_digest: ready_manifest_digest.to_string(),
             store_state_digest: envelope.store_state_digest()?,
-            current_session_generation: None,
-            current_session_digest: None,
-            current_head_digest: None,
-            current_prepared_digest: None,
+            current_session_generation: envelope
+                .session
+                .as_ref()
+                .map(|session| session.session_generation),
+            current_session_digest: envelope
+                .session
+                .as_ref()
+                .map(|session| {
+                    digest_domain(
+                        WITNESS_SESSION_STATE_DOMAIN_V1,
+                        &canonical_wire_bytes(session)?,
+                    )
+                })
+                .transpose()?,
+            current_head_digest: envelope
+                .current
+                .as_ref()
+                .map(|stored| stored.head.head_digest())
+                .transpose()?,
+            current_prepared_digest: envelope
+                .prepared
+                .as_ref()
+                .map(|stored| {
+                    digest_domain(
+                        WITNESS_PREPARED_STATE_DOMAIN_V1,
+                        &canonical_wire_bytes(&stored.prepared)?,
+                    )
+                })
+                .transpose()?,
             witness_nonce: "6".repeat(64),
             witness_identity: binding.witness_identity.clone(),
             witness_key_id: binding.witness_key_id.clone(),
@@ -1553,7 +1657,7 @@ mod deadline_state_machine_tests {
         let receiver = TokioMutex::new(receiver);
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         assert!(
             receive_and_run_private_worker_message(
@@ -1603,7 +1707,7 @@ mod deadline_state_machine_tests {
         let receiver = TokioMutex::new(receiver);
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         assert!(
             receive_and_run_public_worker_message(&receiver, dispatcher, observer, &publisher,)
@@ -1727,6 +1831,37 @@ mod deadline_state_machine_tests {
             .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
     }
 
+    async fn private_deadline_request_route() -> ProtocolResult<(async_nats::Client, String)> {
+        if std::env::var_os("SWARM_NATS_RELAY_CREDENTIAL_PATH").is_some() {
+            return Ok((
+                connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?,
+                "swarm.governance.witness.relay.forward.store.v1.read_entry".to_string(),
+            ));
+        }
+        Ok((
+            connect_deadline_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?,
+            store_proxy_subjects()[1].to_string(),
+        ))
+    }
+
+    async fn public_deadline_request_route(
+        ordinary_subject: &str,
+    ) -> ProtocolResult<(async_nats::Client, String)> {
+        if std::env::var_os("SWARM_NATS_RELAY_CREDENTIAL_PATH").is_some() {
+            let suffix = ordinary_subject
+                .strip_prefix("swarm.governance.witness.v1.")
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            return Ok((
+                connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?,
+                format!("swarm.governance.witness.relay.forward.v1.{suffix}"),
+            ));
+        }
+        Ok((
+            connect_deadline_role("SWARM_NATS_RUNTIME_CREDENTIAL_PATH", "runtime").await?,
+            ordinary_subject.to_string(),
+        ))
+    }
+
     async fn initialize_deadline_stream() -> ProtocolResult<()> {
         let client = connect_deadline_role("SWARM_NATS_INIT_CREDENTIAL_PATH", "init").await?;
         let context = async_nats::jetstream::new(client);
@@ -1776,8 +1911,8 @@ mod deadline_state_machine_tests {
         public: &'a SubscriberAdmissionReceiptV1,
         private_backend_calls: usize,
         public_backend_calls: usize,
-        private_second_publications: usize,
-        public_second_publications: usize,
+        private_second_responses: usize,
+        public_second_responses: usize,
     }
 
     fn write_subscriber_callsite_receipt(
@@ -1801,8 +1936,8 @@ mod deadline_state_machine_tests {
             public,
             private_backend_calls,
             public_backend_calls,
-            private_second_publications: 0,
-            public_second_publications: 0,
+            private_second_responses: 0,
+            public_second_responses: 0,
         };
         let bytes = must(canonical_wire_bytes(&row), "subscriber callsite receipt");
         let mut file = must(
@@ -1908,17 +2043,17 @@ mod deadline_state_machine_tests {
             StoreProxyServiceRunner::start(private_connection, private_service).await,
             "shipping private start",
         );
-        let witness_client = must(
-            connect_deadline_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await,
-            "witness client",
+        let (private_requester, private_subject) = must(
+            private_deadline_request_route().await,
+            "private deadline request route",
         );
         private_fixture
             .block_next_read
             .store(true, Ordering::SeqCst);
         let (mut private_first_response, _) = must(
             publish_deadline_request(
-                &witness_client,
-                store_proxy_subjects()[1],
+                &private_requester,
+                &private_subject,
                 private_payload.clone(),
             )
             .await,
@@ -1935,8 +2070,7 @@ mod deadline_state_machine_tests {
         let _private_first_receipt =
             must_some(private_receipt_rx.recv().await, "private receipt one");
         let (mut private_second_response, _) = must(
-            publish_deadline_request(&witness_client, store_proxy_subjects()[1], private_payload)
-                .await,
+            publish_deadline_request(&private_requester, &private_subject, private_payload).await,
             "private request two",
         );
         let private_second_receipt = must_some(
@@ -1958,13 +2092,13 @@ mod deadline_state_machine_tests {
             tokio::time::timeout(Duration::from_millis(500), private_first_response.next())
                 .await
                 .is_err(),
-            "deadline_r24_private_late_first_publication"
+            "deadline_r24_private_late_first_response"
         );
         assert!(
             tokio::time::timeout(Duration::from_millis(150), private_second_response.next())
                 .await
                 .is_err(),
-            "deadline_r24_private_second_publication"
+            "deadline_r24_private_second_response"
         );
         assert_eq!(
             private_fixture.facts.reads.load(Ordering::SeqCst),
@@ -1997,15 +2131,20 @@ mod deadline_state_machine_tests {
             PublicWitnessServiceRunner::start(witness_public_client, dispatcher).await,
             "shipping public start",
         );
-        let runtime_client = must(
-            connect_deadline_role("SWARM_NATS_RUNTIME_CREDENTIAL_PATH", "runtime").await,
-            "runtime client",
-        );
         let public_request = must(public_fixture.fence_request(), "public request");
         let public_payload = must(public_request.canonical_bytes(), "public payload");
         let public_subject = PublicWitnessServiceConfigV1::subject_for(public_request.operation);
+        let (public_requester, public_request_subject) = must(
+            public_deadline_request_route(public_subject).await,
+            "public deadline request route",
+        );
         let (mut public_first_response, _) = must(
-            publish_deadline_request(&runtime_client, public_subject, public_payload.clone()).await,
+            publish_deadline_request(
+                &public_requester,
+                &public_request_subject,
+                public_payload.clone(),
+            )
+            .await,
             "public request one",
         );
         let _public_first_receipt = must_some(
@@ -2024,7 +2163,8 @@ mod deadline_state_machine_tests {
             "public request one did not enter proxy",
         );
         let (mut public_second_response, _) = must(
-            publish_deadline_request(&runtime_client, public_subject, public_payload).await,
+            publish_deadline_request(&public_requester, &public_request_subject, public_payload)
+                .await,
             "public request two",
         );
         let public_second_receipt = must_some(
@@ -2046,13 +2186,13 @@ mod deadline_state_machine_tests {
             tokio::time::timeout(Duration::from_millis(500), public_first_response.next())
                 .await
                 .is_err(),
-            "deadline_r24_public_late_first_publication"
+            "deadline_r24_public_late_first_response"
         );
         assert!(
             tokio::time::timeout(Duration::from_millis(150), public_second_response.next())
                 .await
                 .is_err(),
-            "deadline_r24_public_second_publication"
+            "deadline_r24_public_second_response"
         );
         assert_eq!(
             public_fixture.facts.reads.load(Ordering::SeqCst),
@@ -2116,7 +2256,7 @@ mod deadline_state_machine_tests {
         );
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         let gate = observer.arm(DeadlineGateV1::PrivatePostPreflight);
         let expiry = tokio::spawn(async move {
@@ -2140,7 +2280,7 @@ mod deadline_state_machine_tests {
             "deadline_r20_worker_budget_substitution"
         );
         assert_eq!(
-            publisher.publications.load(Ordering::SeqCst),
+            publisher.response_enqueues.load(Ordering::SeqCst),
             0,
             "deadline_r20_worker_budget_substitution"
         );
@@ -2158,7 +2298,7 @@ mod deadline_state_machine_tests {
         fixture.mode.store(1, Ordering::SeqCst);
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         let gate = observer.arm(DeadlineGateV1::PrivatePostPreflight);
         let elapsed_before_store = tokio::spawn(async move {
@@ -2177,7 +2317,7 @@ mod deadline_state_machine_tests {
         );
         must(elapsed_before_store.await, "private store elapsed budget");
         assert_eq!(fixture.facts.reads.load(Ordering::SeqCst), 1);
-        assert_eq!(publisher.publications.load(Ordering::SeqCst), 0);
+        assert_eq!(publisher.response_enqueues.load(Ordering::SeqCst), 0);
         rows.push((
             "private_store_crosses_deadline",
             observer.reduce_authenticated(&fixture.facts, &publisher, WorkerKindV1::Private),
@@ -2191,7 +2331,7 @@ mod deadline_state_machine_tests {
         );
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         let gate = observer.arm(DeadlineGateV1::PrivateStoreEnd);
         let expiry = tokio::spawn(async move {
@@ -2210,7 +2350,7 @@ mod deadline_state_machine_tests {
         );
         must(expiry.await, "private enqueue expiry");
         assert_eq!(fixture.facts.reads.load(Ordering::SeqCst), 1);
-        assert_eq!(publisher.publications.load(Ordering::SeqCst), 0);
+        assert_eq!(publisher.response_enqueues.load(Ordering::SeqCst), 0);
         rows.push((
             "private_response_enqueue_expired",
             observer.reduce_authenticated(&fixture.facts, &publisher, WorkerKindV1::Private),
@@ -2252,7 +2392,7 @@ mod deadline_state_machine_tests {
         fixture.mode.store(3, Ordering::SeqCst);
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         let request = must(fixture.fence_request(), "fence request");
         must(
@@ -2267,7 +2407,7 @@ mod deadline_state_machine_tests {
             "public exchange deadline request",
         );
         assert_eq!(fixture.facts.reads.load(Ordering::SeqCst), 1);
-        assert_eq!(publisher.publications.load(Ordering::SeqCst), 0);
+        assert_eq!(publisher.response_enqueues.load(Ordering::SeqCst), 0);
         rows.push((
             "public_private_exchange_crosses_deadline",
             observer.reduce_authenticated(&fixture.facts, &publisher, WorkerKindV1::Public),
@@ -2286,7 +2426,7 @@ mod deadline_state_machine_tests {
         observer.clear();
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         let gate = observer.arm(DeadlineGateV1::PublicProxyEnd);
         let expiry = tokio::spawn(async move {
@@ -2307,7 +2447,7 @@ mod deadline_state_machine_tests {
         );
         must(expiry.await, "public enqueue expiry");
         assert_eq!(fixture.facts.reads.load(Ordering::SeqCst), 1);
-        assert_eq!(publisher.publications.load(Ordering::SeqCst), 0);
+        assert_eq!(publisher.response_enqueues.load(Ordering::SeqCst), 0);
         rows.push((
             "public_response_enqueue_expired",
             observer.reduce_authenticated(&fixture.facts, &publisher, WorkerKindV1::Public),
@@ -2327,7 +2467,7 @@ mod deadline_state_machine_tests {
         fixture.mode.store(2, Ordering::SeqCst);
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         let request = must(fixture.establish_request(), "establish request");
         must(
@@ -2348,7 +2488,7 @@ mod deadline_state_machine_tests {
         );
         assert_eq!(fixture.facts.cas_attempted.load(Ordering::SeqCst), 1);
         assert_eq!(fixture.facts.cas_applied.load(Ordering::SeqCst), 1);
-        assert_eq!(publisher.publications.load(Ordering::SeqCst), 0);
+        assert_eq!(publisher.response_enqueues.load(Ordering::SeqCst), 0);
         rows.push((
             "post_cas_timeout_outcome_unknown",
             observer.reduce_authenticated(&fixture.facts, &publisher, WorkerKindV1::Public),
@@ -2449,9 +2589,9 @@ mod deadline_state_machine_tests {
                     succeeded: true,
                     cas_applied: false,
                 },
-                WorkerTransitionEventV1::ResponseEnqueueAttempt {
+                WorkerTransitionEventV1::ResponseDeadlineCheck {
                     worker: WorkerKindV1::Private,
-                    accepted: false,
+                    open: false,
                 },
             ],
             vec![WorkerTransitionEventV1::Dequeued {
@@ -2494,9 +2634,9 @@ mod deadline_state_machine_tests {
                     succeeded: true,
                     cas_applied: false,
                 },
-                WorkerTransitionEventV1::ResponseEnqueueAttempt {
+                WorkerTransitionEventV1::ResponseDeadlineCheck {
                     worker: WorkerKindV1::Public,
-                    accepted: false,
+                    open: false,
                 },
             ],
             vec![
@@ -2560,7 +2700,7 @@ mod deadline_state_machine_tests {
                     evidence.cas_attempted,
                     evidence.cas_applied,
                     evidence.retries,
-                    evidence.publications,
+                    evidence.response_enqueues,
                     evidence.outcome_unknown,
                 ),
                 expected_counts,
@@ -2660,7 +2800,7 @@ mod deadline_state_machine_tests {
 
         let publisher = RecordingPublisherV1 {
             delay_millis: 0,
-            publications: Arc::new(AtomicUsize::new(0)),
+            response_enqueues: Arc::new(AtomicUsize::new(0)),
         };
         let transition = WorkerTransitionV1::new(
             WorkerKindV1::Private,
@@ -2692,10 +2832,10 @@ mod deadline_state_machine_tests {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-    struct PublisherObservationV1 {
+    struct ResponseEnqueueObservationV1 {
         ordinal: usize,
         worker: WorkerKindV1,
-        published: bool,
+        enqueued: bool,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2742,7 +2882,7 @@ mod deadline_state_machine_tests {
         proxy_exchanges: usize,
         private_exchanges: usize,
         store_operations: usize,
-        publisher_attempts: usize,
+        response_enqueue_attempts: usize,
         connections: usize,
         cas_attempted: usize,
         cas_applied: usize,
@@ -2756,7 +2896,7 @@ mod deadline_state_machine_tests {
         proxy_exchanges_sha256: String,
         private_exchanges_sha256: String,
         store_operations_sha256: String,
-        publisher_attempts_sha256: String,
+        response_enqueue_attempts_sha256: String,
         public_admission_sha256: String,
         publisher_sha256: String,
         connections_sha256: String,
@@ -2785,7 +2925,7 @@ mod deadline_state_machine_tests {
         proxy_exchanges: Vec<ProxyObservationV1>,
         private_exchanges: Vec<ProxyObservationV1>,
         store_operations: Vec<StoreObservationV1>,
-        publisher_attempts: Vec<PublisherObservationV1>,
+        response_enqueue_attempts: Vec<ResponseEnqueueObservationV1>,
         public_admission: TimestampedPublicAdmissionV1,
         publisher: CompletePublisherObservationV1,
         connections: Vec<ConnectionObservationV1>,
@@ -2961,15 +3101,31 @@ mod deadline_state_machine_tests {
         decision: oneshot::Sender<bool>,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum RelaySubscriptionOmissionV1 {
+        None,
+        Public,
+        Private,
+    }
+
     struct LiveRelayLegsV1 {
         public_client_id: u64,
         private_client_id: u64,
+        public_subscription_count: usize,
+        private_subscription_count: usize,
         held_response: mpsc::Receiver<HeldPublicRelayResponseV1>,
         tasks: Vec<tokio::task::JoinHandle<()>>,
     }
 
     impl LiveRelayLegsV1 {
         async fn start(hold_first_read_head: bool) -> ProtocolResult<Self> {
+            Self::start_selective(hold_first_read_head, RelaySubscriptionOmissionV1::None).await
+        }
+
+        async fn start_selective(
+            hold_first_read_head: bool,
+            omission: RelaySubscriptionOmissionV1,
+        ) -> ProtocolResult<Self> {
             let public_client =
                 connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?;
             let private_client =
@@ -2985,93 +3141,104 @@ mod deadline_state_machine_tests {
             let (held_sender, held_response) = mpsc::channel(1);
             let held_once = Arc::new(AtomicBool::new(false));
             let mut tasks = Vec::new();
-            for operation in [
-                WitnessServiceOperationV1::Fence,
-                WitnessServiceOperationV1::Establish,
-                WitnessServiceOperationV1::Discover,
-                WitnessServiceOperationV1::Prepare,
-                WitnessServiceOperationV1::Commit,
-                WitnessServiceOperationV1::Abort,
-                WitnessServiceOperationV1::ReadPrepared,
-                WitnessServiceOperationV1::ReadHead,
-                WitnessServiceOperationV1::FetchPayload,
-            ] {
-                let ordinary = PublicWitnessServiceConfigV1::subject_for(operation);
-                let suffix = ordinary
-                    .strip_prefix("swarm.governance.witness.v1.")
-                    .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
-                let routed = format!("swarm.governance.witness.relay.v1.{suffix}");
-                let forward = format!("swarm.governance.witness.relay.forward.v1.{suffix}");
-                let mut subscriber = public_client
-                    .subscribe(routed)
-                    .await
-                    .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
-                let client = public_client.clone();
-                let held_sender = held_sender.clone();
-                let held_once = held_once.clone();
-                tasks.push(tokio::spawn(async move {
-                    while let Some(message) = subscriber.next().await {
-                        let Some(reply) = message.reply.clone() else {
-                            continue;
-                        };
-                        let request_bytes = message.payload.to_vec();
-                        let Ok(response) = client.request(forward.clone(), message.payload).await
-                        else {
-                            continue;
-                        };
-                        let response_bytes = response.payload.to_vec();
-                        let should_hold = hold_first_read_head
-                            && operation == WitnessServiceOperationV1::ReadHead
-                            && !held_once.swap(true, Ordering::SeqCst);
-                        if should_hold {
-                            let (decision, decision_receiver) = oneshot::channel();
-                            if held_sender
-                                .send(HeldPublicRelayResponseV1 {
-                                    request_bytes,
-                                    response_bytes: response_bytes.clone(),
-                                    decision,
-                                })
-                                .await
-                                .is_err()
-                            {
+            let mut public_subscription_count = 0;
+            if omission != RelaySubscriptionOmissionV1::Public {
+                for operation in [
+                    WitnessServiceOperationV1::Fence,
+                    WitnessServiceOperationV1::Establish,
+                    WitnessServiceOperationV1::Discover,
+                    WitnessServiceOperationV1::Prepare,
+                    WitnessServiceOperationV1::Commit,
+                    WitnessServiceOperationV1::Abort,
+                    WitnessServiceOperationV1::ReadPrepared,
+                    WitnessServiceOperationV1::ReadHead,
+                    WitnessServiceOperationV1::FetchPayload,
+                ] {
+                    let ordinary = PublicWitnessServiceConfigV1::subject_for(operation);
+                    let suffix = ordinary
+                        .strip_prefix("swarm.governance.witness.v1.")
+                        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+                    let routed = format!("swarm.governance.witness.relay.v1.{suffix}");
+                    let forward = format!("swarm.governance.witness.relay.forward.v1.{suffix}");
+                    let mut subscriber = public_client
+                        .subscribe(routed)
+                        .await
+                        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                    public_subscription_count += 1;
+                    let client = public_client.clone();
+                    let held_sender = held_sender.clone();
+                    let held_once = held_once.clone();
+                    tasks.push(tokio::spawn(async move {
+                        while let Some(message) = subscriber.next().await {
+                            let Some(reply) = message.reply.clone() else {
                                 continue;
+                            };
+                            let request_bytes = message.payload.to_vec();
+                            let Ok(response) =
+                                client.request(forward.clone(), message.payload).await
+                            else {
+                                continue;
+                            };
+                            let response_bytes = response.payload.to_vec();
+                            let should_hold = hold_first_read_head
+                                && operation == WitnessServiceOperationV1::ReadHead
+                                && !held_once.swap(true, Ordering::SeqCst);
+                            if should_hold {
+                                let (decision, decision_receiver) = oneshot::channel();
+                                if held_sender
+                                    .send(HeldPublicRelayResponseV1 {
+                                        request_bytes,
+                                        response_bytes: response_bytes.clone(),
+                                        decision,
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    continue;
+                                }
+                                if !matches!(decision_receiver.await, Ok(true)) {
+                                    continue;
+                                }
                             }
-                            if !matches!(decision_receiver.await, Ok(true)) {
-                                continue;
+                            if client.publish(reply, response_bytes.into()).await.is_ok() {
+                                let _ = client.flush().await;
                             }
                         }
-                        if client.publish(reply, response_bytes.into()).await.is_ok() {
-                            let _ = client.flush().await;
-                        }
-                    }
-                }));
+                    }));
+                }
             }
-            for (index, ordinary) in store_proxy_subjects().iter().enumerate() {
-                let suffix = ordinary
-                    .strip_prefix("swarm.governance.witness.store.v1.")
-                    .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
-                let routed = format!("swarm.governance.witness.relay.store.v1.{suffix}");
-                let forward = format!("swarm.governance.witness.relay.forward.store.v1.{suffix}");
-                let mut subscriber = private_client
-                    .subscribe(routed)
-                    .await
-                    .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
-                let client = private_client.clone();
-                tasks.push(tokio::spawn(async move {
-                    while let Some(message) = subscriber.next().await {
-                        let Some(reply) = message.reply.clone() else {
-                            continue;
-                        };
-                        let Ok(response) = client.request(forward.clone(), message.payload).await
-                        else {
-                            continue;
-                        };
-                        if client.publish(reply, response.payload).await.is_ok() {
-                            let _ = client.flush().await;
+            let mut private_subscription_count = 0;
+            if omission != RelaySubscriptionOmissionV1::Private {
+                for (index, ordinary) in store_proxy_subjects().iter().enumerate() {
+                    let suffix = ordinary
+                        .strip_prefix("swarm.governance.witness.store.v1.")
+                        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+                    let routed = format!("swarm.governance.witness.relay.store.v1.{suffix}");
+                    let forward =
+                        format!("swarm.governance.witness.relay.forward.store.v1.{suffix}");
+                    let mut subscriber = private_client
+                        .subscribe(routed)
+                        .await
+                        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                    private_subscription_count += 1;
+                    let client = private_client.clone();
+                    tasks.push(tokio::spawn(async move {
+                        while let Some(message) = subscriber.next().await {
+                            let Some(reply) = message.reply.clone() else {
+                                continue;
+                            };
+                            let Ok(response) =
+                                client.request(forward.clone(), message.payload).await
+                            else {
+                                continue;
+                            };
+                            if client.publish(reply, response.payload).await.is_ok() {
+                                let _ = client.flush().await;
+                            }
                         }
-                    }
-                    let _ = index;
-                }));
+                        let _ = index;
+                    }));
+                }
             }
             public_client
                 .flush()
@@ -3084,6 +3251,8 @@ mod deadline_state_machine_tests {
             Ok(Self {
                 public_client_id,
                 private_client_id,
+                public_subscription_count,
+                private_subscription_count,
                 held_response,
                 tasks,
             })
@@ -3173,6 +3342,17 @@ mod deadline_state_machine_tests {
         events: &mut mpsc::UnboundedReceiver<async_nats::Event>,
         reply: &str,
     ) -> ProtocolResult<String> {
+        loop {
+            let text = next_publish_permission_violation(events).await?;
+            if text.contains(reply) {
+                return Ok(text);
+            }
+        }
+    }
+
+    async fn next_publish_permission_violation(
+        events: &mut mpsc::UnboundedReceiver<async_nats::Event>,
+    ) -> ProtocolResult<String> {
         let deadline = MonotonicInstant::now() + std::time::Duration::from_secs(2);
         loop {
             let remaining = deadline
@@ -3183,10 +3363,432 @@ mod deadline_state_machine_tests {
                 .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?
                 .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
             let text = event.to_string();
-            if text.contains("Permissions Violation for Publish to") && text.contains(reply) {
+            if text.contains("Permissions Violation for Publish to") {
                 return Ok(text);
             }
         }
+    }
+
+    async fn targeted_admission_receipt(
+        receipts: &mut mpsc::Receiver<SubscriberAdmissionReceiptV1>,
+        worker: WorkerKindV1,
+        subject: &str,
+    ) -> ProtocolResult<SubscriberAdmissionReceiptV1> {
+        let deadline = MonotonicInstant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(MonotonicInstant::now())
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            let receipt = tokio::time::timeout(remaining, receipts.recv())
+                .await
+                .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            if receipt.worker == worker && receipt.subject == subject {
+                return Ok(receipt);
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct ResponseCaptureReceiptV1 {
+        invocation_token: String,
+        physical_case: String,
+        capture_id: u64,
+        worker: WorkerKindV1,
+        reply: String,
+        payload_len: usize,
+        payload_sha256: String,
+        preceding_worker_transition_sequence: u64,
+    }
+
+    #[derive(Debug, Clone)]
+    struct RecordedResponseCaptureV1 {
+        receipt: ResponseCaptureReceiptV1,
+        payload: Vec<u8>,
+    }
+
+    struct RecordingResponsePreEnqueueObserverV1 {
+        sender: mpsc::UnboundedSender<RecordedResponseCaptureV1>,
+        next_capture_id: AtomicU64,
+        transitions: Arc<RecordingWorkerTransitionObserverV1>,
+        invocation_token: String,
+        physical_case: String,
+    }
+
+    impl ResponsePreEnqueueObserverV1 for RecordingResponsePreEnqueueObserverV1 {
+        fn observe(&self, capture: ResponsePreEnqueueCaptureV1) {
+            let capture_id = self.next_capture_id.fetch_add(1, Ordering::SeqCst) + 1;
+            let receipt = ResponseCaptureReceiptV1 {
+                invocation_token: self.invocation_token.clone(),
+                physical_case: self.physical_case.clone(),
+                capture_id,
+                worker: capture.worker,
+                reply: capture.reply,
+                payload_len: capture.payload.len(),
+                payload_sha256: sha256_hex(&capture.payload),
+                preceding_worker_transition_sequence: self.transitions.sequence(),
+            };
+            let _ = self.sender.send(RecordedResponseCaptureV1 {
+                receipt,
+                payload: capture.payload,
+            });
+        }
+    }
+
+    async fn targeted_response_capture(
+        captures: &mut mpsc::UnboundedReceiver<RecordedResponseCaptureV1>,
+        worker: WorkerKindV1,
+        reply: &str,
+    ) -> ProtocolResult<RecordedResponseCaptureV1> {
+        let deadline = MonotonicInstant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(MonotonicInstant::now())
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            let capture = tokio::time::timeout(remaining, captures.recv())
+                .await
+                .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            if capture.receipt.worker == worker && capture.receipt.reply == reply {
+                return Ok(capture);
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct RequesterChildTerminalReceiptV1 {
+        invocation_token: String,
+        physical_case: String,
+        child_task_id: String,
+        response_variant: &'static str,
+        response_sha256: String,
+        child_sequence: u64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct RequesterParentJoinReceiptV1 {
+        invocation_token: String,
+        physical_case: String,
+        child_task_id: String,
+        child_record_sha256: String,
+        returned_response_sha256: String,
+        parent_sequence: u64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    enum RequesterJoinLedgerRowV1 {
+        Child(RequesterChildTerminalReceiptV1),
+        Parent(RequesterParentJoinReceiptV1),
+    }
+
+    #[derive(Default)]
+    struct RequesterJoinLedgerV1 {
+        next_sequence: AtomicU64,
+        rows: Mutex<Vec<RequesterJoinLedgerRowV1>>,
+    }
+
+    impl RequesterJoinLedgerV1 {
+        fn record_child(
+            &self,
+            invocation_token: &str,
+            physical_case: &str,
+            child_task_id: &str,
+            response: &WitnessServiceResponseV1,
+            response_bytes: &[u8],
+        ) -> RequesterChildTerminalReceiptV1 {
+            assert!(
+                matches!(response, WitnessServiceResponseV1::Establish(_)),
+                "requester child terminal response variant differs"
+            );
+            let receipt = RequesterChildTerminalReceiptV1 {
+                invocation_token: invocation_token.to_string(),
+                physical_case: physical_case.to_string(),
+                child_task_id: child_task_id.to_string(),
+                response_variant: "establish",
+                response_sha256: sha256_hex(response_bytes),
+                child_sequence: self.next_sequence.fetch_add(1, Ordering::SeqCst) + 1,
+            };
+            self.rows
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(RequesterJoinLedgerRowV1::Child(receipt.clone()));
+            receipt
+        }
+
+        fn record_parent(
+            &self,
+            invocation_token: &str,
+            physical_case: &str,
+            child_task_id: &str,
+            child: &RequesterChildTerminalReceiptV1,
+            returned_response_bytes: &[u8],
+        ) -> RequesterParentJoinReceiptV1 {
+            let child_record_sha256 = sha256_hex(&must(
+                canonical_wire_bytes(child),
+                "requester child terminal receipt bytes",
+            ));
+            let returned_response_sha256 = sha256_hex(returned_response_bytes);
+            let child_is_recorded = self
+                .rows
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .any(|row| row == &RequesterJoinLedgerRowV1::Child(child.clone()));
+            assert!(child_is_recorded, "requester child terminal record absent");
+            assert_eq!(child.invocation_token, invocation_token);
+            assert_eq!(child.physical_case, physical_case);
+            assert_eq!(child.child_task_id, child_task_id);
+            assert_eq!(child.response_sha256, returned_response_sha256);
+            let receipt = RequesterParentJoinReceiptV1 {
+                invocation_token: invocation_token.to_string(),
+                physical_case: physical_case.to_string(),
+                child_task_id: child_task_id.to_string(),
+                child_record_sha256,
+                returned_response_sha256,
+                parent_sequence: self.next_sequence.fetch_add(1, Ordering::SeqCst) + 1,
+            };
+            assert!(receipt.parent_sequence > child.child_sequence);
+            self.rows
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(RequesterJoinLedgerRowV1::Parent(receipt.clone()));
+            receipt
+        }
+
+        fn contains_parent(&self, receipt: &RequesterParentJoinReceiptV1) -> bool {
+            self.rows
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .any(|row| row == &RequesterJoinLedgerRowV1::Parent(receipt.clone()))
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct PublicRecoveryOperandReceiptV1 {
+        left_kind: &'static str,
+        left_capture_id: u64,
+        left_sha256: String,
+        right_kind: &'static str,
+        right_sha256: String,
+        equal: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct PrivateCasJoinReceiptV1 {
+        capture_id: u64,
+        capture_sha256: String,
+        cas_request_digest: String,
+        cas_request_sha256: String,
+        store_result_sha256: String,
+        proposed_envelope_sha256: String,
+        proposed_envelope_digest: String,
+        final_read_sha256: String,
+        rotation_receipt_sha256: String,
+        outer_attestation_sha256: String,
+        new_revision: u64,
+    }
+
+    struct PrivateCasJoinContextV1<'a> {
+        public_request: &'a WitnessServiceRequestV1,
+        challenge: &'a RecoveryChallengeV1,
+        binding: &'a PublicationBindingV1,
+        outer_response: &'a WitnessServiceResponseV1,
+    }
+
+    fn validate_private_cas_join(
+        capture: &RecordedResponseCaptureV1,
+        proxy_records: &[ProxyRequestObservationV1],
+        store_records: &[StoreObservationV1],
+        final_read: &WitnessStoreProxyResponseV1,
+        context: PrivateCasJoinContextV1<'_>,
+    ) -> ProtocolResult<PrivateCasJoinReceiptV1> {
+        let PrivateCasJoinContextV1 {
+            public_request,
+            challenge,
+            binding,
+            outer_response,
+        } = context;
+        if capture.receipt.worker != WorkerKindV1::Private
+            || capture.receipt.payload_len != capture.payload.len()
+            || capture.receipt.payload_sha256 != sha256_hex(&capture.payload)
+            || capture.receipt.capture_id == 0
+            || capture.receipt.preceding_worker_transition_sequence == 0
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let private_response = WitnessStoreProxyResponseV1::decode(&capture.payload)?;
+        private_response.validate()?;
+        let (
+            response_stream_id,
+            response_previous_revision,
+            response_new_revision,
+            response_acknowledged_digest,
+        ) = match &private_response.body {
+            WitnessStoreProxyResponseBodyV1::CasApplied {
+                stream_id,
+                previous_revision,
+                new_revision,
+                acknowledged_value_digest,
+            } => (
+                stream_id,
+                *previous_revision,
+                *new_revision,
+                acknowledged_value_digest,
+            ),
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        };
+        if private_response.operation != WitnessStoreProxyOperationV1::CompareAndSwap {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let proxy_record = proxy_records
+            .iter()
+            .find(|record| {
+                record.operation == WitnessStoreProxyOperationV1::CompareAndSwap
+                    && record.request_digest == private_response.request_digest
+            })
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let cas_request_bytes = hex::decode(&proxy_record.request_canonical_hex)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if sha256_hex(&cas_request_bytes) != proxy_record.request_sha256 {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let cas_request = WitnessStoreProxyRequestV1::decode(&cas_request_bytes)?;
+        cas_request.validate_structure()?;
+        cas_request.validate_semantics()?;
+        cas_request.validate_signature()?;
+        if cas_request.request_digest != private_response.request_digest {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let (request_stream_id, expected_revision, proposed_envelope) = match &cas_request.body {
+            WitnessStoreProxyRequestBodyV1::CompareAndSwap {
+                stream_id,
+                expected_revision,
+                proposed_envelope,
+                ..
+            } => (stream_id, *expected_revision, proposed_envelope.as_ref()),
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        };
+        let proposed_envelope_bytes = canonical_wire_bytes(proposed_envelope)?;
+        let proposed_envelope_digest = proposed_envelope.signed_envelope_digest()?;
+        if response_stream_id != request_stream_id
+            || response_previous_revision != expected_revision
+            || response_new_revision <= response_previous_revision
+            || response_acknowledged_digest != &proposed_envelope_digest
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let store_record = store_records
+            .iter()
+            .find(|record| {
+                record.operation == "compare_and_swap"
+                    && record.cas_applied
+                    && record.stream_id.as_deref() == Some(request_stream_id)
+            })
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let store_input = hex::decode(&store_record.input_canonical_hex)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if sha256_hex(&store_input) != store_record.input_sha256 {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let (store_stream_id, store_expected_revision, _store_expected_digest, store_proposed): (
+            String,
+            u64,
+            String,
+            WitnessStoreEnvelopeV1,
+        ) = serde_json::from_slice(&store_input)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if store_stream_id != *request_stream_id
+            || store_expected_revision != expected_revision
+            || canonical_wire_bytes(&store_proposed)? != proposed_envelope_bytes
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let store_result_bytes = hex::decode(&store_record.result_canonical_hex)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if sha256_hex(&store_result_bytes) != store_record.result_sha256 {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let store_result: WitnessStoreCasResultV1 = serde_json::from_slice(&store_result_bytes)
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        match store_result {
+            WitnessStoreCasResultV1::Applied {
+                stream_id,
+                expected_previous_revision,
+                previous_revision,
+                new_revision,
+                acknowledged_value_digest,
+                ..
+            } if stream_id == *request_stream_id
+                && expected_previous_revision == expected_revision
+                && previous_revision == response_previous_revision
+                && new_revision == response_new_revision
+                && acknowledged_value_digest == proposed_envelope_digest => {}
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        }
+        let final_read_bytes = final_read.canonical_bytes()?;
+        let final_envelope = match &final_read.body {
+            WitnessStoreProxyResponseBodyV1::Entry {
+                stream_id,
+                revision,
+                envelope,
+            } if stream_id == request_stream_id && *revision == response_new_revision => {
+                envelope.as_ref()
+            }
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        };
+        if canonical_wire_bytes(final_envelope)? != proposed_envelope_bytes {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        final_envelope.validate()?;
+        let rotation = final_envelope
+            .last_session_rotation
+            .as_ref()
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        rotation.validate()?;
+        let establish_snapshot = rotation
+            .establish_snapshot
+            .as_ref()
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        if rotation.accepted_request_digest != public_request.request_digest
+            || rotation.accepted_challenge_digest != challenge.challenge_digest()?
+            || rotation.response_kind != WitnessSessionRotationResponseKindV1::Establish
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let attestation = match outer_response {
+            WitnessServiceResponseV1::Establish(attestation) => attestation,
+            _ => return Err(ProtocolError::WitnessOutcomeMismatch),
+        };
+        attestation.validate()?;
+        attestation.verify_for(
+            challenge,
+            establish_snapshot.committed_head.as_ref(),
+            binding,
+        )?;
+        if attestation.challenge != *challenge
+            || attestation.session != rotation.session
+            || attestation.committed_head != establish_snapshot.committed_head
+            || attestation.external_marker != establish_snapshot.external_marker
+            || attestation.witness_key_id != final_envelope.witness_key_id
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let rotation_bytes = canonical_wire_bytes(rotation)?;
+        let attestation_bytes = attestation.canonical_bytes()?;
+        Ok(PrivateCasJoinReceiptV1 {
+            capture_id: capture.receipt.capture_id,
+            capture_sha256: capture.receipt.payload_sha256.clone(),
+            cas_request_digest: cas_request.request_digest,
+            cas_request_sha256: sha256_hex(&cas_request_bytes),
+            store_result_sha256: sha256_hex(&store_result_bytes),
+            proposed_envelope_sha256: sha256_hex(&proposed_envelope_bytes),
+            proposed_envelope_digest,
+            final_read_sha256: sha256_hex(&final_read_bytes),
+            rotation_receipt_sha256: sha256_hex(&rotation_bytes),
+            outer_attestation_sha256: sha256_hex(&attestation_bytes),
+            new_revision: response_new_revision,
+        })
     }
 
     struct GrantCaseV1 {
@@ -3227,16 +3829,18 @@ mod deadline_state_machine_tests {
         let accepted_origin = MonotonicInstant::now();
         sleep(Duration::from_millis(case.accepted_delay_millis)).await;
         let response_subject = must_some(accepted.reply.clone(), "grant accepted reply absent");
-        let first_publish_at_micros = u64::try_from(accepted_origin.elapsed().as_micros())
-            .unwrap_or_else(|_| panic!("grant first publish timestamp overflow"));
+        let first_response_enqueue_started_at_micros =
+            u64::try_from(accepted_origin.elapsed().as_micros())
+                .unwrap_or_else(|_| panic!("grant first response-enqueue timestamp overflow"));
         must(
             responder
                 .publish(response_subject.clone(), b"accepted".to_vec().into())
                 .await,
             "grant first publish",
         );
-        let second_publish_at_micros = u64::try_from(accepted_origin.elapsed().as_micros())
-            .unwrap_or_else(|_| panic!("grant second publish timestamp overflow"));
+        let second_response_enqueue_started_at_micros =
+            u64::try_from(accepted_origin.elapsed().as_micros())
+                .unwrap_or_else(|_| panic!("grant second response-enqueue timestamp overflow"));
         must(
             responder
                 .publish(response_subject.clone(), b"duplicate".to_vec().into())
@@ -3264,13 +3868,15 @@ mod deadline_state_machine_tests {
             "grant maximum permission event",
         );
         assert!(
-            second_publish_at_micros >= first_publish_at_micros
-                && second_publish_at_micros - first_publish_at_micros < 50_000,
-            "grant publish-to-publish delta differs"
+            second_response_enqueue_started_at_micros >= first_response_enqueue_started_at_micros
+                && second_response_enqueue_started_at_micros
+                    - first_response_enqueue_started_at_micros
+                    < 50_000,
+            "grant response-enqueue-start delta differs"
         );
         assert!(
-            second_publish_at_micros < case.grant_millis * 1_000,
-            "grant duplicate was not strictly pre-expiry"
+            second_response_enqueue_started_at_micros < case.grant_millis * 1_000,
+            "grant duplicate response enqueue did not start strictly pre-expiry"
         );
 
         let (expired, mut expired_replies, _) = must(
@@ -3310,8 +3916,9 @@ mod deadline_state_machine_tests {
             "grant delayed first publish",
         );
         sleep(Duration::from_millis(60)).await;
-        let delayed_second_publish_at_micros = u64::try_from(delayed_origin.elapsed().as_micros())
-            .unwrap_or_else(|_| panic!("grant delayed timestamp overflow"));
+        let delayed_second_response_enqueue_started_at_micros =
+            u64::try_from(delayed_origin.elapsed().as_micros())
+                .unwrap_or_else(|_| panic!("grant delayed response-enqueue timestamp overflow"));
         must(
             responder
                 .publish(delayed_reply.clone(), b"delayed-second".to_vec().into())
@@ -3333,7 +3940,7 @@ mod deadline_state_machine_tests {
             "grant delayed permission event",
         );
         assert!(
-            delayed_second_publish_at_micros >= 50_000,
+            delayed_second_response_enqueue_started_at_micros >= 50_000,
             "grant delayed-first-response control did not cross 50ms"
         );
 
@@ -3356,15 +3963,15 @@ mod deadline_state_machine_tests {
             "grant_millis": case.grant_millis,
             "accepted_delay_millis": case.accepted_delay_millis,
             "rejected_delay_millis": case.rejected_delay_millis,
-            "first_publish_at_micros": first_publish_at_micros,
-            "second_publish_at_micros": second_publish_at_micros,
-            "second_publish_delta_micros": second_publish_at_micros - first_publish_at_micros,
+            "first_response_enqueue_started_at_micros": first_response_enqueue_started_at_micros,
+            "second_response_enqueue_started_at_micros": second_response_enqueue_started_at_micros,
+            "second_response_enqueue_start_delta_micros": second_response_enqueue_started_at_micros - first_response_enqueue_started_at_micros,
             "response_grant_expires_at_micros": case.grant_millis * 1_000,
             "requester_response_count": 1,
             "maximum_rejection": maximum_rejection,
             "expiry_rejection": expiry_rejection,
             "delayed_control_rejection": delayed_rejection,
-            "delayed_control_delta_micros": delayed_second_publish_at_micros,
+            "delayed_control_enqueue_start_delta_micros": delayed_second_response_enqueue_started_at_micros,
             "responder_connection": responder_connection,
             "requester_connection": requester_connection,
             "requester_subject": case.requester_subject,
@@ -3555,6 +4162,7 @@ mod deadline_state_machine_tests {
                 "observation NATS proxy",
             ),
             records: proxy_records.clone(),
+            request_records: Arc::new(Mutex::new(Vec::new())),
             clock: observation_clock.clone(),
         };
         let mut dispatcher = must(
@@ -3662,20 +4270,20 @@ mod deadline_state_machine_tests {
             "observation ReadHead request",
         );
         let relay_origin = Arc::new(MonotonicInstant::now());
-        let first_publish_at_micros = Arc::new(AtomicU64::new(0));
+        let first_request_started_at_micros = Arc::new(AtomicU64::new(0));
         let mut held_relay_response = None;
         let mut first_request_task = None;
         let response = if let Some(relay) = relay_legs.as_mut() {
             let client = runtime_client.clone();
             let spawned_request = request.clone();
             let origin = relay_origin.clone();
-            let published = first_publish_at_micros.clone();
+            let request_started = first_request_started_at_micros.clone();
             first_request_task = Some(tokio::spawn(async move {
                 client
-                    .read_head_with_publish_observation(
+                    .read_head_with_request_start_observation(
                         spawned_request,
                         origin.as_ref(),
-                        published.as_ref(),
+                        request_started.as_ref(),
                     )
                     .await
             }));
@@ -3745,15 +4353,15 @@ mod deadline_state_machine_tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let publisher_attempts: Vec<_> = worker_events
+        let response_enqueue_attempts: Vec<_> = worker_events
             .iter()
             .enumerate()
             .filter_map(|(ordinal, event)| match event {
-                WorkerTransitionEventV1::PublishAttempt { worker, published } => {
-                    Some(PublisherObservationV1 {
+                WorkerTransitionEventV1::ResponseEnqueueAttempt { worker, enqueued } => {
+                    Some(ResponseEnqueueObservationV1 {
                         ordinal,
                         worker: *worker,
-                        published: *published,
+                        enqueued: *enqueued,
                     })
                 }
                 _ => None,
@@ -3801,8 +4409,16 @@ mod deadline_state_machine_tests {
         );
         assert_eq!(proxy_exchanges.len(), 1, "observation proxy count");
         assert_eq!(store_operations.len(), 1, "observation store count");
-        assert_eq!(publisher_attempts.len(), 2, "observation publisher count");
-        assert!(publisher_attempts.iter().all(|record| record.published));
+        assert_eq!(
+            response_enqueue_attempts.len(),
+            2,
+            "observation response enqueue count"
+        );
+        assert!(
+            response_enqueue_attempts
+                .iter()
+                .all(|record| record.enqueued)
+        );
         assert_eq!(
             proxy_exchanges[0].operation,
             WitnessStoreProxyOperationV1::ReadEntry
@@ -3941,9 +4557,9 @@ mod deadline_state_machine_tests {
             canonical_wire_bytes(&store_operations),
             "observation store bytes",
         );
-        let publisher_bytes = must(
-            canonical_wire_bytes(&publisher_attempts),
-            "observation publisher bytes",
+        let response_enqueue_bytes = must(
+            canonical_wire_bytes(&response_enqueue_attempts),
+            "observation response enqueue bytes",
         );
         let complete_publisher_bytes = must(
             canonical_wire_bytes(&publisher),
@@ -3966,7 +4582,7 @@ mod deadline_state_machine_tests {
             proxy_exchanges: proxy_exchanges.len(),
             private_exchanges: private_exchanges.len(),
             store_operations: store_operations.len(),
-            publisher_attempts: publisher_attempts.len(),
+            response_enqueue_attempts: response_enqueue_attempts.len(),
             connections: connections.len(),
             cas_attempted: facts.cas_attempted.load(Ordering::SeqCst),
             cas_applied: facts.cas_applied.load(Ordering::SeqCst),
@@ -3987,7 +4603,7 @@ mod deadline_state_machine_tests {
             proxy_exchanges_sha256: sha256_hex(&proxy_bytes),
             private_exchanges_sha256: sha256_hex(&private_exchange_bytes),
             store_operations_sha256: sha256_hex(&store_bytes),
-            publisher_attempts_sha256: sha256_hex(&publisher_bytes),
+            response_enqueue_attempts_sha256: sha256_hex(&response_enqueue_bytes),
             public_admission_sha256: sha256_hex(&public_admission_bytes),
             publisher_sha256: sha256_hex(&complete_publisher_bytes),
             connections_sha256: sha256_hex(&connection_bytes),
@@ -4058,7 +4674,7 @@ mod deadline_state_machine_tests {
             proxy_exchanges,
             private_exchanges,
             store_operations,
-            publisher_attempts,
+            response_enqueue_attempts,
             public_admission,
             publisher,
             connections,
@@ -4163,24 +4779,24 @@ mod deadline_state_machine_tests {
                 4,
                 "relay leg identities were not recreated"
             );
-            let second_publish_at_micros = AtomicU64::new(0);
+            let replay_request_started_at_micros = AtomicU64::new(0);
             let replay = must(
                 runtime_client
-                    .read_head_with_publish_observation(
+                    .read_head_with_request_start_observation(
                         request.clone(),
                         relay_origin.as_ref(),
-                        &second_publish_at_micros,
+                        &replay_request_started_at_micros,
                     )
                     .await,
                 "live relay replay response",
             );
             must(replay.validate(), "live relay replay attestation");
             assert_eq!(replay, response, "live relay replay response differs");
-            let first_publish = first_publish_at_micros.load(Ordering::SeqCst);
-            let second_publish = second_publish_at_micros.load(Ordering::SeqCst);
+            let first_request_started = first_request_started_at_micros.load(Ordering::SeqCst);
+            let replay_request_started = replay_request_started_at_micros.load(Ordering::SeqCst);
             assert!(
-                first_publish > 0 && second_publish > first_publish,
-                "live relay request publish order differs"
+                first_request_started > 0 && replay_request_started > first_request_started,
+                "live relay request-start order differs"
             );
             let relay_connections = vec![
                 first_public_connection,
@@ -4213,8 +4829,8 @@ mod deadline_state_machine_tests {
                     "response_sha256": sha256_hex(&response_bytes),
                     "complete_receipt_canonical_hex": hex::encode(must(canonical_wire_bytes(&receipt), "relay receipt bytes")),
                     "complete_receipt_sha256": sha256_hex(&must(canonical_wire_bytes(&receipt), "relay receipt digest bytes")),
-                    "first_publish_at_micros": first_publish,
-                    "replay_publish_at_micros": second_publish,
+                    "first_request_started_at_micros": first_request_started,
+                    "replay_request_started_at_micros": replay_request_started,
                     "relay_connections": relay_connections,
                     "relay_connection_client_ids": [first_public_client_id, first_private_client_id, replay_public_client_id, replay_private_client_id],
                     "requester_timeout": true,
@@ -4318,11 +4934,11 @@ mod deadline_state_machine_tests {
             ("post_preflight", "private", None),
             ("proxy_store_begin", "private", Some("read_entry")),
             ("proxy_store_end", "private", Some("read_entry")),
+            ("response_deadline_check", "private", None),
             ("response_enqueue_attempt", "private", None),
-            ("publish_attempt", "private", None),
             ("proxy_store_end", "public", Some("read_entry")),
+            ("response_deadline_check", "public", None),
             ("response_enqueue_attempt", "public", None),
-            ("publish_attempt", "public", None),
         ];
         if events.len() != expected.len() {
             return Err("worker_operation");
@@ -4354,14 +4970,12 @@ mod deadline_state_machine_tests {
             }
         }
         for index in [7_usize, 10] {
-            if ledger_field(&events[index], "accepted", "worker_operation")?.as_bool() != Some(true)
-            {
+            if ledger_field(&events[index], "open", "worker_operation")?.as_bool() != Some(true) {
                 return Err("worker_operation");
             }
         }
         for index in [8_usize, 11] {
-            if ledger_field(&events[index], "published", "worker_operation")?.as_bool()
-                != Some(true)
+            if ledger_field(&events[index], "enqueued", "worker_operation")?.as_bool() != Some(true)
             {
                 return Err("worker_operation");
             }
@@ -4369,27 +4983,31 @@ mod deadline_state_machine_tests {
         Ok(())
     }
 
-    fn validate_complete_publisher_attempts(
+    fn validate_complete_response_enqueue_attempts(
         attempts: &[serde_json::Value],
         events: &[serde_json::Value],
     ) -> Result<(), &'static str> {
         let expected = [(8_u64, "private"), (11_u64, "public")];
         if attempts.len() != expected.len() {
-            return Err("publisher_fabrication");
+            return Err("response_enqueue_fabrication");
         }
         for (attempt, (ordinal, worker)) in attempts.iter().zip(expected) {
-            let ordinal_index = usize::try_from(ordinal).map_err(|_| "publisher_fabrication")?;
-            let event = events.get(ordinal_index).ok_or("publisher_fabrication")?;
-            if ledger_u64(attempt, "ordinal", "publisher_fabrication")? != ordinal
-                || ledger_string(attempt, "worker", "publisher_fabrication")? != worker
-                || ledger_field(attempt, "published", "publisher_fabrication")?.as_bool()
+            let ordinal_index =
+                usize::try_from(ordinal).map_err(|_| "response_enqueue_fabrication")?;
+            let event = events
+                .get(ordinal_index)
+                .ok_or("response_enqueue_fabrication")?;
+            if ledger_u64(attempt, "ordinal", "response_enqueue_fabrication")? != ordinal
+                || ledger_string(attempt, "worker", "response_enqueue_fabrication")? != worker
+                || ledger_field(attempt, "enqueued", "response_enqueue_fabrication")?.as_bool()
                     != Some(true)
-                || ledger_string(event, "event", "publisher_fabrication")? != "publish_attempt"
-                || ledger_string(event, "worker", "publisher_fabrication")? != worker
-                || ledger_field(event, "published", "publisher_fabrication")?.as_bool()
+                || ledger_string(event, "event", "response_enqueue_fabrication")?
+                    != "response_enqueue_attempt"
+                || ledger_string(event, "worker", "response_enqueue_fabrication")? != worker
+                || ledger_field(event, "enqueued", "response_enqueue_fabrication")?.as_bool()
                     != Some(true)
             {
-                return Err("publisher_fabrication");
+                return Err("response_enqueue_fabrication");
             }
         }
         Ok(())
@@ -4556,10 +5174,14 @@ mod deadline_state_machine_tests {
             return Err("proxy_cross_copy");
         }
 
-        let publisher_attempts = ledger_field(&row, "publisher_attempts", "publisher_fabrication")?
-            .as_array()
-            .ok_or("publisher_fabrication")?;
-        validate_complete_publisher_attempts(publisher_attempts, events)?;
+        let response_enqueue_attempts = ledger_field(
+            &row,
+            "response_enqueue_attempts",
+            "response_enqueue_fabrication",
+        )?
+        .as_array()
+        .ok_or("response_enqueue_fabrication")?;
+        validate_complete_response_enqueue_attempts(response_enqueue_attempts, events)?;
 
         let store = ledger_field(&row, "store_operations", "store_result_digest")?
             .as_array()
@@ -4740,8 +5362,8 @@ mod deadline_state_machine_tests {
             ("private_exchanges", private.len()),
             ("store_operations", store.len()),
             (
-                "publisher_attempts",
-                ledger_field(&row, "publisher_attempts", "ledger_counts")?
+                "response_enqueue_attempts",
+                ledger_field(&row, "response_enqueue_attempts", "ledger_counts")?
                     .as_array()
                     .ok_or("ledger_counts")?
                     .len(),
@@ -4777,8 +5399,8 @@ mod deadline_state_machine_tests {
                 ledger_field(&row, "store_operations", "ledger_digests")?,
             ),
             (
-                "publisher_attempts_sha256",
-                ledger_field(&row, "publisher_attempts", "ledger_digests")?,
+                "response_enqueue_attempts_sha256",
+                ledger_field(&row, "response_enqueue_attempts", "ledger_digests")?,
             ),
             ("publisher_sha256", publisher),
             ("public_admission_sha256", admission),
@@ -5364,32 +5986,32 @@ mod deadline_state_machine_tests {
         );
         let proxy_cross_copy = complete_receipt_from_ledger_value(&proxy_cross_copy_value);
 
-        let mut publisher_fabrication_value: serde_json::Value = must(
+        let mut response_enqueue_fabrication_value: serde_json::Value = must(
             serde_json::from_slice(&reopened_ledger),
-            "publisher fabrication ledger decode",
+            "response enqueue fabrication ledger decode",
         );
         must_some(
-            publisher_fabrication_value
-                .get_mut("publisher_attempts")
+            response_enqueue_fabrication_value
+                .get_mut("response_enqueue_attempts")
                 .and_then(serde_json::Value::as_array_mut)
                 .and_then(|rows| rows.get_mut(0))
                 .and_then(serde_json::Value::as_object_mut),
-            "publisher fabrication target absent",
+            "response enqueue fabrication target absent",
         )
         .insert("ordinal".to_string(), serde_json::Value::from(9_u64));
         refresh_ledger_array_digest(
-            &mut publisher_fabrication_value,
-            "publisher_attempts",
-            "publisher_attempts_sha256",
+            &mut response_enqueue_fabrication_value,
+            "response_enqueue_attempts",
+            "response_enqueue_attempts_sha256",
         );
-        let publisher_fabrication =
-            complete_receipt_from_ledger_value(&publisher_fabrication_value);
+        let response_enqueue_fabrication =
+            complete_receipt_from_ledger_value(&response_enqueue_fabrication_value);
         for (label, candidate) in [
             ("missing", missing),
             ("invalid", invalid),
             ("partial", partial),
             ("proxy cross-copy", proxy_cross_copy),
-            ("publisher fabrication", publisher_fabrication),
+            ("response enqueue fabrication", response_enqueue_fabrication),
         ] {
             let (sender, mut receiver) = mpsc::channel(1);
             assert_eq!(
@@ -5411,6 +6033,1434 @@ mod deadline_state_machine_tests {
         if std::env::var_os("PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH").is_some() {
             run_topology_projection_test();
         }
+    }
+
+    pub(super) fn run_transport_other_test() {
+        let thread = must(
+            std::thread::Builder::new()
+                .name("phase285-r1a-transport-other".to_string())
+                .stack_size(32 * 1024 * 1024)
+                .spawn(|| {
+                    let runtime = must(
+                        tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(2)
+                            .thread_stack_size(32 * 1024 * 1024)
+                            .enable_all()
+                            .build(),
+                        "transport Other runtime",
+                    );
+                    runtime.block_on(run_transport_other_test_async());
+                }),
+            "transport Other thread",
+        );
+        must(thread.join(), "transport Other thread panicked");
+    }
+
+    async fn run_transport_other_test_async() {
+        let relay_token = must(
+            std::env::var("PHASE285_RELAY_TOPOLOGY_TOKEN"),
+            "transport Other relay topology token absent",
+        );
+        assert!(
+            !relay_token.is_empty(),
+            "transport Other relay topology token empty"
+        );
+        let relay = must(
+            connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await,
+            "transport Other relay connection",
+        );
+        let subject = PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Fence);
+        let responder_subject = "swarm.governance.witness.relay.v1.fence";
+        assert_eq!(
+            responder_subject,
+            format!(
+                "swarm.governance.witness.relay.v1.{}",
+                must_some(
+                    subject.rsplit('.').next(),
+                    "transport Other operation suffix"
+                )
+            ),
+            "transport[relay-routed-responder]",
+        );
+        let requester = Arc::new(must(
+            RuntimeWitnessClient::connect(runtime_observation_config()).await,
+            "transport requester connection",
+        ));
+        assert!(
+            matches!(
+                requester
+                    .observe_transport_for_test(
+                        subject,
+                        b"phase285-r1a-no-responders".to_vec(),
+                        Duration::from_secs(2),
+                    )
+                    .await,
+                Err((
+                    RuntimeRequestObservationV1::NoResponders,
+                    RuntimeWitnessClientErrorV1::Unavailable
+                ))
+            ),
+            "transport[no-responders-unavailable]"
+        );
+        assert!(matches!(
+            requester
+                .observe_transport_for_test(
+                    "invalid subject",
+                    b"phase285-r1a-invalid-subject".to_vec(),
+                    Duration::from_secs(2),
+                )
+                .await,
+            Err((
+                RuntimeRequestObservationV1::InvalidSubject,
+                RuntimeWitnessClientErrorV1::Configuration
+            ))
+        ));
+        let mut responder = must(
+            relay.subscribe(responder_subject.to_string()).await,
+            "transport Other responder subscription",
+        );
+        must(relay.flush().await, "transport Other responder flush");
+
+        let response_task = {
+            let requester = requester.clone();
+            tokio::spawn(async move {
+                requester
+                    .observe_transport_for_test(
+                        subject,
+                        b"phase285-r1a-response".to_vec(),
+                        Duration::from_secs(2),
+                    )
+                    .await
+            })
+        };
+        let response_request = must_some(
+            must(
+                tokio::time::timeout(Duration::from_secs(5), responder.next()).await,
+                "transport response request absent",
+            ),
+            "transport response subscription closed",
+        );
+        must(
+            relay
+                .publish(
+                    must_some(response_request.reply, "transport response reply absent"),
+                    b"phase285-r1a-response-ok".to_vec().into(),
+                )
+                .await,
+            "transport response enqueue",
+        );
+        assert!(matches!(
+            must(
+                must(
+                    tokio::time::timeout(Duration::from_secs(2), response_task).await,
+                    "transport response task timeout",
+                ),
+                "transport response task panicked",
+            ),
+            Ok(RuntimeRequestObservationV1::Response)
+        ));
+
+        let timeout_task = {
+            let requester = requester.clone();
+            tokio::spawn(async move {
+                requester
+                    .observe_transport_for_test(
+                        subject,
+                        b"phase285-r1a-timeout".to_vec(),
+                        Duration::from_millis(150),
+                    )
+                    .await
+            })
+        };
+        let timed_request = must_some(
+            must(
+                tokio::time::timeout(Duration::from_secs(2), responder.next()).await,
+                "transport timed request absent",
+            ),
+            "transport timed subscription closed",
+        );
+        assert_eq!(timed_request.payload.as_ref(), b"phase285-r1a-timeout");
+        let timed = must(
+            must(
+                tokio::time::timeout(Duration::from_secs(2), timeout_task).await,
+                "transport timed task timeout",
+            ),
+            "transport timed task panicked",
+        );
+        assert!(matches!(
+            timed,
+            Err((
+                RuntimeRequestObservationV1::TimedOut,
+                RuntimeWitnessClientErrorV1::OutcomeUnknown
+            ))
+        ));
+
+        let exact_request = b"phase285-r1a-post-command-other".to_vec();
+        let request_task = {
+            let requester = requester.clone();
+            let request = exact_request.clone();
+            tokio::spawn(async move {
+                requester
+                    .observe_transport_for_test(subject, request, Duration::from_secs(10))
+                    .await
+            })
+        };
+        let observed = must_some(
+            must(
+                tokio::time::timeout(Duration::from_secs(2), responder.next()).await,
+                "transport Other request was not responder-observed",
+            ),
+            "transport Other responder subscription closed",
+        );
+        assert_eq!(
+            observed.payload.as_ref(),
+            exact_request.as_slice(),
+            "transport Other responder observed different request bytes"
+        );
+        assert!(
+            observed.reply.is_some(),
+            "transport Other reply subject absent"
+        );
+        must(
+            requester.drain_for_test().await,
+            "transport Other requester drain",
+        );
+        let post_command = must(
+            tokio::time::timeout(Duration::from_secs(2), request_task).await,
+            "transport Other request did not resolve after drain",
+        );
+        let post_command = must(post_command, "transport Other request task panicked");
+        assert!(
+            matches!(
+                post_command,
+                Err((
+                    RuntimeRequestObservationV1::Other,
+                    RuntimeWitnessClientErrorV1::OutcomeUnknown
+                ))
+            ),
+            "transport[post-command-other-outcome-unknown]"
+        );
+
+        let pre_send = Arc::new(must(
+            RuntimeWitnessClient::connect(runtime_observation_config()).await,
+            "transport pre-send requester connection",
+        ));
+        must(
+            pre_send.drain_for_test().await,
+            "transport pre-send requester drain",
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let pre_send_result = pre_send
+            .observe_transport_for_test(
+                subject,
+                b"phase285-r1a-pre-send-other".to_vec(),
+                Duration::from_secs(2),
+            )
+            .await;
+        assert!(
+            matches!(
+                pre_send_result,
+                Err((
+                    RuntimeRequestObservationV1::Other,
+                    RuntimeWitnessClientErrorV1::OutcomeUnknown
+                ))
+            ),
+            "pre-send drain control was not typed Other/OutcomeUnknown"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), responder.next())
+                .await
+                .is_err(),
+            "pre-send drain control reached the authenticated responder"
+        );
+        run_private_transport_classification_test(&relay).await;
+        println!(
+            "transport_semantics response=1 timed_out=1 no_responders=1 invalid_subject=1 post_command_other=1 shipping_other=outcome_unknown responder_observed=1 pre_send_other=1 pre_send_observed=0 relay_routed_responder=1 private_invalid_subject_invalid=1 private_malformed_invalid=1 private_operation_mismatch_invalid=1 private_digest_mismatch_invalid=1 passed=1"
+        );
+    }
+
+    fn private_transport_probe_request() -> WitnessStoreProxyRequestV1 {
+        let signer = Ed25519Signer::from_secret_material("phase285-r1a-private-transport-probe");
+        let mut request = WitnessStoreProxyRequestV1 {
+            schema_version: PROTOCOL_SCHEMA_VERSION,
+            operation: WitnessStoreProxyOperationV1::InspectReady,
+            request_nonce: sha256_hex(b"phase285-r1a-private-transport-nonce"),
+            admission_digest: sha256_hex(b"phase285-r1a-private-transport-admission"),
+            bucket_epoch_digest: sha256_hex(b"phase285-r1a-private-transport-epoch"),
+            bucket_anchor_digest: sha256_hex(b"phase285-r1a-private-transport-anchor"),
+            body: WitnessStoreProxyRequestBodyV1::InspectReady,
+            request_digest: String::new(),
+            witness_key_id: signer.key_id().to_string(),
+            signature: signer.sign(&[]),
+        };
+        request.request_digest = must(
+            request.computed_digest(),
+            "private transport probe request digest",
+        );
+        request.signature = signer.sign(&must(
+            request.signing_bytes(),
+            "private transport probe request signing bytes",
+        ));
+        request
+    }
+
+    async fn run_private_transport_classification_test(relay: &async_nats::Client) {
+        let mut responder = must(
+            relay
+                .subscribe("swarm.governance.witness.relay.store.v1.inspect_ready")
+                .await,
+            "private transport relay responder subscription",
+        );
+        must(
+            relay.flush().await,
+            "private transport relay responder flush",
+        );
+        let witness = must(
+            connect_deadline_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await,
+            "private transport witness connection",
+        );
+        let proxy = must(
+            NatsPublicWitnessStoreProxyClient::new(
+                witness,
+                MAX_PROTOCOL_RECORD_BYTES,
+                MAX_PROTOCOL_RECORD_BYTES,
+                STORE_RESPONSE_GRANT_MILLIS,
+            ),
+            "private transport proxy",
+        );
+        let request = private_transport_probe_request();
+        let invalid_subject = must_err(
+            proxy
+                .request_on_subject_for_test(
+                    request.clone(),
+                    WitnessStoreProxyOperationV1::InspectReady,
+                    "invalid subject",
+                )
+                .await,
+            "private InvalidSubject unexpectedly succeeded",
+        );
+        assert!(
+            matches!(invalid_subject, PublicWitnessProxyTransportErrorV1::Framing),
+            "private[invalid-subject-invalid]",
+        );
+        assert!(
+            matches!(
+                classify_proxy_transport_for_test(invalid_subject),
+                PublicWitnessDispatchErrorV1::Invalid
+            ),
+            "private[framing-invalid]"
+        );
+
+        for (label, response) in [
+            ("malformed", None),
+            (
+                "operation",
+                Some(WitnessStoreProxyResponseV1 {
+                    schema_version: PROTOCOL_SCHEMA_VERSION,
+                    operation: WitnessStoreProxyOperationV1::ReadEntry,
+                    request_digest: request.request_digest.clone(),
+                    body: WitnessStoreProxyResponseBodyV1::Refused {
+                        failure_code: WitnessStoreProxyFailureCodeV1::Configuration,
+                        observed_revision: None,
+                        observed_value_digest: None,
+                    },
+                }),
+            ),
+            (
+                "digest",
+                Some(WitnessStoreProxyResponseV1 {
+                    schema_version: PROTOCOL_SCHEMA_VERSION,
+                    operation: WitnessStoreProxyOperationV1::InspectReady,
+                    request_digest: "f".repeat(64),
+                    body: WitnessStoreProxyResponseBodyV1::Refused {
+                        failure_code: WitnessStoreProxyFailureCodeV1::Configuration,
+                        observed_revision: None,
+                        observed_value_digest: None,
+                    },
+                }),
+            ),
+        ] {
+            let intended = match label {
+                "malformed" => "private[malformed-response-invalid]",
+                "operation" => "private[operation-mismatch-invalid]",
+                "digest" => "private[request-digest-mismatch-invalid]",
+                _ => unreachable!(),
+            };
+            let task = {
+                let proxy = proxy.clone();
+                let request = request.clone();
+                tokio::spawn(async move { proxy.inspect_ready(request).await })
+            };
+            let observed = must_some(
+                must(
+                    tokio::time::timeout(Duration::from_secs(2), responder.next()).await,
+                    "private transport request absent",
+                ),
+                "private transport relay subscription closed",
+            );
+            let reply = must_some(observed.reply, "private transport reply absent");
+            let bytes = match response {
+                Some(response) => must(
+                    response.canonical_bytes(),
+                    "private transport response bytes",
+                ),
+                None => b"phase285-r1a-malformed-private-response".to_vec(),
+            };
+            must(
+                relay.publish(reply, bytes.into()).await,
+                "private transport response enqueue",
+            );
+            must(
+                relay.flush().await,
+                "private transport response enqueue flush",
+            );
+            let error = match must(task.await, "private transport request task panicked") {
+                Err(error) => error,
+                Ok(_) => panic!("{intended}"),
+            };
+            assert!(
+                matches!(error, PublicWitnessProxyTransportErrorV1::Framing)
+                    && matches!(
+                        classify_proxy_transport_for_test(error),
+                        PublicWitnessDispatchErrorV1::Invalid
+                    ),
+                "{intended}",
+            );
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum GrantExpiryLegV1 {
+        Public,
+        Private,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum GrantRecoveryModeV1 {
+        Held,
+        NoHold,
+    }
+
+    fn grant_physical_case(leg: GrantExpiryLegV1, mode: GrantRecoveryModeV1) -> &'static str {
+        match (leg, mode) {
+            (GrantExpiryLegV1::Public, GrantRecoveryModeV1::Held) => "held-public",
+            (GrantExpiryLegV1::Private, GrantRecoveryModeV1::Held) => "held-private",
+            (GrantExpiryLegV1::Public, GrantRecoveryModeV1::NoHold) => "no-hold-public",
+            (GrantExpiryLegV1::Private, GrantRecoveryModeV1::NoHold) => "no-hold-private",
+        }
+    }
+
+    pub(super) fn run_response_grant_recovery_test() {
+        let thread = must(
+            std::thread::Builder::new()
+                .name("phase285-r1a-response-grant-recovery".to_string())
+                .stack_size(64 * 1024 * 1024)
+                .spawn(|| {
+                    let runtime = must(
+                        tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(4)
+                            .thread_stack_size(64 * 1024 * 1024)
+                            .enable_all()
+                            .build(),
+                        "response grant recovery runtime",
+                    );
+                    runtime.block_on(async {
+                        must(
+                            initialize_deadline_stream().await,
+                            "response grant stream initialization",
+                        );
+                        match std::env::var("PHASE285_R1A_GRANT_CASE").as_deref() {
+                            Ok("held-public") => {
+                                run_response_grant_recovery_leg(
+                                    GrantExpiryLegV1::Public,
+                                    GrantRecoveryModeV1::Held,
+                                )
+                                .await
+                            }
+                            Ok("held-private") => {
+                                run_response_grant_recovery_leg(
+                                    GrantExpiryLegV1::Private,
+                                    GrantRecoveryModeV1::Held,
+                                )
+                                .await
+                            }
+                            Ok("no-hold-public") => {
+                                run_response_grant_recovery_leg(
+                                    GrantExpiryLegV1::Public,
+                                    GrantRecoveryModeV1::NoHold,
+                                )
+                                .await
+                            }
+                            Ok("no-hold-private") => {
+                                run_response_grant_recovery_leg(
+                                    GrantExpiryLegV1::Private,
+                                    GrantRecoveryModeV1::NoHold,
+                                )
+                                .await
+                            }
+                            _ => panic!("response grant physical case selector is invalid"),
+                        }
+                    });
+                }),
+            "response grant recovery thread",
+        );
+        must(thread.join(), "response grant recovery thread panicked");
+    }
+
+    async fn run_response_grant_recovery_leg(leg: GrantExpiryLegV1, mode: GrantRecoveryModeV1) {
+        let relay_token = must(
+            std::env::var("PHASE285_RELAY_TOPOLOGY_TOKEN"),
+            "response grant relay topology token absent",
+        );
+        assert!(
+            !relay_token.is_empty(),
+            "response grant relay topology token empty"
+        );
+        let physical_case = grant_physical_case(leg, mode);
+        let relay_legs = must(
+            LiveRelayLegsV1::start(false).await,
+            "response grant relay legs startup",
+        );
+        if relay_legs.public_subscription_count != 9 {
+            panic!("relay[public-route-ready]");
+        }
+        if relay_legs.private_subscription_count != 3 {
+            panic!("relay[private-route-ready]");
+        }
+        let relay_legs = Some(relay_legs);
+        let observer = Arc::new(RecordingWorkerTransitionObserverV1::default());
+        let mut fixture = must(
+            AuthenticatedDeadlineFixtureV1::new(observer.clone()),
+            "response grant fixture",
+        );
+        let (private_admission_tx, mut private_admission_rx) = mpsc::channel(16);
+        let (public_admission_tx, mut public_admission_rx) = mpsc::channel(16);
+        let (capture_tx, mut capture_rx) = mpsc::unbounded_channel();
+        let capture_observer = Arc::new(RecordingResponsePreEnqueueObserverV1 {
+            sender: capture_tx,
+            next_capture_id: AtomicU64::new(0),
+            transitions: observer.clone(),
+            invocation_token: relay_token.clone(),
+            physical_case: physical_case.to_string(),
+        });
+        let requester_ledger = Arc::new(RequesterJoinLedgerV1::default());
+        let (private_gate, private_control) = SubscriberPollGateV1::new(store_proxy_subjects()[2]);
+        if matches!(
+            (leg, mode),
+            (GrantExpiryLegV1::Private, GrantRecoveryModeV1::Held)
+        ) {
+            must_some(
+                Arc::get_mut(&mut fixture.service),
+                "response grant private service ownership",
+            )
+            .hold_first_subscription_poll_for_test(private_gate);
+        }
+        must_some(
+            Arc::get_mut(&mut fixture.service),
+            "response grant private observer ownership",
+        )
+        .observe_worker_transitions_for_test(observer.clone());
+        must_some(
+            Arc::get_mut(&mut fixture.service),
+            "response grant private admission observer ownership",
+        )
+        .observe_subscriber_admissions_for_test(Arc::new(
+            RecordingSubscriberAdmissionObserverV1 {
+                sender: private_admission_tx,
+            },
+        ));
+        must_some(
+            Arc::get_mut(&mut fixture.service),
+            "response grant private capture ownership",
+        )
+        .observe_response_pre_enqueue_for_test(capture_observer.clone());
+        let store_config = must(
+            deadline_store_config(&fixture.witness, &fixture.ready),
+            "response grant store config",
+        );
+        let (store_connection, mut store_events) = must(
+            StoreRoleConnectionV1::connect_observed_for_test(&store_config, &fixture.ready).await,
+            "response grant store connection",
+        );
+        let store_event_probe = store_connection.client_for_test();
+        let request = must(fixture.establish_request(), "response grant request");
+        let final_read_request = must(
+            fixture.signed_read_request(),
+            "response grant final read request",
+        );
+        let store_service = must_some(
+            Arc::try_unwrap(fixture.service).ok(),
+            "response grant private service still shared",
+        );
+        let store_runner = must(
+            StoreProxyServiceRunner::start(store_connection, store_service).await,
+            "response grant private runner",
+        );
+
+        let (witness_client, mut witness_events) = must(
+            connect_grant_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await,
+            "response grant witness client",
+        );
+        let proxy = must(
+            NatsPublicWitnessStoreProxyClient::new(
+                witness_client.clone(),
+                MAX_PROTOCOL_RECORD_BYTES,
+                MAX_PROTOCOL_RECORD_BYTES,
+                STORE_RESPONSE_GRANT_MILLIS,
+            ),
+            "response grant NATS proxy",
+        );
+        let stale_cas_proxy = proxy.clone();
+        let proxy_records = Arc::new(Mutex::new(Vec::new()));
+        let proxy_request_records = Arc::new(Mutex::new(Vec::new()));
+        let recording_proxy = RecordingNatsProxyV1 {
+            inner: proxy,
+            records: proxy_records.clone(),
+            request_records: proxy_request_records.clone(),
+            clock: Arc::new(ObservationClockV1::new()),
+        };
+        let mut dispatcher = must(
+            PublicWitnessDispatcher::new(
+                fixture.public_config.clone(),
+                fixture.witness.clone(),
+                recording_proxy,
+            )
+            .await,
+            "response grant dispatcher",
+        );
+        dispatcher.observe_worker_transitions_for_test(observer.clone());
+        dispatcher.observe_subscriber_admissions_for_test(Arc::new(
+            RecordingSubscriberAdmissionObserverV1 {
+                sender: public_admission_tx,
+            },
+        ));
+        let (public_gate, public_control) = SubscriberPollGateV1::new(
+            PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Establish),
+        );
+        dispatcher.observe_response_pre_enqueue_for_test(capture_observer);
+        if matches!(
+            (leg, mode),
+            (GrantExpiryLegV1::Public, GrantRecoveryModeV1::Held)
+        ) {
+            dispatcher.hold_first_subscription_poll_for_test(public_gate);
+        }
+        let witness_event_probe = witness_client.clone();
+        let public_runner = must(
+            PublicWitnessServiceRunner::start(witness_client, dispatcher).await,
+            "response grant public runner",
+        );
+        let runtime_client = Arc::new(must(
+            RuntimeWitnessClient::connect(runtime_observation_config()).await,
+            "response grant runtime client",
+        ));
+        let child_task_id = format!("phase285-r1a-{physical_case}-requester-1");
+        let first = {
+            let client = runtime_client.clone();
+            let request = request.clone();
+            let requester_ledger = requester_ledger.clone();
+            let invocation_token = relay_token.clone();
+            let physical_case = physical_case.to_string();
+            let child_task_id = child_task_id.clone();
+            tokio::spawn(async move {
+                let (response, response_bytes) =
+                    client.observe_response_bytes_for_test(&request).await?;
+                let child_receipt = requester_ledger.record_child(
+                    &invocation_token,
+                    &physical_case,
+                    &child_task_id,
+                    &response,
+                    &response_bytes,
+                );
+                Ok::<_, RuntimeWitnessClientErrorV1>((response, response_bytes, child_receipt))
+            })
+        };
+        let (control, grant_millis) = match leg {
+            GrantExpiryLegV1::Public => (&public_control, PUBLIC_RESPONSE_GRANT_MILLIS),
+            GrantExpiryLegV1::Private => (&private_control, STORE_RESPONSE_GRANT_MILLIS),
+        };
+        if matches!(mode, GrantRecoveryModeV1::NoHold) {
+            let public_receipt = must(
+                targeted_admission_receipt(
+                    &mut public_admission_rx,
+                    WorkerKindV1::Public,
+                    PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Establish),
+                )
+                .await,
+                "no-hold response grant public admission receipt",
+            );
+            let private_receipt = if matches!(leg, GrantExpiryLegV1::Private) {
+                Some(must(
+                    targeted_admission_receipt(
+                        &mut private_admission_rx,
+                        WorkerKindV1::Private,
+                        store_proxy_subjects()[2],
+                    )
+                    .await,
+                    "no-hold private CAS admission receipt",
+                ))
+            } else {
+                None
+            };
+            let first = must(
+                tokio::time::timeout(
+                    Duration::from_millis(PUBLIC_RESPONSE_GRANT_MILLIS + 2_000),
+                    first,
+                )
+                .await,
+                "no-hold response grant request timeout",
+            );
+            let (response, response_bytes, child_receipt) = must(
+                must(first, "no-hold response grant request task panicked"),
+                "no-hold response grant requester response",
+            );
+            assert!(
+                matches!(response, WitnessServiceResponseV1::Establish(_)),
+                "no-hold response grant returned the wrong response variant: {leg:?}",
+            );
+            let private_capture = if let Some(receipt) = private_receipt.as_ref() {
+                Some(must(
+                    targeted_response_capture(
+                        &mut capture_rx,
+                        WorkerKindV1::Private,
+                        &receipt.reply,
+                    )
+                    .await,
+                    "no-hold private response capture",
+                ))
+            } else {
+                None
+            };
+            let public_capture = must(
+                targeted_response_capture(
+                    &mut capture_rx,
+                    WorkerKindV1::Public,
+                    &public_receipt.reply,
+                )
+                .await,
+                "no-hold response grant first payload capture",
+            );
+            assert_eq!(public_capture.receipt.invocation_token, relay_token);
+            assert_eq!(public_capture.receipt.physical_case, physical_case);
+            let parent_receipt = requester_ledger.record_parent(
+                &relay_token,
+                physical_case,
+                &child_task_id,
+                &child_receipt,
+                &response_bytes,
+            );
+            let parent_join_bound = requester_ledger.contains_parent(&parent_receipt)
+                && parent_receipt.parent_sequence > child_receipt.child_sequence
+                && parent_receipt.returned_response_sha256 == sha256_hex(&response_bytes);
+            match leg {
+                GrantExpiryLegV1::Public => {
+                    assert!(parent_join_bound, "no-hold[public-parent-join-consumed]")
+                }
+                GrantExpiryLegV1::Private => {
+                    assert!(parent_join_bound, "no-hold[private-parent-join-consumed]")
+                }
+            }
+            let (verified_attempts, verified_applied) = {
+                let records = fixture
+                    .facts
+                    .records
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                must(
+                    verified_cas_evidence(&records),
+                    "no-hold canonical store CAS evidence",
+                )
+            };
+            assert_eq!((verified_attempts, verified_applied), (1, 1));
+            let parent_join_digest = sha256_hex(&must(
+                canonical_wire_bytes(&parent_receipt),
+                "no-hold parent join receipt bytes",
+            ));
+            let case_fields = match leg {
+                GrantExpiryLegV1::Public => {
+                    assert_eq!(
+                        public_capture.payload, response_bytes,
+                        "capture[public-first-payload-real]",
+                    );
+                    "public_capture_delivered_identical=1"
+                }
+                GrantExpiryLegV1::Private => {
+                    let private_capture =
+                        must_some(private_capture.as_ref(), "no-hold private capture absent");
+                    let final_read = must(
+                        stale_cas_proxy.read_entry(final_read_request.clone()).await,
+                        "no-hold private final authenticated ReadEntry",
+                    );
+                    let proxy_request_records = proxy_request_records
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    let store_records = fixture
+                        .facts
+                        .records
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    let join = must(
+                        validate_private_cas_join(
+                            private_capture,
+                            &proxy_request_records,
+                            &store_records,
+                            &final_read,
+                            PrivateCasJoinContextV1 {
+                                public_request: &request,
+                                challenge: &fixture.challenge,
+                                binding: &fixture.binding,
+                                outer_response: &response,
+                            },
+                        ),
+                        "no-hold private CAS/store/rotation/attestation join",
+                    );
+                    assert_eq!(join.capture_id, private_capture.receipt.capture_id);
+                    "private_cas_applied_bound=1 stored_envelope_bound=1 rotation_receipt_bound=1 outer_attestation_bound=1 cross_layer_bytes_compared=0"
+                }
+            };
+            drop(public_runner);
+            drop(store_runner);
+            must_some(relay_legs, "response grant relay legs absent").stop();
+            println!(
+                "response_grant_recovery leg={leg:?} mode=NoHold physical_case={physical_case} grant_millis={grant_millis} relay_path=1 first_payload_captured=1 {case_fields} parent_join_digest={parent_join_digest} terminal_attempts=1 terminal_applied=1 additional_cas_applied=0 no_hold_reply=1 passed=1"
+            );
+            return;
+        }
+        if tokio::time::timeout(Duration::from_secs(2), control.wait_reached())
+            .await
+            .is_err()
+        {
+            panic!(
+                "{}",
+                match (relay_legs.is_some(), leg) {
+                    (false, GrantExpiryLegV1::Public) => "relay[public-route-ready]",
+                    (false, GrantExpiryLegV1::Private) => "relay[private-route-ready]",
+                    (true, GrantExpiryLegV1::Public) => "grant[public-pre-poll-gate-reached]",
+                    (true, GrantExpiryLegV1::Private) => "grant[private-pre-poll-gate-reached]",
+                },
+            );
+        }
+        let unrelated_reply = match leg {
+            GrantExpiryLegV1::Public => "_R_.phase285.r1a.unrelated.public",
+            GrantExpiryLegV1::Private => "_R_.phase285.r1a.unrelated.private",
+        };
+        let event_probe = match leg {
+            GrantExpiryLegV1::Public => &witness_event_probe,
+            GrantExpiryLegV1::Private => &store_event_probe,
+        };
+        must(
+            event_probe
+                .publish(
+                    unrelated_reply,
+                    b"unrelated-refusal-control".to_vec().into(),
+                )
+                .await,
+            "response grant unrelated refusal enqueue",
+        );
+        must(
+            event_probe.flush().await,
+            "response grant unrelated refusal flush",
+        );
+        tokio::time::sleep(Duration::from_millis(grant_millis + 250)).await;
+        control.release();
+        let targeted_receipt = must(
+            match leg {
+                GrantExpiryLegV1::Public => {
+                    targeted_admission_receipt(
+                        &mut public_admission_rx,
+                        WorkerKindV1::Public,
+                        PublicWitnessServiceConfigV1::subject_for(
+                            WitnessServiceOperationV1::Establish,
+                        ),
+                    )
+                    .await
+                }
+                GrantExpiryLegV1::Private => {
+                    targeted_admission_receipt(
+                        &mut private_admission_rx,
+                        WorkerKindV1::Private,
+                        store_proxy_subjects()[2],
+                    )
+                    .await
+                }
+            },
+            "response grant targeted admission receipt",
+        );
+        let first = must(
+            tokio::time::timeout(
+                Duration::from_millis(PUBLIC_RESPONSE_GRANT_MILLIS + 2_000),
+                first,
+            )
+            .await,
+            "response grant first request timeout",
+        );
+        let first = must(first, "response grant first request task panicked");
+        assert!(
+            matches!(first, Err(RuntimeWitnessClientErrorV1::OutcomeUnknown)),
+            "expired response grant was not requester-observed OutcomeUnknown: {leg:?}"
+        );
+        let permission_violation = must(
+            match leg {
+                GrantExpiryLegV1::Public => {
+                    permission_event(&mut witness_events, &targeted_receipt.reply).await
+                }
+                GrantExpiryLegV1::Private => {
+                    permission_event(&mut store_events, &targeted_receipt.reply).await
+                }
+            },
+            "expired response grant lacked broker-authoritative late-publish refusal",
+        );
+        assert!(
+            permission_violation.contains("Permissions Violation for Publish to")
+                && permission_violation.contains(&targeted_receipt.reply)
+                && !permission_violation.contains(unrelated_reply),
+            "grant[targeted-public-refusal]"
+        );
+        let first_capture = must(
+            targeted_response_capture(
+                &mut capture_rx,
+                match leg {
+                    GrantExpiryLegV1::Public => WorkerKindV1::Public,
+                    GrantExpiryLegV1::Private => WorkerKindV1::Private,
+                },
+                &targeted_receipt.reply,
+            )
+            .await,
+            "expired response grant first payload capture",
+        );
+        assert_eq!(first_capture.receipt.invocation_token, relay_token);
+        assert_eq!(first_capture.receipt.physical_case, physical_case);
+        assert!(
+            observer
+                .events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    WorkerTransitionEventV1::ReceiptDeadlineIdentity { worker, identity }
+                        if *worker == match leg {
+                            GrantExpiryLegV1::Public => WorkerKindV1::Public,
+                            GrantExpiryLegV1::Private => WorkerKindV1::Private,
+                        } && *identity == targeted_receipt.deadline_identity
+                )),
+            "deadline[admission-anchor-preserved]",
+        );
+        let initial_private_admission = if matches!(leg, GrantExpiryLegV1::Private) {
+            let _initial_public_receipt = must(
+                targeted_admission_receipt(
+                    &mut public_admission_rx,
+                    WorkerKindV1::Public,
+                    PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Establish),
+                )
+                .await,
+                "held-private initial public admission receipt",
+            );
+            targeted_receipt.clone()
+        } else {
+            must(
+                targeted_admission_receipt(
+                    &mut private_admission_rx,
+                    WorkerKindV1::Private,
+                    store_proxy_subjects()[2],
+                )
+                .await,
+                "held-public initial private CAS admission receipt",
+            )
+        };
+        assert_eq!(
+            initial_private_admission.subject,
+            store_proxy_subjects()[2],
+            "recovery[captured-private-cas-subject]",
+        );
+        assert_eq!(
+            initial_private_admission.payload_sha256,
+            sha256_hex(&initial_private_admission.payload),
+            "recovery[captured-private-cas-digest]",
+        );
+        let captured_private_request = must(
+            WitnessStoreProxyRequestV1::decode(&initial_private_admission.payload),
+            "captured signed private CAS decode",
+        );
+        must(
+            captured_private_request.validate_semantics(),
+            "captured signed private CAS semantics",
+        );
+        must(
+            captured_private_request.validate_signature(),
+            "captured signed private CAS signature",
+        );
+        assert_eq!(
+            must(
+                canonical_wire_bytes(&captured_private_request),
+                "captured signed private CAS canonical bytes",
+            ),
+            initial_private_admission.payload,
+            "recovery[captured-private-cas-canonical]",
+        );
+        assert_eq!(
+            captured_private_request.operation,
+            WitnessStoreProxyOperationV1::CompareAndSwap,
+            "recovery[captured-private-cas-operation]",
+        );
+        must(
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while fixture.facts.cas_applied.load(Ordering::SeqCst) != 1 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await,
+            "expired response grant did not apply exactly one CAS",
+        );
+        let (pre_recovery_attempts, pre_recovery_applied) = {
+            let records = fixture
+                .facts
+                .records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            must(
+                verified_cas_evidence(&records),
+                "response grant pre-recovery CAS evidence",
+            )
+        };
+        assert_eq!((pre_recovery_attempts, pre_recovery_applied), (1, 1));
+
+        let (replay_one, replay_one_bytes) = must(
+            runtime_client
+                .observe_response_bytes_for_test(&request)
+                .await,
+            "response grant first exact replay",
+        );
+        assert!(
+            matches!(replay_one, WitnessServiceResponseV1::Establish(_)),
+            "response grant replay returned the wrong response variant: {leg:?}",
+        );
+        let replay_one_admission = must(
+            targeted_admission_receipt(
+                &mut public_admission_rx,
+                WorkerKindV1::Public,
+                PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Establish),
+            )
+            .await,
+            "response grant recovery-one public admission receipt",
+        );
+        let replay_one_capture = must(
+            targeted_response_capture(
+                &mut capture_rx,
+                WorkerKindV1::Public,
+                &replay_one_admission.reply,
+            )
+            .await,
+            "response grant recovery-one public capture",
+        );
+        assert_eq!(replay_one_capture.payload, replay_one_bytes);
+        let (replay_two, replay_two_bytes) = must(
+            runtime_client
+                .observe_response_bytes_for_test(&request)
+                .await,
+            "response grant second exact replay",
+        );
+        assert!(
+            matches!(replay_two, WitnessServiceResponseV1::Establish(_)),
+            "response grant second replay returned the wrong response variant: {leg:?}",
+        );
+        let replay_two_admission = must(
+            targeted_admission_receipt(
+                &mut public_admission_rx,
+                WorkerKindV1::Public,
+                PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Establish),
+            )
+            .await,
+            "response grant recovery-two public admission receipt",
+        );
+        let replay_two_capture = must(
+            targeted_response_capture(
+                &mut capture_rx,
+                WorkerKindV1::Public,
+                &replay_two_admission.reply,
+            )
+            .await,
+            "response grant recovery-two public capture",
+        );
+        assert_eq!(replay_two_capture.payload, replay_two_bytes);
+        assert!(
+            replay_two_capture.receipt.capture_id > replay_one_capture.receipt.capture_id,
+            "response capture IDs are not strictly monotonic"
+        );
+        assert_eq!(
+            replay_one_bytes, replay_two_bytes,
+            "response grant authenticated public replays differ",
+        );
+        let (post_recovery_attempts, post_recovery_applied) = {
+            let records = fixture
+                .facts
+                .records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            must(
+                verified_cas_evidence(&records),
+                "response grant post-recovery CAS evidence",
+            )
+        };
+        assert_eq!((post_recovery_attempts, post_recovery_applied), (1, 1));
+        assert_eq!(
+            (
+                post_recovery_attempts - pre_recovery_attempts,
+                post_recovery_applied - pre_recovery_applied,
+            ),
+            (0, 0),
+            "response grant recovery added a CAS attempt or application",
+        );
+        let final_read = must(
+            stale_cas_proxy.read_entry(final_read_request.clone()).await,
+            "held response final authenticated ReadEntry",
+        );
+        let final_envelope = match &final_read.body {
+            WitnessStoreProxyResponseBodyV1::Entry { envelope, .. } => envelope.as_ref(),
+            _ => panic!("held response final ReadEntry returned the wrong body"),
+        };
+        let mut operand_receipt_digest = None;
+        let mut private_join_receipt_digest = None;
+        if matches!(leg, GrantExpiryLegV1::Public) {
+            let public_evidence_capture = &first_capture;
+            assert!(
+                public_evidence_capture.receipt.worker == WorkerKindV1::Public
+                    && public_evidence_capture.receipt.reply == targeted_receipt.reply
+                    && public_evidence_capture.receipt.payload_len
+                        == public_evidence_capture.payload.len()
+                    && public_evidence_capture.receipt.payload_sha256
+                        == sha256_hex(&public_evidence_capture.payload)
+                    && public_evidence_capture.receipt.capture_id
+                        < replay_one_capture.receipt.capture_id
+                    && public_evidence_capture
+                        .receipt
+                        .preceding_worker_transition_sequence
+                        > 0,
+                "capture[public-first-payload-real]",
+            );
+            let operand_receipt = PublicRecoveryOperandReceiptV1 {
+                left_kind: "public_pre_enqueue_capture",
+                left_capture_id: first_capture.receipt.capture_id,
+                left_sha256: first_capture.receipt.payload_sha256.clone(),
+                right_kind: "runtime_recovery_1",
+                right_sha256: sha256_hex(&replay_one_bytes),
+                equal: first_capture.payload == replay_one_bytes,
+            };
+            assert!(
+                operand_receipt.left_kind == "public_pre_enqueue_capture"
+                    && operand_receipt.left_capture_id == first_capture.receipt.capture_id
+                    && operand_receipt.left_sha256 == sha256_hex(&first_capture.payload)
+                    && operand_receipt.right_kind == "runtime_recovery_1"
+                    && operand_receipt.right_sha256 == sha256_hex(&replay_one_bytes)
+                    && operand_receipt.equal,
+                "recovery[public-lost-replay-operands]",
+            );
+            operand_receipt_digest = Some(sha256_hex(&must(
+                canonical_wire_bytes(&operand_receipt),
+                "public recovery operand receipt bytes",
+            )));
+        } else {
+            let private_evidence_capture = &first_capture;
+            assert!(
+                private_evidence_capture.receipt.worker == WorkerKindV1::Private
+                    && private_evidence_capture.receipt.reply == targeted_receipt.reply
+                    && private_evidence_capture.receipt.payload_len
+                        == private_evidence_capture.payload.len()
+                    && private_evidence_capture.receipt.payload_sha256
+                        == sha256_hex(&private_evidence_capture.payload)
+                    && private_evidence_capture.receipt.capture_id
+                        < replay_one_capture.receipt.capture_id
+                    && private_evidence_capture
+                        .receipt
+                        .preceding_worker_transition_sequence
+                        > 0,
+                "capture[private-first-payload-real]",
+            );
+            assert_ne!(
+                first_capture.payload, replay_one_bytes,
+                "recovery[cross-layer-bytes-differ]",
+            );
+            let proxy_request_records = proxy_request_records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let store_records = fixture
+                .facts
+                .records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let private_join = must(
+                validate_private_cas_join(
+                    &first_capture,
+                    &proxy_request_records,
+                    &store_records,
+                    &final_read,
+                    PrivateCasJoinContextV1 {
+                        public_request: &request,
+                        challenge: &fixture.challenge,
+                        binding: &fixture.binding,
+                        outer_response: &replay_one,
+                    },
+                ),
+                "held-private CAS/store/rotation/attestation join",
+            );
+            let hostile_cross_wired_capture = RecordedResponseCaptureV1 {
+                receipt: first_capture.receipt.clone(),
+                payload: replay_one_capture.payload.clone(),
+            };
+            assert!(
+                validate_private_cas_join(
+                    &hostile_cross_wired_capture,
+                    &proxy_request_records,
+                    &store_records,
+                    &final_read,
+                    PrivateCasJoinContextV1 {
+                        public_request: &request,
+                        challenge: &fixture.challenge,
+                        binding: &fixture.binding,
+                        outer_response: &replay_one,
+                    },
+                )
+                .is_err(),
+                "recovery[private-cas-binding-required]",
+            );
+            private_join_receipt_digest = Some(sha256_hex(&must(
+                canonical_wire_bytes(&private_join),
+                "private CAS join receipt bytes",
+            )));
+        }
+        let initial_private_response = if matches!(leg, GrantExpiryLegV1::Private) {
+            must(
+                WitnessStoreProxyResponseV1::decode(&first_capture.payload),
+                "held-private initial CasApplied capture decode",
+            )
+        } else {
+            let records = proxy_records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let record = must_some(
+                records.iter().find(|record| {
+                    record.operation == WitnessStoreProxyOperationV1::CompareAndSwap
+                        && record.request_sha256 == initial_private_admission.payload_sha256
+                }),
+                "held-public initial private CAS proxy response absent",
+            );
+            let bytes = must(
+                hex::decode(&record.response_canonical_hex),
+                "held-public initial private CAS proxy response hex",
+            );
+            assert_eq!(sha256_hex(&bytes), record.response_sha256);
+            must(
+                WitnessStoreProxyResponseV1::decode(&bytes),
+                "held-public initial private CAS proxy response decode",
+            )
+        };
+        must(
+            initial_private_response.validate(),
+            "initial private CasApplied response validation",
+        );
+        assert_eq!(
+            initial_private_response.request_digest, captured_private_request.request_digest,
+            "recovery[initial-private-request-digest]",
+        );
+        let initial_new_revision = match &initial_private_response.body {
+            WitnessStoreProxyResponseBodyV1::CasApplied { new_revision, .. } => *new_revision,
+            _ => panic!("initial private response was not CasApplied"),
+        };
+        let final_revision = match &final_read.body {
+            WitnessStoreProxyResponseBodyV1::Entry { revision, .. } => *revision,
+            _ => unreachable!(),
+        };
+        assert_eq!(initial_new_revision, final_revision);
+        let final_store_state_digest = must(
+            final_envelope.store_state_digest(),
+            "held final envelope store-state digest",
+        );
+        let atomic_records_before_stale: Vec<_> = fixture
+            .facts
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|record| record.operation == "compare_and_swap")
+            .cloned()
+            .collect();
+        let atomic_records_digest_before_stale = sha256_hex(&must(
+            canonical_wire_bytes(&atomic_records_before_stale),
+            "pre-stale atomic record bytes",
+        ));
+        assert_eq!(atomic_records_before_stale.len(), 1);
+        let stale_response = must(
+            stale_cas_proxy
+                .replay_canonical_request_for_test(
+                    &initial_private_admission.payload,
+                    WitnessStoreProxyOperationV1::CompareAndSwap,
+                )
+                .await,
+            "exact captured signed private CAS replay",
+        );
+        let stale_private_admission = must(
+            targeted_admission_receipt(
+                &mut private_admission_rx,
+                WorkerKindV1::Private,
+                store_proxy_subjects()[2],
+            )
+            .await,
+            "response grant stale private CAS admission",
+        );
+        assert_eq!(
+            stale_private_admission.payload, initial_private_admission.payload,
+            "recovery[stale-private-exact-request-bytes]",
+        );
+        assert_eq!(
+            stale_private_admission.payload_sha256, initial_private_admission.payload_sha256,
+            "recovery[stale-private-exact-request-digest]",
+        );
+        let stale_capture = must(
+            targeted_response_capture(
+                &mut capture_rx,
+                WorkerKindV1::Private,
+                &stale_private_admission.reply,
+            )
+            .await,
+            "response grant stale private CAS capture",
+        );
+        must(
+            stale_response.validate(),
+            "response grant stale private response",
+        );
+        assert!(
+            matches!(
+                &stale_response.body,
+                WitnessStoreProxyResponseBodyV1::Refused {
+                    failure_code: WitnessStoreProxyFailureCodeV1::Conflict,
+                    observed_revision: Some(observed_revision),
+                    observed_value_digest: Some(observed_value_digest),
+                } if *observed_revision == initial_new_revision
+                    && *observed_revision == final_revision
+                    && observed_value_digest == &final_store_state_digest
+            ),
+            "recovery[stale-private-conflict]"
+        );
+        assert_eq!(
+            stale_capture.payload,
+            must(
+                canonical_wire_bytes(&stale_response),
+                "response grant stale response canonical bytes",
+            ),
+            "recovery[stale-private-captured-response]",
+        );
+        assert_eq!(
+            stale_response.request_digest, captured_private_request.request_digest,
+            "recovery[stale-private-request-bound]",
+        );
+        let atomic_records_after_stale: Vec<_> = fixture
+            .facts
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|record| record.operation == "compare_and_swap")
+            .cloned()
+            .collect();
+        let atomic_records_digest_after_stale = sha256_hex(&must(
+            canonical_wire_bytes(&atomic_records_after_stale),
+            "post-stale atomic record bytes",
+        ));
+        assert_eq!(
+            atomic_records_after_stale.len(),
+            atomic_records_before_stale.len(),
+            "recovery[stale-private-no-second-cas-record]",
+        );
+        assert_eq!(
+            atomic_records_digest_after_stale, atomic_records_digest_before_stale,
+            "recovery[stale-private-atomic-record-unchanged]",
+        );
+        let (verified_attempts, verified_applied) = {
+            let records = fixture
+                .facts
+                .records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            must(
+                verified_cas_evidence(&records),
+                "response grant canonical store CAS evidence",
+            )
+        };
+        assert_eq!(
+            (
+                verified_attempts - post_recovery_attempts,
+                verified_applied - post_recovery_applied,
+            ),
+            (0, 0),
+            "recovery[stale-private-atomic-delta]",
+        );
+        assert_eq!(verified_attempts, 1, "response grant CAS attempt authority");
+        assert_eq!(verified_applied, 1, "response grant CAS applied authority");
+        assert_eq!(
+            fixture.facts.cas_attempted.load(Ordering::SeqCst),
+            verified_attempts,
+            "response grant CAS-attempt counter disagrees with canonical store results"
+        );
+        assert_eq!(
+            fixture.facts.cas_applied.load(Ordering::SeqCst),
+            verified_applied,
+            "response grant CAS counter disagrees with canonical store results"
+        );
+        {
+            let observed_events = observer
+                .events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert!(
+                observed_events.iter().any(|event| matches!(
+                    event,
+                    WorkerTransitionEventV1::ResponseEnqueueAttempt { enqueued: true, .. }
+                )),
+                "response grant processing never reached the truthful local enqueue seam: {leg:?}"
+            );
+            let event_bytes = must(
+                canonical_wire_bytes(&*observed_events),
+                "response grant event bytes",
+            );
+            let event_text = must(
+                std::str::from_utf8(&event_bytes),
+                "response grant event text",
+            );
+            assert!(
+                event_text.contains("\"event\":\"response_enqueue_attempt\"")
+                    && event_text.contains("\"enqueued\":true")
+                    && !event_text.contains("response_delivery_success")
+                    && !event_text.contains("publish_attempt")
+                    && !event_text.contains("\"published\":true"),
+                "evidence[enqueue-not-publication]"
+            );
+        }
+        drop(public_runner);
+        drop(store_runner);
+        must_some(relay_legs, "response grant relay legs absent").stop();
+        tokio::task::yield_now().await;
+        let case_fields = match leg {
+            GrantExpiryLegV1::Public => format!(
+                "public_lost_replay_bytes_identical=1 operand_receipt_digest={}",
+                must_some(
+                    operand_receipt_digest.as_deref(),
+                    "held-public operand receipt digest absent",
+                )
+            ),
+            GrantExpiryLegV1::Private => format!(
+                "private_cas_applied_bound=1 stored_envelope_bound=1 rotation_receipt_bound=1 public_replays_identical=1 cross_layer_bytes_compared=0 private_join_receipt_digest={}",
+                must_some(
+                    private_join_receipt_digest.as_deref(),
+                    "held-private join receipt digest absent",
+                )
+            ),
+        };
+        println!(
+            "response_grant_recovery leg={leg:?} mode=Held physical_case={physical_case} grant_millis={grant_millis} held_past_grant=1 relay_path=1 first_payload_captured=1 outcome_unknown=1 broker_late_publish_refused=1 exact_reply_bound=1 unrelated_refusal_rejected=1 {case_fields} pre_recovery_attempts=1 pre_recovery_applied=1 post_recovery_attempts=1 post_recovery_applied=1 recovery_delta_attempts=0 recovery_delta_applied=0 stale_service_atomic_delta_attempts=0 stale_service_atomic_delta_applied=0 stale_service_refused_conflict=1 atomic_record_digest_before={atomic_records_digest_before_stale} atomic_record_digest_after={atomic_records_digest_after_stale} terminal_attempts=1 terminal_applied=1 additional_cas_applied=0 no_hold_reply=0 passed=1"
+        );
     }
 }
 
@@ -5435,5 +7485,26 @@ mod service_checkpoint_relay_tests {
             "normal NATS harness is required"
         );
         super::deadline_state_machine_tests::run_complete_receipt_suppression_test();
+    }
+}
+
+#[cfg(test)]
+mod service_checkpoint_transport_semantics_tests {
+    #[test]
+    fn post_command_other_is_distinct_from_pre_send_drain() {
+        assert!(
+            std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
+            "normal NATS harness is required"
+        );
+        super::deadline_state_machine_tests::run_transport_other_test();
+    }
+
+    #[test]
+    fn public_and_private_expired_response_grants_recover_exactly_once() {
+        assert!(
+            std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
+            "normal NATS harness is required"
+        );
+        super::deadline_state_machine_tests::run_response_grant_recovery_test();
     }
 }

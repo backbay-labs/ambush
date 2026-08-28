@@ -5577,15 +5577,15 @@ if raw != canonical(row) + b"\n": raise SystemExit("observation ledger is not ca
 expected_events = [
  {"event":"dequeued","worker":"public"},{"event":"post_preflight","worker":"public"},{"cas_attempted":False,"event":"proxy_store_begin","operation":"read_entry","worker":"public"},
  {"event":"dequeued","worker":"private"},{"event":"post_preflight","worker":"private"},{"cas_attempted":False,"event":"proxy_store_begin","operation":"read_entry","worker":"private"},
- {"cas_applied":False,"event":"proxy_store_end","operation":"read_entry","succeeded":True,"worker":"private"},{"accepted":True,"event":"response_enqueue_attempt","worker":"private"},{"event":"publish_attempt","published":True,"worker":"private"},
- {"cas_applied":False,"event":"proxy_store_end","operation":"read_entry","succeeded":True,"worker":"public"},{"accepted":True,"event":"response_enqueue_attempt","worker":"public"},{"event":"publish_attempt","published":True,"worker":"public"},
+ {"cas_applied":False,"event":"proxy_store_end","operation":"read_entry","succeeded":True,"worker":"private"},{"event":"response_deadline_check","open":True,"worker":"private"},{"enqueued":True,"event":"response_enqueue_attempt","worker":"private"},
+ {"cas_applied":False,"event":"proxy_store_end","operation":"read_entry","succeeded":True,"worker":"public"},{"event":"response_deadline_check","open":True,"worker":"public"},{"enqueued":True,"event":"response_enqueue_attempt","worker":"public"},
 ]
 def digest(value): return hashlib.sha256(canonical(value)).hexdigest()
 def domain_digest(domain,value):
     encoded=canonical(value)
     return hashlib.sha256(domain + len(encoded).to_bytes(8,"big") + encoded).hexdigest()
 def validate(candidate):
-    keys={"case","connection_client_ids","connections","counts","digests","invocation_token","operation","private_exchanges","proxy_exchanges","public_admission","public_subject","publisher","publisher_attempts","request_canonical_hex","request_digest","request_nonce","response_canonical_hex","schema_version","selected_envelope_digest","selected_head_txid","selected_store_generation","selected_store_revision","selected_store_state_digest","status","store_operations","tree","worker_events"}
+    keys={"case","connection_client_ids","connections","counts","digests","invocation_token","operation","private_exchanges","proxy_exchanges","public_admission","public_subject","publisher","response_enqueue_attempts","request_canonical_hex","request_digest","request_nonce","response_canonical_hex","schema_version","selected_envelope_digest","selected_head_txid","selected_store_generation","selected_store_revision","selected_store_state_digest","status","store_operations","tree","worker_events"}
     if set(candidate) != keys: raise ValueError("schema")
     if candidate["schema_version"] != 1 or candidate["tree"] != tree or candidate["invocation_token"] != token or candidate["case"] != "service_checkpoint_observations" or candidate["status"] != "passed": raise ValueError("identity")
     request=json.loads(bytes.fromhex(candidate["request_canonical_hex"]),parse_constant=reject); response=json.loads(bytes.fromhex(candidate["response_canonical_hex"]),parse_constant=reject)
@@ -5626,8 +5626,8 @@ def validate(candidate):
         raise ValueError("public_store_head")
     request_body=request.get("body",{}).get("ReadHead") if isinstance(request.get("body"),dict) else None
     if not isinstance(request_body,dict) or request_body.get("target_txid")!=selected_head.get("txid"): raise ValueError("public_store_head")
-    publishers=candidate["publisher_attempts"]
-    if publishers != [{"ordinal":8,"published":True,"worker":"private"},{"ordinal":11,"published":True,"worker":"public"}]: raise ValueError("publisher")
+    response_enqueues=candidate["response_enqueue_attempts"]
+    if response_enqueues != [{"enqueued":True,"ordinal":8,"worker":"private"},{"enqueued":True,"ordinal":11,"worker":"public"}]: raise ValueError("response enqueue")
     connections=candidate["connections"]
     roles=[("runtime-client","PHASE285_RUNTIME","phase285_foreign"),("public-witness","PHASE285_WITNESS","phase285_witness"),("private-store","PHASE285_WITNESS_STORE","phase285_witness_store")]
     if len(connections)!=3 or [(x["runner_role"],x["account"],x["authenticated_user"]) for x in connections]!=roles or any(not isinstance(x["server_client_id"],int) or x["server_client_id"]<=0 for x in connections) or len({x["server_client_id"] for x in connections})!=3: raise ValueError("connections")
@@ -5652,7 +5652,7 @@ def validate(candidate):
     publisher_response=bytes.fromhex(publisher["response_canonical_hex"])
     if hashlib.sha256(publisher_response).hexdigest()!=publisher["response_sha256"] or publisher_response!=bytes.fromhex(candidate["response_canonical_hex"]): raise ValueError("publisher_response")
     if admission["received_at_nanos"]!=publisher["request_received_at_nanos"] or private[-1]["request_at_nanos"]<publisher["request_received_at_nanos"] or private[-1]["response_at_nanos"]>publisher["response_received_at_nanos"]: raise ValueError("causal_timestamps")
-    arrays={"worker_events":candidate["worker_events"],"proxy_exchanges":proxy,"private_exchanges":private,"store_operations":store,"publisher_attempts":publishers,"connections":connections}
+    arrays={"worker_events":candidate["worker_events"],"proxy_exchanges":proxy,"private_exchanges":private,"store_operations":store,"response_enqueue_attempts":response_enqueues,"connections":connections}
     counts={key:len(value) for key,value in arrays.items()}; counts.update({"cas_attempted":0,"cas_applied":0})
     if candidate["counts"] != counts: raise ValueError("counts")
     digests={key+"_sha256":digest(value) for key,value in arrays.items()}; digests.update({"request_sha256":hashlib.sha256(bytes.fromhex(candidate["request_canonical_hex"])).hexdigest(),"response_sha256":hashlib.sha256(bytes.fromhex(candidate["response_canonical_hex"])).hexdigest(),"public_admission_sha256":digest(admission),"publisher_sha256":digest(publisher),"connection_client_ids_sha256":digest(candidate["connection_client_ids"])})
@@ -5952,22 +5952,22 @@ budget = read_canonical_receipt(budget_receipt, "budget")
 callsite = read_canonical_receipt(callsite_receipt, "callsite")
 constructor = read_canonical_receipt(constructor_receipt, "constructor")
 
-counter_keys = {"queue_dequeues","preflights","store_calls","private_proxy_calls","cas_attempted","cas_applied","retries","publications","outcome_unknown"}
+counter_keys = {"queue_dequeues","preflights","store_calls","private_proxy_calls","cas_attempted","cas_applied","retries","response_enqueues","outcome_unknown"}
 evidence_keys = counter_keys | {"ordered_trace"}
 zero = {key: (False if key == "outcome_unknown" else 0) for key in counter_keys}
 def dequeued(worker): return {"event":"dequeued","worker":worker}
 def preflight(worker): return {"event":"post_preflight","worker":worker}
 def begin(worker, operation, attempted=False): return {"cas_attempted":attempted,"event":"proxy_store_begin","operation":operation,"worker":worker}
 def end(worker, operation, succeeded, applied=False): return {"cas_applied":applied,"event":"proxy_store_end","operation":operation,"succeeded":succeeded,"worker":worker}
-def enqueue(worker, accepted): return {"accepted":accepted,"event":"response_enqueue_attempt","worker":worker}
+def deadline(worker, open): return {"event":"response_deadline_check","open":open,"worker":worker}
 expected = [
     ("private_queue_expired", {**zero,"queue_dequeues":1,"ordered_trace":[dequeued("private")]}),
     ("private_preflight_expired", {**zero,"queue_dequeues":1,"preflights":1,"ordered_trace":[dequeued("private"),preflight("private")]}),
     ("private_store_crosses_deadline", {**zero,"queue_dequeues":1,"preflights":1,"store_calls":1,"ordered_trace":[dequeued("private"),preflight("private"),begin("private","read_entry")]}),
-    ("private_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"store_calls":1,"ordered_trace":[dequeued("private"),preflight("private"),begin("private","read_entry"),end("private","read_entry",True),enqueue("private",False)]}),
+    ("private_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"store_calls":1,"ordered_trace":[dequeued("private"),preflight("private"),begin("private","read_entry"),end("private","read_entry",True),deadline("private",False)]}),
     ("public_queue_expired", {**zero,"queue_dequeues":1,"ordered_trace":[dequeued("public")]}),
     ("public_private_exchange_crosses_deadline", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",False)]}),
-    ("public_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",True),enqueue("public",False)]}),
+    ("public_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",True),deadline("public",False)]}),
     ("post_cas_timeout_outcome_unknown", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":3,"cas_attempted":1,"cas_applied":1,"outcome_unknown":True,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",True),begin("public","compare_and_swap",True),{"event":"cas_applied_observation","worker":"private"},end("public","compare_and_swap",False),begin("public","read_entry"),end("public","read_entry",False),{"event":"outcome_unknown"}]}),
 ]
 topology = {"private_handler_millis":2000,"private_response_grant_millis":3000,"public_handler_millis":10000,"public_response_grant_millis":12000,"private_handler_reserve_millis":1000,"public_private_reserve_millis":1000,"public_handler_reserve_millis":2000,"response_grant_maximum":1}
@@ -5998,15 +5998,23 @@ def validate(candidate, budget_value=budget, callsite_value=callsite, constructo
         "inner_id":"deadline_budget_constructor_exact","status":"passed","live_nats_grants_proved":False,"topology":topology,
     }:
         raise ValueError("budget receipt")
-    callsite_keys = {"schema_version","tree","invocation_token","case","private","public","private_backend_calls","public_backend_calls","private_second_publications","public_second_publications"}
+    callsite_keys = {"schema_version","tree","invocation_token","case","private","public","private_backend_calls","public_backend_calls","private_second_responses","public_second_responses"}
     if set(callsite_value) != callsite_keys or callsite_value["schema_version"] != 1 or callsite_value["tree"] != tree or callsite_value["invocation_token"] != token or callsite_value["case"] != "service_checkpoint_deadline":
         raise ValueError("callsite receipt identity")
+    receipt_identities = []
     for key, worker, deadline in [("private","private",2000),("public","public",10000)]:
         receipt = callsite_value[key]
-        if set(receipt) != {"worker","subject","payload_sha256","reply","deadline_millis"} or receipt["worker"] != worker or receipt["deadline_millis"] != deadline or not re.fullmatch(r"[0-9a-f]{64}", receipt["payload_sha256"]):
+        if set(receipt) != {"worker","subject","payload_sha256","payload","deadline_identity","reply","deadline_millis"} or receipt["worker"] != worker or receipt["deadline_millis"] != deadline or not re.fullmatch(r"[0-9a-f]{64}", receipt["payload_sha256"]):
             raise ValueError(f"callsite {key} receipt")
-    if callsite_value["private_backend_calls"] != 1 or callsite_value["public_backend_calls"] != 1 or callsite_value["private_second_publications"] != 0 or callsite_value["public_second_publications"] != 0:
-        raise ValueError("callsite backend/publication facts")
+        payload = receipt["payload"]
+        identity = receipt["deadline_identity"]
+        if not isinstance(payload, list) or any(not isinstance(byte, int) or isinstance(byte, bool) or not 0 <= byte <= 255 for byte in payload) or hashlib.sha256(bytes(payload)).hexdigest() != receipt["payload_sha256"] or not isinstance(identity, int) or isinstance(identity, bool) or identity <= 0:
+            raise ValueError(f"callsite {key} receipt binding")
+        receipt_identities.append(identity)
+    if len(set(receipt_identities)) != 2:
+        raise ValueError("callsite receipt deadline identity reuse")
+    if callsite_value["private_backend_calls"] != 1 or callsite_value["public_backend_calls"] != 1 or callsite_value["private_second_responses"] != 0 or callsite_value["public_second_responses"] != 0:
+        raise ValueError("callsite backend/response facts")
     constructor_keys = {"schema_version","tree","invocation_token","case","inner_id","status","live_nats_grants_proved","launcher_sha256","manifest_sha256","observations","observations_sha256","store_calls"}
     if set(constructor_value) != constructor_keys or constructor_value["schema_version"] != 1 or constructor_value["tree"] != tree or constructor_value["invocation_token"] != token or constructor_value["case"] != "service_checkpoint_deadline" or constructor_value["inner_id"] != "deadline_budget_constructor_exact" or constructor_value["status"] != "passed" or constructor_value["live_nats_grants_proved"] is not False or constructor_value["launcher_sha256"] != launcher_pin or constructor_value["manifest_sha256"] != manifest_pin or not launcher_pin or not manifest_pin or constructor_value["observations"] != constructor_observations or constructor_value["observations_sha256"] != hashlib.sha256(canonical(constructor_observations)).hexdigest() or constructor_value["store_calls"] != 0:
         raise ValueError("constructor receipt")
@@ -6022,7 +6030,7 @@ wrong_count = copy.deepcopy(rows); wrong_count[2]["evidence"]["store_calls"] = 0
 wrong_token = copy.deepcopy(rows); wrong_token[0]["invocation_token"] = "0"*64; mutants.append(("stale_token", wrong_token))
 wrong_tree = copy.deepcopy(rows); wrong_tree[0]["tree"] = "0"*40; mutants.append(("stale_tree", wrong_tree))
 wrong_case = copy.deepcopy(rows); wrong_case[0]["case"] = "other"; mutants.append(("cross_case", wrong_case))
-late_publish = copy.deepcopy(rows); late_publish[3]["evidence"]["publications"] = 1; mutants.append(("late_publication", late_publish))
+late_enqueue = copy.deepcopy(rows); late_enqueue[3]["evidence"]["response_enqueues"] = 1; mutants.append(("late_response_enqueue", late_enqueue))
 downgrade = copy.deepcopy(rows); downgrade[7]["evidence"]["outcome_unknown"] = False; mutants.append(("cas_ambiguity_downgrade", downgrade))
 trace_copy = copy.deepcopy(rows); trace_copy[3]["evidence"]["ordered_trace"] = copy.deepcopy(trace_copy[2]["evidence"]["ordered_trace"]); mutants.append(("row_trace_copy", trace_copy))
 trace_swap = copy.deepcopy(rows); trace_swap[2]["evidence"]["ordered_trace"], trace_swap[3]["evidence"]["ordered_trace"] = trace_swap[3]["evidence"]["ordered_trace"], trace_swap[2]["evidence"]["ordered_trace"]; mutants.append(("row_trace_swap", trace_swap))
@@ -6787,7 +6795,7 @@ mutation_specs = [
     ("preflight_check_deletion", "private", "        if receipt_deadline.ensure_open().is_err() {\n            return Err(StoreProxyServiceErrorV1::Timeout);\n        }\n", "", 1, 1, "deadline_r20_preflight_check_deleted"),
     ("pre_store_check_deletion", "config", "        self.deadline.ensure_open()?;\n        self.observer", "        self.observer", 1, 1, "private store event diverged from recording WitnessAtomicStore"),
     ("relative_timeout", "config", "timeout_at(self.at, future)", "tokio::time::timeout(Duration::from_millis(STORE_HANDLER_DEADLINE_MILLIS), future)", 1, 1, "deadline_r20_post_cas_exact_store_trace"),
-    ("late_publication", "config", "    if transition.response_enqueue().is_err() {\n        return;\n    }\n    transition.publish(publisher, reply, bytes).await;", "    let _ = transition.response_enqueue();\n    transition.publish(publisher, reply, bytes).await;", 1, 1, "deadline_r20_private_response_enqueue_expired"),
+    ("late_response_enqueue", "config", "    if transition.response_deadline_check().is_err() {\n        return;\n    }\n    transition.publish(publisher, reply, bytes).await;", "    let _ = transition.response_deadline_check();\n    transition.publish(publisher, reply, bytes).await;", 1, 1, "deadline_r20_private_response_enqueue_expired"),
     ("retry", "public", retry_old, retry_new, 1, 1, "deadline_r20_post_cas_exact_store_trace"),
     ("cas_ambiguity_downgrade", "public", "                transition.outcome_unknown();\n", "", 3, 1, "deadline_r20_post_cas_timeout_outcome_unknown"),
     ("fabricated_counter", "library", "WorkerTransitionEventV1::CasAppliedObservation { .. } => cas_applied += 1,", "WorkerTransitionEventV1::CasAppliedObservation { .. } => cas_applied += 0,", 1, 1, "CAS-applied event diverged from recording WitnessAtomicStore"),
@@ -6854,11 +6862,11 @@ for label, name, old, new, expected_count, replace_count, expected_failure in mu
     print(f"deadline_executable_mutation mutation={label} tree={tree} token={token} compiled=1 mutation_executed=1 mutation_failed=1 intended={expected_failure} source_sha256={digest}")
 
 callsite_mutations = [
-    ("private_inline_helper_bypass", "private", "__INLINE_PRIVATE_INGRESS__", "", 0, 0, "deadline_r24_private_late_first_publication"),
-    ("public_inline_helper_bypass", "public", "__INLINE_PUBLIC_INGRESS__", "", 0, 0, "deadline_r24_public_second_publication"),
+    ("private_inline_helper_bypass", "private", "__INLINE_PRIVATE_INGRESS__", "", 0, 0, "deadline_r24_private_late_first_response"),
+    ("public_inline_helper_bypass", "public", "__INLINE_PUBLIC_INGRESS__", "", 0, 0, "deadline_r24_public_second_response"),
     ("drop_before_enqueue", "private", "if ingress.try_send(ingress_message).is_err() {", "if { let _ = ingress_message; true } {", 1, 1, "private request one did not enter store: Elapsed(())"),
     ("fabricated_receipt", "private", "if ingress.try_send(ingress_message).is_err() {\n        return Some(Err((reply, payload)));\n    }\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", "let _ = (ingress, ingress_message);\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", 1, 1, "private request one did not enter store: Elapsed(())"),
-    ("post_accept_refreshed_capture", "private", "        receipt_deadline,\n    };\n    if ingress.try_send", "        receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 2_000),\n    };\n    if ingress.try_send", 1, 1, "deadline_r24_private_late_first_publication"),
+    ("post_accept_refreshed_capture", "private", "        receipt_deadline,\n    };\n    if ingress.try_send", "        receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 2_000),\n    };\n    if ingress.try_send", 1, 1, "deadline_r24_private_late_first_response"),
     ("public_start_delegation_bypass", "public", "        Self::start_inner(client, dispatcher).await", "        let _ = (client, dispatcher);\n        Ok(Self { tasks: Vec::new(), _proxy: PhantomData })", 1, 1, "public receipt one absent"),
     ("private_start_delegation_bypass", "private", "        Self::start_inner(connection, service).await", "        let _ = (connection, service);\n        Ok(Self { tasks: Vec::new(), _service: std::marker::PhantomData })", 1, 1, "private request one did not enter store: Elapsed(())"),
 ]
@@ -6948,20 +6956,23 @@ def mutate_callsite_source(label, name, old, new, expected_count, replace_count)
                     let inline_result = match message.reply {
                         Some(reply) if bounded_inbox(&reply) => {
                             let payload = message.payload.to_vec();
-                            let receipt = SubscriberAdmissionReceiptV1 {
-                                worker: WorkerKindV1::Private,
-                                subject: subject.to_string(),
-                                payload_sha256: swarm_crypto::sha256_hex(&payload),
-                                reply: reply.to_string(),
-                                deadline_millis: STORE_HANDLER_DEADLINE_MILLIS,
-                            };
-                            let ingress_message = PrivateIngressMessage {
-                                subject: subject.to_string(),
-                                payload: payload.clone(),
-                                reply: reply.clone(),
-                                receipt_deadline: ReceiptDeadlineV1::from_now(
-                                    STORE_HANDLER_DEADLINE_MILLIS + 1_000,
-                                ),
+            let receipt_deadline = ReceiptDeadlineV1::from_now(
+                STORE_HANDLER_DEADLINE_MILLIS + 1_000,
+            );
+            let receipt = SubscriberAdmissionReceiptV1 {
+                worker: WorkerKindV1::Private,
+                subject: subject.to_string(),
+                payload_sha256: swarm_crypto::sha256_hex(&payload),
+                payload: payload.clone(),
+                deadline_identity: receipt_deadline.identity_for_test(),
+                reply: reply.to_string(),
+                deadline_millis: STORE_HANDLER_DEADLINE_MILLIS,
+            };
+            let ingress_message = PrivateIngressMessage {
+                subject: subject.to_string(),
+                payload: payload.clone(),
+                reply: reply.clone(),
+                receipt_deadline,
                             };
                             if sender.try_send(ingress_message).is_err() {
                                 Some(Err((reply, payload)))
@@ -6998,10 +7009,15 @@ def mutate_callsite_source(label, name, old, new, expected_count, replace_count)
                 continue;
             }
             let payload = message.payload.to_vec();
+            let receipt_deadline = ReceiptDeadlineV1::from_now(
+                PUBLIC_HANDLER_DEADLINE_MILLIS + 1_000,
+            );
             let receipt = SubscriberAdmissionReceiptV1 {
                 worker: WorkerKindV1::Public,
                 subject: expected_subject.to_string(),
                 payload_sha256: sha256_hex(&payload),
+                payload: payload.clone(),
+                deadline_identity: receipt_deadline.identity_for_test(),
                 reply: reply.to_string(),
                 deadline_millis: PUBLIC_HANDLER_DEADLINE_MILLIS,
             };
@@ -7009,9 +7025,7 @@ def mutate_callsite_source(label, name, old, new, expected_count, replace_count)
                 subject: expected_subject.to_string(),
                 payload,
                 reply,
-                receipt_deadline: ReceiptDeadlineV1::from_now(
-                    PUBLIC_HANDLER_DEADLINE_MILLIS + 1_000,
-                ),
+                receipt_deadline,
             };
             if !try_enqueue_public_message(&ingress, ingress_message) {
                 continue;
@@ -7055,7 +7069,7 @@ for label, name, old, new, expected_count, replace_count, expected_failure in ca
     output = result.stdout
     running = re.findall(r"^running (\d+) test$", output, re.M)
     summaries = re.findall(
-        r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in .+$",
+        r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in .+$",
         output,
         re.M,
     )
@@ -7261,14 +7275,14 @@ required = [
     ".write(true)", ".create_new(true)", ".mode(0o600)", "file.sync_all()",
     "fn validate_complete_receipt(", "expected_invocation_token: &str",
     'return Err("current_invocation")', 'return Err("proxy_cross_copy")',
-    "validate_complete_publisher_attempts(",
+    "validate_complete_response_enqueue_attempts(",
     "if validate_complete_receipt(",
     "if sender.max_capacity() != 1", "match sender.try_send(receipt)",
     "run_worker_observation_test_async().await",
 ]
 for fragment in required:
     if fragment not in owned: raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
-for fragment in ('return Err("publisher_fabrication")', "fn validate_complete_publisher_attempts("):
+for fragment in ('return Err("response_enqueue_fabrication")', "fn validate_complete_response_enqueue_attempts("):
     if fragment not in library: raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
 for forbidden in ("std::process::Command", "with-nats-jetstream", "bash", "temp_dir()", "remove_file", "create_dir", "remove_dir"):
     if forbidden in owned: raise SystemExit(f"complete_receipt_source[forbidden:{forbidden}]")
@@ -7935,9 +7949,9 @@ new='''        if proxy.len() != 1
 text=replace_once(text,old,new,"proxy_cross_copy")
 mutations.append(("proxy_cross_copy",text,"proxy cross-copy"))
 
-publisher_collection='''        let publisher_attempts: Vec<_> = worker_events'''
-text=replace_once(original,publisher_collection,publisher_collection.replace("let publisher_attempts", "let mut publisher_attempts"),"publisher_fabrication")
-text=replace_once(text,insert_anchor,'        publisher_attempts[0].ordinal = 11;\n        publisher_attempts[0].worker = WorkerKindV1::Public;\n'+insert_anchor,"publisher_fabrication")
+publisher_collection='''        let response_enqueue_attempts: Vec<_> = worker_events'''
+text=replace_once(original,publisher_collection,publisher_collection.replace("let response_enqueue_attempts", "let mut response_enqueue_attempts"),"response_enqueue_fabrication")
+text=replace_once(text,insert_anchor,'        response_enqueue_attempts[0].ordinal = 11;\n        response_enqueue_attempts[0].worker = WorkerKindV1::Public;\n'+insert_anchor,"response_enqueue_fabrication")
 text=replace_once(text,'        let expected = [(8_u64, "private"), (11_u64, "public")];','        let expected = [(11_u64, "public"), (11_u64, "public")];',"publisher_fabrication")
 mutations.append(("publisher_fabrication",text,"publisher fabrication"))
 
@@ -8722,10 +8736,10 @@ for row in rows:
     grant, accepted, rejected, account, user = expected[row["label"]]
     if (row.get("grant_millis"), row.get("accepted_delay_millis"), row.get("rejected_delay_millis")) != (grant, accepted, rejected):
         raise SystemExit("response_grant[schedule]")
-    first, second, delta = row.get("first_publish_at_micros"), row.get("second_publish_at_micros"), row.get("second_publish_delta_micros")
+    first, second, delta = row.get("first_response_enqueue_started_at_micros"), row.get("second_response_enqueue_started_at_micros"), row.get("second_response_enqueue_start_delta_micros")
     if not all(isinstance(item, int) for item in (first, second, delta)) or first < accepted * 1000 or second - first != delta or not 0 <= delta < 50000 or second >= grant * 1000:
-        raise SystemExit("response_grant[publish-timing]")
-    if row.get("response_grant_expires_at_micros") != grant * 1000 or row.get("requester_response_count") != 1 or row.get("delayed_control_delta_micros", 0) < 50000:
+        raise SystemExit("response_grant[enqueue-start-timing]")
+    if row.get("response_grant_expires_at_micros") != grant * 1000 or row.get("requester_response_count") != 1 or row.get("delayed_control_enqueue_start_delta_micros", 0) < 50000:
         raise SystemExit("response_grant[grant-bound]")
     for name in ("maximum_rejection", "expiry_rejection", "delayed_control_rejection"):
         event = row.get(name, "")
@@ -8747,6 +8761,1343 @@ for row in rows:
     if responder.get("account") != account or responder.get("authenticated_user") != ("phase285_relay" if user == "relay" else "phase285_witness_store" if user == "witness-store" else "phase285_witness"):
         raise SystemExit("response_grant[responder-authority]")
 print("service_checkpoint_grants rows=2 private_grant_millis=3000 public_grant_millis=12000 max_responses=1 timing_controls=2 passed=1")
+PY
+}
+
+transport_semantics_source_guard() {
+  python3 -I - "$ROOT_DIR/crates/swarm-governance-witness/src/runtime_client.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/store_proxy_service.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "${1:-normal}" <<'PY'
+import hashlib,pathlib,sys
+paths=list(map(pathlib.Path,sys.argv[1:6])); mode=sys.argv[6]
+names=["runtime","config","public","private","library"]
+source=dict(zip(names,(path.read_text() for path in paths)))
+def exact(text,fragment,label):
+ if text.count(fragment)!=1: raise ValueError(label)
+def validate(value):
+ runtime,config,public,private,library=[value[name] for name in names]
+ exact(runtime,"async_nats::RequestErrorKind::TimedOut => RuntimeWitnessClientErrorV1::OutcomeUnknown,","timed_out_mapping")
+ exact(runtime,"async_nats::RequestErrorKind::Other => RuntimeWitnessClientErrorV1::OutcomeUnknown,","other_mapping")
+ exact(runtime,"async_nats::RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::Unavailable,","no_responders_mapping")
+ exact(runtime,"async_nats::RequestErrorKind::InvalidSubject => RuntimeWitnessClientErrorV1::Configuration,","invalid_subject_mapping")
+ exact(config,"ResponseDeadlineCheck {\n        worker: WorkerKindV1,\n        open: bool,\n    },\n    #[serde(rename = \"response_enqueue_attempt\")]\n    ResponseEnqueueAttempt {\n        worker: WorkerKindV1,\n        enqueued: bool,\n    },","enqueue_event")
+ if "PublishAttempt" in config or "published: bool" in config: raise ValueError("published_claim")
+ exact(public,"gate.before_first_poll(expected_subject).await;\n        }\n        while let Some(message) = subscriber.next().await","public_pre_poll_gate")
+ exact(private,"gate.before_first_poll(subject).await;\n                }\n                while let Some(message) = subscriber.next().await","private_pre_poll_gate")
+ exact(public,"message.receipt_deadline,\n        observer,","public_receipt_deadline")
+ exact(private,"message.receipt_deadline,\n        observer,","private_receipt_deadline")
+ exact(library,"matches!(first, Err(RuntimeWitnessClientErrorV1::OutcomeUnknown)),\n            \"expired response grant was not requester-observed OutcomeUnknown: {leg:?}\"","post_grant_outcome")
+ exact(library,"tokio::time::sleep(Duration::from_millis(grant_millis + 250)).await;","grant_expiry_hold")
+ exact(library,"atomic_records_after_stale.len(),\n            atomic_records_before_stale.len(),\n            \"recovery[stale-private-no-second-cas-record]\"","stale_no_second_cas_record")
+ exact(library,"atomic_records_digest_after_stale, atomic_records_digest_before_stale,\n            \"recovery[stale-private-atomic-record-unchanged]\"","stale_atomic_record_unchanged")
+ exact(library,"verified_attempts - post_recovery_attempts,\n                verified_applied - post_recovery_applied,\n            ),\n            (0, 0),\n            \"recovery[stale-private-atomic-delta]\"","stale_atomic_delta")
+ exact(library,"let (replay_one, replay_one_bytes) = must(\n            runtime_client\n                .observe_response_bytes_for_test(&request)","replay_one_runtime_bytes")
+ exact(library,"assert_eq!(replay_one_capture.payload, replay_one_bytes);","replay_one_capture_bytes")
+ exact(library,"let (replay_two, replay_two_bytes) = must(\n            runtime_client\n                .observe_response_bytes_for_test(&request)","replay_two_runtime_bytes")
+ exact(library,"assert_eq!(replay_two_capture.payload, replay_two_bytes);","replay_two_capture_bytes")
+ exact(library,"replay_one_bytes, replay_two_bytes,\n            \"response grant authenticated public replays differ\"","public_replay_byte_equality")
+ exact(library,"permission_violation.contains(\"Permissions Violation for Publish to\")","broker_late_publish_refusal")
+ exact(library,"permission_event(&mut witness_events, &targeted_receipt.reply).await","public_reply_binding")
+ exact(library,"permission_event(&mut store_events, &targeted_receipt.reply).await","private_reply_binding")
+ exact(library,"!permission_violation.contains(unrelated_reply)","unrelated_refusal_control")
+ exact(private,"if response.operation != operation || response.request_digest != request_digest {\n            return Err(PublicWitnessProxyTransportErrorV1::Framing);\n        }\n        Ok(response)\n    }\n\n    #[cfg(test)]","ordinary_store_response_binding")
+ exact(private,"if response.operation != operation || response.request_digest != request_digest {\n            return Err(PublicWitnessProxyTransportErrorV1::Framing);\n        }\n        Ok(response)\n    }\n}\n\npub(crate) fn validate_store_proxy_client_deadline","canonical_replay_response_binding")
+ exact(library,"record.cas_applied != result_applied","cas_evidence_reconciliation")
+validate(source)
+if mode=="self-test":
+ mutations=[
+  ("other_to_unavailable","runtime","async_nats::RequestErrorKind::Other => RuntimeWitnessClientErrorV1::OutcomeUnknown,","async_nats::RequestErrorKind::Other => RuntimeWitnessClientErrorV1::Unavailable,"),
+  ("no_responders_to_outcome_unknown","runtime","async_nats::RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::Unavailable,","async_nats::RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::OutcomeUnknown,"),
+  ("post_grant_success_fabrication","library","GrantExpiryLegV1::Public => {\n                    permission_event(&mut witness_events, &targeted_receipt.reply).await\n                }\n                GrantExpiryLegV1::Private => {\n                    permission_event(&mut store_events, &targeted_receipt.reply).await\n                }","GrantExpiryLegV1::Public => {\n                    next_publish_permission_violation(&mut witness_events).await\n                }\n                GrantExpiryLegV1::Private => {\n                    next_publish_permission_violation(&mut store_events).await\n                }"),
+  ("reset_local_deadline_after_dequeue","public","message.receipt_deadline,\n        observer,\n        publisher,\n        message.reply,\n        |_| {\n            dispatcher.dispatch_before(&message.subject, &message.payload, message.receipt_deadline)\n        },","ReceiptDeadlineV1::public(),\n        observer,\n        publisher,\n        message.reply,\n        |_| {\n            dispatcher.dispatch_before(&message.subject, &message.payload, ReceiptDeadlineV1::public())\n        },"),
+  ("omit_public_pre_poll_hold","public","gate.before_first_poll(expected_subject).await;","tokio::task::yield_now().await;"),
+  ("omit_private_pre_poll_hold","private","gate.before_first_poll(subject).await;","tokio::task::yield_now().await;"),
+  ("accept_second_cas","private","if response.operation != operation || response.request_digest != request_digest {\n            return Err(PublicWitnessProxyTransportErrorV1::Framing);\n        }\n        Ok(response)\n    }\n}\n\npub(crate) fn validate_store_proxy_client_deadline","if response.operation != operation || response.request_digest != request_digest {\n            return Err(PublicWitnessProxyTransportErrorV1::Framing);\n        }\n        let WitnessStoreProxyResponseV1 { schema_version, operation, request_digest, body } = response;\n        let body = match (&request.body, body) {\n            (swarm_governance::witness_engine::store::WitnessStoreProxyRequestBodyV1::CompareAndSwap { stream_id, .. }, WitnessStoreProxyResponseBodyV1::Refused { failure_code: WitnessStoreProxyFailureCodeV1::Conflict, observed_revision: Some(observed_revision), observed_value_digest: Some(acknowledged_value_digest) }) => WitnessStoreProxyResponseBodyV1::CasApplied { stream_id: stream_id.clone(), previous_revision: observed_revision.saturating_sub(1), new_revision: observed_revision, acknowledged_value_digest },\n            (_, body) => body,\n        };\n        Ok(WitnessStoreProxyResponseV1 { schema_version, operation, request_digest, body })\n    }\n}\n\npub(crate) fn validate_store_proxy_client_deadline"),
+  ("retain_published_true","config","    OutcomeUnknown,","    PublishAttempt { worker: WorkerKindV1, published: bool },\n    OutcomeUnknown,"),
+ ]
+ digests=[]
+ for label,name,old,new in mutations:
+  if source[name].count(old)!=1: raise SystemExit("transport_semantics_source[anchor:"+label+"]")
+  candidate=dict(source); candidate[name]=candidate[name].replace(old,new,1)
+  digest=hashlib.sha256(candidate[name].encode()).hexdigest(); digests.append(digest)
+  try: validate(candidate)
+  except ValueError as error: print(f"transport_semantics_mutation mutation={label} rejected={error} source_sha256={digest}")
+  else: raise SystemExit("transport_semantics_source[survived:"+label+"]")
+ if len(set(digests))!=8: raise SystemExit("transport_semantics_source[digests]")
+ print("transport_semantics_source mutations=8 unique=8 vacuous=0 passed=1")
+PY
+}
+
+transport_semantics_registry_guard() {
+  python3 -I - "${1:-}" <<'PY'
+import hashlib,json,pathlib,sys
+
+T="service_checkpoint_transport_semantics_tests::post_command_other_is_distinct_from_pre_send_drain"
+G="service_checkpoint_transport_semantics_tests::public_and_private_expired_response_grants_recover_exactly_once"
+
+def row(control_id,target,case,source_path,anchor,replacement,predicate):
+    command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",target,"--","--exact","--nocapture","--test-threads=1"]
+    if case is not None:
+        command=["env",f"PHASE285_R1A_GRANT_CASE={case}",*command]
+    mutation_spec={
+        "id":control_id,
+        "target":target,
+        "physical_case":case,
+        "source_path":source_path,
+        "source_anchor":anchor,
+        "replacement":replacement,
+        "late_failure_predicate":predicate,
+    }
+    mutation_spec_bytes=json.dumps(mutation_spec,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+    return {
+        "id":control_id,
+        "target":target,
+        "physical_case":case,
+        "source_path":source_path,
+        "source_anchor":anchor,
+        "replacement":replacement,
+        "late_failure_predicate":predicate,
+        "exact_command":command,
+        "mutation_spec_sha256":hashlib.sha256(mutation_spec_bytes).hexdigest(),
+        "mutated_source_sha256":None,
+        "selected_executable_sha256":None,
+        "execution_status":"executable_pending_run" if case is None else "red_registry_only",
+        "real_target_classification":{
+            "exact_fqn_required":True,
+            "exact_physical_case_required":case is not None,
+            "required_running_count":1,
+            "required_failed_count":1,
+            "required_passed_count":0,
+        },
+        "vacuity_classification":{
+            "compile_failure":"vacuous",
+            "zero_tests":"vacuous",
+            "timeout":"vacuous",
+            "generic_failure":"vacuous",
+            "failure_before_named_predicate":"vacuous",
+            "helper_authored_success":"vacuous",
+            "named_late_predicate":"required",
+        },
+    }
+
+rows=[
+ row("R1A-C01",T,None,"crates/swarm-governance-witness/src/runtime_client.rs","runtime `Other -> OutcomeUnknown`","`Other -> Unavailable`","transport[post-command-other-outcome-unknown]"),
+ row("R1A-C02",T,None,"crates/swarm-governance-witness/src/runtime_client.rs","runtime `NoResponders -> Unavailable`","`NoResponders -> OutcomeUnknown`","transport[no-responders-unavailable]"),
+ row("R1A-C03",G,"held-public","crates/swarm-governance-witness/src/lib.rs","targeted reply-subject permission-event match","accept next unrelated permission event","grant[targeted-public-refusal]"),
+ row("R1A-C04",G,"held-public","crates/swarm-governance-witness/src/public_dispatcher.rs","receipt deadline carried from subscriber admission","construct a fresh deadline after dequeue","deadline[admission-anchor-preserved]"),
+ row("R1A-C05",G,"held-public","crates/swarm-governance-witness/src/public_dispatcher.rs","public `before_first_poll` gate","no-op yield","grant[public-pre-poll-gate-reached]"),
+ row("R1A-C06",G,"held-private","crates/swarm-governance-witness/src/store_proxy_service.rs","private `before_first_poll` gate","no-op yield","grant[private-pre-poll-gate-reached]"),
+ row("R1A-C07",G,"held-private","crates/swarm-governance-witness/src/store_proxy_service.rs","exact replayed signed private CAS returns request-bound service-level `Refused(Conflict)` before atomic CAS","proxy client rewrites that response as `CasApplied`","recovery[stale-private-conflict]"),
+ row("R1A-C08",G,"held-public","crates/swarm-governance-witness/src/service_config.rs","`ResponseEnqueueAttempt { enqueued }` evidence","`PublishAttempt { published }` evidence","evidence[enqueue-not-publication]"),
+ row("R1A-C09",T,None,"crates/swarm-governance-witness/src/lib.rs","relay principal on exact routed Fence subject","witness principal on ordinary Fence subject","transport[relay-routed-responder]"),
+ row("R1A-C10",G,"held-public","crates/swarm-governance-witness/src/lib.rs","observed nine flushed public relay subscriptions and three flushed private relay subscriptions","omit only the nine public subscriptions while retaining and flushing all three private subscriptions","relay[public-route-ready]"),
+ row("R1A-C11",G,"held-private","crates/swarm-governance-witness/src/lib.rs","observed nine flushed public relay subscriptions and three flushed private relay subscriptions","omit only the three private subscriptions while retaining and flushing all nine public subscriptions","relay[private-route-ready]"),
+ row("R1A-C12",T,None,"crates/swarm-governance-witness/src/store_proxy_service.rs","private `InvalidSubject -> Framing/Invalid`","`InvalidSubject -> Unavailable`","private[invalid-subject-invalid]"),
+ row("R1A-C13",T,None,"crates/swarm-governance-witness/src/public_dispatcher.rs","dispatcher `Framing -> Invalid`","`Framing -> Unavailable`","private[framing-invalid]"),
+ row("R1A-C14",T,None,"crates/swarm-governance-witness/src/store_proxy_service.rs","malformed private response decode rejection","accept default response","private[malformed-response-invalid]"),
+ row("R1A-C15",T,None,"crates/swarm-governance-witness/src/store_proxy_service.rs","exact private response operation equality","accept mismatched operation","private[operation-mismatch-invalid]"),
+ row("R1A-C16",T,None,"crates/swarm-governance-witness/src/store_proxy_service.rs","exact private response request-digest equality","accept mismatched digest","private[request-digest-mismatch-invalid]"),
+ row("R1A-C17",G,"held-public","crates/swarm-governance-witness/src/lib.rs","operand receipt `public_pre_enqueue_capture(capture_id,digest)` vs `runtime_recovery_1(digest)`","`runtime_recovery_1` vs `runtime_recovery_2`","recovery[public-lost-replay-operands]"),
+ row("R1A-C18",G,"held-private","crates/swarm-governance-witness/src/lib.rs","execute the private-response/CAS/store/final-read transitive validator","bypass that validator; the unchanged target's hostile cross-wired private capture must then survive","recovery[private-cas-binding-required]"),
+ row("R1A-C19",G,"held-private","crates/swarm-governance-witness/src/lib.rs","layer-relative receipt/snapshot join","directly assert private `CasApplied` bytes equal outer public `Establish` bytes","recovery[cross-layer-bytes-differ]"),
+ row("R1A-C20",G,"no-hold-public","crates/swarm-governance-witness/src/lib.rs","parent awaits and consumes typed child result, then writes bound later parent-join record","drop/detach handle and set marker true","no-hold[public-parent-join-consumed]"),
+ row("R1A-C21",G,"no-hold-private","crates/swarm-governance-witness/src/lib.rs","parent awaits and consumes typed child result, then writes bound later parent-join record","drop/detach handle and set marker true","no-hold[private-parent-join-consumed]"),
+ row("R1A-C22",G,"held-public","crates/swarm-governance-witness/src/lib.rs","real public pre-enqueue observer capture","no-op observer plus recovery-derived substitute bytes","capture[public-first-payload-real]"),
+ row("R1A-C23",G,"held-private","crates/swarm-governance-witness/src/lib.rs","real private pre-enqueue observer capture","no-op observer plus request-derived substitute `CasApplied` bytes","capture[private-first-payload-real]"),
+]
+
+no_hold_join_anchor='''            let first = must(
+                tokio::time::timeout(
+                    Duration::from_millis(PUBLIC_RESPONSE_GRANT_MILLIS + 2_000),
+                    first,
+                )
+                .await,
+                "no-hold response grant request timeout",
+            );
+            let (response, response_bytes, child_receipt) = must(
+                must(first, "no-hold response grant request task panicked"),
+                "no-hold response grant requester response",
+            );
+            assert!(
+                matches!(response, WitnessServiceResponseV1::Establish(_)),
+                "no-hold response grant returned the wrong response variant: {leg:?}",
+            );
+            let private_capture = if let Some(receipt) = private_receipt.as_ref() {
+                Some(must(
+                    targeted_response_capture(
+                        &mut capture_rx,
+                        WorkerKindV1::Private,
+                        &receipt.reply,
+                    )
+                    .await,
+                    "no-hold private response capture",
+                ))
+            } else {
+                None
+            };
+            let public_capture = must(
+                targeted_response_capture(
+                    &mut capture_rx,
+                    WorkerKindV1::Public,
+                    &public_receipt.reply,
+                )
+                .await,
+                "no-hold response grant first payload capture",
+            );
+            assert_eq!(public_capture.receipt.invocation_token, relay_token);
+            assert_eq!(public_capture.receipt.physical_case, physical_case);
+            let parent_receipt = requester_ledger.record_parent(
+                &relay_token,
+                physical_case,
+                &child_task_id,
+                &child_receipt,
+                &response_bytes,
+            );
+            let parent_join_bound = requester_ledger.contains_parent(&parent_receipt)
+                && parent_receipt.parent_sequence > child_receipt.child_sequence
+                && parent_receipt.returned_response_sha256 == sha256_hex(&response_bytes);'''
+
+no_hold_detach_template='''            assert!(
+                matches!(leg, GrantExpiryLegV1::__LEG__),
+                "no-hold detached control physical case",
+            );
+            let _fabricated_parent_marker = "__MARKER__";
+            drop(first);
+            let private_capture = if let Some(receipt) = private_receipt.as_ref() {
+                Some(must(
+                    targeted_response_capture(
+                        &mut capture_rx,
+                        WorkerKindV1::Private,
+                        &receipt.reply,
+                    )
+                    .await,
+                    "no-hold private response capture",
+                ))
+            } else {
+                None
+            };
+            let public_capture = must(
+                targeted_response_capture(
+                    &mut capture_rx,
+                    WorkerKindV1::Public,
+                    &public_receipt.reply,
+                )
+                .await,
+                "no-hold response grant first payload capture",
+            );
+            assert_eq!(public_capture.receipt.invocation_token, relay_token);
+            assert_eq!(public_capture.receipt.physical_case, physical_case);
+            let response_bytes = public_capture.payload.clone();
+            let response = must(
+                WitnessServiceResponseV1::decode_for_client_request(&response_bytes, &request),
+                "no-hold detached response decode",
+            );
+            assert!(
+                matches!(response, WitnessServiceResponseV1::Establish(_)),
+                "no-hold response grant returned the wrong response variant: {leg:?}",
+            );
+            let child_receipt = must(
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        let recorded = {
+                            requester_ledger
+                                .rows
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .iter()
+                                .find_map(|row| match row {
+                                    RequesterJoinLedgerRowV1::Child(receipt)
+                                        if receipt.child_task_id == child_task_id =>
+                                    {
+                                        Some(receipt.clone())
+                                    }
+                                    _ => None,
+                                })
+                        };
+                        if let Some(receipt) = recorded {
+                            break receipt;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await,
+                "no-hold detached child terminal receipt absent",
+            );
+            let parent_receipt = RequesterParentJoinReceiptV1 {
+                invocation_token: relay_token.clone(),
+                physical_case: physical_case.to_string(),
+                child_task_id: child_task_id.clone(),
+                child_record_sha256: sha256_hex(&must(
+                    canonical_wire_bytes(&child_receipt),
+                    "no-hold fabricated parent child receipt bytes",
+                )),
+                returned_response_sha256: sha256_hex(&response_bytes),
+                parent_sequence: child_receipt.child_sequence.saturating_add(1),
+            };
+            let parent_join_bound = requester_ledger.contains_parent(&parent_receipt)
+                && parent_receipt.parent_sequence > child_receipt.child_sequence
+                && parent_receipt.returned_response_sha256 == sha256_hex(&response_bytes);'''
+
+executable_specs={
+ "transport[post-command-other-outcome-unknown]":(
+  "async_nats::RequestErrorKind::Other => RuntimeWitnessClientErrorV1::OutcomeUnknown,",
+  "async_nats::RequestErrorKind::Other => RuntimeWitnessClientErrorV1::Unavailable,",
+ ),
+ "transport[no-responders-unavailable]":(
+  "async_nats::RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::Unavailable,",
+  "async_nats::RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::OutcomeUnknown,",
+ ),
+ "transport[relay-routed-responder]":(
+  '''        let relay = must(
+            connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await,
+            "transport Other relay connection",
+        );
+        let subject = PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Fence);
+        let responder_subject = "swarm.governance.witness.relay.v1.fence";''',
+  '''        let relay = must(
+            connect_deadline_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await,
+            "transport Other relay connection",
+        );
+        let subject = PublicWitnessServiceConfigV1::subject_for(WitnessServiceOperationV1::Fence);
+        let responder_subject = subject;''',
+ ),
+ "private[invalid-subject-invalid]":(
+  "async_nats::RequestErrorKind::InvalidSubject => PublicWitnessProxyTransportErrorV1::Framing,",
+  "async_nats::RequestErrorKind::InvalidSubject => PublicWitnessProxyTransportErrorV1::Unavailable,",
+ ),
+ "private[framing-invalid]":(
+  "PublicWitnessProxyTransportErrorV1::Framing => PublicWitnessDispatchErrorV1::Invalid,",
+  "PublicWitnessProxyTransportErrorV1::Framing => PublicWitnessDispatchErrorV1::Unavailable,",
+ ),
+ "private[malformed-response-invalid]":(
+  '''        let response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.operation != operation || response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn request_on_subject_for_test''',
+  '''        let response = match WitnessStoreProxyResponseV1::decode(&message.payload) {
+            Ok(response) => response,
+            Err(_) => WitnessStoreProxyResponseV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation,
+                request_digest: request_digest.clone(),
+                body: WitnessStoreProxyResponseBodyV1::Refused {
+                    failure_code: WitnessStoreProxyFailureCodeV1::Configuration,
+                    observed_revision: None,
+                    observed_value_digest: None,
+                },
+            },
+        };
+        if response.operation != operation || response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn request_on_subject_for_test''',
+ ),
+ "private[operation-mismatch-invalid]":(
+  '''        let response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.operation != operation || response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn request_on_subject_for_test''',
+  '''        let response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn request_on_subject_for_test''',
+ ),
+ "private[request-digest-mismatch-invalid]":(
+  '''        let response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.operation != operation || response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn request_on_subject_for_test''',
+ '''        let response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.operation != operation {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn request_on_subject_for_test''',
+ ),
+ "grant[targeted-public-refusal]":(
+  "permission_event(&mut witness_events, &targeted_receipt.reply).await",
+  "next_publish_permission_violation(&mut witness_events).await",
+ ),
+ "deadline[admission-anchor-preserved]":(
+  '''    run_observed_worker_message(
+        WorkerKindV1::Public,
+        message.receipt_deadline,
+        observer,
+        publisher,
+        message.reply,
+        |_| {
+            dispatcher.dispatch_before(&message.subject, &message.payload, message.receipt_deadline)
+        },
+    )''',
+  '''    let fresh_deadline = ReceiptDeadlineV1::public();
+    run_observed_worker_message(
+        WorkerKindV1::Public,
+        fresh_deadline,
+        observer,
+        publisher,
+        message.reply,
+        |_| dispatcher.dispatch_before(&message.subject, &message.payload, fresh_deadline),
+    )''',
+ ),
+ "grant[public-pre-poll-gate-reached]":(
+  "gate.before_first_poll(expected_subject).await;",
+  "tokio::task::yield_now().await;",
+ ),
+ "grant[private-pre-poll-gate-reached]":(
+  "gate.before_first_poll(subject).await;",
+  "tokio::task::yield_now().await;",
+ ),
+ "evidence[enqueue-not-publication]":(
+  '''    #[serde(rename = "response_enqueue_attempt")]
+    ResponseEnqueueAttempt {
+        worker: WorkerKindV1,
+        enqueued: bool,
+    },''',
+  '''    #[serde(rename = "publish_attempt")]
+    ResponseEnqueueAttempt {
+        worker: WorkerKindV1,
+        #[serde(rename = "published")]
+        enqueued: bool,
+    },''',
+ ),
+ "relay[public-route-ready]":(
+  '''        let relay_legs = must(
+            LiveRelayLegsV1::start(false).await,
+            "response grant relay legs startup",
+        );''',
+  '''        let relay_legs = must(
+            LiveRelayLegsV1::start_selective(false, RelaySubscriptionOmissionV1::Public).await,
+            "response grant relay legs startup",
+        );''',
+ ),
+ "relay[private-route-ready]":(
+  '''        let relay_legs = must(
+            LiveRelayLegsV1::start(false).await,
+            "response grant relay legs startup",
+        );''',
+  '''        let relay_legs = must(
+            LiveRelayLegsV1::start_selective(false, RelaySubscriptionOmissionV1::Private).await,
+            "response grant relay legs startup",
+        );''',
+ ),
+ "recovery[stale-private-conflict]":(
+  '''        let response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.operation != operation || response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+}
+
+pub(crate) fn validate_store_proxy_client_deadline''',
+  '''        let mut response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.operation != operation || response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        let rewritten = match (&request.body, &response.body) {
+            (
+                swarm_governance::witness_engine::store::WitnessStoreProxyRequestBodyV1::CompareAndSwap {
+                    stream_id,
+                    expected_revision,
+                    proposed_envelope,
+                    ..
+                },
+                WitnessStoreProxyResponseBodyV1::Refused {
+                    observed_revision: Some(new_revision),
+                    ..
+                },
+            ) => Some((
+                stream_id.clone(),
+                *expected_revision,
+                *new_revision,
+                proposed_envelope
+                    .signed_envelope_digest()
+                    .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?,
+            )),
+            _ => None,
+        };
+        if let Some((stream_id, previous_revision, new_revision, acknowledged_value_digest)) =
+            rewritten
+        {
+            response.body = WitnessStoreProxyResponseBodyV1::CasApplied {
+                stream_id,
+                previous_revision,
+                new_revision,
+                acknowledged_value_digest,
+            };
+        }
+        Ok(response)
+    }
+}
+
+pub(crate) fn validate_store_proxy_client_deadline''',
+ ),
+ "recovery[public-lost-replay-operands]":(
+  '''            let operand_receipt = PublicRecoveryOperandReceiptV1 {
+                left_kind: "public_pre_enqueue_capture",
+                left_capture_id: first_capture.receipt.capture_id,
+                left_sha256: first_capture.receipt.payload_sha256.clone(),
+                right_kind: "runtime_recovery_1",
+                right_sha256: sha256_hex(&replay_one_bytes),
+                equal: first_capture.payload == replay_one_bytes,
+            };''',
+  '''            let operand_receipt = PublicRecoveryOperandReceiptV1 {
+                left_kind: "runtime_recovery_1",
+                left_capture_id: replay_one_capture.receipt.capture_id,
+                left_sha256: sha256_hex(&replay_one_bytes),
+                right_kind: "runtime_recovery_2",
+                right_sha256: sha256_hex(&replay_two_bytes),
+                equal: replay_one_bytes == replay_two_bytes,
+            };''',
+ ),
+ "recovery[private-cas-binding-required]":(
+  '''validate_private_cas_join(
+                    &hostile_cross_wired_capture,
+                    &proxy_request_records,
+                    &store_records,
+                    &final_read,
+                    PrivateCasJoinContextV1 {
+                        public_request: &request,
+                        challenge: &fixture.challenge,
+                        binding: &fixture.binding,
+                        outer_response: &replay_one,
+                    },
+                )''',
+  '''{
+                    let _bypassed_validator_input = &hostile_cross_wired_capture;
+                    Ok::<PrivateCasJoinReceiptV1, ProtocolError>(private_join.clone())
+                }''',
+ ),
+ "recovery[cross-layer-bytes-differ]":(
+  '''            assert_ne!(
+                first_capture.payload, replay_one_bytes,
+                "recovery[cross-layer-bytes-differ]",
+            );''',
+  '''            if first_capture.payload != replay_one_bytes {
+                panic!("recovery[cross-layer-bytes-differ]");
+            }''',
+ ),
+ "no-hold[public-parent-join-consumed]":(
+  no_hold_join_anchor,
+  no_hold_detach_template.replace("__LEG__","Public").replace("__MARKER__","fabricated-no-hold-public-parent-join"),
+ ),
+ "no-hold[private-parent-join-consumed]":(
+  no_hold_join_anchor,
+  no_hold_detach_template.replace("__LEG__","Private").replace("__MARKER__","fabricated-no-hold-private-parent-join"),
+ ),
+ "capture[public-first-payload-real]":(
+  "            let public_evidence_capture = &first_capture;",
+  "            let public_evidence_capture = &replay_one_capture;",
+ ),
+ "capture[private-first-payload-real]":(
+  "            let private_evidence_capture = &first_capture;",
+  '''            let (substitute_stream_id, substitute_previous_revision) =
+                match &captured_private_request.body {
+                    WitnessStoreProxyRequestBodyV1::CompareAndSwap {
+                        stream_id,
+                        expected_revision,
+                        ..
+                    } => (stream_id.clone(), *expected_revision),
+                    _ => panic!("captured private request was not CompareAndSwap"),
+                };
+            let request_derived_substitute = WitnessStoreProxyResponseV1 {
+                schema_version: PROTOCOL_SCHEMA_VERSION,
+                operation: WitnessStoreProxyOperationV1::CompareAndSwap,
+                request_digest: captured_private_request.request_digest.clone(),
+                body: WitnessStoreProxyResponseBodyV1::CasApplied {
+                    stream_id: substitute_stream_id,
+                    previous_revision: substitute_previous_revision,
+                    new_revision: substitute_previous_revision.saturating_add(1),
+                    acknowledged_value_digest: captured_private_request.request_digest.clone(),
+                },
+            };
+            let request_derived_private_capture = RecordedResponseCaptureV1 {
+                receipt: first_capture.receipt.clone(),
+                payload: must(
+                    canonical_wire_bytes(&request_derived_substitute),
+                    "request-derived private substitute bytes",
+                ),
+            };
+            let private_evidence_capture = &request_derived_private_capture;''',
+ ),
+}
+for item in rows:
+    if item["late_failure_predicate"] in executable_specs:
+        try:
+            item["source_anchor"],item["replacement"]=executable_specs[item["late_failure_predicate"]]
+        except KeyError as error:
+            raise SystemExit("transport_registry[missing-executable-spec]") from error
+        item["execution_status"]="executable_pending_run"
+        mutation_spec={key:item[key] for key in ("id","target","physical_case","source_path","source_anchor","replacement","late_failure_predicate")}
+        mutation_spec_bytes=json.dumps(mutation_spec,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+        item["mutation_spec_sha256"]=hashlib.sha256(mutation_spec_bytes).hexdigest()
+
+expected=[f"R1A-C{index:02d}" for index in range(1,24)]
+ids=[item["id"] for item in rows]
+if len(rows)!=23 or ids!=expected or len(set(ids))!=23:
+    raise SystemExit("transport_registry[set-order-cardinality]")
+if any(item["target"] not in (T,G) for item in rows):
+    raise SystemExit("transport_registry[target]")
+allowed_cases={None,"held-public","held-private","no-hold-public","no-hold-private"}
+if any(item["physical_case"] not in allowed_cases for item in rows):
+    raise SystemExit("transport_registry[case]")
+for item in rows:
+    expected_command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",item["target"],"--","--exact","--nocapture","--test-threads=1"]
+    if item["physical_case"] is not None:
+        expected_command=["env",f"PHASE285_R1A_GRANT_CASE={item['physical_case']}",*expected_command]
+    if item["exact_command"]!=expected_command:
+        raise SystemExit("transport_registry[command]")
+    if not item["source_anchor"] or not item["replacement"] or item["source_anchor"]==item["replacement"]:
+        raise SystemExit("transport_registry[source-mutation]")
+    if not item["late_failure_predicate"].endswith("]"):
+        raise SystemExit("transport_registry[predicate]")
+spec_digests=[item["mutation_spec_sha256"] for item in rows]
+if len(set(spec_digests))!=23 or any(len(value)!=64 for value in spec_digests):
+    raise SystemExit("transport_registry[unique-digest]")
+executable_ids={f"R1A-C{index:02d}" for index in range(1,24)}
+if any(item["execution_status"] != ("executable_pending_run" if item["id"] in executable_ids else "red_registry_only") or item["mutated_source_sha256"] is not None or item["selected_executable_sha256"] is not None for item in rows):
+    raise SystemExit("transport_registry[truthfulness]")
+encoded=json.dumps(rows,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+registry_sha256=hashlib.sha256(encoded).hexdigest()
+if sys.argv[1]:
+    path=pathlib.Path(sys.argv[1])
+    path.write_bytes(encoded+b"\n")
+    path.chmod(0o600)
+print("transport_semantics_registry ids="+",".join(ids))
+print(f"transport_semantics_registry rows=23 unique_ids=23 ordered=1 unique_spec_digests=23 executable=23 red=0 real_target_required=23 vacuity_classified=23 registry_sha256={registry_sha256} passed=1")
+PY
+}
+
+transport_semantics_compiled_controls() {
+  local accepted_tree="$1" scratch="$2"
+  local exact="$scratch/compiled-source"
+  local registry="$scratch/transport-r1a-registry.json"
+  mkdir -m 700 -- "$exact"
+  git -C "$ROOT_DIR" archive "$accepted_tree" | tar -xf - -C "$exact"
+  local relative
+  for relative in \
+    crates/swarm-governance-witness/src/lib.rs \
+    crates/swarm-governance-witness/src/public_dispatcher.rs \
+    crates/swarm-governance-witness/src/runtime_client.rs \
+    crates/swarm-governance-witness/src/service_config.rs \
+    crates/swarm-governance-witness/src/store_proxy_service.rs \
+    tools/check-phase285-witness-conformance.sh \
+    tools/fixtures/phase285-witness-integrity.json; do
+    cp -- "$ROOT_DIR/$relative" "$exact/$relative"
+  done
+  transport_semantics_registry_guard "$registry"
+  python3 -I -u - "$exact" "$registry" <<'PY'
+import hashlib,json,os,pathlib,re,shutil,subprocess,sys
+
+template=pathlib.Path(sys.argv[1])
+registry_path=pathlib.Path(sys.argv[2])
+scratch=template.parent
+sources_parent=scratch/"sources"
+targets_parent=scratch/"targets"
+if sources_parent.exists() or targets_parent.exists():
+    raise SystemExit("transport_compiled[confined-roots-preexist]")
+sources_parent.mkdir(mode=0o700)
+targets_parent.mkdir(mode=0o700)
+rows=json.loads(registry_path.read_text())
+transport="service_checkpoint_transport_semantics_tests::post_command_other_is_distinct_from_pre_send_drain"
+controls=[row for row in rows if row["target"]==transport and row["physical_case"] is None]
+if len(controls)!=8 or any(row["execution_status"]!="executable_pending_run" for row in controls):
+    raise SystemExit("transport_compiled[registry-selection]")
+expected_ids=[f"R1A-C{index:02d}" for index in (1,2,9,12,13,14,15,16)]
+if [row["id"] for row in controls]!=expected_ids:
+    raise SystemExit("transport_compiled[registry-order]")
+
+base=os.environ.copy()
+base.pop("CARGO_TARGET_DIR",None)
+base.update({"CARGO_INCREMENTAL":"0","CARGO_NET_OFFLINE":"true"})
+source_digests=[]
+executable_digests=[]
+source_identity_digests=[]
+target_identity_digests=[]
+receipts=[]
+for row in controls:
+    source_root=sources_parent/row["id"]
+    target_root=targets_parent/row["id"]
+    if source_root.exists() or target_root.exists():
+        raise SystemExit(f"transport_compiled[{row['id']}:identity-reuse]")
+    shutil.copytree(template,source_root)
+    path=source_root/row["source_path"]
+    original=path.read_text()
+    original_digest=hashlib.sha256(original.encode()).hexdigest()
+    anchor=row["source_anchor"]
+    replacement=row["replacement"]
+    count=original.count(anchor)
+    if count!=1:
+        raise SystemExit(f"transport_compiled[{row['id']}:anchor:{count}]")
+    mutant=original.replace(anchor,replacement,1)
+    source_digest=hashlib.sha256(mutant.encode()).hexdigest()
+    source_digests.append(source_digest)
+    path.write_text(mutant)
+    command=row["exact_command"]
+    argv_digest=hashlib.sha256(json.dumps(command,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+    source_identity=hashlib.sha256(str(source_root.resolve()).encode()).hexdigest()
+    target_identity=hashlib.sha256(str(target_root.resolve()).encode()).hexdigest()
+    source_identity_digests.append(source_identity)
+    target_identity_digests.append(target_identity)
+    row_env=base.copy()
+    row_env["CARGO_TARGET_DIR"]=str(target_root)
+    print(f"transport_compiled_progress id={row['id']} target={row['target']} case=none state=start",flush=True)
+    frozen_digest=None
+    try:
+        try:
+            result=subprocess.run(
+                command,
+                cwd=source_root,
+                env=row_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise SystemExit(f"transport_compiled[{row['id']}:vacuous-timeout]\n{error.stdout or ''}") from error
+    finally:
+        frozen_digest=hashlib.sha256(path.read_bytes()).hexdigest()
+        path.write_text(original)
+    output=result.stdout
+    if frozen_digest!=source_digest:
+        raise SystemExit(f"transport_compiled[{row['id']}:mutated-source-not-frozen]")
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=original_digest:
+        raise SystemExit(f"transport_compiled[{row['id']}:source-not-restored]")
+    running=re.findall(r"^running (\d+) tests?$",output,re.M)
+    summary=re.findall(
+        r"^test result: FAILED\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;",
+        output,
+        re.M,
+    )
+    test_start=f"test {row['target']} ... "
+    predicate=row["late_failure_predicate"]
+    if result.returncode==0:
+        raise SystemExit(f"transport_compiled[{row['id']}:survived]\n{output}")
+    target_start=output.find(test_start)
+    failures_start=output.find("\nfailures:\n")
+    target_failed=output.find("\nFAILED\n",target_start)
+    if (
+        running!=["1"]
+        or summary!=[("0","1","0","0","22")]
+        or output.count(test_start)!=1
+        or target_start<0
+        or target_failed<0
+        or failures_start<0
+        or not target_start<target_failed<failures_start
+    ):
+        raise SystemExit(f"transport_compiled[{row['id']}:vacuous-real-target]\n{output}")
+    predicate_position=output.find(predicate)
+    first_panic=output.find("panicked at")
+    summary_position=output.find("test result: FAILED.")
+    if predicate_position<0 or first_panic<0 or not first_panic<predicate_position<summary_position:
+        raise SystemExit(f"transport_compiled[{row['id']}:vacuous-predicate]\n{output}")
+    selected_matches=re.findall(r"Running unittests src/lib\.rs \(([^)]+)\)",output)
+    if len(selected_matches)!=1:
+        raise SystemExit(f"transport_compiled[{row['id']}:selected-executable]\n{output}")
+    selected=pathlib.Path(selected_matches[0])
+    if not selected.is_file():
+        raise SystemExit(f"transport_compiled[{row['id']}:selected-executable-absent]")
+    try:
+        selected.resolve().relative_to(target_root.resolve())
+    except ValueError as error:
+        raise SystemExit(f"transport_compiled[{row['id']}:selected-executable-target]") from error
+    executable_digest=hashlib.sha256(selected.read_bytes()).hexdigest()
+    executable_digests.append(executable_digest)
+    receipt={
+        "id":row["id"],
+        "target":row["target"],
+        "physical_case":row["physical_case"],
+        "late_failure_predicate":predicate,
+        "exact_argv_sha256":argv_digest,
+        "mutated_source_sha256":source_digest,
+        "selected_executable_sha256":executable_digest,
+        "source_root_identity_sha256":source_identity,
+        "target_root_identity_sha256":target_identity,
+        "running":1,
+        "passed":0,
+        "failed":1,
+        "ignored":0,
+        "measured":0,
+        "filtered_out":22,
+        "compile_failure":False,
+        "timeout":False,
+        "generic_failure":False,
+        "failure_before_named_predicate":False,
+        "helper_authored_success":False,
+        "vacuous":False,
+    }
+    receipts.append(receipt)
+    print(
+        f"transport_compiled_control id={row['id']} target={row['target']} case=none "
+        f"running=1 passed=0 failed=1 ignored=0 measured=0 filtered_out=22 "
+        f"predicate={predicate} mutated_source_sha256={source_digest} "
+        f"selected_executable_sha256={executable_digest} source_root_identity_sha256={source_identity} "
+        f"target_root_identity_sha256={target_identity} exact_argv_sha256={argv_digest} vacuous=0",
+        flush=True,
+    )
+if len(set(source_digests))!=8:
+    raise SystemExit("transport_compiled[mutated-source-digests]")
+if len(source_identity_digests)!=8 or len(set(source_identity_digests))!=8:
+    raise SystemExit("transport_compiled[source-root-identity-reuse]")
+if len(target_identity_digests)!=8 or len(set(target_identity_digests))!=8:
+    raise SystemExit("transport_compiled[target-root-identity-reuse]")
+if len(receipts)!=8 or any(receipt["vacuous"] for receipt in receipts):
+    raise SystemExit("transport_compiled[receipts]")
+receipts_bytes=json.dumps(receipts,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+print(
+    "transport_semantics_compiled ids="+",".join(receipt["id"] for receipt in receipts)
+    +f" mutations=8 unique_source_digests=8 unique_source_roots=8 unique_target_roots=8 selected_executables={len(executable_digests)} "
+    +f"receipt_sha256={hashlib.sha256(receipts_bytes).hexdigest()} "
+    +"compiled=8 executed=8 failed=8 vacuous=0 red=15 passed=1"
+)
+
+positive_source=sources_parent/"positive"
+positive_target=targets_parent/"positive"
+if positive_source.exists() or positive_target.exists():
+    raise SystemExit("transport_positive[identity-reuse]")
+shutil.copytree(template,positive_source)
+positive_source_identity=hashlib.sha256(str(positive_source.resolve()).encode()).hexdigest()
+positive_target_identity=hashlib.sha256(str(positive_target.resolve()).encode()).hexdigest()
+if positive_source_identity in source_identity_digests or positive_target_identity in target_identity_digests:
+    raise SystemExit("transport_positive[control-identity-reuse]")
+positive_command=controls[0]["exact_command"]
+positive_env=base.copy()
+positive_env["CARGO_TARGET_DIR"]=str(positive_target)
+print(f"transport_positive_progress target={transport} state=start",flush=True)
+try:
+    positive=subprocess.run(
+        positive_command,
+        cwd=positive_source,
+        env=positive_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=180,
+    )
+except subprocess.TimeoutExpired as error:
+    raise SystemExit(f"transport_positive[timeout]\n{error.stdout or ''}") from error
+positive_output=positive.stdout
+positive_running=re.findall(r"^running (\d+) tests?$",positive_output,re.M)
+positive_summary=re.findall(
+    r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;",
+    positive_output,
+    re.M,
+)
+positive_start=f"test {transport} ... "
+positive_start_position=positive_output.find(positive_start)
+positive_ok_position=positive_output.find("\nok\n",positive_start_position)
+positive_summary_position=positive_output.find("test result: ok.")
+required_fields=("response=1","timed_out=1","no_responders=1","invalid_subject=1","post_command_other=1","shipping_other=outcome_unknown","responder_observed=1","pre_send_observed=0","relay_routed_responder=1","private_invalid_subject_invalid=1","private_malformed_invalid=1","private_operation_mismatch_invalid=1","private_digest_mismatch_invalid=1","passed=1")
+marker_rows=[line for line in positive_output.splitlines() if "transport_semantics response=1" in line]
+if (
+    positive.returncode!=0
+    or positive_running!=["1"]
+    or positive_summary!=[("1","0","0","0","22")]
+    or positive_output.count(positive_start)!=1
+    or positive_start_position<0
+    or positive_ok_position<0
+    or positive_summary_position<0
+    or not positive_start_position<positive_ok_position<positive_summary_position
+    or len(marker_rows)!=1
+    or any(field not in marker_rows[0] for field in required_fields)
+):
+    raise SystemExit(f"transport_positive[real-target]\n{positive_output}")
+positive_selected_matches=re.findall(r"Running unittests src/lib\.rs \(([^)]+)\)",positive_output)
+if len(positive_selected_matches)!=1:
+    raise SystemExit(f"transport_positive[selected-executable]\n{positive_output}")
+positive_selected=pathlib.Path(positive_selected_matches[0])
+if not positive_selected.is_file():
+    raise SystemExit("transport_positive[selected-executable-absent]")
+try:
+    positive_selected.resolve().relative_to(positive_target.resolve())
+except ValueError as error:
+    raise SystemExit("transport_positive[selected-executable-target]") from error
+positive_executable_digest=hashlib.sha256(positive_selected.read_bytes()).hexdigest()
+print(
+    f"transport_positive target={transport} running=1 passed=1 failed=0 ignored=0 measured=0 filtered_out=22 "
+    f"selected_executable_sha256={positive_executable_digest} source_root_identity_sha256={positive_source_identity} "
+    f"target_root_identity_sha256={positive_target_identity} control_source_reuse=0 control_target_reuse=0 passed_gate=1",
+    flush=True,
+)
+PY
+}
+
+transport_semantics_held_public_compiled_controls() {
+  local accepted_tree="$1" scratch="$2" requested_id="${3:-}"
+  local template="$scratch/held-public-template"
+  local registry="$scratch/transport-r1a-registry.json"
+  mkdir -m 700 -- "$template"
+  git -C "$ROOT_DIR" archive "$accepted_tree" | tar -xf - -C "$template"
+  local relative
+  for relative in \
+    crates/swarm-governance-witness/src/lib.rs \
+    crates/swarm-governance-witness/src/public_dispatcher.rs \
+    crates/swarm-governance-witness/src/runtime_client.rs \
+    crates/swarm-governance-witness/src/service_config.rs \
+    crates/swarm-governance-witness/src/store_proxy_service.rs \
+    tools/check-phase285-witness-conformance.sh \
+    tools/fixtures/phase285-witness-integrity.json; do
+    cp -- "$ROOT_DIR/$relative" "$template/$relative"
+  done
+  transport_semantics_registry_guard "$registry"
+  python3 -I -u - "$template" "$registry" "$accepted_tree" "$requested_id" <<'PY'
+import hashlib,json,os,pathlib,re,shutil,subprocess,sys
+
+template=pathlib.Path(sys.argv[1])
+registry_path=pathlib.Path(sys.argv[2])
+tree=sys.argv[3]
+requested_id=sys.argv[4]
+scratch=template.parent
+sources_parent=scratch/"grant-control-sources"
+targets_parent=scratch/"grant-control-targets"
+if sources_parent.exists() or targets_parent.exists():
+    raise SystemExit("grant_compiled[confined-roots-preexist]")
+sources_parent.mkdir(mode=0o700)
+targets_parent.mkdir(mode=0o700)
+rows=json.loads(registry_path.read_text())
+target_name="service_checkpoint_transport_semantics_tests::public_and_private_expired_response_grants_recover_exactly_once"
+controls=[row for row in rows if row["target"]==target_name and row["physical_case"]=="held-public" and row["execution_status"]=="executable_pending_run"]
+expected_ids=[f"R1A-C{index:02d}" for index in (3,4,5,8,10,17,22)]
+if requested_id:
+    controls=[row for row in rows if row["id"]==requested_id and row["target"]==target_name and row["execution_status"]=="executable_pending_run"]
+    expected_ids=[requested_id]
+if [row["id"] for row in controls]!=expected_ids:
+    raise SystemExit("grant_compiled[registry-selection]")
+outer_token=os.environ.get("PHASE285_RELAY_TOPOLOGY_TOKEN","")
+if not outer_token.startswith("relay-phase285-"):
+    raise SystemExit("grant_compiled[relay-topology-token]")
+base=os.environ.copy()
+base.pop("CARGO_TARGET_DIR",None)
+base.update({"CARGO_INCREMENTAL":"0","CARGO_NET_OFFLINE":"true"})
+source_digests=[]
+source_identities=[]
+target_identities=[]
+executable_digests=[]
+process_ids=[]
+token_digests=[]
+receipts=[]
+for ordinal,row in enumerate(controls,1):
+    physical_case=row["physical_case"]
+    if physical_case not in ("held-public","held-private","no-hold-public","no-hold-private"):
+        raise SystemExit(f"grant_compiled[{row['id']}:physical-case]")
+    source_root=sources_parent/row["id"]
+    target_root=targets_parent/row["id"]
+    if source_root.exists() or target_root.exists():
+        raise SystemExit(f"grant_compiled[{row['id']}:identity-reuse]")
+    shutil.copytree(template,source_root)
+    path=source_root/row["source_path"]
+    original=path.read_text()
+    original_digest=hashlib.sha256(original.encode()).hexdigest()
+    anchor=row["source_anchor"]
+    replacement=row["replacement"]
+    count=original.count(anchor)
+    if count!=1:
+        raise SystemExit(f"grant_compiled[{row['id']}:anchor:{count}]")
+    mutant=original.replace(anchor,replacement,1)
+    source_digest=hashlib.sha256(mutant.encode()).hexdigest()
+    if source_digest in source_digests:
+        raise SystemExit(f"grant_compiled[{row['id']}:mutated-source-reuse]")
+    source_digests.append(source_digest)
+    path.write_text(mutant)
+    source_identity=hashlib.sha256(str(source_root.resolve()).encode()).hexdigest()
+    target_identity=hashlib.sha256(str(target_root.resolve()).encode()).hexdigest()
+    source_identities.append(source_identity)
+    target_identities.append(target_identity)
+    invocation_token=f"{outer_token}-{physical_case}-{row['id'].lower()}-{hashlib.sha256((tree+':'+row['id']).encode()).hexdigest()[:16]}"
+    token_digest=hashlib.sha256(invocation_token.encode()).hexdigest()
+    if token_digest in token_digests:
+        raise SystemExit(f"grant_compiled[{row['id']}:invocation-token-reuse]")
+    token_digests.append(token_digest)
+    row_env=base.copy()
+    row_env.update({"CARGO_TARGET_DIR":str(target_root),"PHASE285_RELAY_TOPOLOGY_TOKEN":invocation_token})
+    command=row["exact_command"]
+    argv_digest=hashlib.sha256(json.dumps(command,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+    print(f"grant_compiled_progress id={row['id']} case={physical_case} process={ordinal}/{len(controls)} state=start",flush=True)
+    frozen_digest=None
+    process=subprocess.Popen(
+        command,cwd=source_root,env=row_env,text=True,
+        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+    )
+    process_ids.append(process.pid)
+    try:
+        output,_=process.communicate(timeout=240)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        output,_=process.communicate()
+        frozen_digest=hashlib.sha256(path.read_bytes()).hexdigest()
+        path.write_text(original)
+        raise SystemExit(f"grant_compiled[{row['id']}:vacuous-timeout]\n{output}") from error
+    finally:
+        if frozen_digest is None:
+            frozen_digest=hashlib.sha256(path.read_bytes()).hexdigest()
+            path.write_text(original)
+    if frozen_digest!=source_digest:
+        raise SystemExit(f"grant_compiled[{row['id']}:mutated-source-not-frozen]")
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=original_digest:
+        raise SystemExit(f"grant_compiled[{row['id']}:source-not-restored]")
+    running=re.findall(r"^running (\d+) tests?$",output,re.M)
+    summary=re.findall(
+        r"^test result: FAILED\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;",
+        output,re.M,
+    )
+    test_start=f"test {target_name} ... "
+    test_start_position=output.find(test_start)
+    test_failed_position=output.find("\nFAILED\n",test_start_position)
+    failures_position=output.find("\nfailures:\n")
+    predicate=row["late_failure_predicate"]
+    panic_messages=re.findall(r"panicked at [^\n]+:\n([^\n]+)",output)
+    if process.returncode==0:
+        raise SystemExit(f"grant_compiled[{row['id']}:survived]\n{output}")
+    if (
+        running!=["1"]
+        or summary!=[("0","1","0","0","22")]
+        or output.count(test_start)!=1
+        or test_start_position<0
+        or test_failed_position<0
+        or failures_position<0
+        or not test_start_position<test_failed_position<failures_position
+    ):
+        raise SystemExit(f"grant_compiled[{row['id']}:vacuous-real-target]\n{output}")
+    if not panic_messages or panic_messages[0].strip()!=predicate:
+        first=panic_messages[0].strip() if panic_messages else "unclassified-terminal"
+        raise SystemExit(f"grant_compiled[{row['id']}:vacuous-early:{first}]\n{output}")
+    selected_matches=re.findall(r"Running unittests src/lib\.rs \(([^)]+)\)",output)
+    if len(selected_matches)!=1:
+        raise SystemExit(f"grant_compiled[{row['id']}:selected-executable]\n{output}")
+    selected=pathlib.Path(selected_matches[0])
+    if not selected.is_file():
+        raise SystemExit(f"grant_compiled[{row['id']}:selected-executable-absent]")
+    try:
+        selected.resolve().relative_to(target_root.resolve())
+    except ValueError as error:
+        raise SystemExit(f"grant_compiled[{row['id']}:selected-executable-target]") from error
+    executable_digest=hashlib.sha256(selected.read_bytes()).hexdigest()
+    if executable_digest in executable_digests:
+        raise SystemExit(f"grant_compiled[{row['id']}:selected-executable-reuse]")
+    executable_digests.append(executable_digest)
+    receipt={
+        "id":row["id"],"target":row["target"],"physical_case":physical_case,
+        "late_failure_predicate":predicate,"process_pid":process.pid,
+        "invocation_token_sha256":token_digest,"exact_argv_sha256":argv_digest,
+        "mutated_source_sha256":source_digest,"selected_executable_sha256":executable_digest,
+        "source_root_identity_sha256":source_identity,"target_root_identity_sha256":target_identity,
+        "running":1,"passed":0,"failed":1,"ignored":0,"measured":0,"filtered_out":22,"vacuous":False,
+    }
+    receipts.append(receipt)
+    print(
+        f"grant_compiled_control id={row['id']} target={row['target']} case={physical_case} "
+        f"process_pid={process.pid} running=1 passed=0 failed=1 ignored=0 measured=0 filtered_out=22 "
+        f"predicate={predicate} mutated_source_sha256={source_digest} selected_executable_sha256={executable_digest} "
+        f"source_root_identity_sha256={source_identity} target_root_identity_sha256={target_identity} "
+        f"invocation_token_sha256={token_digest} exact_argv_sha256={argv_digest} vacuous=0",
+        flush=True,
+    )
+expected_count=len(controls)
+if len(receipts)!=expected_count or any(receipt["vacuous"] for receipt in receipts):
+    raise SystemExit("grant_compiled[receipts]")
+if len(set(source_digests))!=expected_count or len(set(source_identities))!=expected_count or len(set(target_identities))!=expected_count or len(set(executable_digests))!=expected_count or len(set(process_ids))!=expected_count or len(set(token_digests))!=expected_count:
+    raise SystemExit("grant_compiled[identity-or-digest-reuse]")
+receipts_bytes=json.dumps(receipts,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+print(
+    "transport_semantics_grant_compiled ids="+",".join(receipt["id"] for receipt in receipts)
+    +f" mutations={expected_count} unique_source_digests={expected_count} unique_source_roots={expected_count} unique_target_roots={expected_count} "
+    +f"unique_executables={expected_count} unique_process_ids={expected_count} unique_invocation_tokens={expected_count} "
+    +f"receipt_sha256={hashlib.sha256(receipts_bytes).hexdigest()} "
+    +f"compiled={expected_count} executed={expected_count} failed={expected_count} vacuous=0 remaining_red=0 passed=1"
+)
+PY
+}
+
+run_service_checkpoint_transport_semantics_focus() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint transport tree is malformed" >&2; return 1; }
+  scratch="$(phase285_create_confined_scratch phase285-transport-semantics)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  transport_semantics_registry_guard
+  transport_semantics_compiled_controls "$accepted_tree" "$scratch"
+  echo "service_checkpoint_transport_semantics target=T request_branches=5 private_invalid_rows=4 compiled_controls=8 red_controls=15 passed=1"
+}
+
+run_service_checkpoint_held_public_controls_focus() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint held-public tree is malformed" >&2; return 1; }
+  [[ "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" == relay-phase285-* ]] || { echo "service checkpoint held-public relay topology token is absent" >&2; return 1; }
+  [[ -f "${SWARM_NATS_RELAY_CREDENTIAL_PATH:-}" ]] || { echo "service checkpoint held-public relay credential is absent" >&2; return 1; }
+  scratch="$(phase285_create_confined_scratch phase285-held-public-controls)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  transport_semantics_registry_guard
+  transport_semantics_held_public_compiled_controls "$accepted_tree" "$scratch"
+  echo "service_checkpoint_held_public_controls target=G case=held-public compiled_controls=7 remaining_red_controls=0 passed=1"
+}
+
+run_service_checkpoint_r1a_control_focus() {
+  local control_id="${1:?control ID required}"
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch
+  case "$control_id" in R1A-C06|R1A-C07|R1A-C10|R1A-C11|R1A-C17|R1A-C18|R1A-C19|R1A-C20|R1A-C21|R1A-C22|R1A-C23) ;; *) echo "unsupported isolated R1a control: $control_id" >&2; return 2 ;; esac
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint R1a control tree is malformed" >&2; return 1; }
+  [[ "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" == relay-phase285-* ]] || { echo "service checkpoint R1a control relay topology token is absent" >&2; return 1; }
+  [[ -f "${SWARM_NATS_RELAY_CREDENTIAL_PATH:-}" ]] || { echo "service checkpoint R1a control relay credential is absent" >&2; return 1; }
+  scratch="$(phase285_create_confined_scratch phase285-r1a-control)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  transport_semantics_held_public_compiled_controls "$accepted_tree" "$scratch" "$control_id"
+  echo "service_checkpoint_r1a_control id=$control_id compiled_controls=1 remaining_red_controls=0 passed=1"
+}
+
+run_service_checkpoint_grant_recovery_positive_focus() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local scratch source target relative
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint grant-recovery tree is malformed" >&2; return 1; }
+  [[ "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" == relay-phase285-* ]] || { echo "service checkpoint grant-recovery relay topology token is absent" >&2; return 1; }
+  [[ -f "${SWARM_NATS_RELAY_CREDENTIAL_PATH:-}" ]] || { echo "service checkpoint grant-recovery relay credential is absent" >&2; return 1; }
+  scratch="$(phase285_create_confined_scratch phase285-grant-recovery-positive)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  source="$scratch/grant-positive-clean-source"
+  target="$scratch/grant-positive-target"
+  [[ ! -e "$source" && ! -e "$target" ]] || { echo "service checkpoint grant-recovery positive roots preexist" >&2; return 1; }
+  mkdir -m 700 -- "$source"
+  git -C "$ROOT_DIR" archive "$accepted_tree" | tar -xf - -C "$source"
+  for relative in \
+    crates/swarm-governance-witness/src/lib.rs \
+    crates/swarm-governance-witness/src/public_dispatcher.rs \
+    crates/swarm-governance-witness/src/runtime_client.rs \
+    crates/swarm-governance-witness/src/service_config.rs \
+    crates/swarm-governance-witness/src/store_proxy_service.rs \
+    tools/check-phase285-witness-conformance.sh \
+    tools/fixtures/phase285-witness-integrity.json; do
+    cp -- "$ROOT_DIR/$relative" "$source/$relative"
+  done
+  python3 -I -u - "$source" "$target" "$accepted_tree" "$PHASE285_RELAY_TOPOLOGY_TOKEN" <<'PY'
+import hashlib,json,os,pathlib,re,subprocess,sys
+
+source=pathlib.Path(sys.argv[1])
+target=pathlib.Path(sys.argv[2])
+tree=sys.argv[3]
+outer_token=sys.argv[4]
+test_name="service_checkpoint_transport_semantics_tests::public_and_private_expired_response_grants_recover_exactly_once"
+cases=("held-public","held-private","no-hold-public","no-hold-private")
+owned=(
+    "crates/swarm-governance-witness/src/lib.rs",
+    "crates/swarm-governance-witness/src/public_dispatcher.rs",
+    "crates/swarm-governance-witness/src/runtime_client.rs",
+    "crates/swarm-governance-witness/src/service_config.rs",
+    "crates/swarm-governance-witness/src/store_proxy_service.rs",
+    "tools/check-phase285-witness-conformance.sh",
+    "tools/fixtures/phase285-witness-integrity.json",
+)
+if not source.is_dir() or target.exists():
+    raise SystemExit("grant_positive[initial-root-identity]")
+if not outer_token.startswith("relay-phase285-"):
+    raise SystemExit("grant_positive[relay-topology-token]")
+source_identity=hashlib.sha256(str(source.resolve()).encode()).hexdigest()
+target_identity=hashlib.sha256(str(target.resolve()).encode()).hexdigest()
+if "phase285-transport-semantics" in str(source) or "phase285-transport-semantics" in str(target):
+    raise SystemExit("grant_positive[t-control-root-reuse]")
+def source_snapshot():
+    rows=[]
+    for relative in owned:
+        path=source/relative
+        data=path.read_bytes()
+        rows.append((relative,hashlib.sha256(data).hexdigest(),len(data)))
+    return hashlib.sha256(json.dumps(rows,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+clean_source_digest=source_snapshot()
+base=os.environ.copy()
+base.pop("CARGO_TARGET_DIR",None)
+base.update({"CARGO_INCREMENTAL":"0","CARGO_NET_OFFLINE":"true"})
+build_env=base.copy()
+build_env["CARGO_TARGET_DIR"]=str(target)
+build_command=[
+    "cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--no-run",test_name,
+]
+print(f"grant_positive_build target={test_name} source_root_state=fresh target_root_state=absent state=start",flush=True)
+try:
+    build=subprocess.run(
+        build_command,cwd=source,env=build_env,text=True,
+        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=180,
+    )
+except subprocess.TimeoutExpired as error:
+    raise SystemExit(f"grant_positive[build-timeout]\n{error.stdout or ''}") from error
+if build.returncode!=0:
+    raise SystemExit(f"grant_positive[build-failure]\n{build.stdout}")
+matches=re.findall(r"Executable unittests src/lib\.rs \(([^)]+)\)",build.stdout)
+if len(matches)!=1:
+    raise SystemExit(f"grant_positive[build-executable]\n{build.stdout}")
+selected=pathlib.Path(matches[0])
+if not selected.is_file():
+    raise SystemExit("grant_positive[build-executable-absent]")
+try:
+    selected.resolve().relative_to(target.resolve())
+except ValueError as error:
+    raise SystemExit("grant_positive[build-executable-target]") from error
+selected_digest=hashlib.sha256(selected.read_bytes()).hexdigest()
+if source_snapshot()!=clean_source_digest:
+    raise SystemExit("grant_positive[build-mutated-source]")
+print(
+    f"grant_positive_build target={test_name} builds=1 selected_executable_sha256={selected_digest} "
+    f"source_snapshot_sha256={clean_source_digest} source_root_identity_sha256={source_identity} "
+    f"target_root_identity_sha256={target_identity} t_control_source_reuse=0 t_control_target_reuse=0 passed=1",
+    flush=True,
+)
+
+process_ids=[]
+token_digests=[]
+case_receipts=[]
+for index,case in enumerate(cases,1):
+    invocation_token=f"{outer_token}-r1a-positive-{case}-{hashlib.sha256((tree+':'+case).encode()).hexdigest()[:16]}"
+    token_digest=hashlib.sha256(invocation_token.encode()).hexdigest()
+    if token_digest in token_digests:
+        raise SystemExit(f"grant_positive[{case}:invocation-token-reuse]")
+    token_digests.append(token_digest)
+    case_env=base.copy()
+    case_env.update({
+        "CARGO_TARGET_DIR":str(target),
+        "PHASE285_R1A_GRANT_CASE":case,
+        "PHASE285_RELAY_TOPOLOGY_TOKEN":invocation_token,
+    })
+    command=[str(selected),test_name,"--exact","--nocapture","--test-threads=1"]
+    argv_digest=hashlib.sha256(json.dumps(command,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+    print(f"grant_positive_progress case={case} process={index}/4 state=start",flush=True)
+    process=subprocess.Popen(
+        command,cwd=source,env=case_env,text=True,
+        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+    )
+    process_ids.append(process.pid)
+    try:
+        output,_=process.communicate(timeout=180)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        output,_=process.communicate()
+        raise SystemExit(f"grant_positive[{case}:timeout]\n{output}") from error
+    running=re.findall(r"^running (\d+) tests?$",output,re.M)
+    summary=re.findall(
+        r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;",
+        output,re.M,
+    )
+    test_start=f"test {test_name} ... "
+    test_start_position=output.find(test_start)
+    test_ok_position=output.find("\nok\n",test_start_position)
+    summary_position=output.find("test result: ok.")
+    marker_rows=[line for line in output.splitlines() if "response_grant_recovery " in line]
+    common=(
+        f"physical_case={case}","relay_path=1","first_payload_captured=1",
+        "terminal_attempts=1","terminal_applied=1","additional_cas_applied=0","passed=1",
+    )
+    if case.startswith("held-"):
+        required=common+(
+            "mode=Held","held_past_grant=1","outcome_unknown=1",
+            "broker_late_publish_refused=1","exact_reply_bound=1","unrelated_refusal_rejected=1",
+            "pre_recovery_attempts=1","pre_recovery_applied=1",
+            "post_recovery_attempts=1","post_recovery_applied=1",
+            "recovery_delta_attempts=0","recovery_delta_applied=0",
+            "stale_service_atomic_delta_attempts=0","stale_service_atomic_delta_applied=0",
+            "stale_service_refused_conflict=1","no_hold_reply=0",
+        )
+        if case=="held-public":
+            required+=("leg=Public","public_lost_replay_bytes_identical=1","operand_receipt_digest=")
+        else:
+            required+=(
+                "leg=Private","private_cas_applied_bound=1","stored_envelope_bound=1",
+                "rotation_receipt_bound=1","public_replays_identical=1",
+                "cross_layer_bytes_compared=0","private_join_receipt_digest=",
+            )
+    else:
+        required=common+("mode=NoHold","no_hold_reply=1","parent_join_digest=")
+        if case=="no-hold-public":
+            required+=("leg=Public","public_capture_delivered_identical=1")
+        else:
+            required+=(
+                "leg=Private","private_cas_applied_bound=1","stored_envelope_bound=1",
+                "rotation_receipt_bound=1","outer_attestation_bound=1","cross_layer_bytes_compared=0",
+            )
+    marker=marker_rows[0] if len(marker_rows)==1 else ""
+    digest_fields=re.findall(r"(?:operand_receipt_digest|private_join_receipt_digest|parent_join_digest)=([0-9a-f]{64})",marker)
+    expected_digest_fields=1
+    transcript_valid=(
+        process.returncode==0
+        and running==["1"]
+        and summary==[("1","0","0","0","22")]
+        and output.count(test_start)==1
+        and test_start_position>=0
+        and test_ok_position>=0
+        and summary_position>=0
+        and test_start_position<test_ok_position<summary_position
+        and len(marker_rows)==1
+        and all(field in marker for field in required)
+        and len(digest_fields)==expected_digest_fields
+    )
+    if not transcript_valid:
+        panics=re.findall(r"panicked at [^\n]+:\n([^\n]+)",output)
+        predicate=panics[0].strip() if panics else "unclassified-terminal"
+        raise SystemExit(f"grant_positive[{case}:red:{predicate}]\n{output}")
+    receipt={
+        "case":case,"process_pid":process.pid,"invocation_token_sha256":token_digest,
+        "exact_argv_sha256":argv_digest,"selected_executable_sha256":selected_digest,
+        "running":1,"passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":22,
+        "terminal_marker_sha256":hashlib.sha256(marker.encode()).hexdigest(),
+    }
+    case_receipts.append(receipt)
+    print(
+        f"grant_positive_case case={case} process_pid={process.pid} invocation_token_sha256={token_digest} "
+        f"running=1 passed=1 failed=0 ignored=0 measured=0 filtered_out=22 "
+        f"terminal_marker_sha256={receipt['terminal_marker_sha256']} selected_executable_sha256={selected_digest} passed_gate=1",
+        flush=True,
+    )
+if len(process_ids)!=4 or len(set(process_ids))!=4:
+    raise SystemExit("grant_positive[physical-process-reuse]")
+if len(token_digests)!=4 or len(set(token_digests))!=4:
+    raise SystemExit("grant_positive[invocation-token-reuse]")
+if source_snapshot()!=clean_source_digest:
+    raise SystemExit("grant_positive[source-not-frozen]")
+receipts_bytes=json.dumps(case_receipts,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+print(
+    f"service_checkpoint_grant_recovery_positive target=G builds=1 physical_processes=4 unique_process_ids=4 "
+    f"unique_invocation_tokens=4 cases=held-public,held-private,no-hold-public,no-hold-private "
+    f"running=4 passed=4 failed=0 ignored=0 measured=0 filtered_out=88 "
+    f"receipt_sha256={hashlib.sha256(receipts_bytes).hexdigest()} cross_layer_bytes_compared=0 passed_gate=1"
+)
 PY
 }
 
@@ -8799,7 +10150,7 @@ if value.get("schema_version") != 1 or value.get("tree") != tree or value.get("i
 for prefix in ("request", "response", "complete_receipt"):
     encoded = bytes.fromhex(value.get(prefix + "_canonical_hex", ""))
     if hashlib.sha256(encoded).hexdigest() != value.get(prefix + "_sha256"): raise SystemExit("relay_positive[" + prefix + "-digest]")
-if value.get("requester_timeout") is not True or value.get("replay_forwarded") is not True or not 0 < value.get("first_publish_at_micros", 0) < value.get("replay_publish_at_micros", 0): raise SystemExit("relay_positive[replay]")
+if value.get("requester_timeout") is not True or value.get("replay_forwarded") is not True or not 0 < value.get("first_request_started_at_micros", 0) < value.get("replay_request_started_at_micros", 0): raise SystemExit("relay_positive[replay]")
 connections = value.get("relay_connections")
 ids = value.get("relay_connection_client_ids")
 if not isinstance(connections, list) or len(connections) != 4 or not isinstance(ids, list) or len(ids) != 4 or len(set(ids)) != 4: raise SystemExit("relay_positive[connections]")
@@ -8812,9 +10163,25 @@ PY
 }
 
 case "${1:-}" in
+  --focused-service-checkpoint-transport-semantics)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-transport-semantics" >&2; exit 2; }
+    run_service_checkpoint_transport_semantics_focus
+    ;;
   --focused-service-checkpoint-grants)
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-grants" >&2; exit 2; }
     run_service_checkpoint_grant_focus
+    ;;
+  --focused-service-checkpoint-grant-recovery-positive)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-grant-recovery-positive" >&2; exit 2; }
+    run_service_checkpoint_grant_recovery_positive_focus
+    ;;
+  --focused-service-checkpoint-held-public-controls)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-held-public-controls" >&2; exit 2; }
+    run_service_checkpoint_held_public_controls_focus
+    ;;
+  --focused-service-checkpoint-r1a-control)
+    [ "$#" -eq 2 ] || { echo "usage: $0 --focused-service-checkpoint-r1a-control R1A-C06|R1A-C07|R1A-C10|R1A-C11|R1A-C17|R1A-C18|R1A-C19|R1A-C20|R1A-C21|R1A-C22|R1A-C23" >&2; exit 2; }
+    run_service_checkpoint_r1a_control_focus "$2"
     ;;
   --focused-service-checkpoint-relay-positive)
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-relay-positive" >&2; exit 2; }
@@ -8841,6 +10208,11 @@ case "${1:-}" in
     elif [ "$#" -eq 2 ] && [ "$2" = service-checkpoint-observation-source ]; then
       observation_source_guard normal
       observation_source_guard self-test
+    elif [ "$#" -eq 2 ] && [ "$2" = transport-semantics-source ]; then
+      transport_semantics_source_guard normal
+      transport_semantics_source_guard self-test
+    elif [ "$#" -eq 2 ] && [ "$2" = transport-semantics-registry ]; then
+      transport_semantics_registry_guard
     elif [ "$#" -eq 2 ] && [ "$2" = complete-receipt-suppression ]; then
       run_complete_receipt_focus
     elif [ "$#" -eq 2 ] && [ "$2" = topology-owner-blocks ]; then
@@ -8861,7 +10233,7 @@ case "${1:-}" in
     elif [ "$#" -eq 1 ]; then
       run_self_tests
     else
-      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|complete-receipt-suppression|topology-owner-blocks|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
+      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|transport-semantics-source|transport-semantics-registry|complete-receipt-suppression|topology-owner-blocks|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
       exit 2
     fi
     ;;

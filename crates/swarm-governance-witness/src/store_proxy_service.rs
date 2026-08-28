@@ -20,6 +20,8 @@ use crate::service_config::{
     SubscriberAdmissionObserverV1, SubscriberAdmissionReceiptV1, WorkerKindV1, WorkerPublisherV1,
     WorkerTransitionObserverV1, WorkerTransitionV1, run_observed_worker_message,
 };
+#[cfg(test)]
+use crate::service_config::{ResponsePreEnqueueObserverV1, SubscriberPollGateV1};
 use crate::{
     PublicWitnessProxyTransportErrorV1, PublicWitnessStoreProxyClient, StoreProxyServiceConfigV1,
 };
@@ -65,6 +67,10 @@ pub struct StoreProxyService<S> {
     ready_binding: StoreProxyReadyBindingV1,
     subscriber_admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
     worker_observer: Arc<dyn WorkerTransitionObserverV1>,
+    #[cfg(test)]
+    subscriber_poll_gate: Option<SubscriberPollGateV1>,
+    #[cfg(test)]
+    response_pre_enqueue_observer: Arc<dyn ResponsePreEnqueueObserverV1>,
 }
 
 #[derive(Clone)]
@@ -121,6 +127,12 @@ impl<S: WitnessAtomicStore> StoreProxyService<S> {
             ready_binding,
             subscriber_admission_observer: Arc::new(NoopSubscriberAdmissionObserverV1),
             worker_observer: Arc::new(NoopWorkerTransitionObserverV1),
+            #[cfg(test)]
+            subscriber_poll_gate: None,
+            #[cfg(test)]
+            response_pre_enqueue_observer: Arc::new(
+                crate::service_config::NoopResponsePreEnqueueObserverV1,
+            ),
         })
     }
 
@@ -138,6 +150,19 @@ impl<S: WitnessAtomicStore> StoreProxyService<S> {
         observer: Arc<dyn WorkerTransitionObserverV1>,
     ) {
         self.worker_observer = observer;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_first_subscription_poll_for_test(&mut self, gate: SubscriberPollGateV1) {
+        self.subscriber_poll_gate = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_response_pre_enqueue_for_test(
+        &mut self,
+        observer: Arc<dyn ResponsePreEnqueueObserverV1>,
+    ) {
+        self.response_pre_enqueue_observer = observer;
     }
 
     pub async fn handle_subject_bytes(
@@ -369,6 +394,24 @@ impl StoreRoleConnectionV1 {
         config: &StoreProxyServiceConfigV1,
         ready: &WitnessStoreReadyResultV1,
     ) -> Result<Self, StoreProxyRunnerErrorV1> {
+        Self::connect_with_event_observer(config, ready, None).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn connect_observed_for_test(
+        config: &StoreProxyServiceConfigV1,
+        ready: &WitnessStoreReadyResultV1,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<async_nats::Event>), StoreProxyRunnerErrorV1> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let connection = Self::connect_with_event_observer(config, ready, Some(sender)).await?;
+        Ok((connection, receiver))
+    }
+
+    async fn connect_with_event_observer(
+        config: &StoreProxyServiceConfigV1,
+        ready: &WitnessStoreReadyResultV1,
+        event_observer: Option<mpsc::UnboundedSender<async_nats::Event>>,
+    ) -> Result<Self, StoreProxyRunnerErrorV1> {
         let ready_binding = StoreProxyReadyBindingV1::validated(config, ready)
             .map_err(|_| StoreProxyRunnerErrorV1::Configuration)?;
         let authority =
@@ -406,7 +449,15 @@ impl StoreRoleConnectionV1 {
         .read_buffer_capacity(config.read_buffer_capacity)
         .connection_timeout(Duration::from_millis(config.request_deadline_millis))
         .request_timeout(Some(Duration::from_millis(config.request_deadline_millis)))
-        .max_reconnects(Some(1));
+        .max_reconnects(Some(1))
+        .event_callback(move |event| {
+            let observer = event_observer.clone();
+            async move {
+                if let Some(observer) = observer {
+                    let _ = observer.send(event);
+                }
+            }
+        });
         let client = timeout(
             Duration::from_millis(config.request_deadline_millis),
             options.connect(&config.nats_url),
@@ -430,6 +481,11 @@ impl StoreRoleConnectionV1 {
     #[cfg(test)]
     pub(crate) fn server_client_id_for_test(&self) -> u64 {
         self.client.server_info().client_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn client_for_test(&self) -> async_nats::Client {
+        self.client.clone()
     }
 }
 
@@ -501,6 +557,8 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
         let worker_count = service.config.max_in_flight;
         let admission_observer = service.subscriber_admission_observer.clone();
         let observer = service.worker_observer.clone();
+        #[cfg(test)]
+        let subscriber_poll_gate = service.subscriber_poll_gate.clone();
         let service = Arc::new(service);
         let (sender, receiver) = mpsc::channel(capacity);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -514,8 +572,14 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             let client = client.clone();
             let service = service.clone();
             let admission_observer = admission_observer.clone();
+            #[cfg(test)]
+            let mut subscriber_poll_gate = subscriber_poll_gate.clone();
             tasks.push(tokio::spawn(async move {
                 let mut subscriber = subscriber;
+                #[cfg(test)]
+                if let Some(gate) = subscriber_poll_gate.as_mut() {
+                    gate.before_first_poll(subject).await;
+                }
                 while let Some(message) = subscriber.next().await {
                     if let Some(Err((reply, payload))) = admit_private_subscription_message(
                         subject,
@@ -530,7 +594,14 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             }));
         }
         drop(sender);
-        let publisher = Arc::new(NatsWorkerPublisherV1(client.clone()));
+        #[cfg(not(test))]
+        let publisher = Arc::new(NatsWorkerPublisherV1::new(client.clone()));
+        #[cfg(test)]
+        let publisher = Arc::new(NatsWorkerPublisherV1::observed(
+            client.clone(),
+            WorkerKindV1::Private,
+            service.response_pre_enqueue_observer.clone(),
+        ));
         for _ in 0..worker_count {
             let receiver = receiver.clone();
             let service = service.clone();
@@ -573,6 +644,10 @@ pub(crate) fn admit_private_subscription_message(
         worker: WorkerKindV1::Private,
         subject: expected_subject.to_string(),
         payload_sha256: swarm_crypto::sha256_hex(&payload),
+        #[cfg(test)]
+        payload: payload.clone(),
+        #[cfg(test)]
+        deadline_identity: receipt_deadline.identity_for_test(),
         reply: reply.to_string(),
         deadline_millis: STORE_HANDLER_DEADLINE_MILLIS,
     };
@@ -617,6 +692,20 @@ pub struct NatsPublicWitnessStoreProxyClient {
     max_response_bytes: usize,
 }
 
+fn map_store_request_error(
+    kind: async_nats::RequestErrorKind,
+) -> PublicWitnessProxyTransportErrorV1 {
+    match kind {
+        async_nats::RequestErrorKind::TimedOut | async_nats::RequestErrorKind::Other => {
+            PublicWitnessProxyTransportErrorV1::OutcomeUnknown
+        }
+        async_nats::RequestErrorKind::NoResponders => {
+            PublicWitnessProxyTransportErrorV1::Unavailable
+        }
+        async_nats::RequestErrorKind::InvalidSubject => PublicWitnessProxyTransportErrorV1::Framing,
+    }
+}
+
 impl NatsPublicWitnessStoreProxyClient {
     pub fn new(
         client: async_nats::Client,
@@ -640,6 +729,16 @@ impl NatsPublicWitnessStoreProxyClient {
         request: WitnessStoreProxyRequestV1,
         operation: WitnessStoreProxyOperationV1,
     ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
+        self.request_on_subject(request, operation, subject_for(operation))
+            .await
+    }
+
+    async fn request_on_subject(
+        &self,
+        request: WitnessStoreProxyRequestV1,
+        operation: WitnessStoreProxyOperationV1,
+        subject: &str,
+    ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
         if request.operation != operation {
             return Err(PublicWitnessProxyTransportErrorV1::Framing);
         }
@@ -651,11 +750,57 @@ impl NatsPublicWitnessStoreProxyClient {
         }
         let message = timeout(
             Duration::from_millis(STORE_RESPONSE_GRANT_MILLIS),
-            self.client.request(subject_for(operation), bytes.into()),
+            self.client.request(subject.to_string(), bytes.into()),
         )
         .await
         .map_err(|_| PublicWitnessProxyTransportErrorV1::Timeout)?
-        .map_err(|_| PublicWitnessProxyTransportErrorV1::Unavailable)?;
+        .map_err(|error| map_store_request_error(error.kind()))?;
+        if message.payload.len() > self.max_response_bytes {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        let response = WitnessStoreProxyResponseV1::decode(&message.payload)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if response.operation != operation || response.request_digest != request_digest {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        Ok(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn request_on_subject_for_test(
+        &self,
+        request: WitnessStoreProxyRequestV1,
+        operation: WitnessStoreProxyOperationV1,
+        subject: &str,
+    ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
+        self.request_on_subject(request, operation, subject).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn replay_canonical_request_for_test(
+        &self,
+        request_bytes: &[u8],
+        operation: WitnessStoreProxyOperationV1,
+    ) -> Result<WitnessStoreProxyResponseV1, PublicWitnessProxyTransportErrorV1> {
+        if request_bytes.len() > self.max_request_bytes {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        let request = WitnessStoreProxyRequestV1::decode(request_bytes)
+            .map_err(|_| PublicWitnessProxyTransportErrorV1::Framing)?;
+        if request.operation != operation {
+            return Err(PublicWitnessProxyTransportErrorV1::Framing);
+        }
+        let request_digest = request.request_digest;
+        let message = timeout(
+            Duration::from_millis(STORE_RESPONSE_GRANT_MILLIS),
+            self.client.request(
+                subject_for(operation).to_string(),
+                request_bytes.to_vec().into(),
+            ),
+        )
+        .await
+        .map_err(|_| PublicWitnessProxyTransportErrorV1::Timeout)?
+        .map_err(|error| map_store_request_error(error.kind()))?;
         if message.payload.len() > self.max_response_bytes {
             return Err(PublicWitnessProxyTransportErrorV1::Framing);
         }
