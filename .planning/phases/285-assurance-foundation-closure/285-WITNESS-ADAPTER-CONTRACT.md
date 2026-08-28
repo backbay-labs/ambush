@@ -5,7 +5,7 @@ contract_version: 2
 protocol_architecture_commit: 5be011a07690a63a297d5bba8fbf740bb659c19d
 protocol_code_commit: 27b64174e2c7ceef7c203f357f543e4950e4c27c
 implementation_status: partial-through-plan04-task03a2b2-a2b3-red
-pending_revision: r69
+pending_revision: r70
 prior_reviewed_at: 2026-08-24T16:06:22Z
 prior_reviewed_content_sha256: f9b7dee9872d566878ad3db89333d9236182d2defb65f7e6c0f5b7fdf3b6d43a
 prior_review_verdict: P0=0 P1=0 P2=0
