@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T08:48:41Z"
+last_updated: "2026-08-28T08:55:55Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R53 planning `4e8bd91dc7231309fb9be8b894f34c6ef1778245` passed independent P0/P1/P2=`0/0/0`, is exact at its checkpoint and work refs, and authorizes only validation of exact uncommitted A2b3 final9 tree `9657a2799126ce79d69185ad0139eac3c27cfb62` from `2026-08-28T08:48:41Z` through hard stop `2026-08-28T10:48:41Z`. No production-byte edits are authorized. A2c, A3, 03B, Plan 05A, and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R53 validation stopped at the first nonzero compiled callsite mutant; exact final9 tree `9657a2799126ce79d69185ad0139eac3c27cfb62` remains unmodified, uncommitted, unpushed, and unaccepted. No production process, edit authority, or hard-stop clock is active. A2b3-only planning must decide the intended-relation correction; A2c, A3, 03B, Plan 05A, and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Immutable r53 planning `4e8bd91d` passed hostile review 0/0/0 and was pushed/fetched exactly at `origin/checkpoint/v179-phase285-plan04-task03a-plan-r53` and `origin/work/v179-phase285-planning`. Root opened one two-hour validation-only window for unchanged final9; any gate failure or the hard stop ends the window without edit, retry, commit, or push.
+**Last Activity Description:** R53 exact-tree preflight and the deadline gate through release/API/privacy/symbol receipts plus mutants preceding `public_inline_helper_bypass` were green. That compiled mutant expected `deadline_r24_public_late_first_publication` but first panicked at `deadline_r24_public_second_publication` (`src/lib.rs:2051`), then propagated the subscriber-thread panic; exact target result was 1 run, 0 passed, 1 failed, 18 filtered. Root stopped without retry/edit. Grants and all later gates were unrun; post-stop identity, empty real index, process cleanup, and zero Docker residue were verified.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -135,11 +135,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Session Continuity**
 
 Last Date: 2026-08-28 — A2b3 stopped unaccepted at hard boundary
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. Exact r53 permits validation-only execution against final9 from `2026-08-28T08:48:41Z` through `2026-08-28T10:48:41Z`; no production-byte edit, retry after failure, extension, new worktree, or successor work is authorized.
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. R53 stopped at first failure before grants; its window is closed. Final9 remains exact but unaccepted. No production continuation is authorized.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-In the existing A2b3 worktree, execute only `<r53_continuation_automated>` against exact final9. Stop immediately on the first failure or at `2026-08-28T10:48:41Z`. If and only if every gate passes, root may stage exactly the eleven final9 paths, require the real-index tree to equal final9, and create one direct-child production commit for immutable hostile review. Do not edit production bytes, create a worktree, retry a failed gate, push A2b3 before review, or start A2c.
+In `.claude/worktrees/v179-phase285-planning`, perform one A2b3-only causal review of the `public_inline_helper_bypass` compiled mutant: determine whether `deadline_r24_public_second_publication` is the correct first violated invariant after helper bypass or whether final9 production semantics are wrong. Author no production edit. Any proposed r54 must name the exact mutated call path, expected first-failure ordering, executable RED/control, owned paths, full final-tree validation, no-retry two-hour stop, and preserve every r53 identity/successor block. Obtain immutable P0/P1/P2=`0/0/0` and push/fetch planning before any production command. Do not create a worktree or start A2c.
