@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T10:27:39Z"
+last_updated: "2026-08-28T10:36:49Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R56 advanced exact final11 through topology, observations, deadline, and normal grants, then relay topology failed in `2.03s` at an ambiguous pre-worker grant delivery. R57/r58 were rejected; immutable r59 `43a0925` passed hostile P0/P1/P2=`0/0/0` and both planning refs fetch exactly. One clone-only diagnostic window is active through `2026-08-28T12:27:39Z`. Final11 remains exact, uncommitted, unpushed, and unaccepted. A2c and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b2 remains immutable commit `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` / tree `540d6d6039ab8d915bde96180b4f9f88a225f60f` at both origin refs. R56 advanced exact final11 through topology, observations, deadline, and normal grants, then relay topology failed in `2.03s` at an ambiguous pre-worker grant delivery. The one r59 clone diagnostic ran and is formally invalid: its child test passed `1/0/0/18` with one tree/token-bound `not_reproduced` record, but `--nocapture` split the literal libtest materialization line and the harness returned `1`; the outer parser also sought a nonce the harness never emits to stdout. Scratch is cleaned and production is unchanged. Draft r60 corrects only those two diagnostic-channel defects; it has no execution authority pending immutable review/push. Final11 remains exact, uncommitted, unpushed, and unaccepted. A2c and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
-**Last Activity Description:** Immutable r59 commit/tree `43a0925bbbb6be0b79d46ecc6dbbc8c4bea5dd08` / `6447a420606bf1928ab95b1b42173b7a39f74ba4` received independent P0/P1/P2=`0/0/0`, confidence high. Exactly five planning paths/digest `65cd1bd16b725227d25f6445521c4389dcc7314a76f4decfcc9499793a2e78c1`; both planning refs are pushed/fetched exactly. One diagnostic clone run is authorized; production remains frozen.
+**Last Activity Description:** The exact r59 diagnostic ran once. Cargo compiled the clone-local patch and the exact FQN emitted one `not_reproduced` record for final11, then passed `1/0/0/18`; the enclosing harness nevertheless returned `PHASE285-HARNESS[non-materialized-test:...]`, exit `1`, because the record interrupted its required literal `test <FQN> ... ok` line. The persisted 11,696-byte transcript SHA-256 was `828db205897a7534d5910d2894f8121b45245fea61dae37045fdeb7d1d1c3174`. The outer parser independently could not prove freshness because `phase285_harness_nonce` exists only in the harness-private transcript. Result: invalid diagnostic, not non-reproduction evidence. The validated scratch root was moved to Trash; final11, both production indexes, A2b2 refs, and zero Docker residue were reverified. Draft r60 is planning-only.
 
 **Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`): Plans 01, 02, 03A, and 03B are complete; Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted; completed-plan count remains 4/13 because Plan 04 is still open. A2b3 final9 is a stopped uncommitted diagnostic tree, not durable delivery. No production slice is active. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted CI, and Phase 285 closure remain blocked in sequence. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — r59 clone-only diagnostic authorized
-Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. Final11 is exact and unaccepted. Immutable r59 is accepted/pushed. One clone-only diagnostic may run before `2026-08-28T12:27:39Z`; no production continuation or A2c work is authorized.
+Last Date: 2026-08-28 — r59 diagnostic invalid; r60 planning-only correction drafted
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the durable frontier. Final11 is exact and unaccepted. R59's sole run is consumed and invalid. Draft r60 has no execution authority before immutable P0/P1/P2=`0/0/0` review and exact push/fetch; no production continuation or A2c work is authorized.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
 Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
 
 ## Next Command
 
-Execute immutable `<r59_causal_diagnostic>` exactly once before `2026-08-28T12:27:39Z`. Keep production final11 and both production indexes untouched. Record one exact classified, non-reproduced, or invalid result; clean validated scratch; stop. Do not implement a production fix, rerun relay-positive, create a registered worktree, or start A2c.
+Freeze the five-path r60 planning candidate, run one immutable hostile plan review, and push/fetch only after P0/P1/P2=`0/0/0`. Do not execute `<r60_causal_diagnostic>`, edit production, rerun relay-positive, create a registered worktree, or start A2c before that gate and a fresh root-authored window.
