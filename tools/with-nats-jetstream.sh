@@ -185,7 +185,14 @@ accounts {
       {
         user: "$INIT_USER", password: "$INIT_PASSWORD",
         permissions: {
-          publish: ["\$JS.API.>", "\$KV.>"],
+          publish: [
+            "\$JS.API.STREAM.CREATE.KV_phase285_service",
+            "\$JS.API.STREAM.UPDATE.KV_phase285_service",
+            "\$JS.API.STREAM.INFO.KV_phase285_service",
+            "\$JS.API.STREAM.MSG.GET.KV_phase285_service",
+            "\$KV.phase285_service.__witness_bucket_manifest",
+            "\$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"
+          ],
           subscribe: ["_INBOX.>"]
         }
       }
@@ -284,64 +291,206 @@ EOF
 
 validate_authority_topology() {
   local path="$1" mode="${2:-validate}"
-  python3 -I - "$path" "$mode" <<'PY'
+  python3 -I - "$path" "$mode" "$0" <<'PY'
 import hashlib, pathlib, re, sys
 path, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
+harness_path = pathlib.Path(sys.argv[3])
 source = path.read_text()
-runtime="PHASE285_RUNTIME"; witness="PHASE285_WITNESS"; store="PHASE285_WITNESS_STORE"
-users=["phase285_foreign","phase285_witness","phase285_witness_store","phase285_expected"]
-public=["fence","establish","discover","prepare","commit","abort","read_prepared","read_head","fetch_payload"]
-private=["inspect_ready","read_entry","compare_and_swap"]
+# PHASE285_TOPOLOGY_VALIDATOR_BEGIN
+PUBLIC=[f"swarm.governance.witness.v1.{suffix}" for suffix in ["fence","establish","discover","prepare","commit","abort","read_prepared","read_head","fetch_payload"]]
+PRIVATE=[f"swarm.governance.witness.store.v1.{suffix}" for suffix in ["inspect_ready","read_entry","compare_and_swap"]]
+INIT=["$JS.API.STREAM.CREATE.KV_phase285_service","$JS.API.STREAM.UPDATE.KV_phase285_service","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_service.__witness_bucket_manifest","$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"]
+ACCOUNTS=["PHASE285_RUNTIME","PHASE285_WITNESS","PHASE285_WITNESS_STORE"]
+PRINCIPALS=[("PHASE285_RUNTIME","phase285_foreign"),("PHASE285_WITNESS","phase285_witness"),("PHASE285_WITNESS_STORE","phase285_witness_store"),("PHASE285_WITNESS_STORE","phase285_expected")]
+EXPECTED_PRINCIPALS={
+  "PHASE285_RUNTIME":["phase285_foreign"],
+  "PHASE285_WITNESS":["phase285_witness"],
+  "PHASE285_WITNESS_STORE":["phase285_witness_store","phase285_expected"],
+}
+
+def paired_end(text,start,opening="{",closing="}"):
+    depth=0; quoted=False; escaped=False
+    for index in range(start,len(text)):
+        char=text[index]
+        if quoted:
+            if escaped: escaped=False
+            elif char=="\\": escaped=True
+            elif char=='"': quoted=False
+            continue
+        if char=='"': quoted=True
+        elif char==opening: depth+=1
+        elif char==closing:
+            depth-=1
+            if depth==0: return index+1
+    raise ValueError("topology[unbalanced]")
+
+def exact_block(text,pattern,reason):
+    matches=list(re.finditer(pattern,text,re.M))
+    if len(matches)!=1: raise ValueError(reason)
+    opening=text.index("{",matches[0].start())
+    return text[opening:paired_end(text,opening)]
+
+def exact_array(text,pattern,reason):
+    matches=list(re.finditer(pattern,text,re.M))
+    if len(matches)!=1: raise ValueError(reason)
+    opening=text.index("[",matches[0].start())
+    return text[opening:paired_end(text,opening,"[","]")]
+
+def string_array(text,name,reason):
+    match=re.search(rf"\b{name}:\s*\[(.*?)\]",text,re.S)
+    if not match: raise ValueError(reason)
+    return re.findall(r'"([^"\n]+)"',match.group(1))
+
+def account_blocks(text):
+    accounts=exact_block(text,r"^accounts\s*\{","topology[accounts-block]")
+    result={name: exact_block(accounts,rf"^  {re.escape(name)}\s*\{{",f"topology[account:{name}]") for name in ACCOUNTS}
+    discovered=re.findall(r"^  ([A-Z][A-Z0-9_]*)\s*\{",accounts,re.M)
+    if discovered!=ACCOUNTS: raise ValueError("topology[account-inventory]")
+    return result
+
+def user_block(account,username):
+    marker=f'user: "{username}"'
+    if account.count(marker)!=1: raise ValueError(f"topology[principal:{username}]")
+    position=account.index(marker); opening=account.rfind("{",0,position)
+    return account[opening:paired_end(account,opening)]
+
+def user_blocks(account,owner):
+    users=exact_array(account,r"^    users:\s*\[",f"topology[users:{owner}]")
+    discovered=re.findall(r'\buser:\s*"([^"\n]+)"',users)
+    if discovered!=EXPECTED_PRINCIPALS[owner]: raise ValueError(f"topology[principal-inventory:{owner}]")
+    return {username:user_block(users,username) for username in discovered}
+
+def optional_authority_array(account,name):
+    header=rf"^    {re.escape(name)}:\s*\["
+    headers=list(re.finditer(header,account,re.M))
+    declarations=list(re.finditer(rf"^    {re.escape(name)}\b",account,re.M))
+    if not declarations: return None
+    if len(declarations)!=1 or len(headers)!=1: raise ValueError(f"topology[{name}-declaration]")
+    opening=account.index("[",headers[0].start())
+    return account[opening:paired_end(account,opening,"[","]")]
+
+def imports(account):
+    block=optional_authority_array(account,"imports")
+    if block is None: return []
+    rows=re.findall(r'\{\s*service:\s*\{\s*account:\s*([A-Z][A-Z0-9_]*),\s*subject:\s*"([^"]+)"(?:,\s*to:\s*"([^"]+)")?\s*\}\s*\}',block,re.S)
+    if len(rows)!=len(re.findall(r'\{\s*service\s*:',block)): raise ValueError("topology[imports-malformed]")
+    return [(subject,to or subject,owner) for owner,subject,to in rows]
+
+def exports(account):
+    block=optional_authority_array(account,"exports")
+    if block is None: return []
+    rows=re.findall(r'\{\s*service:\s*"([^"]+)",\s*accounts:\s*\[([A-Z][A-Z0-9_]*)\]\s*\}',block,re.S)
+    if len(rows)!=len(re.findall(r'\{\s*service\s*:',block)): raise ValueError("topology[exports-malformed]")
+    return [(subject,"service",allowed) for subject,allowed in rows]
+
+def principal_row(owner,username,block):
+    grants=re.findall(r'allow_responses:\s*\{\s*max:\s*(\d+),\s*expires:\s*"([^"]+)"\s*\}',block,re.S)
+    return {"owner":owner,"username":username,"publish":string_array(block,"publish",f"topology[publish:{username}]"),"subscribe":string_array(block,"subscribe",f"topology[subscribe:{username}]"),"response_grant":[list(row) for row in grants]}
+
+def parse_topology(text):
+    blocks=account_blocks(text); principals=[]
+    discovered={owner:user_blocks(blocks[owner],owner) for owner in ACCOUNTS}
+    for owner,username in PRINCIPALS: principals.append(principal_row(owner,username,discovered[owner][username]))
+    return {"accounts":ACCOUNTS,"principals":principals,"imports":{name:imports(blocks[name]) for name in ACCOUNTS},"exports":{name:exports(blocks[name]) for name in ACCOUNTS}}
+
 def validate(value):
-    for account in [runtime,witness,store]:
-        if len(re.findall(rf"^  {account} \{{",value,re.M)) != 1: raise ValueError("account inventory differs")
-    if "PHASE285_FOREIGN" in value: raise ValueError("legacy fourth account survived")
-    for user in users:
-        if value.count(f'user: "{user}"') != 1: raise ValueError("principal inventory differs")
-    for suffix in public:
-        if value.count(f'"swarm.governance.witness.v1.{suffix}"') != 4: raise ValueError("public service topology differs")
-    for suffix in private:
-        if value.count(f'"swarm.governance.witness.store.v1.{suffix}"') != 4: raise ValueError("private service topology differs")
-    if re.search(r'(?m)^\s*(?:service|to):\s*"[^"\n]*[*>]',value): raise ValueError("wildcard service authority survived")
-    witness_user=value.index('user: "phase285_witness"')
-    store_account=value.index("  PHASE285_WITNESS_STORE {")
-    witness_block=value[witness_user:store_account]
-    if '"$JS.API.>"' in witness_block or '"$KV.>"' in witness_block:
-        raise ValueError("public witness gained raw authority")
-    store_user=value.index('user: "phase285_witness_store"')
-    init_user=value.index('user: "phase285_expected"')
-    store_block=value[store_user:init_user]
-    store_authority=store_block.replace('"_INBOX.>"','')
-    if 'swarm.governance.witness.v1.' in store_authority or '*' in store_authority or '>' in store_authority:
-        raise ValueError("online store authority broadened")
-    init_block=value[init_user:value.index("    exports:",init_user)]
-    if 'swarm.governance.witness.v1.' in init_block or 'swarm.governance.witness.store.v1.' in init_block:
-        raise ValueError("init gained serving subject")
+    graph=parse_topology(value)
+    expected_permissions={
+      "phase285_foreign":(PUBLIC+["$JS.API.>","$KV.>"],["_INBOX.>","$JS.EVENT.ADVISORY.>"],[]),
+      "phase285_witness":(PRIVATE,PUBLIC+["_INBOX.>"],[["1","2s"]]),
+      "phase285_witness_store":(["$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service"],PRIVATE+["_INBOX.>"],[["1","2s"]]),
+      "phase285_expected":(INIT,["_INBOX.>"],[]),
+    }
+    for row in graph["principals"]:
+        publish,subscribe,grant=expected_permissions[row["username"]]
+        if row["publish"]!=publish: raise ValueError(f'topology[publish:{row["username"]}]')
+        if row["subscribe"]!=subscribe: raise ValueError(f'topology[subscribe:{row["username"]}]')
+        if row["response_grant"]!=grant: raise ValueError(f'topology[response-grant:{row["username"]}]')
+    expected_imports={"PHASE285_RUNTIME":[(subject,subject,"PHASE285_WITNESS") for subject in PUBLIC],"PHASE285_WITNESS":[(subject,subject,"PHASE285_WITNESS_STORE") for subject in PRIVATE],"PHASE285_WITNESS_STORE":[]}
+    expected_exports={"PHASE285_RUNTIME":[],"PHASE285_WITNESS":[(subject,"service","PHASE285_RUNTIME") for subject in PUBLIC],"PHASE285_WITNESS_STORE":[(subject,"service","PHASE285_WITNESS") for subject in PRIVATE]}
+    for owner in ACCOUNTS:
+        if graph["imports"][owner]!=expected_imports[owner]: raise ValueError(f"topology[imports:{owner}]")
+        if graph["exports"][owner]!=expected_exports[owner]: raise ValueError(f"topology[exports:{owner}]")
+    return graph
+# PHASE285_TOPOLOGY_VALIDATOR_END
+
 validate(source)
-if mode == "validate": print("phase285_authority_topology accounts=3 principals=4 public=9 private=3 passed=1"); raise SystemExit(0)
+if mode == "validate": print("phase285_authority_topology accounts=3 principals=4 public=9 private=3 init=6 passed=1"); raise SystemExit(0)
 if mode != "self-test": raise SystemExit("unknown topology validator mode")
-mutations=[
- ("missing_runtime_account",'  PHASE285_RUNTIME {','  PHASE285_RUNTIME_MISSING {'),
- ("account_swap",'  PHASE285_WITNESS {','  PHASE285_RUNTIME {'),
- ("missing_init",'user: "phase285_expected"','user: "phase285_expected_missing"'),
- ("credential_swap",'user: "phase285_witness_store"','user: "phase285_witness"'),
- ("public_omission",'service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence" }','service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence_missing" }'),
- ("private_omission",'service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready" }','service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready_missing" }'),
- ("wildcard_import",'service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.>"'),
- ("runtime_private_import",'service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.establish" }','service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready" }'),
- ("witness_raw_js",'"swarm.governance.witness.store.v1.compare_and_swap"\n        ],','"swarm.governance.witness.store.v1.compare_and_swap", "$JS.API.>"\n        ],'),
- ("store_public_subject",'"swarm.governance.witness.store.v1.compare_and_swap",\n            "_INBOX.>"','"swarm.governance.witness.store.v1.compare_and_swap", "swarm.governance.witness.v1.prepare",\n            "_INBOX.>"'),
- ("init_serving",'subscribe: ["_INBOX.>"]','subscribe: ["_INBOX.>", "swarm.governance.witness.store.v1.>"]'),
-]
+
+def once(text,old,new,label):
+    if text.count(old)!=1: raise SystemExit(f"topology mutation anchor differs: {label}:{text.count(old)}")
+    return text.replace(old,new,1)
+def swap(text,left,right,label):
+    marker=f"__PHASE285_{label}__"
+    return once(once(once(text,left,marker,label),right,left,label),marker,right,label)
+def mutate_init(text,transform):
+    start=text.index('user: "phase285_expected"'); end=text.index("    exports:",start)
+    return text[:start]+transform(text[start:end])+text[end:]
+def once_after(text,anchor,old,new,label):
+    start=text.index(anchor); position=text.find(old,start)
+    if position<0: raise SystemExit(f"topology mutation anchor differs: {label}:0")
+    return text[:position]+new+text[position+len(old):]
+runtime_fence='service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence" }'
+witness_inspect='service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready" }'
+mutations=[]
+mutations.append(("runtime_witness_import_block_move",swap(source,runtime_fence,witness_inspect,"BLOCK_MOVE")))
+mutations.extend([
+ ("missing_runtime_account",once(source,'  PHASE285_RUNTIME {','  PHASE285_RUNTIME_MISSING {',"missing_runtime_account")),
+ ("missing_init_principal",once(source,'user: "phase285_expected"','user: "phase285_expected_missing"',"missing_init_principal")),
+ ("store_init_credential_swap",swap(source,'user: "phase285_witness_store"','user: "phase285_expected"',"CREDENTIAL_SWAP")),
+ ("public_subject_omission",once(source,runtime_fence,runtime_fence.replace("fence","fence_missing"),"public_subject_omission")),
+ ("private_subject_omission",once(source,witness_inspect,witness_inspect.replace("inspect_ready","inspect_ready_missing"),"private_subject_omission")),
+ ("public_wildcard_import",once(source,runtime_fence,runtime_fence.replace("fence","*"),"public_wildcard_import")),
+ ("runtime_private_import",once(source,runtime_fence,witness_inspect,"runtime_private_import")),
+ ("witness_raw_js",once(source,'"swarm.governance.witness.store.v1.compare_and_swap"\n        ],','"swarm.governance.witness.store.v1.compare_and_swap", "$JS.API.>"\n        ],',"witness_raw_js")),
+ ("store_public_service",once(source,'"swarm.governance.witness.store.v1.compare_and_swap",\n            "_INBOX.>"','"swarm.governance.witness.v1.prepare",\n            "_INBOX.>"',"store_public_service")),
+ ("init_serving",once(source,'subscribe: ["_INBOX.>"]','subscribe: ["_INBOX.>", "swarm.governance.witness.store.v1.inspect_ready"]',"init_serving")),
+ ("init_raw_authority_widening",once(once(source,'"$JS.API.STREAM.CREATE.KV_phase285_service"','"$JS.API.>"',"init_raw_authority_widening"),'"$KV.phase285_service.__witness_bucket_manifest"','"$KV.>"',"init_raw_authority_widening")),
+ ("init_manifest_admitted_subject_swap",mutate_init(source,lambda block: swap(block,'"$KV.phase285_service.__witness_bucket_manifest"','"$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"',"INIT_SUBJECT_SWAP"))),
+ ("import_to_substitution",once(source,runtime_fence,runtime_fence[:-2]+', to: "swarm.governance.witness.v1.wrong" }',"import_to_substitution")),
+ ("import_source_account_substitution",once(source,runtime_fence,runtime_fence.replace("PHASE285_WITNESS","PHASE285_WITNESS_STORE"),"import_source_account_substitution")),
+ ("export_allowed_account_substitution",once(source,'{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME] }','{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE] }',"export_allowed_account_substitution")),
+ ("response_grant_move",once_after(source,'user: "phase285_witness"','allow_responses: { max: 1, expires: "2s" }','allow_responses: { max: 2, expires: "2s" }',"response_grant_move")),
+ ("cross_principal_permission_swap",swap(source,'"swarm.governance.witness.store.v1.inspect_ready",\n          "swarm.governance.witness.store.v1.read_entry",\n          "swarm.governance.witness.store.v1.compare_and_swap"','"$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef",\n            "$JS.API.STREAM.INFO.KV_phase285_service",\n            "$JS.API.STREAM.MSG.GET.KV_phase285_service"',"PERMISSION_SWAP")),
+])
+mutations.extend([
+ ("extra_store_principal_raw_authority",once(source,'      }\n    ]\n    exports: [','      },\n      {\n        user: "phase285_extra", password: "phase285-extra-password",\n        permissions: { publish: ["$JS.API.>"], subscribe: ["_INBOX.>"] }\n      }\n    ]\n    exports: [',"extra_store_principal_raw_authority")),
+ ("duplicate_store_imports_declaration",once(source,'    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"','    imports: []\n    imports: []\n    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"',"duplicate_store_imports_declaration")),
+ ("duplicate_runtime_exports_declaration",once(source,'    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','    exports: []\n    exports: []\n    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"',"duplicate_runtime_exports_declaration")),
+])
+mutations.extend([
+ ("malformed_store_import_row",once(source,'    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"','    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.store.v1.inspect_ready", phase285_unexpected: "present" } }\n    ]\n    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"',"malformed_store_import_row")),
+ ("malformed_runtime_export_row",once(source,'    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','    exports: [\n      { service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS], phase285_unexpected: "present" }\n    ]\n    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"',"malformed_runtime_export_row")),
+])
+intended_reasons={
+ "extra_store_principal_raw_authority":"topology[principal-inventory:PHASE285_WITNESS_STORE]",
+ "duplicate_store_imports_declaration":"topology[imports-declaration]",
+ "duplicate_runtime_exports_declaration":"topology[exports-declaration]",
+ "malformed_store_import_row":"topology[imports-malformed]",
+ "malformed_runtime_export_row":"topology[exports-malformed]",
+}
+shape_predicates={
+ "malformed_store_import_row":"topology[imports-malformed]",
+ "malformed_runtime_export_row":"topology[exports-malformed]",
+}
 digests=[]
-for label,old,new in mutations:
-    if source.count(old) != 1: raise SystemExit(f"topology mutation anchor differs: {label}")
-    candidate=source.replace(old,new,1); digests.append(hashlib.sha256(candidate.encode()).hexdigest())
+for label,candidate in mutations:
+    digest=hashlib.sha256(candidate.encode()).hexdigest(); digests.append(digest)
     try: validate(candidate)
-    except ValueError: print(f"phase285_authority_topology_self_test_red mutation={label}")
+    except ValueError as error:
+        if label in intended_reasons and str(error)!=intended_reasons[label]: raise SystemExit(f"authority topology mutant wrong reason: {label}:{error}")
+        if label in shape_predicates:
+            harness=harness_path.read_text(); start=harness.index("# PHASE285_TOPOLOGY_VALIDATOR_BEGIN"); end=harness.index("# PHASE285_TOPOLOGY_VALIDATOR_END",start)
+            validator_source=harness[start:end]; reason=shape_predicates[label]
+            matches=[line for line in validator_source.splitlines(keepends=True) if f'raise ValueError("{reason}")' in line]
+            if len(matches)!=1: raise SystemExit(f"authority topology row-shape anchor differs: {label}")
+            predicate=matches[0]
+            namespace={"re":re}; exec(validator_source.replace(predicate,"",1),namespace); namespace["validate"](candidate)
+        print(f"phase285_authority_topology_self_test_red mutation={label} reason={error} digest={digest}")
     else: raise SystemExit(f"authority topology mutant survived: {label}")
-if len(set(digests)) != len(mutations): raise SystemExit("authority topology mutant digests differ")
-print(f"phase285_authority_topology_self_test mutations={len(mutations)} unique={len(set(digests))} passed=1")
+if len(mutations)!=23 or len(set(digests))!=23: raise SystemExit("authority topology mutant inventory/digests differ")
+print("phase285_authority_topology_self_test mutations=23 unique=23 vacuous=0 passed=1")
 PY
 }
 
@@ -800,7 +949,7 @@ import json, socket, sys
 port, mode = int(sys.argv[1]), sys.argv[2]
 expected = (sys.argv[3], sys.argv[4])
 foreign = (sys.argv[5], sys.argv[6])
-stream = "PHASE285_AUTHORITY"
+stream = "KV_phase285_service"
 
 def request(credentials, subject, payload):
     inbox = "_INBOX.phase285.authority"
@@ -830,9 +979,10 @@ def request(credentials, subject, payload):
 if mode == "create":
     created = request(expected, f"$JS.API.STREAM.CREATE.{stream}", {
         "name": stream,
-        "subjects": ["phase285.authority"],
+        "subjects": ["$KV.phase285_service.>"],
         "storage": "file",
         "num_replicas": 1,
+        "max_msgs_per_subject": 1,
     })
     if "error" in created or created.get("config", {}).get("name") != stream:
         raise SystemExit(f"expected account failed to create authority fixture: {created!r}")
@@ -1136,6 +1286,11 @@ EOF
   export SWARM_NATS_WITNESS_CREDENTIAL_PATH="$SCRATCH/witness.credentials.json"
   export SWARM_NATS_STORE_CREDENTIAL_PATH="$SCRATCH/store.credentials.json"
   export SWARM_NATS_INIT_CREDENTIAL_PATH="$SCRATCH/init.credentials.json"
+  export PHASE285_TOPOLOGY_CONFIG_PATH="$SCRATCH/nats-tls.conf"
+  export PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH="$SCRATCH/runtime.credentials.json"
+  export PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH="$SCRATCH/witness.credentials.json"
+  export PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH="$SCRATCH/store.credentials.json"
+  export PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH="$SCRATCH/init.credentials.json"
   export SWARM_NATS_CAPABILITY_INVOCATION_TOKEN="$HARNESS_NONCE"
   export NATS_HTTP_URL
   export SWARM_NATS_COMPOSE_PROJECT="$PROJECT_NAME"
@@ -1161,8 +1316,17 @@ if [[ "${1:-}" == --checkpoint-control ]]; then
 elif [[ "${1:-}" == --checkpoint-unavailable ]]; then
   checkpoint_unavailable_control "$@"
 elif [[ "${1:-}" == --self-test ]]; then
-  [[ $# -eq 1 ]] || { echo "usage: $0 --self-test" >&2; exit 64; }
-  self_test
+  if [[ $# -eq 1 ]]; then
+    self_test
+  elif [[ $# -eq 2 && "$2" == topology-owner-blocks ]]; then
+    self_test
+  else
+    echo "usage: $0 --self-test [topology-owner-blocks]" >&2
+    exit 64
+  fi
+elif [[ "${1:-}" == --topology-validator ]]; then
+  [[ $# -eq 3 && "$3" =~ ^(validate|self-test)$ ]] || { echo "usage: $0 --topology-validator <config> <validate|self-test>" >&2; exit 64; }
+  validate_authority_topology "$2" "$3"
 else
   run_harness "$@"
 fi

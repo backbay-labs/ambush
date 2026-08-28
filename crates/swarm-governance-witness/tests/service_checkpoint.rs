@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use swarm_governance::persistence_protocol::{WitnessReadResponseV1, canonical_wire_bytes};
 use swarm_governance::witness_engine::store::{
@@ -33,6 +34,7 @@ fn exact_artifact(variable: &str, maximum: u64) -> (PathBuf, Vec<u8>) {
         "artifact is not a regular file"
     );
     assert!(!metadata.file_type().is_symlink(), "artifact is a symlink");
+    assert_eq!(metadata.mode() & 0o777, 0o600, "artifact mode differs");
     assert!(metadata.len() <= maximum, "artifact exceeds bound");
     let framed = must(std::fs::read(&path), "artifact read");
     assert_eq!(framed.last(), Some(&b'\n'), "artifact newline absent");
@@ -667,4 +669,166 @@ fn complete_receipt_validation_precedes_suppression_and_failures_forward() {
     assert_ne!(ledger_path, receipt_path, "artifact paths alias");
     independently_validate_artifacts(&ledger, &receipt);
     println!("complete_receipt_external ledger=1 receipt=1 private=3 worker=12 passed=1");
+}
+
+fn topology_input(variable: &str, maximum: u64) -> Vec<u8> {
+    let path = PathBuf::from(must(std::env::var(variable), "topology input path absent"));
+    assert!(path.is_absolute(), "topology input path is relative");
+    let before = must(std::fs::symlink_metadata(&path), "topology input metadata");
+    assert!(before.file_type().is_file() && !before.file_type().is_symlink());
+    assert!(
+        (1..=maximum).contains(&before.len()),
+        "topology input bound"
+    );
+    let bytes = must(std::fs::read(&path), "topology input read");
+    let after = must(std::fs::symlink_metadata(&path), "topology input recheck");
+    assert_eq!(before.len(), after.len(), "topology input length changed");
+    assert_eq!(
+        digest(&bytes),
+        digest(&must(std::fs::read(&path), "topology input reread")),
+        "topology input digest changed"
+    );
+    bytes
+}
+
+fn independently_parse_topology_pairs(bytes: &[u8]) -> Vec<Value> {
+    let source = must(std::str::from_utf8(bytes), "topology config utf8");
+    let mut account = None;
+    let mut accounts = Vec::new();
+    let mut pairs = Vec::new();
+    for line in source.lines() {
+        if line.starts_with("  ") && !line.starts_with("    ") && line.ends_with(" {") {
+            let owner = line.trim().trim_end_matches(" {").to_string();
+            accounts.push(owner.clone());
+            account = Some(owner);
+        } else if let Some(rest) = line.trim().strip_prefix("user: \"") {
+            let principal = required(rest.split('"').next(), "topology principal");
+            pairs.push(json!({"account": required(account.clone(), "topology owner"), "principal": principal}));
+        }
+    }
+    accounts.dedup();
+    assert_eq!(accounts.len(), 3, "topology account count");
+    assert_eq!(pairs.len(), 4, "topology principal count");
+    pairs
+}
+
+fn topology_projection(variable: &str) -> (PathBuf, Vec<u8>, Value) {
+    let (path, bytes) = exact_artifact(variable, 16_384);
+    assert!(!bytes.is_empty(), "topology projection empty");
+    let value: Value = must(serde_json::from_slice(&bytes), "topology projection json");
+    assert_eq!(
+        canonical_value(&value, "topology projection canonical"),
+        bytes
+    );
+    (path, bytes, value)
+}
+
+#[test]
+fn topology_validator_binds_every_tuple_to_owner_block() {
+    let canonical = topology_input("PHASE285_TOPOLOGY_CONFIG_PATH", 262_144);
+    let probe = topology_input("PHASE285_TOPOLOGY_PROBE_CONFIG_PATH", 262_144);
+    for variable in [
+        "PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH",
+        "PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH",
+        "PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH",
+        "PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH",
+    ] {
+        let credential = topology_input(variable, 4_096);
+        let _: Value = must(
+            serde_json::from_slice(&credential),
+            "topology credential json",
+        );
+    }
+    let (rust_canonical_path, rust_canonical_bytes, rust_canonical) =
+        topology_projection("PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH");
+    let (shell_canonical_path, shell_canonical_bytes, _shell_canonical) =
+        topology_projection("PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH");
+    let (rust_probe_path, rust_probe_bytes, rust_probe) =
+        topology_projection("PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH");
+    let (shell_probe_path, shell_probe_bytes, _shell_probe) =
+        topology_projection("PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH");
+    let mut projection_identities = vec![
+        rust_canonical_path,
+        shell_canonical_path,
+        rust_probe_path,
+        shell_probe_path,
+    ]
+    .into_iter()
+    .map(|path| {
+        let metadata = must(std::fs::symlink_metadata(path), "projection identity");
+        (metadata.dev(), metadata.ino())
+    })
+    .collect::<Vec<_>>();
+    projection_identities.sort_unstable();
+    projection_identities.dedup();
+    assert_eq!(projection_identities.len(), 4, "topology projection alias");
+    assert_eq!(
+        rust_canonical_bytes, shell_canonical_bytes,
+        "canonical parser equality"
+    );
+    assert_eq!(rust_probe_bytes, shell_probe_bytes, "probe parser equality");
+    let tree = must(
+        std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE"),
+        "topology tree absent",
+    );
+    let token = must(
+        std::env::var("PHASE285_TOPOLOGY_INVOCATION_TOKEN"),
+        "topology token absent",
+    );
+    for (projection, kind) in [(&rust_canonical, "canonical"), (&rust_probe, "probe")] {
+        assert_eq!(
+            number(projection, "schema_version", "topology binding"),
+            1,
+            "topology binding"
+        );
+        assert_eq!(
+            string(projection, "tree", "topology binding"),
+            tree,
+            "topology binding"
+        );
+        assert_eq!(
+            string(projection, "invocation_token", "topology binding"),
+            token,
+            "projection-token"
+        );
+        assert_eq!(
+            string(projection, "case", "topology binding"),
+            "service_checkpoint_topology_owner_blocks",
+            "topology binding"
+        );
+        assert_eq!(string(projection, "input_kind", "topology binding"), kind);
+        assert_eq!(
+            string(projection, "canonical_config_sha256", "topology binding"),
+            digest(&canonical)
+        );
+        assert_eq!(
+            string(projection, "probe_config_sha256", "topology binding"),
+            digest(&probe)
+        );
+    }
+    assert_eq!(
+        field(&rust_canonical, "pairs", "canonical pairs"),
+        &Value::Array(independently_parse_topology_pairs(&canonical))
+    );
+    assert_eq!(
+        field(&rust_probe, "pairs", "probe pairs"),
+        &Value::Array(independently_parse_topology_pairs(&probe))
+    );
+    let canonical_inventory = json!([
+        {"account":"PHASE285_RUNTIME","principal":"phase285_foreign"},
+        {"account":"PHASE285_WITNESS","principal":"phase285_witness"},
+        {"account":"PHASE285_WITNESS_STORE","principal":"phase285_witness_store"},
+        {"account":"PHASE285_WITNESS_STORE","principal":"phase285_expected"}
+    ]);
+    assert_eq!(
+        field(&rust_canonical, "pairs", "canonical policy"),
+        &canonical_inventory
+    );
+    assert_ne!(
+        field(&rust_probe, "pairs", "probe policy"),
+        &canonical_inventory
+    );
+    println!(
+        "topology_external canonical=1 probe=1 rust=2 shell=2 accounts=3 principals=4 passed=1"
+    );
 }

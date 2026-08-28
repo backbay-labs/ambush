@@ -5565,7 +5565,7 @@ PY
       service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled --exact | tee "$output"
   grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$output" || { echo "observation exact test counts differ" >&2; return 1; }
   python3 -I - "$ledger" "$accepted_tree" "$token" "$ROOT_DIR" "$scratch" <<'PY'
-import copy, hashlib, json, os, pathlib, subprocess, sys
+import copy, hashlib, json, os, pathlib, re, selectors, signal, stat, subprocess, sys, time
 path, tree, token, root_text, scratch_text = sys.argv[1:]
 root, scratch = pathlib.Path(root_text), pathlib.Path(scratch_text)
 raw = open(path, "rb").read()
@@ -5701,13 +5701,106 @@ environment=os.environ.copy()
 environment["CARGO_TARGET_DIR"]=str(scratch/"observation-mutant-target")
 for key in ("PHASE285_OBSERVATION_LEDGER_REQUIRED","PHASE285_OBSERVATION_LEDGER","PHASE285_OBSERVATION_TREE","PHASE285_OBSERVATION_INVOCATION_TOKEN","PHASE285_OBSERVATION_CASE"):
     environment.pop(key,None)
-try:
-    result=subprocess.run(["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled","--exact"],cwd=exact_root,env=environment,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False,timeout=120)
-except subprocess.TimeoutExpired as error:
-    raise SystemExit("observation compiled public-head mutation timed out") from error
-if result.returncode==0 or "running 1 test" not in result.stdout or "0 passed; 1 failed; 0 ignored" not in result.stdout or "observation public ReadHead is absent" not in result.stdout:
-    raise SystemExit("observation compiled public-head mutation did not fail at intended relation:\n"+result.stdout)
-print("service_checkpoint_observation_compiled_mutation mutation=public_head_absent compiled=1 executed=1 failed=1 intended=public_store_head")
+capture_limit=16_777_216
+diagnostic_limit=65_536
+def fail(phase,reason,captured=b""):
+    tail=captured[-diagnostic_limit:].decode("utf-8",errors="replace")
+    raise SystemExit(f"observation compiled public-head phase={phase} reason={reason}\n{tail}")
+def terminate(process):
+    if process.poll() is None:
+        try: os.killpg(process.pid,signal.SIGKILL)
+        except ProcessLookupError: pass
+    process.wait()
+def run_bounded(command,timeout,phase):
+    process=subprocess.Popen(command,cwd=exact_root,env=environment,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True)
+    descriptor=process.stdout.fileno(); os.set_blocking(descriptor,False)
+    watcher=selectors.DefaultSelector(); watcher.register(descriptor,selectors.EVENT_READ)
+    captured=bytearray(); deadline=time.monotonic()+timeout; reached_eof=False
+    try:
+        while not reached_eof:
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                terminate(process); fail(phase,"timeout",bytes(captured))
+            events=watcher.select(min(0.25,remaining))
+            if not events and process.poll() is not None:
+                events=[(None,None)]
+            for _key,_mask in events:
+                try: chunk=os.read(descriptor,65_536)
+                except BlockingIOError: continue
+                if not chunk:
+                    reached_eof=True; break
+                captured.extend(chunk)
+                if len(captured)>capture_limit:
+                    terminate(process); fail(phase,"output-cap",bytes(captured))
+        remaining=deadline-time.monotonic()
+        if remaining<=0:
+            terminate(process); fail(phase,"timeout",bytes(captured))
+        try: return_code=process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            terminate(process); fail(phase,"timeout",bytes(captured))
+    finally:
+        watcher.close(); process.stdout.close()
+    return return_code,bytes(captured)
+compile_command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--no-run","--message-format=json"]
+compile_status,compile_output=run_bounded(compile_command,300,"compile")
+if compile_status!=0: fail("compile",f"exit-{compile_status}",compile_output)
+records=[]
+for line in compile_output.splitlines():
+    try: value=json.loads(line)
+    except (UnicodeDecodeError,json.JSONDecodeError): continue
+    if isinstance(value,dict): records.append(value)
+finished=[value for value in records if value.get("reason")=="build-finished"]
+if len(finished)!=1 or finished[0].get("success") is not True: fail("compile","build-finished",compile_output)
+artifacts=[]
+for value in records:
+    target=value.get("target",{}); profile=value.get("profile",{})
+    if value.get("reason")=="compiler-artifact" and target.get("name")=="swarm_governance_witness" and target.get("kind")==["lib"] and profile.get("test") is True and isinstance(value.get("executable"),str) and value["executable"]:
+        artifacts.append(value)
+if len(artifacts)!=1: fail("compile",f"executable-cardinality-{len(artifacts)}",compile_output)
+target_root=pathlib.Path(environment["CARGO_TARGET_DIR"]).resolve(strict=True)
+declared_executable=pathlib.Path(artifacts[0]["executable"])
+try: declared_metadata=declared_executable.lstat()
+except (FileNotFoundError,OSError): fail("compile","executable-declared-type",compile_output)
+if not stat.S_ISREG(declared_metadata.st_mode) or stat.S_ISLNK(declared_metadata.st_mode) or declared_metadata.st_size<=0: fail("compile","executable-declared-type",compile_output)
+try: executable=declared_executable.resolve(strict=True); executable.relative_to(target_root)
+except (FileNotFoundError,RuntimeError,ValueError): fail("compile","executable-confinement",compile_output)
+def executable_snapshot(path,phase,captured):
+    metadata=path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or metadata.st_size<=0: fail(phase,"executable-type",captured)
+    digest=hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda:source.read(1_048_576),b""): digest.update(chunk)
+    return (metadata.st_size,digest.hexdigest(),metadata.st_dev,metadata.st_ino)
+before=executable_snapshot(executable,"compile",compile_output)
+execute_command=[str(executable),"--test-threads=1","service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled","--exact"]
+execute_status,execute_output=run_bounded(execute_command,60,"execute")
+if execute_status!=101: fail("execute",f"exit-{execute_status}",execute_output)
+text=execute_output.decode("utf-8",errors="replace")
+running=re.findall(r"^running (\d+) test$",text,re.M)
+summaries=re.findall(r"^test result: FAILED\. (\d+) passed; (\d+) failed; (\d+) ignored;",text,re.M)
+test_lines=re.findall(r"^test service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled \.\.\. FAILED$",text,re.M)
+if running!=["1"] or summaries!=[("0","1","0")] or len(test_lines)!=1: fail("execute","test-cardinality",execute_output)
+panic_header=re.compile(r"^thread '([^']+)'(?: \([0-9]+\))? panicked at .+:$")
+panic_records=[]
+lines=text.splitlines()
+for index,line in enumerate(lines):
+    header=panic_header.fullmatch(line)
+    if header is None: continue
+    message=None
+    for following in lines[index+1:]:
+        if panic_header.fullmatch(following): break
+        if following.strip():
+            message=following; break
+    if message is None: fail("execute","panic-message-missing",execute_output)
+    panic_records.append((header.group(1),message))
+expected_panics=[
+    ("phase285-a2a-worker-observations","observation public ReadHead is absent"),
+    ("service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled","observation thread panicked: Any { .. }"),
+]
+if panic_records!=expected_panics or text.count("observation public ReadHead is absent")!=1: fail("execute","late-relation",execute_output)
+if executable_snapshot(executable,"execute",execute_output)!=before: fail("execute","executable-changed",execute_output)
+compile_receipt=hashlib.sha256(compile_output).hexdigest(); execute_receipt=hashlib.sha256(execute_output).hexdigest()
+print(f"service_checkpoint_observation_compiled_mutation mutation=public_head_absent compiled=1 compile_sha256={compile_receipt} executable_sha256={before[1]} executed=1 execute_sha256={execute_receipt} failed=1 intended=public_store_head")
 print("service_checkpoint_observations rows=1 worker=12 proxy=1 store=1 publisher=2 connections=3 cas_attempted=0 cas_applied=0 validator_mutations=10 compiled_mutations=1 passed=1")
 PY
 }
@@ -5824,7 +5917,7 @@ PY
     "$ROOT_DIR" "$scratch" \
     "$(shasum -a 256 "$ROOT_DIR/tools/check-phase285-witness-integrity.sh" | awk '{print $1}')" \
     "$(shasum -a 256 "$ROOT_DIR/tools/fixtures/phase285-witness-integrity.json" | awk '{print $1}')" <<'PY'
-import copy, hashlib, json, os, pathlib, re, shutil, subprocess, sys
+import copy, hashlib, json, os, pathlib, re, selectors, shutil, signal, stat, subprocess, sys, time
 ledger, budget_receipt, callsite_receipt, constructor_receipt, tree, token, config_path, private_path, public_path, library_path, fixture_path, root_path, scratch_path, launcher_pin, manifest_pin = sys.argv[1:]
 ledger = pathlib.Path(ledger)
 budget_receipt = pathlib.Path(budget_receipt)
@@ -6084,6 +6177,8 @@ if archive_status != 0 or unpack.returncode != 0:
     raise SystemExit("deadline exact-tree extraction failed")
 
 target = scratch / "deadline-shared-target"
+if target.exists():
+    raise SystemExit("deadline shared target is not fresh")
 base_environment = os.environ.copy()
 base_environment["CARGO_TARGET_DIR"] = str(target)
 for name in ["PHASE285_DEADLINE_LEDGER", "PHASE285_DEADLINE_LEDGER_REQUIRED", "PHASE285_DEADLINE_BUDGET_RECEIPT", "PHASE285_DEADLINE_CALLSITE_RECEIPT", "PHASE285_DEADLINE_CONSTRUCTOR_RECEIPT", "PHASE285_DEADLINE_TREE", "PHASE285_DEADLINE_INVOCATION_TOKEN", "PHASE285_DEADLINE_CASE"]:
@@ -6099,59 +6194,574 @@ def cargo(arguments, cwd=exact_root, extra_environment=None):
         timeout=120,
     )
 
-build_modes = [
+boundary_capture_limit = 16_777_216
+boundary_diagnostic_limit = 65_536
+boundary_timeout_seconds = 300
+boundary_seed_timeout_seconds = 900
+
+def boundary_failure(receipt, phase, reason, timeout_seconds, captured=b"", receipt_started_ns=None):
+    elapsed_ms = None
+    if receipt_started_ns is not None:
+        elapsed_ms = (time.monotonic_ns() - receipt_started_ns) // 1_000_000
+    elapsed_field = "" if elapsed_ms is None else f" elapsed_ms={elapsed_ms}"
+    print(
+        f"deadline_boundary_progress receipt={receipt} phase={phase} state=failed timeout_seconds={timeout_seconds} reason={reason}{elapsed_field}",
+        flush=True,
+    )
+    tail = captured[-boundary_diagnostic_limit:].decode("utf-8", errors="replace")
+    raise SystemExit(
+        f"deadline {receipt} bounded build failed phase={phase} reason={reason}{elapsed_field}\n{tail}"
+    )
+
+def terminate_boundary_process(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+def run_boundary_command(receipt, arguments, timeout_seconds, receipt_started_ns):
+    environment = base_environment.copy()
+    for name in list(environment):
+        if name in {"RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"} or name.startswith("SCCACHE_"):
+            environment.pop(name, None)
+    command = ["cargo", *arguments, "--message-format=json"]
+    print(
+        f"deadline_boundary_progress receipt={receipt} phase=compile state=start timeout_seconds={timeout_seconds} reason=none",
+        flush=True,
+    )
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=exact_root,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except OSError:
+        boundary_failure(
+            receipt, "compile", "spawn", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    descriptor = process.stdout.fileno()
+    os.set_blocking(descriptor, False)
+    watcher = selectors.DefaultSelector()
+    watcher.register(descriptor, selectors.EVENT_READ)
+    captured = bytearray()
+    deadline = (receipt_started_ns / 1_000_000_000) + timeout_seconds
+    reached_eof = False
+    try:
+        while not reached_eof:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                terminate_boundary_process(process)
+                boundary_failure(
+                    receipt, "compile", "timeout", timeout_seconds, bytes(captured), receipt_started_ns
+                )
+            events = watcher.select(min(0.25, remaining))
+            if not events and process.poll() is not None:
+                events = [(None, None)]
+            for _key, _mask in events:
+                try:
+                    chunk = os.read(descriptor, 65_536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    reached_eof = True
+                    break
+                if len(captured) + len(chunk) > boundary_capture_limit:
+                    remaining_capacity = boundary_capture_limit - len(captured)
+                    if remaining_capacity > 0:
+                        captured.extend(chunk[:remaining_capacity])
+                    terminate_boundary_process(process)
+                    boundary_failure(
+                        receipt,
+                        "compile",
+                        "output-overflow",
+                        timeout_seconds,
+                        bytes(captured),
+                        receipt_started_ns,
+                    )
+                captured.extend(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            terminate_boundary_process(process)
+            boundary_failure(
+                receipt, "compile", "timeout", timeout_seconds, bytes(captured), receipt_started_ns
+            )
+        try:
+            return_code = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            terminate_boundary_process(process)
+            boundary_failure(
+                receipt, "compile", "timeout", timeout_seconds, bytes(captured), receipt_started_ns
+            )
+    finally:
+        watcher.close()
+        process.stdout.close()
+    return return_code, bytes(captured)
+
+def boundary_artifact_snapshot(
+    receipt,
+    declared,
+    declared_metadata,
+    target_root,
+    artifact,
+    timeout_seconds,
+    captured,
+    receipt_started_ns,
+):
+    declared_identity = (
+        declared_metadata.st_size,
+        declared_metadata.st_dev,
+        declared_metadata.st_ino,
+        declared_metadata.st_mode,
+    )
+    if not hasattr(os, "O_NOFOLLOW"):
+        boundary_failure(
+            receipt, "artifact", "no-open-nofollow", timeout_seconds, captured, receipt_started_ns
+        )
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(declared, flags)
+    except OSError:
+        boundary_failure(
+            receipt, "artifact", "artifact-open", timeout_seconds, captured, receipt_started_ns
+        )
+    try:
+        opened = os.fstat(descriptor)
+        opened_identity = (opened.st_size, opened.st_dev, opened.st_ino, opened.st_mode)
+        if opened_identity != declared_identity or not stat.S_ISREG(opened.st_mode) or opened.st_size <= 0:
+            boundary_failure(
+                receipt,
+                "artifact",
+                "artifact-open-identity",
+                timeout_seconds,
+                captured,
+                receipt_started_ns,
+            )
+        digest = hashlib.sha256()
+        length = 0
+        while True:
+            chunk = os.read(descriptor, 1_048_576)
+            if not chunk:
+                break
+            digest.update(chunk)
+            length += len(chunk)
+        after_open = os.fstat(descriptor)
+        after_open_identity = (
+            after_open.st_size,
+            after_open.st_dev,
+            after_open.st_ino,
+            after_open.st_mode,
+        )
+    except OSError:
+        boundary_failure(
+            receipt, "artifact", "artifact-read", timeout_seconds, captured, receipt_started_ns
+        )
+    finally:
+        os.close(descriptor)
+    try:
+        after_declared = declared.lstat()
+        after_artifact = declared.resolve(strict=True)
+        after_artifact.relative_to(target_root)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError):
+        boundary_failure(
+            receipt,
+            "artifact",
+            "artifact-post-confinement",
+            timeout_seconds,
+            captured,
+            receipt_started_ns,
+        )
+    after_declared_identity = (
+        after_declared.st_size,
+        after_declared.st_dev,
+        after_declared.st_ino,
+        after_declared.st_mode,
+    )
+    if (
+        after_open_identity != declared_identity
+        or after_declared_identity != declared_identity
+        or after_artifact != artifact
+        or length != declared_metadata.st_size
+    ):
+        boundary_failure(
+            receipt, "artifact", "artifact-changed", timeout_seconds, captured, receipt_started_ns
+        )
+    return (
+        declared_metadata.st_size,
+        digest.hexdigest(),
+        declared_metadata.st_dev,
+        declared_metadata.st_ino,
+        declared_metadata.st_mode,
+    )
+
+def seed_component_failure(
+    receipt, component, timeout_seconds, captured=b"", receipt_started_ns=None
+):
+    boundary_failure(
+        receipt,
+        "artifact",
+        f"seed-{component}",
+        timeout_seconds,
+        captured,
+        receipt_started_ns,
+    )
+
+def build_boundary(receipt, arguments, timeout_seconds=boundary_timeout_seconds, expected_fresh=None, expected_seed=None):
+    receipt_started_ns = time.monotonic_ns()
+    return_code, captured = run_boundary_command(
+        receipt, arguments, timeout_seconds, receipt_started_ns
+    )
+
+    def fail(phase, reason):
+        boundary_failure(
+            receipt, phase, reason, timeout_seconds, captured, receipt_started_ns
+        )
+
+    if return_code != 0:
+        fail("compile", f"exit-{return_code}")
+    records = []
+    for line in captured.splitlines():
+        try:
+            text = line.decode("utf-8")
+        except UnicodeDecodeError:
+            fail("json", "non-utf8-output")
+        stripped = text.strip()
+        if not stripped:
+            continue
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            if stripped.startswith(("{", "[")):
+                fail("json", "malformed-json")
+            if not re.fullmatch(r"(?:Blocking waiting for file lock.*|Compiling\s+.*|Checking\s+.*|Finished\s+.*|Fresh\s+.*)", stripped):
+                fail("json", "unexpected-non-json-output")
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+        else:
+            fail("json", "non-object-json")
+    finished = [value for value in records if value.get("reason") == "build-finished"]
+    if len(finished) != 1 or finished[0].get("success") is not True:
+        fail("json", "build-finished")
+    artifacts = []
+    for value in records:
+        cargo_target = value.get("target", {})
+        profile = value.get("profile", {})
+        if (
+            value.get("reason") == "compiler-artifact"
+            and cargo_target.get("name") == "swarm_governance_witness"
+            and cargo_target.get("kind") == ["lib"]
+            and profile.get("test") is False
+        ):
+            artifacts.append(value)
+    if len(artifacts) != 1:
+        fail("json", f"artifact-cardinality-{len(artifacts)}")
+    artifact_record = artifacts[0]
+    if expected_fresh is not None and artifact_record.get("fresh") is not expected_fresh:
+        fail("json", "artifact-fresh")
+    filenames = artifact_record.get("filenames")
+    if not isinstance(filenames, list):
+        fail("json", "artifact-filenames")
+    rlibs = [value for value in filenames if isinstance(value, str) and value.endswith(".rlib")]
+    if len(rlibs) != 1:
+        fail("json", f"rlib-cardinality-{len(rlibs)}")
+    declared = pathlib.Path(rlibs[0])
+    if not declared.is_absolute():
+        declared = exact_root / declared
+    try:
+        declared_metadata = declared.lstat()
+    except (FileNotFoundError, OSError):
+        fail("artifact", "artifact-declared-type")
+    if (
+        not stat.S_ISREG(declared_metadata.st_mode)
+        or stat.S_ISLNK(declared_metadata.st_mode)
+        or declared_metadata.st_size <= 0
+    ):
+        fail("artifact", "artifact-declared-type")
+    try:
+        target_root = target.resolve(strict=True)
+        artifact = declared.resolve(strict=True)
+        artifact.relative_to(target_root)
+    except (FileNotFoundError, RuntimeError, ValueError):
+        fail("artifact", "artifact-confinement")
+    before = boundary_artifact_snapshot(
+        receipt,
+        declared,
+        declared_metadata,
+        target_root,
+        artifact,
+        timeout_seconds,
+        captured,
+        receipt_started_ns,
+    )
+    try:
+        repeat_metadata = declared.lstat()
+    except (FileNotFoundError, OSError):
+        fail("artifact", "artifact-repeat-type")
+    after = boundary_artifact_snapshot(
+        receipt,
+        declared,
+        repeat_metadata,
+        target_root,
+        artifact,
+        timeout_seconds,
+        captured,
+        receipt_started_ns,
+    )
+    if after != before:
+        fail("artifact", "artifact-unstable")
+    elapsed_ms = (time.monotonic_ns() - receipt_started_ns) // 1_000_000
+    result = {
+        "artifact": artifact,
+        "declared": declared,
+        "snapshot": before,
+        "elapsed_ms": elapsed_ms,
+        "started_ns": receipt_started_ns,
+    }
+    if expected_seed is not None:
+        seed_snapshot = expected_seed["snapshot"]
+        if declared != expected_seed["declared"]:
+            seed_component_failure(
+                receipt, "declared-path", timeout_seconds, captured, receipt_started_ns
+            )
+        if artifact != expected_seed["artifact"]:
+            seed_component_failure(
+                receipt, "resolved-path", timeout_seconds, captured, receipt_started_ns
+            )
+        if before[0] != seed_snapshot[0]:
+            seed_component_failure(
+                receipt, "length", timeout_seconds, captured, receipt_started_ns
+            )
+        if before[1] != seed_snapshot[1]:
+            seed_component_failure(
+                receipt, "sha256", timeout_seconds, captured, receipt_started_ns
+            )
+        if before[2] != seed_snapshot[2]:
+            seed_component_failure(
+                receipt, "device", timeout_seconds, captured, receipt_started_ns
+            )
+        if before[4] != seed_snapshot[4]:
+            seed_component_failure(
+                receipt, "mode", timeout_seconds, captured, receipt_started_ns
+            )
+        result["inode_relation"] = "stable" if before[3] == seed_snapshot[3] else "replaced"
+    print(
+        f"deadline_boundary_progress receipt={receipt} phase=artifact state=passed "
+        f"timeout_seconds={timeout_seconds} reason=validated elapsed_ms={elapsed_ms}",
+        flush=True,
+    )
+    return result
+
+def open_retained_seed_descriptor(receipt, seed, timeout_seconds, receipt_started_ns):
+    declared = seed["declared"]
+    try:
+        metadata = declared.lstat()
+        target_root = target.resolve(strict=True)
+        artifact = declared.resolve(strict=True)
+        artifact.relative_to(target_root)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError):
+        seed_component_failure(
+            receipt, "retained-path", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    if artifact != seed["artifact"]:
+        seed_component_failure(
+            receipt,
+            "retained-resolved-path",
+            timeout_seconds,
+            receipt_started_ns=receipt_started_ns,
+        )
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        seed_component_failure(
+            receipt, "retained-type", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    try:
+        return os.open(declared, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        seed_component_failure(
+            receipt, "retained-open", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+
+def revalidate_retained_seed(
+    receipt, seed, descriptor, timeout_seconds, receipt_started_ns
+):
+    expected = seed["snapshot"]
+    try:
+        before = os.fstat(descriptor)
+    except OSError:
+        seed_component_failure(
+            receipt, "retained-fstat", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+        seed_component_failure(
+            receipt, "retained-type", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    if before.st_size != expected[0]:
+        seed_component_failure(
+            receipt, "retained-length", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    if before.st_dev != expected[2]:
+        seed_component_failure(
+            receipt, "retained-device", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    if before.st_ino != expected[3]:
+        seed_component_failure(
+            receipt, "retained-inode", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    if before.st_mode != expected[4]:
+        seed_component_failure(
+            receipt, "retained-mode", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    digest = hashlib.sha256()
+    length = 0
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(descriptor, 1_048_576)
+            if not chunk:
+                break
+            digest.update(chunk)
+            length += len(chunk)
+        after = os.fstat(descriptor)
+    except OSError:
+        seed_component_failure(
+            receipt, "retained-read", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    before_identity = (before.st_size, before.st_dev, before.st_ino, before.st_mode)
+    after_identity = (after.st_size, after.st_dev, after.st_ino, after.st_mode)
+    if after_identity != before_identity:
+        seed_component_failure(
+            receipt, "retained-changed", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+    if length != expected[0]:
+        seed_component_failure(
+            receipt,
+            "retained-read-length",
+            timeout_seconds,
+            receipt_started_ns=receipt_started_ns,
+        )
+    if digest.hexdigest() != expected[1]:
+        seed_component_failure(
+            receipt, "retained-sha256", timeout_seconds, receipt_started_ns=receipt_started_ns
+        )
+
+debug_build_modes = [
     ("non_test_default_debug", ["build", "-p", "swarm-governance-witness", "--lib", "--locked", "--offline"]),
     ("non_test_all_features_debug", ["build", "-p", "swarm-governance-witness", "--lib", "--all-features", "--locked", "--offline"]),
-    ("non_test_default_release", ["build", "-p", "swarm-governance-witness", "--lib", "--release", "--locked", "--offline"]),
-    ("non_test_all_features_release", ["build", "-p", "swarm-governance-witness", "--lib", "--release", "--all-features", "--locked", "--offline"]),
 ]
-for receipt, arguments in build_modes:
-    result = cargo(arguments)
-    if result.returncode != 0:
-        raise SystemExit(f"deadline {receipt} failed:\n{result.stdout}")
-    print(f"deadline_boundary receipt={receipt} tree={tree} token={token} status=passed")
+for receipt, arguments in debug_build_modes:
+    result = build_boundary(receipt, arguments)
+    print(f"deadline_boundary receipt={receipt} tree={tree} token={token} status=passed artifact_sha256={result['snapshot'][1]}")
 
-downstream = scratch / "deadline-downstream"
-(downstream / "src").mkdir(parents=True)
-(downstream / "Cargo.toml").write_text(
-    "[package]\nname=\"phase285-a1-boundary\"\nversion=\"0.0.0\"\nedition=\"2024\"\n"
-    + "[dependencies]\nswarm-governance-witness={path=" + json.dumps(str(exact_root / "crates/swarm-governance-witness")) + "}\n"
+default_release_arguments = ["build", "-p", "swarm-governance-witness", "--lib", "--release", "--locked", "--offline"]
+seed = build_boundary(
+    "cold_default_release_seed",
+    default_release_arguments,
+    timeout_seconds=boundary_seed_timeout_seconds,
+    expected_fresh=False,
 )
-main = downstream / "src/main.rs"
-main.write_text(
-    "use swarm_governance_witness::{PublicWitnessServiceConfigV1,store_proxy_subjects};\n"
-    "fn main(){let _=store_proxy_subjects();let _:Option<PublicWitnessServiceConfigV1>=None;}\n"
-)
-lock = cargo(["generate-lockfile", "--offline", "--manifest-path", str(downstream / "Cargo.toml")], downstream)
-if lock.returncode != 0:
-    raise SystemExit(f"deadline downstream lock generation failed:\n{lock.stdout}")
-positive = cargo(["check", "--manifest-path", str(downstream / "Cargo.toml"), "--locked", "--offline"], downstream)
-if positive.returncode != 0:
-    raise SystemExit(f"deadline downstream positive failed:\n{positive.stdout}")
-print(f"deadline_boundary receipt=downstream_public_api_positive tree={tree} token={token} status=passed")
 
-negative_probes = [
-    ("downstream_public_start_inner_private", "use swarm_governance_witness::{NatsPublicWitnessStoreProxyClient,PublicWitnessServiceRunner};fn main(){let _=PublicWitnessServiceRunner::<NatsPublicWitnessStoreProxyClient>::start_inner;}", "E0624", "start_inner"),
-    ("downstream_private_start_inner_private", "use swarm_governance_witness::{NatsWitnessStore,StoreProxyServiceRunner};fn main(){let _=StoreProxyServiceRunner::<NatsWitnessStore>::start_inner;}", "E0624", "start_inner"),
-    ("downstream_observer_noop_private", "use swarm_governance_witness::service_config::{SubscriberAdmissionObserverV1,NoopSubscriberAdmissionObserverV1};fn main(){}", "E0603", "service_config"),
-    ("downstream_test_builder_absent", "use swarm_governance_witness::{PublicWitnessDispatcher,PublicWitnessStoreProxyClient};fn probe<C:PublicWitnessStoreProxyClient>(d:&mut PublicWitnessDispatcher<C>){d.observe_subscriber_admissions_for_test(todo!());}fn main(){}", "E0599", "observe_subscriber_admissions_for_test"),
-]
-for receipt, source, code, symbol in negative_probes:
-    main.write_text(source + "\n")
-    result = cargo(["check", "--manifest-path", str(downstream / "Cargo.toml"), "--locked", "--offline"], downstream)
-    if result.returncode == 0 or code not in result.stdout or symbol not in result.stdout:
-        raise SystemExit(f"deadline {receipt} did not fail at intended API boundary:\n{result.stdout}")
-    print(f"deadline_boundary receipt={receipt} tree={tree} token={token} diagnostic={code} symbol={symbol} status=passed")
+def run_seed_bound_checks(seed, seed_descriptor):
+    release_build_modes = [
+        ("non_test_default_release", default_release_arguments),
+        ("non_test_all_features_release", ["build", "-p", "swarm-governance-witness", "--lib", "--release", "--all-features", "--locked", "--offline"]),
+    ]
+    for receipt, arguments in release_build_modes:
+        result = build_boundary(receipt, arguments, expected_fresh=True, expected_seed=seed)
+        revalidate_retained_seed(
+            receipt,
+            seed,
+            seed_descriptor,
+            boundary_timeout_seconds,
+            result["started_ns"],
+        )
+        print(
+            f"deadline_boundary receipt={receipt} tree={tree} token={token} status=passed "
+            f"artifact_sha256={result['snapshot'][1]} seed_artifact_sha256={seed['snapshot'][1]} "
+            f"seed_inode={seed['snapshot'][3]} published_inode={result['snapshot'][3]} "
+            f"inode_relation={result['inode_relation']}"
+        )
 
-artifact_candidates = list((target / "debug").glob("libswarm_governance_witness*.rlib")) + list((target / "release").glob("libswarm_governance_witness*.rlib"))
-if len(artifact_candidates) < 2:
-    raise SystemExit("deadline non-test artifacts absent")
-for artifact in artifact_candidates:
-    raw = artifact.read_bytes()
-    for symbol in [b"RecordingWorkerTransitionObserverV1", b"RecordingSubscriberAdmissionObserverV1", b"DeadlineGateV1", b"deadline_state_machine_is_receipt_anchored_and_mutation_sensitive", b"subscriber_callsite_is_receipt_anchored_and_mutation_sensitive", b"observe_worker_transitions_for_test", b"observe_subscriber_admissions_for_test"]:
-        if symbol in raw:
-            raise SystemExit(f"deadline test-only symbol present in non-test artifact: {symbol.decode()}")
-print(f"deadline_boundary receipt=non_test_recorder_symbols_absent tree={tree} token={token} artifacts={len(artifact_candidates)} status=passed")
+    downstream = scratch / "deadline-downstream"
+    (downstream / "src").mkdir(parents=True)
+    (downstream / "Cargo.toml").write_text(
+        "[package]\nname=\"phase285-a1-boundary\"\nversion=\"0.0.0\"\nedition=\"2024\"\n"
+        + "[dependencies]\nswarm-governance-witness={path=" + json.dumps(str(exact_root / "crates/swarm-governance-witness")) + "}\n"
+    )
+    main = downstream / "src/main.rs"
+    main.write_text(
+        "use swarm_governance_witness::{PublicWitnessServiceConfigV1,store_proxy_subjects};\n"
+        "fn main(){let _=store_proxy_subjects();let _:Option<PublicWitnessServiceConfigV1>=None;}\n"
+    )
+    lock = cargo(["generate-lockfile", "--offline", "--manifest-path", str(downstream / "Cargo.toml")], downstream)
+    if lock.returncode != 0:
+        raise SystemExit(f"deadline downstream lock generation failed:\n{lock.stdout}")
+    positive = cargo(["check", "--manifest-path", str(downstream / "Cargo.toml"), "--locked", "--offline"], downstream)
+    if positive.returncode != 0:
+        raise SystemExit(f"deadline downstream positive failed:\n{positive.stdout}")
+    print(f"deadline_boundary receipt=downstream_public_api_positive tree={tree} token={token} status=passed")
+
+    negative_probes = [
+        ("downstream_public_start_inner_private", "use swarm_governance_witness::{NatsPublicWitnessStoreProxyClient,PublicWitnessServiceRunner};fn main(){let _=PublicWitnessServiceRunner::<NatsPublicWitnessStoreProxyClient>::start_inner;}", "E0624", "start_inner"),
+        ("downstream_private_start_inner_private", "use swarm_governance_witness::{NatsWitnessStore,StoreProxyServiceRunner};fn main(){let _=StoreProxyServiceRunner::<NatsWitnessStore>::start_inner;}", "E0624", "start_inner"),
+        ("downstream_observer_noop_private", "use swarm_governance_witness::service_config::{SubscriberAdmissionObserverV1,NoopSubscriberAdmissionObserverV1};fn main(){}", "E0603", "service_config"),
+        ("downstream_test_builder_absent", "use swarm_governance_witness::{PublicWitnessDispatcher,PublicWitnessStoreProxyClient};fn probe<C:PublicWitnessStoreProxyClient>(d:&mut PublicWitnessDispatcher<C>){d.observe_subscriber_admissions_for_test(todo!());}fn main(){}", "E0599", "observe_subscriber_admissions_for_test"),
+    ]
+    for receipt, source, code, symbol in negative_probes:
+        main.write_text(source + "\n")
+        result = cargo(["check", "--manifest-path", str(downstream / "Cargo.toml"), "--locked", "--offline"], downstream)
+        if result.returncode == 0 or code not in result.stdout or symbol not in result.stdout:
+            raise SystemExit(f"deadline {receipt} did not fail at intended API boundary:\n{result.stdout}")
+        print(f"deadline_boundary receipt={receipt} tree={tree} token={token} diagnostic={code} symbol={symbol} status=passed")
+
+    pre_symbol_started_ns = time.monotonic_ns()
+    revalidate_retained_seed(
+        "pre_symbol_scan",
+        seed,
+        seed_descriptor,
+        boundary_timeout_seconds,
+        pre_symbol_started_ns,
+    )
+    artifact_candidates = list((target / "debug").glob("libswarm_governance_witness*.rlib")) + list((target / "release").glob("libswarm_governance_witness*.rlib"))
+    if len(artifact_candidates) < 2:
+        raise SystemExit("deadline non-test artifacts absent")
+    for artifact in artifact_candidates:
+        raw = artifact.read_bytes()
+        for symbol in [b"RecordingWorkerTransitionObserverV1", b"RecordingSubscriberAdmissionObserverV1", b"DeadlineGateV1", b"deadline_state_machine_is_receipt_anchored_and_mutation_sensitive", b"subscriber_callsite_is_receipt_anchored_and_mutation_sensitive", b"observe_worker_transitions_for_test", b"observe_subscriber_admissions_for_test"]:
+            if symbol in raw:
+                raise SystemExit(f"deadline test-only symbol present in non-test artifact: {symbol.decode()}")
+    print(f"deadline_boundary receipt=non_test_recorder_symbols_absent tree={tree} token={token} artifacts={len(artifact_candidates)} status=passed")
+
+seed_descriptor = None
+try:
+    seed_descriptor = open_retained_seed_descriptor(
+        "cold_default_release_seed",
+        seed,
+        boundary_seed_timeout_seconds,
+        seed["started_ns"],
+    )
+    revalidate_retained_seed(
+        "cold_default_release_seed",
+        seed,
+        seed_descriptor,
+        boundary_seed_timeout_seconds,
+        seed["started_ns"],
+    )
+    seed["elapsed_ms"] = (time.monotonic_ns() - seed["started_ns"]) // 1_000_000
+    print(
+        f"deadline_boundary receipt=cold_default_release_seed tree={tree} token={token} status=passed "
+        f"elapsed_ms={seed['elapsed_ms']} artifact_sha256={seed['snapshot'][1]}"
+    )
+    run_seed_bound_checks(seed, seed_descriptor)
+finally:
+    if seed_descriptor is not None:
+        os.close(seed_descriptor)
 
 mutant_paths = {
     "config": exact_root / "crates/swarm-governance-witness/src/service_config.rs",
@@ -7100,7 +7710,7 @@ PY
   python3 -I - "$external_output" <<'PY'
 import re, sys
 text=open(sys.argv[1],encoding="utf-8").read()
-if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","1")]: raise SystemExit("complete receipt external transcript differs")
+if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","2")]: raise SystemExit("complete receipt external transcript differs")
 PY
   complete_receipt_artifact_snapshot "$artifact_dir" "$ledger" "$receipt" "$snapshot" verify
   complete_receipt_artifact_hostile_controls "$scratch" "$ledger" "$receipt"
@@ -7261,6 +7871,8 @@ identity_bypass='''        let _ = (expected_tree, expected_invocation_token, ex
 current_invocation_mutant=replace_once(original,identity_guard,identity_bypass,"current_invocation")
 if len(mutations)!=9: raise SystemExit("complete_receipt_mutant[inventory-external]")
 digests=set(); target=parent/"compiled-target"; base=os.environ.copy(); base["CARGO_TARGET_DIR"]=str(target); base["CARGO_NET_OFFLINE"]="true"
+for variable in list(base):
+    if variable.startswith("PHASE285_TOPOLOGY_"): del base[variable]
 nats_http_url=base.get("NATS_HTTP_URL")
 if not nats_http_url: raise SystemExit("complete_receipt_mutant[nats-monitor-absent]")
 def connection_count():
@@ -7308,6 +7920,363 @@ library.write_text(original)
 if len(digests)!=10: raise SystemExit(f"complete_receipt_mutant[unique:{len(digests)}]")
 print(f"complete_receipt_source_guard_self_test mutations=10 unique={len(digests)} compiled=10 executed_internal=10 executed_external=9 killed=10 vacuous=0 tree={tree} passed=1")
 PY
+}
+
+topology_artifact_snapshot() {
+  local mode="$1" snapshot="$2"
+  shift 2
+  python3 -I - "$mode" "$snapshot" "$@" <<'PY'
+import hashlib,json,pathlib,stat,sys
+mode=sys.argv[1]; snapshot=pathlib.Path(sys.argv[2]); specifications=sys.argv[3:]
+prior={} if mode=="record" else json.loads(snapshot.read_text())
+current=dict(prior)
+projection_identities=[]
+observed={}
+for specification in specifications:
+    raw,limit=specification.rsplit(":",1); path=pathlib.Path(raw); maximum=int(limit); metadata=path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or not 1<=metadata.st_size<=maximum: raise SystemExit("topology_snapshot[bound]")
+    if stat.S_IMODE(metadata.st_mode)!=0o600: raise SystemExit("topology_snapshot[mode]")
+    value=path.read_bytes(); after=path.lstat()
+    row={"length":metadata.st_size,"sha256":hashlib.sha256(value).hexdigest(),"device":metadata.st_dev,"inode":metadata.st_ino,"mode":stat.S_IMODE(metadata.st_mode)}
+    if (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_size)!=(after.st_dev,after.st_ino,after.st_mode,after.st_size) or len(value)!=metadata.st_size: raise SystemExit("topology_snapshot[identity]")
+    key=str(path.resolve())
+    observed[key]=row
+    current[key]=row
+    if maximum==16384: projection_identities.append((metadata.st_dev,metadata.st_ino))
+if len(projection_identities)!=len(set(projection_identities)): raise SystemExit("topology_snapshot[alias]")
+for key,row in observed.items():
+    if key in prior and prior[key]!=row: raise SystemExit("topology_snapshot[changed]")
+framed=json.dumps(current,sort_keys=True,separators=(",",":")).encode()+b"\n"
+if mode=="record":
+    snapshot.write_bytes(framed)
+elif mode=="extend":
+    snapshot.write_bytes(framed)
+elif snapshot.read_bytes()!=framed:
+    raise SystemExit("topology_snapshot[reopen]")
+PY
+}
+
+topology_owner_block_focus() {
+  local tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?}" token harness_root canonical probe
+  local rust_canonical rust_probe shell_canonical shell_probe topology_root snapshot internal_output external_output
+  local config_output comparator_output projection_output
+  harness_root="${SWARM_NATS_HARNESS_SCRATCH:?}"
+  canonical="${PHASE285_TOPOLOGY_CONFIG_PATH:?}"
+  token="$(openssl rand -hex 32)"
+  [[ "$token" =~ ^[0-9a-f]{64}$ ]] || return 1
+  topology_root="$harness_root/topology-$token"
+  mkdir -m 700 -- "$topology_root"
+  probe="$topology_root/probe.conf"
+  rust_canonical="$topology_root/rust-canonical.json"
+  rust_probe="$topology_root/rust-probe.json"
+  shell_canonical="$topology_root/shell-canonical.json"
+  shell_probe="$topology_root/shell-probe.json"
+  snapshot="$topology_root/snapshot.json"
+  internal_output="$topology_root/internal.txt"
+  external_output="$topology_root/external.txt"
+  config_output="$topology_root/config-controls.txt"
+  comparator_output="$topology_root/comparator-controls.txt"
+  projection_output="$topology_root/projection-controls.txt"
+
+  python3 -I - "$canonical" "$probe" \
+    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH:?}" \
+    "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH:?}" \
+    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH:?}" \
+    "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH:?}" <<'PY'
+import os, pathlib, re, secrets, stat, sys
+config,probe,*credentials=map(pathlib.Path,sys.argv[1:])
+def bounded(path,maximum):
+    metadata=path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or stat.S_IMODE(metadata.st_mode)!=0o600 or not 1<=metadata.st_size<=maximum: raise SystemExit("topology_input_bound")
+    value=path.read_bytes(); after=path.lstat()
+    if (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_size)!=(after.st_dev,after.st_ino,after.st_mode,after.st_size) or len(value)!=metadata.st_size: raise SystemExit("topology_input_identity")
+    return value
+source=bounded(config,262144).decode()
+for credential in credentials: bounded(credential,4096)
+accounts=["PHASE285_RUNTIME","PHASE285_WITNESS","PHASE285_WITNESS_STORE"]
+users=["phase285_foreign","phase285_witness","phase285_witness_store","phase285_expected"]
+replacements={name:f"{name}_{secrets.token_hex(16).upper()}" for name in accounts}
+replacements.update({name:f"{name}_{secrets.token_hex(16)}" for name in users})
+if len(set(replacements.values()))!=7: raise SystemExit("topology_probe_freshness")
+value=source
+for old in sorted(replacements,key=len,reverse=True):
+    new=replacements[old]
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*_[0-9A-F]{32}",new) and not re.fullmatch(r"[a-z0-9_]+_[0-9a-f]{32}",new): raise SystemExit("topology_probe_grammar")
+    if old not in value: raise SystemExit("topology_probe_anchor")
+    value=value.replace(old,new)
+if any(re.search(rf"\b{re.escape(name)}\b",value) for name in accounts+users): raise SystemExit("topology_probe_canonical_identifier")
+fd=os.open(probe,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+with os.fdopen(fd,"wb") as output:
+    output.write(value.encode()); output.flush(); os.fsync(output.fileno())
+bounded(probe,262144)
+PY
+
+  export PHASE285_TOPOLOGY_PROBE_CONFIG_PATH="$probe"
+  export PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH="$rust_canonical"
+  export PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH="$rust_probe"
+  export PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH="$shell_canonical"
+  export PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH="$shell_probe"
+  export PHASE285_TOPOLOGY_INVOCATION_TOKEN="$token"
+
+  topology_artifact_snapshot record "$snapshot" "$canonical:262144" "$probe:262144" \
+    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
+    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096"
+
+  run_complete_receipt_focus | tee "$internal_output"
+  topology_artifact_snapshot extend "$snapshot" "$canonical:262144" "$probe:262144" \
+    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
+    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096" \
+    "$rust_canonical:16384" "$rust_probe:16384"
+
+  python3 -I - "$canonical" "$probe" "$shell_canonical" "$shell_probe" "$tree" "$token" \
+    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH:?}" \
+    "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH:?}" \
+    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH:?}" \
+    "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH:?}" <<'PY'
+import hashlib,json,os,pathlib,stat,sys
+canonical,probe,shell_canonical,shell_probe=map(pathlib.Path,sys.argv[1:5]); tree,token=sys.argv[5:7]; credentials=list(map(pathlib.Path,sys.argv[7:]))
+def bounded(path,maximum):
+    metadata=path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or stat.S_IMODE(metadata.st_mode)!=0o600 or not 1<=metadata.st_size<=maximum: raise SystemExit("topology_artifact_bound")
+    value=path.read_bytes(); after=path.lstat()
+    if (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_size)!=(after.st_dev,after.st_ino,after.st_mode,after.st_size): raise SystemExit("topology_artifact_identity")
+    return value
+def pairs(value):
+    owner=None; accounts=[]; result=[]
+    for line in value.decode().splitlines():
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(" {"):
+            owner=line.strip()[:-2]; accounts.append(owner)
+        elif line.strip().startswith('user: "'):
+            principal=line.strip().split('"')[1]
+            if owner is None: raise SystemExit("topology_shell_owner")
+            result.append({"account":owner,"principal":principal})
+    if len(dict.fromkeys(accounts))!=3 or len(result)!=4: raise SystemExit("topology_shell_cardinality")
+    return result
+canonical_bytes=bounded(canonical,262144); probe_bytes=bounded(probe,262144)
+credential_users=[]
+for path in credentials:
+    credential=json.loads(bounded(path,4096)); credential_users.append(credential["username"])
+canonical_pairs=pairs(canonical_bytes); probe_pairs=pairs(probe_bytes)
+if [row["principal"] for row in canonical_pairs]!=credential_users: raise SystemExit("topology_shell_credential_binding")
+common={"canonical_config_sha256":hashlib.sha256(canonical_bytes).hexdigest(),"case":"service_checkpoint_topology_owner_blocks","invocation_token":token,"probe_config_sha256":hashlib.sha256(probe_bytes).hexdigest(),"schema_version":1,"tree":tree}
+for path,kind,rows in [(shell_canonical,"canonical",canonical_pairs),(shell_probe,"probe",probe_pairs)]:
+    value=dict(common,input_kind=kind,pairs=rows); framed=json.dumps(value,sort_keys=True,separators=(",",":")).encode()+b"\n"
+    if not 1<=len(framed)<=16384: raise SystemExit("topology_projection_bound")
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    with os.fdopen(fd,"wb") as output: output.write(framed); output.flush(); os.fsync(output.fileno())
+    if bounded(path,16384)!=framed: raise SystemExit("topology_projection_reopen")
+PY
+  topology_artifact_snapshot extend "$snapshot" "$canonical:262144" "$probe:262144" \
+    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
+    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096" \
+    "$rust_canonical:16384" "$rust_probe:16384" "$shell_canonical:16384" "$shell_probe:16384"
+
+  PHASE285_TOPOLOGY_CONFIG_PATH="$canonical" PHASE285_TOPOLOGY_PROBE_CONFIG_PATH="$probe" \
+  PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH="$rust_canonical" \
+  PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH="$rust_probe" \
+  PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH="$shell_canonical" \
+  PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH="$shell_probe" \
+  PHASE285_TOPOLOGY_INVOCATION_TOKEN="$token" \
+    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 \
+      topology_validator_binds_every_tuple_to_owner_block --exact | tee "$external_output"
+  python3 -I - "$external_output" <<'PY'
+import re,sys
+value=open(sys.argv[1],encoding="utf-8").read()
+if re.findall(r"^running (\d+) test",value,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",value,re.M)!=[("1","0","0","2")]: raise SystemExit("topology external transcript differs")
+PY
+  topology_artifact_snapshot verify "$snapshot" "$canonical:262144" "$probe:262144" \
+    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
+    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096" \
+    "$rust_canonical:16384" "$rust_probe:16384" "$shell_canonical:16384" "$shell_probe:16384"
+  bash "$ROOT_DIR/tools/with-nats-jetstream.sh" --topology-validator "$canonical" self-test | tee "$config_output"
+  topology_validator_comparator_controls "$canonical" "$topology_root" | tee "$comparator_output"
+  topology_projection_controls "$canonical" "$probe" "$rust_canonical" "$rust_probe" "$shell_canonical" "$shell_probe" "$tree" "$token" "$topology_root" | tee "$projection_output"
+  topology_artifact_controls "$rust_canonical" "$rust_probe" "$shell_canonical" "$shell_probe" "$topology_root" | tee -a "$projection_output"
+  python3 -I - "$config_output" "$comparator_output" "$projection_output" <<'PY'
+import re,sys
+config,comparator,projection=[open(path,encoding="utf-8").read() for path in sys.argv[1:]]
+digests=re.findall(r"digest=([0-9a-f]{64})",config)+re.findall(r"source_sha256=([0-9a-f]{64})",comparator)+re.findall(r"source_sha256=([0-9a-f]{64})",projection)
+if len(digests)!=33 or len(set(digests))!=33: raise SystemExit(f"topology_mutation_digest_inventory[{len(digests)}:{len(set(digests))}]")
+PY
+  echo "topology_owner_blocks configs=2 accounts=3 principals=4 config_mutations=23 comparator_mutations=3 projection_mutations=7 mutations=33 unique=33 vacuous=0 passed=1"
+}
+
+topology_validator_comparator_controls() {
+  local canonical="$1" scratch="$2"
+  python3 -I - "$ROOT_DIR/tools/with-nats-jetstream.sh" "$canonical" "$scratch" <<'PY'
+import hashlib,pathlib,re,sys
+harness=pathlib.Path(sys.argv[1]).read_text(); canonical=pathlib.Path(sys.argv[2]).read_text(); scratch=pathlib.Path(sys.argv[3])
+start=harness.index("# PHASE285_TOPOLOGY_VALIDATOR_BEGIN")
+end=harness.index("# PHASE285_TOPOLOGY_VALIDATOR_END",start)
+validator=harness[start:end]
+def load(source):
+    namespace={"re":re}; exec(source,namespace); return namespace["validate"]
+current=load(validator); current(canonical)
+rows=[
+ ("delete_response_grant_comparator",'        if row["response_grant"]!=grant: raise ValueError(f\'topology[response-grant:{row["username"]}]\')\n','',canonical.replace('allow_responses: { max: 1, expires: "2s" }','allow_responses: { max: 2, expires: "2s" }',1),"topology[response-grant:phase285_witness]"),
+ ("delete_import_account_comparator",'        if graph["imports"][owner]!=expected_imports[owner]: raise ValueError(f"topology[imports:{owner}]")\n','',canonical.replace('account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.v1.fence"',1),"topology[imports:PHASE285_RUNTIME]"),
+ ("delete_export_account_comparator",'        if graph["exports"][owner]!=expected_exports[owner]: raise ValueError(f"topology[exports:{owner}]")\n','',canonical.replace('service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME]','service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE]',1),"topology[exports:PHASE285_WITNESS]"),
+]
+digests=[]
+for label,old,new,hostile,reason in rows:
+    if validator.count(old)!=1: raise SystemExit(f"topology_comparator[{label}:anchor]")
+    try: current(hostile)
+    except ValueError as error:
+        if str(error)!=reason: raise SystemExit(f"topology_comparator[{label}:reason:{error}]")
+    else: raise SystemExit(f"topology_comparator[{label}:hostile-survived-current]")
+    mutant=validator.replace(old,new,1); digests.append(hashlib.sha256(mutant.encode()).hexdigest())
+    altered=load(mutant); altered(canonical); altered(hostile)
+    print(f"topology_comparator_mutation mutation={label} compiled=1 canonical=passed hostile=survived intended={reason} source_sha256={digests[-1]}")
+if len(set(digests))!=3: raise SystemExit("topology_comparator[digests]")
+PY
+}
+
+topology_projection_controls() {
+  local canonical="$1" probe="$2" rust_canonical="$3" rust_probe="$4" shell_canonical="$5" shell_probe="$6" tree="$7" token="$8" scratch="$9"
+  python3 -I -u - "$ROOT_DIR" "$canonical" "$probe" "$rust_canonical" "$rust_probe" "$shell_canonical" "$shell_probe" "$tree" "$token" "$scratch" <<'PY'
+import hashlib,json,os,pathlib,shutil,subprocess,sys,time
+root=pathlib.Path(sys.argv[1]).resolve(); canonical_config=pathlib.Path(sys.argv[2]); probe_config=pathlib.Path(sys.argv[3])
+rust_canonical,rust_probe,shell_canonical,shell_probe=map(pathlib.Path,sys.argv[4:8]); tree,token=sys.argv[8:10]; scratch=pathlib.Path(sys.argv[10])
+values=[json.loads(path.read_text()) for path in [rust_canonical,rust_probe,shell_canonical,shell_probe]]
+if values[0]!=values[2] or values[1]!=values[3]: raise SystemExit("topology_projection[positive]")
+exact=scratch/"topology-exact-tree"; exact.mkdir()
+archive=subprocess.Popen(["git","-C",str(root),"archive","HEAD"],stdout=subprocess.PIPE)
+unpack=subprocess.run(["tar","-xf","-","-C",str(exact)],stdin=archive.stdout,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False)
+archive.stdout.close()
+if archive.wait()!=0 or unpack.returncode!=0: raise SystemExit("topology_projection[extract]")
+owned=["crates/swarm-governance-witness/src/lib.rs","crates/swarm-governance-witness/tests/service_checkpoint.rs","tools/check-phase285-witness-conformance.sh","tools/fixtures/phase285-witness-integrity.json","tools/with-nats-jetstream.sh"]
+for relative in owned:
+    destination=exact/relative; destination.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(root/relative,destination)
+library=exact/"crates/swarm-governance-witness/src/lib.rs"; original=library.read_text()
+def replace_once(text,old,new,label):
+    if text.count(old)!=1: raise SystemExit(f"topology_projection[{label}:anchor:{text.count(old)}]")
+    return text.replace(old,new,1)
+literal='''        let probe_pairs = vec![
+            TopologyOwnerPairV1 { account: "PHASE285_RUNTIME".to_string(), principal: "phase285_foreign".to_string() },
+            TopologyOwnerPairV1 { account: "PHASE285_WITNESS".to_string(), principal: "phase285_witness".to_string() },
+            TopologyOwnerPairV1 { account: "PHASE285_WITNESS_STORE".to_string(), principal: "phase285_witness_store".to_string() },
+            TopologyOwnerPairV1 { account: "PHASE285_WITNESS_STORE".to_string(), principal: "phase285_expected".to_string() },
+        ];'''
+literal_source=replace_once(original,"        let probe_pairs = topology_parse_pairs(&probe);",literal,"rust_literal_disconnect")
+swap_anchor='''        assert_eq!(pairs.len(), 4, "topology principal cardinality");
+        pairs'''
+swap_source=replace_once(original,swap_anchor,'''        assert_eq!(pairs.len(), 4, "topology principal cardinality");
+        let first_owner = pairs[0].account.clone();
+        pairs[0].account = pairs[1].account.clone();
+        pairs[1].account = first_owner;
+        pairs''',"rust_owner_swap")
+digests=[]; target=scratch/"topology-compiled-target"
+base=os.environ.copy(); base["CARGO_TARGET_DIR"]=str(target); base["CARGO_NET_OFFLINE"]="true"
+for label,source,reason in [("rust_literal_disconnect",literal_source,"probe parser equality"),("rust_owner_swap",swap_source,"canonical parser equality")]:
+    digest=hashlib.sha256(source.encode()).hexdigest(); digests.append(digest); time.sleep(1.05); library.write_text(source)
+    artifact=scratch/f"projection-{label}"; artifact.mkdir()
+    env=base.copy(); env.update({
+      "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH":str(artifact/"ledger.json"),"PHASE285_COMPLETE_RECEIPT_PATH":str(artifact/"receipt.json"),
+      "PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN":hashlib.sha256((token+label).encode()).hexdigest(),"PHASE285_SERVICE_CHECKPOINT_TREE":tree,
+      "PHASE285_TOPOLOGY_CONFIG_PATH":str(canonical_config),"PHASE285_TOPOLOGY_PROBE_CONFIG_PATH":str(probe_config),
+      "PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH":str(artifact/"rust-canonical.json"),"PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH":str(artifact/"rust-probe.json"),
+      "PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH":str(shell_canonical),"PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH":str(shell_probe),"PHASE285_TOPOLOGY_INVOCATION_TOKEN":token,
+    })
+    internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
+    print(f"topology_projection_progress control={label} phase=internal timeout_seconds=300 state=start",flush=True)
+    first=subprocess.run(internal,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=300)
+    if first.returncode!=0 or "running 1 test" not in first.stdout or "1 passed; 0 failed" not in first.stdout: raise SystemExit(f"topology_projection[{label}:internal]\n{first.stdout}")
+    print(f"topology_projection_progress control={label} phase=internal timeout_seconds=300 state=passed",flush=True)
+    external=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","topology_validator_binds_every_tuple_to_owner_block","--exact"]
+    print(f"topology_projection_progress control={label} phase=external timeout_seconds=300 state=start",flush=True)
+    second=subprocess.run(external,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=300)
+    if second.returncode==0 or "running 1 test" not in second.stdout or "0 passed; 1 failed" not in second.stdout or reason not in second.stdout: raise SystemExit(f"topology_projection[{label}:external]\n{second.stdout}")
+    print(f"topology_projection_progress control={label} phase=external timeout_seconds=300 state=passed",flush=True)
+    print(f"topology_projection_mutation mutation={label} compiled=1 internal=1 external=1 failed=1 intended={reason} source_sha256={digest}")
+library.write_text(original)
+def framed(path,value):
+    data=json.dumps(value,sort_keys=True,separators=(",",":")).encode()+b"\n"; path.write_bytes(data); os.chmod(path,0o600); return hashlib.sha256(data).hexdigest()
+shell_value=json.loads(json.dumps(values[3])); shell_value["pairs"][0]["account"],shell_value["pairs"][1]["account"]=shell_value["pairs"][1]["account"],shell_value["pairs"][0]["account"]
+shell_mutant=scratch/"shell-owner-swap.json"; digests.append(framed(shell_mutant,shell_value))
+stale_rust=json.loads(json.dumps(values[0])); stale_shell=json.loads(json.dumps(values[2])); stale_rust["invocation_token"]=stale_shell["invocation_token"]="0"*64
+stale_rust_path=scratch/"stale-rust.json"; stale_shell_path=scratch/"stale-shell.json"; stale_digest=framed(stale_rust_path,stale_rust)+framed(stale_shell_path,stale_shell); digests.append(hashlib.sha256(stale_digest.encode()).hexdigest())
+for label,rust_can,rust_pro,shell_can,shell_pro,reason in [
+ ("shell_owner_swap",rust_canonical,rust_probe,shell_canonical,shell_mutant,"probe parser equality"),
+ ("stale_projection_token",stale_rust_path,rust_probe,stale_shell_path,shell_probe,"projection-token"),
+]:
+    env=base.copy(); env.update({"PHASE285_SERVICE_CHECKPOINT_TREE":tree,"PHASE285_TOPOLOGY_INVOCATION_TOKEN":token,"PHASE285_TOPOLOGY_CONFIG_PATH":str(canonical_config),"PHASE285_TOPOLOGY_PROBE_CONFIG_PATH":str(probe_config),"PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH":str(rust_can),"PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH":str(rust_pro),"PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH":str(shell_can),"PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH":str(shell_pro)})
+    command=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","topology_validator_binds_every_tuple_to_owner_block","--exact"]
+    print(f"topology_projection_progress control={label} phase=external timeout_seconds=120 state=start",flush=True)
+    result=subprocess.run(command,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+    if result.returncode==0 or "running 1 test" not in result.stdout or "0 passed; 1 failed" not in result.stdout or reason not in result.stdout: raise SystemExit(f"topology_projection[{label}:external]\n{result.stdout}")
+    print(f"topology_projection_progress control={label} phase=external timeout_seconds=120 state=passed",flush=True)
+    source_digest=digests[2] if label=="shell_owner_swap" else digests[3]
+    print(f"topology_projection_mutation mutation={label} compiled=1 external=1 failed=1 intended={reason} source_sha256={source_digest}")
+if len(digests)!=4 or len(set(digests))!=4: raise SystemExit("topology_projection[digests]")
+PY
+}
+
+topology_artifact_controls() {
+  local rust_canonical="$1" rust_probe="$2" shell_canonical="$3" shell_probe="$4" scratch="$5"
+  local label control snapshot expected output digest target replacement
+  for label in projection_mode_widening projection_inode_alias projection_post_snapshot_replacement; do
+    control="$scratch/$label"
+    mkdir -m 700 -- "$control"
+    install -m 600 -- "$rust_canonical" "$control/rust-canonical.json"
+    install -m 600 -- "$rust_probe" "$control/rust-probe.json"
+    install -m 600 -- "$shell_canonical" "$control/shell-canonical.json"
+    install -m 600 -- "$shell_probe" "$control/shell-probe.json"
+    snapshot="$control/snapshot.json"
+    topology_artifact_snapshot record "$snapshot" \
+      "$control/rust-canonical.json:16384" "$control/rust-probe.json:16384" \
+      "$control/shell-canonical.json:16384" "$control/shell-probe.json:16384"
+    topology_artifact_snapshot verify "$snapshot" \
+      "$control/rust-canonical.json:16384" "$control/rust-probe.json:16384" \
+      "$control/shell-canonical.json:16384" "$control/shell-probe.json:16384"
+    case "$label" in
+      projection_mode_widening)
+        chmod 644 "$control/shell-probe.json"
+        expected='topology_snapshot[mode]'
+        ;;
+      projection_inode_alias)
+        cmp -s "$control/rust-canonical.json" "$control/shell-canonical.json" || return 1
+        unlink "$control/shell-canonical.json"
+        ln "$control/rust-canonical.json" "$control/shell-canonical.json"
+        expected='topology_snapshot[alias]'
+        ;;
+      projection_post_snapshot_replacement)
+        target="$control/rust-probe.json"
+        replacement="$control/rust-probe.replacement"
+        install -m 600 -- "$target" "$replacement"
+        python3 -I - "$replacement" <<'PY'
+import os,sys
+descriptor=os.open(sys.argv[1],os.O_RDONLY)
+try: os.fsync(descriptor)
+finally: os.close(descriptor)
+PY
+        mv -f -- "$replacement" "$target"
+        expected='topology_snapshot[changed]'
+        ;;
+    esac
+    if output="$(topology_artifact_snapshot verify "$snapshot" \
+      "$control/rust-canonical.json:16384" "$control/rust-probe.json:16384" \
+      "$control/shell-canonical.json:16384" "$control/shell-probe.json:16384" 2>&1)"; then
+      echo "topology artifact mutant survived: $label" >&2
+      return 1
+    fi
+    [[ "$output" == "$expected" ]] || {
+      echo "topology artifact mutant wrong reason: $label:$output" >&2
+      return 1
+    }
+    digest="$(python3 -I - "$label" "$control/rust-canonical.json" "$control/rust-probe.json" \
+      "$control/shell-canonical.json" "$control/shell-probe.json" <<'PY'
+import hashlib,json,pathlib,stat,sys
+rows=[]
+for raw in sys.argv[2:]:
+    path=pathlib.Path(raw); metadata=path.lstat(); value=path.read_bytes()
+    rows.append({"device":metadata.st_dev,"inode":metadata.st_ino,"length":len(value),"mode":stat.S_IMODE(metadata.st_mode),"sha256":hashlib.sha256(value).hexdigest()})
+framed=json.dumps({"label":sys.argv[1],"rows":rows},sort_keys=True,separators=(",",":")).encode()
+print(hashlib.sha256(framed).hexdigest())
+PY
+)"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+    echo "topology_projection_mutation mutation=$label compiled=1 flow=1 fs_mutation=1 failed=1 intended=$expected source_sha256=$digest"
+  done
 }
 
 run_selector() {
@@ -7647,6 +8616,8 @@ case "${1:-}" in
       observation_source_guard self-test
     elif [ "$#" -eq 2 ] && [ "$2" = complete-receipt-suppression ]; then
       run_complete_receipt_focus
+    elif [ "$#" -eq 2 ] && [ "$2" = topology-owner-blocks ]; then
+      topology_owner_block_focus
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-release-hook ]; then
       run_release_hook_self_test
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-iterator-source ]; then
@@ -7663,7 +8634,7 @@ case "${1:-}" in
     elif [ "$#" -eq 1 ]; then
       run_self_tests
     else
-      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|complete-receipt-suppression|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
+      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|complete-receipt-suppression|topology-owner-blocks|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger]" >&2
       exit 2
     fi
     ;;

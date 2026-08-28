@@ -57,6 +57,7 @@ mod deadline_state_machine_tests {
     use std::collections::BTreeMap;
     use std::fs::OpenOptions;
     use std::io::Write;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
@@ -4179,6 +4180,214 @@ mod deadline_state_machine_tests {
         );
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct TopologyOwnerPairV1 {
+        account: String,
+        principal: String,
+    }
+
+    fn topology_bounded_read(variable: &str, maximum: u64) -> Vec<u8> {
+        let allowed = [
+            "PHASE285_TOPOLOGY_CONFIG_PATH",
+            "PHASE285_TOPOLOGY_PROBE_CONFIG_PATH",
+            "PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH",
+            "PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH",
+            "PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH",
+            "PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH",
+        ];
+        assert!(
+            allowed.contains(&variable),
+            "topology input selector is not closed"
+        );
+        let path = PathBuf::from(must(std::env::var(variable), "topology input path absent"));
+        assert!(path.is_absolute(), "topology input path is relative");
+        let before = must(std::fs::symlink_metadata(&path), "topology input metadata");
+        assert!(
+            before.file_type().is_file(),
+            "topology input is not regular"
+        );
+        assert!(
+            !before.file_type().is_symlink(),
+            "topology input is symlink"
+        );
+        assert!(
+            (1..=maximum).contains(&before.len()),
+            "topology input bound"
+        );
+        let bytes = must(std::fs::read(&path), "topology input read");
+        let after = must(std::fs::symlink_metadata(&path), "topology input recheck");
+        assert_eq!(
+            (before.dev(), before.ino(), before.mode(), before.len()),
+            (after.dev(), after.ino(), after.mode(), after.len()),
+            "topology input identity"
+        );
+        assert_eq!(
+            u64::try_from(bytes.len()).ok(),
+            Some(before.len()),
+            "topology input length"
+        );
+        bytes
+    }
+
+    fn topology_parse_pairs(bytes: &[u8]) -> Vec<TopologyOwnerPairV1> {
+        let source = must(std::str::from_utf8(bytes), "topology config utf8");
+        let mut current_account: Option<String> = None;
+        let mut accounts = Vec::new();
+        let mut pairs = Vec::new();
+        for line in source.lines() {
+            if line.starts_with("  ") && !line.starts_with("    ") && line.ends_with(" {") {
+                let account = line.trim().trim_end_matches(" {").to_string();
+                assert!(!account.is_empty(), "topology account is empty");
+                accounts.push(account.clone());
+                current_account = Some(account);
+            } else if let Some(rest) = line.trim().strip_prefix("user: \"") {
+                let principal = rest.split('"').next().unwrap_or_default();
+                assert!(!principal.is_empty(), "topology principal is empty");
+                pairs.push(TopologyOwnerPairV1 {
+                    account: must_some(current_account.clone(), "topology principal owner absent"),
+                    principal: principal.to_string(),
+                });
+            }
+        }
+        accounts.dedup();
+        assert_eq!(accounts.len(), 3, "topology account cardinality");
+        assert_eq!(pairs.len(), 4, "topology principal cardinality");
+        pairs
+    }
+
+    fn topology_credential_user(variable: &str, expected_role: &str) -> String {
+        let bytes = topology_bounded_read(variable, 4_096);
+        let value: serde_json::Value =
+            must(serde_json::from_slice(&bytes), "topology credential json");
+        assert_eq!(
+            ledger_string(&value, "role", "topology credential"),
+            Ok(expected_role)
+        );
+        must(
+            ledger_string(&value, "username", "topology credential"),
+            "topology credential username",
+        )
+        .to_string()
+    }
+
+    fn topology_projection_path(variable: &str) -> PathBuf {
+        let allowed = [
+            "PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH",
+            "PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH",
+        ];
+        assert!(
+            allowed.contains(&variable),
+            "topology projection selector is not closed"
+        );
+        let path = PathBuf::from(must(
+            std::env::var(variable),
+            "topology projection path absent",
+        ));
+        assert!(path.is_absolute(), "topology projection path is relative");
+        path
+    }
+
+    fn topology_write_projection(variable: &str, value: &serde_json::Value) {
+        let bytes = must(canonical_wire_bytes(value), "topology projection canonical");
+        assert!(
+            (1..=16_384).contains(&bytes.len()),
+            "topology projection bound"
+        );
+        let path = topology_projection_path(variable);
+        let mut file = must(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path),
+            "topology projection freshness",
+        );
+        must(file.write_all(&bytes), "topology projection write");
+        must(file.write_all(b"\n"), "topology projection frame");
+        must(file.sync_all(), "topology projection fsync");
+        drop(file);
+        let metadata = must(
+            std::fs::symlink_metadata(&path),
+            "topology projection metadata",
+        );
+        assert!(
+            metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+            "topology projection type"
+        );
+        assert_eq!(metadata.mode() & 0o777, 0o600, "topology projection mode");
+        assert!(
+            (1..=16_384).contains(&metadata.len()),
+            "topology projection framed bound"
+        );
+        let reopened = must(std::fs::read(&path), "topology projection reopen");
+        assert_eq!(
+            reopened,
+            [bytes.as_slice(), b"\n"].concat(),
+            "topology projection reopen bytes"
+        );
+    }
+
+    fn run_topology_projection_test() {
+        let canonical = topology_bounded_read("PHASE285_TOPOLOGY_CONFIG_PATH", 262_144);
+        let probe = topology_bounded_read("PHASE285_TOPOLOGY_PROBE_CONFIG_PATH", 262_144);
+        let canonical_pairs = topology_parse_pairs(&canonical);
+        let probe_pairs = topology_parse_pairs(&probe);
+        let credential_users = [
+            topology_credential_user("PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH", "runtime"),
+            topology_credential_user("PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH", "witness"),
+            topology_credential_user("PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH", "witness-store"),
+            topology_credential_user("PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH", "init"),
+        ];
+        assert_eq!(
+            canonical_pairs
+                .iter()
+                .map(|pair| pair.principal.as_str())
+                .collect::<Vec<_>>(),
+            credential_users
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            "topology credential binding"
+        );
+        let tree = must(
+            std::env::var("PHASE285_SERVICE_CHECKPOINT_TREE"),
+            "topology tree absent",
+        );
+        let token = must(
+            std::env::var("PHASE285_TOPOLOGY_INVOCATION_TOKEN"),
+            "topology token absent",
+        );
+        let canonical_digest = sha256_hex(&canonical);
+        let probe_digest = sha256_hex(&probe);
+        for (variable, input_kind, pairs) in [
+            (
+                "PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH",
+                "canonical",
+                canonical_pairs,
+            ),
+            (
+                "PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH",
+                "probe",
+                probe_pairs,
+            ),
+        ] {
+            topology_write_projection(
+                variable,
+                &serde_json::json!({
+                    "canonical_config_sha256": canonical_digest,
+                    "case": "service_checkpoint_topology_owner_blocks",
+                    "input_kind": input_kind,
+                    "invocation_token": token,
+                    "pairs": pairs,
+                    "probe_config_sha256": probe_digest,
+                    "schema_version": 1,
+                    "tree": tree,
+                }),
+            );
+        }
+        println!("topology_rust_projection canonical=1 probe=1 accounts=3 principals=4 passed=1");
+    }
+
     pub(super) fn run_complete_receipt_suppression_test() {
         let thread = must(
             std::thread::Builder::new()
@@ -4444,6 +4653,9 @@ mod deadline_state_machine_tests {
         println!(
             "complete_receipt_ledger rows=1 private=3 proxy=1 publisher=2 worker=12 current_invocation=bound capacity=0,1,2,2-partial full=forward closed=forward passed=1"
         );
+        if std::env::var_os("PHASE285_TOPOLOGY_CONFIG_PATH").is_some() {
+            run_topology_projection_test();
+        }
     }
 }
 
