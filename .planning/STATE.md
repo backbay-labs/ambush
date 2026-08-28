@@ -6,7 +6,7 @@ current_phase: 285
 current_phase_name: Assurance Foundation Closure
 current_plan: 04
 status: in_progress
-last_updated: "2026-08-28T11:50:02Z"
+last_updated: "2026-08-28T12:07:26Z"
 last_activity: 2026-08-28
 progress:
   total_phases: 6
@@ -30,7 +30,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b3 is durably banked at immutable commit `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, a direct child of A2b2, with both refs exact; its acceptance is suspended because the r63 live replay executed cached unit-test binary SHA-256 `ab563048ba9f3410e6bf2f77524621cdae81ef61478ec45332a425f72c4d5c52`, which contains diagnostic-only `DeliveryTimeout` absent from accepted `lib.rs` SHA-256 `3dac41d81b30b5b30b10327c410b015843685baf5dbf0c62ff01b9cb1584a139`. The first A2c pass is stopped and unaccepted. Draft r64 permits no execution; it specifies one fresh-target immutable A2b3 provenance replay, then a corrected A2c split of four compiled real-seam reservation controls plus 34 artifact-oracle controls. A3 and later work remain blocked.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b3 is durably banked at immutable commit `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, a direct child of A2b2, with both refs exact; its acceptance is suspended because the r63 live replay executed cached unit-test binary SHA-256 `ab563048ba9f3410e6bf2f77524621cdae81ef61478ec45332a425f72c4d5c52`, which contains diagnostic-only `DeliveryTimeout` absent from accepted `lib.rs` SHA-256 `3dac41d81b30b5b30b10327c410b015843685baf5dbf0c62ff01b9cb1584a139`. The first A2c pass is stopped and unaccepted. Immutable r64 was rejected P0/P1/P2=`0/2/0`; draft r65 adds the missing literal fresh-target replay command and five independent diagnostic-token controls. It preserves the corrected A2c split of four compiled real-seam reservation controls plus 34 artifact-oracle controls. A3 and later work remain blocked.
 **Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
 **Last Activity:** 2026-08-28
@@ -134,7 +134,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-28 — A2c stopped; A2b3 live evidence provenance invalidated
+Last Date: 2026-08-28 — r64 rejected; bounded r65 provenance correction drafted
 Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` is the accepted frontier. A2b3 `ed77183d3d13d046e446d2837e8c5d21d1d1765d` remains durably banked at both refs but is not accepted until fresh-target replay and independent review. A2c is uncommitted and frozen at three dirty owned paths. No execution window is active.
 Resume File: None — no `.continue-here` checkpoint exists.
 Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
@@ -142,4 +142,4 @@ Interrupted agent: None. The former broad swarm is stopped; one owner and one ho
 
 ## Next Command
 
-Freeze the five-path r64 planning correction, obtain immutable hostile P0/P1/P2=`0/0/0`, and push/fetch its checkpoint. Do not rerun A2b3, edit the three-path A2c candidate, refresh the manifest, create a registered worktree, or start A3 before a later fresh root window. R64 must bind the exact ephemeral-clone source, absent fresh Cargo target, executed unit-test binary path/hash, correct tree pin, four compiled reservation-seam mutants, and 34 remaining artifact-oracle mutants.
+Freeze the five-path r65 planning correction, obtain immutable hostile P0/P1/P2=`0/0/0`, and push/fetch its checkpoint. Do not rerun A2b3, edit the three-path A2c candidate, refresh the manifest, create a registered worktree, or start A3 before a later fresh root window. R65 must make its literal `r65_a2b3_provenance_replay` command the sole reacceptance path; bind exact plan/checkpoint/authorization refs, ephemeral-clone source, absent Cargo target, compiler-selected and runner-executed unit-test binary path/hash, correct tree pin, five independent forbidden-token checks plus five synthetic controls, four compiled reservation-seam mutants, and 34 artifact-oracle mutants.
