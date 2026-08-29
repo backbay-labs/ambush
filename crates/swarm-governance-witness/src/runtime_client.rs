@@ -59,7 +59,7 @@ pub enum RuntimeWitnessClientErrorV1 {
     ResponseBounds,
     #[error("runtime witness transport is unavailable")]
     Unavailable,
-    #[error("runtime witness request timed out with unknown outcome")]
+    #[error("runtime witness request has unknown outcome")]
     OutcomeUnknown,
     #[error("runtime witness response is invalid")]
     InvalidResponse,
@@ -465,6 +465,13 @@ pub(crate) enum RuntimeRequestObservationV1 {
     NoResponders,
     InvalidSubject,
     Other,
+}
+
+#[cfg(test)]
+impl RuntimeRequestObservationV1 {
+    pub(crate) const fn is_replay_response(self) -> bool {
+        matches!(self, Self::Response)
+    }
 }
 
 #[cfg(test)]
@@ -1125,5 +1132,9 @@ mod request_error_mapping_tests {
             map_request_error_kind(InvalidSubject),
             RuntimeWitnessClientErrorV1::Configuration
         ));
+        assert_eq!(
+            RuntimeWitnessClientErrorV1::OutcomeUnknown.to_string(),
+            "runtime witness request has unknown outcome"
+        );
     }
 }

@@ -459,10 +459,10 @@ DEPENDENCY_CHECKER = "tools/check-witness-dependency-closure.sh"
 PHASE285_WORKFLOW_PATH = ".github/workflows/ci.yml"
 EXPECTED_PHASE285_WORKFLOW_POLICY_SHA256 = "cf25b5b194a3ce7003db3262dbdfd5f87dbb780bd89b35526023ea45c05395ec"
 EXPECTED_PHASE285_WORKSPACE_JOB_SHA256 = "14fa9f08f14ac97f19ffe09eaffc1af01ed2cf38377ba29a18cf4d40b8c16bab"
-EXPECTED_PHASE285_JOB_SHA256 = "fc37cd269d390e923b2d8fcae33f4e116097b6b65b2475878909cba5bb0fd968"
+EXPECTED_PHASE285_JOB_SHA256 = "4de9043afa931e1a43f2e043ab1b2a49cd1e173888315e1dc020c750b395a438"
 EXPECTED_FMT_JOB_SHA256 = "8320dc038e322c8b2cdbe432b6d77ca825e44aa94913dcf13d7c91bda52a0923"
 EXPECTED_WORKSPACE_RUN_SHA256 = "81a78f526e8ca1fb8b5fde286aaa33db1e363fbe5da76e58ae9b9eaef6f93d67"
-EXPECTED_ASSURANCE_RUN_SHA256 = "86ac7379ae27133b93bc586632c8ca3aa196eb220c36489b2a7cb721dba323ae"
+EXPECTED_ASSURANCE_RUN_SHA256 = "e78fb68cdd6a187f7c4070659c51952a284c11f3eb5f763439641d915e8b6661"
 EXPECTED_FMT_RUN_SHA256 = "b6e19c16e0d5f97094745b63c78c4f15238111c4de91b081bba774a71abff1e8"
 REQUIRED_PHASE285 = [
     "cargo test --workspace --locked --offline",
@@ -476,10 +476,10 @@ REQUIRED_PHASE285 = [
     "run_assured /bin/bash tools/check-phase285-witness-integrity.sh transport-layering",
     "run_assured /bin/bash tools/check-witness-dependency-closure.sh --library-only",
     "run_assured /bin/bash tools/check-witness-dependency-closure.sh --current-targets",
-    "run_assured /bin/bash tools/with-nats-jetstream.sh --relay-service-checkpoint /usr/bin/env PHASE285_SERVICE_CHECKPOINT_TREE=\"$PHASE285_CANDIDATE_TREE\" PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=\"$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256\" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=\"$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256\" /bin/bash tools/check-phase285-witness-integrity.sh --focused-service-checkpoint-ci-harness",
+    "run_assured /bin/bash tools/with-nats-jetstream.sh --relay-service-checkpoint /usr/bin/env PHASE285_CONNZ_CURL_BIN=\"$PHASE285_CONNZ_CURL_BIN\" PHASE285_SERVICE_CHECKPOINT_TREE=\"$PHASE285_CANDIDATE_TREE\" PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=\"$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256\" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=\"$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256\" /bin/bash tools/check-phase285-witness-integrity.sh --focused-service-checkpoint-ci-harness",
     "run_assured \"$PHASE285_CARGO\" clippy -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --offline -- -D warnings",
     "cargo fmt --all -- --check",
-    "run_assured \"$PHASE285_SHELLCHECK\" --norc tools/check-gates-wired.sh tools/check-phase285-witness-conformance.sh tools/check-phase285-witness-integrity.sh tools/check-witness-dependency-closure.sh tools/with-nats-jetstream.sh",
+    "run_assured \"$PHASE285_SHELLCHECK\" --norc tools/check-gates-wired.sh tools/check-negative-registry.sh tools/check-phase285-witness-conformance.sh tools/check-phase285-witness-integrity.sh tools/check-witness-dependency-closure.sh tools/with-nats-jetstream.sh",
     "run_assured \"$PHASE285_ACTIONLINT\" .github/workflows/ci.yml",
 ]
 REQUIRED_PHASE285_RUN_BLOCKS = [
@@ -524,6 +524,8 @@ WORKFLOW_CONTRACT_MUTATION_KINDS = (
     "assurance-user-path-precedence",
     "assurance-tool-verifier-omission",
     "assurance-rustup-actual-binding-omission",
+    "assurance-connz-curl-binding-omission",
+    "assurance-connz-curl-binding-substitution",
     "assurance-run-wrapper-omission",
     "assurance-expected-status-wrapper-omission",
     "assurance-integrity-root-recompute",
@@ -558,6 +560,10 @@ class DifferentialFailure(Exception):
 
 
 class ScratchBoundaryFailure(Exception):
+    pass
+
+
+class ScratchExternalProcessFailure(Exception):
     pass
 
 
@@ -715,14 +721,25 @@ def git_boundaries():
 
 
 @contextlib.contextmanager
-def confined_scratch(prefix, parent=None):
-    requested_parent = pathlib.Path(
-        parent if parent is not None else os.environ.get("TMPDIR", tempfile.gettempdir())
-    ).resolve(strict=True)
-    boundaries = git_boundaries()
+def confined_scratch(prefix, parent=None, boundaries=None):
+    resolved_boundaries = tuple(
+        git_boundaries() if boundaries is None else boundaries
+    )
+    if not resolved_boundaries or any(
+        not boundary.is_absolute() or boundary != boundary.resolve(strict=True)
+        for boundary in resolved_boundaries
+    ):
+        raise DifferentialFailure("scratch boundaries are not immutable absolute paths")
+    if parent is not None:
+        requested_parent_value = parent
+    elif "TMPDIR" in os.environ:
+        requested_parent_value = os.environ["TMPDIR"]
+    else:
+        requested_parent_value = tempfile.gettempdir()
+    requested_parent = pathlib.Path(requested_parent_value).resolve(strict=True)
     if any(
         requested_parent == boundary or path_within(requested_parent, boundary)
-        for boundary in boundaries
+        for boundary in resolved_boundaries
     ):
         raise ScratchBoundaryFailure(
             f"scratch parent refusal before create: {requested_parent}"
@@ -737,7 +754,7 @@ def confined_scratch(prefix, parent=None):
         raise DifferentialFailure("new scratch directory was not empty")
     if any(
         path_within(scratch, boundary) or path_within(boundary, scratch)
-        for boundary in boundaries
+        for boundary in resolved_boundaries
     ):
         scratch.rmdir()
         if scratch.exists():
@@ -753,13 +770,28 @@ def confined_scratch(prefix, parent=None):
 
 def scratch_hostile_controls():
     rejected = 0
-    for boundary in git_boundaries():
+    external_process_mutation_killed = 0
+    post_hostile_positive = 0
+    boundaries = tuple(git_boundaries())
+    original_tempfile_tempdir = tempfile.tempdir
+    tempfile.tempdir = None
+
+    def reject_external_process(*_arguments, **_keywords):
+        raise ScratchExternalProcessFailure(
+            "external process attempted after hostile TMPDIR assignment"
+        )
+
+    for boundary in boundaries:
         before_children = {entry.name for entry in boundary.iterdir()}
         had_tmpdir = "TMPDIR" in os.environ
         original_tmpdir = os.environ.get("TMPDIR")
+        original_subprocess_run = subprocess.run
         try:
             os.environ["TMPDIR"] = str(boundary)
-            with confined_scratch("phase285-wiring-hostile"):
+            subprocess.run = reject_external_process
+            with confined_scratch(
+                "phase285-wiring-hostile", boundaries=boundaries
+            ):
                 pass
         except ScratchBoundaryFailure:
             rejected += 1
@@ -768,6 +800,7 @@ def scratch_hostile_controls():
                 f"hostile TMPDIR boundary was accepted: {boundary}"
             )
         finally:
+            subprocess.run = original_subprocess_run
             if had_tmpdir:
                 os.environ["TMPDIR"] = original_tmpdir
             else:
@@ -779,11 +812,65 @@ def scratch_hostile_controls():
                 f"boundary={boundary} added={sorted(after_children - before_children)} "
                 f"removed={sorted(before_children - after_children)}"
             )
+    boundary = boundaries[0]
+    before_children = {entry.name for entry in boundary.iterdir()}
+    had_tmpdir = "TMPDIR" in os.environ
+    original_tmpdir = os.environ.get("TMPDIR")
+    original_subprocess_run = subprocess.run
+    try:
+        os.environ["TMPDIR"] = str(boundary)
+        subprocess.run = reject_external_process
+        with confined_scratch("phase285-wiring-hostile-omission"):
+            pass
+    except ScratchExternalProcessFailure:
+        external_process_mutation_killed = 1
+    else:
+        raise DifferentialFailure(
+            "hostile scratch boundary omission did not attempt the blocked resolver"
+        )
+    finally:
+        subprocess.run = original_subprocess_run
+        if had_tmpdir:
+            os.environ["TMPDIR"] = original_tmpdir
+        else:
+            os.environ.pop("TMPDIR", None)
+    after_children = {entry.name for entry in boundary.iterdir()}
+    if after_children != before_children:
+        raise DifferentialFailure(
+            "hostile resolver-omission control created a boundary child"
+        )
+    if tempfile.tempdir is not None:
+        raise DifferentialFailure("hostile TMPDIR poisoned tempfile's cached default")
+    had_tmpdir = "TMPDIR" in os.environ
+    original_tmpdir = os.environ.get("TMPDIR")
+    os.environ.pop("TMPDIR", None)
+    ordinary_scratch = None
+    try:
+        with confined_scratch(
+            "phase285-wiring-post-hostile", boundaries=boundaries
+        ) as scratch:
+            ordinary_scratch = scratch
+            if any(scratch.iterdir()):
+                raise DifferentialFailure("post-hostile scratch was not empty")
+            post_hostile_positive = 1
+    finally:
+        if had_tmpdir:
+            os.environ["TMPDIR"] = original_tmpdir
+        else:
+            os.environ.pop("TMPDIR", None)
+        tempfile.tempdir = original_tempfile_tempdir
+    if ordinary_scratch is None or ordinary_scratch.exists():
+        raise DifferentialFailure("post-hostile scratch cleanup failed")
     if rejected != 3:
         raise DifferentialFailure(f"hostile scratch control count drifted: {rejected}")
+    if external_process_mutation_killed != 1:
+        raise DifferentialFailure("hostile external-process mutation survived")
+    if post_hostile_positive != 1:
+        raise DifferentialFailure("post-hostile ordinary scratch did not run")
     print(
         f"phase285_scratch_self_test site=gates boundaries={rejected} "
-        "child_paths_created=0 passed=1"
+        "child_paths_created=0 external_process_mutation=1 "
+        "post_hostile_positive=1 passed=1"
     )
 
 
@@ -954,11 +1041,13 @@ def validate_phase285_raw_workflow_contract(result):
         "          DOCKER_CONFIG=\"$PHASE285_DOCKER_CONFIG\"\n",
         "          /usr/bin/python3 -I - \"$PHASE285_TARGET_ROOT\" \"$DOCKER_CONFIG\" <<'PY'\n",
         "          PHASE285_RUSTUP=\"$(command -v rustup)\"\n",
+        "          PHASE285_CONNZ_CURL_BIN=/usr/bin/curl\n          export PHASE285_CONNZ_CURL_BIN\n",
         "          PHASE285_CARGO=\"$(\"$PHASE285_RUSTUP\" which cargo)\"\n          PHASE285_RUSTC=\"$(\"$PHASE285_RUSTUP\" which rustc)\"\n",
         "          PHASE285_CARGO_CLIPPY=\"$(\"$PHASE285_RUSTUP\" which cargo-clippy)\"\n          PHASE285_CLIPPY_DRIVER=\"$(\"$PHASE285_RUSTUP\" which clippy-driver)\"\n",
         "          PHASE285_SYSROOT=\"$(\"$PHASE285_RUSTC\" --print sysroot)\"\n",
         "          PHASE285_ACTIONLINT=\"$($PHASE285_GO env GOPATH)/bin/actionlint\"\n",
         "          capture_candidate_baseline() {\n            /usr/bin/python3 -I - \"$GITHUB_SHA\" \"$PHASE285_CARGO_HOME\" \"$PHASE285_DOCKER_CONFIG\" \"$PHASE285_TARGET_ROOT\" \"$PHASE285_SYSROOT\" \\\n",
+        "              curl \"$PHASE285_CONNZ_CURL_BIN\" \\\n",
         "[\"/usr/bin/git\", \"rev-parse\", \"--verify\", \"HEAD\"]",
         "[\"/usr/bin/git\", \"ls-tree\", \"-rz\", \"--full-tree\", expected_sha]",
         "                  \"git\": git_inventory,\n",
@@ -969,7 +1058,7 @@ def validate_phase285_raw_workflow_contract(result):
         "                  \"target_root_identity\": [\n",
         "                  \"sysroot\": sysroot_control,\n",
         "                  \"tools\": tools,\n",
-        "          readonly PATH RUSTC RUSTFMT CLIPPY_DRIVER CLIPPY_CONF_DIR PHASE285_BASH PHASE285_GIT PHASE285_PYTHON PHASE285_SHASUM PHASE285_AWK PHASE285_MKTEMP PHASE285_RUSTUP PHASE285_CARGO PHASE285_RUSTC PHASE285_RUSTFMT PHASE285_CARGO_CLIPPY PHASE285_CLIPPY_DRIVER PHASE285_SYSROOT PHASE285_GO PHASE285_SHELLCHECK PHASE285_DOCKER PHASE285_ACTIONLINT PHASE285_CANDIDATE_TREE PHASE285_CANDIDATE_BASELINE PHASE285_CANDIDATE_BASELINE_SHA256\n",
+        "          readonly PATH RUSTC RUSTFMT CLIPPY_DRIVER CLIPPY_CONF_DIR PHASE285_BASH PHASE285_GIT PHASE285_PYTHON PHASE285_SHASUM PHASE285_AWK PHASE285_MKTEMP PHASE285_CONNZ_CURL_BIN PHASE285_RUSTUP PHASE285_CARGO PHASE285_RUSTC PHASE285_RUSTFMT PHASE285_CARGO_CLIPPY PHASE285_CLIPPY_DRIVER PHASE285_SYSROOT PHASE285_GO PHASE285_SHELLCHECK PHASE285_DOCKER PHASE285_ACTIONLINT PHASE285_CANDIDATE_TREE PHASE285_CANDIDATE_BASELINE PHASE285_CANDIDATE_BASELINE_SHA256\n",
         "          CLIPPY_CONF_DIR=\"$PWD\"\n",
         "            /usr/bin/python3 -I - \"$PHASE285_CANDIDATE_BASELINE_SHA256\" \"$GITHUB_SHA\" \"$PHASE285_ACTIVE_TARGET\" \"$PHASE285_ACTIVE_TARGET_IDENTITY\" 3<<< \"$PHASE285_CANDIDATE_BASELINE\" <<'PY'\n",
         "          for tool in baseline[\"tools\"]:\n",
@@ -984,7 +1073,7 @@ def validate_phase285_raw_workflow_contract(result):
         "              raise SystemExit(\"candidate_inventory[inactive-target-root-not-empty]\")\n",
         "          trap verify_candidate_inventory_on_exit EXIT\n",
         "          PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1\n",
-        "          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=b45039413b2f5d9c137b598262a9680a19e371a53ce102a37047ab41857a88b9\n",
+        "          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=802c330e10a65524414564e0a47e4c35787c44a00698962a2f86cb80ac71957d\n",
         "          run_assured() {\n            local command_status=0 verification_status=0 cleanup_status=0\n            verify_candidate_inventory || return $?\n            allocate_assurance_target || return $?\n",
         "            cleanup_assurance_target || cleanup_status=$?\n            if test \"$verification_status\" -ne 0; then\n              return \"$verification_status\"\n            fi\n            if test \"$cleanup_status\" -ne 0; then\n              return \"$cleanup_status\"\n            fi\n            return \"$command_status\"\n          }\n",
         "          allocate_assurance_target() {\n",
@@ -1314,6 +1403,15 @@ def workflow_contract_mutation_variants(workflow_text):
         "assurance-rustup-actual-binding-omission": (
             "          PHASE285_RUSTC=\"$(\"$PHASE285_RUSTUP\" which rustc)\"\n",
             "          PHASE285_RUSTC=\"$(command -v rustc)\"\n",
+        ),
+        "assurance-connz-curl-binding-omission": (
+            "          PHASE285_CONNZ_CURL_BIN=/usr/bin/curl\n"
+            "          export PHASE285_CONNZ_CURL_BIN\n",
+            "",
+        ),
+        "assurance-connz-curl-binding-substitution": (
+            "          PHASE285_CONNZ_CURL_BIN=/usr/bin/curl\n",
+            "          PHASE285_CONNZ_CURL_BIN=/tmp/phase285-curl-mutant\n",
         ),
         "assurance-run-wrapper-omission": (
             "          run_assured /bin/bash tools/check-phase285-witness-integrity.sh --integrity-self-test\n",

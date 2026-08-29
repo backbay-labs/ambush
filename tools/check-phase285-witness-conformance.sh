@@ -210,6 +210,7 @@ response_failure_wire_binds_operation_and_request_digest
 failure_retryability_is_derived_from_code
 response_decoder_rejects_unknown_fields_or_unsigned_success
 failure_store_state_digest_binds_current_snapshot_and_rejects_unproved_absence
+client_failure_decoder_is_request_bound_without_raw_store_proof
 EOF
       ;;
     candidate-verifier) cat <<'EOF'
@@ -222,6 +223,7 @@ EOF
 protocol_checkpoint_rejects_unverified_prepare_and_accepts_only_one_step_transition
 response_failure_maps_each_matchable_protocol_error
 canonical_response_round_trip_preserves_signing_preimage
+service_request_draft_derives_nonce_operation_target_and_authorization_once
 EOF
       ;;
     atomic-store-contract) cat <<'EOF'
@@ -377,7 +379,7 @@ registry_rows() {
 }
 
 # Each target has an independent exact inventory. The shared governance target
-# remains frozen at twenty cases; the JetStream CAS target owns exactly five.
+# remains frozen at twenty-two cases; the JetStream CAS target owns exactly five.
 materialized_inventory_for_target() {
   case "$1/$2" in
     swarm-governance/phase285_witness_conformance)
@@ -403,8 +405,8 @@ materialized_inventory_for_target() {
   esac
 }
 
-REGISTRY_SHA256="de986e0d0779f8b089f5160ff680145e4157ee4fcce08e3a5a577085d889d2e7"
-REGISTRY_ROW_COUNT=58
+REGISTRY_SHA256="6b363406b866ce17a3d885877549cc8d66fced21f042a811b109161716c8874d"
+REGISTRY_ROW_COUNT=60
 
 registry_validator() {
   local registry_file="$1" mode="${2:-validate}" selector="${3:-}"
@@ -618,6 +620,7 @@ PY
 run_self_tests() {
   validate_aggregate_self_test_registry
   phase285_portable_directory_metadata_self_test
+  relay_recreation_canonical_route_guard self-test
   local count=0 mode
   while IFS= read -r mode; do
     [ -n "$mode" ] || continue
@@ -4217,7 +4220,7 @@ run_transport_selector() {
       transport_layering_rejects_raw_kv_subject)
         grep -qx 'phase285_transport_negative case=phase285-raw-kv-subject positive=1' "$output_file" || return 1
         grep -qx 'phase285_scratch_self_test site=negative boundaries=3 passed=1' "$output_file" || return 1
-        grep -qx 'phase285_transport_self_test case=phase285-raw-kv-subject positive=1 structural_mutations=29 executable_mapping_mutations=5' "$output_file" || return 1
+        grep -qx 'phase285_transport_self_test case=phase285-raw-kv-subject positive=1 structural_mutations=44 executable_mapping_mutations=5' "$output_file" || return 1
         ;;
       transport_layering_rejects_missing_library_target)
         [ "$(grep -c '^self_test_red case=missing-library-target ' "$output_file")" -eq 1 ] &&
@@ -11470,6 +11473,933 @@ run_service_checkpoint_grant_focus() {
   validate_service_checkpoint_grant_ledger "$ledger" "$accepted_tree" normal
 }
 
+relay_recreation_canonical_route_guard() {
+  python3 -I - "$ROOT_DIR/tools/check-phase285-witness-conformance.sh" "${1:-normal}" <<'PY'
+import hashlib, pathlib, re, sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+mode = sys.argv[2]
+route_pattern = re.compile(
+    r"(?ms)^ci_harness_dispatch_route\(\) \{\n(?P<body>.*?)^\}\n"
+)
+required = (
+    "    receipt-topology)\n"
+    "      topology_owner_block_focus\n"
+    "      run_relay_recreation_mutants_for_ci\n"
+    "      ;;\n"
+)
+
+def validate(candidate):
+    matches = list(route_pattern.finditer(candidate))
+    if len(matches) != 1:
+        raise ValueError("dispatch-function-cardinality")
+    body = matches[0].group("body")
+    if body.count("receipt-topology)") != 1 or body.count(required) != 1:
+        raise ValueError("receipt-topology-contract")
+    if body.count("topology_owner_block_focus") != 1:
+        raise ValueError("receipt-topology-positive-cardinality")
+    if body.count("run_relay_recreation_mutants_for_ci") != 1:
+        raise ValueError("receipt-topology-mutant-cardinality")
+
+validate(source)
+if mode == "self-test":
+    mutants = [
+        (
+            "omit-canonical-mutants",
+            required,
+            required.replace("      run_relay_recreation_mutants_for_ci\n", "", 1),
+        ),
+        (
+            "reorder-before-positive",
+            required,
+            (
+                "    receipt-topology)\n"
+                "      run_relay_recreation_mutants_for_ci\n"
+                "      topology_owner_block_focus\n"
+                "      ;;\n"
+            ),
+        ),
+    ]
+    digests = []
+    for name, old, new in mutants:
+        if source.count(old) != 1:
+            raise SystemExit(f"relay_recreation_canonical_route_guard[anchor:{name}]")
+        candidate = source.replace(old, new, 1)
+        digests.append(hashlib.sha256(candidate.encode()).hexdigest())
+        try:
+            validate(candidate)
+        except ValueError as error:
+            if str(error) != "receipt-topology-contract":
+                raise SystemExit(
+                    f"relay_recreation_canonical_route_guard[wrong-reason:{name}:{error}]"
+                )
+            print(
+                "relay_recreation_canonical_route_mutation_red "
+                f"mutation={name} reason=receipt-topology-contract"
+            )
+        else:
+            raise SystemExit(
+                f"relay_recreation_canonical_route_guard[survived:{name}]"
+            )
+    if len(set(digests)) != len(mutants):
+        raise SystemExit("relay_recreation_canonical_route_guard[digest-reuse]")
+    print(
+        "relay_recreation_canonical_route_guard "
+        f"mutations={len(mutants)} unique={len(set(digests))} passed=1"
+    )
+elif mode == "normal":
+    print("relay_recreation_canonical_route_guard passed=1")
+else:
+    raise SystemExit(f"relay_recreation_canonical_route_guard[mode:{mode}]")
+PY
+}
+
+relay_recreation_source_guard() {
+  relay_recreation_canonical_route_guard normal
+  python3 -I - \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/runtime_client.rs" \
+    "$ROOT_DIR/tools/check-phase285-witness-conformance.sh" <<'PY'
+import pathlib, sys
+library, runtime, conformance = (
+    pathlib.Path(value).read_text(encoding="utf-8") for value in sys.argv[1:]
+)
+required_library = [
+    "async fn stop_and_confirm(mut self)",
+    "Ok(Err(error)) if error.is_cancelled()",
+    "tokio::time::timeout_at(shutdown_deadline, self.public_client.drain())",
+    "tokio::time::timeout_at(shutdown_deadline, self.private_client.drain())",
+    "let task_inventory_valid = self.tasks.len() == 12;",
+    "let mut task_joins_valid = true;",
+    "let identities_absent =",
+    'format!("{monitor_url}/connz?auth=1&subs=1")',
+    "async fn await_relay_subject_sets(",
+    "public_subjects == expected_public && private_subjects == expected_private",
+    'panic!("relay first-request timestamp overflow")',
+    "relay_recreation_errors no_responders=1 no_responders_unavailable=1 post_accept_other=1 post_accept_other_outcome_unknown=1 rejected_as_replay=2 passed=1",
+    "relay_recreation_teardown tasks_joined={} old_absent={} drained={} passed=1",
+    "relay_recreation_readiness delayed_pending=1 new_present={} public_subscriptions={} private_subscriptions={} wildcard={} passed=1",
+    "relay_recreation_startup_failure public_tasks_spawned=0 private_tasks_spawned=0 identities_absent=2 passed=1",
+    "relay_replay_request_outcome kind=response passed=1",
+]
+required_runtime = [
+    "RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::Unavailable",
+    "RequestErrorKind::Other => RuntimeWitnessClientErrorV1::OutcomeUnknown",
+    "pub(crate) const fn is_replay_response(self) -> bool",
+    "matches!(self, Self::Response)",
+    '#[error("runtime witness request has unknown outcome")]',
+]
+for fragment in required_library:
+    if library.count(fragment) != 1:
+        raise SystemExit(f"relay_recreation_source_guard[library:{fragment[:48]}:{library.count(fragment)}]")
+for fragment in required_runtime:
+    if runtime.count(fragment) != 1:
+        raise SystemExit(f"relay_recreation_source_guard[runtime:{fragment[:48]}:{runtime.count(fragment)}]")
+exact_public_subjects = [
+    "swarm.governance.witness.relay.v1.fence",
+    "swarm.governance.witness.relay.v1.establish",
+    "swarm.governance.witness.relay.v1.discover",
+    "swarm.governance.witness.relay.v1.prepare",
+    "swarm.governance.witness.relay.v1.commit",
+    "swarm.governance.witness.relay.v1.abort",
+    "swarm.governance.witness.relay.v1.read_prepared",
+    "swarm.governance.witness.relay.v1.read_head",
+    "swarm.governance.witness.relay.v1.fetch_payload",
+]
+exact_private_subjects = [
+    "swarm.governance.witness.relay.store.v1.inspect_ready",
+    "swarm.governance.witness.relay.store.v1.read_entry",
+    "swarm.governance.witness.relay.store.v1.compare_and_swap",
+]
+public_expected_region = library.split(
+    "fn exact_public_relay_subjects() -> BTreeSet<String>", 1
+)[1].split("fn exact_private_relay_subjects() -> BTreeSet<String>", 1)[0]
+private_expected_region = library.split(
+    "fn exact_private_relay_subjects() -> BTreeSet<String>", 1
+)[1].split("fn relay_connz()", 1)[0]
+for subject in exact_public_subjects:
+    if public_expected_region.count(f'"{subject}".to_string()') != 1:
+        raise SystemExit(f"relay_recreation_source_guard[exact-public-subject:{subject}]")
+for subject in exact_private_subjects:
+    if private_expected_region.count(f'"{subject}".to_string()') != 1:
+        raise SystemExit(f"relay_recreation_source_guard[exact-private-subject:{subject}]")
+
+def validate_observation_binding(source):
+    if (
+        source.count("fn relay_curl_path() -> ProtocolResult<PathBuf>") != 1
+        or source.count('std::env::var("PHASE285_CONNZ_CURL_BIN")') != 1
+        or source.count("Command::new(relay_curl_path()?)") != 1
+    ):
+        raise ValueError("root-curl-binding")
+    observation_region = source.split("fn server_connection_observation(", 1)[1].split(
+        "fn runtime_observation_config()", 1
+    )[0]
+    observation_fragments = (
+        "let response = must(relay_connz(),",
+        "relay_connz_records(&response)",
+        "relay_record_for_client_id(connections, server_client_id)",
+    )
+    if any(observation_region.count(fragment) != 1 for fragment in observation_fragments):
+        raise ValueError("strict-connz-observation")
+    if ".find(" in observation_region or "subs=0" in observation_region:
+        raise ValueError("strict-connz-observation")
+    curl_region = source.split("fn relay_curl_path()", 1)[1].split(
+        "fn relay_connz_records(", 1
+    )[0]
+    curl_fragments = (
+        'std::env::var("PHASE285_CONNZ_CURL_BIN")',
+        "if !path.is_absolute()",
+        "metadata.file_type().is_symlink()",
+        "!metadata.is_file()",
+        "metadata.mode() & 0o111 == 0",
+        "if canonical != path",
+        "Command::new(relay_curl_path()?)",
+    )
+    if any(curl_region.count(fragment) != 1 for fragment in curl_fragments):
+        raise ValueError("root-curl-binding")
+    if 'Command::new("curl")' in source:
+        raise ValueError("root-curl-binding")
+    bounded_capture_fragments = (
+        "fn read_relay_command_pipe<R: Read>(",
+        '"--max-filesize"',
+        ".stdout(std::process::Stdio::piped())",
+        ".stderr(std::process::Stdio::piped())",
+        "overflow_rx.recv_timeout(Duration::from_millis(10))",
+        "|| stdout_exceeded",
+        "|| stderr_exceeded",
+        "let _ = child.kill();",
+        "let _ = child.wait();",
+    )
+    if any(fragment not in curl_region for fragment in bounded_capture_fragments):
+        raise ValueError("bounded-connz-capture")
+
+validate_observation_binding(library)
+observation_mutants = (
+    (
+        "weak-first-match",
+        "relay_record_for_client_id(connections, server_client_id)",
+        "Ok(connections.first())",
+        "strict-connz-observation",
+    ),
+    (
+        "ambient-curl",
+        "Command::new(relay_curl_path()?)",
+        'Command::new("curl")',
+        "root-curl-binding",
+    ),
+    (
+        "unbounded-capture",
+        '"--max-filesize"',
+        '"--compressed"',
+        "bounded-connz-capture",
+    ),
+)
+for name, old, new, expected in observation_mutants:
+    if library.count(old) != 1:
+        raise SystemExit(f"relay_recreation_source_guard[observation-anchor:{name}]")
+    candidate = library.replace(old, new, 1)
+    try:
+        validate_observation_binding(candidate)
+    except ValueError as error:
+        if str(error) != expected:
+            raise SystemExit(
+                f"relay_recreation_source_guard[observation-wrong-reason:{name}:{error}]"
+            )
+    else:
+        raise SystemExit(f"relay_recreation_source_guard[observation-survived:{name}]")
+print(
+    "relay_recreation_observation_mutations "
+    "strict_connz=1 root_curl=1 bounded_capture=1 passed=1"
+)
+connz_region = library.split(
+    "fn relay_connz_records(value: &serde_json::Value)", 1
+)[1].split("fn relay_record_subjects(", 1)[0]
+complete_connz_counts = {
+    'get("offset")': 1, 'get("total")': 1, 'get("limit")': 1,
+    'get("num_connections")': 1, "offset != 0": 1,
+    "total != num_connections": 1, "num_connections != observed": 1,
+    "limit < total": 1, "client_id == 0": 2,
+    "!client_ids.insert(client_id)": 1, "fn relay_record_for_client_id": 1,
+    "if matches.next().is_some()": 1,
+}
+for fragment, expected in complete_connz_counts.items():
+    if connz_region.count(fragment) != expected:
+        raise SystemExit(f"relay_recreation_source_guard[complete-connz:{fragment}]")
+if ".find(" in connz_region:
+    raise SystemExit("relay_recreation_source_guard[connz-first-match]")
+stop_region = library.split("async fn stop_and_confirm(mut self)", 1)[1].split(
+    "async fn abort_only_for_control", 1
+)[0]
+if (
+    stop_region.count("let shutdown_deadline = tokio::time::Instant::now() + Duration::from_secs(5);") != 1
+    or stop_region.count("tokio::time::timeout_at(shutdown_deadline") != 3
+):
+    raise SystemExit("relay_recreation_source_guard[bounded-teardown]")
+cleanup_prefix = stop_region.split("let evidence = RelayTeardownEvidenceV1", 1)[0]
+if "return Err(" in cleanup_prefix or cleanup_prefix.count(".drain()).await") != 2:
+    raise SystemExit("relay_recreation_source_guard[best-effort-cleanup]")
+readiness_region = library.split("async fn await_relay_subject_sets(", 1)[1].split(
+    "type RelayPrivateReleaseControlV1", 1
+)[0]
+if (
+    readiness_region.count("tokio::time::sleep(Duration::from_millis(10)).await;") != 2
+    or readiness_region.count("async fn await_relay_identities_absent(") != 1
+):
+    raise SystemExit("relay_recreation_source_guard[bounded-poll-pacing]")
+startup_region = library.split("async fn start_selective_with_private_release(", 1)[1].split(
+    "async fn stop_and_confirm(mut self)", 1
+)[0]
+startup_markers = (
+    "let mut public_subscriptions = Vec::new();",
+    "let mut private_subscriptions = Vec::new();",
+    "let mut tasks = Vec::new();",
+)
+if any(startup_region.count(marker) != 1 for marker in startup_markers):
+    raise SystemExit("relay_recreation_source_guard[startup-inventory]")
+if not (
+    startup_region.index(startup_markers[0])
+    < startup_region.index(startup_markers[1])
+    < startup_region.index("private_client\n                .flush()")
+    < startup_region.index(startup_markers[2])
+):
+    raise SystemExit("relay_recreation_source_guard[startup-spawn-order]")
+if (
+    library.count("fn exact_public_relay_subjects() -> BTreeSet<String>") != 1
+    or library.count("fn exact_private_relay_subjects() -> BTreeSet<String>") != 1
+    or len(exact_public_subjects) != 9
+    or len(exact_private_subjects) != 3
+):
+    raise SystemExit("relay_recreation_source_guard[exact-subject-cardinality]")
+if ".stop();" in library:
+    raise SystemExit("relay_recreation_source_guard[abort-only-stop]")
+if "RuntimeRequestObservationV1::Other,\n                        RuntimeWitnessClientErrorV1::Unavailable" in library:
+    raise SystemExit("relay_recreation_source_guard[other-unavailable]")
+normalized = "".join(library.split())
+if (
+    library.count("if self.tasks.len() != 12") != 1
+    or library.count("let task_inventory_valid = self.tasks.len() == 12;") != 1
+    or library.count("WitnessServiceOperationV1::") < 9
+    or library.count("LiveRelayLegsV1::start_after_private_release(") != 2
+    or normalized.count(".stop_and_confirm().await") != 4
+):
+    raise SystemExit("relay_recreation_source_guard[cardinality]")
+reason_counts = {
+    '"delayed_readiness_completed_early"': 2,
+    '"relay_identity_reuse_accepted"': 1,
+    '"public_subscription_set"': 2,
+    '"private_subscription_set"': 2,
+}
+for reason, expected in reason_counts.items():
+    if library.count(reason) != expected:
+        raise SystemExit(f"relay_recreation_source_guard[reason:{reason}:{library.count(reason)}]")
+process_tail = conformance.rsplit("def run_bounded_process_group(", 1)
+if len(process_tail) != 2:
+    raise SystemExit("relay_recreation_source_guard[process-group-helper]")
+process_helper = process_tail[1].split("await_anchor = '''", 1)[0]
+process_fragments = (
+    "start_new_session=True",
+    "except subprocess.TimeoutExpired as timeout_error:",
+    "os.killpg(process.pid, signal.SIGTERM)",
+    "os.killpg(process.pid, signal.SIGKILL)",
+    'raise SystemExit("relay_recreation_mutant[process-group-reap]")',
+)
+if any(process_helper.count(fragment) != 1 for fragment in process_fragments):
+    raise SystemExit("relay_recreation_source_guard[process-group-helper]")
+if process_tail[1].count("run_bounded_process_group(") != 2:
+    raise SystemExit("relay_recreation_source_guard[process-group-callers]")
+for name, old in (
+    ("session", "start_new_session=True"),
+    ("killpg", "os.killpg(process.pid, signal.SIGKILL)"),
+):
+    candidate = process_helper.replace(old, "", 1)
+    if all(candidate.count(fragment) == 1 for fragment in process_fragments):
+        raise SystemExit(f"relay_recreation_source_guard[process-group-survived:{name}]")
+print("relay_recreation_process_group_mutations session=1 killpg=1 passed=1")
+print("relay_recreation_source_guard tasks=12 drains=2 old_absence=2 public=9 private=3 typed_outcomes=3 passed=1")
+PY
+}
+
+validate_relay_recreation_mutation_ledger() {
+  local ledger="$1" receipts="$2"
+  python3 -I - "$ledger" "$receipts" <<'PY'
+import hashlib, json, os, pathlib, re, stat, sys
+ledger, receipts = map(pathlib.Path, sys.argv[1:])
+expected = {
+    "abort_only_stop": "old_relay_identity_present",
+    "omit_task_await": "relay_task_join_cardinality",
+    "omit_public_drain": "old_public_relay_identity_present",
+    "omit_private_drain": "old_private_relay_identity_present",
+    "accept_old_id": "relay_identity_reuse_accepted",
+    "delete_public_set_equality": "public_subscription_set",
+    "delete_private_set_equality": "private_subscription_set",
+    "zero_duration_fixed_sleep": "delayed_readiness_completed_early",
+    "collapse_no_responders_to_other": "no_responders_kind",
+    "collapse_other_to_no_responders": "other_kind",
+    "accept_no_responders_as_replay": "no_responders_accepted_as_replay",
+    "accept_other_as_replay": "other_accepted_as_replay",
+}
+
+row_keys = {
+    "name", "reason", "source", "source_sha256", "target", "executable",
+    "executable_sha256", "runner_receipt", "transcript", "running", "passed",
+    "failed", "ignored", "filtered", "vacuous", "target_device", "target_inode",
+}
+def bounded_regular(path, maximum, expected_mode=None):
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or not 1 <= info.st_size <= maximum:
+        raise SystemExit(f"relay_recreation_ledger[artifact:{path}]")
+    if expected_mode is not None and stat.S_IMODE(info.st_mode) != expected_mode:
+        raise SystemExit(f"relay_recreation_ledger[artifact-mode:{path}]")
+    before = (info.st_dev, info.st_ino, info.st_mode, info.st_size)
+    raw = path.read_bytes()
+    after_info = path.lstat()
+    after = (after_info.st_dev, after_info.st_ino, after_info.st_mode, after_info.st_size)
+    if before != after or len(raw) != info.st_size:
+        raise SystemExit(f"relay_recreation_ledger[identity:{path}]")
+    return raw
+if stat.S_IMODE(ledger.lstat().st_mode) != 0o600:
+    raise SystemExit("relay_recreation_ledger[mode]")
+raw = bounded_regular(ledger, 65536)
+value = json.loads(raw)
+if raw != json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n":
+    raise SystemExit("relay_recreation_ledger[canonical]")
+if set(value) != {"schema_version", "rows"} or value["schema_version"] != 1:
+    raise SystemExit("relay_recreation_ledger[schema]")
+rows = value["rows"]
+if len(rows) != 12 or {row.get("name") for row in rows} != set(expected):
+    raise SystemExit("relay_recreation_ledger[inventory]")
+receipts_info = receipts.lstat()
+if stat.S_ISLNK(receipts_info.st_mode) or not stat.S_ISDIR(receipts_info.st_mode):
+    raise SystemExit("relay_recreation_ledger[receipt-root]")
+receipts_real = receipts.resolve(strict=True)
+source_hashes, executable_hashes, targets, target_identities, filtered_values = set(), set(), set(), set(), set()
+fqn = "service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed"
+expected_argv = ["--test-threads=1", "--ignored", fqn, "--exact"]
+for row in rows:
+    if set(row) != row_keys or row["reason"] != expected[row["name"]]:
+        raise SystemExit("relay_recreation_ledger[row-schema]")
+    if [row[key] for key in ("running", "passed", "failed", "ignored", "vacuous")] != [1, 0, 1, 0, 0]:
+        raise SystemExit("relay_recreation_ledger[row-result]")
+    paths = {key: pathlib.Path(row[key]) for key in ("source", "target", "executable", "runner_receipt", "transcript")}
+    target = paths.pop("target")
+    if not target.is_absolute():
+        raise SystemExit("relay_recreation_ledger[target-path]")
+    target_parent = target.parent.resolve(strict=True)
+    if os.path.commonpath([str(receipts_real), str(target_parent)]) != str(receipts_real):
+        raise SystemExit("relay_recreation_ledger[target-path-escape]")
+    target_info = target.lstat()
+    if stat.S_ISLNK(target_info.st_mode) or not stat.S_ISDIR(target_info.st_mode) or stat.S_IMODE(target_info.st_mode) != 0o700:
+        raise SystemExit("relay_recreation_ledger[target-type]")
+    target_resolved = target.resolve(strict=True)
+    if str(target_resolved) != row["target"]:
+        raise SystemExit("relay_recreation_ledger[target-canonical-path]")
+    if os.path.commonpath([str(receipts_real), str(target_resolved)]) != str(receipts_real):
+        raise SystemExit("relay_recreation_ledger[target-path-escape]")
+    if list(target.iterdir()):
+        raise SystemExit("relay_recreation_ledger[target-content-retained]")
+    if (target_info.st_dev, target_info.st_ino) != (row["target_device"], row["target_inode"]):
+        raise SystemExit("relay_recreation_ledger[target-identity]")
+    resolved = {key: path.resolve(strict=True) for key, path in paths.items()}
+    if any(str(resolved[key]) != row[key] for key in resolved):
+        raise SystemExit("relay_recreation_ledger[canonical-path]")
+    if any(os.path.commonpath([str(receipts_real), str(path)]) != str(receipts_real) for path in resolved.values()):
+        raise SystemExit("relay_recreation_ledger[path-escape]")
+    source_raw = bounded_regular(resolved["source"], 2 * 1024 * 1024, 0o600)
+    executable_raw = bounded_regular(resolved["executable"], 512 * 1024 * 1024, 0o500)
+    runner_raw = bounded_regular(resolved["runner_receipt"], 4096, 0o600)
+    transcript_raw = bounded_regular(resolved["transcript"], 16 * 1024 * 1024, 0o600)
+    source_digest = hashlib.sha256(source_raw).hexdigest()
+    executable_digest = hashlib.sha256(executable_raw).hexdigest()
+    if source_digest != row["source_sha256"] or executable_digest != row["executable_sha256"]:
+        raise SystemExit("relay_recreation_ledger[digest]")
+    runner = json.loads(runner_raw)
+    if runner_raw != json.dumps(runner, sort_keys=True, separators=(",", ":")).encode() + b"\n":
+        raise SystemExit("relay_recreation_ledger[runner-canonical]")
+    if runner != {"argv": expected_argv, "executable": row["executable"], "sha256": executable_digest}:
+        raise SystemExit("relay_recreation_ledger[runner-identity]")
+    transcript = transcript_raw.decode("utf-8")
+    summary = re.findall(r"test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; ([0-9]+) filtered out", transcript)
+    if transcript.count("running 1 test") != 1 or transcript.count(f"test {fqn} ... FAILED") != 1 or len(summary) != 1:
+        raise SystemExit("relay_recreation_ledger[transcript-cardinality]")
+    if expected[row["name"]] not in transcript or int(summary[0]) != row["filtered"]:
+        raise SystemExit("relay_recreation_ledger[late-relation]")
+    source_hashes.add(source_digest); executable_hashes.add(executable_digest); targets.add(row["target"]); target_identities.add((row["target_device"], row["target_inode"])); filtered_values.add(row["filtered"])
+if len(source_hashes) != 12 or len(executable_hashes) != 12 or len(targets) != 12 or len(target_identities) != 12 or len(filtered_values) != 1:
+    raise SystemExit("relay_recreation_ledger[uniqueness]")
+print("relay_recreation_mutation_ledger rows=12 source_hashes=12 sealed_executable_hashes=12 targets_pruned=12 empty_target_dirs=12 target_identities=12 argv_receipts=12 transcripts=12 passed=1")
+PY
+}
+
+relay_recreation_target_cleanup_control() {
+  local ledger="$1" receipts="$2" target retained output status=0
+  target="$(python3 -I - "$ledger" "$receipts" <<'PY'
+import json, os, pathlib, sys
+ledger, receipts = map(pathlib.Path, sys.argv[1:])
+receipts = receipts.resolve(strict=True)
+value = json.loads(ledger.read_bytes())
+target = pathlib.Path(value["rows"][0]["target"])
+resolved = target.resolve(strict=True)
+if target.is_symlink() or not target.is_dir() or list(target.iterdir()) or os.path.commonpath([str(receipts), str(resolved)]) != str(receipts):
+    raise SystemExit("relay_recreation_cleanup_control[target]")
+print(target)
+PY
+)"
+  retained="$target/retained-build-artifact"
+  (umask 077; touch -- "$retained")
+  output="$(validate_relay_recreation_mutation_ledger "$ledger" "$receipts" 2>&1)" || status=$?
+  rm -f -- "$retained"
+  if [ "$status" -eq 0 ] || [[ "$output" != *'relay_recreation_ledger[target-content-retained]'* ]]; then
+    echo "relay_recreation_cleanup_control[unexpected:$status:$output]" >&2
+    return 1
+  fi
+  validate_relay_recreation_mutation_ledger "$ledger" "$receipts"
+  echo "relay_recreation_target_cleanup_mutation retained_build_child_killed=1 targets_pruned=12 empty_target_dirs=12 passed=1"
+}
+
+run_relay_recreation_mutants() {
+  local ledger="${PHASE285_RELAY_RECREATION_LEDGER:-}"
+  local receipts="${PHASE285_RELAY_RECREATION_RECEIPT_ROOT:-}"
+  local scratch
+  scratch="$(phase285_create_confined_scratch phase285-relay-recreation-mutants)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  if [ "${PHASE285_RELAY_RECREATION_SOURCE_ONLY:-0}" = 1 ]; then
+    ledger="$scratch/source-only-ledger.json"
+    receipts="$scratch/source-only-receipts"
+  else
+    [ -n "$ledger" ] || { echo "PHASE285_RELAY_RECREATION_LEDGER required" >&2; return 2; }
+    [ -n "$receipts" ] || { echo "PHASE285_RELAY_RECREATION_RECEIPT_ROOT required" >&2; return 2; }
+  fi
+  relay_recreation_source_guard
+  python3 -I - "$ROOT_DIR" "$scratch" "$ledger" "$receipts" <<'PY'
+import hashlib, json, os, pathlib, re, shutil, signal, stat, subprocess, sys, time
+
+root, scratch, ledger, receipts = map(pathlib.Path, sys.argv[1:])
+root = root.resolve(strict=True)
+scratch = scratch.resolve(strict=True)
+if not ledger.is_absolute() or not receipts.is_absolute() or ledger.exists() or receipts.exists():
+    raise SystemExit("relay_recreation_mutant[output-freshness]")
+for parent in (ledger.parent, receipts.parent):
+    info = parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise SystemExit("relay_recreation_mutant[output-parent]")
+os.mkdir(receipts, 0o700)
+exact = scratch / "source"
+exact.mkdir(mode=0o700)
+
+def reject_cargo_ancestor_configuration(subject):
+    current = subject.resolve(strict=True)
+    while True:
+        for relative in (pathlib.Path(".cargo/config"), pathlib.Path(".cargo/config.toml")):
+            if os.path.lexists(current / relative):
+                raise SystemExit("relay_recreation_mutant[cargo-ancestor-config]")
+        if current.parent == current:
+            break
+        current = current.parent
+
+reject_cargo_ancestor_configuration(exact)
+tracked = subprocess.run(
+    ["git", "ls-files", "-z"], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+).stdout.split(b"\0")
+for raw in tracked:
+    if not raw:
+        continue
+    relative = pathlib.Path(os.fsdecode(raw))
+    source, destination = root / relative, exact / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_symlink():
+        destination.symlink_to(os.readlink(source))
+    elif source.is_file():
+        shutil.copy2(source, destination)
+    else:
+        raise SystemExit(f"relay_recreation_mutant[tracked-type:{relative}]")
+reject_cargo_ancestor_configuration(exact)
+
+lib_path = exact / "crates/swarm-governance-witness/src/lib.rs"
+runtime_path = exact / "crates/swarm-governance-witness/src/runtime_client.rs"
+original_lib = lib_path.read_text(encoding="utf-8")
+original_runtime = runtime_path.read_text(encoding="utf-8")
+
+def replace_once(text, old, new, label):
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"relay_recreation_mutant[{label}:anchor:{count}]")
+    return text.replace(old, new, 1)
+
+def lib_mutation(label, old, new):
+    return (label, "lib.rs", replace_once(original_lib, old, new, label), original_runtime)
+
+def lib_mutation_many(label, replacements):
+    source = original_lib
+    for old, new in replacements:
+        source = replace_once(source, old, new, label)
+    return (label, "lib.rs", source, original_runtime)
+
+def runtime_mutation(label, old, new):
+    return (label, "runtime_client.rs", original_lib, replace_once(original_runtime, old, new, label))
+
+def run_bounded_process_group(argv, *, cwd, env, timeout):
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(argv, process.returncode, output)
+    except subprocess.TimeoutExpired as timeout_error:
+        partial = timeout_error.output or ""
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors="replace")
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            output, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                output, _ = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired as error:
+                raise SystemExit("relay_recreation_mutant[process-group-reap]") from error
+        return subprocess.CompletedProcess(
+            argv,
+            124,
+            partial + (output or "") + "\nrelay_recreation_process_group_timeout reaped=1\n",
+        )
+
+await_anchor = '''            let shutdown_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let mut tasks_joined = 0_usize;
+            let mut task_joins_valid = true;
+            while let Some(mut task) = self.tasks.pop() {'''
+await_mutant = '''            let shutdown_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let mut tasks_joined = 0_usize;
+            let mut task_joins_valid = true;
+            drop(self.tasks.pop());
+            while let Some(mut task) = self.tasks.pop() {'''
+public_drain_anchor = '''            let public_client_drained = matches!(
+                tokio::time::timeout_at(shutdown_deadline, self.public_client.drain()).await,
+                Ok(Ok(()))
+            );
+            if public_client_drained {
+                clients_drained += 1;
+            }'''
+private_drain_anchor = '''            let private_client_drained = matches!(
+                tokio::time::timeout_at(shutdown_deadline, self.private_client.drain()).await,
+                Ok(Ok(()))
+            );
+            if private_client_drained {
+                clients_drained += 1;
+            }'''
+task_count_validation = '''                && tasks_joined == 12'''
+drain_count_validation = '''                && clients_drained == 2'''
+identity_anchor = '''                || [self.public_client_id, self.private_client_id]
+                    .into_iter()
+                    .any(|current| {
+                        current == old_public_client_id || current == old_private_client_id
+                    })'''
+mutations = [
+    lib_mutation(
+        "abort_only_stop",
+        "                first_legs.stop_and_confirm().await,",
+        "                first_legs.abort_only_for_control().await,",
+    ),
+    lib_mutation_many(
+        "omit_task_await",
+        ((await_anchor, await_mutant), (task_count_validation, "                && tasks_joined <= 12")),
+    ),
+    lib_mutation_many(
+        "omit_public_drain",
+        ((public_drain_anchor, "            let public_client_drained = { drop(self.public_client); false };"),
+         (drain_count_validation, "                && clients_drained >= 1")),
+    ),
+    lib_mutation_many(
+        "omit_private_drain",
+        ((private_drain_anchor, "            let private_client_drained = { drop(self.private_client); false };"),
+         (drain_count_validation, "                && clients_drained >= 1")),
+    ),
+    lib_mutation("accept_old_id", identity_anchor, "                || false"),
+    lib_mutation(
+        "delete_public_set_equality",
+        "        public_subjects == expected_public && private_subjects == expected_private",
+        "        private_subjects == expected_private",
+    ),
+    lib_mutation(
+        "delete_private_set_equality",
+        "        public_subjects == expected_public && private_subjects == expected_private",
+        "        public_subjects == expected_public",
+    ),
+    lib_mutation(
+        "zero_duration_fixed_sleep",
+        "            let replay_start = tokio::spawn(LiveRelayLegsV1::start_after_private_release(",
+        "            let replay_start = tokio::spawn(LiveRelayLegsV1::start_with_zero_sleep_control(",
+    ),
+    runtime_mutation(
+        "collapse_no_responders_to_other",
+        "            async_nats::RequestErrorKind::NoResponders => Self::NoResponders,",
+        "            async_nats::RequestErrorKind::NoResponders => Self::Other,",
+    ),
+    runtime_mutation(
+        "collapse_other_to_no_responders",
+        "            async_nats::RequestErrorKind::Other => Self::Other,",
+        "            async_nats::RequestErrorKind::Other => Self::NoResponders,",
+    ),
+    runtime_mutation(
+        "accept_no_responders_as_replay",
+        "        matches!(self, Self::Response)",
+        "        matches!(self, Self::Response | Self::NoResponders)",
+    ),
+    runtime_mutation(
+        "accept_other_as_replay",
+        "        matches!(self, Self::Response)",
+        "        matches!(self, Self::Response | Self::Other)",
+    ),
+]
+reasons = {
+    "abort_only_stop": "old_relay_identity_present",
+    "omit_task_await": "relay_task_join_cardinality",
+    "omit_public_drain": "old_public_relay_identity_present",
+    "omit_private_drain": "old_private_relay_identity_present",
+    "accept_old_id": "relay_identity_reuse_accepted",
+    "delete_public_set_equality": "public_subscription_set",
+    "delete_private_set_equality": "private_subscription_set",
+    "zero_duration_fixed_sleep": "delayed_readiness_completed_early",
+    "collapse_no_responders_to_other": "no_responders_kind",
+    "collapse_other_to_no_responders": "other_kind",
+    "accept_no_responders_as_replay": "no_responders_accepted_as_replay",
+    "accept_other_as_replay": "other_accepted_as_replay",
+}
+if len(mutations) != 12 or {item[0] for item in mutations} != set(reasons):
+    raise SystemExit("relay_recreation_mutant[inventory]")
+if os.environ.get("PHASE285_RELAY_RECREATION_SOURCE_ONLY") == "1":
+    digests = []
+    for name, source_name, lib_source, runtime_source in mutations:
+        source = lib_source if source_name == "lib.rs" else runtime_source
+        digest = hashlib.sha256(source.encode()).hexdigest()
+        if digest in digests:
+            raise SystemExit(f"relay_recreation_mutant[{name}:source-reuse]")
+        digests.append(digest)
+    hostile_cargo = scratch / ".cargo"
+    hostile_cargo.mkdir(mode=0o700)
+    hostile_config = hostile_cargo / "config.toml"
+    hostile_config.write_text("[build]\nrustflags = ['--phase285-mutant']\n", encoding="utf-8")
+    try:
+        reject_cargo_ancestor_configuration(exact)
+    except SystemExit as error:
+        if str(error) != "relay_recreation_mutant[cargo-ancestor-config]":
+            raise
+    else:
+        raise SystemExit("relay_recreation_mutant[cargo-ancestor-config-survived]")
+    hostile_config.unlink()
+    hostile_cargo.rmdir()
+    reject_cargo_ancestor_configuration(exact)
+    receipts.rmdir()
+    print("relay_recreation_mutation_sources inventory=12 unique=12 lib=8 runtime=4 hostile_ancestor_config=1 passed=1")
+    raise SystemExit(0)
+curl_value = os.environ.get("PHASE285_CONNZ_CURL_BIN", "")
+curl_bin = pathlib.Path(curl_value)
+try:
+    curl_info = curl_bin.lstat()
+    curl_resolved = curl_bin.resolve(strict=True)
+except (FileNotFoundError, OSError, RuntimeError):
+    raise SystemExit("relay_recreation_mutant[connz-curl-binding]")
+if (
+    not curl_bin.is_absolute()
+    or curl_bin.is_symlink()
+    or not stat.S_ISREG(curl_info.st_mode)
+    or stat.S_IMODE(curl_info.st_mode) & 0o111 == 0
+    or curl_resolved != curl_bin
+):
+    raise SystemExit("relay_recreation_mutant[connz-curl-binding]")
+source_hashes, executable_hashes, targets, rows = set(), set(), set(), []
+fqn = "service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed"
+for ordinal, (name, source_name, lib_source, runtime_source) in enumerate(mutations, 1):
+    lib_path.write_text(lib_source, encoding="utf-8")
+    runtime_path.write_text(runtime_source, encoding="utf-8")
+    artifact_root = receipts / f"{ordinal:02d}-{name}"
+    artifact_root.mkdir(mode=0o700)
+    target = artifact_root / "target"
+    if target.exists() or target.is_symlink():
+        raise SystemExit(f"relay_recreation_mutant[{name}:target-preexisting]")
+    source_receipt = artifact_root / source_name
+    source_bytes = (lib_source if source_name == "lib.rs" else runtime_source).encode()
+    fd = os.open(source_receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        output.write(source_bytes); output.flush(); os.fsync(output.fileno())
+    source_digest = hashlib.sha256(source_bytes).hexdigest()
+    if source_digest in source_hashes:
+        raise SystemExit(f"relay_recreation_mutant[{name}:source-reuse]")
+    source_hashes.add(source_digest)
+    env = os.environ.copy()
+    env.update({"CARGO_TARGET_DIR": str(target), "CARGO_INCREMENTAL": "0", "CARGO_NET_OFFLINE": "true"})
+    print(f"relay_recreation_mutation_progress name={name} phase=compile ordinal={ordinal}/12", flush=True)
+    compile_result = run_bounded_process_group(
+        ["cargo", "test", "-p", "swarm-governance-witness", "--lib", "--locked", "--offline", "--no-run", "--message-format=json-render-diagnostics"],
+        cwd=exact, env=env, timeout=600,
+    )
+    if compile_result.returncode != 0:
+        raise SystemExit(f"relay_recreation_mutant[{name}:compile]\n{compile_result.stdout}")
+    artifacts, finished = [], []
+    for line in compile_result.stdout.splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if value.get("reason") == "build-finished":
+            finished.append(value.get("success"))
+        if value.get("reason") != "compiler-artifact":
+            continue
+        item, profile, executable = value.get("target", {}), value.get("profile", {}), value.get("executable")
+        if item.get("name") == "swarm_governance_witness" and item.get("kind") == ["lib"] and profile.get("test") is True and executable:
+            artifacts.append(pathlib.Path(executable))
+    if finished != [True] or len(artifacts) != 1:
+        raise SystemExit(f"relay_recreation_mutant[{name}:compile-receipt]")
+    raw_compiled_executable = artifacts[0]
+    raw_executable_info = raw_compiled_executable.lstat()
+    if stat.S_ISLNK(raw_executable_info.st_mode) or not stat.S_ISREG(raw_executable_info.st_mode):
+        raise SystemExit(f"relay_recreation_mutant[{name}:executable-type]")
+    compiled_executable = raw_compiled_executable.resolve(strict=True)
+    target_real = target.resolve(strict=True)
+    if compiled_executable.is_symlink() or os.path.commonpath([str(target_real), str(compiled_executable)]) != str(target_real):
+        raise SystemExit(f"relay_recreation_mutant[{name}:executable-path]")
+    target.chmod(0o700)
+    target_info = target.lstat()
+    if stat.S_ISLNK(target_info.st_mode) or not stat.S_ISDIR(target_info.st_mode) or stat.S_IMODE(target_info.st_mode) != 0o700:
+        raise SystemExit(f"relay_recreation_mutant[{name}:target-type]")
+    target_identity = (target_info.st_dev, target_info.st_ino)
+    executable = artifact_root / "sealed-test-executable"
+    source_info = compiled_executable.lstat()
+    if not stat.S_ISREG(source_info.st_mode) or source_info.st_size <= 0 or source_info.st_size > 512 * 1024 * 1024:
+        raise SystemExit(f"relay_recreation_mutant[{name}:executable-size]")
+    compiled_executable_hasher = hashlib.sha256()
+    sealed_executable_hasher = hashlib.sha256()
+    fd = os.open(executable, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o500)
+    with compiled_executable.open("rb") as source_handle, os.fdopen(fd, "wb") as sealed_handle:
+        while True:
+            chunk = source_handle.read(1024 * 1024)
+            if not chunk:
+                break
+            compiled_executable_hasher.update(chunk); sealed_executable_hasher.update(chunk); sealed_handle.write(chunk)
+        sealed_handle.flush(); os.fsync(sealed_handle.fileno()); os.fchmod(sealed_handle.fileno(), 0o500)
+    executable = executable.resolve(strict=True)
+    executable_digest = sealed_executable_hasher.hexdigest()
+    if executable_digest != compiled_executable_hasher.hexdigest() or executable.lstat().st_size != source_info.st_size:
+        raise SystemExit(f"relay_recreation_mutant[{name}:sealed-executable]")
+    if executable_digest in executable_hashes:
+        raise SystemExit(f"relay_recreation_mutant[{name}:executable-reuse]")
+    executable_hashes.add(executable_digest)
+    argv = ["--test-threads=1", "--ignored", fqn, "--exact"]
+    runner_receipt = artifact_root / "runner.json"
+    runner_value = {"argv": argv, "executable": str(executable), "sha256": executable_digest}
+    runner_bytes = json.dumps(runner_value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    fd = os.open(runner_receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        output.write(runner_bytes); output.flush(); os.fsync(output.fileno())
+    print(f"relay_recreation_mutation_progress name={name} phase=execute ordinal={ordinal}/12", flush=True)
+    result = run_bounded_process_group(
+        [str(executable), *argv], cwd=exact, env=env, timeout=180,
+    )
+    transcript = artifact_root / "transcript.txt"
+    fd = os.open(transcript, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as output:
+        output.write(result.stdout); output.flush(); os.fsync(output.fileno())
+    summary = re.findall(r"test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; ([0-9]+) filtered out", result.stdout)
+    reason = reasons[name]
+    if result.returncode == 0 or result.stdout.count("running 1 test") != 1 or len(summary) != 1 or reason not in result.stdout:
+        raise SystemExit(f"relay_recreation_mutant[{name}:wrong-reason]\n{result.stdout}")
+    final_target_info = target_real.lstat()
+    if (
+        stat.S_ISLNK(final_target_info.st_mode)
+        or not stat.S_ISDIR(final_target_info.st_mode)
+        or (final_target_info.st_dev, final_target_info.st_ino) != target_identity
+    ):
+        raise SystemExit(f"relay_recreation_mutant[{name}:target-identity]")
+    for child in list(target_real.iterdir()):
+        child_info = child.lstat()
+        if stat.S_ISLNK(child_info.st_mode) or stat.S_ISREG(child_info.st_mode):
+            child.unlink()
+        elif stat.S_ISDIR(child_info.st_mode):
+            shutil.rmtree(child)
+        else:
+            raise SystemExit(f"relay_recreation_mutant[{name}:target-child-type]")
+    final_target_info = target_real.lstat()
+    if (
+        list(target_real.iterdir())
+        or (final_target_info.st_dev, final_target_info.st_ino) != target_identity
+        or stat.S_IMODE(final_target_info.st_mode) != 0o700
+    ):
+        raise SystemExit(f"relay_recreation_mutant[{name}:target-prune]")
+    targets.add(str(target_real))
+    rows.append({
+        "name": name, "reason": reason, "source": str(source_receipt.resolve(strict=True)), "source_sha256": source_digest,
+        "target": str(target_real), "executable": str(executable), "executable_sha256": executable_digest,
+        "runner_receipt": str(runner_receipt.resolve(strict=True)), "transcript": str(transcript.resolve(strict=True)),
+        "target_device": target_identity[0], "target_inode": target_identity[1],
+        "running": 1, "passed": 0, "failed": 1, "ignored": 0, "filtered": int(summary[0]), "vacuous": 0,
+    })
+    print(f"relay_recreation_mutation name={name} reason={reason} compiled=1 executed=1 killed=1 vacuous=0", flush=True)
+lib_path.write_text(original_lib, encoding="utf-8")
+runtime_path.write_text(original_runtime, encoding="utf-8")
+if len(source_hashes) != 12 or len(executable_hashes) != 12 or len(targets) != 12:
+    raise SystemExit("relay_recreation_mutant[identity-cardinality]")
+payload = json.dumps({"schema_version": 1, "rows": rows}, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+fd = os.open(ledger, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "wb") as output:
+    output.write(payload); output.flush(); os.fsync(output.fileno())
+print("relay_recreation_mutations inventory=12 executed=12 killed=12 vacuous=0 distinct_targets=12 source_receipts=12 executable_receipts=12 argv_receipts=12 passed=1")
+PY
+  if [ "${PHASE285_RELAY_RECREATION_SOURCE_ONLY:-0}" != 1 ]; then
+    validate_relay_recreation_mutation_ledger "$ledger" "$receipts"
+    relay_recreation_target_cleanup_control "$ledger" "$receipts"
+  fi
+  cleanup_temp_dir
+  trap - EXIT
+}
+
+run_relay_recreation_mutants_for_ci() {
+  local parent="${PHASE285_CI_ROUTE_TEMP_PARENT:?PHASE285_CI_ROUTE_TEMP_PARENT required}"
+  local reservation ledger receipts
+  reservation="$(mktemp "$parent/relay-recreation.XXXXXX")"
+  ledger="$reservation.ledger.json"
+  receipts="$reservation.receipts"
+  rm -f -- "$reservation"
+  [ ! -e "$ledger" ] && [ ! -e "$receipts" ] || {
+    echo "relay recreation CI artifacts are not fresh" >&2
+    return 1
+  }
+  PHASE285_RELAY_RECREATION_LEDGER="$ledger" \
+  PHASE285_RELAY_RECREATION_RECEIPT_ROOT="$receipts" \
+    run_relay_recreation_mutants
+  python3 -I - "$parent" "$ledger" "$receipts" <<'PY'
+import os, pathlib, shutil, stat, sys
+parent, ledger, receipts = map(pathlib.Path, sys.argv[1:])
+parent = parent.resolve(strict=True)
+for path in (ledger, receipts):
+    resolved = path.resolve(strict=True)
+    if os.path.commonpath([str(parent), str(resolved)]) != str(parent):
+        raise SystemExit("relay_recreation_ci_cleanup[path-escape]")
+ledger_info = ledger.lstat()
+receipts_info = receipts.lstat()
+if stat.S_ISLNK(ledger_info.st_mode) or not stat.S_ISREG(ledger_info.st_mode):
+    raise SystemExit("relay_recreation_ci_cleanup[ledger-type]")
+if stat.S_ISLNK(receipts_info.st_mode) or not stat.S_ISDIR(receipts_info.st_mode):
+    raise SystemExit("relay_recreation_ci_cleanup[receipts-type]")
+ledger.unlink()
+shutil.rmtree(receipts)
+if ledger.exists() or receipts.exists():
+    raise SystemExit("relay_recreation_ci_cleanup[residue]")
+print("relay_recreation_ci_cleanup ledger=1 receipts=12 residue=0 passed=1")
+PY
+}
+
 run_service_checkpoint_relay_positive_focus() {
   local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
   local scratch grant_ledger relay_ledger output
@@ -11481,6 +12411,7 @@ run_service_checkpoint_relay_positive_focus() {
   grant_ledger="$scratch/grants.json"
   relay_ledger="$scratch/relay.json"
   output="$scratch/relay.txt"
+  relay_recreation_source_guard
   PHASE285_GRANT_LEDGER="$grant_ledger" PHASE285_RELAY_LEDGER="$relay_ledger" \
   PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
     cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
@@ -11501,7 +12432,7 @@ if value.get("schema_version") != 1 or value.get("tree") != tree or value.get("i
 for prefix in ("request", "response", "complete_receipt"):
     encoded = bytes.fromhex(value.get(prefix + "_canonical_hex", ""))
     if hashlib.sha256(encoded).hexdigest() != value.get(prefix + "_sha256"): raise SystemExit("relay_positive[" + prefix + "-digest]")
-if value.get("requester_timeout") is not True or value.get("replay_forwarded") is not True or not 0 < value.get("first_request_started_at_micros", 0) < value.get("replay_request_started_at_micros", 0): raise SystemExit("relay_positive[replay]")
+if value.get("post_accept_other_outcome_unknown") is not True or value.get("no_responders_unavailable") is not True or value.get("replay_forwarded") is not True or not 0 < value.get("first_request_started_at_micros", 0) < value.get("replay_request_started_at_micros", 0): raise SystemExit("relay_positive[replay]")
 connections = value.get("relay_connections")
 ids = value.get("relay_connection_client_ids")
 if not isinstance(connections, list) or len(connections) != 4 or not isinstance(ids, list) or len(ids) != 4 or len(set(ids)) != 4: raise SystemExit("relay_positive[connections]")
@@ -11509,8 +12440,12 @@ for connection, client_id in zip(connections, ids):
     if connection.get("server_client_id") != client_id or connection.get("account") != "PHASE285_RELAY" or connection.get("authenticated_user") != "phase285_relay": raise SystemExit("relay_positive[authority]")
     evidence = bytes.fromhex(connection.get("server_evidence_canonical_hex", ""))
     if hashlib.sha256(evidence).hexdigest() != connection.get("server_evidence_sha256"): raise SystemExit("relay_positive[server-evidence]")
-print("service_checkpoint_relay_positive public_legs=2 private_legs=2 identities=4 receipt=1 timeout=1 replay=1 passed=1")
+print("service_checkpoint_relay_positive public_legs=2 private_legs=2 identities=4 receipt=1 outcome_unknown=1 replay=1 passed=1")
 PY
+  grep -Fxc 'relay_recreation_errors no_responders=1 no_responders_unavailable=1 post_accept_other=1 post_accept_other_outcome_unknown=1 rejected_as_replay=2 passed=1' "$output" >/dev/null
+  grep -Fxc 'relay_recreation_teardown tasks_joined=12 old_absent=2 drained=2 passed=1' "$output" >/dev/null
+  grep -Fxc 'relay_recreation_readiness delayed_pending=1 new_present=2 public_subscriptions=9 private_subscriptions=3 wildcard=0 passed=1' "$output" >/dev/null
+  grep -Fxc 'relay_replay_request_outcome kind=response passed=1' "$output" >/dev/null
 }
 
 ci_harness_target_inventory() {
@@ -11820,7 +12755,10 @@ ci_harness_dispatch_route() {
     jetstream-cas) run_selector jetstream-cas ;;
     jetstream-checkpoint) run_selector jetstream-checkpoint ;;
     full-service-path) run_selector full-service-path ;;
-    receipt-topology) topology_owner_block_focus ;;
+    receipt-topology)
+      topology_owner_block_focus
+      run_relay_recreation_mutants_for_ci
+      ;;
     *) echo "unknown CI harness route: $route" >&2; return 2 ;;
   esac
 }
@@ -12079,6 +13017,14 @@ case "${1:-}" in
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-relay-positive" >&2; exit 2; }
     run_service_checkpoint_relay_positive_focus
     ;;
+  --focused-service-checkpoint-relay-recreation-source)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-relay-recreation-source" >&2; exit 2; }
+    relay_recreation_source_guard
+    ;;
+  --focused-service-checkpoint-relay-recreation-positive)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-relay-recreation-positive" >&2; exit 2; }
+    run_service_checkpoint_relay_positive_focus
+    ;;
   --focused-service-checkpoint-observations)
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-observations" >&2; exit 2; }
     run_service_checkpoint_observation_focus
@@ -12121,6 +13067,11 @@ case "${1:-}" in
       transport_semantics_source_guard self-test
     elif [ "$#" -eq 2 ] && [ "$2" = transport-semantics-registry ]; then
       transport_semantics_registry_guard
+    elif [ "$#" -eq 2 ] && [ "$2" = relay-recreation-mutants ]; then
+      run_relay_recreation_mutants
+    elif [ "$#" -eq 2 ] && [ "$2" = relay-recreation-mutant-sources ]; then
+      relay_recreation_canonical_route_guard self-test
+      PHASE285_RELAY_RECREATION_SOURCE_ONLY=1 run_relay_recreation_mutants
     elif [ "$#" -eq 2 ] && [ "$2" = complete-receipt-suppression ]; then
       run_complete_receipt_focus
     elif [ "$#" -eq 2 ] && [ "$2" = topology-owner-blocks ]; then
@@ -12149,7 +13100,7 @@ case "${1:-}" in
     elif [ "$#" -eq 1 ]; then
       run_self_tests
     else
-      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|transport-semantics-source|transport-semantics-registry|complete-receipt-suppression|topology-owner-blocks|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger|transport-positive-readiness-parser|ci-harness-registration]" >&2
+      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|transport-semantics-source|transport-semantics-registry|relay-recreation-mutants|relay-recreation-mutant-sources|complete-receipt-suppression|topology-owner-blocks|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger|transport-positive-readiness-parser|ci-harness-registration]" >&2
       exit 2
     fi
     ;;

@@ -128,33 +128,339 @@ phase285_scratch_hostile_controls() {
 }
 
 phase285_transport_negative_check() {
-  "$PHASE285_PYTHON" -I - "$1" "$2" <<'PY'
-import hashlib, pathlib, re, sys, tomllib
+  "$PHASE285_PYTHON" -I - "$1" "$2" "${3:-full}" <<'PY'
+import hashlib, pathlib, re, stat, sys, tomllib
 root = pathlib.Path(sys.argv[1])
 case = sys.argv[2]
+validation_mode = sys.argv[3]
+if validation_mode not in {"full", "semantic-only"}:
+    raise SystemExit("PHASE285-NEGATIVE[validation-mode]")
 if case == "phase285-raw-kv-subject":
     source = root / "crates/swarm-governance-witness/src"
     if not source.is_dir():
         raise SystemExit("PHASE285-NEGATIVE[missing-witness-source]")
-    combined = ""
-    allowed_public_functions = {
-        "phase285_conformance_fixture",
-        "with_wrong_server_version_for_conformance",
-        "with_wrong_image_digest_for_conformance",
-        "raw_configuration",
-        "canonical_raw_configuration",
-        "projected_configuration",
-        "canonical_raw_stream_info",
-        "raw_stream_info",
-        "raw_stream_info_digest",
-        "name",
-        "inspect_raw_stream_info",
+    expected_source_sha256 = {
+        "bin/swarm-governance-witness-store.rs": "73b24fe4b21039f2091ac10a7ccdbac01fef994e8c4faa776b068a4679fcc054",
+        "bin/swarm-governance-witness.rs": "f2e8373c591043e7f0e4912d6be2003f8d737f6b8999618fc8b711d3e9aff83a",
+        "jetstream_store.rs": "7ad46939bc08a9dbe361c1455c9d23b56ed223feb00ce28b9d81ef48fbcaf928",
+        "lib.rs": "6794e88e8b7dbcfe037375c197d7f35c187aa14aa02489cdc4cd1df11a6235e0",
+        "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
+        "public_dispatcher.rs": "dc481dd5c2a7e995a73986f788ccbb3f48cf1975fec33ceb3c442d7607d7ec91",
+        "raw_config.rs": "4bc8a3aabaf986ca3e74008f785444acd39df034f3e562f1f13e4e6a999ec015",
+        "runtime_client.rs": "45d1b01655bbd8bb35c8ceb3f9d5f2b3898bc20ea627133aca8300ef410d0474",
+        "secure_file.rs": "ca8b34c44b0bf54cb7ce621f89b974f1f2bf14babe99388888714eb1ac64f2cb",
+        "service_config.rs": "884914bd6bd531f7ba108be7501920fc6d2dd71d8bf73c62bace71dc6faf6e36",
+        "store_proxy_service.rs": "a54dbcfd14c354c494e5a53e3f46a2cb4ae139cf1ed348ac3dbb546f1616ca6c",
     }
-    approved_open_count = 0
+    source_paths = sorted(source.rglob("*.rs"))
+    observed_source_sha256 = {}
+    for path in source_paths:
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit("PHASE285-NEGATIVE[source-inventory]")
+        relative = path.relative_to(source).as_posix()
+        observed_source_sha256[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if set(observed_source_sha256) != set(expected_source_sha256):
+        raise SystemExit("PHASE285-NEGATIVE[source-inventory]")
+    if validation_mode == "full" and observed_source_sha256 != expected_source_sha256:
+        raise SystemExit("PHASE285-NEGATIVE[source-hash]")
+
+    def public_api_items(text):
+        items = []
+        def tokens():
+            result = []
+            index = 0
+            length = len(text)
+            while index < length:
+                if text[index].isspace():
+                    index += 1
+                    continue
+                if text.startswith("//", index):
+                    newline = text.find("\n", index + 2)
+                    index = length if newline < 0 else newline + 1
+                    continue
+                if text.startswith("/*", index):
+                    depth = 1
+                    cursor = index + 2
+                    while cursor < length and depth:
+                        if text.startswith("/*", cursor):
+                            depth += 1
+                            cursor += 2
+                        elif text.startswith("*/", cursor):
+                            depth -= 1
+                            cursor += 2
+                        else:
+                            cursor += 1
+                    if depth:
+                        raise SystemExit("PHASE285-NEGATIVE[rust-tokenization]")
+                    index = cursor
+                    continue
+                raw = re.match(r'(?:br|r)(?P<hashes>#{0,255})"', text[index:])
+                if raw is not None:
+                    closing = '"' + raw.group("hashes")
+                    end = text.find(closing, index + raw.end())
+                    if end < 0:
+                        raise SystemExit("PHASE285-NEGATIVE[rust-tokenization]")
+                    end += len(closing)
+                    result.append((text[index:end], index, end))
+                    index = end
+                    continue
+                if text[index] == '"':
+                    cursor = index + 1
+                    escaped = False
+                    while cursor < length:
+                        character = text[cursor]
+                        cursor += 1
+                        if escaped:
+                            escaped = False
+                        elif character == "\\":
+                            escaped = True
+                        elif character == '"':
+                            break
+                    else:
+                        raise SystemExit("PHASE285-NEGATIVE[rust-tokenization]")
+                    result.append((text[index:cursor], index, cursor))
+                    index = cursor
+                    continue
+                raw_identifier = re.match(r"r#[A-Za-z_][A-Za-z0-9_]*", text[index:])
+                identifier = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[index:])
+                number = re.match(r"[0-9][A-Za-z0-9_]*", text[index:])
+                match = raw_identifier or identifier or number
+                if match is not None:
+                    end = index + match.end()
+                    result.append((text[index:end], index, end))
+                    index = end
+                    continue
+                pair = next(
+                    (value for value in ("::", "->", "=>", "&&", "||", "..") if text.startswith(value, index)),
+                    None,
+                )
+                end = index + (len(pair) if pair is not None else 1)
+                result.append((text[index:end], index, end))
+                index = end
+            return result
+
+        rust = tokens()
+        values = [token[0] for token in rust]
+        identifier = re.compile(r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*\Z")
+
+        def closing(open_index, opening, closing_token):
+            if open_index >= len(rust) or values[open_index] != opening:
+                raise SystemExit("PHASE285-NEGATIVE[public-declaration-syntax]")
+            depth = 0
+            for cursor in range(open_index, len(rust)):
+                if values[cursor] == opening:
+                    depth += 1
+                elif values[cursor] == closing_token:
+                    depth -= 1
+                    if depth == 0:
+                        return cursor
+            raise SystemExit("PHASE285-NEGATIVE[public-declaration-syntax]")
+
+        def declaration_end(start):
+            stack = []
+            pairs = {"(": ")", "[": "]", "<": ">", "{": "}"}
+            for cursor in range(start, len(rust)):
+                value = values[cursor]
+                if value in pairs:
+                    stack.append(pairs[value])
+                elif stack and value == stack[-1]:
+                    stack.pop()
+                elif not stack and value == ";":
+                    return cursor
+            raise SystemExit("PHASE285-NEGATIVE[public-declaration-syntax]")
+
+        external_pub = 0
+        recognized_pub = 0
+        for pub_index, value in enumerate(values):
+            if value != "pub":
+                continue
+            if pub_index + 1 < len(rust) and values[pub_index + 1] == "(":
+                continue
+            external_pub += 1
+            cursor = pub_index + 1
+            original = cursor
+            if cursor < len(rust) and values[cursor] == "extern" and cursor + 1 < len(rust) and values[cursor + 1] == "crate":
+                if cursor + 2 >= len(rust) or identifier.fullmatch(values[cursor + 2]) is None:
+                    raise SystemExit("PHASE285-NEGATIVE[unknown-public-declaration]")
+                items.append(f"extern-crate:{values[cursor + 2]}")
+                recognized_pub += 1
+                continue
+            qualifiers = []
+            while cursor < len(rust):
+                if values[cursor] in ("async", "const", "unsafe"):
+                    qualifiers.append(values[cursor])
+                    cursor += 1
+                    continue
+                if values[cursor] == "extern":
+                    qualifiers.append("extern")
+                    cursor += 1
+                    if cursor < len(rust) and values[cursor].startswith('"'):
+                        qualifiers.append(values[cursor])
+                        cursor += 1
+                    continue
+                break
+            if cursor < len(rust) and values[cursor] == "fn":
+                cursor += 1
+                if cursor >= len(rust) or identifier.fullmatch(values[cursor]) is None:
+                    raise SystemExit("PHASE285-NEGATIVE[public-function-syntax]")
+                name = values[cursor]
+                cursor += 1
+                generics = ""
+                if cursor < len(rust) and values[cursor] == "<":
+                    end = closing(cursor, "<", ">")
+                    generics = "".join(text[rust[cursor][1] : rust[end][2]].split())
+                    cursor = end + 1
+                if cursor >= len(rust) or values[cursor] != "(":
+                    raise SystemExit("PHASE285-NEGATIVE[public-function-syntax]")
+                end = closing(cursor, "(", ")")
+                parameters = " ".join(text[rust[cursor][2] : rust[end][1]].split())
+                cursor = end + 1
+                stack = []
+                pairs = {"(": ")", "[": "]", "<": ">"}
+                while cursor < len(rust):
+                    value = values[cursor]
+                    if value in pairs:
+                        stack.append(pairs[value])
+                    elif stack and value == stack[-1]:
+                        stack.pop()
+                    elif not stack and value in ("{", ";"):
+                        break
+                    cursor += 1
+                if cursor >= len(rust):
+                    raise SystemExit("PHASE285-NEGATIVE[public-function-syntax]")
+                items.append(f"fn:{' '.join(qualifiers)}:{name}{generics}({parameters})")
+                recognized_pub += 1
+                continue
+            cursor = original
+            if cursor < len(rust) and values[cursor] == "use":
+                end = declaration_end(cursor + 1)
+                imported = " ".join(text[rust[cursor][2] : rust[end][1]].split())
+                items.append("use:" + imported)
+                recognized_pub += 1
+                continue
+            if cursor < len(rust) and values[cursor] in (
+                "const", "static", "type", "struct", "enum", "trait", "union", "mod", "macro",
+            ):
+                kind = values[cursor]
+                cursor += 1
+                if kind == "static" and cursor < len(rust) and values[cursor] == "mut":
+                    kind = "static mut"
+                    cursor += 1
+                if cursor >= len(rust) or identifier.fullmatch(values[cursor]) is None:
+                    raise SystemExit("PHASE285-NEGATIVE[unknown-public-declaration]")
+                items.append(f"{kind}:{values[cursor]}")
+                recognized_pub += 1
+                continue
+            if (
+                cursor + 1 < len(rust)
+                and identifier.fullmatch(values[cursor]) is not None
+                and values[cursor + 1] == ":"
+            ):
+                items.append(f"field:{values[cursor]}")
+                recognized_pub += 1
+                continue
+            raise SystemExit("PHASE285-NEGATIVE[unknown-public-declaration]")
+        if recognized_pub != external_pub:
+            raise SystemExit("PHASE285-NEGATIVE[public-visibility-cardinality]")
+
+        for index in range(len(rust) - 3):
+            if values[index : index + 3] != ["#", "[", "macro_export"]:
+                continue
+            attribute_end = closing(index + 1, "[", "]")
+            cursor = attribute_end + 1
+            while cursor + 1 < len(rust) and values[cursor : cursor + 2] == ["#", "["]:
+                cursor = closing(cursor + 1, "[", "]") + 1
+            if (
+                cursor + 2 >= len(rust)
+                or values[cursor : cursor + 2] != ["macro_rules", "!"]
+                or identifier.fullmatch(values[cursor + 2]) is None
+            ):
+                raise SystemExit("PHASE285-NEGATIVE[macro-export-shape]")
+            items.append(f"macro-export:{values[cursor + 2]}")
+        return sorted(items)
+
+    expected_public_api = {
+        "jetstream_store.rs": (3, "480e8474d90ac2fb5e33beb7e42c3b7ac76371f7a37773d7a05d69e7317b475b"),
+        "lib.rs": (6, "183e849d606045b1ea3d741fcf6dd47fb9ef8117bf280a7b974cd0817300b82f"),
+        "public_dispatcher.rs": (19, "8c841165f5dc4820e11117ac49fe92865e737949706da063dfd5e5dad263c744"),
+        "raw_config.rs": (19, "a7a1b5512771304c147ae0ae7dd091aa88310b6983b8cd1b2ca2b26893087066"),
+        "runtime_client.rs": (9, "386cb0e8bcd70a6e323e9542e42fab7a96933dc683dad8218f47c2c7e1a95533"),
+        "secure_file.rs": (1, "4543b8ff80c84aed3e8618225ca5a10170f431e255ce90b4af38b6adfb280d90"),
+        "service_config.rs": (76, "83c2307e7ada047f9e6edf96efabf30496278e6eb5624caa6fc89ccb6cd4f054"),
+        "store_proxy_service.rs": (15, "f9c8597009ffc372a99a5424e01598e3645ddc5142af56f5cd6328f499468cfa"),
+    }
+    approved_public_function_names = {
+        "jetstream_store.rs": {"open", "open_with_post_ack_barrier"},
+        "public_dispatcher.rs": {
+            "public_witness_ingress_overload_control", "dispatch", "new", "start",
+            "stop_and_wait", "wait_for_failure", "dispatcher_mapping",
+        },
+        "raw_config.rs": {
+            "canonical_raw_configuration", "canonical_raw_stream_info",
+            "inspect_raw_stream_info", "name", "phase285_conformance_fixture",
+            "projected_configuration", "raw_configuration", "raw_stream_info",
+            "with_wrong_image_digest_for_conformance",
+            "with_wrong_server_version_for_conformance",
+        },
+        "runtime_client.rs": {
+            "connection_client_id", "load_public_witness_process_config",
+            "load_store_proxy_process_config", "connect", "run_public_witness_process",
+            "run_store_proxy_process",
+        },
+        "service_config.rs": {
+            "checked_service_buffer_budget", "validate", "validate_for_ready",
+            "public_response_grant_millis", "response_grant_maximum",
+            "store_response_grant_millis", "subject_for",
+        },
+        "store_proxy_service.rs": {
+            "new", "private_store_ingress_overload_control", "connect",
+            "handle_subject_bytes", "start", "stop_and_wait", "wait_for_failure",
+            "store_proxy_subjects",
+        },
+    }
+    approved_public_exports = {
+        "lib.rs": {"mod:raw_config"},
+        "jetstream_store.rs": {"struct:NatsWitnessStore"},
+        "public_dispatcher.rs": {
+            "enum:PublicWitnessDispatchErrorV1", "enum:PublicWitnessProxyTransportErrorV1",
+            "enum:PublicWitnessRunnerErrorV1", "struct:PublicWitnessDispatchMappingV1",
+            "struct:PublicWitnessDispatcher", "struct:PublicWitnessServiceRunner",
+            "trait:PublicWitnessStoreProxyClient",
+        },
+        "raw_config.rs": {
+            "enum:RawConfigurationError", "struct:InspectedRawConfigurationV1",
+            "struct:Nats21117EmptyConsumerLimitsV1", "struct:Nats21117ExpectedConfigurationV1",
+            "struct:Nats21117RawClusterV1", "struct:Nats21117RawConfigV1",
+            "struct:Nats21117RawPeerV1", "struct:Nats21117RawStreamInfoV1",
+            "struct:Nats21117RawStreamStateV1",
+        },
+        "runtime_client.rs": {
+            "enum:RuntimeWitnessClientErrorV1", "enum:WitnessProcessErrorV1",
+            "struct:RuntimeWitnessClient",
+        },
+        "secure_file.rs": {"enum:StableFileErrorV1"},
+        "service_config.rs": {
+            "const:MAX_SERVICE_BUFFERED_BYTES", "const:MAX_SERVICE_CHANNEL_ENTRIES",
+            "const:MAX_SERVICE_WORKERS", "struct:PublicWitnessProcessConfigV1",
+            "struct:PublicWitnessServiceConfigV1", "struct:RuntimeWitnessClientConfigV1",
+            "struct:StoreProxyProcessConfigV1", "struct:StoreProxyServiceConfigV1",
+        },
+        "store_proxy_service.rs": {
+            "enum:StoreProxyRunnerErrorV1", "enum:StoreProxyServiceErrorV1",
+            "struct:NatsPublicWitnessStoreProxyClient", "struct:StoreProxyService",
+            "struct:StoreProxyServiceRunner", "struct:StoreRoleConnectionV1",
+        },
+    }
+    observed_public_items = {}
+    combined = ""
     approved_debug_open_count = 0
     for path in sorted(source.rglob("*.rs")):
         text = path.read_text()
         relative = path.relative_to(source).as_posix()
+        api_items = public_api_items(text)
+        if api_items:
+            observed_public_items[relative] = api_items
         combined += f"\n// {path.relative_to(source)}\n{text}"
         for line in text.splitlines():
             if "$KV." not in line:
@@ -185,49 +491,39 @@ if case == "phase285-raw-kv-subject":
             if ".publish" in stripped:
                 continue
             raise SystemExit("PHASE285-NEGATIVE[raw-literal-outside-allowlist]")
-        public_functions = re.finditer(
-            r"(?ms)^\s*pub\s+(?:async\s+)?fn\s+"
-            r"(?P<name>[A-Za-z0-9_]+)\s*\((?P<params>[^)]*)\)",
-            text,
-        )
-        for function in public_functions:
-            surface = f"{function.group('name')} {function.group('params')}".lower()
-            if "subject" in surface or "header" in surface:
-                raise SystemExit("PHASE285-NEGATIVE[public-raw-builder]")
-            if re.search(r"(?:^|[, :(])(?:raw|subject|header|operation)\s*:\s*&?str", surface):
-                raise SystemExit("PHASE285-NEGATIVE[public-raw-input]")
         if re.search(
             r"\bpub\s+struct\s+[A-Za-z0-9_]*(?:Authority|Input|Builder|Request)[A-Za-z0-9_]*\b",
             text,
         ):
             raise SystemExit("PHASE285-NEGATIVE[public-raw-structure]")
-        if re.search(
-            r"(?ms)\bpub\s+struct\s+[A-Za-z0-9_]+\s*\{[^}]*"
-            r"\bpub\s+(?:raw|subject|header|operation)[A-Za-z0-9_]*\s*:",
-            text,
+        approved_typed_raw_fields = {
+            (
+                "public_dispatcher.rs",
+                "PublicWitnessDispatchMappingV1",
+                ("operation", "subject"),
+            )
+        }
+        for structure in re.finditer(
+            r"(?ms)\bpub\s+struct\s+([A-Za-z0-9_]+)\s*\{([^}]*)\}", text
         ):
-            raise SystemExit("PHASE285-NEGATIVE[public-raw-field]")
-        for public_export in re.findall(r"(?m)^\s*pub\s+(?:const|static|use|type)\b[^\n]*", text):
-            if relative == "lib.rs" and public_export.strip() == "pub use jetstream_store::NatsWitnessStore;":
-                continue
-            raise SystemExit("PHASE285-NEGATIVE[unapproved-public-export]")
+            raw_fields = tuple(
+                re.findall(
+                    r"(?m)^\s*pub\s+((?:raw|subject|header|operation)[A-Za-z0-9_]*)\s*:",
+                    structure.group(2),
+                )
+            )
+            if raw_fields and (
+                relative,
+                structure.group(1),
+                raw_fields,
+            ) not in approved_typed_raw_fields:
+                raise SystemExit("PHASE285-NEGATIVE[public-raw-field]")
         for exported in re.finditer(
             r"(?ms)^\s*pub\s+(?:async\s+)?fn\s+(?P<name>[A-Za-z0-9_]+)\s*"
             r"\((?P<params>[^)]*)\)",
             text,
         ):
             name = exported.group("name")
-            if name == "open":
-                normalized_params = " ".join(exported.group("params").split())
-                expected_params = (
-                    "context: Context, ready: WitnessStoreReadyResultV1, "
-                    "reported_server_version: &str, "
-                    "resolved_server_image_index_digest: &str,"
-                )
-                if relative != "jetstream_store.rs" or normalized_params != expected_params:
-                    raise SystemExit("PHASE285-NEGATIVE[unapproved-public-function]")
-                approved_open_count += 1
-                continue
             if name == "open_with_post_ack_barrier":
                 normalized_params = " ".join(exported.group("params").split())
                 expected_params = (
@@ -257,8 +553,6 @@ if case == "phase285-raw-kv-subject":
                     raise SystemExit("PHASE285-NEGATIVE[debug-constructor-gate]")
                 approved_debug_open_count += 1
                 continue
-            if name not in allowed_public_functions:
-                raise SystemExit("PHASE285-NEGATIVE[unapproved-public-function]")
         if relative == "jetstream_store.rs":
             debug_only_fragments = (
                 "#[cfg(debug_assertions)]\n"
@@ -292,11 +586,112 @@ if case == "phase285-raw-kv-subject":
                 r"(?m)^\s*pub\s+fn\s+raw_stream_info_digest\s*\(", snapshot_impl
             ):
                 raise SystemExit("PHASE285-NEGATIVE[public-full-info-digest]")
-    if approved_open_count != 1 or approved_debug_open_count != 1:
+    typed_subject_builders = {
+        "service_config.rs": "fn:const:subject_for(operation: WitnessServiceOperationV1)",
+        "store_proxy_service.rs": "fn:const:store_proxy_subjects()",
+    }
+    for relative, expected in typed_subject_builders.items():
+        name = expected.split(":", 2)[2].split("(", 1)[0]
+        candidates = [
+            item
+            for item in observed_public_items.get(relative, [])
+            if item.startswith("fn:") and item.split(":", 2)[2].startswith(f"{name}(")
+        ]
+        if candidates != [expected]:
+            raise SystemExit("PHASE285-NEGATIVE[typed-builder-broadening]")
+    approved_raw_boundaries = {
+        (
+            "public_dispatcher.rs",
+            "fn:async:dispatch(&self, subject: &str, payload: &[u8],)",
+        ),
+        (
+            "store_proxy_service.rs",
+            "fn:async:handle_subject_bytes(&self, subject: &str, raw: &[u8],)",
+        ),
+    }
+    for relative, items in observed_public_items.items():
+        for item in items:
+            if not item.startswith("fn:"):
+                continue
+            function = item.split(":", 2)[2]
+            name, parameters = function.split("(", 1)
+            surface = f"{name} ({parameters}".lower()
+            if (relative, item) in approved_raw_boundaries or typed_subject_builders.get(
+                relative
+            ) == item:
+                continue
+            if "subject" in name.lower() or "header" in name.lower():
+                raise SystemExit("PHASE285-NEGATIVE[public-raw-builder]")
+            if re.search(
+                r"(?:^|[, (])(?:raw|subject|header|operation)\s*:\s*&str",
+                surface,
+            ):
+                raise SystemExit("PHASE285-NEGATIVE[public-raw-input]")
+    observed_public_api = {
+        relative: (
+            len(items),
+            hashlib.sha256(("\n".join(items) + "\n").encode()).hexdigest(),
+        )
+        for relative, items in observed_public_items.items()
+    }
+    observed_public_fields = {
+        relative: fields
+        for relative, items in observed_public_items.items()
+        if (fields := [item for item in items if item.startswith("field:")])
+    }
+    expected_public_fields = {
+        "public_dispatcher.rs": (
+            5,
+            "8b2d18a77cae48ee500e4b6d8aab35b5e27447dba3bed17092c347aaab32fdac",
+        ),
+        "service_config.rs": (
+            58,
+            "e8d79d58c7b2ca7918a480d5639648f5735e9b3675bd2925373aa4a8fe56b55d",
+        ),
+    }
+    observed_public_field_inventory = {
+        relative: (
+            len(fields),
+            hashlib.sha256(("\n".join(fields) + "\n").encode()).hexdigest(),
+        )
+        for relative, fields in observed_public_fields.items()
+    }
+    if observed_public_api != expected_public_api:
+        for relative, items in observed_public_items.items():
+            approved_functions = approved_public_function_names.get(relative, set())
+            for item in items:
+                if item.startswith("fn:"):
+                    name = item.split(":", 2)[2].split("(", 1)[0]
+                    if name not in approved_functions:
+                        raise SystemExit("PHASE285-NEGATIVE[unapproved-public-function]")
+        if observed_public_field_inventory != expected_public_fields:
+            raise SystemExit("PHASE285-NEGATIVE[public-field-inventory]")
+        for relative, items in observed_public_items.items():
+            approved_exports = approved_public_exports.get(relative, set())
+            for item in items:
+                if (
+                    not item.startswith(("fn:", "use:", "field:"))
+                    and item not in approved_exports
+                ):
+                    raise SystemExit("PHASE285-NEGATIVE[unapproved-public-export]")
         raise SystemExit("PHASE285-NEGATIVE[public-api-inventory]")
-    request_calls = re.findall(r"\.request\s*\(", combined)
+    if approved_debug_open_count != 1:
+        raise SystemExit("PHASE285-NEGATIVE[public-api-inventory]")
+    expected_request_calls = {
+        "jetstream_store.rs": 1,
+        "lib.rs": 2,
+        "runtime_client.rs": 9,
+        "store_proxy_service.rs": 4,
+    }
+    observed_request_calls = {
+        path.relative_to(source).as_posix(): len(
+            re.findall(r"\.request\s*\(", path.read_text())
+        )
+        for path in source_paths
+        if re.search(r"\.request\s*\(", path.read_text())
+    }
     jetstream_source = (source / "jetstream_store.rs").read_text()
-    if len(request_calls) != 1 or jetstream_source.count(".request(") != 1:
+    if observed_request_calls != expected_request_calls:
         raise SystemExit("PHASE285-NEGATIVE[generic-request]")
     if not re.search(
         r"(?ms)^\s*async\s+fn\s+closed_snapshot\s*\(&self\).*?"
@@ -312,18 +707,6 @@ if case == "phase285-raw-kv-subject":
         combined,
     ):
         raise SystemExit("PHASE285-NEGATIVE[management-operation]")
-    expected_stage_a_sources = {
-        "jetstream_store.rs": "7ad46939bc08a9dbe361c1455c9d23b56ed223feb00ce28b9d81ef48fbcaf928",
-        "lib.rs": "17ee2049f9d4cfd65f78f925fe365979bafab9fc6671f6eab2e51b9d05bb764c",
-        "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
-        "raw_config.rs": "a08b15774c72445f20fa36e8c377e81d455da2aa826102ea9d26bf9657908cf6",
-    }
-    observed_stage_a_sources = {
-        path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(source.rglob("*.rs"))
-    }
-    if observed_stage_a_sources != expected_stage_a_sources:
-        raise SystemExit("PHASE285-NEGATIVE[public-api-inventory]")
 elif case == "phase285-unrelated-authority-crate":
     path = root / "crates/swarm-governance-witness/Cargo.toml"
     with path.open("rb") as handle:
@@ -357,7 +740,7 @@ phase285_transport_negative_self_test() (
       cp "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" "$scratch/crates/swarm-governance-witness/src/lib.rs"
       printf '\n%s\n' "$mutant" >>"$scratch/crates/swarm-governance-witness/src/lib.rs"
       status=0
-      output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+      output="$(phase285_transport_negative_check "$scratch" "$case" semantic-only 2>&1)" || status=$?
       if [ "$status" -eq 0 ]; then
         survivors+=("$expected")
       elif [ "$output" = "PHASE285-NEGATIVE[$expected]" ]; then
@@ -375,7 +758,19 @@ pub struct TransportSurface { pub header_bytes: Vec<u8> }|public-raw-field
 pub const EXPORTED_RAW_SUBJECT: &str = "$KV.raw.>";|exported-raw-literal
 pub fn derive(key: &str) -> String { format!("$KV.raw.{key}") }|public-raw-derivation
 pub static EXPORTED_RAW_ALIAS: &str = "$KV.raw.alias";|exported-raw-literal
-pub fn name(key: &str) -> String { crate::nats_config::projected_configuration(key, 1, 1, 1).subjects[0].clone() }|public-api-inventory
+pub fn name(key: &str) -> String { crate::nats_config::projected_configuration(key, 1, 1, 1).subjects[0].clone() }|unapproved-public-function
+pub type Phase285ExtraApi = ();|unapproved-public-export
+pub mod phase285_extra_subject_api;|unapproved-public-export
+pub unsafe fn phase285_extra_unsafe_api() {}|unapproved-public-function
+unsafe extern "C" { pub fn phase285_extra_foreign_api(); }|unapproved-public-function
+pub fn phase285_extra_generic_api<T>(value: T) { let _ = value; }|unapproved-public-function
+pub fn phase285_extra_fn_bound_api<T: Fn()>() {}|unapproved-public-function
+pub fn phase285_extra_where_api<T>() where T: Clone {}|unapproved-public-function
+pub fn r#type() {}|unapproved-public-function
+fn phase285_private_boundary() {} pub fn phase285_same_line_api() {}|unapproved-public-function
+#[macro_export] #[doc(hidden)] macro_rules! phase285_extra_export { () => {}; }|unapproved-public-export
+struct Phase285PrivateSurface { pub phase285_extra_field: String }|public-field-inventory
+pub static mut PHASE285_EXTRA_MUTABLE_API: usize = 0;|unapproved-public-export
 pub async fn open(raw: &str) -> String { raw.to_string() }|public-raw-input
 fn generic(client: &async_nats::jetstream::Context, subject: &str) { let _ = client.request(subject, &()); }|generic-request
 fn wildcard(client: &async_nats::Client) { let _ = client.publish("$KV.raw.>", "x".into()); }|wildcard-writer
@@ -393,7 +788,7 @@ if text.count(sys.argv[2]) != 1:
 path.write_text(text.replace(sys.argv[2], sys.argv[3], 1))
 PY
       status=0
-      output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+      output="$(phase285_transport_negative_check "$scratch" "$case" semantic-only 2>&1)" || status=$?
       if [ "$status" -eq 0 ]; then
         survivors+=("$expected")
       elif [ "$output" = "PHASE285-NEGATIVE[$expected]" ]; then
@@ -407,8 +802,10 @@ pub(crate) fn from_validated_deployment|pub fn from_validated_deployment|unappro
 pub(crate) fn subjects_count|pub fn subjects_count|public-raw-builder
 pub(crate) fn canonical_raw_stream_info|pub fn canonical_raw_stream_info|public-full-info-bytes
 pub(crate) fn raw_stream_info_digest|pub fn raw_stream_info_digest|public-full-info-digest
-pub(crate) struct Nats21117TypedSnapshotV1|pub struct Nats21117TypedSnapshotV1|public-api-inventory
+pub(crate) struct Nats21117TypedSnapshotV1|pub struct Nats21117TypedSnapshotV1|unapproved-public-export
 MUTANTS
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/raw_config.rs" \
+      "$scratch/crates/swarm-governance-witness/src/raw_config.rs"
     while IFS='|' read -r mutation expected; do
       cp "$ROOT_DIR/crates/swarm-governance-witness/src/jetstream_store.rs" \
         "$scratch/crates/swarm-governance-witness/src/jetstream_store.rs"
@@ -492,7 +889,7 @@ else:
 path.write_text(text)
 PY
       status=0
-      output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+      output="$(phase285_transport_negative_check "$scratch" "$case" semantic-only 2>&1)" || status=$?
       if [ "$status" -eq 0 ]; then
         survivors+=("$expected")
       elif [ "$output" = "PHASE285-NEGATIVE[$expected]" ]; then
@@ -516,11 +913,59 @@ callsite-remove-cfg|debug-control-gate
 MUTANTS
     cp "$ROOT_DIR/crates/swarm-governance-witness/src/jetstream_store.rs" \
       "$scratch/crates/swarm-governance-witness/src/jetstream_store.rs"
+
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs" \
+      "$scratch/crates/swarm-governance-witness/src/service_config.rs"
+    "$PHASE285_PYTHON" -I - \
+      "$scratch/crates/swarm-governance-witness/src/service_config.rs" <<'PY'
+import pathlib
+path = pathlib.Path(__import__("sys").argv[1])
+text = path.read_text()
+old = "pub const fn subject_for(operation: WitnessServiceOperationV1)"
+new = "pub const fn subject_for(operation: &str)"
+if text.count(old) != 1:
+    raise SystemExit("PHASE285-NEGATIVE[typed-builder-mutant-source]")
+path.write_text(text.replace(old, new, 1))
+PY
+    status=0
+    output="$(phase285_transport_negative_check "$scratch" "$case" semantic-only 2>&1)" || status=$?
+    if [ "$status" -ne 0 ] && [ "$output" = "PHASE285-NEGATIVE[typed-builder-broadening]" ]; then
+      killed=$((killed + 1))
+    else
+      echo "PHASE285-NEGATIVE[unexpected-typed-builder-mutant:$status:$output]" >&2
+      return 1
+    fi
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs" \
+      "$scratch/crates/swarm-governance-witness/src/service_config.rs"
+
+    rm "$scratch/crates/swarm-governance-witness/src/secure_file.rs"
+    status=0
+    output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+    if [ "$status" -ne 0 ] && [ "$output" = "PHASE285-NEGATIVE[source-inventory]" ]; then
+      killed=$((killed + 1))
+    else
+      echo "PHASE285-NEGATIVE[unexpected-source-deletion-mutant:$status:$output]" >&2
+      return 1
+    fi
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/secure_file.rs" \
+      "$scratch/crates/swarm-governance-witness/src/secure_file.rs"
+    printf '\n// phase285 source substitution mutant\n' \
+      >>"$scratch/crates/swarm-governance-witness/src/secure_file.rs"
+    status=0
+    output="$(phase285_transport_negative_check "$scratch" "$case" 2>&1)" || status=$?
+    if [ "$status" -ne 0 ] && [ "$output" = "PHASE285-NEGATIVE[source-hash]" ]; then
+      killed=$((killed + 1))
+    else
+      echo "PHASE285-NEGATIVE[unexpected-source-substitution-mutant:$status:$output]" >&2
+      return 1
+    fi
+    cp "$ROOT_DIR/crates/swarm-governance-witness/src/secure_file.rs" \
+      "$scratch/crates/swarm-governance-witness/src/secure_file.rs"
     if [ "${#survivors[@]}" -ne 0 ]; then
       printf 'PHASE285-NEGATIVE[surviving-mutant:%s]\n' "${survivors[@]}" >&2
       return 1
     fi
-    [ "$killed" -eq 29 ] || return 1
+    [ "$killed" -eq 44 ] || return 1
 
     mapping_repo="$scratch/mapping-repo"
     mapping_target="$scratch/mapping-target"
@@ -724,16 +1169,16 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-policy/Cargo.toml": "29ef642b8ba57958db7b202ebedb237d8b5bab1cb17b88d9e0e7ce56f9604520",
     "crates/swarm-response/Cargo.toml": "55d970d2348d4366791f1cb2e46df04872e33892af451c3919f67c45dd736760",
     "crates/swarm-runtime/Cargo.toml": "9e71810643aef57970036390c66e2e973231cff2b0b3e10490b7fb810ca84b0a",
-    "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
+    "crates/swarm-spine/Cargo.toml": "2a60351ee33409190d7343a36d8b9926a1f0dbc56bfb66faef093f799ace8932",
 }
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
-    "Cargo.toml": "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b",
-    "Cargo.lock": "36d0fc55404cc6bcc9b1555d3a4b84e99e9de6a6a49eb86cf7def6624f9bd5e7",
-    ".github/workflows/ci.yml": "d2efb24c6c1c167c40483e6b1587c16dc9e8e6439a44ecd6b81d9d2557f55d4c",
+    "Cargo.toml": "87061d05b125cfa348c0e4a25e1859760c3b62f5e11fc144db2ba27bc319eb06",
+    "Cargo.lock": "1e8dbd9f057574d4fc833054100db482ac7d6eff1d3baa98f1c7a5a9ea8ad673",
+    ".github/workflows/ci.yml": "1c66535bf247f0ba968acf19b5ac06c2e56defd77fd8c72378762185f1c0c784",
     ".github/workflows/release.yml": "937af30a8bc982a73615ca49e1e48f4d64049e82a7a28113cd1c72c2110d8e51",
     "tools/check-supply-chain.sh": "212b37c57bcd372fc74ca29b8e537297196c28c399d98e7613fa24c6413c2fd0",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "f1e1a56887d57bcc37246beadb25d136fa7453c3da308610cbc2e82c1127054b",
+    "tools/check-single-governor-key.sh": "7055a4030de03f379587f6f707b8ea8aaa3d013c01939142fd75af38a8cd7830",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -742,8 +1187,8 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "crates/swarm-evolution/Cargo.toml": "0fca9be1e6d92ad2acdd70fa1b06994bd6a28fd16381c3b42b0255f427f4887c",
     "crates/swarm-runtime-workbench/Cargo.toml": "eab3a2b0578a2366e26604a69ca649ba03ce032d3fc45696876ae222573d24ce",
     "crates/swarm-cli/Cargo.toml": "0593667747de0b4cd7792170f2c6bfa8fb0a5051767dca97ede20fad44a23dfe",
-    "crates/swarm-cli/src/core.inc": "a0def11bbf07f546082a72487d6260087822afc35e98f05b0817362a5c9692e2",
-    "crates/swarm-governance/src/lib.rs": "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896",
+    "crates/swarm-cli/src/core.inc": "fcf7396863c83532664b0a00395b8a7862b0036c5f512e2771eeac8765129e76",
+    "crates/swarm-governance/src/lib.rs": "107518ea5c5d066d5b3d0ba9ff40fb5dc335ed12d7ff00fadfe7afedd25fa353",
     "crates/swarm-runtime/src/containment.rs": "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
     "crates/swarm-runtime/src/dispatcher.rs": "de7ad808ff477c7d1432b47360f4139e9ddaa5d5449a4fa5d21e28b5e86c8c8e",
     "crates/swarm-ingest-runtime/src/ingest/mod.rs": "33a272f43e892f47816eb6fe183f41d9afda86b3093b5258da0c7c6e8a3c7c47",
@@ -757,21 +1202,21 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
 }
 GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
-        (2, "f3345ca1525686353fb3dfccef2df4ae9b561b1b8c1dae065f285d01b3fe1b61"),
+        (14, "aa7b332570ba6f3cc5fb24aeb4279d3a1739ce46e098d07e3233576ebcb7919c"),
     "swarm-runtime":
-        (127, "25f4c2939179f05df6545b3dfc89a5162e5ff0b5465056945667b24405af0df2"),
+        (133, "c01258669da1ce444f7450c87eaf2a93aa28a7eb5525a5e4755707968d956234"),
     "swarm-ingest-runtime":
-        (14, "058ccc0dfa06a4d13d3edb22a534ee2fd142f8d764545d948fe0573e325d2a41"),
+        (14, "2a62160bf16fb4f781ab50e09a83b7ac6a9bfb9d512ca98592d007d98a9f36d3"),
     "swarm-runtime-http":
-        (22, "b6e62e6c68f65da711fd5362a7ddfde3e28663d18a7a8a225212c83902c01020"),
+        (22, "017516d1f5b0a6f7178c760644f824c5d2d39e18d856c9111d8623224a50fb68"),
     "swarm-agents":
         (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
     "swarm-evolution":
-        (6, "de3afe080980d4901954dbddbef02f987a5eaef896b8af193efc05f0c4f028e9"),
+        (6, "2eec23888968fe35f5cbb0c81125cf1b24fe49f53d4b0fb90851c51ccbecff5b"),
     "swarm-runtime-workbench":
         (11, "b333bbfdc9f25b31982e33c30e49dc4663704b04ebc58531e93732300140f1f5"),
     "swarm-cli":
-        (7, "31d1d554fba3635556d968f045861270859a24c7e1131607a8666467b09494db"),
+        (7, "ebe0ae8023e9d6bb141e173c7067b0c0fcb69fa1593aaae1e42fee1a3e96e45e"),
 }
 GOVERNANCE_ASSURANCE_CLOSURE_CRATES = (
     "swarm-governance",
@@ -806,7 +1251,7 @@ SINGLE_GOVERNOR_GATE_OUTPUT = (
     "authenticated mint (crates/swarm-governance/src crates/swarm-consensus/src "
     "crates/swarm-policy/src)"
 )
-EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "5d426b63b3f2a34e0aecd2157a3e5f68afb780bd62446b5f528ee747c3c86903"
+EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "6922bc831808e582a338aa5f064a735400b0c5aca79b5469f4937b1ec5ccfc23"
 ALLOWED_LOCAL_CUSTOM_BUILD = {
     "swarm-ingest-tetragon": {
         "manifest": "crates/swarm-ingest-tetragon/Cargo.toml",

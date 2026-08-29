@@ -64,9 +64,9 @@ mod deadline_state_machine_tests {
     use async_trait::async_trait;
     use futures_util::StreamExt;
     use serde::{Deserialize, Serialize};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs::OpenOptions;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -76,9 +76,7 @@ mod deadline_state_machine_tests {
     use swarm_governance::persistence_protocol::*;
     use swarm_governance::witness_engine::store::{
         WitnessAdmissionEntryV1, WitnessAdmissionSetV1, WitnessAtomicStore, WitnessBucketAnchorV1,
-        WitnessBucketConfigurationV1, WitnessBucketEpochV1, WitnessBucketManifestPhaseV1,
-        WitnessBucketManifestV1, WitnessCompressionV1, WitnessDiscardPolicyV1,
-        WitnessPersistenceSemanticsV1, WitnessRetentionPolicyV1, WitnessStorageTypeV1,
+        WitnessBucketEpochV1, WitnessBucketManifestPhaseV1, WitnessBucketManifestV1,
         WitnessStoreCasResultV1, WitnessStoreDeploymentInputsV1, WitnessStoreErrorV1,
         WitnessStoreProxyFailureCodeV1, WitnessStoreProxyOperationV1,
         WitnessStoreProxyRequestBodyV1, WitnessStoreProxyRequestV1,
@@ -1366,60 +1364,13 @@ mod deadline_state_machine_tests {
         let max_manifest_bytes = 1_000_000_u64;
         let required_bucket_bytes = 2 * (max_manifest_bytes + 65_536)
             + admission_set.entries.len() as u64 * 2 * (max_value_bytes + 65_536);
-        let configuration = WitnessBucketConfigurationV1 {
-            schema_version: PROTOCOL_SCHEMA_VERSION,
-            nats_server_version: "2.11.17".to_string(),
-            nats_server_image_index_digest:
-                "sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00"
-                    .to_string(),
-            stream_name: "KV_phase285_service".to_string(),
-            description: "Phase 285 external governance witness".to_string(),
-            subjects: vec!["$KV.phase285_service.>".to_string()],
-            retention: WitnessRetentionPolicyV1::Limits,
-            discard: WitnessDiscardPolicyV1::New,
-            discard_new_per_subject: false,
-            storage: WitnessStorageTypeV1::File,
-            max_messages: -1,
-            max_bytes: i64::try_from(required_bucket_bytes)
+        let configuration = super::nats_config::projected_configuration(
+            "phase285_service",
+            i64::try_from(required_bucket_bytes)
                 .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?,
-            max_messages_per_subject: 1,
-            max_age_nanos: 0,
-            max_consumers: -1,
-            max_message_size: i32::try_from(max_value_bytes)
-                .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?,
-            num_replicas: 1,
-            no_ack: false,
-            duplicate_window_nanos: 120_000_000_000,
-            persistence_semantics: WitnessPersistenceSemanticsV1::Nats21117SynchronousOnly,
-            persist_mode_wire_key_present: false,
-            sealed: false,
-            allow_rollup: false,
-            deny_delete: true,
-            deny_purge: true,
-            allow_direct: false,
-            mirror_direct: false,
-            allow_message_ttl: false,
-            allow_atomic_publish: false,
-            allow_message_schedules: false,
-            allow_message_counter: false,
-            template_owner: String::new(),
-            application_metadata: BTreeMap::new(),
-            server_metadata: BTreeMap::from([
-                ("_nats.level".to_string(), "1".to_string()),
-                ("_nats.req.level".to_string(), "0".to_string()),
-                ("_nats.ver".to_string(), "2.11.17".to_string()),
-            ]),
-            republish_present: false,
-            mirror_present: false,
-            sources_count: 0,
-            subject_transform_present: false,
-            compression: WitnessCompressionV1::Disabled,
-            consumer_limits_present: false,
-            first_sequence: None,
-            placement_present: false,
-            pause_until: None,
-            subject_delete_marker_ttl_nanos: None,
-        };
+            i32::try_from(max_value_bytes).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?,
+            1,
+        );
         fixture_stage("configuration", configuration.validate())?;
         let configuration_digest = configuration.digest()?;
         let epoch = WitnessBucketEpochV1 {
@@ -1872,7 +1823,13 @@ mod deadline_state_machine_tests {
             Err(_) => context
                 .create_stream(async_nats::jetstream::stream::Config {
                     name: "KV_phase285_service".to_string(),
-                    subjects: vec!["$KV.phase285_service.>".to_string()],
+                    subjects: super::nats_config::projected_configuration(
+                        "phase285_service",
+                        1,
+                        1,
+                        1,
+                    )
+                    .subjects,
                     max_messages_per_subject: 1,
                     ..Default::default()
                 })
@@ -2989,45 +2946,16 @@ mod deadline_state_machine_tests {
         server_client_id: u64,
     ) -> ConnectionObservationV1 {
         assert!(server_client_id > 0, "observation server client ID absent");
-        let monitor_url = must(
-            std::env::var("SWARM_NATS_TLS_HTTP_URL"),
-            "observation monitor URL absent",
-        );
-        let output = must(
-            std::process::Command::new("curl")
-                .args([
-                    "--fail",
-                    "--silent",
-                    "--show-error",
-                    "--max-time",
-                    "2",
-                    &format!("{monitor_url}/connz?auth=1&subs=0"),
-                ])
-                .output(),
-            "observation monitor request",
-        );
-        assert!(
-            output.status.success(),
-            "observation monitor refused request"
-        );
-        assert!(
-            !output.stdout.is_empty() && output.stdout.len() <= MAX_PROTOCOL_RECORD_BYTES,
-            "observation monitor response is not bounded"
-        );
-        let response: serde_json::Value = must(
-            serde_json::from_slice(&output.stdout),
-            "observation monitor response invalid",
-        );
-        let connections = must_some(
-            response
-                .get("connections")
-                .and_then(serde_json::Value::as_array),
-            "observation monitor connections absent",
+        let response = must(relay_connz(), "observation monitor request");
+        let connections = must(
+            relay_connz_records(&response),
+            "observation monitor snapshot incomplete",
         );
         let record = must_some(
-            connections.iter().find(|record| {
-                record.get("cid").and_then(serde_json::Value::as_u64) == Some(server_client_id)
-            }),
+            must(
+                relay_record_for_client_id(connections, server_client_id),
+                "observation server connection ambiguous",
+            ),
             "observation server connection absent",
         );
         let authority = ServerConnectionAuthorityV1 {
@@ -3113,6 +3041,8 @@ mod deadline_state_machine_tests {
     }
 
     struct LiveRelayLegsV1 {
+        public_client: async_nats::Client,
+        private_client: async_nats::Client,
         public_client_id: u64,
         private_client_id: u64,
         public_subscription_count: usize,
@@ -3120,6 +3050,380 @@ mod deadline_state_machine_tests {
         held_response: mpsc::Receiver<HeldPublicRelayResponseV1>,
         tasks: Vec<tokio::task::JoinHandle<()>>,
     }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct RelayTeardownEvidenceV1 {
+        tasks_joined: usize,
+        old_identities_absent: usize,
+        clients_drained: usize,
+        public_client_drained: bool,
+        private_client_drained: bool,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct RelayReadinessEvidenceV1 {
+        new_identities_present: usize,
+        public_subscriptions: usize,
+        private_subscriptions: usize,
+        wildcard_subscriptions: usize,
+    }
+
+    fn public_relay_subjects() -> Vec<String> {
+        [
+            WitnessServiceOperationV1::Fence,
+            WitnessServiceOperationV1::Establish,
+            WitnessServiceOperationV1::Discover,
+            WitnessServiceOperationV1::Prepare,
+            WitnessServiceOperationV1::Commit,
+            WitnessServiceOperationV1::Abort,
+            WitnessServiceOperationV1::ReadPrepared,
+            WitnessServiceOperationV1::ReadHead,
+            WitnessServiceOperationV1::FetchPayload,
+        ]
+        .into_iter()
+        .map(|operation| {
+            let ordinary = PublicWitnessServiceConfigV1::subject_for(operation);
+            let suffix = ordinary
+                .strip_prefix("swarm.governance.witness.v1.")
+                .unwrap_or_else(|| panic!("relay public subject prefix differs"));
+            format!("swarm.governance.witness.relay.v1.{suffix}")
+        })
+        .collect()
+    }
+
+    fn private_relay_subjects() -> Vec<String> {
+        store_proxy_subjects()
+            .iter()
+            .map(|ordinary| {
+                let suffix = ordinary
+                    .strip_prefix("swarm.governance.witness.store.v1.")
+                    .unwrap_or_else(|| panic!("relay private subject prefix differs"));
+                format!("swarm.governance.witness.relay.store.v1.{suffix}")
+            })
+            .collect()
+    }
+
+    fn exact_public_relay_subjects() -> BTreeSet<String> {
+        BTreeSet::from([
+            "swarm.governance.witness.relay.v1.fence".to_string(),
+            "swarm.governance.witness.relay.v1.establish".to_string(),
+            "swarm.governance.witness.relay.v1.discover".to_string(),
+            "swarm.governance.witness.relay.v1.prepare".to_string(),
+            "swarm.governance.witness.relay.v1.commit".to_string(),
+            "swarm.governance.witness.relay.v1.abort".to_string(),
+            "swarm.governance.witness.relay.v1.read_prepared".to_string(),
+            "swarm.governance.witness.relay.v1.read_head".to_string(),
+            "swarm.governance.witness.relay.v1.fetch_payload".to_string(),
+        ])
+    }
+
+    fn exact_private_relay_subjects() -> BTreeSet<String> {
+        BTreeSet::from([
+            "swarm.governance.witness.relay.store.v1.inspect_ready".to_string(),
+            "swarm.governance.witness.relay.store.v1.read_entry".to_string(),
+            "swarm.governance.witness.relay.store.v1.compare_and_swap".to_string(),
+        ])
+    }
+
+    fn relay_curl_path() -> ProtocolResult<PathBuf> {
+        let raw = std::env::var("PHASE285_CONNZ_CURL_BIN")
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let path = PathBuf::from(raw);
+        if !path.is_absolute() {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let metadata =
+            std::fs::symlink_metadata(&path).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.mode() & 0o111 == 0
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let canonical =
+            std::fs::canonicalize(&path).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if canonical != path {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(path)
+    }
+
+    fn read_relay_command_pipe<R: Read>(
+        mut reader: R,
+        limit: usize,
+        overflow: std::sync::mpsc::Sender<()>,
+    ) -> std::io::Result<(Vec<u8>, bool)> {
+        let mut captured = Vec::with_capacity(limit.min(8_192));
+        let mut total = 0_usize;
+        let mut exceeded = false;
+        let mut chunk = [0_u8; 8_192];
+        loop {
+            let read = reader.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            total = total.checked_add(read).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "relay pipe length overflow",
+                )
+            })?;
+            if total > limit {
+                if !exceeded {
+                    exceeded = true;
+                    let _ = overflow.send(());
+                }
+            } else {
+                captured.extend_from_slice(&chunk[..read]);
+            }
+        }
+        Ok((captured, exceeded))
+    }
+
+    fn relay_connz() -> ProtocolResult<serde_json::Value> {
+        let monitor_url = std::env::var("SWARM_NATS_TLS_HTTP_URL")
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let maximum = MAX_PROTOCOL_RECORD_BYTES.to_string();
+        let mut child = std::process::Command::new(relay_curl_path()?)
+            .args([
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "2",
+                "--max-filesize",
+                &maximum,
+                &format!("{monitor_url}/connz?auth=1&subs=1"),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        };
+        let (overflow_tx, overflow_rx) = std::sync::mpsc::channel();
+        let stderr_overflow_tx = overflow_tx.clone();
+        let stdout_reader = std::thread::spawn(move || {
+            read_relay_command_pipe(stdout, MAX_PROTOCOL_RECORD_BYTES, overflow_tx)
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            read_relay_command_pipe(stderr, MAX_PROTOCOL_RECORD_BYTES, stderr_overflow_tx)
+        });
+        let deadline = MonotonicInstant::now() + Duration::from_secs(3);
+        let mut overflowed = false;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {}
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(ProtocolError::WitnessOutcomeMismatch);
+                }
+            }
+            if overflow_rx.recv_timeout(Duration::from_millis(10)).is_ok()
+                || MonotonicInstant::now() >= deadline
+            {
+                overflowed = true;
+                let _ = child.kill();
+                break child
+                    .wait()
+                    .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+            }
+        };
+        let (stdout, stdout_exceeded) = stdout_reader
+            .join()
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        let (_stderr, stderr_exceeded) = stderr_reader
+            .join()
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?
+            .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if overflowed
+            || stdout_exceeded
+            || stderr_exceeded
+            || !status.success()
+            || stdout.is_empty()
+        {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        serde_json::from_slice(&stdout).map_err(|_| ProtocolError::WitnessOutcomeMismatch)
+    }
+
+    fn relay_connz_records(value: &serde_json::Value) -> ProtocolResult<&Vec<serde_json::Value>> {
+        let records = value
+            .get("connections")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let offset = value
+            .get("offset")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let total = value
+            .get("total")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let limit = value
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let num_connections = value
+            .get("num_connections")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let observed =
+            u64::try_from(records.len()).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+        if offset != 0 || total != num_connections || num_connections != observed || limit < total {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let mut client_ids = BTreeSet::new();
+        for record in records {
+            let client_id = record
+                .get("cid")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+            if client_id == 0 || !client_ids.insert(client_id) {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+        }
+        Ok(records)
+    }
+
+    fn relay_record_for_client_id(
+        records: &[serde_json::Value],
+        client_id: u64,
+    ) -> ProtocolResult<Option<&serde_json::Value>> {
+        if client_id == 0 {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        let mut matches = records.iter().filter(|record| {
+            record.get("cid").and_then(serde_json::Value::as_u64) == Some(client_id)
+        });
+        let record = matches.next();
+        if matches.next().is_some() {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(record)
+    }
+
+    fn relay_record_subjects(record: &serde_json::Value) -> ProtocolResult<BTreeSet<String>> {
+        let declared = record
+            .get("subscriptions")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let values = match record
+            .get("subscriptions_list")
+            .and_then(serde_json::Value::as_array)
+        {
+            Some(values) => values.as_slice(),
+            None if declared == 0 => &[],
+            None => return Err(ProtocolError::WitnessOutcomeMismatch),
+        };
+        let mut subjects = BTreeSet::new();
+        for value in values {
+            let subject = value
+                .as_str()
+                .ok_or(ProtocolError::WitnessOutcomeMismatch)?
+                .to_string();
+            if !subjects.insert(subject) {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+        }
+        if u64::try_from(subjects.len()).ok() != Some(declared) {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
+        Ok(subjects)
+    }
+
+    fn relay_subject_sets_are_exact(
+        public_subjects: &BTreeSet<String>,
+        private_subjects: &BTreeSet<String>,
+        expected_public: &BTreeSet<String>,
+        expected_private: &BTreeSet<String>,
+    ) -> bool {
+        public_subjects == expected_public && private_subjects == expected_private
+    }
+
+    async fn await_relay_subject_sets(
+        public_client_id: u64,
+        private_client_id: u64,
+        expected_public: &BTreeSet<String>,
+        expected_private: &BTreeSet<String>,
+    ) -> ProtocolResult<RelayReadinessEvidenceV1> {
+        let expected_user = credential_user("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let connz = relay_connz()?;
+            let records = relay_connz_records(&connz)?;
+            if let (Some(public_record), Some(private_record)) = (
+                relay_record_for_client_id(records, public_client_id)?,
+                relay_record_for_client_id(records, private_client_id)?,
+            ) {
+                let authority_is_exact =
+                    [public_record, private_record].into_iter().all(|record| {
+                        record.get("account").and_then(serde_json::Value::as_str)
+                            == Some("PHASE285_RELAY")
+                            && record
+                                .get("authorized_user")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(expected_user.as_str())
+                    });
+                let public_subjects = relay_record_subjects(public_record)?;
+                let private_subjects = relay_record_subjects(private_record)?;
+                if authority_is_exact
+                    && relay_subject_sets_are_exact(
+                        &public_subjects,
+                        &private_subjects,
+                        expected_public,
+                        expected_private,
+                    )
+                {
+                    let wildcard_subscriptions = public_subjects
+                        .iter()
+                        .chain(private_subjects.iter())
+                        .filter(|subject| subject.contains('*') || subject.contains('>'))
+                        .count();
+                    if wildcard_subscriptions != 0 {
+                        return Err(ProtocolError::WitnessOutcomeMismatch);
+                    }
+                    return Ok(RelayReadinessEvidenceV1 {
+                        new_identities_present: 2,
+                        public_subscriptions: public_subjects.len(),
+                        private_subscriptions: private_subjects.len(),
+                        wildcard_subscriptions,
+                    });
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn await_relay_identities_absent(
+        public_client_id: u64,
+        private_client_id: u64,
+    ) -> ProtocolResult<()> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let connz = relay_connz()?;
+            let records = relay_connz_records(&connz)?;
+            let old_present = relay_record_for_client_id(records, public_client_id)?.is_some()
+                || relay_record_for_client_id(records, private_client_id)?.is_some();
+            if !old_present {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    type RelayPrivateReleaseControlV1 = (oneshot::Sender<(u64, u64)>, oneshot::Receiver<()>);
 
     impl LiveRelayLegsV1 {
         async fn start(hold_first_read_head: bool) -> ProtocolResult<Self> {
@@ -3129,6 +3433,42 @@ mod deadline_state_machine_tests {
         async fn start_selective(
             hold_first_read_head: bool,
             omission: RelaySubscriptionOmissionV1,
+        ) -> ProtocolResult<Self> {
+            Self::start_selective_with_private_release(hold_first_read_head, omission, None).await
+        }
+
+        async fn start_after_private_release(
+            hold_first_read_head: bool,
+            private_gate_reached: oneshot::Sender<(u64, u64)>,
+            private_release: oneshot::Receiver<()>,
+        ) -> ProtocolResult<Self> {
+            Self::start_selective_with_private_release(
+                hold_first_read_head,
+                RelaySubscriptionOmissionV1::None,
+                Some((private_gate_reached, private_release)),
+            )
+            .await
+        }
+
+        #[allow(dead_code)]
+        async fn start_with_zero_sleep_control(
+            hold_first_read_head: bool,
+            private_gate_reached: oneshot::Sender<(u64, u64)>,
+            private_release: oneshot::Receiver<()>,
+        ) -> ProtocolResult<Self> {
+            drop(private_release);
+            tokio::time::sleep(Duration::ZERO).await;
+            let legs = Self::start(hold_first_read_head).await?;
+            private_gate_reached
+                .send((legs.public_client_id, legs.private_client_id))
+                .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+            Ok(legs)
+        }
+
+        async fn start_selective_with_private_release(
+            hold_first_read_head: bool,
+            omission: RelaySubscriptionOmissionV1,
+            private_release: Option<RelayPrivateReleaseControlV1>,
         ) -> ProtocolResult<Self> {
             let public_client =
                 connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?;
@@ -3144,10 +3484,10 @@ mod deadline_state_machine_tests {
             }
             let (held_sender, held_response) = mpsc::channel(1);
             let held_once = Arc::new(AtomicBool::new(false));
-            let mut tasks = Vec::new();
+            let mut public_subscriptions = Vec::new();
             let mut public_subscription_count = 0;
             if omission != RelaySubscriptionOmissionV1::Public {
-                for operation in [
+                for (operation, routed) in [
                     WitnessServiceOperationV1::Fence,
                     WitnessServiceOperationV1::Establish,
                     WitnessServiceOperationV1::Discover,
@@ -3157,91 +3497,53 @@ mod deadline_state_machine_tests {
                     WitnessServiceOperationV1::ReadPrepared,
                     WitnessServiceOperationV1::ReadHead,
                     WitnessServiceOperationV1::FetchPayload,
-                ] {
-                    let ordinary = PublicWitnessServiceConfigV1::subject_for(operation);
-                    let suffix = ordinary
-                        .strip_prefix("swarm.governance.witness.v1.")
+                ]
+                .into_iter()
+                .zip(public_relay_subjects())
+                {
+                    let suffix = routed
+                        .strip_prefix("swarm.governance.witness.relay.v1.")
                         .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
-                    let routed = format!("swarm.governance.witness.relay.v1.{suffix}");
                     let forward = format!("swarm.governance.witness.relay.forward.v1.{suffix}");
-                    let mut subscriber = public_client
+                    let subscriber = public_client
                         .subscribe(routed)
                         .await
                         .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
                     public_subscription_count += 1;
-                    let client = public_client.clone();
-                    let held_sender = held_sender.clone();
-                    let held_once = held_once.clone();
-                    tasks.push(tokio::spawn(async move {
-                        while let Some(message) = subscriber.next().await {
-                            let Some(reply) = message.reply.clone() else {
-                                continue;
-                            };
-                            let request_bytes = message.payload.to_vec();
-                            let Ok(response) =
-                                client.request(forward.clone(), message.payload).await
-                            else {
-                                continue;
-                            };
-                            let response_bytes = response.payload.to_vec();
-                            let should_hold = hold_first_read_head
-                                && operation == WitnessServiceOperationV1::ReadHead
-                                && !held_once.swap(true, Ordering::SeqCst);
-                            if should_hold {
-                                let (decision, decision_receiver) = oneshot::channel();
-                                if held_sender
-                                    .send(HeldPublicRelayResponseV1 {
-                                        request_bytes,
-                                        response_bytes: response_bytes.clone(),
-                                        decision,
-                                    })
-                                    .await
-                                    .is_err()
-                                {
-                                    continue;
-                                }
-                                if !matches!(decision_receiver.await, Ok(true)) {
-                                    continue;
-                                }
-                            }
-                            if client.publish(reply, response_bytes.into()).await.is_ok() {
-                                let _ = client.flush().await;
-                            }
-                        }
-                    }));
+                    public_subscriptions.push((operation, forward, subscriber));
                 }
             }
+            let mut private_subscriptions = Vec::new();
             let mut private_subscription_count = 0;
             if omission != RelaySubscriptionOmissionV1::Private {
-                for (index, ordinary) in store_proxy_subjects().iter().enumerate() {
-                    let suffix = ordinary
-                        .strip_prefix("swarm.governance.witness.store.v1.")
+                if let Some((gate_reached, release)) = private_release {
+                    public_client
+                        .flush()
+                        .await
+                        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                    private_client
+                        .flush()
+                        .await
+                        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                    gate_reached
+                        .send((public_client_id, private_client_id))
+                        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                    release
+                        .await
+                        .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+                }
+                for (index, routed) in private_relay_subjects().into_iter().enumerate() {
+                    let suffix = routed
+                        .strip_prefix("swarm.governance.witness.relay.store.v1.")
                         .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
-                    let routed = format!("swarm.governance.witness.relay.store.v1.{suffix}");
                     let forward =
                         format!("swarm.governance.witness.relay.forward.store.v1.{suffix}");
-                    let mut subscriber = private_client
+                    let subscriber = private_client
                         .subscribe(routed)
                         .await
                         .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
                     private_subscription_count += 1;
-                    let client = private_client.clone();
-                    tasks.push(tokio::spawn(async move {
-                        while let Some(message) = subscriber.next().await {
-                            let Some(reply) = message.reply.clone() else {
-                                continue;
-                            };
-                            let Ok(response) =
-                                client.request(forward.clone(), message.payload).await
-                            else {
-                                continue;
-                            };
-                            if client.publish(reply, response.payload).await.is_ok() {
-                                let _ = client.flush().await;
-                            }
-                        }
-                        let _ = index;
-                    }));
+                    private_subscriptions.push((index, forward, subscriber));
                 }
             }
             public_client
@@ -3252,7 +3554,69 @@ mod deadline_state_machine_tests {
                 .flush()
                 .await
                 .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
+            let mut tasks = Vec::new();
+            for (operation, forward, mut subscriber) in public_subscriptions {
+                let client = public_client.clone();
+                let held_sender = held_sender.clone();
+                let held_once = held_once.clone();
+                tasks.push(tokio::spawn(async move {
+                    while let Some(message) = subscriber.next().await {
+                        let Some(reply) = message.reply.clone() else {
+                            continue;
+                        };
+                        let request_bytes = message.payload.to_vec();
+                        let Ok(response) = client.request(forward.clone(), message.payload).await
+                        else {
+                            continue;
+                        };
+                        let response_bytes = response.payload.to_vec();
+                        let should_hold = hold_first_read_head
+                            && operation == WitnessServiceOperationV1::ReadHead
+                            && !held_once.swap(true, Ordering::SeqCst);
+                        if should_hold {
+                            let (decision, decision_receiver) = oneshot::channel();
+                            if held_sender
+                                .send(HeldPublicRelayResponseV1 {
+                                    request_bytes,
+                                    response_bytes: response_bytes.clone(),
+                                    decision,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                continue;
+                            }
+                            if !matches!(decision_receiver.await, Ok(true)) {
+                                continue;
+                            }
+                        }
+                        if client.publish(reply, response_bytes.into()).await.is_ok() {
+                            let _ = client.flush().await;
+                        }
+                    }
+                }));
+            }
+            for (index, forward, mut subscriber) in private_subscriptions {
+                let client = private_client.clone();
+                tasks.push(tokio::spawn(async move {
+                    while let Some(message) = subscriber.next().await {
+                        let Some(reply) = message.reply.clone() else {
+                            continue;
+                        };
+                        let Ok(response) = client.request(forward.clone(), message.payload).await
+                        else {
+                            continue;
+                        };
+                        if client.publish(reply, response.payload).await.is_ok() {
+                            let _ = client.flush().await;
+                        }
+                    }
+                    let _ = index;
+                }));
+            }
             Ok(Self {
+                public_client,
+                private_client,
                 public_client_id,
                 private_client_id,
                 public_subscription_count,
@@ -3262,10 +3626,118 @@ mod deadline_state_machine_tests {
             })
         }
 
-        fn stop(self) {
-            for task in self.tasks {
+        async fn stop_and_confirm(mut self) -> ProtocolResult<RelayTeardownEvidenceV1> {
+            let task_inventory_valid = self.tasks.len() == 12;
+            for task in &self.tasks {
                 task.abort();
             }
+            let shutdown_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let mut tasks_joined = 0_usize;
+            let mut task_joins_valid = true;
+            while let Some(mut task) = self.tasks.pop() {
+                match tokio::time::timeout_at(shutdown_deadline, &mut task).await {
+                    Ok(Err(error)) if error.is_cancelled() => match tasks_joined.checked_add(1) {
+                        Some(count) => tasks_joined = count,
+                        None => task_joins_valid = false,
+                    },
+                    Ok(Ok(())) | Ok(Err(_)) | Err(_) => task_joins_valid = false,
+                }
+            }
+            let mut clients_drained = 0_usize;
+            let public_client_drained = matches!(
+                tokio::time::timeout_at(shutdown_deadline, self.public_client.drain()).await,
+                Ok(Ok(()))
+            );
+            if public_client_drained {
+                clients_drained += 1;
+            }
+            let private_client_drained = matches!(
+                tokio::time::timeout_at(shutdown_deadline, self.private_client.drain()).await,
+                Ok(Ok(()))
+            );
+            if private_client_drained {
+                clients_drained += 1;
+            }
+            let identities_absent =
+                await_relay_identities_absent(self.public_client_id, self.private_client_id)
+                    .await
+                    .is_ok();
+            let evidence = RelayTeardownEvidenceV1 {
+                tasks_joined,
+                old_identities_absent: usize::from(identities_absent) * 2,
+                clients_drained,
+                public_client_drained,
+                private_client_drained,
+            };
+            if task_inventory_valid
+                && task_joins_valid
+                && tasks_joined == 12
+                && clients_drained == 2
+                && identities_absent
+            {
+                Ok(evidence)
+            } else {
+                Err(ProtocolError::WitnessOutcomeMismatch)
+            }
+        }
+
+        #[allow(dead_code)]
+        async fn abort_only_for_control(mut self) -> ProtocolResult<RelayTeardownEvidenceV1> {
+            if self.tasks.len() != 12 {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            for task in &self.tasks {
+                task.abort();
+            }
+            let connz = relay_connz()?;
+            let records = relay_connz_records(&connz)?;
+            let mut old_identities_present = 0_usize;
+            for client_id in [self.public_client_id, self.private_client_id] {
+                if relay_record_for_client_id(records, client_id)?.is_some() {
+                    old_identities_present += 1;
+                }
+            }
+            if old_identities_present != 2 {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            self.tasks.clear();
+            Ok(RelayTeardownEvidenceV1 {
+                tasks_joined: 0,
+                old_identities_absent: 0,
+                clients_drained: 0,
+                public_client_drained: false,
+                private_client_drained: false,
+            })
+        }
+
+        async fn confirm_ready(
+            &self,
+            old_public_client_id: u64,
+            old_private_client_id: u64,
+        ) -> ProtocolResult<RelayReadinessEvidenceV1> {
+            if self.public_client_id == 0
+                || self.private_client_id == 0
+                || self.public_client_id == self.private_client_id
+                || [self.public_client_id, self.private_client_id]
+                    .into_iter()
+                    .any(|current| {
+                        current == old_public_client_id || current == old_private_client_id
+                    })
+            {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            let expected_public = exact_public_relay_subjects();
+            let expected_private = exact_private_relay_subjects();
+            if expected_public.len() != 9 || expected_private.len() != 3 {
+                return Err(ProtocolError::WitnessOutcomeMismatch);
+            }
+            await_relay_subject_sets(
+                self.public_client_id,
+                self.private_client_id,
+                &expected_public,
+                &expected_private,
+            )
+            .await
         }
     }
 
@@ -4273,21 +4745,26 @@ mod deadline_state_machine_tests {
             ),
             "observation ReadHead request",
         );
+        let request_bytes = must(request.canonical_bytes(), "observation request bytes");
         let relay_origin = Arc::new(MonotonicInstant::now());
         let first_request_started_at_micros = Arc::new(AtomicU64::new(0));
         let mut held_relay_response = None;
         let mut first_request_task = None;
         let response = if let Some(relay) = relay_legs.as_mut() {
             let client = runtime_client.clone();
-            let spawned_request = request.clone();
+            let spawned_request_bytes = request_bytes.clone();
+            let request_subject = PublicWitnessServiceConfigV1::subject_for(request.operation);
             let origin = relay_origin.clone();
             let request_started = first_request_started_at_micros.clone();
             first_request_task = Some(tokio::spawn(async move {
+                let observed = u64::try_from(origin.elapsed().as_micros())
+                    .unwrap_or_else(|_| panic!("relay first-request timestamp overflow"));
+                request_started.store(observed, Ordering::SeqCst);
                 client
-                    .read_head_with_request_start_observation(
-                        spawned_request,
-                        origin.as_ref(),
-                        request_started.as_ref(),
+                    .observe_transport_message_for_test(
+                        request_subject,
+                        spawned_request_bytes,
+                        Duration::from_millis(PUBLIC_RESPONSE_GRANT_MILLIS),
                     )
                     .await
             }));
@@ -4301,8 +4778,7 @@ mod deadline_state_machine_tests {
             );
             let held = must_some(held, "relay held response absent");
             assert_eq!(
-                held.request_bytes,
-                must(request.canonical_bytes(), "relay held request bytes"),
+                held.request_bytes, request_bytes,
                 "relay held request differs"
             );
             let decoded = must(
@@ -4519,7 +4995,6 @@ mod deadline_state_machine_tests {
             "observation request target differs from selected head"
         );
 
-        let request_bytes = must(request.canonical_bytes(), "observation request bytes");
         let response_bytes = must(
             WitnessServiceResponseV1::Read(response.clone()).canonical_bytes(),
             "observation response bytes",
@@ -4739,11 +5214,52 @@ mod deadline_state_machine_tests {
                 held.decision.send(false).is_ok(),
                 "live relay suppression decision was not delivered"
             );
+            must(
+                runtime_client.drain_for_test().await,
+                "accepted relay requester drain",
+            );
             let first = must_some(first_request_task.take(), "live relay request task absent");
             let first = must(first.await, "live relay request task panicked");
+            let (post_accept_kind_text, post_accept_shipping_text) = match &first {
+                Err((
+                    RuntimeRequestObservationV1::Other,
+                    RuntimeWitnessClientErrorV1::OutcomeUnknown,
+                )) => ("other", "outcome_unknown"),
+                Err((
+                    RuntimeRequestObservationV1::NoResponders,
+                    RuntimeWitnessClientErrorV1::Unavailable,
+                )) => ("no_responders", "unavailable"),
+                Err((
+                    RuntimeRequestObservationV1::TimedOut,
+                    RuntimeWitnessClientErrorV1::OutcomeUnknown,
+                )) => ("timed_out", "outcome_unknown"),
+                Err((
+                    RuntimeRequestObservationV1::InvalidSubject,
+                    RuntimeWitnessClientErrorV1::Configuration,
+                )) => ("invalid_subject", "configuration"),
+                Err(_) => ("other_error", "other_error"),
+                Ok(_) => ("response", "response"),
+            };
+            println!(
+                "relay_recreation_observation case=post_accept kind={post_accept_kind_text} shipping={post_accept_shipping_text} persisted=1"
+            );
             assert!(
-                matches!(first, Err(RuntimeWitnessClientErrorV1::OutcomeUnknown)),
-                "live relay loss was not requester-observed timeout"
+                matches!(
+                    &first,
+                    Err((
+                        RuntimeRequestObservationV1::Other,
+                        RuntimeWitnessClientErrorV1::OutcomeUnknown
+                    ))
+                ),
+                "other_kind"
+            );
+            let post_accept_kind = match &first {
+                Err((kind, _)) => *kind,
+                Ok(_) => panic!("live relay accepted loss returned a response"),
+            };
+            assert!(
+                !post_accept_kind.is_replay_response(),
+                "other_accepted_as_replay"
             );
             let first_legs = must_some(relay_legs.take(), "live relay legs absent");
             let first_public_client_id = first_legs.public_client_id;
@@ -4762,30 +5278,204 @@ mod deadline_state_machine_tests {
                 "relay",
                 first_private_client_id,
             );
-            first_legs.stop();
-            tokio::task::yield_now().await;
-            let replay_legs = must(
-                LiveRelayLegsV1::start(false).await,
-                "replay relay legs startup",
+            let teardown = must(
+                first_legs.stop_and_confirm().await,
+                "old_relay_identity_present",
             );
+            assert_eq!(
+                teardown.old_identities_absent, 2,
+                "old_relay_identity_present"
+            );
+            assert_eq!(teardown.tasks_joined, 12, "relay_task_join_cardinality");
+            assert!(
+                teardown.public_client_drained,
+                "old_public_relay_identity_present"
+            );
+            assert!(
+                teardown.private_client_drained,
+                "old_private_relay_identity_present"
+            );
+            let (startup_failure_gate_sender, startup_failure_gate_receiver) = oneshot::channel();
+            let (startup_failure_release_sender, startup_failure_release_receiver) =
+                oneshot::channel();
+            let startup_failure = tokio::spawn(LiveRelayLegsV1::start_after_private_release(
+                false,
+                startup_failure_gate_sender,
+                startup_failure_release_receiver,
+            ));
+            let (failed_public_client_id, failed_private_client_id) = must(
+                must(
+                    tokio::time::timeout(Duration::from_secs(5), startup_failure_gate_receiver)
+                        .await,
+                    "relay startup-failure gate deadline",
+                ),
+                "relay startup-failure gate closed",
+            );
+            drop(startup_failure_release_sender);
+            let startup_failure = must(
+                tokio::time::timeout(Duration::from_secs(5), startup_failure).await,
+                "relay startup-failure task deadline",
+            );
+            assert!(
+                matches!(
+                    startup_failure,
+                    Ok(Err(ProtocolError::WitnessOutcomeMismatch))
+                ),
+                "relay_startup_failure_not_rejected"
+            );
+            must(
+                await_relay_identities_absent(failed_public_client_id, failed_private_client_id)
+                    .await,
+                "relay_startup_failure_residue",
+            );
+            println!(
+                "relay_recreation_startup_failure public_tasks_spawned=0 private_tasks_spawned=0 identities_absent=2 passed=1"
+            );
+            let replay_client = Arc::new(must(
+                RuntimeWitnessClient::connect(runtime_observation_config()).await,
+                "relay replay runtime connection",
+            ));
+            let no_responders = replay_client
+                .observe_transport_for_test(
+                    PublicWitnessServiceConfigV1::subject_for(request.operation),
+                    request_bytes.clone(),
+                    Duration::from_secs(2),
+                )
+                .await;
+            let (no_responders_kind_text, no_responders_shipping_text) = match &no_responders {
+                Err((
+                    RuntimeRequestObservationV1::NoResponders,
+                    RuntimeWitnessClientErrorV1::Unavailable,
+                )) => ("no_responders", "unavailable"),
+                Err((
+                    RuntimeRequestObservationV1::Other,
+                    RuntimeWitnessClientErrorV1::OutcomeUnknown,
+                )) => ("other", "outcome_unknown"),
+                Err((
+                    RuntimeRequestObservationV1::TimedOut,
+                    RuntimeWitnessClientErrorV1::OutcomeUnknown,
+                )) => ("timed_out", "outcome_unknown"),
+                Err((
+                    RuntimeRequestObservationV1::InvalidSubject,
+                    RuntimeWitnessClientErrorV1::Configuration,
+                )) => ("invalid_subject", "configuration"),
+                Err(_) => ("other_error", "other_error"),
+                Ok(_) => ("response", "response"),
+            };
+            println!(
+                "relay_recreation_observation case=no_responders kind={no_responders_kind_text} shipping={no_responders_shipping_text} persisted=1"
+            );
+            assert!(
+                matches!(
+                    &no_responders,
+                    Err((
+                        RuntimeRequestObservationV1::NoResponders,
+                        RuntimeWitnessClientErrorV1::Unavailable
+                    ))
+                ),
+                "no_responders_kind"
+            );
+            let no_responders_kind = match &no_responders {
+                Err((kind, _)) => *kind,
+                Ok(_) => panic!("relay absence unexpectedly returned a response"),
+            };
+            assert!(
+                !no_responders_kind.is_replay_response(),
+                "no_responders_accepted_as_replay"
+            );
+            let (private_gate_reached_sender, private_gate_reached_receiver) = oneshot::channel();
+            let (private_release_sender, private_release_receiver) = oneshot::channel();
+            let replay_start = tokio::spawn(LiveRelayLegsV1::start_after_private_release(
+                false,
+                private_gate_reached_sender,
+                private_release_receiver,
+            ));
+            let (pending_public_client_id, pending_private_client_id) = must(
+                must(
+                    tokio::time::timeout(Duration::from_secs(5), private_gate_reached_receiver)
+                        .await,
+                    "relay private readiness gate deadline",
+                ),
+                "relay private readiness gate closed",
+            );
+            assert!(
+                !replay_start.is_finished(),
+                "delayed_readiness_completed_early"
+            );
+            let expected_pending_public = exact_public_relay_subjects();
+            let expected_pending_private = BTreeSet::new();
+            let pending_readiness = must(
+                await_relay_subject_sets(
+                    pending_public_client_id,
+                    pending_private_client_id,
+                    &expected_pending_public,
+                    &expected_pending_private,
+                )
+                .await,
+                "delayed_readiness_completed_early",
+            );
+            assert_eq!(
+                pending_readiness.public_subscriptions, 9,
+                "public_subscription_set"
+            );
+            assert_eq!(
+                pending_readiness.private_subscriptions, 0,
+                "private_subscription_set"
+            );
+            assert!(
+                private_release_sender.send(()).is_ok(),
+                "relay private readiness release failed"
+            );
+            let replay_legs = must(
+                must(
+                    tokio::time::timeout(Duration::from_secs(5), replay_start).await,
+                    "replay relay startup deadline",
+                ),
+                "replay relay startup task",
+            );
+            let replay_legs = must(replay_legs, "replay relay legs startup");
             let replay_public_client_id = replay_legs.public_client_id;
             let replay_private_client_id = replay_legs.private_client_id;
-            assert_eq!(
-                [
-                    first_public_client_id,
-                    first_private_client_id,
-                    replay_public_client_id,
-                    replay_private_client_id,
-                ]
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len(),
-                4,
-                "relay leg identities were not recreated"
+            let readiness = must(
+                replay_legs
+                    .confirm_ready(first_public_client_id, first_private_client_id)
+                    .await,
+                "relay replacement readiness",
+            );
+            assert!(
+                replay_legs
+                    .confirm_ready(replay_public_client_id, first_private_client_id)
+                    .await
+                    .is_err(),
+                "relay_identity_reuse_accepted"
+            );
+            let exact_public = exact_public_relay_subjects();
+            let exact_private = exact_private_relay_subjects();
+            let mut missing_public = exact_public.clone();
+            assert!(missing_public.pop_first().is_some());
+            assert!(
+                !relay_subject_sets_are_exact(
+                    &exact_public,
+                    &exact_private,
+                    &missing_public,
+                    &exact_private,
+                ),
+                "public_subscription_set"
+            );
+            let mut missing_private = exact_private.clone();
+            assert!(missing_private.pop_first().is_some());
+            assert!(
+                !relay_subject_sets_are_exact(
+                    &exact_public,
+                    &exact_private,
+                    &exact_public,
+                    &missing_private,
+                ),
+                "private_subscription_set"
             );
             let replay_request_started_at_micros = AtomicU64::new(0);
             let replay = must(
-                runtime_client
+                replay_client
                     .read_head_with_request_start_observation(
                         request.clone(),
                         relay_origin.as_ref(),
@@ -4793,6 +5483,11 @@ mod deadline_state_machine_tests {
                     )
                     .await,
                 "live relay replay response",
+            );
+            let replay_kind = RuntimeRequestObservationV1::Response;
+            assert!(
+                replay_kind.is_replay_response(),
+                "relay replay predicate refused response"
             );
             must(replay.validate(), "live relay replay attestation");
             assert_eq!(replay, response, "live relay replay response differs");
@@ -4837,7 +5532,8 @@ mod deadline_state_machine_tests {
                     "replay_request_started_at_micros": replay_request_started,
                     "relay_connections": relay_connections,
                     "relay_connection_client_ids": [first_public_client_id, first_private_client_id, replay_public_client_id, replay_private_client_id],
-                    "requester_timeout": true,
+                    "post_accept_other_outcome_unknown": true,
+                    "no_responders_unavailable": true,
                     "replay_forwarded": true,
                 });
                 let relay_bytes = must(
@@ -4856,9 +5552,27 @@ mod deadline_state_machine_tests {
                 must(file.write_all(b"\n"), "relay ledger frame");
                 must(file.sync_all(), "relay ledger sync");
             }
-            replay_legs.stop();
+            must(
+                replay_legs.stop_and_confirm().await,
+                "replay relay quiescent teardown",
+            );
             println!(
-                "relay_positive public_legs=2 private_legs=2 complete_receipt=1 requester_timeout=1 replay=1 typed_read_head=1 passed=1"
+                "relay_recreation_errors no_responders=1 no_responders_unavailable=1 post_accept_other=1 post_accept_other_outcome_unknown=1 rejected_as_replay=2 passed=1"
+            );
+            println!(
+                "relay_recreation_teardown tasks_joined={} old_absent={} drained={} passed=1",
+                teardown.tasks_joined, teardown.old_identities_absent, teardown.clients_drained,
+            );
+            println!(
+                "relay_recreation_readiness delayed_pending=1 new_present={} public_subscriptions={} private_subscriptions={} wildcard={} passed=1",
+                readiness.new_identities_present,
+                readiness.public_subscriptions,
+                readiness.private_subscriptions,
+                readiness.wildcard_subscriptions,
+            );
+            println!("relay_replay_request_outcome kind=response passed=1");
+            println!(
+                "relay_positive public_legs=2 private_legs=2 complete_receipt=1 outcome_unknown=1 replay=1 typed_read_head=1 passed=1"
             );
         }
         bytes
@@ -7399,7 +8113,12 @@ mod deadline_state_machine_tests {
             };
             drop(public_runner);
             drop(store_runner);
-            must_some(relay_legs, "response grant relay legs absent").stop();
+            must(
+                must_some(relay_legs, "response grant relay legs absent")
+                    .stop_and_confirm()
+                    .await,
+                "response grant relay teardown",
+            );
             println!(
                 "response_grant_recovery leg={leg:?} mode=NoHold physical_case={physical_case} grant_millis={grant_millis} relay_path=1 first_payload_captured=1 {case_fields} parent_join_digest={parent_join_digest} terminal_attempts=1 terminal_applied=1 additional_cas_applied=0 no_hold_reply=1 passed=1"
             );
@@ -8018,8 +8737,12 @@ mod deadline_state_machine_tests {
         }
         drop(public_runner);
         drop(store_runner);
-        must_some(relay_legs, "response grant relay legs absent").stop();
-        tokio::task::yield_now().await;
+        must(
+            must_some(relay_legs, "response grant relay legs absent")
+                .stop_and_confirm()
+                .await,
+            "response grant relay teardown",
+        );
         let case_fields = match leg {
             GrantExpiryLegV1::Public => format!(
                 "public_lost_replay_bytes_identical=1 operand_receipt_digest={}",

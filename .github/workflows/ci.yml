@@ -163,6 +163,8 @@ jobs:
           PHASE285_SHASUM=/usr/bin/shasum
           PHASE285_AWK=/usr/bin/awk
           PHASE285_MKTEMP=/usr/bin/mktemp
+          PHASE285_CONNZ_CURL_BIN=/usr/bin/curl
+          export PHASE285_CONNZ_CURL_BIN
           PHASE285_RUSTUP="$(command -v rustup)"
           PHASE285_CARGO="$("$PHASE285_RUSTUP" which cargo)"
           PHASE285_RUSTC="$("$PHASE285_RUSTUP" which rustc)"
@@ -182,6 +184,7 @@ jobs:
               shasum "$PHASE285_SHASUM" \
               awk "$PHASE285_AWK" \
               mktemp "$PHASE285_MKTEMP" \
+              curl "$PHASE285_CONNZ_CURL_BIN" \
               rustup "$PHASE285_RUSTUP" \
               cargo "$PHASE285_CARGO" \
               rustc "$PHASE285_RUSTC" \
@@ -473,7 +476,7 @@ jobs:
           CLIPPY_DRIVER="$PHASE285_CLIPPY_DRIVER"
           CLIPPY_CONF_DIR="$PWD"
           export PATH RUSTC RUSTFMT CLIPPY_DRIVER CLIPPY_CONF_DIR
-          readonly PATH RUSTC RUSTFMT CLIPPY_DRIVER CLIPPY_CONF_DIR PHASE285_BASH PHASE285_GIT PHASE285_PYTHON PHASE285_SHASUM PHASE285_AWK PHASE285_MKTEMP PHASE285_RUSTUP PHASE285_CARGO PHASE285_RUSTC PHASE285_RUSTFMT PHASE285_CARGO_CLIPPY PHASE285_CLIPPY_DRIVER PHASE285_SYSROOT PHASE285_GO PHASE285_SHELLCHECK PHASE285_DOCKER PHASE285_ACTIONLINT PHASE285_CANDIDATE_TREE PHASE285_CANDIDATE_BASELINE PHASE285_CANDIDATE_BASELINE_SHA256
+          readonly PATH RUSTC RUSTFMT CLIPPY_DRIVER CLIPPY_CONF_DIR PHASE285_BASH PHASE285_GIT PHASE285_PYTHON PHASE285_SHASUM PHASE285_AWK PHASE285_MKTEMP PHASE285_CONNZ_CURL_BIN PHASE285_RUSTUP PHASE285_CARGO PHASE285_RUSTC PHASE285_RUSTFMT PHASE285_CARGO_CLIPPY PHASE285_CLIPPY_DRIVER PHASE285_SYSROOT PHASE285_GO PHASE285_SHELLCHECK PHASE285_DOCKER PHASE285_ACTIONLINT PHASE285_CANDIDATE_TREE PHASE285_CANDIDATE_BASELINE PHASE285_CANDIDATE_BASELINE_SHA256
           PHASE285_ACTIVE_TARGET=
           PHASE285_ACTIVE_TARGET_IDENTITY=
           verify_candidate_inventory() {
@@ -900,7 +903,7 @@ jobs:
           trap verify_candidate_inventory_on_exit EXIT
 
           PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1
-          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=b45039413b2f5d9c137b598262a9680a19e371a53ce102a37047ab41857a88b9
+          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=802c330e10a65524414564e0a47e4c35787c44a00698962a2f86cb80ac71957d
           export PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
           readonly PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
           verify_integrity_roots
@@ -916,10 +919,10 @@ jobs:
           run_assured /bin/bash tools/check-witness-dependency-closure.sh --library-only
           run_assured /bin/bash tools/check-witness-dependency-closure.sh --current-targets
 
-          run_assured /bin/bash tools/with-nats-jetstream.sh --relay-service-checkpoint /usr/bin/env PHASE285_SERVICE_CHECKPOINT_TREE="$PHASE285_CANDIDATE_TREE" PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" /bin/bash tools/check-phase285-witness-integrity.sh --focused-service-checkpoint-ci-harness
+          run_assured /bin/bash tools/with-nats-jetstream.sh --relay-service-checkpoint /usr/bin/env PHASE285_CONNZ_CURL_BIN="$PHASE285_CONNZ_CURL_BIN" PHASE285_SERVICE_CHECKPOINT_TREE="$PHASE285_CANDIDATE_TREE" PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" /bin/bash tools/check-phase285-witness-integrity.sh --focused-service-checkpoint-ci-harness
 
           run_assured "$PHASE285_CARGO" clippy -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --offline -- -D warnings
-          run_assured "$PHASE285_SHELLCHECK" --norc tools/check-gates-wired.sh tools/check-phase285-witness-conformance.sh tools/check-phase285-witness-integrity.sh tools/check-witness-dependency-closure.sh tools/with-nats-jetstream.sh
+          run_assured "$PHASE285_SHELLCHECK" --norc tools/check-gates-wired.sh tools/check-negative-registry.sh tools/check-phase285-witness-conformance.sh tools/check-phase285-witness-integrity.sh tools/check-witness-dependency-closure.sh tools/with-nats-jetstream.sh
           run_assured "$PHASE285_ACTIONLINT" .github/workflows/ci.yml
 
           run_assured /bin/bash tools/check-phase285-witness-conformance.sh --self-test
