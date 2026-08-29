@@ -33,6 +33,9 @@ use swarm_governance::witness_service::{
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
 use crate::PublicWitnessServiceConfigV1;
+use crate::runtime_client::{
+    cancel_and_join_owned_tasks, service_event_is_terminal, wait_for_owned_task_failure,
+};
 use crate::service_config::{
     NatsWorkerPublisherV1, NoopSubscriberAdmissionObserverV1, NoopWorkerTransitionObserverV1,
     PUBLIC_HANDLER_DEADLINE_MILLIS, ReceiptDeadlineV1, SubscriberAdmissionObserverV1,
@@ -183,6 +186,10 @@ const PUBLIC_WITNESS_QUEUE_GROUP: &str = "swarm-governance-witness-v1";
 pub enum PublicWitnessRunnerErrorV1 {
     #[error("public witness subscription setup failed")]
     Subscription,
+    #[error("public witness task exited unexpectedly")]
+    TaskExit,
+    #[error("public witness shutdown failed")]
+    Shutdown,
 }
 
 pub(crate) struct PublicIngressMessage {
@@ -240,6 +247,9 @@ pub(crate) async fn receive_and_run_public_worker_message<
 /// authenticated NATS transport message, never from the request payload.
 pub struct PublicWitnessServiceRunner<C> {
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    client: Option<async_nats::Client>,
+    ready: Arc<AtomicBool>,
+    stop_result: Option<Result<(), PublicWitnessRunnerErrorV1>>,
     _proxy: PhantomData<C>,
 }
 
@@ -249,6 +259,22 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
         dispatcher: PublicWitnessDispatcher<C>,
     ) -> Result<Self, PublicWitnessRunnerErrorV1> {
         Self::start_inner(client, dispatcher).await
+    }
+
+    pub(crate) async fn start_supervised(
+        client: async_nats::Client,
+        dispatcher: PublicWitnessDispatcher<C>,
+        mut lifecycle_events: mpsc::Receiver<async_nats::Event>,
+    ) -> Result<Self, PublicWitnessRunnerErrorV1> {
+        let mut runner = Self::start_inner(client, dispatcher).await?;
+        runner.tasks.push(tokio::spawn(async move {
+            while let Some(event) = lifecycle_events.recv().await {
+                if service_event_is_terminal(&event) {
+                    return;
+                }
+            }
+        }));
+        Ok(runner)
     }
 
     async fn start_inner(
@@ -354,8 +380,61 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
         }
         Ok(Self {
             tasks,
+            client: Some(client),
+            ready: Arc::new(AtomicBool::new(true)),
+            stop_result: None,
             _proxy: PhantomData,
         })
+    }
+
+    pub async fn wait_for_failure(&mut self) -> Result<(), PublicWitnessRunnerErrorV1> {
+        if self.tasks.is_empty() {
+            self.ready.store(false, Ordering::SeqCst);
+            return Err(PublicWitnessRunnerErrorV1::TaskExit);
+        }
+        wait_for_owned_task_failure(&mut self.tasks).await;
+        self.ready.store(false, Ordering::SeqCst);
+        Err(PublicWitnessRunnerErrorV1::TaskExit)
+    }
+
+    pub async fn stop_and_wait(
+        &mut self,
+        deadline: tokio::time::Duration,
+    ) -> Result<(), PublicWitnessRunnerErrorV1> {
+        if let Some(result) = self.stop_result {
+            return result;
+        }
+        // Fail closed if this future is cancelled. A later call reports the
+        // same terminal shutdown failure and never starts a second drain.
+        self.stop_result = Some(Err(PublicWitnessRunnerErrorV1::Shutdown));
+        self.ready.store(false, Ordering::SeqCst);
+        let client = &self.client;
+        let result = match tokio::time::timeout(deadline, async {
+            let task_result = cancel_and_join_owned_tasks(&mut self.tasks).await;
+            let drain_result = async {
+                if let Some(client) = client.as_ref() {
+                    client
+                        .drain()
+                        .await
+                        .map_err(|_| PublicWitnessRunnerErrorV1::Shutdown)?;
+                }
+                Ok(())
+            }
+            .await;
+            if task_result.is_err() {
+                Err(PublicWitnessRunnerErrorV1::TaskExit)
+            } else {
+                drain_result
+            }
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(PublicWitnessRunnerErrorV1::Shutdown),
+        };
+        self.client.take();
+        self.stop_result = Some(result);
+        result
     }
 }
 

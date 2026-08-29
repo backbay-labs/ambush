@@ -7,6 +7,7 @@ mod nats_config;
 mod public_dispatcher;
 pub mod raw_config;
 mod runtime_client;
+mod secure_file;
 mod service_config;
 mod store_proxy_service;
 
@@ -18,6 +19,7 @@ pub use public_dispatcher::{
 };
 pub use runtime_client::{
     RuntimeWitnessClient, RuntimeWitnessClientErrorV1, WitnessProcessErrorV1,
+    load_public_witness_process_config, load_store_proxy_process_config,
     run_public_witness_process, run_store_proxy_process,
 };
 pub use service_config::{

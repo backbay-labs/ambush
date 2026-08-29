@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use swarm_governance::persistence_protocol::{PROTOCOL_SCHEMA_VERSION, canonical_wire_bytes};
 use swarm_governance::witness_engine::store::proxy::WitnessStoreProxy;
 use swarm_governance::witness_engine::store::{
@@ -13,7 +14,12 @@ use swarm_governance::witness_engine::store::{
 };
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::{Duration, timeout};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+use crate::runtime_client::{
+    cancel_and_join_owned_tasks, service_event_is_terminal, wait_for_owned_task_failure,
+};
+use crate::secure_file::{StableFilePolicyV1, read_stable_file, validate_stable_public_file};
 use crate::service_config::{
     NatsWorkerPublisherV1, NoopSubscriberAdmissionObserverV1, NoopWorkerTransitionObserverV1,
     ReceiptDeadlineV1, STORE_HANDLER_DEADLINE_MILLIS, STORE_RESPONSE_GRANT_MILLIS,
@@ -370,9 +376,13 @@ pub enum StoreProxyRunnerErrorV1 {
     Authentication,
     #[error("private proxy subscription setup failed")]
     Subscription,
+    #[error("private proxy task exited unexpectedly")]
+    TaskExit,
+    #[error("private proxy shutdown failed")]
+    Shutdown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]
 struct StoreRoleCredentialFileV1 {
     schema_version: u32,
@@ -387,6 +397,7 @@ struct StoreRoleCredentialFileV1 {
 pub struct StoreRoleConnectionV1 {
     client: async_nats::Client,
     ready_binding: StoreProxyReadyBindingV1,
+    lifecycle_events: Option<mpsc::Receiver<async_nats::Event>>,
 }
 
 impl StoreRoleConnectionV1 {
@@ -419,17 +430,20 @@ impl StoreRoleConnectionV1 {
         if authority != config.tls_server_name {
             return Err(StoreProxyRunnerErrorV1::Configuration);
         }
-        let raw = tokio::fs::read(&config.nats_credentials_path)
-            .await
+        validate_stable_public_file(&config.tls_ca_path, 1_048_576)
             .map_err(|_| StoreProxyRunnerErrorV1::Configuration)?;
-        if raw.is_empty() || raw.len() > 4_096 {
-            return Err(StoreProxyRunnerErrorV1::Configuration);
-        }
+        let raw = read_stable_file(
+            &config.nats_credentials_path,
+            4_096,
+            StableFilePolicyV1::Private,
+        )
+        .map_err(|_| StoreProxyRunnerErrorV1::Configuration)?;
         let credentials: StoreRoleCredentialFileV1 =
             serde_json::from_slice(&raw).map_err(|_| StoreProxyRunnerErrorV1::Configuration)?;
-        let canonical =
-            serde_json::to_vec(&credentials).map_err(|_| StoreProxyRunnerErrorV1::Configuration)?;
-        if canonical != raw
+        let canonical = Zeroizing::new(
+            serde_json::to_vec(&credentials).map_err(|_| StoreProxyRunnerErrorV1::Configuration)?,
+        );
+        if canonical.as_slice() != raw.as_slice()
             || credentials.schema_version != PROTOCOL_SCHEMA_VERSION
             || credentials.role != "witness-store"
             || credentials.invocation_token != config.credential_invocation_token
@@ -438,9 +452,12 @@ impl StoreRoleConnectionV1 {
         {
             return Err(StoreProxyRunnerErrorV1::Configuration);
         }
+        let username = Zeroizing::new(credentials.username.clone());
+        let password = Zeroizing::new(credentials.password.clone());
+        let (lifecycle_sender, lifecycle_events) = mpsc::channel(1_024);
         let options = async_nats::ConnectOptions::with_user_and_password(
-            credentials.username,
-            credentials.password,
+            username.to_string(),
+            password.to_string(),
         )
         .require_tls(true)
         .add_root_certificates(PathBuf::from(&config.tls_ca_path))
@@ -452,7 +469,9 @@ impl StoreRoleConnectionV1 {
         .max_reconnects(Some(1))
         .event_callback(move |event| {
             let observer = event_observer.clone();
+            let lifecycle_sender = lifecycle_sender.clone();
             async move {
+                let _ = lifecycle_sender.send(event.clone()).await;
                 if let Some(observer) = observer {
                     let _ = observer.send(event);
                 }
@@ -475,6 +494,7 @@ impl StoreRoleConnectionV1 {
         Ok(Self {
             client,
             ready_binding,
+            lifecycle_events: Some(lifecycle_events),
         })
     }
 
@@ -499,6 +519,9 @@ fn tls_authority(url: &str) -> Option<&str> {
 
 pub struct StoreProxyServiceRunner<S> {
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    client: Option<async_nats::Client>,
+    ready: Arc<AtomicBool>,
+    stop_result: Option<Result<(), StoreProxyRunnerErrorV1>>,
     _service: std::marker::PhantomData<S>,
 }
 
@@ -521,6 +544,9 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             return Err(StoreProxyRunnerErrorV1::Configuration);
         }
         let client = connection.client;
+        let mut lifecycle_events = connection
+            .lifecycle_events
+            .ok_or(StoreProxyRunnerErrorV1::Configuration)?;
         timeout(
             Duration::from_millis(service.config.request_deadline_millis),
             async_nats::jetstream::new(client.clone()).get_stream(&service.config.stream_name),
@@ -618,10 +644,70 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
                 {}
             }));
         }
+        tasks.push(tokio::spawn(async move {
+            while let Some(event) = lifecycle_events.recv().await {
+                if service_event_is_terminal(&event) {
+                    return;
+                }
+            }
+        }));
         Ok(Self {
             tasks,
+            client: Some(client),
+            ready: Arc::new(AtomicBool::new(true)),
+            stop_result: None,
             _service: std::marker::PhantomData,
         })
+    }
+
+    pub async fn wait_for_failure(&mut self) -> Result<(), StoreProxyRunnerErrorV1> {
+        if self.tasks.is_empty() {
+            self.ready.store(false, Ordering::SeqCst);
+            return Err(StoreProxyRunnerErrorV1::TaskExit);
+        }
+        wait_for_owned_task_failure(&mut self.tasks).await;
+        self.ready.store(false, Ordering::SeqCst);
+        Err(StoreProxyRunnerErrorV1::TaskExit)
+    }
+
+    pub async fn stop_and_wait(
+        &mut self,
+        deadline: tokio::time::Duration,
+    ) -> Result<(), StoreProxyRunnerErrorV1> {
+        if let Some(result) = self.stop_result {
+            return result;
+        }
+        // Fail closed if this future is cancelled. A later call reports the
+        // same terminal shutdown failure and never starts a second drain.
+        self.stop_result = Some(Err(StoreProxyRunnerErrorV1::Shutdown));
+        self.ready.store(false, Ordering::SeqCst);
+        let client = &self.client;
+        let result = match tokio::time::timeout(deadline, async {
+            let task_result = cancel_and_join_owned_tasks(&mut self.tasks).await;
+            let drain_result = async {
+                if let Some(client) = client.as_ref() {
+                    client
+                        .drain()
+                        .await
+                        .map_err(|_| StoreProxyRunnerErrorV1::Shutdown)?;
+                }
+                Ok(())
+            }
+            .await;
+            if task_result.is_err() {
+                Err(StoreProxyRunnerErrorV1::TaskExit)
+            } else {
+                drain_result
+            }
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(StoreProxyRunnerErrorV1::Shutdown),
+        };
+        self.client.take();
+        self.stop_result = Some(result);
+        result
     }
 }
 

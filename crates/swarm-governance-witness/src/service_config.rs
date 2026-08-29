@@ -121,6 +121,77 @@ const _: () = assert!(PUBLIC_PRIVATE_RESERVE_MILLIS == 1_000);
 const _: () = assert!(PUBLIC_HANDLER_RESERVE_MILLIS == 2_000);
 const _: () = assert!(RESPONSE_GRANT_MAXIMUM == 1);
 
+pub const MAX_SERVICE_WORKERS: usize = 64;
+pub const MAX_SERVICE_CHANNEL_ENTRIES: usize = 1_024;
+pub const MAX_SERVICE_BUFFERED_BYTES: usize = 512 * 1024 * 1024;
+const BUFFER_FRAME_OVERHEAD_BYTES: usize = 1_024;
+
+#[allow(clippy::too_many_arguments)]
+pub fn checked_service_buffer_budget(
+    max_request_bytes: usize,
+    max_response_bytes: usize,
+    ingress_capacity: usize,
+    subscription_capacity: usize,
+    client_capacity: usize,
+    worker_count: usize,
+    read_buffer_bytes: usize,
+) -> ProtocolResult<usize> {
+    if max_request_bytes == 0
+        || max_response_bytes == 0
+        || ingress_capacity == 0
+        || subscription_capacity == 0
+        || client_capacity == 0
+        || worker_count == 0
+        || worker_count > MAX_SERVICE_WORKERS
+        || ingress_capacity > MAX_SERVICE_CHANNEL_ENTRIES
+        || subscription_capacity > MAX_SERVICE_CHANNEL_ENTRIES
+        || client_capacity > MAX_SERVICE_CHANNEL_ENTRIES
+        || worker_count > ingress_capacity
+        || read_buffer_bytes == 0
+    {
+        return Err(invalid(
+            "service_operational_bounds",
+            "worker and channel counts must fit closed operational ceilings",
+        ));
+    }
+    let request_frame = max_request_bytes
+        .checked_add(BUFFER_FRAME_OVERHEAD_BYTES)
+        .ok_or_else(|| invalid("service_buffer_budget", "request frame overflow"))?;
+    let response_frame = max_response_bytes
+        .checked_add(BUFFER_FRAME_OVERHEAD_BYTES)
+        .ok_or_else(|| invalid("service_buffer_budget", "response frame overflow"))?;
+    // Shared Bytes payload ownership is counted once in the client-command
+    // component. Ingress/subscription frames and each worker's in-flight
+    // request/response are distinct owned buffers.
+    let components = [
+        ingress_capacity.checked_mul(request_frame),
+        subscription_capacity.checked_mul(request_frame),
+        client_capacity.checked_mul(request_frame.max(response_frame)),
+        worker_count.checked_mul(
+            request_frame
+                .checked_add(response_frame)
+                .ok_or_else(|| invalid("service_buffer_budget", "worker frame overflow"))?,
+        ),
+        Some(read_buffer_bytes),
+    ];
+    let mut total = 0usize;
+    for component in components {
+        total = total
+            .checked_add(
+                component.ok_or_else(|| invalid("service_buffer_budget", "capacity overflow"))?,
+            )
+            .ok_or_else(|| invalid("service_buffer_budget", "aggregate overflow"))?;
+    }
+    if total > MAX_SERVICE_BUFFERED_BYTES {
+        return Err(ProtocolError::Bounds {
+            field: "service_buffer_budget".to_string(),
+            observed: total,
+            maximum: MAX_SERVICE_BUFFERED_BYTES,
+        });
+    }
+    Ok(total)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeWitnessClientConfigV1 {
@@ -615,6 +686,15 @@ impl StoreProxyServiceConfigV1 {
                 "transport capacities and deadline must be bounded",
             ));
         }
+        checked_service_buffer_budget(
+            self.max_request_bytes,
+            self.max_response_bytes,
+            self.ingress_queue_capacity,
+            self.subscription_capacity,
+            self.client_capacity,
+            self.max_in_flight,
+            usize::from(self.read_buffer_capacity),
+        )?;
         Ok(())
     }
 
@@ -726,7 +806,11 @@ impl PublicWitnessServiceConfigV1 {
                 });
             }
         }
-        if self.max_in_flight > self.ingress_queue_capacity || self.request_deadline_millis == 0 {
+        if self.max_in_flight > self.ingress_queue_capacity
+            || self.max_in_flight > MAX_SERVICE_WORKERS
+            || self.ingress_queue_capacity > MAX_SERVICE_CHANNEL_ENTRIES
+            || self.request_deadline_millis == 0
+        {
             return Err(invalid(
                 "service_limits",
                 "max-in-flight must fit the queue and deadline must be nonzero",
@@ -784,6 +868,15 @@ impl RuntimeWitnessClientConfigV1 {
         {
             return Err(ProtocolError::WitnessOutcomeMismatch);
         }
+        checked_service_buffer_budget(
+            self.max_request_bytes,
+            self.max_response_bytes,
+            1,
+            self.subscription_capacity,
+            self.client_capacity,
+            1,
+            usize::from(self.read_buffer_capacity),
+        )?;
         Ok(())
     }
 }
@@ -800,7 +893,17 @@ impl PublicWitnessProcessConfigV1 {
             self.subscription_capacity,
             self.client_capacity,
             self.read_buffer_capacity,
-        )
+        )?;
+        checked_service_buffer_budget(
+            self.service.max_request_bytes,
+            self.service.max_response_bytes,
+            self.service.ingress_queue_capacity,
+            self.subscription_capacity,
+            self.client_capacity,
+            self.service.max_in_flight,
+            usize::from(self.read_buffer_capacity),
+        )?;
+        Ok(())
     }
 }
 
@@ -858,6 +961,8 @@ fn validate_process_transport(
         ]
         .into_iter()
         .any(|value| value == 0 || value > MAX_PROTOCOL_RECORD_BYTES)
+        || subscription_capacity > MAX_SERVICE_CHANNEL_ENTRIES
+        || client_capacity > MAX_SERVICE_CHANNEL_ENTRIES
     {
         return Err(ProtocolError::WitnessOutcomeMismatch);
     }
@@ -868,5 +973,39 @@ fn invalid(field: &'static str, reason: &'static str) -> ProtocolError {
     ProtocolError::InvalidField {
         field: field.to_string(),
         reason: reason.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod operational_bound_tests {
+    use super::*;
+
+    #[test]
+    fn operational_counts_and_aggregate_budget_are_closed() {
+        assert!(checked_service_buffer_budget(4_096, 4_096, 64, 64, 64, 64, 4_096).is_ok());
+        for (ingress, subscriptions, clients, workers) in [
+            (1_025, 1, 1, 1),
+            (1, 1_025, 1, 1),
+            (1, 1, 1_025, 1),
+            (65, 1, 1, 65),
+        ] {
+            assert!(
+                checked_service_buffer_budget(
+                    4_096,
+                    4_096,
+                    ingress,
+                    subscriptions,
+                    clients,
+                    workers,
+                    4_096,
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            checked_service_buffer_budget(1_048_576, 1_048_576, 1_024, 1_024, 1_024, 64, 65_535,)
+                .is_err()
+        );
+        assert!(checked_service_buffer_budget(usize::MAX, 1, 1, 1, 1, 1, 1).is_err());
     }
 }

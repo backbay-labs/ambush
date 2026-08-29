@@ -25,11 +25,13 @@ hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+rustix = { version = "1", features = ["fs", "process"] }
 swarm-crypto.workspace = true
 swarm-governance.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

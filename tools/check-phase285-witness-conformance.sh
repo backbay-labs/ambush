@@ -588,6 +588,208 @@ run_self_tests() {
   echo "aggregate_self_test modes=$count unique=8 executed_once=1 passed=1"
 }
 
+service_process_safety_source_guard() {
+  python3 -I - "$ROOT_DIR/crates/swarm-governance-witness/src/runtime_client.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/store_proxy_service.rs" "${1:-normal}" <<'PY'
+import hashlib,pathlib,sys
+runtime_path,public_path,private_path=map(pathlib.Path,sys.argv[1:4]); mode=sys.argv[4]
+source={"runtime":runtime_path.read_text(),"public":public_path.read_text(),"private":private_path.read_text()}
+required=[
+ ("sigint","runtime","SignalKind::interrupt()"),
+ ("sigterm","runtime","SignalKind::terminate()"),
+ ("typed_abnormal_exit","runtime","WitnessProcessErrorV1::AbnormalExit"),
+ ("public_failure_select","runtime","_ = runner.wait_for_failure() => true,"),
+ ("public_supervised_start","runtime","PublicWitnessServiceRunner::start_supervised("),
+ ("raw_lifecycle_supervision","runtime","_ = &mut raw_failure => true,"),
+ ("cancellation_safe_failure_wait","runtime","select_all(tasks.iter_mut()).await"),
+ ("strict_owned_join","runtime","cancel_and_join_owned_tasks("),
+ ("repeated_signal_stop","runtime","complete_single_stop_while_observing_signals("),
+ ("public_stop","public","pub async fn stop_and_wait("),
+ ("public_idempotent","public","if let Some(result) = self.stop_result"),
+ ("public_await","public","cancel_and_join_owned_tasks(&mut self.tasks).await"),
+ ("public_drain","public","client\n                        .drain()"),
+ ("public_lifecycle","public","service_event_is_terminal(&event)"),
+ ("private_stop","private","pub async fn stop_and_wait("),
+ ("private_idempotent","private","if let Some(result) = self.stop_result"),
+ ("private_await","private","cancel_and_join_owned_tasks(&mut self.tasks).await"),
+ ("private_drain","private","client\n                        .drain()"),
+ ("private_lifecycle","private","service_event_is_terminal(&event)"),
+]
+def validate(value):
+ process_region=value["runtime"].split("pub async fn run_public_witness_process(",1)[1].split("pub struct RuntimeWitnessClient",1)[0]
+ if "std::future::pending" in process_region: raise ValueError("pending_forever")
+ if "mem::take(tasks)" in value["runtime"] or "mem::take(&mut self.tasks)" in value["public"] or "mem::take(&mut self.tasks)" in value["private"]: raise ValueError("detached_handles")
+ for label,name,fragment in required:
+  if fragment not in value[name]: raise ValueError(label)
+ if value["runtime"].count("Err(WitnessProcessErrorV1::AbnormalExit)")!=3: raise ValueError("typed_abnormal_exit")
+ if value["runtime"].count("_ = runner.wait_for_failure() => true,")!=2: raise ValueError("public_failure_select")
+ for name in ("public","private"):
+  stop=value[name].split("pub async fn stop_and_wait(",1)[1].split("\n    }\n}",1)[0]
+  if not stop.index("self.ready.store(false") < stop.index("cancel_and_join_owned_tasks(&mut self.tasks).await") < stop.index(".drain()"):
+   raise ValueError(name+"_shutdown_order")
+validate(source)
+if mode=="self-test":
+ mutations=[
+  ("pending_forever","runtime","if let Ok(token) = std::env::var(\"PHASE285_RELAY_TOPOLOGY_TOKEN\")","std::future::pending::<()>().await;\n    if let Ok(token) = std::env::var(\"PHASE285_RELAY_TOPOLOGY_TOKEN\")"),
+  ("missing_sigterm","runtime","SignalKind::terminate()","SignalKind::interrupt()"),
+  ("successful_error_exit","runtime","Err(WitnessProcessErrorV1::AbnormalExit)","Ok(())"),
+  ("detached_public_runner","runtime","_ = runner.wait_for_failure() => true,","_ = signals.next() => false,"),
+  ("ignored_raw_lifecycle","runtime","_ = &mut raw_failure => true,","_ = signals.next() => false,"),
+  ("detached_wait_handles","runtime","select_all(tasks.iter_mut()).await","select_all(std::mem::take(tasks)).await"),
+  ("public_abort_without_await","public","cancel_and_join_owned_tasks(&mut self.tasks).await","Ok(())"),
+  ("public_drain_omitted","public","client\n                        .drain()","client\n                        .flush()"),
+  ("public_lifecycle_ignored","public","service_event_is_terminal(&event)","false"),
+  ("private_abort_without_await","private","cancel_and_join_owned_tasks(&mut self.tasks).await","Ok(())"),
+  ("private_drain_omitted","private","client\n                        .drain()","client\n                        .flush()"),
+  ("private_lifecycle_ignored","private","service_event_is_terminal(&event)","false"),
+ ]
+ digests=[]
+ for label,name,old,new in mutations:
+  if source[name].count(old)<1: raise SystemExit(f"process safety mutation anchor differs: {label}")
+  candidate=dict(source); candidate[name]=candidate[name].replace(old,new,1)
+  digests.append(hashlib.sha256(candidate[name].encode()).hexdigest())
+  try: validate(candidate)
+  except ValueError: print(f"service_process_safety_mutation_red mutation={label}")
+  else: raise SystemExit(f"process safety mutant survived: {label}")
+ if len(set(digests))!=len(mutations): raise SystemExit("process safety mutation digest reuse")
+ print(f"service_process_safety_source mutations={len(mutations)} unique={len(set(digests))} passed=1")
+else: print("service_process_safety_source passed=1")
+PY
+}
+
+service_operational_bounds_source_guard() {
+  python3 -I - "$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs" "${1:-normal}" <<'PY'
+import hashlib,pathlib,sys
+source=pathlib.Path(sys.argv[1]).read_text(); mode=sys.argv[2]
+required=[
+ ("worker_ceiling","pub const MAX_SERVICE_WORKERS: usize = 64;"),
+ ("channel_ceiling","pub const MAX_SERVICE_CHANNEL_ENTRIES: usize = 1_024;"),
+ ("aggregate_ceiling","pub const MAX_SERVICE_BUFFERED_BYTES: usize = 512 * 1024 * 1024;"),
+ ("request_checked_add","max_request_bytes\n        .checked_add(BUFFER_FRAME_OVERHEAD_BYTES)"),
+ ("response_checked_add","max_response_bytes\n        .checked_add(BUFFER_FRAME_OVERHEAD_BYTES)"),
+ ("checked_multiply","worker_count.checked_mul("),
+ ("checked_aggregate","total\n            .checked_add("),
+ ("aggregate_rejection","if total > MAX_SERVICE_BUFFERED_BYTES"),
+]
+def validate(text):
+ for label,fragment in required:
+  if text.count(fragment)!=1: raise ValueError(label)
+ if text.count("checked_service_buffer_budget(")<5: raise ValueError("budget_callsites")
+validate(source)
+if mode=="self-test":
+ mutations=[
+  (label,fragment,fragment.replace("64","65",1) if label=="worker_ceiling" else fragment.replace("1_024","1_025",1) if label=="channel_ceiling" else fragment.replace("512","513",1) if label=="aggregate_ceiling" else fragment.replace("checked_","saturating_",1) if "checked_" in fragment else fragment.replace(">",">=",1))
+  for label,fragment in required
+ ]
+ digests=[]
+ for label,old,new in mutations:
+  candidate=source.replace(old,new,1); digests.append(hashlib.sha256(candidate.encode()).hexdigest())
+  try: validate(candidate)
+  except ValueError: print(f"service_operational_bounds_mutation_red mutation={label}")
+  else: raise SystemExit(f"operational bounds mutant survived: {label}")
+ if len(set(digests))!=len(mutations): raise SystemExit("operational bounds mutation digest reuse")
+ print(f"service_operational_bounds_source mutations={len(mutations)} unique={len(set(digests))} passed=1")
+else: print("service_operational_bounds_source passed=1")
+PY
+}
+
+service_secret_files_source_guard() {
+  python3 -I - "$ROOT_DIR/crates/swarm-governance-witness/src/secure_file.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/runtime_client.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/store_proxy_service.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/bin/swarm-governance-witness.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/src/bin/swarm-governance-witness-store.rs" \
+    "$ROOT_DIR/crates/swarm-governance-witness/Cargo.toml" "${1:-normal}" <<'PY'
+import hashlib,pathlib,sys
+names=["secure","runtime","private","public_bin","private_bin","cargo"]
+source=dict(zip(names,(pathlib.Path(path).read_text() for path in sys.argv[1:7]))); mode=sys.argv[7]
+required=[
+ ("nofollow","secure","OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC"),
+ ("regular","secure","FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile"),
+ ("single_link","secure","metadata.st_nlink != 1"),
+ ("effective_uid","secure","rustix::process::geteuid().as_raw()"),
+ ("closed_mode","secure","metadata.st_mode as u32 & PRIVATE_MODE_MASK"),
+ ("bounded_read","secure",".checked_add(1)"),
+ ("bounded_take","secure",".take(limit)"),
+ ("stable_open","secure","same_identity(&before, &opened)"),
+ ("post_read_fstat","secure","let after_read = fstat(&file)"),
+ ("stable_final","secure","!same_identity(&opened, &after_reopened_read)"),
+ ("stable_content","secure","bytes.as_slice() != reopened.as_slice()"),
+ ("ctime_identity","secure","left.st_ctime == right.st_ctime"),
+ ("zeroizing_bytes","secure","Zeroizing<Vec<u8>>"),
+ ("runtime_zeroize","runtime","Zeroize, ZeroizeOnDrop"),
+ ("canonical_zeroize","runtime","let canonical = Zeroizing::new("),
+ ("utf8_without_byte_clone","runtime","std::str::from_utf8(bytes.as_slice())"),
+ ("private_zeroize","private","Zeroize, ZeroizeOnDrop"),
+ ("public_config_loader","public_bin","load_public_witness_process_config(path)?"),
+ ("private_config_loader","private_bin","load_store_proxy_process_config(path)?"),
+ ("rustix_dependency","cargo","rustix = { version = \"1\", features = [\"fs\", \"process\"] }"),
+ ("zeroize_dependency","cargo","zeroize.workspace = true"),
+]
+def validate(value):
+ for label,name,fragment in required:
+  if fragment not in value[name]: raise ValueError(label)
+ if value["secure"].count("OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC")!=2: raise ValueError("nofollow")
+ if value["secure"].count(".take(limit)")!=2: raise ValueError("bounded_take")
+ for name in ("runtime","private"):
+  if "tokio::fs::read(" in value[name] or "tokio::fs::read_to_string(" in value[name]: raise ValueError(name+"_direct_read")
+ if "secret_bytes.to_vec()" in value["runtime"]: raise ValueError("unzeroized_secret_copy")
+ for name in ("public_bin","private_bin"):
+  if "std::fs::read(" in value[name]: raise ValueError(name+"_direct_read")
+ if value["runtime"].count("validate_stable_public_file(")<2 or value["private"].count("validate_stable_public_file(")<1: raise ValueError("stable_ca_reads")
+ if value["runtime"].count("let canonical = Zeroizing::new(")!=3 or value["private"].count("let canonical = Zeroizing::new(")!=1: raise ValueError("canonical_zeroize")
+validate(source)
+if mode=="self-test":
+ mutations=[
+  ("follow_symlink","secure","OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC","OFlags::RDONLY"),
+  ("accept_hardlink","secure","metadata.st_nlink != 1","false"),
+  ("accept_foreign_owner","secure","metadata.st_uid != rustix::process::geteuid().as_raw()","false"),
+  ("accept_wide_mode","secure","(metadata.st_mode as u32 & PRIVATE_MODE_MASK) != 0","false"),
+  ("omit_post_read_fstat","secure","let after_read = fstat(&file)","let after_read = opened"),
+  ("omit_ctime_identity","secure","left.st_ctime == right.st_ctime","true"),
+  ("omit_final_identity","secure","!same_identity(&opened, &after_reopened_read)","false"),
+  ("unwrapped_canonical","runtime","let canonical = Zeroizing::new(","let canonical = identity("),
+  ("unbounded_read","secure",".take(limit)",".take(u64::MAX)"),
+  ("public_direct_config_read","public_bin","load_public_witness_process_config(path)?","serde_json::from_slice(&std::fs::read(path)?)?"),
+  ("private_direct_config_read","private_bin","load_store_proxy_process_config(path)?","serde_json::from_slice(&std::fs::read(path)?)?"),
+ ]
+ digests=[]
+ for label,name,old,new in mutations:
+  if source[name].count(old)<1: raise SystemExit(f"secret file mutation anchor differs: {label}")
+  candidate=dict(source); candidate[name]=candidate[name].replace(old,new,1)
+  digests.append(hashlib.sha256(candidate[name].encode()).hexdigest())
+  try: validate(candidate)
+  except ValueError: print(f"service_secret_files_mutation_red mutation={label}")
+  else: raise SystemExit(f"secret file mutant survived: {label}")
+ if len(set(digests))!=len(mutations): raise SystemExit("secret file mutation digest reuse")
+ print(f"service_secret_files_source mutations={len(mutations)} unique={len(set(digests))} passed=1")
+else: print("service_secret_files_source passed=1")
+PY
+}
+
+run_service_process_safety_focus() {
+  service_process_safety_source_guard normal
+  service_process_safety_source_guard self-test
+  cargo test -p swarm-governance-witness --lib --locked --offline \
+    runtime_client::service_lifecycle_unit_tests -- --nocapture
+}
+
+run_service_operational_bounds_focus() {
+  service_operational_bounds_source_guard normal
+  service_operational_bounds_source_guard self-test
+  cargo test -p swarm-governance-witness --lib --locked --offline \
+    service_config::operational_bound_tests::operational_counts_and_aggregate_budget_are_closed -- --exact
+}
+
+run_service_secret_files_focus() {
+  service_secret_files_source_guard normal
+  service_secret_files_source_guard self-test
+  cargo test -p swarm-governance-witness --lib --locked --offline secure_file::tests -- --nocapture
+  cargo test -p swarm-governance-witness --lib --locked --offline \
+    runtime_client::service_lifecycle_unit_tests::signing_secret_utf8_conversion_never_creates_an_unwrapped_byte_copy -- --exact
+}
+
 dispatcher_source_guard() {
   local source="$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs"
   local integration="$ROOT_DIR/crates/swarm-governance-witness/tests/full_service_path.rs"
@@ -2026,7 +2228,7 @@ def validate(s=source, c=config, i=integration, h=harness, d=compose):
         "ready.bucket_configuration.stream_name != self.stream_name",
         '("subscription_capacity", self.subscription_capacity)',
         '("client_capacity", self.client_capacity)',
-        'usize::from(self.read_buffer_capacity)',
+        "self.subscription_capacity,\n            self.client_capacity,\n            self.max_in_flight,\n            usize::from(self.read_buffer_capacity),",
     ]:
         if c.count(fragment) != 1: raise ValueError(f"private config boundary differs: {fragment}")
     found_ids = re.findall(r'^    "([a-z_]+)",$', re.search(r"const CAPABILITY_MATRIX: \[&str; 20\] = \[(.*?)\n\];", i, re.S).group(1), re.M)
@@ -11230,6 +11432,18 @@ case "${1:-}" in
   --focused-service-checkpoint-deadline)
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-deadline" >&2; exit 2; }
     run_service_checkpoint_deadline_focus
+    ;;
+  --focused-service-process-safety)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-process-safety" >&2; exit 2; }
+    run_service_process_safety_focus
+    ;;
+  --focused-service-operational-bounds)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-operational-bounds" >&2; exit 2; }
+    run_service_operational_bounds_focus
+    ;;
+  --focused-service-secret-files)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-secret-files" >&2; exit 2; }
+    run_service_secret_files_focus
     ;;
   --self-test)
     if [ "$#" -eq 4 ] && [ "$2" = complete-receipt-real-signal ]; then

@@ -1,6 +1,10 @@
 use async_trait::async_trait;
+use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
@@ -14,10 +18,12 @@ use swarm_governance::witness_service::{
     WitnessServiceFailureAttestationV1, WitnessServiceRequestV1, WitnessServiceResponseV1,
 };
 use tokio::time::{Duration, Instant as TokioInstant, timeout, timeout_at};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use swarm_crypto::Ed25519Signer;
 
 use crate::raw_config::relay_topology_token_is_closed;
+use crate::secure_file::{StableFilePolicyV1, read_stable_file, validate_stable_public_file};
 use crate::service_config::{PUBLIC_RESPONSE_GRANT_MILLIS, STORE_RESPONSE_GRANT_MILLIS};
 use crate::{
     NatsPublicWitnessStoreProxyClient, NatsWitnessStore, PublicWitnessDispatcher,
@@ -26,7 +32,7 @@ use crate::{
     StoreProxyServiceRunner, StoreRoleConnectionV1,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]
 struct RuntimeRoleCredentialFileV1 {
     schema_version: u32,
@@ -35,6 +41,11 @@ struct RuntimeRoleCredentialFileV1 {
     password: String,
     invocation_token: String,
 }
+
+const MAX_ROLE_CREDENTIAL_BYTES: usize = 4_096;
+const MAX_SIGNING_KEY_BYTES: usize = 4_096;
+const MAX_CA_BYTES: usize = 1_048_576;
+const MAX_PROCESS_CONFIG_BYTES: usize = 2_097_152;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeWitnessClientErrorV1 {
@@ -64,6 +75,38 @@ pub enum WitnessProcessErrorV1 {
     Authentication,
     #[error("service process startup failed")]
     Startup,
+    #[error("service capability exited abnormally")]
+    AbnormalExit,
+    #[error("service shutdown did not complete")]
+    Shutdown,
+}
+
+fn load_canonical_process_config<T>(path: &Path) -> Result<T, WitnessProcessErrorV1>
+where
+    T: for<'de> Deserialize<'de> + Serialize,
+{
+    let bytes = read_stable_file(path, MAX_PROCESS_CONFIG_BYTES, StableFilePolicyV1::Private)
+        .map_err(|_| WitnessProcessErrorV1::Configuration)?;
+    let value = serde_json::from_slice(&bytes).map_err(|_| WitnessProcessErrorV1::Configuration)?;
+    let canonical = Zeroizing::new(
+        serde_json::to_vec(&value).map_err(|_| WitnessProcessErrorV1::Configuration)?,
+    );
+    if canonical.as_slice() != bytes.as_slice() {
+        return Err(WitnessProcessErrorV1::Configuration);
+    }
+    Ok(value)
+}
+
+pub fn load_public_witness_process_config(
+    path: impl AsRef<Path>,
+) -> Result<PublicWitnessProcessConfigV1, WitnessProcessErrorV1> {
+    load_canonical_process_config(path.as_ref())
+}
+
+pub fn load_store_proxy_process_config(
+    path: impl AsRef<Path>,
+) -> Result<StoreProxyProcessConfigV1, WitnessProcessErrorV1> {
+    load_canonical_process_config(path.as_ref())
 }
 
 fn map_request_error_kind(kind: async_nats::RequestErrorKind) -> RuntimeWitnessClientErrorV1 {
@@ -72,6 +115,345 @@ fn map_request_error_kind(kind: async_nats::RequestErrorKind) -> RuntimeWitnessC
         async_nats::RequestErrorKind::Other => RuntimeWitnessClientErrorV1::OutcomeUnknown,
         async_nats::RequestErrorKind::NoResponders => RuntimeWitnessClientErrorV1::Unavailable,
         async_nats::RequestErrorKind::InvalidSubject => RuntimeWitnessClientErrorV1::Configuration,
+    }
+}
+
+fn copy_zeroizing_utf8_secret(
+    bytes: &Zeroizing<Vec<u8>>,
+) -> Result<Zeroizing<String>, WitnessProcessErrorV1> {
+    Ok(Zeroizing::new(
+        std::str::from_utf8(bytes.as_slice())
+            .map_err(|_| WitnessProcessErrorV1::Configuration)?
+            .to_owned(),
+    ))
+}
+
+pub(crate) fn service_event_is_terminal(event: &async_nats::Event) -> bool {
+    !matches!(
+        event,
+        async_nats::Event::Connected | async_nats::Event::Disconnected
+    )
+}
+
+async fn wait_for_connection_failure(mut events: tokio::sync::mpsc::Receiver<async_nats::Event>) {
+    while let Some(event) = events.recv().await {
+        if service_event_is_terminal(&event) {
+            return;
+        }
+    }
+}
+
+/// Waits for an owned capability task without transferring ownership of its
+/// join handle. Cancelling this future therefore cannot detach the task.
+pub(crate) async fn wait_for_owned_task_failure(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
+    debug_assert!(!tasks.is_empty());
+    let (_result, completed_index, _remaining_borrows) =
+        futures_util::future::select_all(tasks.iter_mut()).await;
+    // The selected handle has already produced Ready; remove it without
+    // polling it a second time. All other handles stayed in `tasks` if this
+    // wait was cancelled.
+    drop(tasks.swap_remove(completed_index));
+}
+
+/// Cancels and joins every owned task. Only cancellation requested by this
+/// invocation is an expected exit. A task that had already finished, races to
+/// a normal return, or panics remains an abnormal capability exit.
+pub(crate) async fn cancel_and_join_owned_tasks(
+    tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+) -> Result<(), ()> {
+    let mut cancellation_flags = Vec::with_capacity(tasks.len());
+    for task in tasks.iter() {
+        let cancellation_requested_here = !task.is_finished();
+        if cancellation_requested_here {
+            task.abort();
+        }
+        cancellation_flags.push(cancellation_requested_here);
+    }
+
+    let mut abnormal = false;
+    while !tasks.is_empty() {
+        let (result, completed_index, _remaining_borrows) =
+            futures_util::future::select_all(tasks.iter_mut()).await;
+        let expected_cancellation = cancellation_flags.swap_remove(completed_index);
+        drop(tasks.swap_remove(completed_index));
+        match result {
+            Err(error) if expected_cancellation && error.is_cancelled() => {}
+            Ok(()) | Err(_) => abnormal = true,
+        }
+    }
+    if abnormal { Err(()) } else { Ok(()) }
+}
+
+#[cfg(test)]
+mod service_lifecycle_unit_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn must<T, E: std::fmt::Debug>(result: Result<T, E>, context: &str) -> T {
+        match result {
+            Ok(value) => value,
+            Err(error) => panic!("{context}: {error:?}"),
+        }
+    }
+
+    #[test]
+    fn terminal_events_include_closed_reconnect_exhaustion_and_slow_consumer() {
+        assert!(!service_event_is_terminal(&async_nats::Event::Connected));
+        assert!(!service_event_is_terminal(&async_nats::Event::Disconnected));
+        assert!(service_event_is_terminal(&async_nats::Event::Closed));
+        assert!(service_event_is_terminal(&async_nats::Event::SlowConsumer(
+            7
+        )));
+        assert!(service_event_is_terminal(&async_nats::Event::ClientError(
+            async_nats::ClientError::MaxReconnects,
+        )));
+    }
+
+    #[test]
+    fn signing_secret_utf8_conversion_never_creates_an_unwrapped_byte_copy() {
+        let valid = Zeroizing::new(b"signing-secret".to_vec());
+        assert_eq!(
+            must(copy_zeroizing_utf8_secret(&valid), "valid UTF-8 secret").as_str(),
+            "signing-secret"
+        );
+        let invalid = Zeroizing::new(vec![0xff, 0xfe]);
+        assert!(matches!(
+            copy_zeroizing_utf8_secret(&invalid),
+            Err(WitnessProcessErrorV1::Configuration)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelling_failure_wait_retains_and_stops_every_owned_task() {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..3 {
+            let completed = completed.clone();
+            tasks.push(tokio::spawn(async move {
+                std::future::pending::<()>().await;
+                completed.fetch_add(1, Ordering::SeqCst);
+            }));
+        }
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(10),
+                wait_for_owned_task_failure(&mut tasks),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(tasks.len(), 3, "cancellation must retain every join handle");
+        assert!(cancel_and_join_owned_tasks(&mut tasks).await.is_ok());
+        assert!(tasks.is_empty());
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn stop_accepts_only_cancellation_requested_by_that_stop() {
+        let mut pending = vec![tokio::spawn(std::future::pending::<()>())];
+        assert!(cancel_and_join_owned_tasks(&mut pending).await.is_ok());
+
+        let mut returned = vec![tokio::spawn(async {})];
+        while !returned[0].is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert!(cancel_and_join_owned_tasks(&mut returned).await.is_err());
+
+        let mut panicked = vec![tokio::spawn(async { panic!("capability panic control") })];
+        while !panicked[0].is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert!(cancel_and_join_owned_tasks(&mut panicked).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn repeated_signals_do_not_duplicate_or_bypass_held_stop() {
+        let stop_starts = Arc::new(AtomicUsize::new(0));
+        let stop_completed = Arc::new(AtomicUsize::new(0));
+        let signals_observed = Arc::new(AtomicUsize::new(0));
+        let signal_observed_notify = Arc::new(tokio::sync::Notify::new());
+        let (release_sender, release_receiver) = tokio::sync::oneshot::channel::<()>();
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel::<()>();
+        let (signal_sender, signal_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let _signal_sender_guard = signal_sender.clone();
+        let starts = stop_starts.clone();
+        let completed = stop_completed.clone();
+        let stop = async move {
+            starts.fetch_add(1, Ordering::SeqCst);
+            must(started_sender.send(()), "announce first stop poll");
+            must(release_receiver.await, "release held stop");
+            completed.fetch_add(1, Ordering::SeqCst);
+            7_u8
+        };
+        let observed = signals_observed.clone();
+        let observed_notify = signal_observed_notify.clone();
+        let repeated = futures_util::stream::unfold(signal_receiver, |mut receiver| async move {
+            receiver.recv().await.map(|event| (event, receiver))
+        })
+        .inspect(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            observed_notify.notify_waiters();
+        });
+        let mut repeated = Box::pin(repeated);
+        let emit_signals = tokio::spawn(async move {
+            must(started_receiver.await, "stop is polled first");
+            must(
+                signal_sender.send(Ok::<(), WitnessProcessErrorV1>(())),
+                "first repeated signal",
+            );
+            must(
+                signal_sender.send(Ok::<(), WitnessProcessErrorV1>(())),
+                "second repeated signal",
+            );
+        });
+        let release_starts = stop_starts.clone();
+        let release_completed = stop_completed.clone();
+        let release = tokio::spawn(async move {
+            loop {
+                let notified = signal_observed_notify.notified();
+                if signals_observed.load(Ordering::SeqCst) == 2 {
+                    break;
+                }
+                notified.await;
+            }
+            assert_eq!(release_starts.load(Ordering::SeqCst), 1);
+            assert_eq!(release_completed.load(Ordering::SeqCst), 0);
+            must(release_sender.send(()), "stop still awaits release");
+        });
+
+        let (result, repeated_count) = must(
+            complete_single_stop_while_observing_signals(stop, repeated.as_mut()).await,
+            "signal observation remains available during stop",
+        );
+        must(release.await, "release task");
+        must(emit_signals.await, "signal emitter");
+        assert_eq!(result, 7);
+        assert_eq!(repeated_count, 2);
+        assert_eq!(stop_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(stop_completed.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn signal_observer_failure_still_completes_the_owned_stop() {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let completion = completed.clone();
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let (release_sender, release_receiver) = tokio::sync::oneshot::channel();
+        let stop = async move {
+            must(started_sender.send(()), "announce stop poll");
+            must(release_receiver.await, "release stop");
+            completion.fetch_add(1, Ordering::SeqCst);
+        };
+        let mut signals = Box::pin(futures_util::stream::iter([Err(
+            WitnessProcessErrorV1::Startup,
+        )]));
+        let release = tokio::spawn(async move {
+            must(started_receiver.await, "stop started");
+            must(release_sender.send(()), "stop remains owned");
+        });
+
+        assert!(matches!(
+            complete_single_stop_while_observing_signals(stop, signals.as_mut()).await,
+            Err(WitnessProcessErrorV1::Startup)
+        ));
+        must(release.await, "release task");
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(unix)]
+struct ShutdownSignalSetV1 {
+    interrupt: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+impl ShutdownSignalSetV1 {
+    fn new() -> Result<Self, WitnessProcessErrorV1> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            interrupt: signal(SignalKind::interrupt())
+                .map_err(|_| WitnessProcessErrorV1::Startup)?,
+            terminate: signal(SignalKind::terminate())
+                .map_err(|_| WitnessProcessErrorV1::Startup)?,
+        })
+    }
+
+    async fn recv(&mut self) -> Result<(), WitnessProcessErrorV1> {
+        tokio::select! {
+            value = self.interrupt.recv() => value.ok_or(WitnessProcessErrorV1::Startup),
+            value = self.terminate.recv() => value.ok_or(WitnessProcessErrorV1::Startup),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct ShutdownSignalSetV1;
+
+#[cfg(not(unix))]
+impl ShutdownSignalSetV1 {
+    fn new() -> Result<Self, WitnessProcessErrorV1> {
+        Ok(Self)
+    }
+
+    async fn recv(&mut self) -> Result<(), WitnessProcessErrorV1> {
+        tokio::signal::ctrl_c()
+            .await
+            .map_err(|_| WitnessProcessErrorV1::Startup)
+    }
+}
+
+fn shutdown_signal_stream(
+    signals: ShutdownSignalSetV1,
+) -> impl Stream<Item = Result<(), WitnessProcessErrorV1>> {
+    futures_util::stream::unfold(signals, |mut signals| async move {
+        let event = signals.recv().await;
+        Some((event, signals))
+    })
+}
+
+async fn complete_single_stop_while_observing_signals<F, S>(
+    stop: F,
+    mut signals: Pin<&mut S>,
+) -> Result<(F::Output, usize), WitnessProcessErrorV1>
+where
+    F: Future,
+    S: Stream<Item = Result<(), WitnessProcessErrorV1>>,
+{
+    tokio::pin!(stop);
+    let mut repeated_signals = 0_usize;
+    let mut observe_signals = true;
+    let mut signal_failure = None;
+    loop {
+        tokio::select! {
+            result = &mut stop => {
+                return match signal_failure {
+                    Some(error) => Err(error),
+                    None => Ok((result, repeated_signals)),
+                };
+            }
+            signal = signals.next(), if observe_signals => {
+                match signal {
+                    Some(Ok(())) => {
+                        if let Some(next) = repeated_signals.checked_add(1) {
+                            repeated_signals = next;
+                        } else {
+                            signal_failure = Some(WitnessProcessErrorV1::Shutdown);
+                            observe_signals = false;
+                        }
+                    }
+                    Some(Err(error)) => {
+                        signal_failure = Some(error);
+                        observe_signals = false;
+                    }
+                    None => {
+                        signal_failure = Some(WitnessProcessErrorV1::Startup);
+                        observe_signals = false;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -110,6 +492,11 @@ struct RoleTransportConfigV1<'a> {
     deadline_millis: u64,
 }
 
+struct ConnectedRoleV1 {
+    client: async_nats::Client,
+    lifecycle_events: tokio::sync::mpsc::Receiver<async_nats::Event>,
+}
+
 fn tls_authority(url: &str) -> Option<&str> {
     let authority = url.strip_prefix("tls://")?;
     if authority.contains(['@', '/', '?']) {
@@ -120,22 +507,25 @@ fn tls_authority(url: &str) -> Option<&str> {
 
 async fn connect_exact_role(
     config: RoleTransportConfigV1<'_>,
-) -> Result<async_nats::Client, RuntimeWitnessClientErrorV1> {
+) -> Result<ConnectedRoleV1, RuntimeWitnessClientErrorV1> {
     if config.deadline_millis == 0 || tls_authority(config.nats_url) != Some(config.tls_server_name)
     {
         return Err(RuntimeWitnessClientErrorV1::Configuration);
     }
-    let raw = tokio::fs::read(config.credentials_path)
-        .await
+    validate_stable_public_file(config.tls_ca_path, MAX_CA_BYTES)
         .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
-    if raw.is_empty() || raw.len() > 4_096 {
-        return Err(RuntimeWitnessClientErrorV1::Configuration);
-    }
+    let raw = read_stable_file(
+        config.credentials_path,
+        MAX_ROLE_CREDENTIAL_BYTES,
+        StableFilePolicyV1::Private,
+    )
+    .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
     let credentials: RuntimeRoleCredentialFileV1 =
         serde_json::from_slice(&raw).map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
-    let canonical =
-        serde_json::to_vec(&credentials).map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
-    if canonical != raw
+    let canonical = Zeroizing::new(
+        serde_json::to_vec(&credentials).map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?,
+    );
+    if canonical.as_slice() != raw.as_slice()
         || credentials.schema_version != PROTOCOL_SCHEMA_VERSION
         || credentials.role != config.role
         || credentials.invocation_token != config.invocation_token
@@ -146,9 +536,12 @@ async fn connect_exact_role(
     {
         return Err(RuntimeWitnessClientErrorV1::Configuration);
     }
+    let username = Zeroizing::new(credentials.username.clone());
+    let password = Zeroizing::new(credentials.password.clone());
+    let (lifecycle_sender, lifecycle_events) = tokio::sync::mpsc::channel(1_024);
     let options = async_nats::ConnectOptions::with_user_and_password(
-        credentials.username,
-        credentials.password,
+        username.to_string(),
+        password.to_string(),
     )
     .require_tls(true)
     .add_root_certificates(PathBuf::from(config.tls_ca_path))
@@ -157,7 +550,13 @@ async fn connect_exact_role(
     .read_buffer_capacity(config.read_buffer_capacity)
     .connection_timeout(Duration::from_millis(config.deadline_millis))
     .request_timeout(Some(Duration::from_millis(config.deadline_millis)))
-    .max_reconnects(Some(1));
+    .max_reconnects(Some(1))
+    .event_callback(move |event| {
+        let sender = lifecycle_sender.clone();
+        async move {
+            let _ = sender.send(event).await;
+        }
+    });
     let client = timeout(
         Duration::from_millis(config.deadline_millis),
         options.connect(config.nats_url),
@@ -172,7 +571,10 @@ async fn connect_exact_role(
     .await
     .map_err(|_| RuntimeWitnessClientErrorV1::Authentication)?
     .map_err(|_| RuntimeWitnessClientErrorV1::Authentication)?;
-    Ok(client)
+    Ok(ConnectedRoleV1 {
+        client,
+        lifecycle_events,
+    })
 }
 
 pub async fn run_public_witness_process(
@@ -186,7 +588,7 @@ pub async fn run_public_witness_process(
     config
         .validate()
         .map_err(|_| WitnessProcessErrorV1::Configuration)?;
-    let client = connect_exact_role(RoleTransportConfigV1 {
+    let connection = connect_exact_role(RoleTransportConfigV1 {
         nats_url: &config.service.nats_url,
         credentials_path: &config.service.nats_credentials_path,
         invocation_token: &config.credential_invocation_token,
@@ -200,18 +602,22 @@ pub async fn run_public_witness_process(
     })
     .await
     .map_err(|_| WitnessProcessErrorV1::Authentication)?;
-    let secret = tokio::fs::read_to_string(&config.service.witness_key_path)
-        .await
-        .map_err(|_| WitnessProcessErrorV1::Configuration)?;
+    let secret_bytes = read_stable_file(
+        &config.service.witness_key_path,
+        MAX_SIGNING_KEY_BYTES,
+        StableFilePolicyV1::Private,
+    )
+    .map_err(|_| WitnessProcessErrorV1::Configuration)?;
+    let secret = copy_zeroizing_utf8_secret(&secret_bytes)?;
     if secret.is_empty() || secret.len() > 4_096 || secret.contains(['\r', '\n']) {
         return Err(WitnessProcessErrorV1::Configuration);
     }
-    let signer = Ed25519Signer::from_secret_material(&secret);
+    let signer = Ed25519Signer::from_secret_material(secret.as_str());
     if signer.key_id() != config.service.witness_key_id {
         return Err(WitnessProcessErrorV1::Configuration);
     }
     let proxy = NatsPublicWitnessStoreProxyClient::new(
-        client.clone(),
+        connection.client.clone(),
         config.service.max_request_bytes,
         config.service.max_response_bytes,
         STORE_RESPONSE_GRANT_MILLIS,
@@ -220,11 +626,47 @@ pub async fn run_public_witness_process(
     let dispatcher = PublicWitnessDispatcher::new(config.service, signer, proxy)
         .await
         .map_err(|_| WitnessProcessErrorV1::Startup)?;
-    let _runner = PublicWitnessServiceRunner::start(client, dispatcher)
-        .await
-        .map_err(|_| WitnessProcessErrorV1::Startup)?;
-    std::future::pending::<()>().await;
-    Ok(())
+    let mut runner = PublicWitnessServiceRunner::start_supervised(
+        connection.client,
+        dispatcher,
+        connection.lifecycle_events,
+    )
+    .await
+    .map_err(|_| WitnessProcessErrorV1::Startup)?;
+    let mut signals = Box::pin(shutdown_signal_stream(ShutdownSignalSetV1::new()?));
+    let mut initial_signal_failure = false;
+    let abnormal = tokio::select! {
+        signal = signals.next() => {
+            match signal {
+                Some(Ok(())) => false,
+                Some(Err(_)) | None => {
+                    initial_signal_failure = true;
+                    true
+                }
+            }
+        }
+        _ = runner.wait_for_failure() => true,
+    };
+    let (stop_result, _repeated_signals) = complete_single_stop_while_observing_signals(
+        runner.stop_and_wait(Duration::from_millis(PUBLIC_RESPONSE_GRANT_MILLIS)),
+        signals.as_mut(),
+    )
+    .await?;
+    match stop_result {
+        Ok(()) => {}
+        Err(crate::PublicWitnessRunnerErrorV1::TaskExit) => {
+            return Err(WitnessProcessErrorV1::AbnormalExit);
+        }
+        Err(_) => return Err(WitnessProcessErrorV1::Shutdown),
+    }
+    if initial_signal_failure {
+        return Err(WitnessProcessErrorV1::Startup);
+    }
+    if abnormal {
+        Err(WitnessProcessErrorV1::AbnormalExit)
+    } else {
+        Ok(())
+    }
 }
 
 pub async fn run_store_proxy_process(
@@ -233,7 +675,7 @@ pub async fn run_store_proxy_process(
     config
         .validate()
         .map_err(|_| WitnessProcessErrorV1::Configuration)?;
-    let raw_client = connect_exact_role(RoleTransportConfigV1 {
+    let raw_connection = connect_exact_role(RoleTransportConfigV1 {
         nats_url: &config.service.nats_url,
         credentials_path: &config.service.nats_credentials_path,
         invocation_token: &config.service.credential_invocation_token,
@@ -247,6 +689,10 @@ pub async fn run_store_proxy_process(
     })
     .await
     .map_err(|_| WitnessProcessErrorV1::Authentication)?;
+    let raw_client = raw_connection.client;
+    let raw_drain_client = raw_client.clone();
+    let raw_failure = wait_for_connection_failure(raw_connection.lifecycle_events);
+    tokio::pin!(raw_failure);
     let store = NatsWitnessStore::open(
         async_nats::jetstream::new(raw_client),
         config.ready.clone(),
@@ -260,11 +706,48 @@ pub async fn run_store_proxy_process(
     let connection = StoreRoleConnectionV1::connect(&config.service, &config.ready)
         .await
         .map_err(|_| WitnessProcessErrorV1::Authentication)?;
-    let _runner = StoreProxyServiceRunner::start(connection, service)
+    let mut runner = StoreProxyServiceRunner::start(connection, service)
         .await
         .map_err(|_| WitnessProcessErrorV1::Startup)?;
-    std::future::pending::<()>().await;
-    Ok(())
+    let mut signals = Box::pin(shutdown_signal_stream(ShutdownSignalSetV1::new()?));
+    let mut initial_signal_failure = false;
+    let abnormal = tokio::select! {
+        signal = signals.next() => {
+            match signal {
+                Some(Ok(())) => false,
+                Some(Err(_)) | None => {
+                    initial_signal_failure = true;
+                    true
+                }
+            }
+        }
+        _ = runner.wait_for_failure() => true,
+        _ = &mut raw_failure => true,
+    };
+    let stop = timeout(Duration::from_millis(STORE_RESPONSE_GRANT_MILLIS), async {
+        runner
+            .stop_and_wait(Duration::from_millis(STORE_RESPONSE_GRANT_MILLIS))
+            .await
+            .map_err(|error| match error {
+                crate::StoreProxyRunnerErrorV1::TaskExit => WitnessProcessErrorV1::AbnormalExit,
+                _ => WitnessProcessErrorV1::Shutdown,
+            })?;
+        raw_drain_client
+            .drain()
+            .await
+            .map_err(|_| WitnessProcessErrorV1::Shutdown)
+    });
+    let (stop_result, _repeated_signals) =
+        complete_single_stop_while_observing_signals(stop, signals.as_mut()).await?;
+    stop_result.map_err(|_| WitnessProcessErrorV1::Shutdown)??;
+    if initial_signal_failure {
+        return Err(WitnessProcessErrorV1::Startup);
+    }
+    if abnormal {
+        Err(WitnessProcessErrorV1::AbnormalExit)
+    } else {
+        Ok(())
+    }
 }
 
 pub struct RuntimeWitnessClient {
@@ -282,15 +765,21 @@ impl RuntimeWitnessClient {
         config
             .validate()
             .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
-        let raw = tokio::fs::read(&config.nats_credentials_path)
-            .await
+        validate_stable_public_file(&config.tls_ca_path, MAX_CA_BYTES)
             .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
-        if raw.is_empty() || raw.len() > 4_096 {
-            return Err(RuntimeWitnessClientErrorV1::Configuration);
-        }
+        let raw = read_stable_file(
+            &config.nats_credentials_path,
+            MAX_ROLE_CREDENTIAL_BYTES,
+            StableFilePolicyV1::Private,
+        )
+        .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
         let credentials: RuntimeRoleCredentialFileV1 =
             serde_json::from_slice(&raw).map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
-        if serde_json::to_vec(&credentials).ok().as_deref() != Some(raw.as_slice())
+        let canonical = Zeroizing::new(
+            serde_json::to_vec(&credentials)
+                .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?,
+        );
+        if canonical.as_slice() != raw.as_slice()
             || credentials.schema_version != PROTOCOL_SCHEMA_VERSION
             || credentials.role != "runtime"
             || credentials.invocation_token != config.credential_invocation_token
@@ -303,9 +792,11 @@ impl RuntimeWitnessClient {
         }
         #[cfg(test)]
         let authenticated_user = credentials.username.clone();
+        let username = Zeroizing::new(credentials.username.clone());
+        let password = Zeroizing::new(credentials.password.clone());
         let options = async_nats::ConnectOptions::with_user_and_password(
-            credentials.username,
-            credentials.password,
+            username.to_string(),
+            password.to_string(),
         )
         .require_tls(true)
         .add_root_certificates(PathBuf::from(&config.tls_ca_path))

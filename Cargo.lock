@@ -3068,6 +3068,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "hex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -3076,6 +3077,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

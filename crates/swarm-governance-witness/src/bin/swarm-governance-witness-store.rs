@@ -1,4 +1,4 @@
-use swarm_governance_witness::{StoreProxyProcessConfigV1, run_store_proxy_process};
+use swarm_governance_witness::{load_store_proxy_process_config, run_store_proxy_process};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -10,11 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if arguments.next().is_some() {
         return Err("exactly one configuration path is required".into());
     }
-    let bytes = std::fs::read(path)?;
-    let config: StoreProxyProcessConfigV1 = serde_json::from_slice(&bytes)?;
-    if serde_json::to_vec(&config)? != bytes {
-        return Err("configuration must be canonical JSON".into());
-    }
+    let config = load_store_proxy_process_config(path)?;
     run_store_proxy_process(config).await?;
     Ok(())
 }
