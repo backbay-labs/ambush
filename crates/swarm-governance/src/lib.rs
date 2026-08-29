@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 //! Authenticated governance persistence, consensus authority, and the Tom role.
 //!
 //! ## Owns
@@ -19,9 +17,14 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ffi::OsStr;
+use std::ffi::OsString;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::ffi::{CStr, CString};
 use std::fs::{self, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_consensus::{
@@ -62,12 +65,29 @@ const MAX_CONSUMED_AUTHORIZATIONS: usize = 1_024;
 const MAX_PENDING_HUMAN_AUTHORIZATIONS: usize = 1_024;
 const MAX_AUTHORIZATION_AGE_MS: i64 = 300_000;
 const MAX_AUTHORIZATION_FUTURE_SKEW_MS: i64 = 30_000;
+const GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS: i64 = 1_000;
 const GOVERNANCE_STATE_KIND: &str = "swarm.governance.policy-state.v1";
 const GOVERNANCE_CHECKPOINT_KIND: &str = "swarm.governance.policy-checkpoint.v1";
 const GOVERNANCE_STATE_STREAM: &str = "tom-primary";
 const GOVERNANCE_LOCK_RECORD_SCHEMA_VERSION: u32 = 1;
 const GOVERNANCE_LOCK_GENERATION_BYTES: usize = 32;
 const MAX_GOVERNANCE_LOCK_RECORD_BYTES: u64 = 4_096;
+const GOVERNANCE_CLEANUP_POOL_DIR_NAME: &str = ".governance-cleanup-pool";
+const GOVERNANCE_CLEANUP_POOL_LOCK_NAME: &str = "lock";
+const GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME: &str = "journal";
+const GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME: &str = "candidate";
+const GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME: &str = "quarantine";
+const GOVERNANCE_CLEANUP_POOL_BINDING_NAME: &str = "binding.json";
+const GOVERNANCE_CLEANUP_POOL_SLOT_COUNT: usize = 64;
+const CLEANUP_POOL_BINDING_SCHEMA_VERSION: u32 = 1;
+const CLEANUP_POOL_BINDING_KIND: &str = "swarm.governance.cleanup-pool-binding.v1";
+const CLEANUP_POOL_BINDING_STREAM: &str = "tom-primary-cleanup-pool";
+const GOVERNANCE_CLEANUP_POOL_MAINTENANCE_JOURNAL_NAME: &str = "maintenance.json";
+const CLEANUP_POOL_MAINTENANCE_SCHEMA_VERSION: u32 = 1;
+const CLEANUP_POOL_MAINTENANCE_KIND: &str = "swarm.governance.cleanup-pool-maintenance.v1";
+const CLEANUP_POOL_MAINTENANCE_STREAM: &str = "tom-primary-cleanup-pool-maintenance";
+
+static AUTHORITY_CLEANUP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContingencyLease {
@@ -460,6 +480,22 @@ struct GovernanceState {
     /// Transient marker: the state envelope committed but its signed high-water
     /// checkpoint did not. Never serialized into the state it describes.
     checkpoint_lagging: Option<GovernanceCheckpointLag>,
+    /// Transient health-tick retry deadline for a failed checkpoint repair.
+    /// Governed effects deliberately bypass this backoff and attempt repair
+    /// immediately before their external effect.
+    checkpoint_repair_backoff: Option<GovernanceCheckpointRepairBackoff>,
+    /// A health observation that arrived while checkpoint repair was deferred.
+    /// Governed authority remains fail-closed until a later health tick can
+    /// persist the observation against a repaired checkpoint. This is the
+    /// latest in-memory observation; the signed `durable_pending_health_observation`
+    /// below is the checkpoint-repair anchor when observations oscillate during
+    /// the retry window.
+    pending_health_observation: Option<PendingHealthObservation>,
+    /// The first pending observation committed into the signed state envelope.
+    /// Keeping this anchor separate from the latest in-memory observation means
+    /// checkpoint repair can authenticate the durable envelope even when health
+    /// snapshots change repeatedly before the retry deadline.
+    durable_pending_health_observation: Option<PendingHealthObservation>,
     /// The exact signed envelope sequence this in-memory snapshot was loaded
     /// from or last committed as. Never serialized into its own payload.
     persistence_sequence: Option<u64>,
@@ -538,6 +574,9 @@ impl Default for GovernanceState {
             reconciliation_reports: Vec::new(),
             pending_events: VecDeque::new(),
             checkpoint_lagging: None,
+            checkpoint_repair_backoff: None,
+            pending_health_observation: None,
+            durable_pending_health_observation: None,
             persistence_sequence: None,
             persistence_digest: None,
         }
@@ -559,19 +598,74 @@ impl Default for GovernancePolicyConfig {
     }
 }
 
+#[cfg(test)]
+type GovernanceLoaderBarrier = (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+
+#[derive(Debug)]
+struct CleanupPoolContext {
+    pool_path: PathBuf,
+    binding_path: PathBuf,
+    parent_identity: GovernanceArtifactIdentity,
+    pool_file: fs::File,
+    pool_identity: GovernanceArtifactIdentity,
+    lock_file: fs::File,
+    lock_identity: GovernanceArtifactIdentity,
+    binding_file: fs::File,
+    binding_identity: GovernanceArtifactIdentity,
+    binding: CleanupPoolBinding,
+    signed: bool,
+}
+
+impl CleanupPoolContext {
+    #[cfg(test)]
+    fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(Self {
+            pool_path: self.pool_path.clone(),
+            binding_path: self.binding_path.clone(),
+            parent_identity: self.parent_identity,
+            pool_file: self.pool_file.try_clone()?,
+            pool_identity: self.pool_identity,
+            lock_file: self.lock_file.try_clone()?,
+            lock_identity: self.lock_identity,
+            binding_file: self.binding_file.try_clone()?,
+            binding_identity: self.binding_identity,
+            binding: self.binding.clone(),
+            signed: self.signed,
+        })
+    }
+}
+
 #[derive(Debug)]
 struct GovernancePersistence {
     path: PathBuf,
     sequence_path: PathBuf,
+    parent_directory: fs::File,
+    parent_directory_identity: GovernanceArtifactIdentity,
+    no_replace_initial_publication: Mutex<bool>,
     lock_path: PathBuf,
+    authority_lock_path: PathBuf,
     lock_binding: GovernanceLockBinding,
     expected_signer_agent_id: AgentId,
     /// Exclusive OS advisory lock held for the full policy lifetime. The lock
     /// file may remain after exit; ownership comes only from this live handle,
     /// never from file existence.
     lock_file: fs::File,
+    /// Process-lifetime exclusion shared by current and legacy authority paths.
+    authority_lock_file: fs::File,
+    authority_lock_identity: GovernanceAuthorityLockIdentity,
+    cleanup_pool_context: Mutex<Option<CleanupPoolContext>>,
+    /// Exact identities written by the current initialization transaction.
+    /// Rollback consumes this journal and never removes a state/sequence path
+    /// based only on its name or on the unrelated stream lock.
+    new_stream_artifacts: Mutex<Vec<(PathBuf, GovernanceArtifactIdentity)>>,
+    /// Active reinitialization journal context.  Write paths publish an
+    /// authenticated content intent before their atomic rename.
+    reinitialization_journal_path: Mutex<Option<PathBuf>>,
+    reinitialization_journal_signing_key: Mutex<Option<SigningKey>>,
     #[cfg(test)]
     test_pre_write_barrier: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+    #[cfg(test)]
+    test_loader_barrier: Mutex<Option<GovernanceLoaderBarrier>>,
 }
 
 impl Drop for GovernancePersistence {
@@ -593,6 +687,16 @@ struct GovernanceLockIdentity {
 #[cfg(not(unix))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GovernanceLockIdentity;
+
+/// Stable filesystem identity of the process-lifetime governance authority
+/// sidecar. Runtime path-selection code uses this opaque value to require the
+/// current and legacy authority paths to be hard links to one inode before it
+/// selects either stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernanceAuthorityLockIdentity {
+    pub device: u64,
+    pub inode: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct GovernanceLockBinding {
@@ -652,23 +756,2397 @@ enum GovernancePersistenceOutcome {
 
 #[derive(Debug)]
 enum AtomicWriteOutcome {
-    Synced,
+    Synced(GovernanceArtifactIdentity),
     /// The rename (the state commit point) succeeded, but syncing its parent
     /// directory did not. Callers must treat the new file as committed in this
     /// process even though crash durability is not yet proven.
-    RenamedDirectorySyncFailed(GovernancePersistenceError),
+    RenamedDirectorySyncFailed(GovernancePersistenceError, GovernanceArtifactIdentity),
 }
 
-#[derive(Debug, Clone)]
+/// Identity captured from the freshly fsynced temporary file before its
+/// atomic rename.  Reinitialization rollback uses this identity, rather than a
+/// pathname or a lock check, when deciding whether a partial new stream may be
+/// quarantined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct GovernanceArtifactIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// A no-follow, byte-authenticated snapshot of one persistence artifact.
+///
+/// The inode alone is not sufficient for reinitialization rollback: a hard
+/// link would make the supposed archive an alias of the live source, so a
+/// later in-place write could mutate both.  Reinitialization therefore binds
+/// the source identity to the exact copied bytes and length.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GovernanceArtifactSnapshot {
+    identity: GovernanceArtifactIdentity,
+    content_digest: String,
+    byte_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CleanupPoolBinding {
+    schema_version: u32,
+    parent_identity: GovernanceArtifactIdentity,
+    pool_identity: GovernanceArtifactIdentity,
+    lock_identity: GovernanceArtifactIdentity,
+    generation_id: String,
+    slot_count: usize,
+    pool_name: String,
+    lock_name: String,
+    binding_name: String,
+    journal_name: String,
+    candidate_name: String,
+    quarantine_name: String,
+    slot_names: Vec<String>,
+}
+
+impl CleanupPoolBinding {
+    fn unbound() -> Self {
+        Self {
+            schema_version: CLEANUP_POOL_BINDING_SCHEMA_VERSION,
+            parent_identity: GovernanceArtifactIdentity {
+                device: 0,
+                inode: 0,
+            },
+            pool_identity: GovernanceArtifactIdentity {
+                device: 0,
+                inode: 0,
+            },
+            lock_identity: GovernanceArtifactIdentity {
+                device: 0,
+                inode: 0,
+            },
+            generation_id: String::new(),
+            slot_count: GOVERNANCE_CLEANUP_POOL_SLOT_COUNT,
+            pool_name: GOVERNANCE_CLEANUP_POOL_DIR_NAME.to_string(),
+            lock_name: GOVERNANCE_CLEANUP_POOL_LOCK_NAME.to_string(),
+            binding_name: GOVERNANCE_CLEANUP_POOL_BINDING_NAME.to_string(),
+            journal_name: GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME.to_string(),
+            candidate_name: GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME.to_string(),
+            quarantine_name: GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME.to_string(),
+            slot_names: Vec::new(),
+        }
+    }
+
+    fn new(
+        parent_identity: GovernanceArtifactIdentity,
+        pool_identity: GovernanceArtifactIdentity,
+        lock_identity: GovernanceArtifactIdentity,
+    ) -> Self {
+        let mut generation = [0_u8; 32];
+        OsRng.fill_bytes(&mut generation);
+        Self {
+            schema_version: CLEANUP_POOL_BINDING_SCHEMA_VERSION,
+            parent_identity,
+            pool_identity,
+            lock_identity,
+            generation_id: hex::encode(generation),
+            slot_count: GOVERNANCE_CLEANUP_POOL_SLOT_COUNT,
+            pool_name: GOVERNANCE_CLEANUP_POOL_DIR_NAME.to_string(),
+            lock_name: GOVERNANCE_CLEANUP_POOL_LOCK_NAME.to_string(),
+            binding_name: GOVERNANCE_CLEANUP_POOL_BINDING_NAME.to_string(),
+            journal_name: GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME.to_string(),
+            candidate_name: GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME.to_string(),
+            quarantine_name: GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME.to_string(),
+            slot_names: (0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT)
+                .map(|index| cleanup_pool_slot_name(index).to_string_lossy().into_owned())
+                .collect(),
+        }
+    }
+
+    fn validate_namespace(
+        &self,
+        parent_identity: GovernanceArtifactIdentity,
+        pool_identity: GovernanceArtifactIdentity,
+        lock_identity: GovernanceArtifactIdentity,
+    ) -> Result<(), String> {
+        let expected = Self {
+            schema_version: CLEANUP_POOL_BINDING_SCHEMA_VERSION,
+            parent_identity,
+            pool_identity,
+            lock_identity,
+            generation_id: self.generation_id.clone(),
+            slot_count: GOVERNANCE_CLEANUP_POOL_SLOT_COUNT,
+            pool_name: GOVERNANCE_CLEANUP_POOL_DIR_NAME.to_string(),
+            lock_name: GOVERNANCE_CLEANUP_POOL_LOCK_NAME.to_string(),
+            binding_name: GOVERNANCE_CLEANUP_POOL_BINDING_NAME.to_string(),
+            journal_name: GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME.to_string(),
+            candidate_name: GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME.to_string(),
+            quarantine_name: GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME.to_string(),
+            slot_names: (0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT)
+                .map(|index| cleanup_pool_slot_name(index).to_string_lossy().into_owned())
+                .collect(),
+        };
+        if self.schema_version != expected.schema_version
+            || self.parent_identity != expected.parent_identity
+            || self.pool_identity != expected.pool_identity
+            || self.lock_identity != expected.lock_identity
+            || self.generation_id.len() != 64
+            || self.slot_count != expected.slot_count
+            || self.pool_name != expected.pool_name
+            || self.lock_name != expected.lock_name
+            || self.binding_name != expected.binding_name
+            || self.journal_name != expected.journal_name
+            || self.candidate_name != expected.candidate_name
+            || self.quarantine_name != expected.quarantine_name
+            || self.slot_names != expected.slot_names
+        {
+            return Err("cleanup pool binding does not describe the fixed namespace".to_string());
+        }
+        if !self
+            .generation_id
+            .as_bytes()
+            .iter()
+            .all(u8::is_ascii_hexdigit)
+        {
+            return Err("cleanup pool binding generation is not hexadecimal".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn governance_artifact_identity(metadata: &fs::Metadata) -> Option<GovernanceArtifactIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    metadata
+        .file_type()
+        .is_file()
+        .then_some(GovernanceArtifactIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+}
+
+#[cfg(not(unix))]
+fn governance_artifact_identity(_metadata: &fs::Metadata) -> Option<GovernanceArtifactIdentity> {
+    None
+}
+
+#[cfg(unix)]
+fn governance_directory_identity(metadata: &fs::Metadata) -> Option<GovernanceArtifactIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    metadata
+        .file_type()
+        .is_dir()
+        .then_some(GovernanceArtifactIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+}
+
+#[cfg(not(unix))]
+fn governance_directory_identity(_metadata: &fs::Metadata) -> Option<GovernanceArtifactIdentity> {
+    None
+}
+
+fn read_governance_artifact_identity(
+    path: &Path,
+) -> Result<Option<GovernanceArtifactIdentity>, std::io::Error> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(governance_artifact_identity(&metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+const CLEANUP_POOL_RECORD_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum CleanupPoolPhase {
+    Reserved,
+    SourceMoved,
+    QuarantineMoved,
+    ForeignPreserved,
+    Retained,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum CleanupPoolMaintenanceJournalPhase {
+    Prepared,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CleanupPoolMaintenanceJournal {
+    schema_version: u32,
+    operation_id: String,
+    mode: GovernanceCleanupPoolMaintenanceMode,
+    binding: CleanupPoolBinding,
+    archive_name: String,
+    archive_identity: GovernanceArtifactIdentity,
+    selected_slots: Vec<String>,
+    slot_proofs: BTreeMap<String, CleanupPoolMaintenanceSlotProof>,
+    moved_slots: Vec<String>,
+    opaque_slots: Vec<String>,
+    phase: CleanupPoolMaintenanceJournalPhase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CleanupPoolMaintenanceSlotProof {
+    identity: GovernanceArtifactIdentity,
+    content_digest: String,
+    byte_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CleanupPoolEntryRecord {
+    target_component: Vec<u8>,
+    identity: GovernanceArtifactIdentity,
+    content_digest: String,
+    byte_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CleanupPoolRecord {
+    schema_version: u32,
+    transaction_id: String,
+    parent_identity: GovernanceArtifactIdentity,
+    pool_identity: GovernanceArtifactIdentity,
+    lock_identity: GovernanceArtifactIdentity,
+    slot_identity: GovernanceArtifactIdentity,
+    target_component: Vec<u8>,
+    entries: Vec<CleanupPoolEntryRecord>,
+    previous_digest: Option<String>,
+    phase: CleanupPoolPhase,
+    record_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuarantineOutcome {
+    NotVerified,
+    Retained,
+    ForeignPreserved,
+    PoolExhausted,
+    Uncertain,
+}
+
+impl QuarantineOutcome {
+    fn is_semantic_success(self) -> bool {
+        // A foreign replacement being preserved is deliberately not success
+        // for the caller that expected to retire its own artifact.  It is a
+        // safe outcome for a drop path, but result-returning paths must retain
+        // their higher-level rollback material and report uncertainty.
+        matches!(self, Self::Retained)
+    }
+
+    fn maintenance_reason(self) -> &'static str {
+        match self {
+            Self::NotVerified => "cleanup precondition was not verified",
+            Self::Retained => "entry is semantically quarantined in a retained pool slot",
+            Self::ForeignPreserved => "foreign replacement was preserved in a retained slot",
+            Self::PoolExhausted => "all 64 cleanup pool slots are occupied",
+            Self::Uncertain => "cleanup transaction is uncertain and requires maintenance",
+        }
+    }
+}
+
+/// A fixed-cardinality cleanup slot.  The pool and lock descriptors remain
+/// live for the complete quarantine transaction; every slot operation is
+/// relative to these descriptors, never a pathname re-open.
+struct AuthorityCleanupRetirement {
+    path: PathBuf,
+    pool_path: PathBuf,
+    /// The fixed pool entry name is part of the capability.  Holding the slot
+    /// directory alone is insufficient: a same-UID writer can rename that
+    /// entry away and leave the descriptor orphaned while the name is reused
+    /// for a different transaction.
+    slot_name: OsString,
+    parent_file: fs::File,
+    parent_identity: GovernanceArtifactIdentity,
+    pool_file: fs::File,
+    pool_identity: GovernanceArtifactIdentity,
+    lock_file: fs::File,
+    lock_identity: GovernanceArtifactIdentity,
+    file: fs::File,
+    identity: GovernanceArtifactIdentity,
+    transaction_id: String,
+    target_component: Vec<u8>,
+    previous_record_digest: Option<String>,
+    journal_file: Option<fs::File>,
+    journal_identity: Option<GovernanceArtifactIdentity>,
+    journal_expected_bytes: Vec<u8>,
+    journal_expected_len: u64,
+    journal_expected_digest: String,
+    journal_last_phase: Option<CleanupPoolPhase>,
+}
+
+/// Stable handle to the original parent directory of a cleanup entry. Every
+/// restore/publication operation is relative to this descriptor; the
+/// pathname is only an observation and may be replaced by a foreign
+/// directory while cleanup is in flight.
+#[derive(Debug)]
+struct AuthorityCleanupParent {
+    file: fs::File,
+    identity: GovernanceArtifactIdentity,
+}
+
+fn cleanup_pool_record_digest(record: &CleanupPoolRecord) -> Result<String, std::io::Error> {
+    let mut unsigned = record.clone();
+    unsigned.record_digest.clear();
+    let bytes = serde_json::to_vec(&unsigned).map_err(|error| {
+        std::io::Error::other(format!("cleanup journal encoding failed: {error}"))
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn cleanup_pool_record_line(record: &CleanupPoolRecord) -> Result<Vec<u8>, std::io::Error> {
+    let mut record = record.clone();
+    record.record_digest = cleanup_pool_record_digest(&record)?;
+    let mut bytes = serde_json::to_vec(&record).map_err(|error| {
+        std::io::Error::other(format!("cleanup journal encoding failed: {error}"))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn cleanup_pool_phase_rank(phase: CleanupPoolPhase) -> u8 {
+    match phase {
+        CleanupPoolPhase::Reserved => 0,
+        CleanupPoolPhase::SourceMoved => 1,
+        CleanupPoolPhase::QuarantineMoved => 2,
+        CleanupPoolPhase::ForeignPreserved => 3,
+        CleanupPoolPhase::Retained => 4,
+    }
+}
+
+fn cleanup_pool_journal_error(
+    slot: &AuthorityCleanupRetirement,
+    reason: impl Into<String>,
+) -> GovernancePersistenceError {
+    cleanup_pool_error(&slot.path, reason)
+}
+
+fn validate_cleanup_pool_journal_bytes(
+    slot: &AuthorityCleanupRetirement,
+    bytes: &[u8],
+    expected_bytes: &[u8],
+    expected_len: u64,
+    expected_digest: &str,
+) -> Result<(Option<String>, Option<CleanupPoolPhase>), GovernancePersistenceError> {
+    if bytes.len() as u64 != expected_len
+        || bytes != expected_bytes
+        || sha256_hex(bytes) != expected_digest
+    {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal bytes changed from the held authenticated chain",
+        ));
+    }
+    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal is not newline terminated",
+        ));
+    }
+
+    let mut previous_digest = None;
+    let mut previous_phase = None;
+    let mut lines = bytes.split(|byte| *byte == b'\n').peekable();
+    while let Some(line) = lines.next() {
+        if line.is_empty() {
+            if lines.peek().is_none() {
+                break;
+            }
+            return Err(cleanup_pool_journal_error(
+                slot,
+                "cleanup slot journal contains an empty record",
+            ));
+        }
+        let record: CleanupPoolRecord = serde_json::from_slice(line).map_err(|error| {
+            cleanup_pool_journal_error(
+                slot,
+                format!("cleanup slot journal record is malformed: {error}"),
+            )
+        })?;
+        if record.schema_version != CLEANUP_POOL_RECORD_SCHEMA_VERSION
+            || record.transaction_id != slot.transaction_id
+            || record.parent_identity != slot.parent_identity
+            || record.pool_identity != slot.pool_identity
+            || record.lock_identity != slot.lock_identity
+            || record.slot_identity != slot.identity
+            || record.target_component != slot.target_component
+        {
+            return Err(cleanup_pool_journal_error(
+                slot,
+                "cleanup slot journal record metadata is not bound to this slot",
+            ));
+        }
+        if record.previous_digest != previous_digest {
+            return Err(cleanup_pool_journal_error(
+                slot,
+                "cleanup slot journal previous digest does not match its predecessor",
+            ));
+        }
+        if let Some(previous_phase) = previous_phase {
+            if matches!(
+                previous_phase,
+                CleanupPoolPhase::ForeignPreserved | CleanupPoolPhase::Retained
+            ) || cleanup_pool_phase_rank(record.phase) < cleanup_pool_phase_rank(previous_phase)
+            {
+                return Err(cleanup_pool_journal_error(
+                    slot,
+                    "cleanup slot journal phase is not a legal monotonic transition",
+                ));
+            }
+        } else if record.phase != CleanupPoolPhase::Reserved {
+            return Err(cleanup_pool_journal_error(
+                slot,
+                "cleanup slot journal does not begin with Reserved",
+            ));
+        }
+        for entry in &record.entries {
+            if entry.target_component != slot.target_component
+                || entry.content_digest.len() != 64
+                || !entry
+                    .content_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(cleanup_pool_journal_error(
+                    slot,
+                    "cleanup slot journal entry metadata is invalid",
+                ));
+            }
+        }
+        let recomputed = cleanup_pool_record_digest(&record).map_err(|error| {
+            cleanup_pool_journal_error(
+                slot,
+                format!("cleanup slot journal digest could not be recomputed: {error}"),
+            )
+        })?;
+        if record.record_digest != recomputed {
+            return Err(cleanup_pool_journal_error(
+                slot,
+                "cleanup slot journal record digest is forged",
+            ));
+        }
+        previous_digest = Some(record.record_digest);
+        previous_phase = Some(record.phase);
+    }
+    Ok((previous_digest, previous_phase))
+}
+
+#[derive(Debug)]
+struct CleanupPoolMaintenanceSlot {
+    phase: Option<CleanupPoolPhase>,
+    opaque: bool,
+}
+
+fn cleanup_maintenance_journal_path(pool_path: &Path) -> PathBuf {
+    pool_path.join(GOVERNANCE_CLEANUP_POOL_MAINTENANCE_JOURNAL_NAME)
+}
+
+fn cleanup_maintenance_error(path: &Path, reason: impl Into<String>) -> GovernancePersistenceError {
+    GovernancePersistenceError::CleanupMaintenanceJournal {
+        path: path.to_path_buf(),
+        reason: reason.into(),
+    }
+}
+
+fn cleanup_maintenance_archive_error(
+    path: &Path,
+    reason: impl Into<String>,
+) -> GovernancePersistenceError {
+    GovernancePersistenceError::CleanupMaintenanceArchive {
+        path: path.to_path_buf(),
+        reason: reason.into(),
+    }
+}
+
+fn map_cleanup_maintenance_contention(
+    error: GovernancePersistenceError,
+) -> GovernancePersistenceError {
+    match error {
+        GovernancePersistenceError::StateLocked { path } => {
+            GovernancePersistenceError::MaintenanceBusy {
+                path,
+                resource: "governance state lock".to_string(),
+            }
+        }
+        GovernancePersistenceError::CleanupPoolNamespaceChanged { path, reason }
+            if reason.contains("held by another writer")
+                || reason.contains("could not lock cleanup pool")
+                || reason.contains("cleanup pool lock could not be acquired") =>
+        {
+            GovernancePersistenceError::MaintenanceBusy {
+                path,
+                resource: "cleanup pool lock".to_string(),
+            }
+        }
+        other => other,
+    }
+}
+
+fn valid_cleanup_archive_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && Path::new(name).file_name().and_then(|value| value.to_str()) == Some(name)
+}
+
+fn cleanup_pool_slot_name_set(binding: &CleanupPoolBinding) -> BTreeSet<OsString> {
+    binding.slot_names.iter().map(OsString::from).collect()
+}
+
+fn validate_cleanup_pool_directory_namespace(
+    pool: &fs::File,
+    binding: &CleanupPoolBinding,
+    pool_path: &Path,
+) -> Result<(), GovernancePersistenceError> {
+    let fixed_slots = cleanup_pool_slot_name_set(binding);
+    let fixed_names = [
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_MAINTENANCE_JOURNAL_NAME),
+    ];
+    for name in directory_entry_names(pool).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!("could not enumerate fixed pool: {source}"),
+        )
+    })? {
+        if fixed_slots.contains(&name) || fixed_names.contains(&name.as_os_str()) {
+            continue;
+        }
+        return Err(cleanup_maintenance_error(
+            pool_path,
+            format!(
+                "unknown cleanup-pool entry `{}` is present",
+                name.to_string_lossy()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn inspect_cleanup_pool_slot(
+    parent: &AuthorityCleanupParent,
+    pool: &fs::File,
+    lock: &fs::File,
+    binding: &CleanupPoolBinding,
+    pool_path: &Path,
+    name: &OsStr,
+) -> Result<CleanupPoolMaintenanceSlot, GovernancePersistenceError> {
+    let identity = directory_entry_identity_at(pool, name)
+        .map_err(|source| cleanup_maintenance_error(pool_path, source.to_string()))?
+        .ok_or_else(|| cleanup_maintenance_error(pool_path, "cleanup slot disappeared"))?;
+    let slot = open_directory_at(pool, name).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!(
+                "slot `{}` is not an openable directory: {source}",
+                name.to_string_lossy()
+            ),
+        )
+    })?;
+    let journal_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+    let journal = open_regular_entry_at(&slot, journal_name).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!(
+                "slot `{}` has no regular journal: {source}",
+                name.to_string_lossy()
+            ),
+        )
+    })?;
+    let journal_identity = journal
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata))
+        .ok_or_else(|| cleanup_maintenance_error(pool_path, "slot journal is not regular"))?;
+    let mut reader = journal.try_clone().map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!("slot journal could not be cloned: {source}"),
+        )
+    })?;
+    reader.seek(SeekFrom::Start(0)).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!("slot journal could not be read: {source}"),
+        )
+    })?;
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!("slot journal could not be read: {source}"),
+        )
+    })?;
+    let first_line = bytes
+        .split(|byte| *byte == b'\n')
+        .find(|line| !line.is_empty())
+        .ok_or_else(|| cleanup_maintenance_error(pool_path, "slot journal is empty"))?;
+    let first_record: CleanupPoolRecord = serde_json::from_slice(first_line).map_err(|error| {
+        cleanup_maintenance_error(pool_path, format!("slot journal is malformed: {error}"))
+    })?;
+    let target_component = first_record.target_component.clone();
+    let transaction_id = first_record.transaction_id.clone();
+    let retirement = AuthorityCleanupRetirement {
+        path: pool_path.join(name),
+        pool_path: pool_path.to_path_buf(),
+        slot_name: name.to_os_string(),
+        parent_file: parent.file.try_clone().map_err(|source| {
+            cleanup_maintenance_error(
+                pool_path,
+                format!("parent descriptor could not clone: {source}"),
+            )
+        })?,
+        parent_identity: parent.identity,
+        pool_file: pool.try_clone().map_err(|source| {
+            cleanup_maintenance_error(
+                pool_path,
+                format!("pool descriptor could not clone: {source}"),
+            )
+        })?,
+        pool_identity: binding.pool_identity,
+        lock_file: lock.try_clone().map_err(|source| {
+            cleanup_maintenance_error(
+                pool_path,
+                format!("pool lock descriptor could not clone: {source}"),
+            )
+        })?,
+        lock_identity: binding.lock_identity,
+        file: slot,
+        identity,
+        transaction_id,
+        target_component,
+        previous_record_digest: None,
+        journal_file: Some(journal),
+        journal_identity: Some(journal_identity),
+        journal_expected_bytes: bytes.clone(),
+        journal_expected_len: bytes.len() as u64,
+        journal_expected_digest: sha256_hex(&bytes),
+        journal_last_phase: None,
+    };
+    let (_, phase) = validate_cleanup_pool_journal_bytes(
+        &retirement,
+        &bytes,
+        &bytes,
+        bytes.len() as u64,
+        &sha256_hex(&bytes),
+    )?;
+    if retirement.parent_identity != binding.parent_identity
+        || retirement.pool_identity != binding.pool_identity
+        || retirement.lock_identity != binding.lock_identity
+    {
+        return Err(cleanup_maintenance_error(
+            pool_path,
+            "slot journal namespace does not match authenticated cleanup binding",
+        ));
+    }
+    let allowed = [
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME),
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME),
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME),
+        OsStr::new(std::str::from_utf8(&retirement.target_component).unwrap_or("")),
+    ];
+    for entry in directory_entry_names(&retirement.file).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!("slot directory could not enumerate: {source}"),
+        )
+    })? {
+        if !allowed.contains(&entry.as_os_str()) {
+            return Err(cleanup_maintenance_error(
+                pool_path,
+                format!(
+                    "slot `{}` contains unknown entry `{}`",
+                    name.to_string_lossy(),
+                    entry.to_string_lossy()
+                ),
+            ));
+        }
+    }
+    Ok(CleanupPoolMaintenanceSlot {
+        phase,
+        opaque: matches!(phase, Some(CleanupPoolPhase::ForeignPreserved)),
+    })
+}
+
+/// Snapshot the fixed slot's direct namespace through its held parent fd.  The
+/// maintenance journal binds this proof together with the slot inode; a
+/// same-inode content mutation therefore cannot make resume accept an
+/// unproven source/archive pair.
+fn cleanup_pool_slot_content_proof(
+    pool: &fs::File,
+    name: &OsStr,
+) -> Result<(String, u64), std::io::Error> {
+    let slot = open_directory_at(pool, name)?;
+    let mut entries = Vec::new();
+    let mut byte_len = 0_u64;
+    for entry in directory_entry_names(&slot)? {
+        let identity = directory_entry_identity_at(&slot, &entry)?;
+        let (digest, len) = match open_regular_entry_at(&slot, &entry) {
+            Ok(mut file) => {
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)?;
+                byte_len = byte_len.saturating_add(bytes.len() as u64);
+                (sha256_hex(&bytes), bytes.len() as u64)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (String::new(), 0),
+            Err(error) if error.kind() == std::io::ErrorKind::IsADirectory => (String::new(), 0),
+            Err(error) => return Err(error),
+        };
+        #[cfg(unix)]
+        use std::os::unix::ffi::OsStrExt;
+        #[cfg(unix)]
+        let entry_bytes = entry.as_bytes().to_vec();
+        #[cfg(not(unix))]
+        let entry_bytes = entry.to_string_lossy().as_bytes().to_vec();
+        entries.push((entry_bytes, identity, digest, len));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let encoded = serde_json::to_vec(&entries).map_err(std::io::Error::other)?;
+    Ok((sha256_hex(&encoded), byte_len))
+}
+
+#[derive(Debug)]
+struct CleanupPoolMaintenanceJournalHandle {
+    file: fs::File,
+    identity: GovernanceArtifactIdentity,
+}
+
+fn open_cleanup_pool_maintenance_journal(
+    pool: &fs::File,
+    pool_path: &Path,
+    create: bool,
+) -> Result<Option<CleanupPoolMaintenanceJournalHandle>, GovernancePersistenceError> {
+    let name = OsStr::new(GOVERNANCE_CLEANUP_POOL_MAINTENANCE_JOURNAL_NAME);
+    let file = match open_writable_entry_at(pool, name) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+            create_regular_file_at(pool, name).map_err(|source| {
+                cleanup_maintenance_error(
+                    &cleanup_maintenance_journal_path(pool_path),
+                    format!("could not create maintenance journal: {source}"),
+                )
+            })?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(cleanup_maintenance_error(
+                &cleanup_maintenance_journal_path(pool_path),
+                format!("could not open maintenance journal: {source}"),
+            ));
+        }
+    };
+    let identity = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata))
+        .ok_or_else(|| {
+            cleanup_maintenance_error(
+                &cleanup_maintenance_journal_path(pool_path),
+                "maintenance journal is not a regular file",
+            )
+        })?;
+    Ok(Some(CleanupPoolMaintenanceJournalHandle { file, identity }))
+}
+
+fn validate_cleanup_pool_maintenance_journal(
+    journal: &CleanupPoolMaintenanceJournal,
+    binding: &CleanupPoolBinding,
+    path: &Path,
+) -> Result<(), GovernancePersistenceError> {
+    if journal.schema_version != CLEANUP_POOL_MAINTENANCE_SCHEMA_VERSION
+        || journal.operation_id.is_empty()
+        || !valid_cleanup_archive_name(&journal.archive_name)
+        || journal.binding != *binding
+    {
+        return Err(cleanup_maintenance_error(
+            path,
+            "maintenance journal schema, operation, archive, or namespace binding is invalid",
+        ));
+    }
+    let slots = cleanup_pool_slot_name_set(binding);
+    let selected = journal
+        .selected_slots
+        .iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    let moved = journal
+        .moved_slots
+        .iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    let opaque = journal
+        .opaque_slots
+        .iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    let mut sorted_selected = selected.clone();
+    let mut sorted_moved = moved.clone();
+    let mut sorted_opaque = opaque.clone();
+    sorted_selected.sort();
+    sorted_moved.sort();
+    sorted_opaque.sort();
+    if selected != sorted_selected
+        || moved != sorted_moved
+        || opaque != sorted_opaque
+        || selected.windows(2).any(|pair| pair[0] == pair[1])
+        || moved.windows(2).any(|pair| pair[0] == pair[1])
+        || opaque.windows(2).any(|pair| pair[0] == pair[1])
+        || selected.iter().any(|slot| !slots.contains(slot))
+        || moved.iter().any(|slot| !selected.contains(slot))
+        || opaque.iter().any(|slot| !selected.contains(slot))
+    {
+        return Err(cleanup_maintenance_error(
+            path,
+            "maintenance journal slot selection is not a sorted fixed-pool subset",
+        ));
+    }
+    let selected_set = selected.iter().map(OsString::from).collect::<BTreeSet<_>>();
+    let proof_set = journal
+        .slot_proofs
+        .keys()
+        .map(OsString::from)
+        .collect::<BTreeSet<_>>();
+    if proof_set != selected_set
+        || journal.slot_proofs.values().any(|proof| {
+            proof.content_digest.len() != 64
+                || !proof
+                    .content_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err(cleanup_maintenance_error(
+            path,
+            "maintenance journal slot proofs are not an exact authenticated selection",
+        ));
+    }
+    match journal.phase {
+        CleanupPoolMaintenanceJournalPhase::Prepared if !moved.is_empty() => {
+            return Err(cleanup_maintenance_error(
+                path,
+                "Prepared maintenance journal already records moved slots",
+            ));
+        }
+        CleanupPoolMaintenanceJournalPhase::Completed if moved.len() != selected.len() => {
+            return Err(cleanup_maintenance_error(
+                path,
+                "Completed maintenance journal does not record every selected slot",
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn read_cleanup_pool_maintenance_journal(
+    handle: &mut CleanupPoolMaintenanceJournalHandle,
+    pool: &fs::File,
+    pool_path: &Path,
+    binding: &CleanupPoolBinding,
+    expected_signer: &AgentId,
+) -> Result<CleanupPoolMaintenanceJournal, GovernancePersistenceError> {
+    let path = cleanup_maintenance_journal_path(pool_path);
+    let named_identity = open_regular_entry_at(
+        pool,
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_MAINTENANCE_JOURNAL_NAME),
+    )
+    .ok()
+    .and_then(|file| file.metadata().ok())
+    .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_identity != Some(handle.identity) {
+        return Err(cleanup_maintenance_error(
+            &path,
+            "maintenance journal name is not bound to the held descriptor",
+        ));
+    }
+    let mut reader = handle.file.try_clone().map_err(|source| {
+        cleanup_maintenance_error(
+            &path,
+            format!("maintenance journal could not clone: {source}"),
+        )
+    })?;
+    reader.seek(SeekFrom::Start(0)).map_err(|source| {
+        cleanup_maintenance_error(
+            &path,
+            format!("maintenance journal could not seek: {source}"),
+        )
+    })?;
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).map_err(|source| {
+        cleanup_maintenance_error(
+            &path,
+            format!("maintenance journal could not read: {source}"),
+        )
+    })?;
+    let envelope: SignedStateEnvelope<CleanupPoolMaintenanceJournal> =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            cleanup_maintenance_error(&path, format!("maintenance journal is malformed: {error}"))
+        })?;
+    let verified = envelope
+        .verify(SignedStateExpectation {
+            state_kind: CLEANUP_POOL_MAINTENANCE_KIND,
+            stream_id: CLEANUP_POOL_MAINTENANCE_STREAM,
+            expected_signer_agent_id: Some(expected_signer),
+            accepted_sequence: Some(1),
+        })
+        .map_err(|error| {
+            cleanup_maintenance_error(&path, format!("maintenance authentication failed: {error}"))
+        })?;
+    if verified.schema_version != SIGNED_STATE_SCHEMA_VERSION {
+        return Err(cleanup_maintenance_error(
+            &path,
+            "maintenance envelope schema is unsupported",
+        ));
+    }
+    validate_cleanup_pool_maintenance_journal(&verified.payload, binding, &path)?;
+    Ok(verified.payload)
+}
+
+struct CleanupPoolMaintenanceJournalWriteContext<'a> {
+    handle: &'a mut CleanupPoolMaintenanceJournalHandle,
+    pool: &'a fs::File,
+    parent: &'a fs::File,
+    archive: &'a fs::File,
+    pool_path: &'a Path,
+    binding: &'a CleanupPoolBinding,
+    expected_signer: &'a AgentId,
+    signing_key: &'a SigningKey,
+}
+
+fn write_cleanup_pool_maintenance_journal(
+    context: CleanupPoolMaintenanceJournalWriteContext<'_>,
+    journal: &CleanupPoolMaintenanceJournal,
+) -> Result<(), GovernancePersistenceError> {
+    let CleanupPoolMaintenanceJournalWriteContext {
+        handle,
+        pool,
+        parent,
+        archive,
+        pool_path,
+        binding,
+        expected_signer,
+        signing_key,
+    } = context;
+    let path = cleanup_maintenance_journal_path(pool_path);
+    validate_cleanup_pool_maintenance_journal(journal, binding, &path)?;
+    let envelope = SignedStateEnvelope::sign(
+        CLEANUP_POOL_MAINTENANCE_KIND,
+        CLEANUP_POOL_MAINTENANCE_STREAM,
+        expected_signer.clone(),
+        1,
+        journal,
+        signing_key,
+    )
+    .map_err(|error| {
+        cleanup_maintenance_error(&path, format!("maintenance signing failed: {error}"))
+    })?;
+    let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| {
+        cleanup_maintenance_error(&path, format!("maintenance serialization failed: {error}"))
+    })?;
+    let held_identity = handle
+        .file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+    if held_identity != Some(handle.identity) {
+        return Err(cleanup_maintenance_error(
+            &path,
+            "maintenance journal descriptor identity changed before write",
+        ));
+    }
+    handle
+        .file
+        .set_len(0)
+        .and_then(|()| handle.file.seek(SeekFrom::Start(0)).map(|_| ()))
+        .and_then(|()| handle.file.write_all(&bytes))
+        .and_then(|()| handle.file.sync_all())
+        .map_err(|source| {
+            cleanup_maintenance_error(&path, format!("maintenance journal write failed: {source}"))
+        })?;
+    let named_identity = open_regular_entry_at(
+        pool,
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_MAINTENANCE_JOURNAL_NAME),
+    )
+    .ok()
+    .and_then(|file| file.metadata().ok())
+    .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_identity != Some(handle.identity) {
+        return Err(cleanup_maintenance_error(
+            &path,
+            "maintenance journal name changed during write",
+        ));
+    }
+    pool.sync_all()
+        .and_then(|()| archive.sync_all())
+        .and_then(|()| parent.sync_all())
+        .map_err(|source| {
+            cleanup_maintenance_error(
+                &path,
+                format!("maintenance durability sync failed: {source}"),
+            )
+        })?;
+    Ok(())
+}
+
+fn read_cleanup_pool_journal(
+    slot: &AuthorityCleanupRetirement,
+) -> Result<Vec<u8>, GovernancePersistenceError> {
+    let journal = slot.journal_file.as_ref().ok_or_else(|| {
+        cleanup_pool_journal_error(slot, "cleanup slot journal descriptor is missing")
+    })?;
+    let identity = journal
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+    if identity != slot.journal_identity {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal descriptor identity changed",
+        ));
+    }
+    let mut reader = journal.try_clone().map_err(|error| {
+        cleanup_pool_journal_error(
+            slot,
+            format!("cleanup slot journal could not be cloned: {error}"),
+        )
+    })?;
+    reader.seek(SeekFrom::Start(0)).map_err(|error| {
+        cleanup_pool_journal_error(
+            slot,
+            format!("cleanup slot journal could not seek: {error}"),
+        )
+    })?;
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).map_err(|error| {
+        cleanup_pool_journal_error(
+            slot,
+            format!("cleanup slot journal could not be read: {error}"),
+        )
+    })?;
+    Ok(bytes)
+}
+
+fn cleanup_pool_component(path: &Path) -> Option<Vec<u8>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.file_name().map(|name| name.as_bytes().to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.as_bytes().to_vec())
+    }
+}
+
+fn cleanup_pool_slot_name(index: usize) -> OsString {
+    OsString::from(format!("slot-{index:02}"))
+}
+
+fn cleanup_pool_transaction_id() -> String {
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    format!("{}-{}", std::process::id(), hex::encode(bytes))
+}
+
+fn cleanup_pool_error(path: &Path, reason: impl Into<String>) -> GovernancePersistenceError {
+    GovernancePersistenceError::CleanupMaintenance {
+        path: path.to_path_buf(),
+        reason: reason.into(),
+    }
+}
+
+fn verify_cleanup_slot_name_binding(
+    slot: &AuthorityCleanupRetirement,
+) -> Result<(), GovernancePersistenceError> {
+    let held_identity = slot
+        .file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata));
+    let named_identity = directory_entry_identity_at(&slot.pool_file, &slot.slot_name)
+        .map_err(|source| cleanup_pool_error(&slot.path, source.to_string()))?;
+    if held_identity != Some(slot.identity) || named_identity != Some(slot.identity) {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup slot descriptor is orphaned or its fixed name was replaced",
+        ));
+    }
+    Ok(())
+}
+
+fn append_cleanup_pool_record(
+    slot: &mut AuthorityCleanupRetirement,
+    phase: CleanupPoolPhase,
+    entries: Vec<CleanupPoolEntryRecord>,
+) -> Result<(), GovernancePersistenceError> {
+    verify_cleanup_slot_name_binding(slot)?;
+    let named_lock_identity = open_regular_entry_at(
+        &slot.pool_file,
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+    )
+    .ok()
+    .and_then(|lock| lock.metadata().ok())
+    .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_lock_identity != Some(slot.lock_identity) {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup pool lock name no longer refers to the held lock",
+        ));
+    }
+    let lock_identity = slot
+        .lock_file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata))
+        .ok_or_else(|| cleanup_pool_error(&slot.path, "cleanup pool lock descriptor is invalid"))?;
+    if lock_identity != slot.lock_identity {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup pool lock identity changed while slot was active",
+        ));
+    }
+    let journal_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+    if slot.journal_file.is_none() {
+        let journal = create_regular_file_at(&slot.file, journal_name).map_err(|source| {
+            cleanup_pool_error(
+                &slot.path,
+                format!("could not create cleanup slot journal: {source}"),
+            )
+        })?;
+        let identity = journal
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata))
+            .ok_or_else(|| cleanup_pool_error(&slot.path, "cleanup slot journal is not regular"))?;
+        slot.journal_identity = Some(identity);
+        slot.journal_file = Some(journal);
+    }
+    let expected_journal_identity = slot.journal_identity.ok_or_else(|| {
+        cleanup_pool_error(&slot.path, "cleanup slot journal identity is missing")
+    })?;
+    let named_journal_identity = open_regular_entry_at(&slot.file, journal_name)
+        .ok()
+        .and_then(|journal| journal.metadata().ok())
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_journal_identity != Some(expected_journal_identity) {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup slot journal name no longer refers to the held journal",
+        ));
+    }
+    let current_bytes = read_cleanup_pool_journal(slot)?;
+    let (current_digest, current_phase) = validate_cleanup_pool_journal_bytes(
+        slot,
+        &current_bytes,
+        &slot.journal_expected_bytes,
+        slot.journal_expected_len,
+        &slot.journal_expected_digest,
+    )?;
+    if current_digest != slot.previous_record_digest || current_phase != slot.journal_last_phase {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal chain state disagrees with the held transaction",
+        ));
+    }
+    if let Some(current_phase) = current_phase {
+        if matches!(
+            current_phase,
+            CleanupPoolPhase::ForeignPreserved | CleanupPoolPhase::Retained
+        ) || cleanup_pool_phase_rank(phase) < cleanup_pool_phase_rank(current_phase)
+        {
+            return Err(cleanup_pool_journal_error(
+                slot,
+                "cleanup slot journal append would regress or extend a terminal phase",
+            ));
+        }
+    } else if phase != CleanupPoolPhase::Reserved {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal first phase must be Reserved",
+        ));
+    }
+    let mut record = CleanupPoolRecord {
+        schema_version: CLEANUP_POOL_RECORD_SCHEMA_VERSION,
+        transaction_id: slot.transaction_id.clone(),
+        parent_identity: slot.parent_identity,
+        pool_identity: slot.pool_identity,
+        lock_identity: slot.lock_identity,
+        slot_identity: slot.identity,
+        target_component: slot.target_component.clone(),
+        entries,
+        previous_digest: current_digest,
+        phase,
+        record_digest: String::new(),
+    };
+    let bytes = cleanup_pool_record_line(&record).map_err(|source| {
+        cleanup_pool_error(
+            &slot.path,
+            format!("could not encode cleanup slot journal: {source}"),
+        )
+    })?;
+    record.record_digest = cleanup_pool_record_digest(&record).map_err(|source| {
+        cleanup_pool_error(
+            &slot.path,
+            format!("could not authenticate cleanup slot journal: {source}"),
+        )
+    })?;
+    let mut expected_bytes_after = slot.journal_expected_bytes.clone();
+    expected_bytes_after.extend_from_slice(&bytes);
+    let expected_len_after = expected_bytes_after.len() as u64;
+    let expected_digest_after = sha256_hex(&expected_bytes_after);
+    let journal = slot.journal_file.as_mut().ok_or_else(|| {
+        cleanup_pool_error(&slot.path, "cleanup slot journal descriptor is missing")
+    })?;
+    let offset = journal.seek(SeekFrom::End(0)).map_err(|source| {
+        cleanup_pool_error(
+            &slot.path,
+            format!("could not seek cleanup slot journal EOF: {source}"),
+        )
+    })?;
+    if offset != slot.journal_expected_len {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal EOF moved since its authenticated read",
+        ));
+    }
+    journal
+        .write_all(&bytes)
+        .and_then(|()| journal.sync_all())
+        .map_err(|source| {
+            cleanup_pool_error(
+                &slot.path,
+                format!("could not fsync cleanup slot journal: {source}"),
+            )
+        })?;
+    let after_write_bytes = read_cleanup_pool_journal(slot)?;
+    let (after_write_digest, after_write_phase) = validate_cleanup_pool_journal_bytes(
+        slot,
+        &after_write_bytes,
+        &expected_bytes_after,
+        expected_len_after,
+        &expected_digest_after,
+    )?;
+    if after_write_digest.as_deref() != Some(record.record_digest.as_str())
+        || after_write_phase != Some(phase)
+    {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal chain did not converge after append",
+        ));
+    }
+    let named_journal_identity_after = open_regular_entry_at(&slot.file, journal_name)
+        .ok()
+        .and_then(|journal| journal.metadata().ok())
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_journal_identity_after != Some(expected_journal_identity) {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup slot journal name changed during phase append",
+        ));
+    }
+    let named_lock_identity_after = open_regular_entry_at(
+        &slot.pool_file,
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+    )
+    .ok()
+    .and_then(|lock| lock.metadata().ok())
+    .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_lock_identity_after != Some(slot.lock_identity) {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup pool lock name changed during phase append",
+        ));
+    }
+    slot.file.sync_all().map_err(|source| {
+        cleanup_pool_error(
+            &slot.path,
+            format!("could not fsync cleanup slot directory: {source}"),
+        )
+    })?;
+    slot.pool_file.sync_all().map_err(|source| {
+        cleanup_pool_error(
+            &slot.pool_path,
+            format!("could not fsync cleanup pool directory: {source}"),
+        )
+    })?;
+    slot.parent_file.sync_all().map_err(|source| {
+        cleanup_pool_error(
+            &slot.path,
+            format!("could not fsync cleanup pool parent: {source}"),
+        )
+    })?;
+    let named_lock_identity_final = open_regular_entry_at(
+        &slot.pool_file,
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+    )
+    .ok()
+    .and_then(|lock| lock.metadata().ok())
+    .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_lock_identity_final != Some(slot.lock_identity) {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup pool lock name changed before phase durability completed",
+        ));
+    }
+    let named_journal_identity_final = open_regular_entry_at(&slot.file, journal_name)
+        .ok()
+        .and_then(|journal| journal.metadata().ok())
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_journal_identity_final != Some(expected_journal_identity) {
+        return Err(cleanup_pool_error(
+            &slot.path,
+            "cleanup slot journal name changed before phase durability completed",
+        ));
+    }
+    let final_bytes = read_cleanup_pool_journal(slot)?;
+    let (final_digest, final_phase) = validate_cleanup_pool_journal_bytes(
+        slot,
+        &final_bytes,
+        &expected_bytes_after,
+        expected_len_after,
+        &expected_digest_after,
+    )?;
+    if final_digest.as_deref() != Some(record.record_digest.as_str()) || final_phase != Some(phase)
+    {
+        return Err(cleanup_pool_journal_error(
+            slot,
+            "cleanup slot journal changed before phase durability completed",
+        ));
+    }
+    verify_cleanup_slot_name_binding(slot)?;
+    slot.journal_expected_bytes = expected_bytes_after;
+    slot.journal_expected_len = expected_len_after;
+    slot.journal_expected_digest = expected_digest_after;
+    slot.journal_last_phase = Some(phase);
+    slot.previous_record_digest = Some(record.record_digest);
+    Ok(())
+}
+
+fn acquire_cleanup_pool_slot(
+    path: &Path,
+    parent_handle: &AuthorityCleanupParent,
+) -> Result<AuthorityCleanupRetirement, GovernancePersistenceError> {
+    let target_component = cleanup_pool_component(path)
+        .ok_or_else(|| cleanup_pool_error(path, "cleanup target has no raw final component"))?;
+    let pool_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+    if !authority_cleanup_parent_is_current(path, parent_handle) {
+        return Err(cleanup_pool_error(
+            path,
+            "cleanup parent changed before pool acquisition",
+        ));
+    }
+    let (pool_file, _pool_created) = open_or_create_directory_at(&parent_handle.file, pool_name)
+        .map_err(|source| {
+            cleanup_pool_error(path, format!("could not open cleanup pool: {source}"))
+        })?;
+    let pool_identity = pool_file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        .ok_or_else(|| cleanup_pool_error(path, "cleanup pool is not a regular directory"))?;
+    let lock_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME);
+    let (lock_file, lock_created) = match create_regular_file_at(&pool_file, lock_name) {
+        Ok(file) => (file, true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+            open_writable_entry_at(&pool_file, lock_name).map_err(|source| {
+                cleanup_pool_error(path, format!("could not open cleanup pool lock: {source}"))
+            })?,
+            false,
+        ),
+        Err(source) => {
+            return Err(cleanup_pool_error(
+                path,
+                format!("could not create cleanup pool lock: {source}"),
+            ));
+        }
+    };
+    let lock_identity = lock_file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata))
+        .ok_or_else(|| cleanup_pool_error(path, "cleanup pool lock is not a regular file"))?;
+    match lock_file.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            return Err(cleanup_pool_error(
+                path,
+                "cleanup pool lock is held by another writer",
+            ));
+        }
+        Err(fs::TryLockError::Error(source)) => {
+            return Err(cleanup_pool_error(
+                path,
+                format!("could not lock cleanup pool: {source}"),
+            ));
+        }
+    }
+    if lock_created {
+        lock_file.sync_all().map_err(|source| {
+            cleanup_pool_error(
+                path,
+                format!("could not fsync new cleanup pool lock: {source}"),
+            )
+        })?;
+        pool_file.sync_all().map_err(|source| {
+            cleanup_pool_error(
+                path,
+                format!("could not fsync cleanup pool after lock: {source}"),
+            )
+        })?;
+        parent_handle.file.sync_all().map_err(|source| {
+            cleanup_pool_error(
+                path,
+                format!("could not fsync cleanup pool parent: {source}"),
+            )
+        })?;
+    }
+    let mut selected = None;
+    for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
+        let slot_name = cleanup_pool_slot_name(index);
+        match open_directory_at(&pool_file, &slot_name) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match create_directory_at(&pool_file, &slot_name) {
+                    Ok(file) => {
+                        selected = Some((slot_name, file));
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(source) => {
+                        return Err(cleanup_pool_error(
+                            path,
+                            format!("could not create cleanup pool slot: {source}"),
+                        ));
+                    }
+                }
+            }
+            // Any existing, malformed, non-directory, symlink, or partially
+            // written slot is occupied forever.  Never repair it by name and
+            // never treat it as reusable capacity; an operator can inspect
+            // or drain it under an exclusive maintenance protocol.
+            Err(_) => continue,
+        }
+    }
+    let Some((slot_name, file)) = selected else {
+        return Err(GovernancePersistenceError::CleanupPoolExhausted {
+            path: path.to_path_buf(),
+        });
+    };
+    pool_file.sync_all().map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not fsync cleanup pool slot creation: {source}"),
+        )
+    })?;
+    parent_handle.file.sync_all().map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not fsync cleanup pool parent: {source}"),
+        )
+    })?;
+    let slot_identity = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        .ok_or_else(|| cleanup_pool_error(path, "cleanup pool slot is not a directory"))?;
+    let pool_path = path
+        .parent()
+        .unwrap_or(path)
+        .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+    let slot_path = pool_path.join(&slot_name);
+    let mut slot = AuthorityCleanupRetirement {
+        path: slot_path,
+        pool_path,
+        slot_name: slot_name.clone(),
+        parent_file: parent_handle.file.try_clone().map_err(|source| {
+            cleanup_pool_error(path, format!("could not clone cleanup parent: {source}"))
+        })?,
+        parent_identity: parent_handle.identity,
+        pool_file,
+        pool_identity,
+        lock_file,
+        lock_identity,
+        file,
+        identity: slot_identity,
+        transaction_id: cleanup_pool_transaction_id(),
+        target_component,
+        previous_record_digest: None,
+        journal_file: None,
+        journal_identity: None,
+        journal_expected_bytes: Vec::new(),
+        journal_expected_len: 0,
+        journal_expected_digest: sha256_hex(&[]),
+        journal_last_phase: None,
+    };
+    append_cleanup_pool_record(&mut slot, CleanupPoolPhase::Reserved, Vec::new())?;
+    Ok(slot)
+}
+
+/// Reserve one slot from an already authenticated, live cleanup-pool context.
+/// Unlike `acquire_cleanup_pool_slot`, this path never opens or creates the
+/// pool by pathname: the context's held pool and lock descriptors are the
+/// namespace capability.  This is the only allocator used by the exported
+/// normal-operation retention API.
+fn acquire_cleanup_pool_slot_bound(
+    path: &Path,
+    parent_handle: &AuthorityCleanupParent,
+    context: &CleanupPoolContext,
+) -> Result<AuthorityCleanupRetirement, GovernancePersistenceError> {
+    let target_component = cleanup_pool_component(path)
+        .ok_or_else(|| cleanup_pool_error(path, "cleanup target has no raw final component"))?;
+    if !authority_cleanup_parent_is_current(path, parent_handle) {
+        return Err(cleanup_pool_error(
+            path,
+            "cleanup parent changed before bound pool acquisition",
+        ));
+    }
+    let pool_identity = context
+        .pool_file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        .ok_or_else(|| cleanup_pool_error(path, "bound cleanup pool is not a directory"))?;
+    if pool_identity != context.pool_identity
+        || context.parent_identity != parent_handle.identity
+        || context.binding.pool_identity != context.pool_identity
+        || context.binding.parent_identity != context.parent_identity
+        || context.binding.lock_identity != context.lock_identity
+    {
+        return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: path.to_path_buf(),
+            reason:
+                "bound cleanup-pool context identity no longer matches its authenticated binding"
+                    .to_string(),
+        });
+    }
+    let named_lock_identity = open_regular_entry_at(
+        &context.pool_file,
+        OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+    )
+    .ok()
+    .and_then(|file| file.metadata().ok())
+    .and_then(|metadata| governance_artifact_identity(&metadata));
+    if named_lock_identity != Some(context.lock_identity) {
+        return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: path.to_path_buf(),
+            reason: "bound cleanup-pool lock name was replaced".to_string(),
+        });
+    }
+    let mut selected = None;
+    for index in 0..context.binding.slot_count {
+        let slot_name = OsString::from(&context.binding.slot_names[index]);
+        match open_directory_at(&context.pool_file, &slot_name) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match create_directory_at(&context.pool_file, &slot_name) {
+                    Ok(file) => {
+                        selected = Some((slot_name, file));
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(source) => {
+                        return Err(cleanup_pool_error(
+                            path,
+                            format!("could not create bound cleanup pool slot: {source}"),
+                        ));
+                    }
+                }
+            }
+            // A malformed, symlink, or non-directory entry is occupied
+            // forever.  It may be handled only by explicit reset.
+            Err(_) => continue,
+        }
+    }
+    let Some((slot_name, file)) = selected else {
+        return Err(GovernancePersistenceError::CleanupPoolExhausted {
+            path: path.to_path_buf(),
+        });
+    };
+    context.pool_file.sync_all().map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not fsync bound cleanup pool slot creation: {source}"),
+        )
+    })?;
+    parent_handle.file.sync_all().map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not fsync bound cleanup pool parent: {source}"),
+        )
+    })?;
+    let slot_identity = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        .ok_or_else(|| cleanup_pool_error(path, "bound cleanup pool slot is not a directory"))?;
+    let pool_path = context.pool_path.clone();
+    let slot_path = pool_path.join(&slot_name);
+    let mut slot = AuthorityCleanupRetirement {
+        path: slot_path,
+        pool_path,
+        slot_name: slot_name.clone(),
+        parent_file: parent_handle.file.try_clone().map_err(|source| {
+            cleanup_pool_error(path, format!("could not clone cleanup parent: {source}"))
+        })?,
+        parent_identity: parent_handle.identity,
+        pool_file: context.pool_file.try_clone().map_err(|source| {
+            cleanup_pool_error(
+                path,
+                format!("could not clone bound cleanup pool: {source}"),
+            )
+        })?,
+        pool_identity: context.pool_identity,
+        lock_file: context.lock_file.try_clone().map_err(|source| {
+            cleanup_pool_error(
+                path,
+                format!("could not clone bound cleanup lock: {source}"),
+            )
+        })?,
+        lock_identity: context.lock_identity,
+        file,
+        identity: slot_identity,
+        transaction_id: cleanup_pool_transaction_id(),
+        target_component,
+        previous_record_digest: None,
+        journal_file: None,
+        journal_identity: None,
+        journal_expected_bytes: Vec::new(),
+        journal_expected_len: 0,
+        journal_expected_digest: sha256_hex(&[]),
+        journal_last_phase: None,
+    };
+    append_cleanup_pool_record(&mut slot, CleanupPoolPhase::Reserved, Vec::new())?;
+    Ok(slot)
+}
+
+fn bind_authority_cleanup_parent(path: &Path) -> Option<AuthorityCleanupParent> {
+    let parent = path.parent()?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = options.open(parent).ok()?;
+    let identity = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))?;
+    Some(AuthorityCleanupParent { file, identity })
+}
+
+fn authority_cleanup_parent_is_current(path: &Path, parent: &AuthorityCleanupParent) -> bool {
+    path.parent()
+        .and_then(|parent_path| fs::symlink_metadata(parent_path).ok())
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        == Some(parent.identity)
+}
+
+fn open_regular_entry_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup entry name contains an interior NUL",
+            )
+        })?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fd` is a successful openat result owned by this function.
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (parent, name);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "dirfd-relative cleanup open is unavailable on this platform",
+        ))
+    }
+}
+
+fn create_directory_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::AsRawFd;
+    #[cfg(unix)]
+    use std::os::unix::io::FromRawFd;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup directory name contains an interior NUL",
+            )
+        })?;
+        let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fd` is a successful openat result owned by this function.
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (parent, name);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "dirfd-relative cleanup directory creation is unavailable on this platform",
+        ))
+    }
+}
+
+fn open_directory_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup directory name contains an interior NUL",
+            )
+        })?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (parent, name);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "dirfd-relative cleanup directory open is unavailable on this platform",
+        ))
+    }
+}
+
+/// Enumerate one held directory descriptor without reopening its pathname.
+/// The duplicated descriptor is consumed by `fdopendir`; the caller's
+/// descriptor remains the stable namespace capability for subsequent moves.
+fn directory_entry_names(directory: &fs::File) -> Result<Vec<OsString>, std::io::Error> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::io::AsRawFd;
+
+        let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
+        if duplicate < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let stream = unsafe { libc::fdopendir(duplicate) };
+        if stream.is_null() {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                libc::close(duplicate);
+            }
+            return Err(error);
+        }
+        let mut names = Vec::new();
+        loop {
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name != b"." && name != b".." {
+                names.push(OsString::from_vec(name.to_vec()));
+            }
+        }
+        unsafe {
+            libc::closedir(stream);
+        }
+        Ok(names)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = directory;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "held-directory enumeration is unavailable on this platform",
+        ))
+    }
+}
+
+/// Read an entry identity without following a symlink.  A reset operation may
+/// archive a malformed/symlink slot opaquely, so it cannot rely on
+/// `openat(O_NOFOLLOW)` alone for this preflight observation.
+fn directory_entry_identity_at(
+    directory: &fs::File,
+    name: &OsStr,
+) -> Result<Option<GovernanceArtifactIdentity>, std::io::Error> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::io::AsRawFd;
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "directory entry name contains an interior NUL",
+            )
+        })?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+        let stat = unsafe { stat.assume_init() };
+        Ok(Some(GovernanceArtifactIdentity {
+            device: stat.st_dev as u64,
+            inode: stat.st_ino,
+        }))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (directory, name);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "dirfd-relative entry identity is unavailable on this platform",
+        ))
+    }
+}
+
+fn open_writable_entry_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup lock name contains an interior NUL",
+            )
+        })?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (parent, name);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "dirfd-relative cleanup lock open is unavailable on this platform",
+        ))
+    }
+}
+
+fn open_or_create_directory_at(
+    parent: &fs::File,
+    name: &OsStr,
+) -> Result<(fs::File, bool), std::io::Error> {
+    match create_directory_at(parent, name) {
+        Ok(file) => Ok((file, true)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok((open_directory_at(parent, name)?, false))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn create_regular_file_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::AsRawFd;
+    #[cfg(unix)]
+    use std::os::unix::io::FromRawFd;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "atomic temporary name contains an interior NUL",
+            )
+        })?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fd` is a successful openat result owned by this function.
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (parent, name);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "dirfd-relative atomic publication is unavailable on this platform",
+        ))
+    }
+}
+
+fn snapshot_cleanup_file(
+    mut file: fs::File,
+) -> Result<(GovernanceArtifactSnapshot, Vec<u8>), std::io::Error> {
+    let metadata_before = file.metadata()?;
+    let Some(identity) = governance_artifact_identity(&metadata_before) else {
+        return Err(std::io::Error::other(
+            "retired cleanup entry is not a regular non-symlink file",
+        ));
+    };
+    file.seek(SeekFrom::Start(0))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let metadata_after = file.metadata()?;
+    let Some(after_identity) = governance_artifact_identity(&metadata_after) else {
+        return Err(std::io::Error::other(
+            "retired cleanup entry ceased to be a regular file",
+        ));
+    };
+    if identity != after_identity || metadata_after.len() != bytes.len() as u64 {
+        return Err(std::io::Error::other(
+            "retired cleanup entry changed while being snapshotted",
+        ));
+    }
+    Ok((
+        GovernanceArtifactSnapshot {
+            identity,
+            content_digest: sha256_hex(&bytes),
+            byte_len: bytes.len() as u64,
+        },
+        bytes,
+    ))
+}
+
+fn linkat_relative(
+    source_parent: &fs::File,
+    source_name: &OsStr,
+    destination_parent: &fs::File,
+    destination_name: &OsStr,
+) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::AsRawFd;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let source_name = CString::new(source_name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup entry name contains an interior NUL",
+            )
+        })?;
+        let destination_name = CString::new(destination_name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup destination contains an interior NUL",
+            )
+        })?;
+        let result = unsafe {
+            libc::linkat(
+                source_parent.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination_name.as_ptr(),
+                0,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (
+            source_parent,
+            source_name,
+            destination_parent,
+            destination_name,
+        );
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "dirfd-relative cleanup restore is unavailable on this platform",
+        ))
+    }
+}
+
+fn atomic_no_replace_move_between(
+    source_parent: &fs::File,
+    source_name: &OsStr,
+    destination_parent: &fs::File,
+    destination_name: &OsStr,
+) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::AsRawFd;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let source = CString::new(source_name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup source name contains an interior NUL",
+            )
+        })?;
+        let destination = CString::new(destination_name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cleanup destination name contains an interior NUL",
+            )
+        })?;
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2 as libc::c_long,
+                source_parent.as_raw_fd(),
+                source.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination.as_ptr(),
+                1u32,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let result = unsafe {
+            libc::renameatx_np(
+                source_parent.as_raw_fd(),
+                source.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination.as_ptr(),
+                0x0000_0004u32,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (
+            source_parent,
+            source_name,
+            destination_parent,
+            destination_name,
+        );
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "atomic no-replace cleanup move is unavailable on this platform",
+        ))
+    }
+}
+
+/// Conditionally publish over an existing canonical artifact without ever
+/// treating a pathname observation as authority.  Linux `RENAME_EXCHANGE` and
+/// macOS `RENAME_SWAP` atomically exchange the temporary and canonical names;
+/// the identities on both names are then checked.  If a foreign inode won the
+/// final seam, the exchange is reversed while the two expected identities are
+/// still held, leaving the foreign entry at the canonical name and retaining
+/// our temporary for authenticated recovery.  There is deliberately no
+/// unconditional unlink of the old inode: neither platform exposes a
+/// conditional unlink-by-inode primitive.
+fn atomic_replace_if_identity(
+    source_parent: &fs::File,
+    source_name: &OsStr,
+    destination_parent: &fs::File,
+    destination_name: &OsStr,
+    expected_destination: GovernanceArtifactIdentity,
+    expected_source: GovernanceArtifactIdentity,
+) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    use std::os::unix::io::AsRawFd;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let source = CString::new(source_name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "atomic replacement source contains an interior NUL",
+            )
+        })?;
+        let destination = CString::new(destination_name.as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "atomic replacement destination contains an interior NUL",
+            )
+        })?;
+        let result = unsafe {
+            #[cfg(target_os = "linux")]
+            {
+                libc::syscall(
+                    libc::SYS_renameat2 as libc::c_long,
+                    source_parent.as_raw_fd(),
+                    source.as_ptr(),
+                    destination_parent.as_raw_fd(),
+                    destination.as_ptr(),
+                    2u32,
+                )
+            }
+            #[cfg(target_os = "macos")]
+            {
+                libc::renameatx_np(
+                    source_parent.as_raw_fd(),
+                    source.as_ptr(),
+                    destination_parent.as_raw_fd(),
+                    destination.as_ptr(),
+                    0x0000_0002u32,
+                )
+            }
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let observed_destination =
+            directory_entry_identity_at(destination_parent, destination_name)?;
+        let observed_source = directory_entry_identity_at(source_parent, source_name)?;
+        if observed_destination == Some(expected_source)
+            && observed_source == Some(expected_destination)
+        {
+            return Ok(());
+        }
+        // A foreign destination may have appeared after the caller's initial
+        // read.  Restore the exact pre-exchange namespace only if the names
+        // still contain the two identities produced by this exchange.  If a
+        // further writer changed either name, preserve both entries and fail
+        // closed rather than guessing which inode may be removed.
+        if observed_destination == Some(expected_source)
+            && observed_source != Some(expected_destination)
+        {
+            let restore = unsafe {
+                #[cfg(target_os = "linux")]
+                {
+                    libc::syscall(
+                        libc::SYS_renameat2 as libc::c_long,
+                        source_parent.as_raw_fd(),
+                        source.as_ptr(),
+                        destination_parent.as_raw_fd(),
+                        destination.as_ptr(),
+                        2u32,
+                    )
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    libc::renameatx_np(
+                        source_parent.as_raw_fd(),
+                        source.as_ptr(),
+                        destination_parent.as_raw_fd(),
+                        destination.as_ptr(),
+                        0x0000_0002u32,
+                    )
+                }
+            };
+            if restore != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "conditional publication lost its rollback exchange: {}",
+                        std::io::Error::last_os_error()
+                    ),
+                ));
+            }
+        }
+        Err(std::io::Error::other(
+            "canonical artifact identity changed during conditional publication",
+        ))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (
+            source_parent,
+            source_name,
+            destination_parent,
+            destination_name,
+        );
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "descriptor-relative atomic replacement is unavailable on this platform",
+        ))
+    }
+}
+
+fn read_governance_artifact_snapshot(
+    path: &Path,
+) -> Result<Option<(GovernanceArtifactSnapshot, Vec<u8>)>, std::io::Error> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let mut file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let metadata_before = file.metadata()?;
+    let Some(identity) = governance_artifact_identity(&metadata_before) else {
+        return Err(std::io::Error::other(
+            "artifact is not a regular non-symlink file",
+        ));
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let metadata_after = file.metadata()?;
+    let Some(after_identity) = governance_artifact_identity(&metadata_after) else {
+        return Err(std::io::Error::other(
+            "artifact ceased to be a regular non-symlink file",
+        ));
+    };
+    if after_identity != identity || metadata_after.len() != bytes.len() as u64 {
+        return Err(std::io::Error::other(
+            "artifact changed while its immutable snapshot was being read",
+        ));
+    }
+    Ok(Some((
+        GovernanceArtifactSnapshot {
+            identity,
+            content_digest: sha256_hex(&bytes),
+            byte_len: bytes.len() as u64,
+        },
+        bytes,
+    )))
+}
+
+/// Read one regular artifact through an already-held parent directory
+/// descriptor.  This is the mutation-safe counterpart to the pathname
+/// observation helper above: a replaced parent pathname cannot redirect the
+/// descriptor-bound read used by rollback and cleanup decisions.
+fn read_governance_artifact_snapshot_at(
+    parent: &fs::File,
+    name: &OsStr,
+) -> Result<Option<(GovernanceArtifactSnapshot, Vec<u8>)>, std::io::Error> {
+    let file = match open_regular_entry_at(parent, name) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    snapshot_cleanup_file(file).map(Some)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct GovernanceCheckpointLag {
     sequence: u64,
     reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PendingHealthObservation {
+    governing_agent_id: AgentId,
+    entries: Vec<AgentHealthEntry>,
+    observed_at_ms: i64,
+}
+
+/// Ephemeral health-tick backoff for a failed checkpoint repair.
+///
+/// A governed effect never consults this value: its repair-before-effect path
+/// always attempts repair immediately. The `saturated` bit distinguishes a
+/// real deadline at `i64::MAX` from an overflowed deadline, so a clock parked
+/// at the maximum value cannot turn a failed repair into a tight retry loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GovernanceCheckpointRepairBackoff {
+    retry_at_ms: i64,
+    saturated: bool,
+}
+
+impl GovernanceCheckpointRepairBackoff {
+    fn after(observed_at_ms: i64) -> Self {
+        match observed_at_ms.checked_add(GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS) {
+            Some(retry_at_ms) => Self {
+                retry_at_ms,
+                saturated: false,
+            },
+            None => Self {
+                retry_at_ms: i64::MAX,
+                saturated: true,
+            },
+        }
+    }
+
+    fn is_due(self, observed_at_ms: i64) -> bool {
+        !self.saturated && observed_at_ms >= self.retry_at_ms
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedGovernanceState {
     lock_binding: GovernanceLockBinding,
+    cleanup_pool_binding: CleanupPoolBinding,
     governing_agent_id: Option<AgentId>,
     /// Display identity to consensus identity bindings used by health quorum
     /// accounting. These are signed state because losing the mapping can turn a
@@ -702,12 +3180,20 @@ struct PersistedGovernanceState {
     pending_human_authorizations: VecDeque<GovernedHumanAuthorizationHold>,
     partition_activity: Vec<PartitionActionRecord>,
     reconciliation_reports: Vec<PartitionReconciliationReport>,
+    /// A signed fail-closed marker for a health observation that could not yet
+    /// be committed against a repaired checkpoint. Legacy signed payloads may
+    /// omit this optional field; absence means no pending observation was
+    /// recorded by that older schema and is safe because no newer observation
+    /// could have existed in the authenticated payload.
+    #[serde(default)]
+    pending_health_observation: Option<PendingHealthObservation>,
 }
 
 impl Default for PersistedGovernanceState {
     fn default() -> Self {
         Self {
             lock_binding: GovernanceLockBinding::unbound(),
+            cleanup_pool_binding: CleanupPoolBinding::unbound(),
             governing_agent_id: None,
             display_governors: BTreeMap::new(),
             peer_governors: BTreeSet::new(),
@@ -725,14 +3211,28 @@ impl Default for PersistedGovernanceState {
             pending_human_authorizations: VecDeque::new(),
             partition_activity: Vec::new(),
             reconciliation_reports: Vec::new(),
+            pending_health_observation: None,
         }
     }
 }
 
 impl PersistedGovernanceState {
+    fn without_pending_health_observation(mut self) -> Self {
+        self.pending_health_observation = None;
+        self
+    }
+
     fn from_runtime(state: &GovernanceState) -> Self {
+        Self::from_runtime_with_binding(state, CleanupPoolBinding::unbound())
+    }
+
+    fn from_runtime_with_binding(
+        state: &GovernanceState,
+        cleanup_pool_binding: CleanupPoolBinding,
+    ) -> Self {
         Self {
             lock_binding: GovernanceLockBinding::unbound(),
+            cleanup_pool_binding,
             governing_agent_id: state.governing_agent_id.clone(),
             display_governors: state.display_governors.clone(),
             peer_governors: state.peer_governors.clone(),
@@ -750,6 +3250,7 @@ impl PersistedGovernanceState {
             pending_human_authorizations: state.pending_human_authorizations.clone(),
             partition_activity: state.partition_activity.clone(),
             reconciliation_reports: state.reconciliation_reports.clone(),
+            pending_health_observation: state.durable_pending_health_observation.clone(),
         }
     }
 
@@ -771,6 +3272,8 @@ impl PersistedGovernanceState {
         state.pending_human_authorizations = self.pending_human_authorizations;
         state.partition_activity = self.partition_activity;
         state.reconciliation_reports = self.reconciliation_reports;
+        state.pending_health_observation = self.pending_health_observation.clone();
+        state.durable_pending_health_observation = self.pending_health_observation;
     }
 }
 
@@ -779,6 +3282,15 @@ impl PersistedGovernanceState {
 struct GovernanceSequenceCheckpoint {
     accepted_sequence: u64,
     lock_binding: GovernanceLockBinding,
+    cleanup_pool_binding: CleanupPoolBinding,
+    /// A signed fail-closed marker for an observation whose state envelope
+    /// could not be committed.  This is intentionally anchored in the
+    /// checkpoint as well as the state envelope: when the state write itself
+    /// fails, the already-existing checkpoint is still an authenticated
+    /// recovery anchor that prevents a restart from treating stale Healthy as
+    /// authoritative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_health_observation: Option<PendingHealthObservation>,
 }
 
 #[derive(Debug)]
@@ -793,6 +3305,7 @@ struct LoadedGovernanceState {
 struct GovernanceStateVersion {
     sequence: u64,
     digest: String,
+    health_marker_cleared: bool,
 }
 
 /// Result of an explicit offline permanent-lock migration.
@@ -806,6 +3319,47 @@ pub struct GovernanceLockMigrationReport {
     pub already_migrated: bool,
 }
 
+/// The only supported modes for explicit cleanup-pool maintenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GovernanceCleanupPoolMaintenanceMode {
+    Drain,
+    Reset,
+}
+
+/// Authenticated result of one cleanup-pool maintenance transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GovernanceCleanupPoolMaintenanceReport {
+    pub mode: GovernanceCleanupPoolMaintenanceMode,
+    pub archive_path: PathBuf,
+    pub moved_slots: Vec<String>,
+    pub opaque_slots: Vec<String>,
+}
+
+/// The authenticated identity and bytes a caller observed for an artifact it
+/// needs to retain during normal governance operation.  The expectation is
+/// checked against a no-follow descriptor before a fixed cleanup-pool slot is
+/// reserved; a caller cannot use this API to make the pool accept a different
+/// inode or silently create a replacement namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernanceCleanupArtifactExpectation {
+    pub device: u64,
+    pub inode: u64,
+    pub content_digest: String,
+    pub byte_len: u64,
+}
+
+/// Result of normal-operation retention in the authenticated fixed cleanup
+/// pool.  `ForeignPreserved` and `Uncertain` are safe, non-success outcomes:
+/// the caller must retain its higher-level recovery material and must not infer
+/// that the expected artifact was retired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GovernanceCleanupPoolRetentionOutcome {
+    Retained,
+    ForeignPreserved,
+    PoolExhausted,
+    Uncertain,
+}
+
 #[derive(Debug)]
 struct VerifiedGovernanceMigrationAnchors {
     state_bytes: Vec<u8>,
@@ -813,6 +3367,7 @@ struct VerifiedGovernanceMigrationAnchors {
     state_payload: serde_json::Value,
     state_binding: Option<GovernanceLockBinding>,
     state_sequence: u64,
+    state_pending_health_observation: Option<PendingHealthObservation>,
     checkpoint_binding: Option<GovernanceLockBinding>,
     checkpoint_sequence: u64,
 }
@@ -882,6 +3437,33 @@ pub enum GovernancePersistenceError {
 
     #[error("governance state lock `{path}` is held by another process")]
     StateLocked { path: PathBuf },
+
+    #[error("failed to open governance authority lifetime lock `{path}`: {source}")]
+    OpenAuthorityLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("governance authority lifetime lock `{path}` must be a regular non-symlink file")]
+    InvalidAuthorityLockFileType { path: PathBuf },
+
+    #[error(
+        "governance authority lifetime lock is missing at `{path}`; refusing implicit replacement"
+    )]
+    MissingAuthorityLock { path: PathBuf },
+
+    #[error("governance authority lock binding `{path}` is held by another process")]
+    AuthorityStateLocked { path: PathBuf },
+
+    #[error(
+        "governance authority lifetime lock path identity changed for `{path}`: held {expected}, observed {observed}; refusing persistence"
+    )]
+    AuthorityLockIdentityChanged {
+        path: PathBuf,
+        expected: String,
+        observed: String,
+    },
 
     #[error("failed to acquire governance state lock `{path}`: {source}")]
     LockState {
@@ -986,6 +3568,24 @@ pub enum GovernancePersistenceError {
 
     #[error("explicit governance reinitialization failed: {reason}")]
     ReinitializationFailed { reason: String },
+
+    #[error("governance cleanup pool is exhausted or requires maintenance for `{path}`: {reason}")]
+    CleanupMaintenance { path: PathBuf, reason: String },
+
+    #[error("governance cleanup pool is exhausted for `{path}`; explicit maintenance is required")]
+    CleanupPoolExhausted { path: PathBuf },
+
+    #[error("governance cleanup-pool namespace changed for `{path}`: {reason}")]
+    CleanupPoolNamespaceChanged { path: PathBuf, reason: String },
+
+    #[error("cleanup-pool maintenance is busy for `{path}` ({resource})")]
+    MaintenanceBusy { path: PathBuf, resource: String },
+
+    #[error("cleanup-pool maintenance journal `{path}` is invalid: {reason}")]
+    CleanupMaintenanceJournal { path: PathBuf, reason: String },
+
+    #[error("cleanup-pool maintenance archive `{path}` is unavailable: {reason}")]
+    CleanupMaintenanceArchive { path: PathBuf, reason: String },
 }
 
 fn read_migration_anchor(
@@ -1045,6 +3645,11 @@ fn decode_migration_state_payload(
             path: path.to_path_buf(),
             reason: format!("signed state lock binding is invalid: {error}"),
         })?;
+    let cleanup_pool_binding = object.remove("cleanup_pool_binding");
+    let cleanup_pool_binding_present = cleanup_pool_binding.is_some();
+    if let Some(cleanup_pool_binding) = cleanup_pool_binding {
+        object.insert("cleanup_pool_binding".to_string(), cleanup_pool_binding);
+    }
     let mut typed_shape = unsigned_shape.clone();
     let unbound = serde_json::to_value(GovernanceLockBinding::unbound()).map_err(|error| {
         GovernancePersistenceError::InvalidMigrationInput {
@@ -1059,6 +3664,17 @@ fn decode_migration_state_payload(
         });
     };
     typed_object.insert("lock_binding".to_string(), unbound);
+    if !cleanup_pool_binding_present {
+        typed_object.insert(
+            "cleanup_pool_binding".to_string(),
+            serde_json::to_value(CleanupPoolBinding::unbound()).map_err(|error| {
+                GovernancePersistenceError::InvalidMigrationInput {
+                    path: path.to_path_buf(),
+                    reason: format!("cleanup pool binding could not be normalized: {error}"),
+                }
+            })?,
+        );
+    }
     let typed: PersistedGovernanceState = serde_json::from_value(typed_shape).map_err(|error| {
         GovernancePersistenceError::InvalidMigrationInput {
             path: path.to_path_buf(),
@@ -1080,6 +3696,9 @@ fn decode_migration_state_payload(
         });
     };
     round_trip_object.remove("lock_binding");
+    if !cleanup_pool_binding_present {
+        round_trip_object.remove("cleanup_pool_binding");
+    }
     if round_trip != unsigned_shape {
         return Err(GovernancePersistenceError::InvalidMigrationInput {
             path: path.to_path_buf(),
@@ -1093,7 +3712,13 @@ fn decode_migration_checkpoint_payload(
     path: &Path,
     payload: &serde_json::Value,
     envelope_sequence: u64,
-) -> Result<Option<GovernanceLockBinding>, GovernancePersistenceError> {
+) -> Result<
+    (
+        Option<GovernanceLockBinding>,
+        Option<PendingHealthObservation>,
+    ),
+    GovernancePersistenceError,
+> {
     let mut unsigned_shape = payload.clone();
     let object = unsigned_shape.as_object_mut().ok_or_else(|| {
         GovernancePersistenceError::InvalidMigrationInput {
@@ -1109,6 +3734,19 @@ fn decode_migration_checkpoint_payload(
             path: path.to_path_buf(),
             reason: format!("signed checkpoint lock binding is invalid: {error}"),
         })?;
+    let pending_health_observation = object
+        .remove("pending_health_observation")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| GovernancePersistenceError::InvalidMigrationInput {
+            path: path.to_path_buf(),
+            reason: format!("signed checkpoint pending health marker is invalid: {error}"),
+        })?;
+    // Current signed streams carry the authenticated cleanup-pool namespace
+    // beside the lock binding. Migration validates and rewrites that copy
+    // through the held cleanup context; it is not part of the legacy
+    // checkpoint sequence shape check below.
+    object.remove("cleanup_pool_binding");
     let accepted_sequence = unsigned_shape
         .get("accepted_sequence")
         .and_then(serde_json::Value::as_u64);
@@ -1120,11 +3758,11 @@ fn decode_migration_checkpoint_payload(
     {
         return Err(GovernancePersistenceError::InvalidSequence {
             path: path.to_path_buf(),
-            reason: "signed migration checkpoint must contain only an accepted_sequence matching its positive envelope sequence"
+            reason: "signed migration checkpoint must contain only an accepted_sequence and optional pending health marker matching its positive envelope sequence"
                 .to_string(),
         });
     }
-    Ok(binding)
+    Ok((binding, pending_health_observation))
 }
 
 fn verify_governance_migration_anchors(
@@ -1173,11 +3811,12 @@ fn verify_governance_migration_anchors(
             observed: checkpoint.schema_version,
         });
     }
-    let checkpoint_binding = decode_migration_checkpoint_payload(
-        &sequence_path,
-        &checkpoint.payload,
-        checkpoint.sequence,
-    )?;
+    let (checkpoint_binding, checkpoint_pending_health_observation) =
+        decode_migration_checkpoint_payload(
+            &sequence_path,
+            &checkpoint.payload,
+            checkpoint.sequence,
+        )?;
 
     let state = state_envelope.verify(SignedStateExpectation {
         state_kind: GOVERNANCE_STATE_KIND,
@@ -1219,12 +3858,29 @@ fn verify_governance_migration_anchors(
                 .to_string(),
         });
     }
+    if checkpoint_pending_health_observation
+        .as_ref()
+        .is_some_and(|pending| {
+            typed_state
+                .pending_health_observation
+                .as_ref()
+                .is_some_and(|state_pending| state_pending != pending)
+        })
+    {
+        return Err(GovernancePersistenceError::InvalidMigrationInput {
+            path: sequence_path.clone(),
+            reason: "checkpoint pending health marker is not present identically in its authenticated state predecessor"
+                .to_string(),
+        });
+    }
     Ok(VerifiedGovernanceMigrationAnchors {
         state_bytes,
         checkpoint_bytes,
         state_payload: state.payload,
         state_binding,
         state_sequence: state.sequence,
+        state_pending_health_observation: checkpoint_pending_health_observation
+            .or(typed_state.pending_health_observation),
         checkpoint_binding,
         checkpoint_sequence: checkpoint.sequence,
     })
@@ -1243,6 +3899,3203 @@ fn ensure_lock_identity_supported() -> Result<(), GovernancePersistenceError> {
             },
         )
     }
+}
+
+/// Derive the canonical process-lifetime authority sidecar for a governance
+/// state path. The sidecar deliberately replaces the state extension rather
+/// than appending to it, yielding e.g. `state.authority.lock`.
+pub fn governance_authority_lock_path(path: impl AsRef<Path>) -> PathBuf {
+    path.as_ref().with_extension("authority.lock")
+}
+
+/// Validate a canonical authority sidecar and return its regular-file identity.
+/// Symlinks, directories, missing files, and unsupported identity platforms all
+/// fail closed so a selector cannot bind two logical paths to different locks.
+pub fn governance_authority_lock_identity(
+    state_path: impl AsRef<Path>,
+) -> Result<GovernanceAuthorityLockIdentity, GovernancePersistenceError> {
+    let path = governance_authority_lock_path(state_path);
+    let metadata = fs::symlink_metadata(&path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            GovernancePersistenceError::MissingAuthorityLock { path: path.clone() }
+        } else {
+            GovernancePersistenceError::OpenAuthorityLock {
+                path: path.clone(),
+                source,
+            }
+        }
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(GovernancePersistenceError::InvalidAuthorityLockFileType { path });
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(GovernanceAuthorityLockIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        Err(
+            GovernancePersistenceError::UnsupportedLockIdentityPlatform {
+                platform: std::env::consts::OS,
+            },
+        )
+    }
+}
+
+/// Validate the authority sidecars for two logical state paths and return their
+/// shared filesystem identity. Path-selection code must call this after it has
+/// created any missing sidecar as a hard link while holding its selection lock;
+/// a pair with different devices/inodes is never a single authority stream.
+pub fn governance_authority_lock_pair_identity(
+    first_state_path: impl AsRef<Path>,
+    second_state_path: impl AsRef<Path>,
+) -> Result<GovernanceAuthorityLockIdentity, GovernancePersistenceError> {
+    let first_state_path = first_state_path.as_ref().to_path_buf();
+    let second_state_path = second_state_path.as_ref().to_path_buf();
+    let second_path = governance_authority_lock_path(&second_state_path);
+    let first = governance_authority_lock_identity(&first_state_path)?;
+    let second = governance_authority_lock_identity(&second_state_path)?;
+    if first != second {
+        return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+            path: second_path,
+            expected: authority_lock_identity_description(first),
+            observed: authority_lock_identity_description(second),
+        });
+    }
+    Ok(first)
+}
+
+/// Opaque nonblocking quiescence guard for explicit cleanup-pool maintenance.
+///
+/// The guard owns the process-lifetime authority sidecar lock.  It must be
+/// acquired before the state lock and is consumed by a drain/reset operation;
+/// it never deletes or replaces the sidecar on drop.
+#[derive(Debug)]
+pub struct GovernanceCleanupPoolMaintenanceGuard {
+    state_path: PathBuf,
+    sidecar_path: PathBuf,
+    file: Option<fs::File>,
+    identity: GovernanceAuthorityLockIdentity,
+    transferred: bool,
+}
+
+/// Pre-construction capability for retaining a verified governance artifact.
+/// The caller must already hold the daemon's external path-selection lock;
+/// this guard adds the authenticated parent/pool namespace and nonblocking pool
+/// lock, but deliberately does not acquire the governance state lock.  Drop it
+/// before calling a policy constructor.
+#[derive(Debug)]
+pub struct GovernanceCleanupPoolRetentionGuard {
+    state_path: PathBuf,
+    parent: AuthorityCleanupParent,
+    pool_path: PathBuf,
+    pool_file: fs::File,
+    lock_file: fs::File,
+    binding_file: fs::File,
+    binding_identity: GovernanceArtifactIdentity,
+    binding: CleanupPoolBinding,
+    expected_governing_agent_id: AgentId,
+    expected_signer_agent_id: AgentId,
+}
+
+impl Drop for GovernanceCleanupPoolRetentionGuard {
+    fn drop(&mut self) {
+        // Advisory locks are released with the descriptor.  The fixed pool,
+        // signed binding, and any retained slots are intentionally preserved
+        // for the subsequent constructor or explicit maintenance operation.
+    }
+}
+
+fn retention_guard_error(path: &Path, reason: impl Into<String>) -> GovernancePersistenceError {
+    GovernancePersistenceError::CleanupPoolNamespaceChanged {
+        path: path.to_path_buf(),
+        reason: reason.into(),
+    }
+}
+
+fn read_retention_guard_anchor(
+    state_path: &Path,
+    parent: &AuthorityCleanupParent,
+    name: &OsStr,
+    sequence: bool,
+) -> Result<Option<(Vec<u8>, GovernanceArtifactIdentity)>, GovernancePersistenceError> {
+    let file = match open_regular_entry_at(&parent.file, name) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(retention_guard_error(
+                state_path,
+                format!(
+                    "{} anchor is not a regular no-follow file: {source}",
+                    if sequence { "sequence" } else { "state" }
+                ),
+            ));
+        }
+    };
+    let before = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata))
+        .ok_or_else(|| {
+            retention_guard_error(
+                state_path,
+                format!(
+                    "{} anchor is not a regular file",
+                    if sequence { "sequence" } else { "state" }
+                ),
+            )
+        })?;
+    let mut reader = file.try_clone().map_err(|source| {
+        retention_guard_error(
+            state_path,
+            format!("anchor descriptor could not clone: {source}"),
+        )
+    })?;
+    reader.seek(SeekFrom::Start(0)).map_err(|source| {
+        retention_guard_error(state_path, format!("anchor could not seek: {source}"))
+    })?;
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).map_err(|source| {
+        retention_guard_error(state_path, format!("anchor could not read: {source}"))
+    })?;
+    let after = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+    if after != Some(before)
+        || file
+            .metadata()
+            .ok()
+            .is_none_or(|metadata| metadata.len() != bytes.len() as u64)
+    {
+        return Err(retention_guard_error(
+            state_path,
+            "anchor changed while being read",
+        ));
+    }
+    Ok(Some((bytes, before)))
+}
+
+fn verify_retention_guard_anchors(
+    state_path: &Path,
+    state_bytes: &[u8],
+    checkpoint_bytes: &[u8],
+    binding: &CleanupPoolBinding,
+    expected_governing_agent_id: &AgentId,
+    expected_signer_agent_id: &AgentId,
+) -> Result<(), GovernancePersistenceError> {
+    let checkpoint: SignedStateEnvelope<GovernanceSequenceCheckpoint> =
+        serde_json::from_slice(checkpoint_bytes).map_err(|error| {
+            retention_guard_error(
+                state_path,
+                format!("signed sequence anchor is malformed: {error}"),
+            )
+        })?;
+    let verified_checkpoint = checkpoint
+        .verify(SignedStateExpectation {
+            state_kind: GOVERNANCE_CHECKPOINT_KIND,
+            stream_id: GOVERNANCE_STATE_STREAM,
+            expected_signer_agent_id: Some(expected_signer_agent_id),
+            accepted_sequence: None,
+        })
+        .map_err(|error| {
+            retention_guard_error(state_path, format!("sequence anchor refused: {error}"))
+        })?;
+    if verified_checkpoint.schema_version != SIGNED_STATE_SCHEMA_VERSION
+        || verified_checkpoint.payload.cleanup_pool_binding != *binding
+    {
+        return Err(retention_guard_error(
+            state_path,
+            "signed checkpoint schema or cleanup binding does not match the held pool",
+        ));
+    }
+    let state: SignedStateEnvelope<PersistedGovernanceState> = serde_json::from_slice(state_bytes)
+        .map_err(|error| {
+            retention_guard_error(
+                state_path,
+                format!("signed state anchor is malformed: {error}"),
+            )
+        })?;
+    let verified_state = state
+        .verify(SignedStateExpectation {
+            state_kind: GOVERNANCE_STATE_KIND,
+            stream_id: GOVERNANCE_STATE_STREAM,
+            expected_signer_agent_id: Some(expected_signer_agent_id),
+            accepted_sequence: Some(verified_checkpoint.payload.accepted_sequence),
+        })
+        .map_err(|error| {
+            retention_guard_error(state_path, format!("state anchor refused: {error}"))
+        })?;
+    if verified_state.schema_version != SIGNED_STATE_SCHEMA_VERSION
+        || verified_state.payload.cleanup_pool_binding != *binding
+        || verified_state.payload.governing_agent_id.as_ref() != Some(expected_governing_agent_id)
+        || verified_state
+            .payload
+            .display_governors
+            .get(expected_governing_agent_id)
+            != Some(expected_signer_agent_id)
+    {
+        return Err(retention_guard_error(
+            state_path,
+            "signed state identity, schema, or cleanup binding does not match the request",
+        ));
+    }
+    Ok(())
+}
+
+impl GovernanceCleanupPoolMaintenanceGuard {
+    fn verify(&self) -> Result<(), GovernancePersistenceError> {
+        let file =
+            self.file
+                .as_ref()
+                .ok_or_else(|| GovernancePersistenceError::MaintenanceBusy {
+                    path: self.state_path.clone(),
+                    resource: "maintenance guard was already transferred".to_string(),
+                })?;
+        verify_governance_authority_lock_path(&self.sidecar_path, file, self.identity)
+    }
+
+    fn transfer(
+        mut self,
+    ) -> Result<
+        (PathBuf, fs::File, GovernanceAuthorityLockIdentity, bool),
+        GovernancePersistenceError,
+    > {
+        self.verify()?;
+        let file = self
+            .file
+            .take()
+            .ok_or_else(|| GovernancePersistenceError::MaintenanceBusy {
+                path: self.state_path.clone(),
+                resource: "maintenance guard was already transferred".to_string(),
+            })?;
+        self.transferred = true;
+        Ok((self.sidecar_path.clone(), file, self.identity, false))
+    }
+}
+
+impl Drop for GovernanceCleanupPoolMaintenanceGuard {
+    fn drop(&mut self) {
+        if !self.transferred {
+            drop(self.file.take());
+        }
+    }
+}
+
+/// A verified authority-pair lifetime guard transferred from a selector into
+/// governance construction.  The guard owns the locked current sidecar and
+/// verifies that the current and legacy sidecars remain hard links to the same
+/// inode until construction consumes it.  A constructor that rejects the
+/// guard leaves newly-created sidecars eligible for exact-identity cleanup;
+/// it never reacquires by pathname.
+#[derive(Debug)]
+pub struct GovernanceAuthorityPairGuard {
+    current_state_path: PathBuf,
+    legacy_state_path: PathBuf,
+    primary_sidecar_path: PathBuf,
+    legacy_sidecar_path: PathBuf,
+    file: Option<fs::File>,
+    identity: GovernanceAuthorityLockIdentity,
+    created_primary: bool,
+    created_legacy: bool,
+    transferred: bool,
+}
+
+struct GovernanceAuthorityPairTransfer {
+    primary: (PathBuf, fs::File, GovernanceAuthorityLockIdentity, bool),
+    cleanup_primary: fs::File,
+    legacy_sidecar_path: PathBuf,
+    identity: GovernanceAuthorityLockIdentity,
+    created_legacy: bool,
+}
+
+/// Acquire and verify the shared current/legacy authority sidecar while the
+/// caller still holds its selection lock.  The legacy sidecar is created only
+/// with a no-replace hard link to the already-locked current inode.
+pub fn acquire_governance_authority_pair_guard(
+    current_state_path: impl AsRef<Path>,
+    legacy_state_path: impl AsRef<Path>,
+) -> Result<GovernanceAuthorityPairGuard, GovernancePersistenceError> {
+    ensure_lock_identity_supported()?;
+    let current_state_path = current_state_path.as_ref().to_path_buf();
+    let legacy_state_path = legacy_state_path.as_ref().to_path_buf();
+    let primary_sidecar_path = governance_authority_lock_path(&current_state_path);
+    let legacy_sidecar_path = governance_authority_lock_path(&legacy_state_path);
+    if primary_sidecar_path == legacy_sidecar_path {
+        return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+            path: legacy_sidecar_path,
+            expected: "distinct current and legacy sidecars".to_string(),
+            observed: "same sidecar path".to_string(),
+        });
+    }
+    let (file, identity, created_primary) =
+        open_governance_authority_lock(&primary_sidecar_path, true)?;
+    let mut created_legacy = false;
+    let result = (|| {
+        match fs::symlink_metadata(&legacy_sidecar_path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file() {
+                    return Err(GovernancePersistenceError::InvalidAuthorityLockFileType {
+                        path: legacy_sidecar_path.clone(),
+                    });
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::hard_link(&primary_sidecar_path, &legacy_sidecar_path).map_err(|source| {
+                    GovernancePersistenceError::OpenAuthorityLock {
+                        path: legacy_sidecar_path.clone(),
+                        source,
+                    }
+                })?;
+                created_legacy = true;
+                if let Some(parent) = legacy_sidecar_path.parent() {
+                    fs::File::open(parent)
+                        .and_then(|directory| directory.sync_all())
+                        .map_err(|source| GovernancePersistenceError::OpenAuthorityLock {
+                            path: parent.to_path_buf(),
+                            source,
+                        })?;
+                }
+            }
+            Err(source) => {
+                return Err(GovernancePersistenceError::OpenAuthorityLock {
+                    path: legacy_sidecar_path.clone(),
+                    source,
+                });
+            }
+        }
+        let observed = governance_authority_lock_identity(&legacy_state_path)?;
+        if observed != identity {
+            return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                path: legacy_sidecar_path.clone(),
+                expected: authority_lock_identity_description(identity),
+                observed: authority_lock_identity_description(observed),
+            });
+        }
+        verify_governance_authority_lock_path(&primary_sidecar_path, &file, identity)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let mut cleanup_errors = Vec::new();
+        if created_legacy
+            && let Err(cleanup_error) = remove_authority_lock_if_identity_with_held_file(
+                &legacy_sidecar_path,
+                &file,
+                identity,
+            )
+        {
+            cleanup_errors.push(cleanup_error);
+        }
+        if created_primary {
+            if let Err(cleanup_error) =
+                remove_new_authority_lock_if_owned(&primary_sidecar_path, file, identity)
+            {
+                cleanup_errors.push(cleanup_error);
+            }
+        } else {
+            drop(file);
+        }
+        return Err(compose_operation_cleanup_failure(
+            &primary_sidecar_path,
+            error,
+            cleanup_errors,
+        ));
+    }
+    Ok(GovernanceAuthorityPairGuard {
+        current_state_path,
+        legacy_state_path,
+        primary_sidecar_path,
+        legacy_sidecar_path,
+        file: Some(file),
+        identity,
+        created_primary,
+        created_legacy,
+        transferred: false,
+    })
+}
+
+impl GovernanceAuthorityPairGuard {
+    /// Return the inode identity that was verified for both logical sidecar
+    /// paths.  The value is a capability provenance marker, not a pathname
+    /// lookup; callers must still transfer this guard to construction rather
+    /// than reacquiring either sidecar by name.
+    pub fn identity(&self) -> GovernanceAuthorityLockIdentity {
+        self.identity
+    }
+
+    /// Revalidate the pair while the guard is still held.  This is useful for
+    /// a selector's final pre-construction check and never opens a second
+    /// descriptor or lock stream.
+    pub fn verify(&self) -> Result<(), GovernancePersistenceError> {
+        self.verify_for_state_path(&self.current_state_path)
+    }
+
+    fn verify_for_state_path(&self, state_path: &Path) -> Result<(), GovernancePersistenceError> {
+        let canonical = governance_authority_lock_path(state_path);
+        if canonical != self.primary_sidecar_path && canonical != self.legacy_sidecar_path {
+            return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                path: canonical,
+                expected: self.primary_sidecar_path.display().to_string(),
+                observed: "guard belongs to a different authority pair".to_string(),
+            });
+        }
+        let file =
+            self.file
+                .as_ref()
+                .ok_or_else(|| GovernancePersistenceError::OpenAuthorityLock {
+                    path: self.primary_sidecar_path.clone(),
+                    source: std::io::Error::other("authority pair guard was already transferred"),
+                })?;
+        verify_governance_authority_lock_path(&self.primary_sidecar_path, file, self.identity)?;
+        let current = governance_authority_lock_identity(&self.current_state_path)?;
+        let legacy = governance_authority_lock_identity(&self.legacy_state_path)?;
+        if current != self.identity || legacy != self.identity {
+            return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                path: self.legacy_sidecar_path.clone(),
+                expected: authority_lock_identity_description(self.identity),
+                observed: format!(
+                    "current {}, legacy {}",
+                    authority_lock_identity_description(current),
+                    authority_lock_identity_description(legacy)
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn transfer(
+        mut self,
+        state_path: &Path,
+    ) -> Result<GovernanceAuthorityPairTransfer, GovernancePersistenceError> {
+        self.verify_for_state_path(state_path)?;
+        let cleanup_primary = self
+            .file
+            .as_ref()
+            .ok_or_else(|| GovernancePersistenceError::OpenAuthorityLock {
+                path: self.primary_sidecar_path.clone(),
+                source: std::io::Error::other("authority pair guard was already transferred"),
+            })?
+            .try_clone()
+            .map_err(|source| GovernancePersistenceError::OpenAuthorityLock {
+                path: self.primary_sidecar_path.clone(),
+                source,
+            })?;
+        let file =
+            self.file
+                .take()
+                .ok_or_else(|| GovernancePersistenceError::OpenAuthorityLock {
+                    path: self.primary_sidecar_path.clone(),
+                    source: std::io::Error::other("authority pair guard was already transferred"),
+                })?;
+        self.transferred = true;
+        Ok(GovernanceAuthorityPairTransfer {
+            primary: (
+                self.primary_sidecar_path.clone(),
+                file,
+                self.identity,
+                self.created_primary,
+            ),
+            cleanup_primary,
+            legacy_sidecar_path: self.legacy_sidecar_path.clone(),
+            identity: self.identity,
+            created_legacy: self.created_legacy,
+        })
+    }
+}
+
+impl Drop for GovernanceAuthorityPairGuard {
+    fn drop(&mut self) {
+        if self.transferred {
+            return;
+        }
+        let Some(file) = self.file.take() else {
+            return;
+        };
+        if self.created_legacy {
+            let _ = remove_authority_lock_if_identity(&self.legacy_sidecar_path, self.identity);
+        }
+        if self.created_primary {
+            let _ =
+                remove_new_authority_lock_if_owned(&self.primary_sidecar_path, file, self.identity);
+        } else {
+            drop(file);
+        }
+    }
+}
+
+fn authority_lock_identity_description(identity: GovernanceAuthorityLockIdentity) -> String {
+    format!("device {}, inode {}", identity.device, identity.inode)
+}
+
+fn authority_lock_identity_from_metadata(
+    metadata: &fs::Metadata,
+) -> Option<GovernanceAuthorityLockIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(GovernanceAuthorityLockIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+/// Owns a newly-created authority sidecar until acquisition has completed.
+/// If any fsync, lock, or identity check fails, the drop path removes the
+/// name only when it still denotes the exact inode held by this guard.  A
+/// replacement, pre-existing file, symlink, or non-regular path is never
+/// deleted as cleanup collateral.
+struct NewAuthorityLockGuard {
+    path: PathBuf,
+    file: Option<fs::File>,
+}
+
+impl NewAuthorityLockGuard {
+    fn new(path: &Path, file: fs::File) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            file: Some(file),
+        }
+    }
+
+    fn file(&self) -> Result<&fs::File, GovernancePersistenceError> {
+        self.file
+            .as_ref()
+            .ok_or_else(|| GovernancePersistenceError::OpenAuthorityLock {
+                path: self.path.clone(),
+                source: std::io::Error::other("authority lock guard lost its file"),
+            })
+    }
+
+    fn disarm(
+        mut self,
+        identity: GovernanceAuthorityLockIdentity,
+    ) -> Result<(fs::File, GovernanceAuthorityLockIdentity), GovernancePersistenceError> {
+        Ok((
+            self.file
+                .take()
+                .ok_or_else(|| GovernancePersistenceError::OpenAuthorityLock {
+                    path: self.path.clone(),
+                    source: std::io::Error::other("authority lock guard lost its file"),
+                })?,
+            identity,
+        ))
+    }
+}
+
+impl Drop for NewAuthorityLockGuard {
+    fn drop(&mut self) {
+        let Some(file) = self.file.take() else {
+            return;
+        };
+        let expected = file
+            .metadata()
+            .ok()
+            .and_then(|metadata| authority_lock_identity_from_metadata(&metadata));
+        if let Some(expected) = expected {
+            let _ = remove_verified_authority_entry(&self.path, &file, expected);
+        }
+        // Keep the descriptor (and its advisory lock) held through quarantine:
+        // cooperating replacement attempts cannot win the directory-entry
+        // transition and leave cleanup deleting a foreign inode.
+        drop(file);
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InjectedAuthorityLockFailure {
+    FileSync,
+    ParentSync,
+    TryLock,
+    IdentityVerification,
+    PostAcquireVerification,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InjectedHealthCrashPoint {
+    Intent,
+    StateWrite,
+    CheckpointWrite,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InjectedReinitializationCrashPoint {
+    ArchiveCreated,
+    OriginalsQuarantined,
+    StateRenamed,
+    CheckpointRenamed,
+    BeforeCommitJournal,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupMaintenanceCrashPoint {
+    Prepared,
+    AfterMove(usize),
+    BeforeCompleted,
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECT_AUTHORITY_LOCK_FAILURE:
+        std::cell::RefCell<Option<(PathBuf, InjectedAuthorityLockFailure)>> =
+        const { std::cell::RefCell::new(None) };
+    static INJECT_HEALTH_CRASH:
+        std::cell::RefCell<Option<(PathBuf, InjectedHealthCrashPoint)>> =
+        const { std::cell::RefCell::new(None) };
+static INJECT_REINITIALIZATION_CRASH:
+        std::cell::RefCell<Option<(PathBuf, InjectedReinitializationCrashPoint)>> =
+        const { std::cell::RefCell::new(None) };
+    static INJECT_REINITIALIZATION_COMMIT_JOURNAL_FAILURE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+    static INJECT_CLEANUP_MAINTENANCE_CRASH:
+        std::cell::RefCell<Option<(PathBuf, CleanupMaintenanceCrashPoint)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+type AuthorityCleanupBarrier = (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+
+#[cfg(test)]
+type AuthorityCleanupPostVerifyBarrier = (
+    PathBuf,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+);
+
+#[cfg(test)]
+type AuthorityCleanupPreRenameBarrier = (
+    PathBuf,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+);
+
+#[cfg(test)]
+type AuthorityCleanupFinalUnlinkBarrier = (
+    PathBuf,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+);
+
+#[cfg(test)]
+type AuthorityCleanupFinalAbsenceBarrier =
+    (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+
+#[cfg(test)]
+type AuthorityCleanupSourceFinalBarrier =
+    (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+
+#[cfg(test)]
+type AuthorityCleanupPostMoveBarrier = (
+    PathBuf,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+);
+
+#[cfg(test)]
+type AuthorityCleanupReclaimBarrier = (
+    PathBuf,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+);
+
+#[cfg(test)]
+type ReinitializationArchiveBarrier = (
+    PathBuf,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+);
+
+#[cfg(test)]
+type ReinitializationPublicationBarrier =
+    (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+
+#[cfg(test)]
+type ReinitializationRestoreLinkBarrier =
+    (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+
+#[cfg(test)]
+type GovernanceStreamCleanupBarrier = (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+
+#[cfg(test)]
+type CleanupMaintenanceMoveBarrier = (
+    PathBuf,
+    String,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+);
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_BARRIER: std::sync::OnceLock<Mutex<Option<AuthorityCleanupBarrier>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_POST_VERIFY_BARRIER: std::sync::OnceLock<
+    Mutex<Option<AuthorityCleanupPostVerifyBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_PRE_RENAME_BARRIER: std::sync::OnceLock<
+    Mutex<Option<AuthorityCleanupPreRenameBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_FINAL_UNLINK_BARRIER: std::sync::OnceLock<
+    Mutex<Option<AuthorityCleanupFinalUnlinkBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_FINAL_ABSENCE_BARRIER: std::sync::OnceLock<
+    Mutex<Option<AuthorityCleanupFinalAbsenceBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_SOURCE_FINAL_BARRIER: std::sync::OnceLock<
+    Mutex<Option<AuthorityCleanupSourceFinalBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_POST_MOVE_BARRIER: std::sync::OnceLock<
+    Mutex<Option<AuthorityCleanupPostMoveBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_RECLAIM_BARRIER: std::sync::OnceLock<
+    Mutex<Option<AuthorityCleanupReclaimBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static AUTHORITY_CLEANUP_TEST_MUTEX: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static REINITIALIZATION_ARCHIVE_BARRIER: std::sync::OnceLock<
+    Mutex<Option<ReinitializationArchiveBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static REINITIALIZATION_PUBLICATION_BARRIER: std::sync::OnceLock<
+    Mutex<Option<ReinitializationPublicationBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static REINITIALIZATION_RESTORE_LINK_BARRIER: std::sync::OnceLock<
+    Mutex<Option<ReinitializationRestoreLinkBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static GOVERNANCE_STREAM_CLEANUP_BARRIER: std::sync::OnceLock<
+    Mutex<Option<GovernanceStreamCleanupBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+static CLEANUP_MAINTENANCE_MOVE_BARRIER: std::sync::OnceLock<
+    Mutex<Option<CleanupMaintenanceMoveBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn lock_authority_cleanup_tests() -> std::sync::MutexGuard<'static, ()> {
+    AUTHORITY_CLEANUP_TEST_MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+fn install_cleanup_maintenance_move_barrier(
+    pool_path: &Path,
+    slot_name: &str,
+) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    *CLEANUP_MAINTENANCE_MOVE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        pool_path.to_path_buf(),
+        slot_name.to_string(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+    ));
+    (reached, resume)
+}
+
+#[cfg(test)]
+fn pause_before_cleanup_maintenance_move(pool_path: &Path, slot_name: &str) {
+    let barrier = CLEANUP_MAINTENANCE_MOVE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, target_slot, _, _)| target == pool_path && target_slot == slot_name)
+        .map(|(_, _, reached, resume)| (Arc::clone(reached), Arc::clone(resume)));
+    if let Some((reached, resume)) = barrier {
+        reached.wait();
+        resume.wait();
+        CLEANUP_MAINTENANCE_MOVE_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_barrier(
+    path: &Path,
+) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    *AUTHORITY_CLEANUP_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+    ));
+    (reached, resume)
+}
+
+#[cfg(test)]
+fn pause_after_authority_cleanup_identity_read(path: &Path) {
+    let mut barrier = AUTHORITY_CLEANUP_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let barrier = if barrier
+        .as_ref()
+        .is_some_and(|(target, _, _)| target == path)
+    {
+        barrier.take()
+    } else {
+        None
+    };
+    if let Some((_, reached, resume)) = barrier {
+        reached.wait();
+        resume.wait();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_post_verify_barrier(
+    path: &Path,
+) -> (
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let destination = Arc::new(Mutex::new(None));
+    *AUTHORITY_CLEANUP_POST_VERIFY_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+        Arc::clone(&destination),
+    ));
+    (reached, resume, destination)
+}
+
+#[cfg(test)]
+fn pause_after_authority_cleanup_post_verify(path: &Path, quarantine: &Path) {
+    let barrier = AUTHORITY_CLEANUP_POST_VERIFY_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _, _)| target == path)
+        .map(|(_, reached, resume, destination)| {
+            (
+                Arc::clone(reached),
+                Arc::clone(resume),
+                Arc::clone(destination),
+            )
+        });
+    if let Some((reached, resume, destination)) = barrier {
+        *destination
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(quarantine.to_path_buf());
+        reached.wait();
+        resume.wait();
+        AUTHORITY_CLEANUP_POST_VERIFY_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_pre_rename_barrier(
+    path: &Path,
+) -> (
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let destination = Arc::new(Mutex::new(None));
+    *AUTHORITY_CLEANUP_PRE_RENAME_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+        Arc::clone(&destination),
+    ));
+    (reached, resume, destination)
+}
+
+#[cfg(test)]
+fn pause_before_authority_cleanup_rename(path: &Path, quarantine: &Path) {
+    let barrier = AUTHORITY_CLEANUP_PRE_RENAME_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _, _)| target == path)
+        .map(|(_, reached, resume, destination)| {
+            (
+                Arc::clone(reached),
+                Arc::clone(resume),
+                Arc::clone(destination),
+            )
+        });
+    if let Some((reached, resume, destination)) = barrier {
+        *destination
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(quarantine.to_path_buf());
+        reached.wait();
+        resume.wait();
+        AUTHORITY_CLEANUP_PRE_RENAME_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_source_final_barrier(
+    path: &Path,
+) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    *AUTHORITY_CLEANUP_SOURCE_FINAL_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+    ));
+    (reached, resume)
+}
+
+#[cfg(test)]
+fn pause_after_authority_cleanup_source_identity_read(path: &Path) {
+    let barrier = AUTHORITY_CLEANUP_SOURCE_FINAL_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _)| target == path)
+        .map(|(_, reached, resume)| (Arc::clone(reached), Arc::clone(resume)));
+    if let Some((reached, resume)) = barrier {
+        reached.wait();
+        resume.wait();
+        AUTHORITY_CLEANUP_SOURCE_FINAL_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_post_move_barrier(
+    path: &Path,
+) -> (
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let retirement = Arc::new(Mutex::new(None));
+    *AUTHORITY_CLEANUP_POST_MOVE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+        Arc::clone(&retirement),
+    ));
+    (reached, resume, retirement)
+}
+
+#[cfg(test)]
+fn pause_after_authority_cleanup_move(path: &Path, retirement: &Path) {
+    let barrier = AUTHORITY_CLEANUP_POST_MOVE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _, _)| target == path)
+        .map(|(_, reached, resume, retirement_path)| {
+            (
+                Arc::clone(reached),
+                Arc::clone(resume),
+                Arc::clone(retirement_path),
+            )
+        });
+    if let Some((reached, resume, retirement_path)) = barrier {
+        *retirement_path
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(retirement.to_path_buf());
+        reached.wait();
+        resume.wait();
+        AUTHORITY_CLEANUP_POST_MOVE_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_reclaim_barrier(
+    path: &Path,
+) -> (
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let reclaim = Arc::new(Mutex::new(None));
+    *AUTHORITY_CLEANUP_RECLAIM_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+        Arc::clone(&reclaim),
+    ));
+    (reached, resume, reclaim)
+}
+
+#[cfg(test)]
+fn pause_after_authority_cleanup_reclaim_snapshot(path: &Path, reclaim: &Path) {
+    let barrier = AUTHORITY_CLEANUP_RECLAIM_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _, _)| target == path)
+        .map(|(_, reached, resume, destination)| {
+            (
+                Arc::clone(reached),
+                Arc::clone(resume),
+                Arc::clone(destination),
+            )
+        });
+    if let Some((reached, resume, destination)) = barrier {
+        *destination
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(reclaim.to_path_buf());
+        reached.wait();
+        resume.wait();
+        AUTHORITY_CLEANUP_RECLAIM_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_final_unlink_barrier(
+    path: &Path,
+) -> (
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let destination = Arc::new(Mutex::new(None));
+    *AUTHORITY_CLEANUP_FINAL_UNLINK_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+        Arc::clone(&destination),
+    ));
+    (reached, resume, destination)
+}
+
+#[cfg(test)]
+fn pause_after_authority_cleanup_final_identity_read(path: &Path, quarantine: &Path) {
+    let barrier = AUTHORITY_CLEANUP_FINAL_UNLINK_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _, _)| target == path)
+        .map(|(_, reached, resume, destination)| {
+            (
+                Arc::clone(reached),
+                Arc::clone(resume),
+                Arc::clone(destination),
+            )
+        });
+    if let Some((reached, resume, destination)) = barrier {
+        *destination
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(quarantine.to_path_buf());
+        reached.wait();
+        resume.wait();
+        AUTHORITY_CLEANUP_FINAL_UNLINK_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_authority_cleanup_final_absence_barrier(
+    path: &Path,
+) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    *AUTHORITY_CLEANUP_FINAL_ABSENCE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+    ));
+    (reached, resume)
+}
+
+#[cfg(test)]
+fn pause_after_authority_cleanup_final_absence_read(path: &Path) {
+    let barrier = AUTHORITY_CLEANUP_FINAL_ABSENCE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _)| target == path)
+        .map(|(_, reached, resume)| (Arc::clone(reached), Arc::clone(resume)));
+    if let Some((reached, resume)) = barrier {
+        reached.wait();
+        resume.wait();
+        AUTHORITY_CLEANUP_FINAL_ABSENCE_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_reinitialization_archive_barrier(
+    path: &Path,
+) -> (
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+    Arc<Mutex<Option<PathBuf>>>,
+) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let destination = Arc::new(Mutex::new(None));
+    *REINITIALIZATION_ARCHIVE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+        Arc::clone(&destination),
+    ));
+    (reached, resume, destination)
+}
+
+#[cfg(test)]
+fn install_reinitialization_publication_barrier(
+    path: &Path,
+) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    *REINITIALIZATION_PUBLICATION_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+    ));
+    (reached, resume)
+}
+
+#[cfg(test)]
+fn pause_before_reinitialization_no_replace_publication(path: &Path) {
+    let barrier = REINITIALIZATION_PUBLICATION_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _)| target == path)
+        .map(|(_, reached, resume)| (Arc::clone(reached), Arc::clone(resume)));
+    if let Some((reached, resume)) = barrier {
+        reached.wait();
+        resume.wait();
+        REINITIALIZATION_PUBLICATION_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_reinitialization_restore_link_barrier(
+    path: &Path,
+) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    *REINITIALIZATION_RESTORE_LINK_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+    ));
+    (reached, resume)
+}
+
+#[cfg(test)]
+fn pause_after_reinitialization_restore_link(path: &Path) {
+    let barrier = REINITIALIZATION_RESTORE_LINK_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _)| target == path)
+        .map(|(_, reached, resume)| (Arc::clone(reached), Arc::clone(resume)));
+    if let Some((reached, resume)) = barrier {
+        reached.wait();
+        resume.wait();
+        REINITIALIZATION_RESTORE_LINK_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn pause_after_reinitialization_archive_check(path: &Path, archive: &Path) {
+    let barrier = REINITIALIZATION_ARCHIVE_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _, _)| target == path)
+        .map(|(_, reached, resume, destination)| {
+            (
+                Arc::clone(reached),
+                Arc::clone(resume),
+                Arc::clone(destination),
+            )
+        });
+    if let Some((reached, resume, destination)) = barrier {
+        *destination
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(archive.to_path_buf());
+        reached.wait();
+        resume.wait();
+        REINITIALIZATION_ARCHIVE_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn install_governance_stream_cleanup_barrier(
+    path: &Path,
+) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    *GOVERNANCE_STREAM_CLEANUP_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        path.to_path_buf(),
+        Arc::clone(&reached),
+        Arc::clone(&resume),
+    ));
+    (reached, resume)
+}
+
+#[cfg(test)]
+fn pause_before_governance_stream_cleanup(path: &Path) {
+    let barrier = GOVERNANCE_STREAM_CLEANUP_BARRIER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(target, _, _)| target == path)
+        .map(|(_, reached, resume)| (Arc::clone(reached), Arc::clone(resume)));
+    if let Some((reached, resume)) = barrier {
+        reached.wait();
+        resume.wait();
+        GOVERNANCE_STREAM_CLEANUP_BARRIER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+}
+
+#[cfg(test)]
+fn inject_authority_lock_failure(path: &Path, failure: InjectedAuthorityLockFailure) {
+    INJECT_AUTHORITY_LOCK_FAILURE.with(|injected| {
+        *injected.borrow_mut() = Some((path.to_path_buf(), failure));
+    });
+}
+
+#[cfg(test)]
+fn take_injected_authority_lock_failure(
+    path: &Path,
+    failure: InjectedAuthorityLockFailure,
+) -> bool {
+    INJECT_AUTHORITY_LOCK_FAILURE.with(|injected| {
+        let mut injected = injected.borrow_mut();
+        if injected
+            .as_ref()
+            .is_some_and(|(target, observed)| target == path && *observed == failure)
+        {
+            injected.take();
+            true
+        } else {
+            false
+        }
+    })
+}
+
+#[cfg(test)]
+fn inject_health_crash(path: &Path, point: InjectedHealthCrashPoint) {
+    INJECT_HEALTH_CRASH.with(|injected| {
+        *injected.borrow_mut() = Some((path.to_path_buf(), point));
+    });
+}
+
+#[cfg(test)]
+fn take_injected_health_crash(path: &Path, point: InjectedHealthCrashPoint) -> bool {
+    INJECT_HEALTH_CRASH.with(|injected| {
+        let mut injected = injected.borrow_mut();
+        if injected
+            .as_ref()
+            .is_some_and(|(target, observed)| target == path && *observed == point)
+        {
+            injected.take();
+            true
+        } else {
+            false
+        }
+    })
+}
+
+#[cfg(test)]
+fn maybe_inject_health_crash(path: &Path, point: InjectedHealthCrashPoint) {
+    if take_injected_health_crash(path, point) {
+        panic!("injected governance health crash at {point:?}");
+    }
+}
+
+#[cfg(test)]
+fn inject_reinitialization_crash(path: &Path, point: InjectedReinitializationCrashPoint) {
+    INJECT_REINITIALIZATION_CRASH.with(|injected| {
+        *injected.borrow_mut() = Some((path.to_path_buf(), point));
+    });
+}
+
+#[cfg(test)]
+fn take_injected_reinitialization_crash(
+    path: &Path,
+    point: InjectedReinitializationCrashPoint,
+) -> bool {
+    INJECT_REINITIALIZATION_CRASH.with(|injected| {
+        let mut injected = injected.borrow_mut();
+        if injected
+            .as_ref()
+            .is_some_and(|(target, observed)| target == path && *observed == point)
+        {
+            injected.take();
+            true
+        } else {
+            false
+        }
+    })
+}
+
+#[cfg(test)]
+fn maybe_inject_reinitialization_crash(path: &Path, point: InjectedReinitializationCrashPoint) {
+    if take_injected_reinitialization_crash(path, point) {
+        panic!("injected governance reinitialization crash at {point:?}");
+    }
+}
+
+#[cfg(test)]
+fn inject_reinitialization_commit_journal_failure(path: &Path) {
+    INJECT_REINITIALIZATION_COMMIT_JOURNAL_FAILURE.with(|target| {
+        *target.borrow_mut() = Some(path.to_path_buf());
+    });
+}
+
+#[cfg(test)]
+fn maybe_inject_reinitialization_commit_journal_failure(path: &Path) {
+    let inject = INJECT_REINITIALIZATION_COMMIT_JOURNAL_FAILURE.with(|target| {
+        let mut target = target.borrow_mut();
+        if target.as_deref() == Some(path) {
+            target.take();
+            true
+        } else {
+            false
+        }
+    });
+    if inject {
+        inject_atomic_parent_sync_failure(&reinitialization_journal_path(path));
+    }
+}
+
+#[cfg(test)]
+fn inject_cleanup_maintenance_crash(path: &Path, point: CleanupMaintenanceCrashPoint) {
+    INJECT_CLEANUP_MAINTENANCE_CRASH.with(|target| {
+        *target.borrow_mut() = Some((path.to_path_buf(), point));
+    });
+}
+
+#[cfg(test)]
+fn maybe_inject_cleanup_maintenance_crash(path: &Path, point: CleanupMaintenanceCrashPoint) {
+    let should_crash = INJECT_CLEANUP_MAINTENANCE_CRASH.with(|target| {
+        let mut target = target.borrow_mut();
+        if target
+            .as_ref()
+            .is_some_and(|(target_path, expected)| target_path == path && *expected == point)
+        {
+            target.take();
+            true
+        } else {
+            false
+        }
+    });
+    if should_crash {
+        panic!("injected cleanup maintenance crash at {point:?}");
+    }
+}
+
+fn open_governance_authority_lock(
+    path: &Path,
+    allow_create: bool,
+) -> Result<(fs::File, GovernanceAuthorityLockIdentity, bool), GovernancePersistenceError> {
+    ensure_lock_identity_supported()?;
+    if allow_create && let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| {
+            GovernancePersistenceError::OpenAuthorityLock {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+    for _ in 0..2 {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(GovernancePersistenceError::OpenAuthorityLock {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        if let Some(metadata) = metadata {
+            if !metadata.file_type().is_file() {
+                return Err(GovernancePersistenceError::InvalidAuthorityLockFileType {
+                    path: path.to_path_buf(),
+                });
+            }
+            let mut options = OpenOptions::new();
+            options.read(true).write(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            }
+            let file = options.open(path).map_err(|source| {
+                GovernancePersistenceError::OpenAuthorityLock {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            })?;
+            let identity = {
+                let held = file.metadata().map_err(|source| {
+                    GovernancePersistenceError::OpenAuthorityLock {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    GovernanceAuthorityLockIdentity {
+                        device: held.dev(),
+                        inode: held.ino(),
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = held;
+                    return Err(
+                        GovernancePersistenceError::UnsupportedLockIdentityPlatform {
+                            platform: std::env::consts::OS,
+                        },
+                    );
+                }
+            };
+            match file.try_lock() {
+                Ok(()) => {
+                    let named = fs::symlink_metadata(path).map_err(|source| {
+                        GovernancePersistenceError::OpenAuthorityLock {
+                            path: path.to_path_buf(),
+                            source,
+                        }
+                    })?;
+                    if !named.file_type().is_file() {
+                        return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                            path: path.to_path_buf(),
+                            expected: authority_lock_identity_description(identity),
+                            observed: "nonregular or symlink".to_string(),
+                        });
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        let named_identity = GovernanceAuthorityLockIdentity {
+                            device: named.dev(),
+                            inode: named.ino(),
+                        };
+                        if named_identity != identity {
+                            return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                                path: path.to_path_buf(),
+                                expected: authority_lock_identity_description(identity),
+                                observed: authority_lock_identity_description(named_identity),
+                            });
+                        }
+                    }
+                    return Ok((file, identity, false));
+                }
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Err(GovernancePersistenceError::AuthorityStateLocked {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(fs::TryLockError::Error(source)) => {
+                    return Err(GovernancePersistenceError::OpenAuthorityLock {
+                        path: path.to_path_buf(),
+                        source,
+                    });
+                }
+            }
+        }
+        if !allow_create {
+            return Err(GovernancePersistenceError::MissingAuthorityLock {
+                path: path.to_path_buf(),
+            });
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        match options.open(path) {
+            Ok(file) => {
+                let guard = NewAuthorityLockGuard::new(path, file);
+                #[cfg(test)]
+                if take_injected_authority_lock_failure(
+                    path,
+                    InjectedAuthorityLockFailure::FileSync,
+                ) {
+                    return Err(GovernancePersistenceError::OpenAuthorityLock {
+                        path: path.to_path_buf(),
+                        source: std::io::Error::other("injected authority lock file sync failure"),
+                    });
+                }
+                guard.file()?.sync_all().map_err(|source| {
+                    GovernancePersistenceError::OpenAuthorityLock {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                })?;
+                if let Some(parent) = path.parent() {
+                    #[cfg(test)]
+                    if take_injected_authority_lock_failure(
+                        path,
+                        InjectedAuthorityLockFailure::ParentSync,
+                    ) {
+                        return Err(GovernancePersistenceError::OpenAuthorityLock {
+                            path: path.to_path_buf(),
+                            source: std::io::Error::other(
+                                "injected authority lock parent sync failure",
+                            ),
+                        });
+                    }
+                    fs::File::open(parent)
+                        .and_then(|directory| directory.sync_all())
+                        .map_err(|source| GovernancePersistenceError::OpenAuthorityLock {
+                            path: path.to_path_buf(),
+                            source,
+                        })?;
+                }
+                let identity = {
+                    let metadata = guard.file()?.metadata().map_err(|source| {
+                        GovernancePersistenceError::OpenAuthorityLock {
+                            path: path.to_path_buf(),
+                            source,
+                        }
+                    })?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        GovernanceAuthorityLockIdentity {
+                            device: metadata.dev(),
+                            inode: metadata.ino(),
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = metadata;
+                        return Err(
+                            GovernancePersistenceError::UnsupportedLockIdentityPlatform {
+                                platform: std::env::consts::OS,
+                            },
+                        );
+                    }
+                };
+                #[cfg(test)]
+                if take_injected_authority_lock_failure(path, InjectedAuthorityLockFailure::TryLock)
+                {
+                    return Err(GovernancePersistenceError::AuthorityStateLocked {
+                        path: path.to_path_buf(),
+                    });
+                }
+                guard.file()?.try_lock().map_err(|error| match error {
+                    fs::TryLockError::WouldBlock => {
+                        GovernancePersistenceError::AuthorityStateLocked {
+                            path: path.to_path_buf(),
+                        }
+                    }
+                    fs::TryLockError::Error(source) => {
+                        GovernancePersistenceError::OpenAuthorityLock {
+                            path: path.to_path_buf(),
+                            source,
+                        }
+                    }
+                })?;
+                #[cfg(test)]
+                if take_injected_authority_lock_failure(
+                    path,
+                    InjectedAuthorityLockFailure::IdentityVerification,
+                ) {
+                    return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                        path: path.to_path_buf(),
+                        expected: authority_lock_identity_description(identity),
+                        observed: "injected identity verification failure".to_string(),
+                    });
+                }
+                let named = fs::symlink_metadata(path).map_err(|source| {
+                    GovernancePersistenceError::OpenAuthorityLock {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                })?;
+                if !named.file_type().is_file() {
+                    return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                        path: path.to_path_buf(),
+                        expected: authority_lock_identity_description(identity),
+                        observed: "nonregular or symlink".to_string(),
+                    });
+                }
+                if let Some(named_identity) = authority_lock_identity_from_metadata(&named)
+                    && named_identity != identity
+                {
+                    return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                        path: path.to_path_buf(),
+                        expected: authority_lock_identity_description(identity),
+                        observed: authority_lock_identity_description(named_identity),
+                    });
+                }
+                let (file, identity) = guard.disarm(identity)?;
+                return Ok((file, identity, true));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(GovernancePersistenceError::OpenAuthorityLock {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    }
+    Err(GovernancePersistenceError::OpenAuthorityLock {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "authority lock path changed during open",
+        ),
+    })
+}
+
+/// Acquire the external quiescence guard required by explicit cleanup-pool
+/// maintenance.  Existing authority/state owners are reported as typed busy
+/// contention; no pool or archive path is touched by this operation.
+pub fn acquire_governance_cleanup_pool_maintenance_guard(
+    state_path: impl AsRef<Path>,
+) -> Result<GovernanceCleanupPoolMaintenanceGuard, GovernancePersistenceError> {
+    let state_path = state_path.as_ref().to_path_buf();
+    let sidecar_path = governance_authority_lock_path(&state_path);
+    let (file, identity, created) =
+        open_governance_authority_lock(&sidecar_path, false).map_err(|error| match error {
+            GovernancePersistenceError::AuthorityStateLocked { .. } => {
+                GovernancePersistenceError::MaintenanceBusy {
+                    path: state_path.clone(),
+                    resource: "authority sidecar".to_string(),
+                }
+            }
+            other => other,
+        })?;
+    if created {
+        drop(file);
+        return Err(GovernancePersistenceError::MaintenanceBusy {
+            path: state_path,
+            resource: "authority sidecar was unexpectedly created".to_string(),
+        });
+    }
+    let guard = GovernanceCleanupPoolMaintenanceGuard {
+        state_path,
+        sidecar_path,
+        file: Some(file),
+        identity,
+        transferred: false,
+    };
+    guard.verify()?;
+    Ok(guard)
+}
+
+/// Acquire the pre-construction normal-retention capability.  The caller must
+/// hold its external path-selection/quiescence lock while invoking this
+/// function and must drop the returned guard before a governance constructor
+/// acquires the state lock.  Existing streams require two authenticated anchors
+/// and an exact signed pool binding; a genuinely fresh pair of absent anchors
+/// may create that signed binding for the first explicit Initialize adoption.
+pub fn acquire_governance_cleanup_pool_retention_guard(
+    state_path: impl AsRef<Path>,
+    expected_governing_agent_id: AgentId,
+    expected_signer_agent_id: AgentId,
+    signing_key: SigningKey,
+) -> Result<GovernanceCleanupPoolRetentionGuard, GovernancePersistenceError> {
+    let state_path = state_path.as_ref().to_path_buf();
+    let actual_signer = AgentId::from_verifying_key(&signing_key.verifying_key());
+    if actual_signer != expected_signer_agent_id {
+        return Err(retention_guard_error(
+            &state_path,
+            "retention signer does not match the expected signer identity",
+        ));
+    }
+    let parent = bind_authority_cleanup_parent(&state_path).ok_or_else(|| {
+        retention_guard_error(
+            &state_path,
+            "retention stream parent is not a regular directory",
+        )
+    })?;
+    if !authority_cleanup_parent_is_current(&state_path, &parent) {
+        return Err(retention_guard_error(
+            &state_path,
+            "retention stream parent changed during acquisition",
+        ));
+    }
+    let state_name = state_path
+        .file_name()
+        .ok_or_else(|| retention_guard_error(&state_path, "retention state has no final name"))?;
+    let sequence_path = state_path.with_extension("sequence.json");
+    let sequence_name = sequence_path.file_name().ok_or_else(|| {
+        retention_guard_error(&state_path, "retention sequence has no final name")
+    })?;
+    let state_present = directory_entry_identity_at(&parent.file, state_name)
+        .map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("state anchor inspection failed: {source}"),
+            )
+        })?
+        .is_some();
+    let sequence_present = directory_entry_identity_at(&parent.file, sequence_name)
+        .map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("sequence anchor inspection failed: {source}"),
+            )
+        })?
+        .is_some();
+    if state_present != sequence_present {
+        return Err(retention_guard_error(
+            &state_path,
+            "mixed state/checkpoint anchors are not eligible for pre-construction retention",
+        ));
+    }
+    let existing_anchors = if state_present {
+        let state = read_retention_guard_anchor(&state_path, &parent, state_name, false)?
+            .ok_or_else(|| retention_guard_error(&state_path, "state anchor disappeared"))?;
+        let sequence = read_retention_guard_anchor(&state_path, &parent, sequence_name, true)?
+            .ok_or_else(|| retention_guard_error(&state_path, "sequence anchor disappeared"))?;
+        Some((state, sequence))
+    } else {
+        None
+    };
+    let pool_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+    let (pool_file, pool_created) = if existing_anchors.is_some() {
+        (
+            open_directory_at(&parent.file, pool_name).map_err(|source| {
+                retention_guard_error(
+                    &state_path,
+                    format!("signed stream cleanup pool is missing or changed: {source}"),
+                )
+            })?,
+            false,
+        )
+    } else {
+        open_or_create_directory_at(&parent.file, pool_name).map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("fresh cleanup pool could not be opened: {source}"),
+            )
+        })?
+    };
+    let pool_identity = pool_file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        .ok_or_else(|| retention_guard_error(&state_path, "cleanup pool is not a directory"))?;
+    let binding_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME);
+    let binding_preexisting = directory_entry_identity_at(&pool_file, binding_name)
+        .map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("cleanup pool binding inspection failed: {source}"),
+            )
+        })?
+        .is_some();
+    if existing_anchors.is_none() && !pool_created && !binding_preexisting {
+        let entries = directory_entry_names(&pool_file).map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("existing cleanup pool enumeration failed: {source}"),
+            )
+        })?;
+        if !entries.is_empty() {
+            return Err(retention_guard_error(
+                &state_path,
+                "existing cleanup pool has entries but no authenticated binding",
+            ));
+        }
+    }
+    if existing_anchors.is_none() && !pool_created && binding_preexisting {
+        let binding_probe = open_writable_entry_at(&pool_file, binding_name).map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("existing cleanup pool binding could not be opened: {source}"),
+            )
+        })?;
+        let mut bytes = Vec::new();
+        binding_probe
+            .try_clone()
+            .and_then(|mut reader| reader.read_to_end(&mut bytes).map(|_| reader))
+            .map_err(|source| {
+                retention_guard_error(
+                    &state_path,
+                    format!("existing cleanup pool binding could not be read: {source}"),
+                )
+            })?;
+        let envelope: SignedStateEnvelope<CleanupPoolBinding> = serde_json::from_slice(&bytes)
+            .map_err(|error| {
+                retention_guard_error(
+                    &state_path,
+                    format!("existing cleanup pool binding is malformed: {error}"),
+                )
+            })?;
+        envelope
+            .verify(SignedStateExpectation {
+                state_kind: CLEANUP_POOL_BINDING_KIND,
+                stream_id: CLEANUP_POOL_BINDING_STREAM,
+                expected_signer_agent_id: Some(&expected_signer_agent_id),
+                accepted_sequence: Some(1),
+            })
+            .map_err(|error| {
+                retention_guard_error(
+                    &state_path,
+                    format!("existing cleanup pool binding refused: {error}"),
+                )
+            })?;
+    }
+    let lock_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME);
+    let (lock_file, lock_created) = if existing_anchors.is_some() || binding_preexisting {
+        (
+            open_writable_entry_at(&pool_file, lock_name).map_err(|source| {
+                retention_guard_error(
+                    &state_path,
+                    format!("signed stream cleanup pool lock is missing or changed: {source}"),
+                )
+            })?,
+            false,
+        )
+    } else {
+        match create_regular_file_at(&pool_file, lock_name) {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+                open_writable_entry_at(&pool_file, lock_name).map_err(|source| {
+                    retention_guard_error(
+                        &state_path,
+                        format!("cleanup pool lock could not be opened: {source}"),
+                    )
+                })?,
+                false,
+            ),
+            Err(source) => {
+                return Err(retention_guard_error(
+                    &state_path,
+                    format!("cleanup pool lock could not be created: {source}"),
+                ));
+            }
+        }
+    };
+    let lock_identity = lock_file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata))
+        .ok_or_else(|| retention_guard_error(&state_path, "cleanup pool lock is not regular"))?;
+    if let Err(error) = lock_file.try_lock() {
+        return Err(match error {
+            fs::TryLockError::WouldBlock => GovernancePersistenceError::MaintenanceBusy {
+                path: state_path,
+                resource: "cleanup pool lock".to_string(),
+            },
+            fs::TryLockError::Error(source) => retention_guard_error(
+                &state_path,
+                format!("cleanup pool lock could not be acquired: {source}"),
+            ),
+        });
+    }
+    if lock_created {
+        lock_file
+            .sync_all()
+            .and_then(|()| pool_file.sync_all())
+            .and_then(|()| parent.file.sync_all())
+            .map_err(|source| {
+                retention_guard_error(
+                    &state_path,
+                    format!("fresh cleanup pool durability sync failed: {source}"),
+                )
+            })?;
+    }
+    let pool_path = state_path
+        .parent()
+        .unwrap_or(&state_path)
+        .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+    let (mut binding_file, binding_created) = if existing_anchors.is_some() || binding_preexisting {
+        (
+            open_writable_entry_at(&pool_file, binding_name).map_err(|source| {
+                retention_guard_error(
+                    &state_path,
+                    format!("signed stream cleanup pool binding is missing or changed: {source}"),
+                )
+            })?,
+            false,
+        )
+    } else {
+        match create_regular_file_at(&pool_file, binding_name) {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+                open_writable_entry_at(&pool_file, binding_name).map_err(|source| {
+                    retention_guard_error(
+                        &state_path,
+                        format!("cleanup pool binding could not be opened: {source}"),
+                    )
+                })?,
+                false,
+            ),
+            Err(source) => {
+                return Err(retention_guard_error(
+                    &state_path,
+                    format!("cleanup pool binding could not be created: {source}"),
+                ));
+            }
+        }
+    };
+    let binding_identity = binding_file
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_artifact_identity(&metadata))
+        .ok_or_else(|| retention_guard_error(&state_path, "cleanup pool binding is not regular"))?;
+    let mut binding_bytes = Vec::new();
+    let mut binding_reader = binding_file.try_clone().map_err(|source| {
+        retention_guard_error(
+            &state_path,
+            format!("cleanup pool binding could not clone: {source}"),
+        )
+    })?;
+    binding_reader
+        .read_to_end(&mut binding_bytes)
+        .map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("cleanup pool binding could not read: {source}"),
+            )
+        })?;
+    let binding = if binding_created && binding_bytes.is_empty() {
+        CleanupPoolBinding::new(parent.identity, pool_identity, lock_identity)
+    } else {
+        let envelope: SignedStateEnvelope<CleanupPoolBinding> =
+            serde_json::from_slice(&binding_bytes).map_err(|error| {
+                retention_guard_error(
+                    &state_path,
+                    format!("cleanup pool binding is unsigned or malformed: {error}"),
+                )
+            })?;
+        let verified = envelope
+            .verify(SignedStateExpectation {
+                state_kind: CLEANUP_POOL_BINDING_KIND,
+                stream_id: CLEANUP_POOL_BINDING_STREAM,
+                expected_signer_agent_id: Some(&expected_signer_agent_id),
+                accepted_sequence: Some(1),
+            })
+            .map_err(|error| {
+                retention_guard_error(
+                    &state_path,
+                    format!("cleanup pool binding refused: {error}"),
+                )
+            })?;
+        if verified.schema_version != SIGNED_STATE_SCHEMA_VERSION {
+            return Err(retention_guard_error(
+                &state_path,
+                "cleanup pool binding schema is unsupported",
+            ));
+        }
+        verified.payload
+    };
+    binding
+        .validate_namespace(parent.identity, pool_identity, lock_identity)
+        .map_err(|reason| retention_guard_error(&state_path, reason))?;
+    if binding_created && binding_bytes.is_empty() {
+        let envelope = SignedStateEnvelope::sign(
+            CLEANUP_POOL_BINDING_KIND,
+            CLEANUP_POOL_BINDING_STREAM,
+            expected_signer_agent_id.clone(),
+            1,
+            binding.clone(),
+            &signing_key,
+        )?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            retention_guard_error(
+                &state_path,
+                format!("cleanup pool binding serialization failed: {source}"),
+            )
+        })?;
+        binding_file
+            .write_all(&bytes)
+            .and_then(|()| binding_file.sync_all())
+            .and_then(|()| pool_file.sync_all())
+            .and_then(|()| parent.file.sync_all())
+            .map_err(|source| {
+                retention_guard_error(
+                    &state_path,
+                    format!("cleanup pool binding durability failed: {source}"),
+                )
+            })?;
+    }
+    if let Some(((state_bytes, _), (checkpoint_bytes, _))) = existing_anchors {
+        verify_retention_guard_anchors(
+            &state_path,
+            &state_bytes,
+            &checkpoint_bytes,
+            &binding,
+            &expected_governing_agent_id,
+            &expected_signer_agent_id,
+        )?;
+    }
+    if let Some(mut journal) = open_cleanup_pool_maintenance_journal(&pool_file, &pool_path, false)?
+    {
+        let maintenance = read_cleanup_pool_maintenance_journal(
+            &mut journal,
+            &pool_file,
+            &pool_path,
+            &binding,
+            &expected_signer_agent_id,
+        )?;
+        if !matches!(
+            maintenance.phase,
+            CleanupPoolMaintenanceJournalPhase::Completed
+        ) {
+            return Err(GovernancePersistenceError::CleanupMaintenanceJournal {
+                path: cleanup_maintenance_journal_path(&pool_path),
+                reason: "cleanup maintenance is active during pre-construction retention"
+                    .to_string(),
+            });
+        }
+    }
+    Ok(GovernanceCleanupPoolRetentionGuard {
+        state_path,
+        parent,
+        pool_path,
+        pool_file,
+        lock_file,
+        binding_file,
+        binding_identity,
+        binding,
+        expected_governing_agent_id,
+        expected_signer_agent_id,
+    })
+}
+
+impl GovernanceCleanupPoolRetentionGuard {
+    /// Retain an artifact using the exact pool namespace held by this
+    /// pre-construction guard.  The fixed slot is reserved before the source
+    /// move; no pool or binding pathname is reopened as an authority source.
+    pub fn retain_cleanup_artifact(
+        &self,
+        path: impl AsRef<Path>,
+        expected: GovernanceCleanupArtifactExpectation,
+    ) -> Result<GovernanceCleanupPoolRetentionOutcome, GovernancePersistenceError> {
+        let path = path.as_ref().to_path_buf();
+        let expected_parent = self
+            .state_path
+            .parent()
+            .unwrap_or(&self.state_path)
+            .to_path_buf();
+        if path.parent().map(Path::to_path_buf).as_ref() != Some(&expected_parent)
+            || !authority_cleanup_parent_is_current(&self.state_path, &self.parent)
+        {
+            return Err(retention_guard_error(
+                &path,
+                "pre-construction retention target parent changed or is outside the held namespace",
+            ));
+        }
+        let held_pool_identity = self
+            .pool_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata));
+        if held_pool_identity != Some(self.binding.pool_identity)
+            || self.binding.parent_identity != self.parent.identity
+        {
+            return Err(retention_guard_error(
+                &path,
+                "held pre-construction cleanup pool identity changed",
+            ));
+        }
+        let named_lock_identity = open_regular_entry_at(
+            &self.pool_file,
+            OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+        )
+        .ok()
+        .and_then(|file| file.metadata().ok())
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+        if named_lock_identity != Some(self.binding.lock_identity) {
+            return Err(retention_guard_error(
+                &path,
+                "pre-construction cleanup pool lock name changed",
+            ));
+        }
+        let named_binding_identity = open_regular_entry_at(
+            &self.pool_file,
+            OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+        )
+        .ok()
+        .and_then(|file| file.metadata().ok())
+        .and_then(|metadata| governance_artifact_identity(&metadata));
+        if named_binding_identity != Some(self.binding_identity) {
+            return Err(retention_guard_error(
+                &path,
+                "pre-construction cleanup pool binding name changed",
+            ));
+        }
+        let mut binding_reader = self.binding_file.try_clone().map_err(|source| {
+            retention_guard_error(
+                &path,
+                format!("cleanup pool binding clone failed: {source}"),
+            )
+        })?;
+        binding_reader.seek(SeekFrom::Start(0)).map_err(|source| {
+            retention_guard_error(&path, format!("cleanup pool binding seek failed: {source}"))
+        })?;
+        let mut binding_bytes = Vec::new();
+        binding_reader
+            .read_to_end(&mut binding_bytes)
+            .map_err(|source| {
+                retention_guard_error(&path, format!("cleanup pool binding read failed: {source}"))
+            })?;
+        let envelope: SignedStateEnvelope<CleanupPoolBinding> =
+            serde_json::from_slice(&binding_bytes).map_err(|error| {
+                retention_guard_error(&path, format!("cleanup pool binding changed: {error}"))
+            })?;
+        let verified = envelope
+            .verify(SignedStateExpectation {
+                state_kind: CLEANUP_POOL_BINDING_KIND,
+                stream_id: CLEANUP_POOL_BINDING_STREAM,
+                expected_signer_agent_id: Some(&self.expected_signer_agent_id),
+                accepted_sequence: Some(1),
+            })
+            .map_err(|error| {
+                retention_guard_error(&path, format!("cleanup pool binding changed: {error}"))
+            })?;
+        if verified.payload != self.binding {
+            return Err(retention_guard_error(
+                &path,
+                "pre-construction cleanup pool binding content changed",
+            ));
+        }
+        let state_name = self
+            .state_path
+            .file_name()
+            .ok_or_else(|| retention_guard_error(&path, "retention state has no final name"))?;
+        let sequence_path = self.state_path.with_extension("sequence.json");
+        let sequence_name = sequence_path
+            .file_name()
+            .ok_or_else(|| retention_guard_error(&path, "retention sequence has no final name"))?;
+        let state_present = directory_entry_identity_at(&self.parent.file, state_name)
+            .map_err(|source| {
+                retention_guard_error(&path, format!("state anchor inspection failed: {source}"))
+            })?
+            .is_some();
+        let sequence_present = directory_entry_identity_at(&self.parent.file, sequence_name)
+            .map_err(|source| {
+                retention_guard_error(
+                    &path,
+                    format!("sequence anchor inspection failed: {source}"),
+                )
+            })?
+            .is_some();
+        if state_present != sequence_present {
+            return Err(retention_guard_error(
+                &path,
+                "state/checkpoint anchor set changed while retention guard was held",
+            ));
+        }
+        if state_present {
+            let state =
+                read_retention_guard_anchor(&self.state_path, &self.parent, state_name, false)?
+                    .ok_or_else(|| retention_guard_error(&path, "state anchor disappeared"))?;
+            let sequence =
+                read_retention_guard_anchor(&self.state_path, &self.parent, sequence_name, true)?
+                    .ok_or_else(|| retention_guard_error(&path, "sequence anchor disappeared"))?;
+            verify_retention_guard_anchors(
+                &self.state_path,
+                &state.0,
+                &sequence.0,
+                &self.binding,
+                &self.expected_governing_agent_id,
+                &self.expected_signer_agent_id,
+            )?;
+        }
+        let context = CleanupPoolContext {
+            pool_path: self.pool_path.clone(),
+            binding_path: self.pool_path.join(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+            parent_identity: self.parent.identity,
+            pool_file: self.pool_file.try_clone().map_err(|source| {
+                retention_guard_error(&path, format!("cleanup pool clone failed: {source}"))
+            })?,
+            pool_identity: self.binding.pool_identity,
+            lock_file: self.lock_file.try_clone().map_err(|source| {
+                retention_guard_error(&path, format!("cleanup pool lock clone failed: {source}"))
+            })?,
+            lock_identity: self.binding.lock_identity,
+            binding_file: self.binding_file.try_clone().map_err(|source| {
+                retention_guard_error(
+                    &path,
+                    format!("cleanup pool binding clone failed: {source}"),
+                )
+            })?,
+            binding_identity: self.binding_identity,
+            binding: self.binding.clone(),
+            signed: true,
+        };
+        retain_cleanup_artifact_in_bound_pool(&path, &expected, &self.parent, &context)
+    }
+}
+
+fn verify_governance_authority_lock_path(
+    path: &Path,
+    lock_file: &fs::File,
+    expected: GovernanceAuthorityLockIdentity,
+) -> Result<(), GovernancePersistenceError> {
+    #[cfg(test)]
+    if take_injected_authority_lock_failure(
+        path,
+        InjectedAuthorityLockFailure::PostAcquireVerification,
+    ) {
+        return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+            path: path.to_path_buf(),
+            expected: authority_lock_identity_description(expected),
+            observed: "injected post-acquisition identity verification failure".to_string(),
+        });
+    }
+    let held_metadata =
+        lock_file
+            .metadata()
+            .map_err(|source| GovernancePersistenceError::OpenAuthorityLock {
+                path: path.to_path_buf(),
+                source,
+            })?;
+    #[cfg(unix)]
+    let held = {
+        use std::os::unix::fs::MetadataExt;
+        GovernanceAuthorityLockIdentity {
+            device: held_metadata.dev(),
+            inode: held_metadata.ino(),
+        }
+    };
+    #[cfg(not(unix))]
+    let held = {
+        let _ = held_metadata;
+        return Err(
+            GovernancePersistenceError::UnsupportedLockIdentityPlatform {
+                platform: std::env::consts::OS,
+            },
+        );
+    };
+    if held != expected {
+        return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+            path: path.to_path_buf(),
+            expected: authority_lock_identity_description(expected),
+            observed: authority_lock_identity_description(held),
+        });
+    }
+    let named = fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            GovernancePersistenceError::AuthorityLockIdentityChanged {
+                path: path.to_path_buf(),
+                expected: authority_lock_identity_description(expected),
+                observed: "missing".to_string(),
+            }
+        } else {
+            GovernancePersistenceError::OpenAuthorityLock {
+                path: path.to_path_buf(),
+                source: error,
+            }
+        }
+    })?;
+    if !named.file_type().is_file() {
+        return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+            path: path.to_path_buf(),
+            expected: authority_lock_identity_description(expected),
+            observed: "nonregular or symlink".to_string(),
+        });
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let named_identity = GovernanceAuthorityLockIdentity {
+            device: named.dev(),
+            inode: named.ino(),
+        };
+        if named_identity != expected {
+            return Err(GovernancePersistenceError::AuthorityLockIdentityChanged {
+                path: path.to_path_buf(),
+                expected: authority_lock_identity_description(expected),
+                observed: authority_lock_identity_description(named_identity),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn quarantine_outcome_from_error(error: &GovernancePersistenceError) -> QuarantineOutcome {
+    match error {
+        GovernancePersistenceError::CleanupPoolExhausted { .. } => QuarantineOutcome::PoolExhausted,
+        GovernancePersistenceError::CleanupMaintenance { .. }
+        | GovernancePersistenceError::Write { .. }
+        | GovernancePersistenceError::OpenAuthorityLock { .. }
+        | GovernancePersistenceError::AuthorityStateLocked { .. }
+        | GovernancePersistenceError::AuthorityLockIdentityChanged { .. } => {
+            QuarantineOutcome::Uncertain
+        }
+        _ => QuarantineOutcome::Uncertain,
+    }
+}
+
+fn cleanup_error_for_outcome(
+    path: &Path,
+    outcome: QuarantineOutcome,
+) -> GovernancePersistenceError {
+    match outcome {
+        QuarantineOutcome::PoolExhausted => GovernancePersistenceError::CleanupPoolExhausted {
+            path: path.to_path_buf(),
+        },
+        _ => cleanup_pool_error(path, outcome.maintenance_reason()),
+    }
+}
+
+/// Preserve the original operation error when cleanup succeeds, but make any
+/// cleanup uncertainty part of the returned non-Drop failure.  Callers must
+/// not proceed after ForeignPreserved, PoolExhausted, or Uncertain cleanup;
+/// the retained material is the recovery authority and is never silently
+/// discarded.
+fn compose_operation_cleanup_failure(
+    path: &Path,
+    original: GovernancePersistenceError,
+    mut cleanup_errors: Vec<GovernancePersistenceError>,
+) -> GovernancePersistenceError {
+    if cleanup_errors.is_empty() {
+        return original;
+    }
+    if cleanup_errors.len() == 1 {
+        let cleanup_error = cleanup_errors.remove(0);
+        if matches!(
+            &cleanup_error,
+            GovernancePersistenceError::CleanupPoolExhausted { .. }
+        ) {
+            return cleanup_error;
+        }
+        cleanup_errors.push(cleanup_error);
+    }
+    let cleanup = cleanup_errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    cleanup_pool_error(
+        path,
+        format!("operation failed: {original}; cleanup failed: {cleanup}"),
+    )
+}
+
+fn cleanup_pool_entry_record(
+    target_component: &[u8],
+    snapshot: &GovernanceArtifactSnapshot,
+) -> CleanupPoolEntryRecord {
+    CleanupPoolEntryRecord {
+        target_component: target_component.to_vec(),
+        identity: snapshot.identity,
+        content_digest: snapshot.content_digest.clone(),
+        byte_len: snapshot.byte_len,
+    }
+}
+
+fn cleanup_pool_entry_snapshot(
+    slot: &AuthorityCleanupRetirement,
+    name: &OsStr,
+) -> Result<GovernanceArtifactSnapshot, std::io::Error> {
+    let file = open_regular_entry_at(&slot.file, name)?;
+    snapshot_cleanup_file(file).map(|(snapshot, _)| snapshot)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupRestoreDecision {
+    Candidate,
+    Quarantine,
+    BothTrusted,
+    NoTrustedLink,
+}
+
+fn cleanup_pool_entry_snapshot_optional(
+    slot: &AuthorityCleanupRetirement,
+    name: &OsStr,
+) -> Result<Option<GovernanceArtifactSnapshot>, std::io::Error> {
+    match cleanup_pool_entry_snapshot(slot, name) {
+        Ok(snapshot) => Ok(Some(snapshot)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn cleanup_canonical_name_absent(
+    parent: &AuthorityCleanupParent,
+    name: &OsStr,
+) -> Result<bool, std::io::Error> {
+    match open_regular_entry_at(&parent.file, name) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+/// Select a private link only from snapshots taken together at the restore
+/// decision.  A foreign same-content inode is not trusted because identity is
+/// part of the authenticated source snapshot.  When both links still name the
+/// source, retain the normal moved-source behavior and restore quarantine.
+fn restore_cleanup_pool_entry_from_trusted_link(
+    slot: &AuthorityCleanupRetirement,
+    source_snapshot: &GovernanceArtifactSnapshot,
+    parent: &AuthorityCleanupParent,
+    original_name: &OsStr,
+) -> Result<CleanupRestoreDecision, std::io::Error> {
+    let candidate_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME);
+    let quarantine_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME);
+    let candidate = cleanup_pool_entry_snapshot_optional(slot, candidate_name)?;
+    let quarantine = cleanup_pool_entry_snapshot_optional(slot, quarantine_name)?;
+    let candidate_trusted = candidate.as_ref() == Some(source_snapshot);
+    let quarantine_trusted = quarantine.as_ref() == Some(source_snapshot);
+    let decision = match (candidate_trusted, quarantine_trusted) {
+        (true, false) => CleanupRestoreDecision::Candidate,
+        (false, true) => CleanupRestoreDecision::Quarantine,
+        (true, true) => CleanupRestoreDecision::BothTrusted,
+        (false, false) => CleanupRestoreDecision::NoTrustedLink,
+    };
+    let selected = match decision {
+        CleanupRestoreDecision::Candidate => Some(candidate_name),
+        CleanupRestoreDecision::Quarantine | CleanupRestoreDecision::BothTrusted => {
+            Some(quarantine_name)
+        }
+        CleanupRestoreDecision::NoTrustedLink => None,
+    };
+    if let Some(selected) = selected {
+        linkat_relative(&slot.file, selected, &parent.file, original_name)?;
+    }
+    Ok(decision)
+}
+
+/// Quarantine one already-authenticated regular file into one write-once,
+/// fixed-cardinality pool slot.  The slot descriptor is the capability for
+/// every post-move read and restore; no callback is ever evaluated against a
+/// pool pathname.
+fn quarantine_verified_entry<F, G>(
+    path: &Path,
+    verify_initial: F,
+    verify_quarantine: G,
+) -> QuarantineOutcome
+where
+    F: Fn() -> bool,
+    G: Fn(&Path) -> bool,
+{
+    let Some(parent_handle) = bind_authority_cleanup_parent(path) else {
+        return QuarantineOutcome::Uncertain;
+    };
+    quarantine_verified_entry_at(path, &parent_handle, verify_initial, verify_quarantine)
+}
+
+fn quarantine_verified_entry_at<F, G>(
+    path: &Path,
+    parent_handle: &AuthorityCleanupParent,
+    verify_initial: F,
+    verify_quarantine: G,
+) -> QuarantineOutcome
+where
+    F: Fn() -> bool,
+    G: Fn(&Path) -> bool,
+{
+    if !verify_initial() {
+        return QuarantineOutcome::NotVerified;
+    }
+    let Some(original_name) = path.file_name() else {
+        return QuarantineOutcome::Uncertain;
+    };
+    let source_snapshot = match read_governance_artifact_snapshot(path) {
+        Ok(Some((snapshot, _))) => snapshot,
+        Ok(None) => return QuarantineOutcome::NotVerified,
+        Err(_) => return QuarantineOutcome::Uncertain,
+    };
+    #[cfg(test)]
+    pause_after_authority_cleanup_identity_read(path);
+    if !authority_cleanup_parent_is_current(path, &parent_handle) || !verify_initial() {
+        return QuarantineOutcome::NotVerified;
+    }
+    let mut slot = match acquire_cleanup_pool_slot(path, &parent_handle) {
+        Ok(slot) => slot,
+        Err(error) => return quarantine_outcome_from_error(&error),
+    };
+    let target_component = slot.target_component.clone();
+    let candidate_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME);
+    if linkat_relative(
+        &parent_handle.file,
+        original_name,
+        &slot.file,
+        candidate_name,
+    )
+    .is_err()
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    let candidate_snapshot = match cleanup_pool_entry_snapshot(&slot, candidate_name) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return QuarantineOutcome::Uncertain,
+    };
+    if candidate_snapshot != source_snapshot {
+        return QuarantineOutcome::Uncertain;
+    }
+    if append_cleanup_pool_record(
+        &mut slot,
+        CleanupPoolPhase::Reserved,
+        vec![cleanup_pool_entry_record(
+            &target_component,
+            &candidate_snapshot,
+        )],
+    )
+    .is_err()
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    if !authority_cleanup_parent_is_current(path, &parent_handle)
+        || !verify_initial()
+        // This callback is intentionally evaluated only against the original
+        // path.  Pool state is verified from `slot.file` below.
+        || !verify_quarantine(path)
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    #[cfg(test)]
+    pause_after_authority_cleanup_source_identity_read(path);
+    let quarantine_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME);
+    if verify_cleanup_slot_name_binding(&slot).is_err() {
+        return QuarantineOutcome::Uncertain;
+    }
+    if atomic_no_replace_move_between(
+        &parent_handle.file,
+        original_name,
+        &slot.file,
+        quarantine_name,
+    )
+    .is_err()
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    #[cfg(test)]
+    let quarantine_path = slot.path.join(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME);
+
+    #[cfg(test)]
+    pause_after_authority_cleanup_move(path, &slot.path);
+    // The source name must remain absent in the held original-parent
+    // namespace after the move.  A writer may create a replacement during the
+    // post-move seam; that is a foreign-preserved outcome, never evidence that
+    // this quarantine completed.  No pathname delete follows this read.
+    match open_regular_entry_at(&parent_handle.file, original_name) {
+        Ok(file) => {
+            let foreign_snapshot = snapshot_cleanup_file(file)
+                .map(|(snapshot, _)| snapshot)
+                .map_err(|_| ())
+                .ok();
+            let _ = append_cleanup_pool_record(
+                &mut slot,
+                CleanupPoolPhase::ForeignPreserved,
+                foreign_snapshot
+                    .as_ref()
+                    .map(|snapshot| vec![cleanup_pool_entry_record(&target_component, snapshot)])
+                    .unwrap_or_default(),
+            );
+            return QuarantineOutcome::ForeignPreserved;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return QuarantineOutcome::Uncertain,
+    }
+    #[cfg(test)]
+    pause_before_authority_cleanup_rename(path, &quarantine_path);
+    let _moved_snapshot_before = match cleanup_pool_entry_snapshot(&slot, quarantine_name) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return QuarantineOutcome::Uncertain,
+    };
+    #[cfg(test)]
+    pause_after_authority_cleanup_reclaim_snapshot(path, &slot.path);
+
+    #[cfg(test)]
+    pause_after_authority_cleanup_post_verify(path, &quarantine_path);
+    let _moved_snapshot_after_post = match cleanup_pool_entry_snapshot(&slot, quarantine_name) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return QuarantineOutcome::Uncertain,
+    };
+    let candidate_after_post = cleanup_pool_entry_snapshot(&slot, candidate_name).ok();
+    if candidate_after_post.as_ref() != Some(&candidate_snapshot) {
+        let _ = append_cleanup_pool_record(
+            &mut slot,
+            CleanupPoolPhase::ForeignPreserved,
+            candidate_after_post
+                .as_ref()
+                .map(|snapshot| vec![cleanup_pool_entry_record(&target_component, snapshot)])
+                .unwrap_or_default(),
+        );
+        if restore_cleanup_pool_entry_from_trusted_link(
+            &slot,
+            &source_snapshot,
+            &parent_handle,
+            original_name,
+        )
+        .is_err()
+        {
+            return QuarantineOutcome::Uncertain;
+        }
+        return QuarantineOutcome::ForeignPreserved;
+    }
+    #[cfg(test)]
+    pause_after_authority_cleanup_final_identity_read(path, &quarantine_path);
+    let moved_snapshot = match cleanup_pool_entry_snapshot(&slot, quarantine_name) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return QuarantineOutcome::Uncertain,
+    };
+    let candidate_after_final = cleanup_pool_entry_snapshot(&slot, candidate_name).ok();
+    if candidate_after_final.as_ref() != Some(&candidate_snapshot) {
+        let _ = append_cleanup_pool_record(
+            &mut slot,
+            CleanupPoolPhase::ForeignPreserved,
+            candidate_after_final
+                .as_ref()
+                .map(|snapshot| vec![cleanup_pool_entry_record(&target_component, snapshot)])
+                .unwrap_or_default(),
+        );
+        if restore_cleanup_pool_entry_from_trusted_link(
+            &slot,
+            &source_snapshot,
+            &parent_handle,
+            original_name,
+        )
+        .is_err()
+        {
+            return QuarantineOutcome::Uncertain;
+        }
+        return QuarantineOutcome::ForeignPreserved;
+    }
+    // Repeat the canonical-absence check after every adversarial seam.  The
+    // source move itself is atomic, but a writer can create the canonical name
+    // while the private slot is being authenticated.  Leave that foreign
+    // inode untouched and keep the slot for explicit recovery.
+    match open_regular_entry_at(&parent_handle.file, original_name) {
+        Ok(file) => {
+            let foreign_snapshot = snapshot_cleanup_file(file)
+                .map(|(snapshot, _)| snapshot)
+                .map_err(|_| ())
+                .ok();
+            let _ = append_cleanup_pool_record(
+                &mut slot,
+                CleanupPoolPhase::ForeignPreserved,
+                foreign_snapshot
+                    .as_ref()
+                    .map(|snapshot| vec![cleanup_pool_entry_record(&target_component, snapshot)])
+                    .unwrap_or_default(),
+            );
+            return QuarantineOutcome::ForeignPreserved;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return QuarantineOutcome::Uncertain,
+    }
+    #[cfg(test)]
+    pause_after_authority_cleanup_final_absence_read(path);
+    if !cleanup_canonical_name_absent(&parent_handle, original_name).unwrap_or(false) {
+        let foreign_snapshot = open_regular_entry_at(&parent_handle.file, original_name)
+            .ok()
+            .and_then(|file| snapshot_cleanup_file(file).ok())
+            .map(|(snapshot, _)| snapshot);
+        let _ = append_cleanup_pool_record(
+            &mut slot,
+            CleanupPoolPhase::ForeignPreserved,
+            foreign_snapshot
+                .as_ref()
+                .map(|snapshot| vec![cleanup_pool_entry_record(&target_component, snapshot)])
+                .unwrap_or_default(),
+        );
+        return QuarantineOutcome::ForeignPreserved;
+    }
+    if verify_cleanup_slot_name_binding(&slot).is_err() {
+        return QuarantineOutcome::Uncertain;
+    }
+    if moved_snapshot != source_snapshot {
+        let _ = append_cleanup_pool_record(
+            &mut slot,
+            CleanupPoolPhase::ForeignPreserved,
+            vec![cleanup_pool_entry_record(
+                &target_component,
+                &moved_snapshot,
+            )],
+        );
+        if restore_cleanup_pool_entry_from_trusted_link(
+            &slot,
+            &source_snapshot,
+            &parent_handle,
+            original_name,
+        )
+        .is_err()
+        {
+            return QuarantineOutcome::Uncertain;
+        }
+        return QuarantineOutcome::ForeignPreserved;
+    }
+    if verify_cleanup_slot_name_binding(&slot).is_err()
+        || !cleanup_canonical_name_absent(&parent_handle, original_name).unwrap_or(false)
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    if append_cleanup_pool_record(
+        &mut slot,
+        CleanupPoolPhase::QuarantineMoved,
+        vec![
+            cleanup_pool_entry_record(&target_component, &candidate_snapshot),
+            cleanup_pool_entry_record(&target_component, &moved_snapshot),
+        ],
+    )
+    .is_err()
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    if verify_cleanup_slot_name_binding(&slot).is_err()
+        || !cleanup_canonical_name_absent(&parent_handle, original_name).unwrap_or(false)
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    if append_cleanup_pool_record(
+        &mut slot,
+        CleanupPoolPhase::Retained,
+        vec![cleanup_pool_entry_record(
+            &target_component,
+            &moved_snapshot,
+        )],
+    )
+    .is_err()
+    {
+        return QuarantineOutcome::Uncertain;
+    }
+    QuarantineOutcome::Retained
+}
+
+fn retain_cleanup_artifact_in_bound_pool(
+    path: &Path,
+    expected: &GovernanceCleanupArtifactExpectation,
+    parent_handle: &AuthorityCleanupParent,
+    context: &CleanupPoolContext,
+) -> Result<GovernanceCleanupPoolRetentionOutcome, GovernancePersistenceError> {
+    let Some(original_name) = path.file_name() else {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    };
+    if expected.content_digest.len() != 64
+        || !expected
+            .content_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    let source_file = match open_regular_entry_at(&parent_handle.file, original_name) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+        }
+        Err(source) => {
+            return Err(cleanup_pool_error(
+                path,
+                format!("could not open expected cleanup artifact: {source}"),
+            ));
+        }
+    };
+    let source_snapshot = snapshot_cleanup_file(source_file.try_clone().map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not clone expected cleanup artifact: {source}"),
+        )
+    })?)
+    .map(|(snapshot, _)| snapshot)
+    .map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not snapshot expected cleanup artifact: {source}"),
+        )
+    })?;
+    let expected_snapshot = GovernanceArtifactSnapshot {
+        identity: GovernanceArtifactIdentity {
+            device: expected.device,
+            inode: expected.inode,
+        },
+        content_digest: expected.content_digest.clone(),
+        byte_len: expected.byte_len,
+    };
+    if source_snapshot != expected_snapshot
+        || source_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata))
+            != Some(expected_snapshot.identity)
+    {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    if !authority_cleanup_parent_is_current(path, parent_handle) {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    let mut slot = match acquire_cleanup_pool_slot_bound(path, parent_handle, context) {
+        Ok(slot) => slot,
+        Err(GovernancePersistenceError::CleanupPoolExhausted { .. }) => {
+            return Ok(GovernanceCleanupPoolRetentionOutcome::PoolExhausted);
+        }
+        Err(error) => return Err(error),
+    };
+    let target_component = slot.target_component.clone();
+    let candidate_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME);
+    if linkat_relative(
+        &parent_handle.file,
+        original_name,
+        &slot.file,
+        candidate_name,
+    )
+    .is_err()
+    {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    let candidate_snapshot = match cleanup_pool_entry_snapshot(&slot, candidate_name) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain),
+    };
+    if candidate_snapshot != expected_snapshot {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    append_cleanup_pool_record(
+        &mut slot,
+        CleanupPoolPhase::Reserved,
+        vec![cleanup_pool_entry_record(
+            &target_component,
+            &candidate_snapshot,
+        )],
+    )?;
+    let source_still_expected = open_regular_entry_at(&parent_handle.file, original_name)
+        .ok()
+        .and_then(|file| snapshot_cleanup_file(file).ok())
+        .is_some_and(|(snapshot, _)| snapshot == expected_snapshot);
+    if !source_still_expected || !authority_cleanup_parent_is_current(path, parent_handle) {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    let quarantine_name = OsStr::new(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME);
+    if verify_cleanup_slot_name_binding(&slot).is_err() {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    if atomic_no_replace_move_between(
+        &parent_handle.file,
+        original_name,
+        &slot.file,
+        quarantine_name,
+    )
+    .is_err()
+    {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    if open_regular_entry_at(&parent_handle.file, original_name).is_ok() {
+        let _ =
+            append_cleanup_pool_record(&mut slot, CleanupPoolPhase::ForeignPreserved, Vec::new());
+        return Ok(GovernanceCleanupPoolRetentionOutcome::ForeignPreserved);
+    }
+    let moved_snapshot = match cleanup_pool_entry_snapshot(&slot, quarantine_name) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain),
+    };
+    let candidate_after =
+        cleanup_pool_entry_snapshot_optional(&slot, candidate_name).map_err(|source| {
+            cleanup_pool_error(
+                path,
+                format!("could not verify bound cleanup candidate: {source}"),
+            )
+        })?;
+    if candidate_after.as_ref() != Some(&candidate_snapshot) {
+        let _ = append_cleanup_pool_record(
+            &mut slot,
+            CleanupPoolPhase::ForeignPreserved,
+            candidate_after
+                .as_ref()
+                .map(|snapshot| vec![cleanup_pool_entry_record(&target_component, snapshot)])
+                .unwrap_or_default(),
+        );
+        return if restore_cleanup_pool_entry_from_trusted_link(
+            &slot,
+            &expected_snapshot,
+            parent_handle,
+            original_name,
+        )
+        .is_ok()
+        {
+            Ok(GovernanceCleanupPoolRetentionOutcome::ForeignPreserved)
+        } else {
+            Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain)
+        };
+    }
+    if open_regular_entry_at(&parent_handle.file, original_name).is_ok() {
+        let _ =
+            append_cleanup_pool_record(&mut slot, CleanupPoolPhase::ForeignPreserved, Vec::new());
+        return Ok(GovernanceCleanupPoolRetentionOutcome::ForeignPreserved);
+    }
+    #[cfg(test)]
+    pause_after_authority_cleanup_final_absence_read(path);
+    if !cleanup_canonical_name_absent(parent_handle, original_name).unwrap_or(false) {
+        let _ =
+            append_cleanup_pool_record(&mut slot, CleanupPoolPhase::ForeignPreserved, Vec::new());
+        return Ok(GovernanceCleanupPoolRetentionOutcome::ForeignPreserved);
+    }
+    if verify_cleanup_slot_name_binding(&slot).is_err() {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    if moved_snapshot != expected_snapshot {
+        let _ = append_cleanup_pool_record(
+            &mut slot,
+            CleanupPoolPhase::ForeignPreserved,
+            vec![cleanup_pool_entry_record(
+                &target_component,
+                &moved_snapshot,
+            )],
+        );
+        return if restore_cleanup_pool_entry_from_trusted_link(
+            &slot,
+            &expected_snapshot,
+            parent_handle,
+            original_name,
+        )
+        .is_ok()
+        {
+            Ok(GovernanceCleanupPoolRetentionOutcome::ForeignPreserved)
+        } else {
+            Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain)
+        };
+    }
+    if verify_cleanup_slot_name_binding(&slot).is_err()
+        || !cleanup_canonical_name_absent(parent_handle, original_name).unwrap_or(false)
+    {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    append_cleanup_pool_record(
+        &mut slot,
+        CleanupPoolPhase::QuarantineMoved,
+        vec![
+            cleanup_pool_entry_record(&target_component, &candidate_snapshot),
+            cleanup_pool_entry_record(&target_component, &moved_snapshot),
+        ],
+    )?;
+    if verify_cleanup_slot_name_binding(&slot).is_err()
+        || !cleanup_canonical_name_absent(parent_handle, original_name).unwrap_or(false)
+    {
+        return Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain);
+    }
+    append_cleanup_pool_record(
+        &mut slot,
+        CleanupPoolPhase::Retained,
+        vec![cleanup_pool_entry_record(
+            &target_component,
+            &moved_snapshot,
+        )],
+    )?;
+    Ok(GovernanceCleanupPoolRetentionOutcome::Retained)
+}
+
+fn remove_verified_authority_entry(
+    path: &Path,
+    lock_file: &fs::File,
+    expected: GovernanceAuthorityLockIdentity,
+) -> Result<(), GovernancePersistenceError> {
+    let outcome = quarantine_verified_entry(
+        path,
+        || verify_governance_authority_lock_path(path, lock_file, expected).is_ok(),
+        |quarantine| verify_governance_authority_lock_path(quarantine, lock_file, expected).is_ok(),
+    );
+    if outcome.is_semantic_success() {
+        Ok(())
+    } else {
+        Err(cleanup_error_for_outcome(path, outcome))
+    }
+}
+
+fn remove_new_authority_lock_if_owned(
+    path: &Path,
+    lock_file: fs::File,
+    expected: GovernanceAuthorityLockIdentity,
+) -> Result<(), GovernancePersistenceError> {
+    let result = remove_verified_authority_entry(path, &lock_file, expected);
+    drop(lock_file);
+    result
+}
+
+fn remove_authority_lock_if_identity(
+    path: &Path,
+    expected: GovernanceAuthorityLockIdentity,
+) -> Result<(), GovernancePersistenceError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not inspect authority cleanup target: {source}"),
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(cleanup_pool_error(
+            path,
+            "authority cleanup target is not a regular file",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|source| {
+        cleanup_pool_error(
+            path,
+            format!("could not open authority cleanup target: {source}"),
+        )
+    })?;
+    file.try_lock().map_err(|error| {
+        cleanup_pool_error(
+            path,
+            format!("could not acquire authority cleanup target lock: {error}"),
+        )
+    })?;
+    let result = remove_verified_authority_entry(path, &file, expected);
+    drop(file);
+    result
+}
+
+fn remove_authority_lock_if_identity_with_held_file(
+    path: &Path,
+    file: &fs::File,
+    expected: GovernanceAuthorityLockIdentity,
+) -> Result<(), GovernancePersistenceError> {
+    remove_verified_authority_entry(path, file, expected)
 }
 
 fn preflight_governance_lock_path(
@@ -1551,11 +7404,946 @@ fn verify_governance_lock_path(
     Ok(())
 }
 
+fn remove_new_governance_lock_if_owned(
+    path: &Path,
+    lock_file: fs::File,
+    expected: &GovernanceLockBinding,
+) -> Result<(), GovernancePersistenceError> {
+    let outcome = quarantine_verified_entry(
+        path,
+        || verify_governance_lock_path(path, &lock_file, expected).is_ok(),
+        |quarantine| verify_governance_lock_path(quarantine, &lock_file, expected).is_ok(),
+    );
+    drop(lock_file);
+    if outcome.is_semantic_success() {
+        Ok(())
+    } else {
+        Err(cleanup_error_for_outcome(path, outcome))
+    }
+}
+
 impl GovernancePersistence {
+    fn cleanup_pool_namespace_error(
+        &self,
+        reason: impl Into<String>,
+    ) -> GovernancePersistenceError {
+        GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: self.path.clone(),
+            reason: reason.into(),
+        }
+    }
+
+    fn cleanup_pool_binding(&self) -> Result<CleanupPoolBinding, GovernancePersistenceError> {
+        self.verify_cleanup_pool_context()?;
+        self.cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|context| context.binding.clone())
+            .ok_or_else(|| {
+                self.cleanup_pool_namespace_error("verified cleanup pool context is absent")
+            })
+    }
+
+    fn cleanup_pool_binding_bytes(
+        &self,
+        file: &fs::File,
+    ) -> Result<Vec<u8>, GovernancePersistenceError> {
+        let mut clone =
+            file.try_clone()
+                .map_err(|source| GovernancePersistenceError::ReadState {
+                    path: self.path.clone(),
+                    source,
+                })?;
+        clone
+            .seek(SeekFrom::Start(0))
+            .map(|_| ())
+            .and_then(|()| {
+                let mut bytes = Vec::new();
+                clone.read_to_end(&mut bytes).map(|_| bytes)
+            })
+            .map_err(|source| GovernancePersistenceError::ReadState {
+                path: self.path.clone(),
+                source,
+            })
+    }
+
+    fn decode_cleanup_pool_binding(
+        &self,
+        bytes: &[u8],
+        allow_unbound: bool,
+    ) -> Result<(CleanupPoolBinding, bool), GovernancePersistenceError> {
+        if let Ok(envelope) =
+            serde_json::from_slice::<SignedStateEnvelope<CleanupPoolBinding>>(bytes)
+        {
+            let verified = envelope
+                .verify(SignedStateExpectation {
+                    state_kind: CLEANUP_POOL_BINDING_KIND,
+                    stream_id: CLEANUP_POOL_BINDING_STREAM,
+                    expected_signer_agent_id: Some(&self.expected_signer_agent_id),
+                    accepted_sequence: Some(1),
+                })
+                .map_err(|error| {
+                    self.cleanup_pool_namespace_error(format!(
+                        "invalid signed pool binding: {error}"
+                    ))
+                })?;
+            if verified.schema_version != SIGNED_STATE_SCHEMA_VERSION {
+                return Err(self.cleanup_pool_namespace_error(format!(
+                    "unsupported signed pool binding schema `{}`",
+                    verified.schema_version
+                )));
+            }
+            return Ok((verified.payload, true));
+        }
+        if !allow_unbound {
+            return Err(self.cleanup_pool_namespace_error(
+                "cleanup pool binding is unsigned; explicit initialization or migration is required",
+            ));
+        }
+        let binding = serde_json::from_slice::<CleanupPoolBinding>(bytes).map_err(|error| {
+            self.cleanup_pool_namespace_error(format!("malformed cleanup pool binding: {error}"))
+        })?;
+        Ok((binding, false))
+    }
+
+    fn sign_cleanup_pool_binding(
+        &self,
+        context: &mut CleanupPoolContext,
+        signing_key: &SigningKey,
+    ) -> Result<(), GovernancePersistenceError> {
+        let envelope = SignedStateEnvelope::sign(
+            CLEANUP_POOL_BINDING_KIND,
+            CLEANUP_POOL_BINDING_STREAM,
+            self.expected_signer_agent_id.clone(),
+            1,
+            context.binding.clone(),
+            signing_key,
+        )?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: context.binding_path.clone(),
+                source: std::io::Error::other(source.to_string()),
+            }
+        })?;
+        let held_identity = context
+            .binding_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata));
+        if held_identity != Some(context.binding_identity) {
+            return Err(self.cleanup_pool_namespace_error(
+                "cleanup pool binding descriptor identity changed before signing",
+            ));
+        }
+        context
+            .binding_file
+            .set_len(0)
+            .and_then(|()| context.binding_file.seek(SeekFrom::Start(0)).map(|_| ()))
+            .and_then(|()| context.binding_file.write_all(&bytes))
+            .and_then(|()| context.binding_file.sync_all())
+            .map_err(|source| GovernancePersistenceError::Write {
+                path: context.binding_path.clone(),
+                source,
+            })?;
+        let named = open_writable_entry_at(
+            &context.pool_file,
+            OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+        )
+        .map_err(|source| {
+            self.cleanup_pool_namespace_error(format!("binding name disappeared: {source}"))
+        })?;
+        let named_identity = named
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata));
+        if named_identity != Some(context.binding_identity) {
+            return Err(self.cleanup_pool_namespace_error(
+                "cleanup pool binding name identity changed while signing",
+            ));
+        }
+        context
+            .pool_file
+            .sync_all()
+            .and_then(|()| self.parent_directory.sync_all())
+            .map_err(|source| GovernancePersistenceError::Write {
+                path: context.pool_path.clone(),
+                source,
+            })?;
+        context.signed = true;
+        Ok(())
+    }
+
+    fn verify_cleanup_pool_context_locked(
+        &self,
+        context: &mut CleanupPoolContext,
+    ) -> Result<(), GovernancePersistenceError> {
+        if self
+            .parent_directory
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata))
+            != Some(context.parent_identity)
+            || context.parent_identity != self.parent_directory_identity
+        {
+            return Err(
+                self.cleanup_pool_namespace_error("held cleanup pool parent identity changed")
+            );
+        }
+        let named_pool = open_directory_at(
+            &self.parent_directory,
+            OsStr::new(GOVERNANCE_CLEANUP_POOL_DIR_NAME),
+        )
+        .map_err(|source| {
+            self.cleanup_pool_namespace_error(format!("cleanup pool path changed: {source}"))
+        })?;
+        let named_pool_identity = named_pool
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata));
+        if named_pool_identity != Some(context.pool_identity) {
+            return Err(
+                self.cleanup_pool_namespace_error("cleanup pool directory identity changed")
+            );
+        }
+        let held_pool_identity = context
+            .pool_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata));
+        if held_pool_identity != Some(context.pool_identity) {
+            return Err(
+                self.cleanup_pool_namespace_error("held cleanup pool descriptor identity changed")
+            );
+        }
+        let named_lock = open_regular_entry_at(
+            &context.pool_file,
+            OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+        )
+        .map_err(|source| {
+            self.cleanup_pool_namespace_error(format!("cleanup pool lock changed: {source}"))
+        })?;
+        let named_lock_identity = named_lock
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata));
+        if named_lock_identity != Some(context.lock_identity) {
+            return Err(self.cleanup_pool_namespace_error("cleanup pool lock identity changed"));
+        }
+        let held_lock_identity = context
+            .lock_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata));
+        if held_lock_identity != Some(context.lock_identity) {
+            return Err(self.cleanup_pool_namespace_error(
+                "held cleanup pool lock descriptor identity changed",
+            ));
+        }
+        let named_binding = open_writable_entry_at(
+            &context.pool_file,
+            OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+        )
+        .map_err(|source| {
+            self.cleanup_pool_namespace_error(format!("cleanup pool binding changed: {source}"))
+        })?;
+        let named_binding_identity = named_binding
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata));
+        if named_binding_identity != Some(context.binding_identity) {
+            return Err(self.cleanup_pool_namespace_error("cleanup pool binding identity changed"));
+        }
+        let held_binding_identity = context
+            .binding_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata));
+        if held_binding_identity != Some(context.binding_identity) {
+            return Err(self.cleanup_pool_namespace_error(
+                "held cleanup pool binding descriptor identity changed",
+            ));
+        }
+        let bytes = self.cleanup_pool_binding_bytes(&context.binding_file)?;
+        let (binding, signed) = self.decode_cleanup_pool_binding(&bytes, false)?;
+        binding
+            .validate_namespace(
+                context.parent_identity,
+                context.pool_identity,
+                context.lock_identity,
+            )
+            .map_err(|reason| self.cleanup_pool_namespace_error(reason))?;
+        if !signed || binding != context.binding {
+            return Err(self.cleanup_pool_namespace_error("cleanup pool binding content changed"));
+        }
+        context.signed = true;
+        Ok(())
+    }
+
+    fn verify_cleanup_pool_context(&self) -> Result<(), GovernancePersistenceError> {
+        let mut guard = self
+            .cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let context = guard.as_mut().ok_or_else(|| {
+            self.cleanup_pool_namespace_error("cleanup pool context has not been authenticated")
+        })?;
+        self.verify_cleanup_pool_context_locked(context)
+    }
+
+    fn release_cleanup_pool_context(&self) {
+        self.cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+
+    /// Authenticate the current fixed cleanup namespace without retaining its
+    /// advisory lock. Ordinary startup runs this read-only preflight before
+    /// journal recovery so a replaced pool cannot receive recovery writes.
+    fn preflight_cleanup_pool_namespace(&self) -> Result<(), GovernancePersistenceError> {
+        self.preflight_cleanup_pool_namespace_with_maintenance(false)
+    }
+
+    fn preflight_cleanup_pool_namespace_with_maintenance(
+        &self,
+        allow_active_maintenance: bool,
+    ) -> Result<(), GovernancePersistenceError> {
+        if self
+            .cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+        {
+            return self.verify_cleanup_pool_context();
+        }
+        let pool_file = open_directory_at(
+            &self.parent_directory,
+            OsStr::new(GOVERNANCE_CLEANUP_POOL_DIR_NAME),
+        )
+        .map_err(|source| {
+            self.cleanup_pool_namespace_error(format!(
+                "cleanup pool is missing or changed before recovery: {source}"
+            ))
+        })?;
+        let pool_identity = pool_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata))
+            .ok_or_else(|| self.cleanup_pool_namespace_error("cleanup pool is not a directory"))?;
+        let lock_file =
+            open_writable_entry_at(&pool_file, OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME))
+                .map_err(|source| {
+                    self.cleanup_pool_namespace_error(format!(
+                        "cleanup pool lock is missing or changed before recovery: {source}"
+                    ))
+                })?;
+        let lock_identity = lock_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata))
+            .ok_or_else(|| self.cleanup_pool_namespace_error("cleanup pool lock is not regular"))?;
+        if lock_file
+            .try_lock()
+            .map_err(|error| match error {
+                fs::TryLockError::WouldBlock => {
+                    self.cleanup_pool_namespace_error("cleanup pool lock is held by another writer")
+                }
+                fs::TryLockError::Error(source) => self
+                    .cleanup_pool_namespace_error(format!("could not lock cleanup pool: {source}")),
+            })
+            .is_err()
+        {
+            return Err(
+                self.cleanup_pool_namespace_error("cleanup pool lock could not be acquired")
+            );
+        }
+        let binding_file =
+            open_writable_entry_at(&pool_file, OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME))
+                .map_err(|source| {
+                    self.cleanup_pool_namespace_error(format!(
+                        "cleanup pool binding is missing or changed before recovery: {source}"
+                    ))
+                })?;
+        binding_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata))
+            .ok_or_else(|| {
+                self.cleanup_pool_namespace_error("cleanup pool binding is not regular")
+            })?;
+        let mut clone = binding_file.try_clone().map_err(|source| {
+            self.cleanup_pool_namespace_error(format!(
+                "could not read cleanup pool binding: {source}"
+            ))
+        })?;
+        clone.seek(SeekFrom::Start(0)).map_err(|source| {
+            self.cleanup_pool_namespace_error(format!(
+                "could not seek cleanup pool binding: {source}"
+            ))
+        })?;
+        let mut bytes = Vec::new();
+        clone.read_to_end(&mut bytes).map_err(|source| {
+            self.cleanup_pool_namespace_error(format!(
+                "could not read cleanup pool binding: {source}"
+            ))
+        })?;
+        let (binding, signed) = self.decode_cleanup_pool_binding(&bytes, false)?;
+        if !signed {
+            return Err(self
+                .cleanup_pool_namespace_error("cleanup pool binding is unsigned before recovery"));
+        }
+        binding
+            .validate_namespace(self.parent_directory_identity, pool_identity, lock_identity)
+            .map_err(|reason| self.cleanup_pool_namespace_error(reason))?;
+        let pool_path = self
+            .path
+            .parent()
+            .unwrap_or(&self.path)
+            .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+        validate_cleanup_pool_directory_namespace(&pool_file, &binding, &pool_path)?;
+        let parent = AuthorityCleanupParent {
+            file: self.parent_directory.try_clone().map_err(|source| {
+                self.cleanup_pool_namespace_error(format!(
+                    "could not clone cleanup pool parent for namespace validation: {source}"
+                ))
+            })?,
+            identity: self.parent_directory_identity,
+        };
+        for slot_name in &binding.slot_names {
+            let name = OsStr::new(slot_name);
+            if directory_entry_identity_at(&pool_file, name)
+                .map_err(|source| self.cleanup_pool_namespace_error(source.to_string()))?
+                .is_some()
+            {
+                inspect_cleanup_pool_slot(
+                    &parent, &pool_file, &lock_file, &binding, &pool_path, name,
+                )?;
+            }
+        }
+        if let Some(mut maintenance) =
+            open_cleanup_pool_maintenance_journal(&pool_file, &pool_path, false)?
+        {
+            let journal = read_cleanup_pool_maintenance_journal(
+                &mut maintenance,
+                &pool_file,
+                &pool_path,
+                &binding,
+                &self.expected_signer_agent_id,
+            )?;
+            if !allow_active_maintenance
+                && !matches!(journal.phase, CleanupPoolMaintenanceJournalPhase::Completed)
+            {
+                return Err(cleanup_maintenance_error(
+                    &cleanup_maintenance_journal_path(&pool_path),
+                    "an authenticated cleanup maintenance transaction is still in progress",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_cleanup_pool_context(
+        &self,
+        signing_key: &SigningKey,
+        allow_unbound: bool,
+    ) -> Result<(), GovernancePersistenceError> {
+        if AgentId::from_verifying_key(&signing_key.verifying_key())
+            != self.expected_signer_agent_id
+        {
+            return Err(self.cleanup_pool_namespace_error(
+                "cleanup pool signer is not the admitted local governor",
+            ));
+        }
+        if self
+            .cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+        {
+            return self.verify_cleanup_pool_context();
+        }
+        let pool_path = self
+            .path
+            .parent()
+            .unwrap_or(&self.path)
+            .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+        let (pool_file, _pool_created) = if allow_unbound {
+            open_or_create_directory_at(
+                &self.parent_directory,
+                OsStr::new(GOVERNANCE_CLEANUP_POOL_DIR_NAME),
+            )
+            .map_err(|source| {
+                self.cleanup_pool_namespace_error(format!("could not open cleanup pool: {source}"))
+            })?
+        } else {
+            (
+                open_directory_at(
+                    &self.parent_directory,
+                    OsStr::new(GOVERNANCE_CLEANUP_POOL_DIR_NAME),
+                )
+                .map_err(|source| {
+                    self.cleanup_pool_namespace_error(format!(
+                        "cleanup pool is missing or changed: {source}"
+                    ))
+                })?,
+                false,
+            )
+        };
+        let pool_identity = pool_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata))
+            .ok_or_else(|| self.cleanup_pool_namespace_error("cleanup pool is not a directory"))?;
+        let (lock_file, lock_created) = if allow_unbound {
+            match create_regular_file_at(&pool_file, OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME))
+            {
+                Ok(file) => (file, true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+                    open_writable_entry_at(
+                        &pool_file,
+                        OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME),
+                    )
+                    .map_err(|source| {
+                        self.cleanup_pool_namespace_error(format!(
+                            "cleanup pool lock is missing or changed: {source}"
+                        ))
+                    })?,
+                    false,
+                ),
+                Err(source) => {
+                    return Err(self.cleanup_pool_namespace_error(format!(
+                        "could not create cleanup pool lock: {source}"
+                    )));
+                }
+            }
+        } else {
+            (
+                open_writable_entry_at(&pool_file, OsStr::new(GOVERNANCE_CLEANUP_POOL_LOCK_NAME))
+                    .map_err(|source| {
+                    self.cleanup_pool_namespace_error(format!(
+                        "cleanup pool lock is missing or changed: {source}"
+                    ))
+                })?,
+                false,
+            )
+        };
+        let lock_identity = lock_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata))
+            .ok_or_else(|| {
+                self.cleanup_pool_namespace_error("cleanup pool lock is not a regular file")
+            })?;
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(self
+                    .cleanup_pool_namespace_error("cleanup pool lock is held by another writer"));
+            }
+            Err(fs::TryLockError::Error(source)) => {
+                return Err(self.cleanup_pool_namespace_error(format!(
+                    "could not lock cleanup pool: {source}"
+                )));
+            }
+        }
+        if lock_created {
+            lock_file
+                .sync_all()
+                .and_then(|()| pool_file.sync_all())
+                .and_then(|()| self.parent_directory.sync_all())
+                .map_err(|source| {
+                    self.cleanup_pool_namespace_error(format!(
+                        "could not durably create cleanup pool lock: {source}"
+                    ))
+                })?;
+        }
+        let (binding_file, binding_created) = if allow_unbound {
+            match create_regular_file_at(
+                &pool_file,
+                OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+            ) {
+                Ok(file) => (file, true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+                    open_writable_entry_at(
+                        &pool_file,
+                        OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+                    )
+                    .map_err(|source| {
+                        self.cleanup_pool_namespace_error(format!(
+                            "cleanup pool binding is missing or changed: {source}"
+                        ))
+                    })?,
+                    false,
+                ),
+                Err(source) => {
+                    return Err(self.cleanup_pool_namespace_error(format!(
+                        "could not create cleanup pool binding: {source}"
+                    )));
+                }
+            }
+        } else {
+            (
+                open_writable_entry_at(
+                    &pool_file,
+                    OsStr::new(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+                )
+                .map_err(|source| {
+                    self.cleanup_pool_namespace_error(format!(
+                        "cleanup pool binding is missing or changed: {source}"
+                    ))
+                })?,
+                false,
+            )
+        };
+        let binding_identity = binding_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata))
+            .ok_or_else(|| {
+                self.cleanup_pool_namespace_error("cleanup pool binding is not a regular file")
+            })?;
+        let mut context = CleanupPoolContext {
+            pool_path: pool_path.clone(),
+            binding_path: pool_path.join(GOVERNANCE_CLEANUP_POOL_BINDING_NAME),
+            parent_identity: self.parent_directory_identity,
+            pool_file,
+            pool_identity,
+            lock_file,
+            lock_identity,
+            binding_file,
+            binding_identity,
+            binding: CleanupPoolBinding::unbound(),
+            signed: false,
+        };
+        let bytes = self.cleanup_pool_binding_bytes(&context.binding_file)?;
+        let (binding, signed) = if binding_created || bytes.is_empty() {
+            if !allow_unbound {
+                return Err(self.cleanup_pool_namespace_error("cleanup pool binding is missing"));
+            }
+            (
+                CleanupPoolBinding::new(
+                    context.parent_identity,
+                    context.pool_identity,
+                    context.lock_identity,
+                ),
+                false,
+            )
+        } else {
+            self.decode_cleanup_pool_binding(&bytes, allow_unbound)?
+        };
+        binding
+            .validate_namespace(
+                context.parent_identity,
+                context.pool_identity,
+                context.lock_identity,
+            )
+            .map_err(|reason| self.cleanup_pool_namespace_error(reason))?;
+        context.binding = binding;
+        context.signed = signed;
+        if !context.signed {
+            if !allow_unbound {
+                return Err(
+                    self.cleanup_pool_namespace_error("cleanup pool binding is not authenticated")
+                );
+            }
+            self.sign_cleanup_pool_binding(&mut context, signing_key)?;
+        }
+        let mut guard = self
+            .cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(context);
+        drop(guard);
+        self.verify_cleanup_pool_context()
+    }
+
+    fn write_atomic_artifact(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<AtomicWriteOutcome, GovernancePersistenceError> {
+        let no_replace_initial_publication = *self
+            .no_replace_initial_publication
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let parent = AuthorityCleanupParent {
+            file: self.parent_directory.try_clone().map_err(|source| {
+                GovernancePersistenceError::Write {
+                    path: path.parent().unwrap_or(path).to_path_buf(),
+                    source,
+                }
+            })?,
+            identity: self.parent_directory_identity,
+        };
+        write_atomic_synced_at(path, bytes, &parent, no_replace_initial_publication)
+    }
+
+    fn clear_new_stream_artifacts(&self) {
+        self.new_stream_artifacts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+
+    fn arm_reinitialization_journal(&self, signing_key: &SigningKey) {
+        *self
+            .reinitialization_journal_path
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(self.path.clone());
+        *self
+            .reinitialization_journal_signing_key
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(signing_key.clone());
+    }
+
+    fn disarm_reinitialization_journal(&self) {
+        *self
+            .reinitialization_journal_path
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self
+            .reinitialization_journal_signing_key
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    fn update_reinitialization_journal_new_artifact(
+        &self,
+        path: &Path,
+        content_digest: String,
+        byte_len: u64,
+        identity: Option<GovernanceArtifactIdentity>,
+    ) -> Result<(), GovernancePersistenceError> {
+        let journal_active = self
+            .reinitialization_journal_path
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some();
+        if !journal_active {
+            return Ok(());
+        }
+        let signing_key = self
+            .reinitialization_journal_signing_key
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .ok_or_else(|| {
+                reinitialization_journal_error(&self.path, "active transaction has no signing key")
+            })?;
+        let Some((mut journal, _, _)) =
+            read_reinitialization_journal(&self.path, &self.expected_signer_agent_id)?
+        else {
+            return Err(reinitialization_journal_error(
+                &self.path,
+                "active transaction journal disappeared",
+            ));
+        };
+        if let Some(existing) = journal
+            .new_stream_artifacts
+            .iter_mut()
+            .find(|artifact| artifact.path == path)
+        {
+            if existing.content_digest != content_digest || existing.byte_len != byte_len {
+                return Err(reinitialization_journal_error(
+                    &self.path,
+                    "new-stream artifact content intent changed",
+                ));
+            }
+            if identity.is_some() {
+                existing.identity = identity;
+            }
+        } else {
+            journal
+                .new_stream_artifacts
+                .push(ReinitializationNewArtifact {
+                    path: path.to_path_buf(),
+                    content_digest,
+                    byte_len,
+                    identity,
+                });
+        }
+        let parent = held_persistence_parent(self)?;
+        write_reinitialization_journal_at(&self.path, &journal, &signing_key, &parent)?;
+        Ok(())
+    }
+
+    fn record_new_stream_intent(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<(), GovernancePersistenceError> {
+        self.update_reinitialization_journal_new_artifact(
+            path,
+            sha256_hex(bytes),
+            bytes.len() as u64,
+            None,
+        )
+    }
+
+    fn record_new_stream_artifact(
+        &self,
+        path: &Path,
+        identity: GovernanceArtifactIdentity,
+        bytes: &[u8],
+    ) -> Result<(), GovernancePersistenceError> {
+        let mut artifacts = self
+            .new_stream_artifacts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = artifacts.iter_mut().find(|(known, _)| known == path) {
+            existing.1 = identity;
+        } else {
+            artifacts.push((path.to_path_buf(), identity));
+        }
+        drop(artifacts);
+        self.update_reinitialization_journal_new_artifact(
+            path,
+            sha256_hex(bytes),
+            bytes.len() as u64,
+            Some(identity),
+        )
+    }
+
+    fn new_stream_artifacts(&self) -> Vec<(PathBuf, GovernanceArtifactIdentity)> {
+        let artifacts = self
+            .new_stream_artifacts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        artifacts.clone()
+    }
+
+    fn recover_reinitialization_transaction(
+        &self,
+        signing_key: &SigningKey,
+    ) -> Result<(), GovernancePersistenceError> {
+        let Some((mut journal, journal_identity, journal_digest)) =
+            read_reinitialization_journal(&self.path, &self.expected_signer_agent_id)?
+        else {
+            return Ok(());
+        };
+        // A crash can occur after an archive copy is fsynced but before the
+        // phase journal records its identity. The archive is still private
+        // rollback material, so digest/length alone are not enough to bind a
+        // newly observed inode. Fail closed and retain the authenticated
+        // journal when an archive exists without its journaled identity.
+        for artifact in &mut journal.artifacts {
+            if artifact.archive_identity.is_none()
+                && read_governance_artifact_snapshot(&artifact.archive)
+                    .map_err(|source| GovernancePersistenceError::Write {
+                        path: artifact.archive.clone(),
+                        source,
+                    })?
+                    .is_some()
+            {
+                return Err(GovernancePersistenceError::Write {
+                    path: artifact.archive.clone(),
+                    source: std::io::Error::other(
+                        "reinitialization archive identity is absent from the authenticated journal",
+                    ),
+                });
+            }
+        }
+        verify_reinitialization_journal_identity_and_digest(
+            &self.path,
+            journal_identity,
+            &journal_digest,
+            &self.expected_signer_agent_id,
+        )?;
+        match journal.phase {
+            ReinitializationJournalPhase::NewStreamCommitted => {
+                finalize_reinitialization_transaction(self, &journal, signing_key)
+            }
+            ReinitializationJournalPhase::Restored => {
+                cleanup_reinitialization_archives(self, &journal.artifacts, None)?;
+                let Some((_, journal_identity, journal_digest)) = read_reinitialization_journal(
+                    &journal.state_path,
+                    &self.expected_signer_agent_id,
+                )?
+                else {
+                    return Err(reinitialization_journal_error(
+                        &journal.state_path,
+                        "restored transaction journal disappeared",
+                    ));
+                };
+                let parent = held_persistence_parent(self)?;
+                remove_reinitialization_journal_if_owned_at(
+                    &journal.state_path,
+                    journal_identity,
+                    &journal_digest,
+                    &self.expected_signer_agent_id,
+                    &parent,
+                )
+            }
+            ReinitializationJournalPhase::Prepared
+            | ReinitializationJournalPhase::ArchivesCreated
+            | ReinitializationJournalPhase::OriginalsRemoved => {
+                rollback_reinitialization_transaction(self, &mut journal, signing_key)
+            }
+        }
+    }
+
     fn new(
         path: PathBuf,
         expected_signer_agent_id: AgentId,
         open_mode: GovernanceLockOpenMode,
+    ) -> Result<Self, GovernancePersistenceError> {
+        Self::new_with_authority_lock(path, expected_signer_agent_id, open_mode, None)
+    }
+
+    fn new_with_authority_pair_guard(
+        path: PathBuf,
+        expected_signer_agent_id: AgentId,
+        open_mode: GovernanceLockOpenMode,
+        guard: GovernanceAuthorityPairGuard,
+    ) -> Result<Self, GovernancePersistenceError> {
+        let transfer = guard.transfer(&path)?;
+        let primary_path = transfer.primary.0.clone();
+        let cleanup_file = transfer.cleanup_primary;
+        let created_primary = transfer.primary.3;
+        let legacy_sidecar_path = transfer.legacy_sidecar_path.clone();
+        let identity = transfer.identity;
+        let created_legacy = transfer.created_legacy;
+        let result = Self::new_with_authority_lock(
+            path,
+            expected_signer_agent_id,
+            open_mode,
+            Some(transfer.primary),
+        );
+        if let Err(error) = result {
+            let mut cleanup_errors = Vec::new();
+            if created_legacy
+                && let Err(cleanup_error) = remove_authority_lock_if_identity_with_held_file(
+                    &legacy_sidecar_path,
+                    &cleanup_file,
+                    identity,
+                )
+            {
+                cleanup_errors.push(cleanup_error);
+            }
+            if created_primary {
+                if let Err(cleanup_error) =
+                    remove_new_authority_lock_if_owned(&primary_path, cleanup_file, identity)
+                {
+                    cleanup_errors.push(cleanup_error);
+                }
+            } else {
+                drop(cleanup_file);
+            }
+            return Err(compose_operation_cleanup_failure(
+                &primary_path,
+                error,
+                cleanup_errors,
+            ));
+        }
+        result
+    }
+
+    fn new_with_authority_lock(
+        path: PathBuf,
+        expected_signer_agent_id: AgentId,
+        open_mode: GovernanceLockOpenMode,
+        authority_lock: Option<(PathBuf, fs::File, GovernanceAuthorityLockIdentity, bool)>,
     ) -> Result<Self, GovernancePersistenceError> {
         ensure_lock_identity_supported()?;
         let sequence_path = path.with_extension("sequence.json");
@@ -1588,6 +8376,9 @@ impl GovernancePersistence {
         let initialize_empty_stream =
             open_mode == GovernanceLockOpenMode::Initialize && anchors_absent;
         let explicit_migration = open_mode == GovernanceLockOpenMode::Migrate;
+        let may_create_authority_lock = initialize_empty_stream
+            || explicit_migration
+            || open_mode == GovernanceLockOpenMode::Reinitialize;
         let may_create_lock = initialize_empty_stream || explicit_migration;
         if may_create_lock && let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent).map_err(|source| GovernancePersistenceError::OpenLock {
@@ -1595,6 +8386,14 @@ impl GovernancePersistence {
                 source,
             })?;
         }
+        let parent_handle = bind_authority_cleanup_parent(&path).ok_or_else(|| {
+            GovernancePersistenceError::Write {
+                path: path.parent().unwrap_or(&path).to_path_buf(),
+                source: std::io::Error::other(
+                    "governance stream parent is not a regular directory",
+                ),
+            }
+        })?;
         preflight_governance_lock_path(&lock_path, may_create_lock)?;
         let mut existing_options = OpenOptions::new();
         existing_options.read(true).write(true).truncate(false);
@@ -1725,15 +8524,92 @@ impl GovernancePersistence {
         };
         let lock_binding = governance_lock_binding(lock_identity, lock_record);
         verify_governance_lock_path(&lock_path, &lock_file, &lock_binding)?;
+        let (
+            authority_lock_path,
+            authority_lock_file,
+            authority_lock_identity,
+            authority_lock_created,
+        ) = match if let Some(authority_lock) = authority_lock {
+            Ok(authority_lock)
+        } else {
+            let authority_lock_path = governance_authority_lock_path(&path);
+            open_governance_authority_lock(&authority_lock_path, may_create_authority_lock).map(
+                |(authority_lock_file, authority_lock_identity, authority_lock_created)| {
+                    (
+                        authority_lock_path,
+                        authority_lock_file,
+                        authority_lock_identity,
+                        authority_lock_created,
+                    )
+                },
+            )
+        } {
+            Ok(authority_lock) => authority_lock,
+            Err(error) => {
+                let mut cleanup_errors = Vec::new();
+                if created
+                    && let Err(cleanup_error) =
+                        remove_new_governance_lock_if_owned(&lock_path, lock_file, &lock_binding)
+                {
+                    cleanup_errors.push(cleanup_error);
+                }
+                return Err(compose_operation_cleanup_failure(
+                    &lock_path,
+                    error,
+                    cleanup_errors,
+                ));
+            }
+        };
+        if let Err(error) = verify_governance_authority_lock_path(
+            &authority_lock_path,
+            &authority_lock_file,
+            authority_lock_identity,
+        ) {
+            let mut cleanup_errors = Vec::new();
+            if created
+                && let Err(cleanup_error) =
+                    remove_new_governance_lock_if_owned(&lock_path, lock_file, &lock_binding)
+            {
+                cleanup_errors.push(cleanup_error);
+            }
+            if authority_lock_created
+                && let Err(cleanup_error) = remove_new_authority_lock_if_owned(
+                    &authority_lock_path,
+                    authority_lock_file,
+                    authority_lock_identity,
+                )
+            {
+                cleanup_errors.push(cleanup_error);
+            }
+            return Err(compose_operation_cleanup_failure(
+                &authority_lock_path,
+                error,
+                cleanup_errors,
+            ));
+        }
         Ok(Self {
             path,
             sequence_path,
+            parent_directory: parent_handle.file,
+            parent_directory_identity: parent_handle.identity,
+            no_replace_initial_publication: Mutex::new(
+                initialize_empty_stream || open_mode == GovernanceLockOpenMode::Reinitialize,
+            ),
             lock_path,
+            authority_lock_path,
             lock_binding,
             expected_signer_agent_id,
             lock_file,
+            authority_lock_file,
+            authority_lock_identity,
+            cleanup_pool_context: Mutex::new(None),
+            new_stream_artifacts: Mutex::new(Vec::new()),
+            reinitialization_journal_path: Mutex::new(None),
+            reinitialization_journal_signing_key: Mutex::new(None),
             #[cfg(test)]
             test_pre_write_barrier: Mutex::new(None),
+            #[cfg(test)]
+            test_loader_barrier: Mutex::new(None),
         })
     }
 
@@ -1778,13 +8654,17 @@ impl GovernancePersistence {
                 // then failed its parent-directory sync. Rewriting the signed
                 // checkpoint makes the idempotent success boundary durable;
                 // merely loading matching bytes cannot prove that durability.
-                self.write_migration_checkpoint(under_lock.state_sequence, signing_key)
-                    .map_err(
-                        |error| GovernancePersistenceError::MigrationCheckpointLagging {
-                            sequence: under_lock.state_sequence,
-                            reason: error.to_string(),
-                        },
-                    )?;
+                self.write_migration_checkpoint(
+                    under_lock.state_sequence,
+                    signing_key,
+                    under_lock.state_pending_health_observation.as_ref(),
+                )
+                .map_err(|error| {
+                    GovernancePersistenceError::MigrationCheckpointLagging {
+                        sequence: under_lock.state_sequence,
+                        reason: error.to_string(),
+                    }
+                })?;
                 let local = LocalGovernorKey::new(signing_key.clone());
                 self.load(&local)?;
                 return Ok(GovernanceLockMigrationReport {
@@ -1803,13 +8683,17 @@ impl GovernancePersistence {
                         .to_string(),
                 });
             }
-            self.write_migration_checkpoint(under_lock.state_sequence, signing_key)
-                .map_err(
-                    |error| GovernancePersistenceError::MigrationCheckpointLagging {
-                        sequence: under_lock.state_sequence,
-                        reason: error.to_string(),
-                    },
-                )?;
+            self.write_migration_checkpoint(
+                under_lock.state_sequence,
+                signing_key,
+                under_lock.state_pending_health_observation.as_ref(),
+            )
+            .map_err(|error| {
+                GovernancePersistenceError::MigrationCheckpointLagging {
+                    sequence: under_lock.state_sequence,
+                    reason: error.to_string(),
+                }
+            })?;
             let local = LocalGovernorKey::new(signing_key.clone());
             self.load(&local)?;
             return Ok(GovernanceLockMigrationReport {
@@ -1828,6 +8712,7 @@ impl GovernancePersistence {
                 reason: "governance migration sequence overflow".to_string(),
             }
         })?;
+        let pending_health_observation = under_lock.state_pending_health_observation.clone();
         let mut migrated_payload = under_lock.state_payload;
         let Some(payload_object) = migrated_payload.as_object_mut() else {
             return Err(GovernancePersistenceError::InvalidMigrationInput {
@@ -1835,6 +8720,7 @@ impl GovernancePersistence {
                 reason: "signed state payload is not a JSON object".to_string(),
             });
         };
+        let cleanup_pool_binding = self.cleanup_pool_binding()?;
         payload_object.insert(
             "lock_binding".to_string(),
             serde_json::to_value(&self.lock_binding).map_err(|error| {
@@ -1844,6 +8730,28 @@ impl GovernancePersistence {
                 }
             })?,
         );
+        payload_object.insert(
+            "cleanup_pool_binding".to_string(),
+            serde_json::to_value(&cleanup_pool_binding).map_err(|error| {
+                GovernancePersistenceError::InvalidMigrationInput {
+                    path: self.path.clone(),
+                    reason: format!("cleanup pool binding could not be encoded: {error}"),
+                }
+            })?,
+        );
+        if let Some(pending_health_observation) = pending_health_observation.as_ref() {
+            payload_object.insert(
+                "pending_health_observation".to_string(),
+                serde_json::to_value(pending_health_observation).map_err(|error| {
+                    GovernancePersistenceError::InvalidMigrationInput {
+                        path: self.path.clone(),
+                        reason: format!(
+                            "pending health intent could not be encoded during migration: {error}"
+                        ),
+                    }
+                })?,
+            );
+        }
         let envelope = SignedStateEnvelope::sign(
             GOVERNANCE_STATE_KIND,
             GOVERNANCE_STATE_STREAM,
@@ -1859,9 +8767,17 @@ impl GovernancePersistence {
             }
         })?;
         self.verify_lock_path()?;
-        let state_directory_sync_error = match write_atomic_synced(&self.path, &bytes)? {
-            AtomicWriteOutcome::Synced => None,
-            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Some(error.to_string()),
+        self.record_new_stream_intent(&self.path, &bytes)?;
+        let state_outcome = self.write_atomic_artifact(&self.path, &bytes)?;
+        let state_directory_sync_error = match state_outcome {
+            AtomicWriteOutcome::Synced(identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                None
+            }
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error, identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                Some(error.to_string())
+            }
         };
         if let Err(error) = self.verify_lock_path() {
             return Err(GovernancePersistenceError::MigrationCheckpointLagging {
@@ -1869,7 +8785,11 @@ impl GovernancePersistence {
                 reason: error.to_string(),
             });
         }
-        if let Err(error) = self.write_migration_checkpoint(migrated_sequence, signing_key) {
+        if let Err(error) = self.write_migration_checkpoint(
+            migrated_sequence,
+            signing_key,
+            pending_health_observation.as_ref(),
+        ) {
             return Err(GovernancePersistenceError::MigrationCheckpointLagging {
                 sequence: migrated_sequence,
                 reason: match state_directory_sync_error {
@@ -1896,11 +8816,14 @@ impl GovernancePersistence {
         &self,
         sequence: u64,
         signing_key: &SigningKey,
+        pending_health_observation: Option<&PendingHealthObservation>,
     ) -> Result<(), GovernancePersistenceError> {
         self.verify_lock_path()?;
         let checkpoint = GovernanceSequenceCheckpoint {
             accepted_sequence: sequence,
             lock_binding: self.lock_binding.clone(),
+            cleanup_pool_binding: self.cleanup_pool_binding()?,
+            pending_health_observation: pending_health_observation.cloned(),
         };
         let envelope = SignedStateEnvelope::sign(
             GOVERNANCE_CHECKPOINT_KIND,
@@ -1916,11 +8839,18 @@ impl GovernancePersistence {
                 source,
             }
         })?;
-        let outcome = write_atomic_synced(&self.sequence_path, &bytes)?;
+        self.record_new_stream_intent(&self.sequence_path, &bytes)?;
+        let outcome = self.write_atomic_artifact(&self.sequence_path, &bytes)?;
         self.verify_lock_path()?;
         match outcome {
-            AtomicWriteOutcome::Synced => Ok(()),
-            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Err(error),
+            AtomicWriteOutcome::Synced(identity) => {
+                self.record_new_stream_artifact(&self.sequence_path, identity, &bytes)?;
+                Ok(())
+            }
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error, identity) => {
+                self.record_new_stream_artifact(&self.sequence_path, identity, &bytes)?;
+                Err(error)
+            }
         }
     }
 
@@ -1929,11 +8859,50 @@ impl GovernancePersistence {
         Ok(Self {
             path: self.path.clone(),
             sequence_path: self.sequence_path.clone(),
+            parent_directory: self.parent_directory.try_clone()?,
+            parent_directory_identity: self.parent_directory_identity,
+            no_replace_initial_publication: Mutex::new(
+                *self
+                    .no_replace_initial_publication
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            ),
             lock_path: self.lock_path.clone(),
+            authority_lock_path: self.authority_lock_path.clone(),
             lock_binding: self.lock_binding.clone(),
             expected_signer_agent_id: self.expected_signer_agent_id.clone(),
             lock_file: self.lock_file.try_clone()?,
+            authority_lock_file: self.authority_lock_file.try_clone()?,
+            authority_lock_identity: self.authority_lock_identity,
+            cleanup_pool_context: Mutex::new(
+                self.cleanup_pool_context
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_ref()
+                    .map(CleanupPoolContext::try_clone)
+                    .transpose()?,
+            ),
+            new_stream_artifacts: Mutex::new(
+                self.new_stream_artifacts
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            ),
+            reinitialization_journal_path: Mutex::new(
+                self.reinitialization_journal_path
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            ),
+            reinitialization_journal_signing_key: Mutex::new(
+                self.reinitialization_journal_signing_key
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            ),
             test_pre_write_barrier: Mutex::new(None),
+            #[cfg(test)]
+            test_loader_barrier: Mutex::new(None),
         })
     }
 
@@ -1962,14 +8931,53 @@ impl GovernancePersistence {
         }
     }
 
+    #[cfg(test)]
+    fn install_loader_barrier(
+        &self,
+        path: &Path,
+    ) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+        let reached = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        *self
+            .test_loader_barrier
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+            path.to_path_buf(),
+            Arc::clone(&reached),
+            Arc::clone(&resume),
+        ));
+        (reached, resume)
+    }
+
+    #[cfg(test)]
+    fn pause_after_loader_open(&self, path: &Path) {
+        let barrier = self
+            .test_loader_barrier
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some((expected_path, reached, resume)) = barrier
+            && expected_path == path
+        {
+            reached.wait();
+            resume.wait();
+        }
+    }
+
     fn verify_lock_path(&self) -> Result<(), GovernancePersistenceError> {
-        verify_governance_lock_path(&self.lock_path, &self.lock_file, &self.lock_binding)
+        verify_governance_lock_path(&self.lock_path, &self.lock_file, &self.lock_binding)?;
+        verify_governance_authority_lock_path(
+            &self.authority_lock_path,
+            &self.authority_lock_file,
+            self.authority_lock_identity,
+        )
     }
 
     fn load(
         &self,
         local: &LocalGovernorKey,
     ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
+        self.verify_cleanup_pool_context()?;
         self.load_internal(local, true)
     }
 
@@ -1977,7 +8985,109 @@ impl GovernancePersistence {
         &self,
         local: &LocalGovernorKey,
     ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
+        self.verify_cleanup_pool_context()?;
         self.load_internal(local, false)
+    }
+
+    /// Read a signed stream anchor through the parent directory descriptor
+    /// that was bound when this persistence instance was constructed.  The
+    /// pathname is used only for diagnostics and identity revalidation; no
+    /// state bytes are ever obtained through a path-following read.
+    fn read_bound_stream_artifact(
+        &self,
+        path: &Path,
+        state_anchor: bool,
+    ) -> Result<Vec<u8>, GovernancePersistenceError> {
+        let read_error = |source| {
+            if state_anchor {
+                GovernancePersistenceError::ReadState {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            } else {
+                GovernancePersistenceError::ReadSequence {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            }
+        };
+        let missing_error = || {
+            if state_anchor {
+                GovernancePersistenceError::MissingState {
+                    path: path.to_path_buf(),
+                }
+            } else {
+                GovernancePersistenceError::MissingSequence {
+                    path: path.to_path_buf(),
+                }
+            }
+        };
+        let parent_path = path.parent().ok_or_else(|| {
+            read_error(std::io::Error::other(
+                "governance stream anchor has no parent directory",
+            ))
+        })?;
+        let parent_identity = fs::symlink_metadata(parent_path)
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata));
+        if parent_identity != Some(self.parent_directory_identity) {
+            return Err(read_error(std::io::Error::other(
+                "governance stream anchor parent directory identity changed",
+            )));
+        }
+        let name = path.file_name().ok_or_else(|| {
+            read_error(std::io::Error::other(
+                "governance stream anchor has no final component",
+            ))
+        })?;
+        let mut file = match open_regular_entry_at(&self.parent_directory, name) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(missing_error());
+            }
+            Err(source) => return Err(read_error(source)),
+        };
+        let metadata_before = file.metadata().map_err(read_error)?;
+        let Some(identity_before) = governance_artifact_identity(&metadata_before) else {
+            return Err(read_error(std::io::Error::other(
+                "governance stream anchor is not a regular file",
+            )));
+        };
+        #[cfg(test)]
+        self.pause_after_loader_open(path);
+        file.seek(SeekFrom::Start(0)).map_err(read_error)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(read_error)?;
+        let metadata_after = file.metadata().map_err(read_error)?;
+        let Some(identity_after) = governance_artifact_identity(&metadata_after) else {
+            return Err(read_error(std::io::Error::other(
+                "governance stream anchor ceased to be a regular file",
+            )));
+        };
+        if identity_before != identity_after || metadata_after.len() != bytes.len() as u64 {
+            return Err(read_error(std::io::Error::other(
+                "governance stream anchor changed while being read",
+            )));
+        }
+        let named_file = open_regular_entry_at(&self.parent_directory, name).map_err(read_error)?;
+        let named_identity = named_file
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_artifact_identity(&metadata));
+        if named_identity != Some(identity_before) {
+            return Err(read_error(std::io::Error::other(
+                "governance stream anchor name identity changed during read",
+            )));
+        }
+        let parent_identity_after = fs::symlink_metadata(parent_path)
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata));
+        if parent_identity_after != Some(self.parent_directory_identity) {
+            return Err(read_error(std::io::Error::other(
+                "governance stream anchor parent directory changed during read",
+            )));
+        }
+        Ok(bytes)
     }
 
     fn load_internal(
@@ -1986,16 +9096,16 @@ impl GovernancePersistence {
         repair_checkpoint: bool,
     ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
         self.verify_lock_path()?;
-        if !self.path.exists() {
-            return Err(GovernancePersistenceError::MissingState {
-                path: self.path.clone(),
-            });
+        let cleanup_pool_binding = self
+            .cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|context| context.binding.clone());
+        if cleanup_pool_binding.is_some() {
+            self.verify_cleanup_pool_context()?;
         }
-        let bytes =
-            fs::read(&self.path).map_err(|source| GovernancePersistenceError::ReadState {
-                path: self.path.clone(),
-                source,
-            })?;
+        let bytes = self.read_bound_stream_artifact(&self.path, true)?;
         let shape: serde_json::Value = serde_json::from_slice(&bytes).map_err(|source| {
             GovernancePersistenceError::ParseState {
                 path: self.path.clone(),
@@ -2014,17 +9124,7 @@ impl GovernancePersistence {
             })?;
         let digest = signed_governance_envelope_digest(&envelope, &self.path)?;
 
-        if !self.sequence_path.exists() {
-            return Err(GovernancePersistenceError::MissingSequence {
-                path: self.sequence_path.clone(),
-            });
-        }
-        let checkpoint_bytes = fs::read(&self.sequence_path).map_err(|source| {
-            GovernancePersistenceError::ReadSequence {
-                path: self.sequence_path.clone(),
-                source,
-            }
-        })?;
+        let checkpoint_bytes = self.read_bound_stream_artifact(&self.sequence_path, false)?;
         let checkpoint_envelope: SignedStateEnvelope<GovernanceSequenceCheckpoint> =
             serde_json::from_slice(&checkpoint_bytes).map_err(|source| {
                 GovernancePersistenceError::ParseSequence {
@@ -2044,6 +9144,14 @@ impl GovernancePersistence {
             });
         }
         self.validate_signed_lock_binding(&checkpoint.payload.lock_binding, "checkpoint")?;
+        if cleanup_pool_binding
+            .as_ref()
+            .is_some_and(|binding| checkpoint.payload.cleanup_pool_binding != *binding)
+        {
+            return Err(self.cleanup_pool_namespace_error(
+                "signed checkpoint cleanup pool binding does not match the held namespace",
+            ));
+        }
         self.validate_checkpoint(&checkpoint.payload, checkpoint.sequence)?;
 
         let verified = envelope.verify(SignedStateExpectation {
@@ -2058,15 +9166,51 @@ impl GovernancePersistence {
             });
         }
         self.validate_signed_lock_binding(&verified.payload.lock_binding, "state")?;
+        if cleanup_pool_binding
+            .as_ref()
+            .is_some_and(|binding| verified.payload.cleanup_pool_binding != *binding)
+        {
+            return Err(self.cleanup_pool_namespace_error(
+                "signed state cleanup pool binding does not match the held namespace",
+            ));
+        }
+        let mut payload = verified.payload;
+        if let Some(checkpoint_pending) = checkpoint.payload.pending_health_observation.as_ref() {
+            if checkpoint.payload.accepted_sequence > verified.sequence {
+                return Err(GovernancePersistenceError::InvalidSequence {
+                    path: self.sequence_path.clone(),
+                    reason:
+                        "signed checkpoint pending health marker is ahead of its state predecessor"
+                            .to_string(),
+                });
+            }
+            if payload
+                .pending_health_observation
+                .as_ref()
+                .is_some_and(|state_pending| state_pending != checkpoint_pending)
+            {
+                return Err(GovernancePersistenceError::InvalidSequence {
+                    path: self.sequence_path.clone(),
+                    reason:
+                        "signed state and checkpoint carry divergent pending health observations"
+                            .to_string(),
+                });
+            }
+            payload.pending_health_observation = Some(checkpoint_pending.clone());
+        }
         if repair_checkpoint && checkpoint.payload.accepted_sequence < verified.sequence {
             // State is committed before its high-water checkpoint. A crash in
             // that narrow window leaves a fully signed newer envelope, which is
             // safe to accept and use to repair the lagging checkpoint.
-            self.write_checkpoint(verified.sequence, local)?;
+            self.write_checkpoint(
+                verified.sequence,
+                local,
+                payload.pending_health_observation.as_ref(),
+            )?;
         }
         self.verify_lock_path()?;
         Ok(LoadedGovernanceState {
-            payload: verified.payload,
+            payload,
             sequence: verified.sequence,
             digest,
             checkpoint_sequence: checkpoint.payload.accepted_sequence,
@@ -2077,7 +9221,13 @@ impl GovernancePersistence {
         &self,
         state: &GovernanceState,
     ) -> Result<GovernanceStateVersion, GovernancePersistenceError> {
+        self.clear_new_stream_artifacts();
         self.verify_lock_path()?;
+        let local = state
+            .local_governor
+            .as_ref()
+            .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
+        self.ensure_cleanup_pool_context(&local.signing_key, true)?;
         if self.path.exists() || self.sequence_path.exists() {
             return Err(GovernancePersistenceError::AlreadyInitialized {
                 state_path: self.path.clone(),
@@ -2086,8 +9236,15 @@ impl GovernancePersistence {
         }
         let (outcome, version) = self.write_state_and_checkpoint(state, 1)?;
         match outcome {
-            GovernancePersistenceOutcome::Committed => Ok(version),
+            GovernancePersistenceOutcome::Committed => {
+                *self
+                    .no_replace_initial_publication
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = false;
+                Ok(version)
+            }
             GovernancePersistenceOutcome::StateCommittedCheckpointLagging { reason, .. } => {
+                self.release_cleanup_pool_context();
                 let rollback = self.rollback_incomplete_initialization();
                 Err(GovernancePersistenceError::IncompleteInitialization {
                     reason: match rollback {
@@ -2102,6 +9259,16 @@ impl GovernancePersistence {
     }
 
     fn save(
+        &self,
+        state: &GovernanceState,
+        expected_sequence: u64,
+        expected_digest: &str,
+    ) -> Result<(GovernancePersistenceOutcome, GovernanceStateVersion), GovernancePersistenceError>
+    {
+        self.save_internal(state, expected_sequence, expected_digest)
+    }
+
+    fn save_internal(
         &self,
         state: &GovernanceState,
         expected_sequence: u64,
@@ -2123,7 +9290,11 @@ impl GovernancePersistence {
             });
         }
         if loaded.checkpoint_sequence < loaded.sequence {
-            self.write_checkpoint(loaded.sequence, local)?;
+            self.write_checkpoint(
+                loaded.sequence,
+                local,
+                loaded.payload.pending_health_observation.as_ref(),
+            )?;
         }
         let next_sequence = loaded.sequence.checked_add(1).ok_or_else(|| {
             GovernancePersistenceError::InvalidSequence {
@@ -2132,6 +9303,139 @@ impl GovernancePersistence {
             }
         })?;
         self.write_state_and_checkpoint(state, next_sequence)
+    }
+
+    /// Write a restrictive health intent at the current signed sequence before
+    /// the runtime health projection is changed.  The checkpoint is the
+    /// preferred write-ahead journal: it is independently signed, fsynced,
+    /// and can veto a stale state envelope after restart.  If that anchor is
+    /// unavailable, rewrite the current state envelope at the same sequence
+    /// with the intent before allowing the caller to mutate memory.  Sequence
+    /// identity is never advanced by this write-ahead step.
+    fn write_pending_health_intent(
+        &self,
+        state: &GovernanceState,
+        observation: &PendingHealthObservation,
+    ) -> Result<GovernanceStateVersion, GovernancePersistenceError> {
+        let local = state
+            .local_governor
+            .as_ref()
+            .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
+        let expected_sequence = state.persistence_sequence.ok_or_else(|| {
+            GovernancePersistenceError::InvalidSequence {
+                path: self.path.clone(),
+                reason: "signed governance state has no in-memory sequence anchor".to_string(),
+            }
+        })?;
+        let expected_digest = state.persistence_digest.as_deref().ok_or_else(|| {
+            GovernancePersistenceError::InvalidSequence {
+                path: self.path.clone(),
+                reason: "signed governance state has no in-memory digest anchor".to_string(),
+            }
+        })?;
+        let loaded = self.load_for_cas(local)?;
+        if loaded.sequence != expected_sequence || loaded.digest != expected_digest {
+            return Err(GovernancePersistenceError::StalePredecessor {
+                path: self.path.clone(),
+                expected_sequence,
+                expected_digest: expected_digest.to_string(),
+                observed_sequence: loaded.sequence,
+                observed_digest: loaded.digest,
+            });
+        }
+        if loaded
+            .payload
+            .pending_health_observation
+            .as_ref()
+            .is_some_and(|existing| existing == observation)
+        {
+            return Ok(GovernanceStateVersion {
+                sequence: loaded.sequence,
+                digest: loaded.digest,
+                health_marker_cleared: false,
+            });
+        }
+
+        // Do not replace an older restrictive marker with a different
+        // same-sequence observation. The state envelope is the durable
+        // predecessor, so writing the new observation only to the checkpoint
+        // would create divergent signed anchors that a restart must reject.
+        // The older marker is itself fail-closed, so retaining it is safer
+        // than creating an unauthenticated/ambiguous convergence point.
+        if loaded
+            .payload
+            .pending_health_observation
+            .as_ref()
+            .is_some_and(|existing| existing != observation)
+        {
+            return Err(GovernancePersistenceError::Write {
+                path: self.sequence_path.clone(),
+                source: std::io::Error::other(format!(
+                    "signed pending health marker differs at sequence {}; refusing same-sequence divergence",
+                    loaded.sequence
+                )),
+            });
+        }
+
+        let checkpoint_error =
+            match self.write_checkpoint(loaded.sequence, local, Some(observation)) {
+                Ok(()) => {
+                    return Ok(GovernanceStateVersion {
+                        sequence: loaded.sequence,
+                        digest: loaded.digest,
+                        health_marker_cleared: false,
+                    });
+                }
+                Err(error) => error,
+            };
+
+        // Checkpoint publication can fail before its directory entry becomes
+        // durable (for example, an injected directory blocker).  A same-
+        // sequence signed state rewrite is the recovery anchor in that case;
+        // it is still a write-ahead intent and does not move the CAS sequence.
+        let mut persisted = PersistedGovernanceState::from_runtime_with_binding(
+            state,
+            self.cleanup_pool_binding()?,
+        );
+        persisted.lock_binding = self.lock_binding.clone();
+        persisted.pending_health_observation = Some(observation.clone());
+        let envelope = local.sign_persisted_state(loaded.sequence, persisted)?;
+        let digest = signed_governance_envelope_digest(&envelope, &self.path)?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            GovernancePersistenceError::ParseState {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
+        self.verify_lock_path()?;
+        self.record_new_stream_intent(&self.path, &bytes)?;
+        let outcome = self.write_atomic_artifact(&self.path, &bytes)?;
+        let state_directory_sync_error = match outcome {
+            AtomicWriteOutcome::Synced(identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                None
+            }
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error, identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                Some(error)
+            }
+        };
+        if let Some(error) = state_directory_sync_error {
+            return Err(error);
+        }
+        self.verify_lock_path().map_err(|error| {
+            GovernancePersistenceError::Write {
+                path: self.path.clone(),
+                source: std::io::Error::other(format!(
+                    "write-ahead health intent checkpoint failed ({checkpoint_error}); state anchor verification failed: {error}"
+                )),
+            }
+        })?;
+        Ok(GovernanceStateVersion {
+            sequence: loaded.sequence,
+            digest,
+            health_marker_cleared: false,
+        })
     }
 
     fn write_state_and_checkpoint(
@@ -2154,8 +9458,12 @@ impl GovernancePersistence {
                 },
             ));
         }
-        let mut persisted = PersistedGovernanceState::from_runtime(state);
+        let mut persisted = PersistedGovernanceState::from_runtime_with_binding(
+            state,
+            self.cleanup_pool_binding()?,
+        );
         persisted.lock_binding = self.lock_binding.clone();
+        let pending_health_observation = persisted.pending_health_observation.clone();
         let envelope = local.sign_persisted_state(sequence, persisted)?;
         let digest = signed_governance_envelope_digest(&envelope, &self.path)?;
         let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
@@ -2165,14 +9473,37 @@ impl GovernancePersistence {
             }
         })?;
         self.verify_lock_path()?;
+        self.record_new_stream_intent(&self.path, &bytes)?;
         #[cfg(test)]
         self.pause_after_pre_write_verification();
-        let state_directory_sync_error = match write_atomic_synced(&self.path, &bytes)? {
-            AtomicWriteOutcome::Synced => None,
-            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Some(error.to_string()),
+        let state_outcome = self.write_atomic_artifact(&self.path, &bytes)?;
+        let state_directory_sync_error = match state_outcome {
+            AtomicWriteOutcome::Synced(identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                None
+            }
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error, identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                Some(error.to_string())
+            }
         };
+        #[cfg(test)]
+        maybe_inject_reinitialization_crash(
+            &self.path,
+            InjectedReinitializationCrashPoint::StateRenamed,
+        );
+        #[cfg(test)]
+        maybe_inject_health_crash(&self.path, InjectedHealthCrashPoint::StateWrite);
         let lock_after_state = self.verify_lock_path();
-        let outcome = match lock_after_state.and_then(|()| self.write_checkpoint(sequence, local)) {
+        let mut outcome = match lock_after_state.and_then(|()| {
+            let result =
+                self.write_checkpoint(sequence, local, pending_health_observation.as_ref());
+            #[cfg(test)]
+            if result.is_ok() {
+                maybe_inject_health_crash(&self.path, InjectedHealthCrashPoint::CheckpointWrite);
+            }
+            result
+        }) {
             Ok(()) => GovernancePersistenceOutcome::Committed,
             Err(error) => GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
                 sequence,
@@ -2184,7 +9515,131 @@ impl GovernancePersistence {
                 },
             },
         };
-        Ok((outcome, GovernanceStateVersion { sequence, digest }))
+        let mut final_digest = digest;
+        let mut health_marker_cleared = false;
+        if matches!(outcome, GovernancePersistenceOutcome::Committed)
+            && pending_health_observation.is_some()
+        {
+            let (clear_outcome, clear_version) =
+                self.clear_pending_health_marker(state, sequence, local, final_digest)?;
+            outcome = clear_outcome;
+            final_digest = clear_version.digest;
+            health_marker_cleared = clear_version.health_marker_cleared;
+        }
+        Ok((
+            outcome,
+            GovernanceStateVersion {
+                sequence,
+                digest: final_digest,
+                health_marker_cleared,
+            },
+        ))
+    }
+
+    /// Remove a write-ahead health marker only after the state and checkpoint
+    /// carrying the restrictive projection have both committed.  The
+    /// checkpoint is cleared first: if the subsequent state rewrite fails,
+    /// the old signed state marker remains authoritative and the next repair
+    /// restores that marker into the checkpoint.  A successful state rename
+    /// returns its digest even when the parent-directory sync is the only
+    /// remaining failure, because the rename changed the in-process state
+    /// anchor and must be reflected by the caller's CAS snapshot.
+    fn clear_pending_health_marker(
+        &self,
+        state: &GovernanceState,
+        sequence: u64,
+        local: &LocalGovernorKey,
+        marker_digest: String,
+    ) -> Result<(GovernancePersistenceOutcome, GovernanceStateVersion), GovernancePersistenceError>
+    {
+        if let Err(error) = self.write_checkpoint(sequence, local, None) {
+            return Ok((
+                GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                    sequence,
+                    reason: format!("health marker clear checkpoint failed: {error}"),
+                },
+                GovernanceStateVersion {
+                    sequence,
+                    digest: marker_digest,
+                    health_marker_cleared: false,
+                },
+            ));
+        }
+
+        let mut persisted = PersistedGovernanceState::from_runtime_with_binding(
+            state,
+            self.cleanup_pool_binding()?,
+        );
+        persisted.lock_binding = self.lock_binding.clone();
+        persisted.pending_health_observation = None;
+        let envelope = local.sign_persisted_state(sequence, persisted)?;
+        let digest = signed_governance_envelope_digest(&envelope, &self.path)?;
+        let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            GovernancePersistenceError::ParseState {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
+        self.verify_lock_path()?;
+        self.record_new_stream_intent(&self.path, &bytes)?;
+        let state_outcome = self.write_atomic_artifact(&self.path, &bytes)?;
+        let (state_committed, state_sync_error) = match state_outcome {
+            AtomicWriteOutcome::Synced(identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                (true, None)
+            }
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error, identity) => {
+                self.record_new_stream_artifact(&self.path, identity, &bytes)?;
+                (true, Some(error.to_string()))
+            }
+        };
+        if let Err(error) = self.verify_lock_path() {
+            return Ok((
+                GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                    sequence,
+                    reason: format!(
+                        "health marker state clear committed but authority verification failed: {error}"
+                    ),
+                },
+                GovernanceStateVersion {
+                    sequence,
+                    digest: if state_committed {
+                        digest
+                    } else {
+                        marker_digest
+                    },
+                    health_marker_cleared: state_committed,
+                },
+            ));
+        }
+        if !state_committed {
+            return Ok((
+                GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                    sequence,
+                    reason: "health marker state clear did not commit".to_string(),
+                },
+                GovernanceStateVersion {
+                    sequence,
+                    digest: marker_digest,
+                    health_marker_cleared: false,
+                },
+            ));
+        }
+        let outcome = match state_sync_error {
+            Some(error) => GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason: format!("health marker state clear directory sync failed: {error}"),
+            },
+            None => GovernancePersistenceOutcome::Committed,
+        };
+        Ok((
+            outcome,
+            GovernanceStateVersion {
+                sequence,
+                digest,
+                health_marker_cleared: true,
+            },
+        ))
     }
 
     fn repair_checkpoint(
@@ -2205,7 +9660,10 @@ impl GovernancePersistence {
                     source,
                 }
             })? != {
-                let mut persisted = PersistedGovernanceState::from_runtime(state);
+                let mut persisted = PersistedGovernanceState::from_runtime_with_binding(
+                    state,
+                    self.cleanup_pool_binding()?,
+                );
                 persisted.lock_binding = self.lock_binding.clone();
                 serde_json::to_value(persisted).map_err(|source| {
                     GovernancePersistenceError::ParseState {
@@ -2226,12 +9684,17 @@ impl GovernancePersistence {
         // `load` repairs a numerically lagging checkpoint. Rewrite even when
         // the file already names this sequence: the original failure may have
         // happened after checkpoint rename but before parent-directory sync.
-        self.write_checkpoint(lag.sequence, local)?;
+        self.write_checkpoint(
+            lag.sequence,
+            local,
+            loaded.payload.pending_health_observation.as_ref(),
+        )?;
         Ok(())
     }
 
     fn rollback_incomplete_initialization(&self) -> Result<(), GovernancePersistenceError> {
-        remove_governance_stream_files(self, &self.path, &self.sequence_path)
+        let artifacts = self.new_stream_artifacts();
+        remove_governance_stream_files(self, &artifacts)
     }
 
     fn validate_checkpoint(
@@ -2271,11 +9734,14 @@ impl GovernancePersistence {
         &self,
         sequence: u64,
         local: &LocalGovernorKey,
+        pending_health_observation: Option<&PendingHealthObservation>,
     ) -> Result<(), GovernancePersistenceError> {
         self.verify_lock_path()?;
         let checkpoint = GovernanceSequenceCheckpoint {
             accepted_sequence: sequence,
             lock_binding: self.lock_binding.clone(),
+            cleanup_pool_binding: self.cleanup_pool_binding()?,
+            pending_health_observation: pending_health_observation.cloned(),
         };
         let envelope = local.sign_checkpoint(sequence, checkpoint)?;
         let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
@@ -2284,13 +9750,677 @@ impl GovernancePersistence {
                 source,
             }
         })?;
-        let outcome = write_atomic_synced(&self.sequence_path, &bytes)?;
+        self.record_new_stream_intent(&self.sequence_path, &bytes)?;
+        let outcome = self.write_atomic_artifact(&self.sequence_path, &bytes)?;
         self.verify_lock_path()?;
         match outcome {
-            AtomicWriteOutcome::Synced => Ok(()),
-            AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Err(error),
+            AtomicWriteOutcome::Synced(identity) => {
+                self.record_new_stream_artifact(&self.sequence_path, identity, &bytes)?;
+                #[cfg(test)]
+                maybe_inject_reinitialization_crash(
+                    &self.path,
+                    InjectedReinitializationCrashPoint::CheckpointRenamed,
+                );
+                Ok(())
+            }
+            AtomicWriteOutcome::RenamedDirectorySyncFailed(error, identity) => {
+                self.record_new_stream_artifact(&self.sequence_path, identity, &bytes)?;
+                #[cfg(test)]
+                maybe_inject_reinitialization_crash(
+                    &self.path,
+                    InjectedReinitializationCrashPoint::CheckpointRenamed,
+                );
+                Err(error)
+            }
         }
     }
+}
+
+type CleanupPoolMaintenanceScan = (
+    Vec<String>,
+    Vec<String>,
+    BTreeMap<String, GovernanceArtifactIdentity>,
+    BTreeMap<String, CleanupPoolMaintenanceSlotProof>,
+);
+
+fn scan_cleanup_pool_slots_for_maintenance(
+    parent: &AuthorityCleanupParent,
+    pool: &fs::File,
+    lock: &fs::File,
+    binding: &CleanupPoolBinding,
+    pool_path: &Path,
+    mode: GovernanceCleanupPoolMaintenanceMode,
+) -> Result<CleanupPoolMaintenanceScan, GovernancePersistenceError> {
+    validate_cleanup_pool_directory_namespace(pool, binding, pool_path)?;
+    let mut selected = Vec::new();
+    let mut opaque = Vec::new();
+    let mut identities = BTreeMap::new();
+    let mut proofs = BTreeMap::new();
+    for slot_name in &binding.slot_names {
+        let name = OsStr::new(slot_name);
+        let Some(identity) = directory_entry_identity_at(pool, name).map_err(|source| {
+            cleanup_maintenance_error(
+                pool_path,
+                format!("could not inspect slot `{slot_name}`: {source}"),
+            )
+        })?
+        else {
+            continue;
+        };
+        let proof = match cleanup_pool_slot_content_proof(pool, name) {
+            Ok((content_digest, byte_len)) => CleanupPoolMaintenanceSlotProof {
+                identity,
+                content_digest,
+                byte_len,
+            },
+            Err(_) if mode == GovernanceCleanupPoolMaintenanceMode::Reset => {
+                CleanupPoolMaintenanceSlotProof {
+                    identity,
+                    content_digest: sha256_hex(
+                        format!("opaque-slot:{}:{}", identity.device, identity.inode).as_bytes(),
+                    ),
+                    byte_len: 0,
+                }
+            }
+            Err(source) => {
+                return Err(cleanup_maintenance_error(
+                    pool_path,
+                    format!("could not snapshot slot `{slot_name}`: {source}"),
+                ));
+            }
+        };
+        let is_opaque = match mode {
+            GovernanceCleanupPoolMaintenanceMode::Reset => {
+                match inspect_cleanup_pool_slot(parent, pool, lock, binding, pool_path, name) {
+                    Ok(slot) => {
+                        slot.opaque
+                            || !matches!(
+                                slot.phase,
+                                Some(
+                                    CleanupPoolPhase::Retained | CleanupPoolPhase::ForeignPreserved
+                                )
+                            )
+                    }
+                    Err(_) => true,
+                }
+            }
+            GovernanceCleanupPoolMaintenanceMode::Drain => {
+                let slot = inspect_cleanup_pool_slot(parent, pool, lock, binding, pool_path, name)?;
+                if !matches!(
+                    slot.phase,
+                    Some(CleanupPoolPhase::Retained | CleanupPoolPhase::ForeignPreserved)
+                ) {
+                    return Err(cleanup_maintenance_error(
+                        pool_path,
+                        format!("drain found nonterminal slot `{slot_name}`"),
+                    ));
+                }
+                slot.opaque
+            }
+        };
+        selected.push(slot_name.clone());
+        if is_opaque {
+            opaque.push(slot_name.clone());
+        }
+        identities.insert(slot_name.clone(), identity);
+        proofs.insert(slot_name.clone(), proof);
+    }
+    Ok((selected, opaque, identities, proofs))
+}
+
+fn create_cleanup_maintenance_archive(
+    parent: &AuthorityCleanupParent,
+    parent_path: &Path,
+    archive_name: &str,
+) -> Result<(PathBuf, fs::File, GovernanceArtifactIdentity), GovernancePersistenceError> {
+    if !valid_cleanup_archive_name(archive_name) {
+        return Err(cleanup_maintenance_archive_error(
+            parent_path,
+            "archive name must be one validated path component",
+        ));
+    }
+    let name = OsStr::new(archive_name);
+    let archive = match create_directory_at(&parent.file, name) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(cleanup_maintenance_archive_error(
+                &parent_path.join(archive_name),
+                "archive destination already exists",
+            ));
+        }
+        Err(source) => {
+            return Err(cleanup_maintenance_archive_error(
+                &parent_path.join(archive_name),
+                format!("archive directory could not be created: {source}"),
+            ));
+        }
+    };
+    let identity = archive
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        .ok_or_else(|| {
+            cleanup_maintenance_archive_error(
+                &parent_path.join(archive_name),
+                "archive directory identity is unavailable",
+            )
+        })?;
+    archive
+        .sync_all()
+        .and_then(|()| parent.file.sync_all())
+        .map_err(|source| {
+            cleanup_maintenance_archive_error(
+                &parent_path.join(archive_name),
+                format!("archive creation durability sync failed: {source}"),
+            )
+        })?;
+    Ok((parent_path.join(archive_name), archive, identity))
+}
+
+fn open_cleanup_maintenance_archive(
+    parent: &AuthorityCleanupParent,
+    parent_path: &Path,
+    archive_name: &str,
+    expected: GovernanceArtifactIdentity,
+) -> Result<(PathBuf, fs::File), GovernancePersistenceError> {
+    if !valid_cleanup_archive_name(archive_name) {
+        return Err(cleanup_maintenance_archive_error(
+            parent_path,
+            "journal archive name is not one path component",
+        ));
+    }
+    let path = parent_path.join(archive_name);
+    let archive = open_directory_at(&parent.file, OsStr::new(archive_name)).map_err(|source| {
+        cleanup_maintenance_archive_error(
+            &path,
+            format!("journal archive is unavailable: {source}"),
+        )
+    })?;
+    let observed = archive
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata));
+    if observed != Some(expected) {
+        return Err(cleanup_maintenance_archive_error(
+            &path,
+            "journal archive identity changed",
+        ));
+    }
+    Ok((path, archive))
+}
+
+fn validate_cleanup_maintenance_archive_entries(
+    archive: &fs::File,
+    selected: &[String],
+    archive_path: &Path,
+) -> Result<(), GovernancePersistenceError> {
+    let selected = selected.iter().map(OsString::from).collect::<BTreeSet<_>>();
+    for name in directory_entry_names(archive).map_err(|source| {
+        cleanup_maintenance_archive_error(
+            archive_path,
+            format!("archive could not enumerate: {source}"),
+        )
+    })? {
+        if !selected.contains(&name) {
+            return Err(cleanup_maintenance_archive_error(
+                archive_path,
+                format!(
+                    "archive contains unknown entry `{}`",
+                    name.to_string_lossy()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+struct CleanupPoolMaintenanceMoveContext<'a> {
+    pool: &'a fs::File,
+    pool_identity: GovernanceArtifactIdentity,
+    pool_name: &'a OsStr,
+    archive: &'a fs::File,
+    archive_identity: GovernanceArtifactIdentity,
+    archive_name: &'a OsStr,
+    parent: &'a AuthorityCleanupParent,
+    state_path: &'a Path,
+    pool_path: &'a Path,
+    archive_path: &'a Path,
+}
+
+fn move_cleanup_maintenance_slot(
+    context: CleanupPoolMaintenanceMoveContext<'_>,
+    slot_name: &str,
+    expected_identity: Option<GovernanceArtifactIdentity>,
+    expected_proof: Option<&CleanupPoolMaintenanceSlotProof>,
+    current_proof: Option<&CleanupPoolMaintenanceSlotProof>,
+    expected_archive_identity: GovernanceArtifactIdentity,
+) -> Result<(), GovernancePersistenceError> {
+    let CleanupPoolMaintenanceMoveContext {
+        pool,
+        pool_identity,
+        pool_name,
+        archive,
+        archive_identity,
+        archive_name,
+        parent,
+        state_path,
+        pool_path,
+        archive_path,
+    } = context;
+    if pool
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        != Some(pool_identity)
+        || archive
+            .metadata()
+            .ok()
+            .and_then(|metadata| governance_directory_identity(&metadata))
+            != Some(expected_archive_identity)
+        || archive_identity != expected_archive_identity
+        || directory_entry_identity_at(&parent.file, pool_name).ok() != Some(Some(pool_identity))
+        || directory_entry_identity_at(&parent.file, archive_name).ok()
+            != Some(Some(expected_archive_identity))
+    {
+        return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: state_path.to_path_buf(),
+            reason: "maintenance pool or archive descriptor identity changed".to_string(),
+        });
+    }
+    if !authority_cleanup_parent_is_current(state_path, parent) {
+        return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: state_path.to_path_buf(),
+            reason: "original parent directory changed during cleanup maintenance".to_string(),
+        });
+    }
+    let name = OsStr::new(slot_name);
+    let source_identity = directory_entry_identity_at(pool, name).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!("could not inspect slot `{slot_name}`: {source}"),
+        )
+    })?;
+    let archive_identity = directory_entry_identity_at(archive, name).map_err(|source| {
+        cleanup_maintenance_archive_error(
+            archive_path,
+            format!("could not inspect archive slot `{slot_name}`: {source}"),
+        )
+    })?;
+    let Some(expected_proof) = expected_proof else {
+        return Err(cleanup_maintenance_error(
+            pool_path,
+            format!("slot `{slot_name}` has no authenticated maintenance proof"),
+        ));
+    };
+    if source_identity.is_some()
+        && (expected_identity != Some(expected_proof.identity)
+            || current_proof != Some(expected_proof))
+    {
+        return Err(cleanup_maintenance_error(
+            pool_path,
+            format!("slot `{slot_name}` source proof changed before maintenance move"),
+        ));
+    }
+    match (source_identity, archive_identity) {
+        (None, Some(observed)) => {
+            let (digest, byte_len) =
+                cleanup_pool_slot_content_proof(archive, name).map_err(|source| {
+                    cleanup_maintenance_archive_error(archive_path, source.to_string())
+                })?;
+            if observed != expected_proof.identity
+                || digest != expected_proof.content_digest
+                || byte_len != expected_proof.byte_len
+            {
+                return Err(cleanup_maintenance_archive_error(
+                    archive_path,
+                    format!("resumed archive slot `{slot_name}` does not match its journal proof"),
+                ));
+            }
+            return Ok(());
+        }
+        (None, None) => {
+            return Err(cleanup_maintenance_error(
+                pool_path,
+                format!("slot `{slot_name}` disappeared from both active and archive namespaces"),
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(cleanup_maintenance_archive_error(
+                archive_path,
+                format!("archive slot `{slot_name}` already exists while active slot remains"),
+            ));
+        }
+        (Some(observed), None) => {
+            if observed != expected_proof.identity {
+                return Err(cleanup_maintenance_error(
+                    pool_path,
+                    format!("slot `{slot_name}` identity changed before no-replace move"),
+                ));
+            }
+        }
+    }
+    #[cfg(test)]
+    pause_before_cleanup_maintenance_move(pool_path, slot_name);
+    if !authority_cleanup_parent_is_current(state_path, parent) {
+        return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: state_path.to_path_buf(),
+            reason: "original parent directory changed after maintenance move preflight"
+                .to_string(),
+        });
+    }
+    if directory_entry_identity_at(pool, name)
+        .map_err(|source| cleanup_maintenance_error(pool_path, source.to_string()))?
+        != Some(expected_proof.identity)
+    {
+        return Err(cleanup_maintenance_error(
+            pool_path,
+            format!("slot `{slot_name}` identity changed at the final move seam"),
+        ));
+    }
+    let (digest, byte_len) = cleanup_pool_slot_content_proof(pool, name)
+        .map_err(|source| cleanup_maintenance_error(pool_path, source.to_string()))?;
+    if digest != expected_proof.content_digest || byte_len != expected_proof.byte_len {
+        return Err(cleanup_maintenance_error(
+            pool_path,
+            format!("slot `{slot_name}` content changed at the final move seam"),
+        ));
+    }
+    atomic_no_replace_move_between(pool, name, archive, name).map_err(|source| {
+        cleanup_maintenance_error(
+            pool_path,
+            format!("slot `{slot_name}` could not move atomically: {source}"),
+        )
+    })?;
+    if archive
+        .metadata()
+        .ok()
+        .and_then(|metadata| governance_directory_identity(&metadata))
+        != Some(expected_archive_identity)
+        || directory_entry_identity_at(&parent.file, archive_name).ok()
+            != Some(Some(expected_archive_identity))
+        || directory_entry_identity_at(&parent.file, pool_name).ok() != Some(Some(pool_identity))
+    {
+        return Err(cleanup_maintenance_archive_error(
+            archive_path,
+            "archive directory identity changed after slot move",
+        ));
+    }
+    let moved_identity = directory_entry_identity_at(archive, name)
+        .map_err(|source| cleanup_maintenance_archive_error(archive_path, source.to_string()))?;
+    let source_after = directory_entry_identity_at(pool, name)
+        .map_err(|source| cleanup_maintenance_error(pool_path, source.to_string()))?;
+    let (moved_digest, moved_byte_len) = cleanup_pool_slot_content_proof(archive, name)
+        .map_err(|source| cleanup_maintenance_archive_error(archive_path, source.to_string()))?;
+    if moved_identity != Some(expected_proof.identity)
+        || source_after.is_some()
+        || moved_digest != expected_proof.content_digest
+        || moved_byte_len != expected_proof.byte_len
+    {
+        return Err(cleanup_maintenance_error(
+            pool_path,
+            format!("slot `{slot_name}` move did not converge"),
+        ));
+    }
+    archive
+        .sync_all()
+        .and_then(|()| pool.sync_all())
+        .and_then(|()| parent.file.sync_all())
+        .map_err(|source| {
+            cleanup_maintenance_error(
+                pool_path,
+                format!("slot `{slot_name}` durability sync failed: {source}"),
+            )
+        })?;
+    Ok(())
+}
+
+fn run_cleanup_pool_maintenance(
+    path: PathBuf,
+    governing_agent_id: AgentId,
+    signing_key: SigningKey,
+    guard: GovernanceCleanupPoolMaintenanceGuard,
+    mode: GovernanceCleanupPoolMaintenanceMode,
+    archive_name: &str,
+) -> Result<GovernanceCleanupPoolMaintenanceReport, GovernancePersistenceError> {
+    let local = LocalGovernorKey::new(signing_key.clone());
+    let expected_signer = local.consensus_agent_id().clone();
+    let authority_lock = guard.transfer()?;
+    let persistence = GovernancePersistence::new_with_authority_lock(
+        path.clone(),
+        expected_signer.clone(),
+        GovernanceLockOpenMode::Existing,
+        Some(authority_lock),
+    )
+    .map_err(map_cleanup_maintenance_contention)?;
+    persistence.verify_lock_path()?;
+    persistence
+        .preflight_cleanup_pool_namespace_with_maintenance(true)
+        .map_err(map_cleanup_maintenance_contention)?;
+    persistence
+        .ensure_cleanup_pool_context(&signing_key, false)
+        .map_err(map_cleanup_maintenance_contention)?;
+    let loaded = persistence.load(&local)?;
+    if loaded.payload.governing_agent_id.as_ref() != Some(&governing_agent_id)
+        || loaded.payload.display_governors.get(&governing_agent_id) != Some(&expected_signer)
+    {
+        return Err(GovernancePersistenceError::InvalidIdentityBinding {
+            reason: "maintenance signer is not the admitted governing agent".to_string(),
+        });
+    }
+    let mut context_guard = persistence
+        .cleanup_pool_context
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let context = context_guard.as_mut().ok_or_else(|| {
+        GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: path.clone(),
+            reason: "maintenance cleanup-pool context was not retained".to_string(),
+        }
+    })?;
+    persistence.verify_cleanup_pool_context_locked(context)?;
+    let parent = AuthorityCleanupParent {
+        file: persistence.parent_directory.try_clone().map_err(|source| {
+            cleanup_maintenance_error(
+                &path,
+                format!("parent descriptor could not clone: {source}"),
+            )
+        })?,
+        identity: persistence.parent_directory_identity,
+    };
+    let pool_path = context.pool_path.clone();
+    let pool = context.pool_file.try_clone().map_err(|source| {
+        cleanup_maintenance_error(
+            &pool_path,
+            format!("pool descriptor could not clone: {source}"),
+        )
+    })?;
+    let lock = context.lock_file.try_clone().map_err(|source| {
+        cleanup_maintenance_error(
+            &pool_path,
+            format!("pool lock descriptor could not clone: {source}"),
+        )
+    })?;
+    let binding = context.binding.clone();
+    drop(context_guard);
+    if !authority_cleanup_parent_is_current(&path, &parent) {
+        return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+            path: path.clone(),
+            reason: "original parent directory changed before cleanup maintenance".to_string(),
+        });
+    }
+
+    let mut journal_handle = open_cleanup_pool_maintenance_journal(&pool, &pool_path, false)?;
+    let mut journal = if let Some(ref mut handle) = journal_handle {
+        read_cleanup_pool_maintenance_journal(
+            handle,
+            &pool,
+            &pool_path,
+            &binding,
+            &expected_signer,
+        )?
+    } else {
+        CleanupPoolMaintenanceJournal {
+            schema_version: CLEANUP_POOL_MAINTENANCE_SCHEMA_VERSION,
+            operation_id: cleanup_pool_transaction_id(),
+            mode,
+            binding: binding.clone(),
+            archive_name: archive_name.to_string(),
+            archive_identity: GovernanceArtifactIdentity {
+                device: 0,
+                inode: 0,
+            },
+            selected_slots: Vec::new(),
+            slot_proofs: BTreeMap::new(),
+            moved_slots: Vec::new(),
+            opaque_slots: Vec::new(),
+            phase: CleanupPoolMaintenanceJournalPhase::Prepared,
+        }
+    };
+    let resume = journal_handle.is_some()
+        && !matches!(journal.phase, CleanupPoolMaintenanceJournalPhase::Completed);
+    if resume {
+        if journal.mode != mode || journal.archive_name != archive_name {
+            return Err(GovernancePersistenceError::MaintenanceBusy {
+                path: pool_path,
+                resource: "a different cleanup maintenance transaction is active".to_string(),
+            });
+        }
+    } else {
+        let (selected, opaque, _identities, slot_proofs) = scan_cleanup_pool_slots_for_maintenance(
+            &parent, &pool, &lock, &binding, &pool_path, mode,
+        )?;
+        let parent_path = path.parent().unwrap_or(&path).to_path_buf();
+        let (archive_path, archive, archive_identity) =
+            create_cleanup_maintenance_archive(&parent, &parent_path, archive_name)?;
+        validate_cleanup_maintenance_archive_entries(&archive, &selected, &archive_path)?;
+        journal = CleanupPoolMaintenanceJournal {
+            schema_version: CLEANUP_POOL_MAINTENANCE_SCHEMA_VERSION,
+            operation_id: cleanup_pool_transaction_id(),
+            mode,
+            binding: binding.clone(),
+            archive_name: archive_name.to_string(),
+            archive_identity,
+            selected_slots: selected,
+            slot_proofs,
+            moved_slots: Vec::new(),
+            opaque_slots: opaque,
+            phase: CleanupPoolMaintenanceJournalPhase::Prepared,
+        };
+        let mut handle = match journal_handle.take() {
+            Some(handle) => handle,
+            None => open_cleanup_pool_maintenance_journal(&pool, &pool_path, true)?.ok_or_else(
+                || {
+                    cleanup_maintenance_error(
+                        &pool_path,
+                        "maintenance journal could not be created",
+                    )
+                },
+            )?,
+        };
+        write_cleanup_pool_maintenance_journal(
+            CleanupPoolMaintenanceJournalWriteContext {
+                handle: &mut handle,
+                pool: &pool,
+                parent: &parent.file,
+                archive: &archive,
+                pool_path: &pool_path,
+                binding: &binding,
+                expected_signer: &expected_signer,
+                signing_key: &signing_key,
+            },
+            &journal,
+        )?;
+        journal_handle = Some(handle);
+        #[cfg(test)]
+        maybe_inject_cleanup_maintenance_crash(&path, CleanupMaintenanceCrashPoint::Prepared);
+    }
+
+    let parent_path = path.parent().unwrap_or(&path).to_path_buf();
+    let (archive_path, archive) = open_cleanup_maintenance_archive(
+        &parent,
+        &parent_path,
+        &journal.archive_name,
+        journal.archive_identity,
+    )?;
+    validate_cleanup_maintenance_archive_entries(&archive, &journal.selected_slots, &archive_path)?;
+    let scan_mode = if resume { journal.mode } else { mode };
+    let (_, _, identities, current_proofs) = scan_cleanup_pool_slots_for_maintenance(
+        &parent, &pool, &lock, &binding, &pool_path, scan_mode,
+    )?;
+    let moved: BTreeSet<String> = journal.moved_slots.iter().cloned().collect();
+    for slot_name in journal.selected_slots.clone() {
+        if moved.contains(&slot_name) {
+            continue;
+        }
+        move_cleanup_maintenance_slot(
+            CleanupPoolMaintenanceMoveContext {
+                pool: &pool,
+                pool_identity: binding.pool_identity,
+                pool_name: OsStr::new(GOVERNANCE_CLEANUP_POOL_DIR_NAME),
+                archive: &archive,
+                archive_identity: journal.archive_identity,
+                archive_name: OsStr::new(&journal.archive_name),
+                parent: &parent,
+                state_path: &path,
+                pool_path: &pool_path,
+                archive_path: &archive_path,
+            },
+            &slot_name,
+            identities.get(&slot_name).copied(),
+            journal.slot_proofs.get(&slot_name),
+            current_proofs.get(&slot_name),
+            journal.archive_identity,
+        )?;
+        journal.moved_slots.push(slot_name.clone());
+        journal.moved_slots.sort();
+        journal.phase = CleanupPoolMaintenanceJournalPhase::InProgress;
+        let handle = journal_handle.as_mut().ok_or_else(|| {
+            cleanup_maintenance_error(&pool_path, "maintenance journal descriptor disappeared")
+        })?;
+        write_cleanup_pool_maintenance_journal(
+            CleanupPoolMaintenanceJournalWriteContext {
+                handle,
+                pool: &pool,
+                parent: &parent.file,
+                archive: &archive,
+                pool_path: &pool_path,
+                binding: &binding,
+                expected_signer: &expected_signer,
+                signing_key: &signing_key,
+            },
+            &journal,
+        )?;
+        #[cfg(test)]
+        maybe_inject_cleanup_maintenance_crash(
+            &path,
+            CleanupMaintenanceCrashPoint::AfterMove(journal.moved_slots.len()),
+        );
+    }
+    #[cfg(test)]
+    maybe_inject_cleanup_maintenance_crash(&path, CleanupMaintenanceCrashPoint::BeforeCompleted);
+    journal.phase = CleanupPoolMaintenanceJournalPhase::Completed;
+    let handle = journal_handle.as_mut().ok_or_else(|| {
+        cleanup_maintenance_error(&pool_path, "maintenance journal descriptor disappeared")
+    })?;
+    write_cleanup_pool_maintenance_journal(
+        CleanupPoolMaintenanceJournalWriteContext {
+            handle,
+            pool: &pool,
+            parent: &parent.file,
+            archive: &archive,
+            pool_path: &pool_path,
+            binding: &binding,
+            expected_signer: &expected_signer,
+            signing_key: &signing_key,
+        },
+        &journal,
+    )?;
+    Ok(GovernanceCleanupPoolMaintenanceReport {
+        mode: journal.mode,
+        archive_path,
+        moved_slots: journal.moved_slots,
+        opaque_slots: journal.opaque_slots,
+    })
 }
 
 fn signed_governance_envelope_digest(
@@ -2306,64 +10436,125 @@ fn signed_governance_envelope_digest(
     Ok(sha256_hex(&statement_bytes))
 }
 
-fn write_atomic_synced(
+fn write_atomic_synced_at(
     path: &Path,
     bytes: &[u8],
+    parent: &AuthorityCleanupParent,
+    no_replace: bool,
 ) -> Result<AtomicWriteOutcome, GovernancePersistenceError> {
-    use std::io::Write;
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| GovernancePersistenceError::Write {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+    let parent_path = path.parent().unwrap_or(path);
+    if !authority_cleanup_parent_is_current(path, parent) {
+        return Err(GovernancePersistenceError::Write {
+            path: parent_path.to_path_buf(),
+            source: std::io::Error::other("atomic write parent directory changed"),
+        });
     }
-    let tmp_path = path.with_extension(format!(
+    let final_name = path
+        .file_name()
+        .ok_or_else(|| GovernancePersistenceError::Write {
+            path: path.to_path_buf(),
+            source: std::io::Error::other("atomic write path has no final component"),
+        })?;
+    let existing_identity =
+        directory_entry_identity_at(&parent.file, final_name).map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    if no_replace && existing_identity.is_some() {
+        return Err(GovernancePersistenceError::Write {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "no-replace publication destination already exists",
+            ),
+        });
+    }
+    // Preserve the historical fixed blocker name as an occupied namespace
+    // signal.  This also prevents a stale or foreign process-id temporary
+    // from being bypassed by the monotonic recovery suffix below.
+    let legacy_temporary_name = OsString::from(format!(
         "{}.tmp-{}",
         path.extension()
             .and_then(|extension| extension.to_str())
             .unwrap_or("state"),
         std::process::id()
     ));
-    match fs::symlink_metadata(&tmp_path) {
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            // A process crash may leave the exact per-process temp name behind.
-            // Removing the directory entry (including a symlink itself, never its
-            // target) lets a valid state-ahead/checkpoint-behind restart recover.
-            fs::remove_file(&tmp_path).map_err(|source| GovernancePersistenceError::Write {
-                path: tmp_path.clone(),
-                source,
-            })?;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(source) => {
-            return Err(GovernancePersistenceError::Write {
-                path: tmp_path.clone(),
-                source,
-            });
-        }
-    }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&tmp_path)
+    if directory_entry_identity_at(&parent.file, &legacy_temporary_name)
         .map_err(|source| GovernancePersistenceError::Write {
-            path: tmp_path.clone(),
+            path: path.to_path_buf(),
             source,
-        })?;
+        })?
+        .is_some()
+    {
+        return Err(GovernancePersistenceError::Write {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "atomic publication temporary namespace is occupied",
+            ),
+        });
+    }
+    let temporary_path = path.with_extension(format!(
+        "{}.tmp-{}",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("state"),
+        AUTHORITY_CLEANUP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let temporary_name = temporary_path
+        .file_name()
+        .ok_or_else(|| GovernancePersistenceError::Write {
+            path: temporary_path.clone(),
+            source: std::io::Error::other("atomic write temporary has no final component"),
+        })?
+        .to_os_string();
+    let mut file = create_regular_file_at(&parent.file, &temporary_name).map_err(|source| {
+        GovernancePersistenceError::Write {
+            path: parent_path.join(&temporary_name),
+            source,
+        }
+    })?;
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|source| GovernancePersistenceError::Write {
-            path: tmp_path.clone(),
+            path: parent_path.join(&temporary_name),
             source,
         })?;
-    fs::rename(&tmp_path, path).map_err(|source| GovernancePersistenceError::Write {
+    let artifact_identity = governance_artifact_identity(&file.metadata().map_err(|source| {
+        GovernancePersistenceError::Write {
+            path: parent_path.join(&temporary_name),
+            source,
+        }
+    })?)
+    .ok_or_else(|| GovernancePersistenceError::Write {
+        path: parent_path.join(&temporary_name),
+        source: std::io::Error::other("atomic write temporary is not a regular file"),
+    })?;
+    if !authority_cleanup_parent_is_current(path, parent) {
+        return Err(GovernancePersistenceError::Write {
+            path: parent_path.to_path_buf(),
+            source: std::io::Error::other("atomic write parent changed before publication"),
+        });
+    }
+    #[cfg(test)]
+    pause_before_reinitialization_no_replace_publication(path);
+    let move_result = if no_replace {
+        atomic_no_replace_move_between(&parent.file, &temporary_name, &parent.file, final_name)
+    } else if let Some(expected_identity) = existing_identity {
+        atomic_replace_if_identity(
+            &parent.file,
+            &temporary_name,
+            &parent.file,
+            final_name,
+            expected_identity,
+            artifact_identity,
+        )
+    } else {
+        atomic_no_replace_move_between(&parent.file, &temporary_name, &parent.file, final_name)
+    };
+    move_result.map_err(|source| GovernancePersistenceError::Write {
         path: path.to_path_buf(),
         source,
     })?;
@@ -2371,22 +10562,22 @@ fn write_atomic_synced(
     if take_injected_atomic_parent_sync_failure(path) {
         return Ok(AtomicWriteOutcome::RenamedDirectorySyncFailed(
             GovernancePersistenceError::Write {
-                path: path.parent().unwrap_or(path).to_path_buf(),
+                path: parent_path.to_path_buf(),
                 source: std::io::Error::other("injected post-rename parent sync failure"),
             },
+            artifact_identity,
         ));
     }
-    if let Some(parent) = path.parent()
-        && let Err(source) = fs::File::open(parent).and_then(|directory| directory.sync_all())
-    {
+    if let Err(source) = parent.file.sync_all() {
         return Ok(AtomicWriteOutcome::RenamedDirectorySyncFailed(
             GovernancePersistenceError::Write {
-                path: parent.to_path_buf(),
+                path: parent_path.to_path_buf(),
                 source,
             },
+            artifact_identity,
         ));
     }
-    Ok(AtomicWriteOutcome::Synced)
+    Ok(AtomicWriteOutcome::Synced(artifact_identity))
 }
 
 #[cfg(test)]
@@ -2417,53 +10608,1137 @@ fn take_injected_atomic_parent_sync_failure(path: &Path) -> bool {
 
 fn remove_governance_stream_files(
     persistence: &GovernancePersistence,
-    state_path: &Path,
-    sequence_path: &Path,
+    artifacts: &[(PathBuf, GovernanceArtifactIdentity)],
 ) -> Result<(), GovernancePersistenceError> {
-    for path in [state_path, sequence_path] {
+    let parent = artifacts
+        .first()
+        .and_then(|(path, _)| bind_authority_cleanup_parent(path))
+        .ok_or_else(|| GovernancePersistenceError::Write {
+            path: artifacts
+                .first()
+                .map_or_else(PathBuf::new, |(path, _)| path.clone()),
+            source: std::io::Error::other("new-stream cleanup parent is not a regular directory"),
+        })?;
+    let mut first_error = None;
+    for (path, expected) in artifacts {
         persistence.verify_lock_path()?;
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(GovernancePersistenceError::Write {
-                    path: path.to_path_buf(),
-                    source,
+        if !authority_cleanup_parent_is_current(path, &parent) {
+            if first_error.is_none() {
+                first_error = Some(GovernancePersistenceError::Write {
+                    path: path.clone(),
+                    source: std::io::Error::other(
+                        "new-stream cleanup parent directory changed before cleanup",
+                    ),
                 });
             }
+            continue;
+        }
+        let observed = match read_governance_artifact_identity(path) {
+            Ok(observed) => observed,
+            Err(source) => {
+                if first_error.is_none() {
+                    first_error = Some(GovernancePersistenceError::Write {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+                continue;
+            }
+        };
+        let Some(observed) = observed else {
+            continue;
+        };
+        if observed != *expected {
+            if first_error.is_none() {
+                first_error = Some(GovernancePersistenceError::Write {
+                    path: path.clone(),
+                    source: std::io::Error::other(format!(
+                        "new-stream artifact identity changed before cleanup: expected {expected:?}, observed {observed:?}"
+                    )),
+                });
+            }
+            continue;
+        }
+        #[cfg(test)]
+        pause_before_governance_stream_cleanup(path);
+        let cleanup_outcome = quarantine_verified_entry_at(
+            path,
+            &parent,
+            || {
+                persistence.verify_lock_path().is_ok()
+                    && authority_cleanup_parent_is_current(path, &parent)
+                    && read_governance_artifact_identity(path).ok().flatten() == Some(*expected)
+            },
+            |quarantine| {
+                persistence.verify_lock_path().is_ok()
+                    && authority_cleanup_parent_is_current(path, &parent)
+                    && read_governance_artifact_identity(quarantine).ok().flatten()
+                        == Some(*expected)
+            },
+        );
+        if !cleanup_outcome.is_semantic_success() && first_error.is_none() {
+            first_error = Some(cleanup_error_for_outcome(path, cleanup_outcome));
         }
         persistence.verify_lock_path()?;
     }
-    if let Some(parent) = state_path.parent() {
-        fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
+    parent
+        .file
+        .sync_all()
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: artifacts.first().map_or_else(PathBuf::new, |(path, _)| {
+                path.parent().unwrap_or(path).to_path_buf()
+            }),
+            source,
+        })?;
+    first_error.map_or(Ok(()), Err)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReinitializationArtifact {
+    original: PathBuf,
+    archive: PathBuf,
+    identity: GovernanceArtifactIdentity,
+    content_digest: String,
+    byte_len: u64,
+    #[serde(default)]
+    archive_identity: Option<GovernanceArtifactIdentity>,
+    #[serde(default)]
+    restored_identity: Option<GovernanceArtifactIdentity>,
+}
+
+const REINITIALIZATION_JOURNAL_SCHEMA_VERSION: u32 = 1;
+const REINITIALIZATION_JOURNAL_KIND: &str = "swarm.governance.reinitialization-journal.v1";
+const REINITIALIZATION_JOURNAL_STREAM: &str = "tom-primary-reinitialization";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum ReinitializationJournalPhase {
+    Prepared,
+    ArchivesCreated,
+    OriginalsRemoved,
+    NewStreamCommitted,
+    Restored,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReinitializationRollbackJournal {
+    schema_version: u32,
+    transaction_id: String,
+    archive_suffix: String,
+    state_path: PathBuf,
+    sequence_path: PathBuf,
+    artifacts: Vec<ReinitializationArtifact>,
+    #[serde(default)]
+    new_stream_artifacts: Vec<ReinitializationNewArtifact>,
+    phase: ReinitializationJournalPhase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReinitializationNewArtifact {
+    path: PathBuf,
+    content_digest: String,
+    byte_len: u64,
+    #[serde(default)]
+    identity: Option<GovernanceArtifactIdentity>,
+}
+
+fn reinitialization_journal_path(path: &Path) -> PathBuf {
+    path.with_extension("reinitialize.journal")
+}
+
+fn reinitialization_archive_path(path: &Path, suffix: &str) -> PathBuf {
+    path.with_extension(format!(
+        "{}.{}",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("state"),
+        suffix
+    ))
+}
+
+fn valid_reinitialization_suffix(suffix: &str) -> bool {
+    !suffix.is_empty()
+        && Path::new(suffix).file_name().and_then(|name| name.to_str()) == Some(suffix)
+        && !suffix.contains('.')
+}
+
+fn write_reinitialization_archive_at(
+    artifact: &ReinitializationArtifact,
+    bytes: &[u8],
+    parent: &AuthorityCleanupParent,
+) -> Result<GovernanceArtifactIdentity, GovernancePersistenceError> {
+    let archive_parent = artifact.archive.parent().unwrap_or(&artifact.archive);
+    if artifact.original.parent() != artifact.archive.parent()
+        || !authority_cleanup_parent_is_current(&artifact.original, parent)
+    {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.archive.clone(),
+            source: std::io::Error::other("archive parent changed or is not the source parent"),
+        });
+    }
+    let archive_name =
+        artifact
+            .archive
+            .file_name()
+            .ok_or_else(|| GovernancePersistenceError::Write {
+                path: artifact.archive.clone(),
+                source: std::io::Error::other("archive path has no final component"),
+            })?;
+    let mut archive = create_regular_file_at(&parent.file, archive_name).map_err(|source| {
+        GovernancePersistenceError::Write {
+            path: archive_parent.join(archive_name),
+            source,
+        }
+    })?;
+    archive
+        .write_all(bytes)
+        .and_then(|()| archive.sync_all())
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: artifact.archive.clone(),
+            source,
+        })?;
+    let metadata = archive
+        .metadata()
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: artifact.archive.clone(),
+            source,
+        })?;
+    let Some(identity) = governance_artifact_identity(&metadata) else {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.archive.clone(),
+            source: std::io::Error::other("archive is not a regular non-symlink file"),
+        });
+    };
+    if metadata.len() != artifact.byte_len || sha256_hex(bytes) != artifact.content_digest {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.archive.clone(),
+            source: std::io::Error::other("archive bytes do not match authenticated snapshot"),
+        });
+    }
+    parent
+        .file
+        .sync_all()
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: archive_parent.to_path_buf(),
+            source,
+        })?;
+    Ok(identity)
+}
+
+fn reinitialization_journal_error(
+    path: &Path,
+    reason: impl Into<String>,
+) -> GovernancePersistenceError {
+    GovernancePersistenceError::ReinitializationFailed {
+        reason: format!(
+            "reinitialization journal `{}`: {}",
+            path.display(),
+            reason.into()
+        ),
+    }
+}
+
+fn validate_reinitialization_journal(
+    path: &Path,
+    journal: &ReinitializationRollbackJournal,
+) -> Result<(), GovernancePersistenceError> {
+    let sequence_path = path.with_extension("sequence.json");
+    let expected_journal_path = reinitialization_journal_path(path);
+    if journal.schema_version != REINITIALIZATION_JOURNAL_SCHEMA_VERSION {
+        return Err(reinitialization_journal_error(
+            &reinitialization_journal_path(path),
+            format!("unsupported schema version {}", journal.schema_version),
+        ));
+    }
+    if journal.transaction_id.is_empty()
+        || !valid_reinitialization_suffix(&journal.archive_suffix)
+        || journal.state_path != path
+        || journal.sequence_path != sequence_path
+    {
+        return Err(reinitialization_journal_error(
+            &reinitialization_journal_path(path),
+            "journal stream identity or transaction id does not match the requested path",
+        ));
+    }
+    if journal.artifacts.iter().any(|artifact| {
+        let expected_archive =
+            reinitialization_archive_path(&artifact.original, &journal.archive_suffix);
+        artifact.original != path && artifact.original != sequence_path
+            || artifact.archive != expected_archive
+            || artifact.archive.parent() != artifact.original.parent()
+            || artifact.archive.file_name() != expected_archive.file_name()
+            || artifact.archive == artifact.original
+            || artifact.content_digest.is_empty()
+            || artifact.archive_identity.is_none()
+                && !matches!(
+                    journal.phase,
+                    ReinitializationJournalPhase::Prepared | ReinitializationJournalPhase::Restored
+                )
+            || matches!(journal.phase, ReinitializationJournalPhase::Restored)
+                && artifact.restored_identity.is_none()
+    }) {
+        return Err(reinitialization_journal_error(
+            &reinitialization_journal_path(path),
+            "journal contains an invalid canonical archive or incomplete snapshot",
+        ));
+    }
+    let mut originals = journal
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.original.clone())
+        .collect::<Vec<_>>();
+    originals.sort();
+    originals.dedup();
+    if originals.len() != journal.artifacts.len() {
+        return Err(reinitialization_journal_error(
+            &reinitialization_journal_path(path),
+            "journal contains duplicate artifacts",
+        ));
+    }
+    if journal.new_stream_artifacts.iter().any(|artifact| {
+        (artifact.path != path && artifact.path != sequence_path)
+            || artifact.content_digest.is_empty()
+    }) {
+        return Err(reinitialization_journal_error(
+            &reinitialization_journal_path(path),
+            "journal contains an unknown new-stream artifact",
+        ));
+    }
+    let mut new_stream_paths = journal
+        .new_stream_artifacts
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .collect::<Vec<_>>();
+    new_stream_paths.sort();
+    new_stream_paths.dedup();
+    if new_stream_paths.len() != journal.new_stream_artifacts.len() {
+        return Err(reinitialization_journal_error(
+            &expected_journal_path,
+            "journal contains duplicate new-stream artifacts",
+        ));
+    }
+    Ok(())
+}
+
+fn read_reinitialization_journal(
+    path: &Path,
+    expected_signer_agent_id: &AgentId,
+) -> Result<
+    Option<(
+        ReinitializationRollbackJournal,
+        GovernanceArtifactIdentity,
+        String,
+    )>,
+    GovernancePersistenceError,
+> {
+    let journal_path = reinitialization_journal_path(path);
+    read_reinitialization_journal_at(&journal_path, path, expected_signer_agent_id)
+}
+
+fn read_reinitialization_journal_at(
+    journal_path: &Path,
+    path: &Path,
+    expected_signer_agent_id: &AgentId,
+) -> Result<
+    Option<(
+        ReinitializationRollbackJournal,
+        GovernanceArtifactIdentity,
+        String,
+    )>,
+    GovernancePersistenceError,
+> {
+    let expected_journal_path = reinitialization_journal_path(path);
+    if journal_path != expected_journal_path {
+        return Err(reinitialization_journal_error(
+            journal_path,
+            "journal path is not the canonical same-parent stream journal",
+        ));
+    }
+    let Some((snapshot, bytes)) = read_governance_artifact_snapshot(journal_path)
+        .map_err(|source| reinitialization_journal_error(journal_path, source.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let identity = snapshot.identity;
+    let envelope: SignedStateEnvelope<ReinitializationRollbackJournal> =
+        serde_json::from_slice(&bytes).map_err(|source| {
+            reinitialization_journal_error(journal_path, format!("journal is invalid: {source}"))
+        })?;
+    let verified = envelope
+        .verify(SignedStateExpectation {
+            state_kind: REINITIALIZATION_JOURNAL_KIND,
+            stream_id: REINITIALIZATION_JOURNAL_STREAM,
+            expected_signer_agent_id: Some(expected_signer_agent_id),
+            accepted_sequence: None,
+        })
+        .map_err(|source| {
+            reinitialization_journal_error(
+                journal_path,
+                format!("journal authentication failed: {source}"),
+            )
+        })?;
+    let journal = verified.payload;
+    validate_reinitialization_journal(path, &journal)?;
+    Ok(Some((journal, identity, sha256_hex(&bytes))))
+}
+
+fn verify_reinitialization_journal_identity_and_digest(
+    path: &Path,
+    expected_identity: GovernanceArtifactIdentity,
+    expected_digest: &str,
+    expected_signer_agent_id: &AgentId,
+) -> Result<(), GovernancePersistenceError> {
+    let Some((_, identity, digest)) =
+        read_reinitialization_journal(path, expected_signer_agent_id)?
+    else {
+        return Err(reinitialization_journal_error(
+            path,
+            "journal disappeared during recovery",
+        ));
+    };
+    if identity != expected_identity || digest != expected_digest {
+        return Err(reinitialization_journal_error(
+            path,
+            "journal identity or authenticated content changed during recovery",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn write_reinitialization_journal(
+    path: &Path,
+    journal: &ReinitializationRollbackJournal,
+    signing_key: &SigningKey,
+) -> Result<(GovernanceArtifactIdentity, String), GovernancePersistenceError> {
+    let parent = bind_authority_cleanup_parent(path).ok_or_else(|| {
+        reinitialization_journal_error(path, "journal parent is not a regular directory")
+    })?;
+    write_reinitialization_journal_at(path, journal, signing_key, &parent)
+}
+
+fn write_reinitialization_journal_at(
+    path: &Path,
+    journal: &ReinitializationRollbackJournal,
+    signing_key: &SigningKey,
+    parent: &AuthorityCleanupParent,
+) -> Result<(GovernanceArtifactIdentity, String), GovernancePersistenceError> {
+    validate_reinitialization_journal(path, journal)?;
+    if !authority_cleanup_parent_is_current(path, parent) {
+        return Err(reinitialization_journal_error(
+            path,
+            "journal parent changed before write",
+        ));
+    }
+    let journal_path = reinitialization_journal_path(path);
+    let signer = AgentId::from_verifying_key(&signing_key.verifying_key());
+    let envelope = SignedStateEnvelope::sign(
+        REINITIALIZATION_JOURNAL_KIND,
+        REINITIALIZATION_JOURNAL_STREAM,
+        signer,
+        0,
+        journal,
+        signing_key,
+    )
+    .map_err(|source| reinitialization_journal_error(&journal_path, source.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+        reinitialization_journal_error(
+            &journal_path,
+            format!("journal serialization failed: {source}"),
+        )
+    })?;
+    let digest = sha256_hex(&bytes);
+    match write_atomic_synced_at(&journal_path, &bytes, parent, false)? {
+        AtomicWriteOutcome::Synced(identity) => Ok((identity, digest)),
+        AtomicWriteOutcome::RenamedDirectorySyncFailed(error, _) => Err(error),
+    }
+}
+
+fn remove_reinitialization_journal_if_owned_at(
+    path: &Path,
+    expected: GovernanceArtifactIdentity,
+    expected_digest: &str,
+    expected_signer_agent_id: &AgentId,
+    parent: &AuthorityCleanupParent,
+) -> Result<(), GovernancePersistenceError> {
+    let journal_path = reinitialization_journal_path(path);
+    let matches = || {
+        read_reinitialization_journal_at(&journal_path, path, expected_signer_agent_id)
+            .ok()
+            .flatten()
+            .is_some_and(|(_, identity, digest)| identity == expected && digest == expected_digest)
+    };
+    let cleanup_outcome =
+        quarantine_verified_entry_at(&journal_path, parent, matches, |quarantine| {
+            read_governance_artifact_snapshot(quarantine)
+                .ok()
+                .flatten()
+                .is_some_and(|(snapshot, bytes)| {
+                    snapshot.identity == expected && sha256_hex(&bytes) == expected_digest
+                })
+        });
+    if !cleanup_outcome.is_semantic_success() {
+        return Err(cleanup_error_for_outcome(&journal_path, cleanup_outcome));
+    }
+    Ok(())
+}
+
+fn reinitialization_artifact_matches_at(
+    parent: &AuthorityCleanupParent,
+    path: &Path,
+    artifact: &ReinitializationArtifact,
+) -> bool {
+    path.file_name()
+        .and_then(|name| read_governance_artifact_snapshot_at(&parent.file, name).ok())
+        .flatten()
+        .is_some_and(|(snapshot, _)| {
+            snapshot.identity == artifact.identity
+                && snapshot.content_digest == artifact.content_digest
+                && snapshot.byte_len == artifact.byte_len
+        })
+}
+
+fn restore_reinitialization_artifact(
+    persistence: &GovernancePersistence,
+    artifact: &mut ReinitializationArtifact,
+) -> Result<(), GovernancePersistenceError> {
+    persistence.verify_lock_path()?;
+    let parent = held_persistence_parent(persistence)?;
+    let original_name =
+        artifact
+            .original
+            .file_name()
+            .ok_or_else(|| GovernancePersistenceError::Write {
+                path: artifact.original.clone(),
+                source: std::io::Error::other("rollback original has no final component"),
+            })?;
+    let archive_name =
+        artifact
+            .archive
+            .file_name()
+            .ok_or_else(|| GovernancePersistenceError::Write {
+                path: artifact.archive.clone(),
+                source: std::io::Error::other("rollback archive has no final component"),
+            })?;
+    if artifact.original.parent() != artifact.archive.parent()
+        || !authority_cleanup_parent_is_current(&artifact.original, &parent)
+    {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.original.clone(),
+            source: std::io::Error::other(
+                "rollback artifacts are not in the held current parent directory",
+            ),
+        });
+    }
+    let Some((archive_snapshot, bytes)) =
+        read_governance_artifact_snapshot_at(&parent.file, archive_name).map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: artifact.archive.clone(),
+                source,
+            }
+        })?
+    else {
+        let Some((original_snapshot, _)) =
+            read_governance_artifact_snapshot_at(&parent.file, original_name).map_err(
+                |source| GovernancePersistenceError::Write {
+                    path: artifact.original.clone(),
+                    source,
+                },
+            )?
+        else {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.archive.clone(),
+                source: std::io::Error::other(
+                    "rollback archive is missing before its original was proven restored",
+                ),
+            });
+        };
+        if original_snapshot.content_digest != artifact.content_digest
+            || original_snapshot.byte_len != artifact.byte_len
+            || (artifact.restored_identity != Some(original_snapshot.identity)
+                && artifact.identity != original_snapshot.identity)
+        {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.original.clone(),
+                source: std::io::Error::other(
+                    "rollback archive is missing and original bytes do not match",
+                ),
+            });
+        }
+        artifact.restored_identity = Some(original_snapshot.identity);
+        return Ok(());
+    };
+    if artifact
+        .archive_identity
+        .is_some_and(|expected| expected != archive_snapshot.identity)
+        || archive_snapshot.content_digest != artifact.content_digest
+        || archive_snapshot.byte_len != artifact.byte_len
+    {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.archive.clone(),
+            source: std::io::Error::other(
+                "archive identity or authenticated bytes changed during rollback",
+            ),
+        });
+    }
+    if let Some((original_snapshot, _)) =
+        read_governance_artifact_snapshot_at(&parent.file, original_name).map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: artifact.original.clone(),
+                source,
+            }
+        })?
+    {
+        if original_snapshot.content_digest != artifact.content_digest
+            || original_snapshot.byte_len != artifact.byte_len
+            || (artifact.restored_identity != Some(original_snapshot.identity)
+                && artifact.identity != original_snapshot.identity)
+        {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.original.clone(),
+                source: std::io::Error::other("foreign original appeared during rollback"),
+            });
+        }
+        artifact.restored_identity = Some(original_snapshot.identity);
+        return Ok(());
+    }
+    let restore_tmp = artifact.original.with_extension(format!(
+        "restore.tmp-{}",
+        AUTHORITY_CLEANUP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let restore_tmp_name =
+        restore_tmp
+            .file_name()
+            .ok_or_else(|| GovernancePersistenceError::Write {
+                path: restore_tmp.clone(),
+                source: std::io::Error::other("restore temporary has no final component"),
+            })?;
+    if !authority_cleanup_parent_is_current(&artifact.original, &parent) {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.original.clone(),
+            source: std::io::Error::other("rollback parent changed before temporary creation"),
+        });
+    }
+    let mut restored =
+        create_regular_file_at(&parent.file, restore_tmp_name).map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: restore_tmp.clone(),
+                source,
+            }
+        })?;
+    restored
+        .write_all(&bytes)
+        .and_then(|()| restored.sync_all())
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: restore_tmp.clone(),
+            source,
+        })?;
+    let restore_tmp_identity =
+        governance_artifact_identity(&restored.metadata().map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: restore_tmp.clone(),
+                source,
+            }
+        })?)
+        .ok_or_else(|| GovernancePersistenceError::Write {
+            path: restore_tmp.clone(),
+            source: std::io::Error::other(
+                "restore temporary disappeared before its identity was journaled",
+            ),
+        })?;
+    if !authority_cleanup_parent_is_current(&artifact.original, &parent)
+        || directory_entry_identity_at(&parent.file, original_name)
             .map_err(|source| GovernancePersistenceError::Write {
-                path: parent.to_path_buf(),
+                path: artifact.original.clone(),
+                source,
+            })?
+            .is_some()
+    {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.original.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "rollback original appeared before descriptor-bound restore",
+            ),
+        });
+    }
+    linkat_relative(&parent.file, restore_tmp_name, &parent.file, original_name).map_err(
+        |source| GovernancePersistenceError::Write {
+            path: artifact.original.clone(),
+            source,
+        },
+    )?;
+    #[cfg(test)]
+    pause_after_reinitialization_restore_link(&artifact.original);
+    let Some((restored_snapshot, _)) =
+        read_governance_artifact_snapshot_at(&parent.file, original_name).map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: artifact.original.clone(),
+                source,
+            }
+        })?
+    else {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.original.clone(),
+            source: std::io::Error::other("restored original disappeared"),
+        });
+    };
+    if restored_snapshot.identity != restore_tmp_identity
+        || restored_snapshot.content_digest != artifact.content_digest
+        || restored_snapshot.byte_len != artifact.byte_len
+    {
+        return Err(GovernancePersistenceError::Write {
+            path: artifact.original.clone(),
+            source: std::io::Error::other(
+                "restored original identity or bytes do not match the authenticated temporary",
+            ),
+        });
+    }
+    artifact.restored_identity = Some(restored_snapshot.identity);
+    let cleanup_outcome = quarantine_verified_entry_at(
+        &restore_tmp,
+        &parent,
+        || {
+            read_governance_artifact_snapshot_at(&parent.file, restore_tmp_name)
+                .ok()
+                .flatten()
+                .is_some_and(|(snapshot, _)| {
+                    snapshot.identity == restore_tmp_identity
+                        && snapshot.content_digest == artifact.content_digest
+                        && snapshot.byte_len == artifact.byte_len
+                })
+        },
+        |quarantine| {
+            quarantine
+                .file_name()
+                .and_then(|name| read_governance_artifact_snapshot_at(&parent.file, name).ok())
+                .flatten()
+                .is_some_and(|(snapshot, _)| {
+                    snapshot.identity == restore_tmp_identity
+                        && snapshot.content_digest == artifact.content_digest
+                        && snapshot.byte_len == artifact.byte_len
+                })
+        },
+    );
+    if !cleanup_outcome.is_semantic_success() {
+        return Err(cleanup_error_for_outcome(&restore_tmp, cleanup_outcome));
+    }
+    parent
+        .file
+        .sync_all()
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: artifact
+                .original
+                .parent()
+                .unwrap_or(&artifact.original)
+                .to_path_buf(),
+            source,
+        })?;
+    Ok(())
+}
+
+fn restore_reinitialization_artifacts(
+    persistence: &GovernancePersistence,
+    artifacts: &mut [ReinitializationArtifact],
+) -> Result<(), GovernancePersistenceError> {
+    let parent = held_persistence_parent(persistence)?;
+    // First compensate every source entry without deleting any archive. This
+    // makes state+sequence restoration one all-or-safe phase: a later peer
+    // failure cannot leave an earlier archive discarded before its peer has
+    // been proven restorable. Continue after an individual peer failure so
+    // earlier mutations are still compensated before the error is returned.
+    let mut first_error = None;
+    for artifact in artifacts.iter_mut().rev() {
+        if let Err(error) = restore_reinitialization_artifact(persistence, artifact)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    for artifact in artifacts.iter() {
+        let Some(original_name) = artifact.original.file_name() else {
+            if first_error.is_none() {
+                first_error = Some(GovernancePersistenceError::Write {
+                    path: artifact.original.clone(),
+                    source: std::io::Error::other("rollback original has no final component"),
+                });
+            }
+            continue;
+        };
+        let observed = if authority_cleanup_parent_is_current(&artifact.original, &parent) {
+            read_governance_artifact_snapshot_at(&parent.file, original_name)
+        } else {
+            Err(std::io::Error::other(
+                "rollback original parent directory changed during compensation",
+            ))
+        };
+        match observed {
+            Ok(Some((snapshot, _)))
+                if snapshot.content_digest == artifact.content_digest
+                    && snapshot.byte_len == artifact.byte_len
+                    && (artifact.restored_identity == Some(snapshot.identity)
+                        || artifact.identity == snapshot.identity) => {}
+            Ok(observed) => {
+                if first_error.is_none() {
+                    first_error = Some(GovernancePersistenceError::Write {
+                        path: artifact.original.clone(),
+                        source: std::io::Error::other(format!(
+                            "rollback did not prove original state/sequence bytes: observed {observed:?}"
+                        )),
+                    });
+                }
+            }
+            Err(source) => {
+                if first_error.is_none() {
+                    first_error = Some(GovernancePersistenceError::Write {
+                        path: artifact.original.clone(),
+                        source,
+                    });
+                }
+            }
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn cleanup_reinitialization_archives(
+    persistence: &GovernancePersistence,
+    artifacts: &[ReinitializationArtifact],
+    committed_new_stream_artifacts: Option<&[ReinitializationNewArtifact]>,
+) -> Result<(), GovernancePersistenceError> {
+    persistence.verify_lock_path()?;
+    let parent = held_persistence_parent(persistence)?;
+    if let Some(new_stream_artifacts) = committed_new_stream_artifacts {
+        for artifact in new_stream_artifacts {
+            let Some(expected_identity) = artifact.identity else {
+                return Err(GovernancePersistenceError::Write {
+                    path: artifact.path.clone(),
+                    source: std::io::Error::other(
+                        "new-stream cleanup lacks a journaled inode identity",
+                    ),
+                });
+            };
+            let name =
+                artifact
+                    .path
+                    .file_name()
+                    .ok_or_else(|| GovernancePersistenceError::Write {
+                        path: artifact.path.clone(),
+                        source: std::io::Error::other("new-stream artifact has no final component"),
+                    })?;
+            let Some((snapshot, _)) = read_governance_artifact_snapshot_at(&parent.file, name)
+                .map_err(|source| GovernancePersistenceError::Write {
+                    path: artifact.path.clone(),
+                    source,
+                })?
+            else {
+                return Err(GovernancePersistenceError::Write {
+                    path: artifact.path.clone(),
+                    source: std::io::Error::other(
+                        "new-stream artifact disappeared before archive cleanup",
+                    ),
+                });
+            };
+            if snapshot.identity != expected_identity
+                || snapshot.content_digest != artifact.content_digest
+                || snapshot.byte_len != artifact.byte_len
+            {
+                return Err(GovernancePersistenceError::Write {
+                    path: artifact.path.clone(),
+                    source: std::io::Error::other(
+                        "new-stream identity or authenticated bytes changed before archive cleanup",
+                    ),
+                });
+            }
+        }
+    } else {
+        for artifact in artifacts {
+            let name =
+                artifact
+                    .original
+                    .file_name()
+                    .ok_or_else(|| GovernancePersistenceError::Write {
+                        path: artifact.original.clone(),
+                        source: std::io::Error::other("restored original has no final component"),
+                    })?;
+            let Some((snapshot, _)) = read_governance_artifact_snapshot_at(&parent.file, name)
+                .map_err(|source| GovernancePersistenceError::Write {
+                    path: artifact.original.clone(),
+                    source,
+                })?
+            else {
+                return Err(GovernancePersistenceError::Write {
+                    path: artifact.original.clone(),
+                    source: std::io::Error::other(
+                        "restored original disappeared before archive cleanup",
+                    ),
+                });
+            };
+            let identity_matches = artifact
+                .restored_identity
+                .or(Some(artifact.identity))
+                .is_some_and(|expected| expected == snapshot.identity);
+            if !identity_matches
+                || snapshot.content_digest != artifact.content_digest
+                || snapshot.byte_len != artifact.byte_len
+            {
+                return Err(GovernancePersistenceError::Write {
+                    path: artifact.original.clone(),
+                    source: std::io::Error::other(
+                        "restored original identity or authenticated bytes changed before archive cleanup",
+                    ),
+                });
+            }
+        }
+    }
+    // Archive deletion is intentionally a separate phase after every peer has
+    // committed or been restored. A failure here leaves the durable journal
+    // available for an idempotent retry rather than losing rollback material.
+    for artifact in artifacts {
+        let archive_name =
+            artifact
+                .archive
+                .file_name()
+                .ok_or_else(|| GovernancePersistenceError::Write {
+                    path: artifact.archive.clone(),
+                    source: std::io::Error::other("archive has no final component"),
+                })?;
+        let observed =
+            read_governance_artifact_snapshot_at(&parent.file, archive_name).map_err(|source| {
+                GovernancePersistenceError::Write {
+                    path: artifact.archive.clone(),
+                    source,
+                }
+            })?;
+        let Some((observed, _)) = observed else {
+            continue;
+        };
+        if artifact
+            .archive_identity
+            .is_some_and(|expected| expected != observed.identity)
+            || observed.content_digest != artifact.content_digest
+            || observed.byte_len != artifact.byte_len
+        {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.archive.clone(),
+                source: std::io::Error::other(
+                    "archive identity or authenticated bytes changed before deferred cleanup",
+                ),
+            });
+        }
+        let cleanup_outcome = quarantine_verified_entry_at(
+            &artifact.archive,
+            &parent,
+            || {
+                persistence.verify_lock_path().is_ok()
+                    && authority_cleanup_parent_is_current(&artifact.archive, &parent)
+                    && read_governance_artifact_snapshot_at(&parent.file, archive_name)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|(snapshot, _)| {
+                            artifact
+                                .archive_identity
+                                .is_none_or(|expected| expected == snapshot.identity)
+                                && snapshot.content_digest == artifact.content_digest
+                                && snapshot.byte_len == artifact.byte_len
+                        })
+            },
+            |quarantine| {
+                persistence.verify_lock_path().is_ok()
+                    && authority_cleanup_parent_is_current(&artifact.archive, &parent)
+                    && quarantine
+                        .file_name()
+                        .and_then(|name| {
+                            read_governance_artifact_snapshot_at(&parent.file, name).ok()
+                        })
+                        .flatten()
+                        .is_some_and(|(snapshot, _)| {
+                            artifact
+                                .archive_identity
+                                .is_none_or(|expected| expected == snapshot.identity)
+                                && snapshot.content_digest == artifact.content_digest
+                                && snapshot.byte_len == artifact.byte_len
+                        })
+            },
+        );
+        if !cleanup_outcome.is_semantic_success() {
+            return Err(cleanup_error_for_outcome(
+                &artifact.archive,
+                cleanup_outcome,
+            ));
+        }
+    }
+    if !artifacts.is_empty() {
+        parent
+            .file
+            .sync_all()
+            .map_err(|source| GovernancePersistenceError::Write {
+                path: persistence
+                    .path
+                    .parent()
+                    .unwrap_or(&persistence.path)
+                    .to_path_buf(),
                 source,
             })?;
     }
     Ok(())
 }
 
-fn restore_governance_archives(
+fn remove_reinitialization_new_stream_artifacts(
     persistence: &GovernancePersistence,
-    archived: &[(PathBuf, PathBuf)],
+    artifacts: &[ReinitializationNewArtifact],
 ) -> Result<(), GovernancePersistenceError> {
-    for (original, archive) in archived.iter().rev() {
-        if !archive.exists() {
-            continue;
+    let parent = held_persistence_parent(persistence)?;
+    let mut identities = Vec::new();
+    for artifact in artifacts {
+        let name = artifact
+            .path
+            .file_name()
+            .ok_or_else(|| GovernancePersistenceError::Write {
+                path: artifact.path.clone(),
+                source: std::io::Error::other("new-stream artifact has no final component"),
+            })?;
+        let observed = if authority_cleanup_parent_is_current(&artifact.path, &parent) {
+            read_governance_artifact_snapshot_at(&parent.file, name)
+        } else {
+            Err(std::io::Error::other(
+                "new-stream artifact parent directory changed during cleanup",
+            ))
         }
-        persistence.verify_lock_path()?;
-        fs::rename(archive, original).map_err(|source| GovernancePersistenceError::Write {
-            path: original.clone(),
+        .map_err(|source| GovernancePersistenceError::Write {
+            path: artifact.path.clone(),
             source,
         })?;
-        persistence.verify_lock_path()?;
+        let Some((snapshot, _)) = observed else {
+            continue;
+        };
+        let Some(expected_identity) = artifact.identity else {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.path.clone(),
+                source: std::io::Error::other(
+                    "new-stream cleanup cannot remove an intent-only artifact without its journaled inode identity",
+                ),
+            });
+        };
+        if snapshot.content_digest != artifact.content_digest
+            || snapshot.byte_len != artifact.byte_len
+            || expected_identity != snapshot.identity
+        {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.path.clone(),
+                source: std::io::Error::other(
+                    "new-stream artifact identity or authenticated bytes changed",
+                ),
+            });
+        }
+        identities.push((artifact.path.clone(), snapshot.identity));
     }
-    if let Some((original, _)) = archived.first() {
-        sync_parent_directory(original)?;
+    remove_governance_stream_files(persistence, &identities)
+}
+
+fn rollback_reinitialization_transaction(
+    persistence: &GovernancePersistence,
+    journal: &mut ReinitializationRollbackJournal,
+    signing_key: &SigningKey,
+) -> Result<(), GovernancePersistenceError> {
+    let parent = held_persistence_parent(persistence)?;
+    let new_stream_cleanup_error = if journal.new_stream_artifacts.is_empty() {
+        None
+    } else {
+        remove_reinitialization_new_stream_artifacts(persistence, &journal.new_stream_artifacts)
+            .err()
+    };
+    let restore_error =
+        restore_reinitialization_artifacts(persistence, &mut journal.artifacts).err();
+    if let Some(error) = restore_error.or(new_stream_cleanup_error) {
+        // Persist any successfully restored peer identities before returning
+        // the later-peer failure.  The authenticated journal then prevents a
+        // restart from treating a same-content foreign inode as the restored
+        // stream merely because its bytes happen to match the archive.
+        let journal_error =
+            write_reinitialization_journal_at(&journal.state_path, journal, signing_key, &parent)
+                .err();
+        return Err(journal_error.unwrap_or(error));
     }
-    Ok(())
+    journal.phase = ReinitializationJournalPhase::Restored;
+    journal.new_stream_artifacts.clear();
+    let (journal_identity, journal_digest) =
+        write_reinitialization_journal_at(&journal.state_path, journal, signing_key, &parent)?;
+    cleanup_reinitialization_archives(persistence, &journal.artifacts, None)?;
+    remove_reinitialization_journal_if_owned_at(
+        &journal.state_path,
+        journal_identity,
+        &journal_digest,
+        &AgentId::from_verifying_key(&signing_key.verifying_key()),
+        &parent,
+    )
+}
+
+fn finalize_reinitialization_transaction(
+    persistence: &GovernancePersistence,
+    journal: &ReinitializationRollbackJournal,
+    signing_key: &SigningKey,
+) -> Result<(), GovernancePersistenceError> {
+    let parent = held_persistence_parent(persistence)?;
+    if journal.new_stream_artifacts.is_empty() {
+        return Err(reinitialization_journal_error(
+            &journal.state_path,
+            "committed journal has no new-stream identities",
+        ));
+    }
+    for artifact in &journal.new_stream_artifacts {
+        let Some(expected_identity) = artifact.identity else {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.path.clone(),
+                source: std::io::Error::other(
+                    "committed reinitialization stream lacks a journaled inode identity",
+                ),
+            });
+        };
+        let snapshot = read_governance_artifact_snapshot(&artifact.path).map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: artifact.path.clone(),
+                source,
+            }
+        })?;
+        if snapshot.as_ref().is_none_or(|(snapshot, _)| {
+            snapshot.identity != expected_identity
+                || snapshot.content_digest != artifact.content_digest
+                || snapshot.byte_len != artifact.byte_len
+        }) {
+            return Err(GovernancePersistenceError::Write {
+                path: artifact.path.clone(),
+                source: std::io::Error::other(
+                    "committed reinitialization stream identity or bytes changed",
+                ),
+            });
+        }
+    }
+    cleanup_reinitialization_archives(
+        persistence,
+        &journal.artifacts,
+        Some(&journal.new_stream_artifacts),
+    )?;
+    let journal_path = reinitialization_journal_path(&journal.state_path);
+    let Some((_, journal_identity, journal_digest)) = read_reinitialization_journal(
+        &journal.state_path,
+        &AgentId::from_verifying_key(&signing_key.verifying_key()),
+    )?
+    else {
+        return Err(reinitialization_journal_error(
+            &journal_path,
+            "journal disappeared during committed cleanup",
+        ));
+    };
+    remove_reinitialization_journal_if_owned_at(
+        &journal.state_path,
+        journal_identity,
+        &journal_digest,
+        &AgentId::from_verifying_key(&signing_key.verifying_key()),
+        &parent,
+    )
 }
 
 fn sync_parent_directory(path: &Path) -> Result<(), GovernancePersistenceError> {
@@ -2476,6 +11751,24 @@ fn sync_parent_directory(path: &Path) -> Result<(), GovernancePersistenceError> 
             path: parent.to_path_buf(),
             source,
         })
+}
+
+fn held_persistence_parent(
+    persistence: &GovernancePersistence,
+) -> Result<AuthorityCleanupParent, GovernancePersistenceError> {
+    Ok(AuthorityCleanupParent {
+        file: persistence.parent_directory.try_clone().map_err(|source| {
+            GovernancePersistenceError::Write {
+                path: persistence
+                    .path
+                    .parent()
+                    .unwrap_or(&persistence.path)
+                    .to_path_buf(),
+                source,
+            }
+        })?,
+        identity: persistence.parent_directory_identity,
+    })
 }
 
 #[derive(Debug)]
@@ -2536,6 +11829,9 @@ pub enum GovernanceAuthorityError {
     #[error("persisted governance authority identity binding is invalid")]
     InvalidIdentityBinding,
 
+    #[error("persisted governance authority has restrictive pending health: {reason}")]
+    PendingHealthObservation { reason: String },
+
     #[error(transparent)]
     Persistence(#[from] GovernancePersistenceError),
 }
@@ -2568,10 +11864,22 @@ impl GovernancePolicy {
             .as_ref()
             .ok_or(GovernanceAuthorityError::Unpersisted)?;
         persistence.verify_lock_path()?;
-        let state = self
+        persistence.verify_cleanup_pool_context()?;
+        let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Err(reason) = self.ensure_checkpoint_repaired_locked(&mut state) {
+            return Err(GovernanceAuthorityError::Persistence(
+                GovernancePersistenceError::Write {
+                    path: persistence.path.clone(),
+                    source: std::io::Error::other(reason),
+                },
+            ));
+        }
+        if let Some(reason) = Self::pending_health_observation_error(&state) {
+            return Err(GovernanceAuthorityError::PendingHealthObservation { reason });
+        }
         let local = state
             .local_governor
             .as_ref()
@@ -2617,12 +11925,160 @@ impl GovernancePolicy {
         Self::with_locked_persistence(config, persistence, governing_agent_id, local_governor)
     }
 
+    /// Acquire the external quiescence guard required before cleanup-pool
+    /// maintenance.  The guard is intentionally separate from a live policy;
+    /// callers must acquire it before opening the state lock.
+    pub fn acquire_cleanup_pool_maintenance_guard(
+        path: impl AsRef<Path>,
+    ) -> Result<GovernanceCleanupPoolMaintenanceGuard, GovernancePersistenceError> {
+        acquire_governance_cleanup_pool_maintenance_guard(path)
+    }
+
+    /// Acquire the opaque pre-construction retention capability.  The caller
+    /// must hold its external path-selection lock and drop this guard before
+    /// invoking `initialize_persistence` or another policy constructor.
+    pub fn acquire_cleanup_pool_retention_guard(
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signer_agent_id: AgentId,
+        signing_key: SigningKey,
+    ) -> Result<GovernanceCleanupPoolRetentionGuard, GovernancePersistenceError> {
+        acquire_governance_cleanup_pool_retention_guard(
+            path,
+            governing_agent_id,
+            signer_agent_id,
+            signing_key,
+        )
+    }
+
+    /// Drain terminal cleanup slots into a caller-selected same-parent archive
+    /// directory.  The caller must supply the guard acquired before the state
+    /// lock; all maintenance locks are nonblocking and fail closed.
+    pub fn drain_cleanup_pool(
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+        guard: GovernanceCleanupPoolMaintenanceGuard,
+        archive_name: impl AsRef<str>,
+    ) -> Result<GovernanceCleanupPoolMaintenanceReport, GovernancePersistenceError> {
+        run_cleanup_pool_maintenance(
+            path.as_ref().to_path_buf(),
+            governing_agent_id,
+            signing_key,
+            guard,
+            GovernanceCleanupPoolMaintenanceMode::Drain,
+            archive_name.as_ref(),
+        )
+    }
+
+    /// Reset the fixed cleanup pool.  Every occupied slot is moved opaquely,
+    /// including malformed/uncertain contents; no slot bytes are interpreted
+    /// as authority during reset.
+    pub fn reset_cleanup_pool(
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+        guard: GovernanceCleanupPoolMaintenanceGuard,
+        archive_name: impl AsRef<str>,
+    ) -> Result<GovernanceCleanupPoolMaintenanceReport, GovernancePersistenceError> {
+        run_cleanup_pool_maintenance(
+            path.as_ref().to_path_buf(),
+            governing_agent_id,
+            signing_key,
+            guard,
+            GovernanceCleanupPoolMaintenanceMode::Reset,
+            archive_name.as_ref(),
+        )
+    }
+
+    /// Retain one caller-verified artifact in the authenticated fixed pool
+    /// during ordinary operation.  The artifact must live beside this policy's
+    /// state stream, and the expectation must contain the exact no-follow
+    /// device/inode and content digest/length observed by the caller.  The
+    /// already-held policy namespace is used; this method never creates or
+    /// reopens a cleanup pool by pathname.
+    pub fn retain_cleanup_artifact(
+        &self,
+        path: impl AsRef<Path>,
+        expected: GovernanceCleanupArtifactExpectation,
+    ) -> Result<GovernanceCleanupPoolRetentionOutcome, GovernancePersistenceError> {
+        let path = path.as_ref().to_path_buf();
+        let persistence = self.persistence.as_ref().ok_or_else(|| {
+            GovernancePersistenceError::CleanupPoolNamespaceChanged {
+                path: path.clone(),
+                reason: "normal cleanup retention requires an authenticated persisted policy"
+                    .to_string(),
+            }
+        })?;
+        persistence.verify_lock_path()?;
+        persistence.preflight_cleanup_pool_namespace()?;
+        persistence.verify_cleanup_pool_context()?;
+        let expected_parent = persistence
+            .path
+            .parent()
+            .unwrap_or(&persistence.path)
+            .to_path_buf();
+        if path.parent().map(Path::to_path_buf).as_ref() != Some(&expected_parent) {
+            return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+                path,
+                reason:
+                    "normal cleanup retention target is outside the authenticated stream parent"
+                        .to_string(),
+            });
+        }
+        let parent = AuthorityCleanupParent {
+            file: persistence.parent_directory.try_clone().map_err(|source| {
+                cleanup_pool_error(
+                    &path,
+                    format!("could not clone authenticated cleanup parent: {source}"),
+                )
+            })?,
+            identity: persistence.parent_directory_identity,
+        };
+        let context_guard = persistence
+            .cleanup_pool_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let context = context_guard.as_ref().ok_or_else(|| {
+            GovernancePersistenceError::CleanupPoolNamespaceChanged {
+                path: path.clone(),
+                reason: "authenticated cleanup-pool context is absent".to_string(),
+            }
+        })?;
+        if !context.signed {
+            return Err(GovernancePersistenceError::CleanupPoolNamespaceChanged {
+                path,
+                reason: "normal cleanup retention requires a signed cleanup-pool binding"
+                    .to_string(),
+            });
+        }
+        retain_cleanup_artifact_in_bound_pool(&path, &expected, &parent, context)
+    }
+
     fn with_locked_persistence(
         config: GovernancePolicyConfig,
         persistence: GovernancePersistence,
         governing_agent_id: AgentId,
         local_governor: LocalGovernorKey,
     ) -> Result<Self, GovernancePersistenceError> {
+        persistence.verify_lock_path()?;
+        // Keep the historical decode/error ordering for an ordinary stream,
+        // but allow a transaction-recovery restart to authenticate the fixed
+        // cleanup namespace before it can mutate rollback material.  A crash
+        // after source quarantine can leave the canonical state absent; a
+        // crash during anchor publication can leave it temporarily
+        // undecodable.  The authenticated journal candidate is the only
+        // reason to proceed past either result.
+        let journal_path = reinitialization_journal_path(&persistence.path);
+        let journal_present = fs::symlink_metadata(&journal_path).is_ok();
+        if let Err(error) = persistence.load_internal(&local_governor, false)
+            && !journal_present
+        {
+            return Err(error);
+        }
+        persistence.preflight_cleanup_pool_namespace()?;
+        persistence.recover_reinitialization_transaction(&local_governor.signing_key)?;
+        persistence.ensure_cleanup_pool_context(&local_governor.signing_key, false)?;
         let loaded = persistence.load(&local_governor)?;
         let persisted = loaded.payload;
         let consensus_agent_id = local_governor.consensus_agent_id().clone();
@@ -2654,6 +12110,8 @@ impl GovernancePolicy {
             pending_human_authorizations: persisted.pending_human_authorizations,
             partition_activity: persisted.partition_activity,
             reconciliation_reports: persisted.reconciliation_reports,
+            pending_health_observation: persisted.pending_health_observation.clone(),
+            durable_pending_health_observation: persisted.pending_health_observation,
             persistence_sequence: Some(loaded.sequence),
             persistence_digest: Some(loaded.digest),
             ..Default::default()
@@ -2688,6 +12146,39 @@ impl GovernancePolicy {
             local_governor.consensus_agent_id().clone(),
             GovernanceLockOpenMode::Initialize,
         )?;
+        Self::initialize_with_persistence(config, persistence, governing_agent_id, local_governor)
+    }
+
+    /// Initialize through a selector-held, verified current/legacy authority
+    /// pair. The guard is consumed by construction; governance never
+    /// reacquires the sidecar by pathname, so the selector can prove that this
+    /// invocation owns the exact pair it preflighted.
+    pub fn initialize_persistence_with_authority_pair_guard(
+        config: GovernancePolicyConfig,
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+        guard: GovernanceAuthorityPairGuard,
+    ) -> Result<Self, GovernancePersistenceError> {
+        let path = path.as_ref().to_path_buf();
+        let local_governor = LocalGovernorKey::new(signing_key);
+        let persistence = GovernancePersistence::new_with_authority_pair_guard(
+            path,
+            local_governor.consensus_agent_id().clone(),
+            GovernanceLockOpenMode::Initialize,
+            guard,
+        )?;
+        Self::initialize_with_persistence(config, persistence, governing_agent_id, local_governor)
+    }
+
+    fn initialize_with_persistence(
+        config: GovernancePolicyConfig,
+        persistence: GovernancePersistence,
+        governing_agent_id: AgentId,
+        local_governor: LocalGovernorKey,
+    ) -> Result<Self, GovernancePersistenceError> {
+        persistence.recover_reinitialization_transaction(&local_governor.signing_key)?;
+        persistence.ensure_cleanup_pool_context(&local_governor.signing_key, true)?;
         let mut display_governors = BTreeMap::new();
         display_governors.insert(
             governing_agent_id.clone(),
@@ -2727,16 +12218,80 @@ impl GovernancePolicy {
     ) -> Result<GovernanceLockMigrationReport, GovernancePersistenceError> {
         let path = path.as_ref().to_path_buf();
         let expected_signer_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
-        let before_lock = verify_governance_migration_anchors(
+        let authority_lock_path = governance_authority_lock_path(&path);
+        let (authority_lock_file, authority_lock_identity, authority_lock_created) =
+            open_governance_authority_lock(&authority_lock_path, true)?;
+        let before_lock = match verify_governance_migration_anchors(
             &path,
             &governing_agent_id,
             &expected_signer_agent_id,
-        )?;
-        let persistence = GovernancePersistence::new(
-            path,
+        ) {
+            Ok(before_lock) => before_lock,
+            Err(error) => {
+                if authority_lock_created {
+                    let cleanup = remove_new_authority_lock_if_owned(
+                        &authority_lock_path,
+                        authority_lock_file,
+                        authority_lock_identity,
+                    );
+                    return Err(compose_operation_cleanup_failure(
+                        &authority_lock_path,
+                        error,
+                        cleanup.err().into_iter().collect(),
+                    ));
+                } else {
+                    drop(authority_lock_file);
+                }
+                return Err(error);
+            }
+        };
+        let authority_cleanup_handle = if authority_lock_created {
+            authority_lock_file.try_clone().ok()
+        } else {
+            None
+        };
+        let persistence = match GovernancePersistence::new_with_authority_lock(
+            path.clone(),
             expected_signer_agent_id,
             GovernanceLockOpenMode::Migrate,
-        )?;
+            Some((
+                authority_lock_path.clone(),
+                authority_lock_file,
+                authority_lock_identity,
+                authority_lock_created,
+            )),
+        ) {
+            Ok(persistence) => {
+                drop(authority_cleanup_handle);
+                persistence
+            }
+            Err(error) => {
+                let mut cleanup_errors = Vec::new();
+                if let Some(cleanup_handle) = authority_cleanup_handle {
+                    if let Err(cleanup_error) = remove_new_authority_lock_if_owned(
+                        &authority_lock_path,
+                        cleanup_handle,
+                        authority_lock_identity,
+                    ) {
+                        cleanup_errors.push(cleanup_error);
+                    }
+                } else if authority_lock_created
+                    && let Err(cleanup_error) = remove_authority_lock_if_identity(
+                        &authority_lock_path,
+                        authority_lock_identity,
+                    )
+                {
+                    cleanup_errors.push(cleanup_error);
+                }
+                return Err(compose_operation_cleanup_failure(
+                    &authority_lock_path,
+                    error,
+                    cleanup_errors,
+                ));
+            }
+        };
+        persistence.recover_reinitialization_transaction(&signing_key)?;
+        persistence.ensure_cleanup_pool_context(&signing_key, true)?;
         persistence.migrate_lock_binding(&governing_agent_id, &signing_key, &before_lock)
     }
 
@@ -2758,6 +12313,28 @@ impl GovernancePolicy {
             governing_agent_id,
             signing_key,
             &suffix,
+            None,
+        )
+    }
+
+    /// Explicit offline reinitialization through a selector-held authority
+    /// pair. The guard transfer is identity-bound and construction does not
+    /// reacquire either sidecar pathname.
+    pub fn reinitialize_persistence_with_authority_pair_guard(
+        config: GovernancePolicyConfig,
+        path: impl AsRef<Path>,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+        suffix: impl AsRef<str>,
+        guard: GovernanceAuthorityPairGuard,
+    ) -> Result<Self, GovernancePersistenceError> {
+        Self::reinitialize_persistence_with_suffix(
+            config,
+            path.as_ref().to_path_buf(),
+            governing_agent_id,
+            signing_key,
+            suffix.as_ref(),
+            Some(guard),
         )
     }
 
@@ -2767,63 +12344,349 @@ impl GovernancePolicy {
         governing_agent_id: AgentId,
         signing_key: SigningKey,
         suffix: &str,
+        authority_guard: Option<GovernanceAuthorityPairGuard>,
     ) -> Result<Self, GovernancePersistenceError> {
+        if !valid_reinitialization_suffix(suffix) {
+            return Err(GovernancePersistenceError::ReinitializationFailed {
+                reason: format!("invalid reinitialization suffix `{suffix}`"),
+            });
+        }
         let local_governor = LocalGovernorKey::new(signing_key);
-        let persistence = GovernancePersistence::new(
-            path.clone(),
-            local_governor.consensus_agent_id().clone(),
-            GovernanceLockOpenMode::Reinitialize,
-        )?;
+        let persistence = if let Some(guard) = authority_guard {
+            GovernancePersistence::new_with_authority_pair_guard(
+                path.clone(),
+                local_governor.consensus_agent_id().clone(),
+                GovernanceLockOpenMode::Reinitialize,
+                guard,
+            )?
+        } else {
+            GovernancePersistence::new(
+                path.clone(),
+                local_governor.consensus_agent_id().clone(),
+                GovernanceLockOpenMode::Reinitialize,
+            )?
+        };
+        persistence.recover_reinitialization_transaction(&local_governor.signing_key)?;
+        let cleanup_parent = held_persistence_parent(&persistence)?;
         let sequence_path = path.with_extension("sequence.json");
-        let mut archived: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut plan: Vec<ReinitializationArtifact> = Vec::new();
         for existing in [&path, &sequence_path] {
-            if existing.exists() {
-                let archive = existing.with_extension(format!(
-                    "{}.{}",
-                    existing
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .unwrap_or("state"),
-                    suffix
-                ));
-                persistence.verify_lock_path()?;
-                if let Err(source) = fs::rename(existing, &archive) {
-                    let rollback = restore_governance_archives(&persistence, &archived);
+            let name = existing.file_name().ok_or_else(|| {
+                GovernancePersistenceError::ReinitializationFailed {
+                    reason: format!(
+                        "stream artifact `{}` has no final component",
+                        existing.display()
+                    ),
+                }
+            })?;
+            let Some((snapshot, _bytes)) =
+                read_governance_artifact_snapshot_at(&cleanup_parent.file, name).map_err(
+                    |source| GovernancePersistenceError::ReinitializationFailed {
+                        reason: format!("could not snapshot `{}`: {source}", existing.display()),
+                    },
+                )?
+            else {
+                continue;
+            };
+            let archive = reinitialization_archive_path(existing, suffix);
+            let archive_name = archive.file_name().ok_or_else(|| {
+                GovernancePersistenceError::ReinitializationFailed {
+                    reason: format!("archive `{}` has no final component", archive.display()),
+                }
+            })?;
+            match directory_entry_identity_at(&cleanup_parent.file, archive_name) {
+                Ok(None) => {}
+                Ok(Some(_)) => {
                     return Err(GovernancePersistenceError::ReinitializationFailed {
-                        reason: match rollback {
-                            Ok(()) => format!(
-                                "could not archive `{}` as `{}`: {source}",
-                                existing.display(),
-                                archive.display()
-                            ),
-                            Err(rollback_error) => format!(
-                                "could not archive `{}` as `{}`: {source}; archive rollback also failed: {rollback_error}",
-                                existing.display(),
-                                archive.display()
-                            ),
-                        },
+                        reason: format!(
+                            "reinitialization archive destination already exists: `{}`",
+                            archive.display()
+                        ),
                     });
                 }
-                archived.push((existing.to_path_buf(), archive));
-                persistence.verify_lock_path()?;
+                Err(source) => {
+                    return Err(GovernancePersistenceError::ReinitializationFailed {
+                        reason: format!(
+                            "could not inspect archive `{}`: {source}",
+                            archive.display()
+                        ),
+                    });
+                }
             }
+            plan.push(ReinitializationArtifact {
+                original: existing.to_path_buf(),
+                archive,
+                identity: snapshot.identity,
+                content_digest: snapshot.content_digest,
+                byte_len: snapshot.byte_len,
+                archive_identity: None,
+                restored_identity: None,
+            });
         }
-        if !archived.is_empty() {
-            persistence.verify_lock_path()?;
-            if let Err(sync_error) = sync_parent_directory(&path) {
-                let rollback_error = restore_governance_archives(&persistence, &archived).err();
+        // Validate every source and every archive destination once more under
+        // the held locks before the first mutation.  The archive is copied
+        // with create-new/no-follow semantics below, so a foreign candidate
+        // created after this check cannot be overwritten.
+        persistence.verify_lock_path()?;
+        for artifact in &plan {
+            let original_name = artifact.original.file_name().ok_or_else(|| {
+                GovernancePersistenceError::ReinitializationFailed {
+                    reason: format!(
+                        "reinitialization source `{}` has no final component",
+                        artifact.original.display()
+                    ),
+                }
+            })?;
+            let archive_name = artifact.archive.file_name().ok_or_else(|| {
+                GovernancePersistenceError::ReinitializationFailed {
+                    reason: format!(
+                        "reinitialization archive `{}` has no final component",
+                        artifact.archive.display()
+                    ),
+                }
+            })?;
+            let Some((snapshot, _bytes)) =
+                read_governance_artifact_snapshot_at(&cleanup_parent.file, original_name).map_err(
+                    |source| GovernancePersistenceError::ReinitializationFailed {
+                        reason: format!(
+                            "could not recheck `{}`: {source}",
+                            artifact.original.display()
+                        ),
+                    },
+                )?
+            else {
                 return Err(GovernancePersistenceError::ReinitializationFailed {
                     reason: format!(
-                        "archived prior files but could not sync the archive directory: {sync_error}{}",
-                        rollback_error
-                            .map(|rollback_error| format!(
-                                "; prior-state restore also failed: {rollback_error}"
-                            ))
-                            .unwrap_or_default()
+                        "reinitialization source disappeared: `{}`",
+                        artifact.original.display()
+                    ),
+                });
+            };
+            if snapshot.identity != artifact.identity
+                || snapshot.content_digest != artifact.content_digest
+                || snapshot.byte_len != artifact.byte_len
+            {
+                return Err(GovernancePersistenceError::ReinitializationFailed {
+                    reason: format!(
+                        "reinitialization source changed before mutation: `{}`",
+                        artifact.original.display()
                     ),
                 });
             }
-            persistence.verify_lock_path()?;
+            match directory_entry_identity_at(&cleanup_parent.file, archive_name) {
+                Ok(Some(_)) => {
+                    return Err(GovernancePersistenceError::ReinitializationFailed {
+                        reason: format!(
+                            "reinitialization archive destination appeared before mutation: `{}`",
+                            artifact.archive.display()
+                        ),
+                    });
+                }
+                Ok(None) => {}
+                Err(source) => {
+                    return Err(GovernancePersistenceError::ReinitializationFailed {
+                        reason: format!(
+                            "could not recheck archive destination `{}`: {source}",
+                            artifact.archive.display()
+                        ),
+                    });
+                }
+            }
+        }
+
+        let mut journal = if plan.is_empty() {
+            None
+        } else {
+            let journal = ReinitializationRollbackJournal {
+                schema_version: REINITIALIZATION_JOURNAL_SCHEMA_VERSION,
+                transaction_id: format!("{suffix}-{}-{}", now_ms(), std::process::id()),
+                archive_suffix: suffix.to_string(),
+                state_path: path.clone(),
+                sequence_path: sequence_path.clone(),
+                artifacts: plan.clone(),
+                new_stream_artifacts: Vec::new(),
+                phase: ReinitializationJournalPhase::Prepared,
+            };
+            write_reinitialization_journal_at(
+                &path,
+                &journal,
+                &local_governor.signing_key,
+                &cleanup_parent,
+            )?;
+            Some(journal)
+        };
+        let archive_result = if let Some(journal) = journal.as_mut() {
+            (|| -> Result<(), GovernancePersistenceError> {
+                // Create every archive first. No source is removed until the
+                // complete state+sequence peer set has a durable rollback
+                // journal and every archive identity has been verified.
+                for index in 0..journal.artifacts.len() {
+                    let artifact = journal.artifacts[index].clone();
+                    persistence.verify_lock_path()?;
+                    let original_name = artifact.original.file_name().ok_or_else(|| {
+                        GovernancePersistenceError::Write {
+                            path: artifact.original.clone(),
+                            source: std::io::Error::other(
+                                "reinitialization source has no final component",
+                            ),
+                        }
+                    })?;
+                    let archive_name = artifact.archive.file_name().ok_or_else(|| {
+                        GovernancePersistenceError::Write {
+                            path: artifact.archive.clone(),
+                            source: std::io::Error::other(
+                                "reinitialization archive has no final component",
+                            ),
+                        }
+                    })?;
+                    let Some((snapshot, bytes)) =
+                        read_governance_artifact_snapshot_at(&cleanup_parent.file, original_name)
+                            .map_err(|source| GovernancePersistenceError::Write {
+                            path: artifact.original.clone(),
+                            source,
+                        })?
+                    else {
+                        return Err(GovernancePersistenceError::Write {
+                            path: artifact.original.clone(),
+                            source: std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                "reinitialization source disappeared before archive",
+                            ),
+                        });
+                    };
+                    if snapshot.identity != artifact.identity
+                        || snapshot.content_digest != artifact.content_digest
+                        || snapshot.byte_len != artifact.byte_len
+                    {
+                        return Err(GovernancePersistenceError::Write {
+                            path: artifact.original.clone(),
+                            source: std::io::Error::other(
+                                "reinitialization source snapshot changed before archive",
+                            ),
+                        });
+                    }
+                    match directory_entry_identity_at(&cleanup_parent.file, archive_name) {
+                        Ok(Some(_)) => {
+                            return Err(GovernancePersistenceError::Write {
+                                path: artifact.archive.clone(),
+                                source: std::io::Error::new(
+                                    std::io::ErrorKind::AlreadyExists,
+                                    "reinitialization archive destination appeared before no-replace link",
+                                ),
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(source) => {
+                            return Err(GovernancePersistenceError::Write {
+                                path: artifact.archive.clone(),
+                                source,
+                            });
+                        }
+                    }
+                    #[cfg(test)]
+                    pause_after_reinitialization_archive_check(
+                        &artifact.original,
+                        &artifact.archive,
+                    );
+                    let archive_identity =
+                        write_reinitialization_archive_at(&artifact, &bytes, &cleanup_parent)?;
+                    journal.artifacts[index].archive_identity = Some(archive_identity);
+                }
+                journal.phase = ReinitializationJournalPhase::ArchivesCreated;
+                write_reinitialization_journal_at(
+                    &path,
+                    journal,
+                    &local_governor.signing_key,
+                    &cleanup_parent,
+                )?;
+                #[cfg(test)]
+                maybe_inject_reinitialization_crash(
+                    &path,
+                    InjectedReinitializationCrashPoint::ArchiveCreated,
+                );
+
+                // Only after both peers are archived may either canonical
+                // source entry be quarantined. The archives remain until the
+                // new state and checkpoint commit is durable.
+                for artifact in &journal.artifacts {
+                    let cleanup_outcome = quarantine_verified_entry_at(
+                        &artifact.original,
+                        &cleanup_parent,
+                        || {
+                            persistence.verify_lock_path().is_ok()
+                                && authority_cleanup_parent_is_current(
+                                    &artifact.original,
+                                    &cleanup_parent,
+                                )
+                                && reinitialization_artifact_matches_at(
+                                    &cleanup_parent,
+                                    &artifact.original,
+                                    artifact,
+                                )
+                        },
+                        |quarantine| {
+                            persistence.verify_lock_path().is_ok()
+                                && authority_cleanup_parent_is_current(
+                                    &artifact.original,
+                                    &cleanup_parent,
+                                )
+                                && reinitialization_artifact_matches_at(
+                                    &cleanup_parent,
+                                    quarantine,
+                                    artifact,
+                                )
+                        },
+                    );
+                    if !cleanup_outcome.is_semantic_success() {
+                        return Err(cleanup_error_for_outcome(
+                            &artifact.original,
+                            cleanup_outcome,
+                        ));
+                    }
+                }
+                #[cfg(test)]
+                maybe_inject_reinitialization_crash(
+                    &path,
+                    InjectedReinitializationCrashPoint::OriginalsQuarantined,
+                );
+                cleanup_parent.file.sync_all().map_err(|source| {
+                    GovernancePersistenceError::Write {
+                        path: path.parent().unwrap_or(&path).to_path_buf(),
+                        source,
+                    }
+                })?;
+                journal.phase = ReinitializationJournalPhase::OriginalsRemoved;
+                write_reinitialization_journal_at(
+                    &path,
+                    journal,
+                    &local_governor.signing_key,
+                    &cleanup_parent,
+                )?;
+                persistence.verify_lock_path()?;
+                Ok(())
+            })()
+        } else {
+            Ok(())
+        };
+        if let Err(error) = archive_result {
+            if let Some(journal) = journal.as_mut() {
+                let rollback = rollback_reinitialization_transaction(
+                    &persistence,
+                    journal,
+                    &local_governor.signing_key,
+                );
+                return Err(GovernancePersistenceError::ReinitializationFailed {
+                    reason: match rollback {
+                        Ok(()) => format!("could not archive prior governance stream: {error}"),
+                        Err(rollback_error) => format!(
+                            "could not archive prior governance stream: {error}; archive rollback also failed: {rollback_error}"
+                        ),
+                    },
+                });
+            }
+            return Err(GovernancePersistenceError::ReinitializationFailed {
+                reason: format!("could not initialize an empty governance stream: {error}"),
+            });
         }
         let mut display_governors = BTreeMap::new();
         display_governors.insert(
@@ -2836,10 +12699,71 @@ impl GovernancePolicy {
             local_governor: Some(local_governor),
             ..GovernanceState::default()
         };
+        let local_signing_key = state
+            .local_governor
+            .as_ref()
+            .map(|local| &local.signing_key)
+            .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
+        if journal.is_some() {
+            persistence.arm_reinitialization_journal(local_signing_key);
+        }
         match persistence.initialize(&state) {
             Ok(version) => {
                 state.persistence_sequence = Some(version.sequence);
                 state.persistence_digest = Some(version.digest);
+                if let Some(journal) = journal.as_mut() {
+                    if let Some((durable, _, _)) =
+                        read_reinitialization_journal(&path, &persistence.expected_signer_agent_id)?
+                    {
+                        journal.new_stream_artifacts = durable.new_stream_artifacts;
+                    }
+                    journal.phase = ReinitializationJournalPhase::NewStreamCommitted;
+                    #[cfg(test)]
+                    maybe_inject_reinitialization_commit_journal_failure(&path);
+                    #[cfg(test)]
+                    maybe_inject_reinitialization_crash(
+                        &path,
+                        InjectedReinitializationCrashPoint::BeforeCommitJournal,
+                    );
+                    if let Err(commit_error) = write_reinitialization_journal_at(
+                        &path,
+                        journal,
+                        local_signing_key,
+                        &cleanup_parent,
+                    ) {
+                        persistence.release_cleanup_pool_context();
+                        let rollback_error = rollback_reinitialization_transaction(
+                            &persistence,
+                            journal,
+                            local_signing_key,
+                        )
+                        .err();
+                        persistence.disarm_reinitialization_journal();
+                        return Err(GovernancePersistenceError::ReinitializationFailed {
+                            reason: format!(
+                                "new signed stream commit journal failed: {commit_error}{}",
+                                rollback_error
+                                    .map(|rollback_error| format!(
+                                        "; transactional rollback failed: {rollback_error}"
+                                    ))
+                                    .unwrap_or_default()
+                            ),
+                        });
+                    }
+                    // Once the committed phase is durable, archive cleanup is
+                    // a resumable post-commit operation.  Keep the journal if
+                    // it fails so the next opener can retry without rolling
+                    // back a valid new stream.
+                    persistence.release_cleanup_pool_context();
+                    let finalized = finalize_reinitialization_transaction(
+                        &persistence,
+                        journal,
+                        local_signing_key,
+                    );
+                    persistence.disarm_reinitialization_journal();
+                    finalized?;
+                    persistence.ensure_cleanup_pool_context(local_signing_key, true)?;
+                }
                 Ok(Self {
                     state: Mutex::new(state),
                     config,
@@ -2848,20 +12772,41 @@ impl GovernancePolicy {
                 })
             }
             Err(error) => {
-                let cleanup_error =
-                    remove_governance_stream_files(&persistence, &path, &sequence_path).err();
-                let rollback_error = restore_governance_archives(&persistence, &archived).err();
+                let rollback_error = if let Some(journal) = journal.as_mut() {
+                    if let Some((durable, _, _)) =
+                        read_reinitialization_journal(&path, &persistence.expected_signer_agent_id)?
+                    {
+                        journal.new_stream_artifacts = durable.new_stream_artifacts;
+                    }
+                    let journal_write_error = write_reinitialization_journal_at(
+                        &path,
+                        journal,
+                        local_signing_key,
+                        &cleanup_parent,
+                    )
+                    .err();
+                    persistence.release_cleanup_pool_context();
+                    let rollback_error = rollback_reinitialization_transaction(
+                        &persistence,
+                        journal,
+                        local_signing_key,
+                    )
+                    .err();
+                    persistence.disarm_reinitialization_journal();
+                    journal_write_error.or(rollback_error)
+                } else {
+                    remove_governance_stream_files(
+                        &persistence,
+                        &persistence.new_stream_artifacts(),
+                    )
+                    .err()
+                };
                 Err(GovernancePersistenceError::ReinitializationFailed {
                     reason: format!(
-                        "new signed stream initialization failed: {error}{}{}",
-                        cleanup_error
-                            .map(|cleanup_error| format!(
-                                "; partial new-stream cleanup failed: {cleanup_error}"
-                            ))
-                            .unwrap_or_default(),
+                        "new signed stream initialization failed: {error}{}",
                         rollback_error
                             .map(|rollback_error| format!(
-                                "; prior-state restore failed: {rollback_error}"
+                                "; transactional rollback failed: {rollback_error}"
                             ))
                             .unwrap_or_default()
                     ),
@@ -2876,6 +12821,29 @@ impl GovernancePolicy {
 
     pub fn persistence_lock_path(path: impl AsRef<Path>) -> PathBuf {
         path.as_ref().with_extension("lock")
+    }
+
+    /// Canonical process-lifetime authority sidecar path used by every
+    /// persisted policy initializer and loader.
+    pub fn persistence_authority_lock_path(path: impl AsRef<Path>) -> PathBuf {
+        governance_authority_lock_path(path)
+    }
+
+    /// Return the regular-file identity of the canonical authority sidecar.
+    /// Path-selection code can compare identities for current and legacy state
+    /// paths and require a hard-link pair before selecting either stream.
+    pub fn persistence_authority_lock_identity(
+        path: impl AsRef<Path>,
+    ) -> Result<GovernanceAuthorityLockIdentity, GovernancePersistenceError> {
+        governance_authority_lock_identity(path)
+    }
+
+    /// Validate the canonical authority sidecars for two logical state paths.
+    pub fn persistence_authority_lock_pair_identity(
+        first_path: impl AsRef<Path>,
+        second_path: impl AsRef<Path>,
+    ) -> Result<GovernanceAuthorityLockIdentity, GovernancePersistenceError> {
+        governance_authority_lock_pair_identity(first_path, second_path)
     }
 
     /// Install THE local governor signing key.
@@ -2900,6 +12868,9 @@ impl GovernancePolicy {
                 existing: existing.consensus_agent_id().clone(),
                 offered: offered.consensus_agent_id().clone(),
             });
+        }
+        if let Err(reason) = self.ensure_authority_ready_locked(&mut state) {
+            return Err(GovernanceKeyError::Persistence { reason });
         }
         if state.local_governor.is_some()
             && state.governing_agent_id.as_ref() == Some(&governing_agent_id)
@@ -2965,6 +12936,7 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_authority_ready_locked(&mut state)?;
         if state
             .local_governor
             .as_ref()
@@ -3011,11 +12983,57 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let checkpoint_lagging_before_health = state.checkpoint_lagging.is_some();
+        self.repair_checkpoint_from_health_tick_locked(&mut state, observed_at_ms);
+        let pending_observation = PendingHealthObservation {
+            governing_agent_id: governing_agent_id.clone(),
+            entries: entries.to_vec(),
+            observed_at_ms,
+        };
+        let mut wrote_new_health_intent = false;
+        #[cfg(test)]
+        let pre_intent_persisted = PersistedGovernanceState::from_runtime(&state);
+        if Self::restrictive_health_intent_needed(&state, governing_agent_id, entries)
+            && !state
+                .durable_pending_health_observation
+                .as_ref()
+                .is_some_and(|existing| {
+                    Self::same_health_observation(existing, &pending_observation)
+                })
+        {
+            if let Err(error) =
+                self.persist_pending_health_intent_locked(&mut state, &pending_observation)
+            {
+                // No restrictive health projection may become authoritative
+                // until its write-ahead intent is authenticated and synced.
+                // Retain only the in-memory veto when the filesystem itself
+                // is unavailable; the next tick retries the intent.
+                state.pending_health_observation = Some(pending_observation);
+                tracing::warn!(
+                    reason = %error,
+                    module = module_path!(),
+                    "restrictive governance health observation was retained fail-closed because its write-ahead intent could not be committed"
+                );
+                return;
+            }
+            wrote_new_health_intent = true;
+        }
+        #[cfg(test)]
+        if pre_intent_persisted != PersistedGovernanceState::from_runtime(&state) {
+            maybe_inject_health_crash(
+                self.persistence
+                    .as_ref()
+                    .map(|persistence| persistence.path.as_path())
+                    .unwrap_or_else(|| Path::new("<memory>")),
+                InjectedHealthCrashPoint::Intent,
+            );
+        }
         let previous_persisted = PersistedGovernanceState::from_runtime(&state);
         let previous_unhealthy_agents = state.unhealthy_agents.clone();
         let previous_last_healthy_governors = state.last_healthy_governors;
         let previous_last_quorum_threshold = state.last_quorum_threshold;
         let previous_pending_events = state.pending_events.clone();
+        let previous_pending_health_observation = state.pending_health_observation.clone();
         if state.governing_agent_id.as_ref() != Some(governing_agent_id) {
             if let Some(previous) = state.governing_agent_id.clone() {
                 state.display_governors.remove(&previous);
@@ -3091,24 +13109,92 @@ impl GovernancePolicy {
             }
             state.partition_state = next_state;
         }
+        let health_projection_changed = PersistedGovernanceState::from_runtime(&state)
+            .without_pending_health_observation()
+            != previous_persisted
+                .clone()
+                .without_pending_health_observation()
+            || state.pending_events != previous_pending_events;
+        // When a prior checkpoint repair is still in its health-tick backoff,
+        // do not let a changed health snapshot reach `save`: `save` repairs a
+        // lagging checkpoint before writing the next state envelope. Revert
+        // this observation in memory and leave both durable anchors alone.
+        // The next observation at the logical deadline will repair first and
+        // then persist the current health snapshot. Direct governed effects
+        // still call `ensure_checkpoint_repaired_locked` and bypass this gate.
+        let checkpoint_repair_deferred = checkpoint_lagging_before_health
+            && state.checkpoint_lagging.is_some()
+            && state
+                .checkpoint_repair_backoff
+                .is_some_and(|backoff| !backoff.is_due(observed_at_ms));
+        if checkpoint_repair_deferred {
+            let pending_observation = PendingHealthObservation {
+                governing_agent_id: governing_agent_id.clone(),
+                entries: entries.to_vec(),
+                observed_at_ms,
+            };
+            previous_persisted.restore_into(&mut state);
+            state.unhealthy_agents = previous_unhealthy_agents;
+            state.last_healthy_governors = previous_last_healthy_governors;
+            state.last_quorum_threshold = previous_last_quorum_threshold;
+            state.pending_events = previous_pending_events;
+            if health_projection_changed {
+                // Preserve the latest genuinely different projection while
+                // the checkpoint retry is deferred. A repeated baseline tick
+                // must not overwrite an earlier alternate snapshot merely
+                // because its host timestamp changed.
+                state.pending_health_observation = Some(pending_observation);
+            } else {
+                state.pending_health_observation = previous_pending_health_observation;
+            }
+            return;
+        }
         prune_expired_contingency_leases(&mut state, observed_at_ms);
         if state.partition_state == PartitionState::Healthy {
             self.ensure_contingency_leases_locked(&mut state, observed_at_ms);
         }
-        // Health is sampled on every dispatcher tick. Avoid turning an
-        // unchanged projection into two fsyncs and an artificial sequence
-        // advance. Expired leases and replenished leases are part of the
-        // persisted projection, so real durable changes still commit.
+        // Tom calls this method on every dispatcher tick.  Do not turn an
+        // unchanged health snapshot into a signed state rewrite: the state
+        // envelope and checkpoint are both fsynced, and every rewrite advances
+        // the durable sequence.  Transient pending events are emitted only
+        // alongside a durable transition above, so comparing the persisted
+        // projection is sufficient here.
+        if !wrote_new_health_intent {
+            state.pending_health_observation = None;
+            state.durable_pending_health_observation = None;
+        }
         if PersistedGovernanceState::from_runtime(&state) == previous_persisted {
             return;
         }
         match self.persist_locked(&mut state) {
             Err(error) => {
+                let pending_observation = health_projection_changed
+                    .then_some(PendingHealthObservation {
+                        governing_agent_id: governing_agent_id.clone(),
+                        entries: entries.to_vec(),
+                        observed_at_ms,
+                    })
+                    .or_else(|| previous_persisted.pending_health_observation.clone());
                 previous_persisted.restore_into(&mut state);
                 state.unhealthy_agents = previous_unhealthy_agents;
                 state.last_healthy_governors = previous_last_healthy_governors;
                 state.last_quorum_threshold = previous_last_quorum_threshold;
                 state.pending_events = previous_pending_events;
+                state.pending_health_observation = pending_observation.clone();
+                let marker_error = pending_observation.as_ref().and_then(|observation| {
+                    if state
+                        .durable_pending_health_observation
+                        .as_ref()
+                        .is_some_and(|existing| {
+                            Self::same_health_observation(existing, observation)
+                        })
+                    {
+                        None
+                    } else {
+                        self.persist_pending_health_intent_locked(&mut state, observation)
+                            .err()
+                    }
+                });
                 let path = self
                     .persistence
                     .as_ref()
@@ -3116,21 +13202,32 @@ impl GovernancePolicy {
                     .unwrap_or_else(|| "<memory>".to_string());
                 tracing::warn!(
                     reason = %error,
+                    checkpoint_marker_error = ?marker_error,
                     path = %path,
                     module = module_path!(),
-                    "discarded an unpersisted governance health transition and contingency leases"
+                    "discarded an unpersisted governance health transition and contingency leases; retained its write-ahead health veto"
                 );
             }
             Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
                 sequence,
                 reason,
-            }) => tracing::warn!(
-                sequence,
-                reason = %reason,
-                module = module_path!(),
-                "governance health transition committed while its checkpoint remains lagging"
-            ),
-            Ok(GovernancePersistenceOutcome::Committed) => {}
+            }) => {
+                state.checkpoint_repair_backoff =
+                    Some(GovernanceCheckpointRepairBackoff::after(observed_at_ms));
+                tracing::warn!(
+                    sequence,
+                    reason = %reason,
+                    retry_at_ms = state
+                        .checkpoint_repair_backoff
+                        .map(|backoff| backoff.retry_at_ms),
+                    module = module_path!(),
+                    "governance health transition committed while its checkpoint remains lagging"
+                );
+            }
+            Ok(GovernancePersistenceOutcome::Committed) => {
+                state.pending_health_observation = None;
+                state.durable_pending_health_observation = None;
+            }
         }
     }
 
@@ -3170,6 +13267,18 @@ impl GovernancePolicy {
                 reason: format!(
                     "blocked destructive action until the signed governance checkpoint is repaired: {error}"
                 ),
+                receipt: None,
+            };
+        }
+        if Self::pending_health_observation(&state).is_some() {
+            return GovernanceDecision::Veto {
+                governing_agent_id: state
+                    .governing_agent_id
+                    .clone()
+                    .unwrap_or_else(|| AgentId::new("tom", "health-pending")),
+                reason:
+                    "blocked destructive action until the deferred health observation is persisted"
+                        .to_string(),
                 receipt: None,
             };
         }
@@ -3360,6 +13469,9 @@ impl GovernancePolicy {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.ensure_checkpoint_repaired_locked(&mut state)?;
+        if let Some(error) = Self::pending_health_observation_error(&state) {
+            return Err(error);
+        }
         let (receipt, subject_digest, index) = validate_pending_request_receipt_locked(
             &state,
             request,
@@ -3417,6 +13529,10 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_checkpoint_repaired_locked(&mut state)?;
+        if let Some(error) = Self::pending_health_observation_error(&state) {
+            return Err(error);
+        }
         let (receipt, subject_digest, _) = validate_pending_request_receipt_locked(
             &state,
             request,
@@ -3493,6 +13609,10 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_checkpoint_repaired_locked(&mut state)?;
+        if let Some(error) = Self::pending_health_observation_error(&state) {
+            return Err(error);
+        }
         let previous = state.pending_human_authorizations.clone();
         let Some(hold) = state
             .pending_human_authorizations
@@ -3662,9 +13782,19 @@ impl GovernancePolicy {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.ensure_checkpoint_repaired_locked(&mut state)?;
+        if let Some(error) = Self::pending_health_observation_error(&state) {
+            return Err(error);
+        }
+        // The hold and its receipt may have been created while quorum was
+        // healthy, but they are bearer state until this final, one-shot
+        // consumption.  Recheck the current governance state under the same
+        // mutex immediately before validating/consuming them.  Otherwise a
+        // persisted pre-partition approval could bypass the contingency-lease
+        // path and route a destructive action while the committee is
+        // partitioned (or while governance is still degraded/healing).
         if state.partition_state != PartitionState::Healthy {
             return Err(format!(
-                "human authorization requires healthy governance; current partition state is {:?}",
+                "human authorization hold cannot be consumed while governance state is {:?}; use the current governance or contingency-lease path",
                 state.partition_state
             ));
         }
@@ -3734,11 +13864,11 @@ impl GovernancePolicy {
     }
 
     pub fn is_partitioned(&self) -> bool {
-        self.state
+        let state = self
+            .state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .partition_state
-            == PartitionState::Partitioned
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::effective_partition_projection(&state).0 == PartitionState::Partitioned
     }
 
     pub fn authorize_partition_request(
@@ -3754,10 +13884,13 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_checkpoint_repaired_locked(&mut state)?;
+        if let Some(error) = Self::pending_health_observation_error(&state) {
+            return Err(error);
+        }
         if state.partition_state != PartitionState::Partitioned {
             return Ok(None);
         }
-        self.ensure_checkpoint_repaired_locked(&mut state)?;
 
         let lease_value = match request.evidence.get("contingency_lease").cloned() {
             Some(value) => value,
@@ -3946,6 +14079,14 @@ impl GovernancePolicy {
             );
             return None;
         }
+        if let Some(error) = Self::pending_health_observation_error(&state) {
+            tracing::warn!(
+                reason = %error,
+                module = module_path!(),
+                "containment release attestation was refused while a health observation is pending"
+            );
+            return None;
+        }
         // Rebased onto BFT-03's single-key path. This used to read
         // `state.governors` and call `simulate_governance_commit` with the whole
         // keyring; both are gone, and the round now runs through the transport
@@ -4012,7 +14153,15 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.partition_state != PartitionState::Partitioned {
+        if let Err(error) = self.ensure_authority_ready_locked(&mut state) {
+            tracing::warn!(
+                reason = %error,
+                module = module_path!(),
+                "partition veto activity was withheld until governance repair and health veto cleared"
+            );
+            return;
+        }
+        if Self::effective_partition_projection(&state).0 != PartitionState::Partitioned {
             return;
         }
         self.record_partition_activity_locked(
@@ -4057,11 +14206,13 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (partition_state, total_governors, healthy_governors, quorum_threshold, pending_at) =
+            Self::effective_partition_projection(&state);
         GovernanceStatusReport {
-            partition_state: state.partition_state,
-            total_governors: state.display_governors.len().max(state.governor_count()),
-            healthy_governors: state.last_healthy_governors,
-            quorum_threshold: state.last_quorum_threshold,
+            partition_state,
+            total_governors,
+            healthy_governors,
+            quorum_threshold,
             active_contingency_leases: state
                 .active_contingency_leases
                 .iter()
@@ -4072,7 +14223,7 @@ impl GovernancePolicy {
                 .iter()
                 .filter(|record| !record.authorized)
                 .count(),
-            last_transition_at_ms: state.last_transition_at_ms,
+            last_transition_at_ms: pending_at,
             last_reconciliation_report_id: state
                 .reconciliation_reports
                 .last()
@@ -4116,6 +14267,168 @@ impl GovernancePolicy {
                 state.active_contingency_leases.push(lease);
             }
         }
+    }
+
+    fn pending_health_observation_error(state: &GovernanceState) -> Option<String> {
+        state
+            .pending_health_observation
+            .as_ref()
+            .or(state.durable_pending_health_observation.as_ref())
+            .map(|observation| {
+            format!(
+                "governance authority is blocked until deferred health observed at {} is persisted",
+                observation.observed_at_ms
+            )
+            })
+    }
+
+    fn same_health_observation(
+        first: &PendingHealthObservation,
+        second: &PendingHealthObservation,
+    ) -> bool {
+        first.governing_agent_id == second.governing_agent_id && first.entries == second.entries
+    }
+
+    fn restrictive_health_intent_needed(
+        state: &GovernanceState,
+        governing_agent_id: &AgentId,
+        entries: &[AgentHealthEntry],
+    ) -> bool {
+        if !entries
+            .iter()
+            .any(|entry| entry.health != AgentHealth::Healthy)
+        {
+            return false;
+        }
+        // A previously committed restrictive projection is already fail
+        // closed across restart.  Do not turn oscillating restrictive health
+        // entries into another write while a checkpoint repair is deferred;
+        // the first transition from Healthy is the only one that needs a
+        // write-ahead intent.
+        if state.partition_state != PartitionState::Healthy
+            || !state.unhealthy_agents.is_empty()
+            || state.durable_pending_health_observation.is_some()
+        {
+            return false;
+        }
+        if state.pending_health_observation.is_some()
+            && state.durable_pending_health_observation.is_none()
+        {
+            return true;
+        }
+        if state.governing_agent_id.as_ref() != Some(governing_agent_id) {
+            return true;
+        }
+        let unhealthy_agents = entries
+            .iter()
+            .filter(|entry| entry.health != AgentHealth::Healthy)
+            .cloned()
+            .collect::<Vec<_>>();
+        if state.unhealthy_agents != unhealthy_agents {
+            return true;
+        }
+        let total_governors = state.display_governors.len().max(state.governor_count());
+        let unhealthy_governors = state.unhealthy_governor_ids(entries).len();
+        let healthy_governors = total_governors.saturating_sub(unhealthy_governors);
+        let quorum_threshold = governance_quorum_threshold(total_governors);
+        let base_state = if healthy_governors < quorum_threshold {
+            PartitionState::Partitioned
+        } else if unhealthy_agents.is_empty() {
+            PartitionState::Healthy
+        } else {
+            PartitionState::Degraded
+        };
+        state.last_healthy_governors != healthy_governors
+            || state.last_quorum_threshold != quorum_threshold
+            || state.partition_state != base_state
+    }
+
+    /// Every public authority mutation uses this ordering: repair the signed
+    /// checkpoint first, then reject any restrictive health observation that is
+    /// still pending.  Keeping this gate shared prevents bookkeeping paths such
+    /// as governor admission and partition-veto activity from becoming a side
+    /// channel around the direct governed-effect veto.
+    fn ensure_authority_ready_locked(&self, state: &mut GovernanceState) -> Result<(), String> {
+        self.ensure_checkpoint_repaired_locked(state)?;
+        if let Some(error) = Self::pending_health_observation_error(state) {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn pending_health_observation(state: &GovernanceState) -> Option<&PendingHealthObservation> {
+        state
+            .pending_health_observation
+            .as_ref()
+            .or(state.durable_pending_health_observation.as_ref())
+    }
+
+    fn pending_health_projection(
+        state: &GovernanceState,
+        observation: &PendingHealthObservation,
+    ) -> (PartitionState, usize, usize, usize) {
+        let mut display_governors = state.display_governors.clone();
+        if let Some(local) = state.local_governor.as_ref() {
+            display_governors.insert(
+                observation.governing_agent_id.clone(),
+                local.consensus_agent_id().clone(),
+            );
+        }
+        let unhealthy_governors = observation
+            .entries
+            .iter()
+            .filter(|entry| entry.role == AgentRole::Tom && entry.health != AgentHealth::Healthy)
+            .filter_map(|entry| {
+                let observed_id = AgentId(entry.id.clone());
+                display_governors.get(&observed_id).cloned().or_else(|| {
+                    (display_governors
+                        .values()
+                        .any(|consensus_id| consensus_id == &observed_id)
+                        || state.peer_governors.contains(&observed_id))
+                    .then_some(observed_id)
+                })
+            })
+            .collect::<BTreeSet<_>>()
+            .len();
+        let total_governors = display_governors.len().max(state.governor_count());
+        let healthy_governors = total_governors.saturating_sub(unhealthy_governors);
+        let quorum_threshold = governance_quorum_threshold(total_governors);
+        // A pending marker itself means the latest observation is not yet
+        // checkpoint-anchored. Never expose stale Healthy to a dispatcher.
+        let partition_state = if healthy_governors < quorum_threshold {
+            PartitionState::Partitioned
+        } else {
+            PartitionState::Degraded
+        };
+        (
+            partition_state,
+            total_governors,
+            healthy_governors,
+            quorum_threshold,
+        )
+    }
+
+    fn effective_partition_projection(
+        state: &GovernanceState,
+    ) -> (PartitionState, usize, usize, usize, Option<i64>) {
+        if let Some(observation) = Self::pending_health_observation(state) {
+            let (partition_state, total, healthy, quorum) =
+                Self::pending_health_projection(state, observation);
+            return (
+                partition_state,
+                total,
+                healthy,
+                quorum,
+                Some(observation.observed_at_ms),
+            );
+        }
+        (
+            state.partition_state,
+            state.display_governors.len().max(state.governor_count()),
+            state.last_healthy_governors,
+            state.last_quorum_threshold,
+            state.last_transition_at_ms,
+        )
     }
 
     fn reconcile_partition_activity_locked(
@@ -4179,6 +14492,7 @@ impl GovernancePolicy {
     ) -> Result<GovernancePersistenceOutcome, String> {
         let Some(persistence) = &self.persistence else {
             state.checkpoint_lagging = None;
+            state.checkpoint_repair_backoff = None;
             return Ok(GovernancePersistenceOutcome::Committed);
         };
         let expected_sequence = state.persistence_sequence.ok_or_else(|| {
@@ -4196,6 +14510,10 @@ impl GovernancePolicy {
         debug_assert_eq!(version.sequence, next_sequence);
         state.persistence_sequence = Some(version.sequence);
         state.persistence_digest = Some(version.digest);
+        if version.health_marker_cleared {
+            state.pending_health_observation = None;
+            state.durable_pending_health_observation = None;
+        }
         state.checkpoint_lagging = match &outcome {
             GovernancePersistenceOutcome::Committed => None,
             GovernancePersistenceOutcome::StateCommittedCheckpointLagging { sequence, reason } => {
@@ -4206,15 +14524,75 @@ impl GovernancePolicy {
                 })
             }
         };
+        if matches!(&outcome, GovernancePersistenceOutcome::Committed) {
+            state.checkpoint_repair_backoff = None;
+        }
         Ok(outcome)
+    }
+
+    fn persist_pending_health_intent_locked(
+        &self,
+        state: &mut GovernanceState,
+        observation: &PendingHealthObservation,
+    ) -> Result<(), String> {
+        let Some(persistence) = &self.persistence else {
+            state.pending_health_observation = Some(observation.clone());
+            return Ok(());
+        };
+        let version = persistence
+            .write_pending_health_intent(state, observation)
+            .map_err(|error| error.to_string())?;
+        state.persistence_sequence = Some(version.sequence);
+        state.persistence_digest = Some(version.digest);
+        state.pending_health_observation = Some(observation.clone());
+        state.durable_pending_health_observation = Some(observation.clone());
+        Ok(())
+    }
+
+    fn repair_checkpoint_from_health_tick_locked(
+        &self,
+        state: &mut GovernanceState,
+        observed_at_ms: i64,
+    ) {
+        if state.checkpoint_lagging.is_none() {
+            state.checkpoint_repair_backoff = None;
+            return;
+        }
+        if state
+            .checkpoint_repair_backoff
+            .is_some_and(|backoff| !backoff.is_due(observed_at_ms))
+        {
+            return;
+        }
+        match self.ensure_checkpoint_repaired_locked(state) {
+            Ok(()) => {
+                // `ensure_checkpoint_repaired_locked` also clears this on
+                // success; keep the invariant local to this health path.
+                state.checkpoint_repair_backoff = None;
+            }
+            Err(error) => {
+                state.checkpoint_repair_backoff =
+                    Some(GovernanceCheckpointRepairBackoff::after(observed_at_ms));
+                tracing::warn!(
+                    reason = %error,
+                    retry_at_ms = state
+                        .checkpoint_repair_backoff
+                        .map(|backoff| backoff.retry_at_ms),
+                    module = module_path!(),
+                    "governance health observation retained a lagging checkpoint"
+                );
+            }
+        }
     }
 
     fn ensure_checkpoint_repaired_locked(&self, state: &mut GovernanceState) -> Result<(), String> {
         let Some(lag) = state.checkpoint_lagging.clone() else {
+            state.checkpoint_repair_backoff = None;
             return Ok(());
         };
         let Some(persistence) = &self.persistence else {
             state.checkpoint_lagging = None;
+            state.checkpoint_repair_backoff = None;
             return Ok(());
         };
         persistence.repair_checkpoint(state, &lag).map_err(|error| {
@@ -4224,6 +14602,7 @@ impl GovernancePolicy {
             )
         })?;
         state.checkpoint_lagging = None;
+        state.checkpoint_repair_backoff = None;
         Ok(())
     }
 
@@ -4857,18 +15236,47 @@ fn governance_runtime_event_record(event: GovernanceRuntimeEvent) -> GovernanceR
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConsumedGovernanceAuthorization, GOVERNANCE_CHECKPOINT_KIND, GOVERNANCE_STATE_KIND,
-        GOVERNANCE_STATE_STREAM, GovernanceDecision, GovernanceLockRecord,
-        GovernancePersistenceError, GovernancePolicy, GovernancePolicyConfig,
-        GovernanceRuntimeEvent, GovernanceSequenceCheckpoint, LocalGovernorKey, PartitionState,
-        PendingGovernanceAuthorization, PersistedGovernanceState, TomAgent,
-        inject_atomic_parent_sync_failure,
+        CLEANUP_POOL_BINDING_KIND, CLEANUP_POOL_BINDING_STREAM, CleanupMaintenanceCrashPoint,
+        CleanupPoolBinding, CleanupPoolPhase, ConsumedGovernanceAuthorization,
+        GOVERNANCE_CHECKPOINT_KIND, GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS,
+        GOVERNANCE_CLEANUP_POOL_BINDING_NAME, GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME,
+        GOVERNANCE_CLEANUP_POOL_DIR_NAME, GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME,
+        GOVERNANCE_CLEANUP_POOL_LOCK_NAME, GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME,
+        GOVERNANCE_CLEANUP_POOL_SLOT_COUNT, GOVERNANCE_STATE_KIND, GOVERNANCE_STATE_STREAM,
+        GovernanceAuthorityError, GovernanceCleanupArtifactExpectation,
+        GovernanceCleanupPoolMaintenanceMode, GovernanceCleanupPoolRetentionOutcome,
+        GovernanceDecision, GovernanceKeyError, GovernanceLockRecord, GovernancePersistenceError,
+        GovernancePolicy, GovernancePolicyConfig, GovernanceRuntimeEvent,
+        GovernanceSequenceCheckpoint, InjectedAuthorityLockFailure, InjectedHealthCrashPoint,
+        InjectedReinitializationCrashPoint, LocalGovernorKey, PartitionState,
+        PendingGovernanceAuthorization, PendingHealthObservation, PersistedGovernanceState,
+        QuarantineOutcome, REINITIALIZATION_JOURNAL_SCHEMA_VERSION, ReinitializationJournalPhase,
+        ReinitializationRollbackJournal, TomAgent, acquire_cleanup_pool_slot,
+        append_cleanup_pool_record, bind_authority_cleanup_parent, cleanup_pool_slot_name,
+        inject_atomic_parent_sync_failure, inject_authority_lock_failure,
+        inject_cleanup_maintenance_crash, inject_health_crash,
+        inject_reinitialization_commit_journal_failure, inject_reinitialization_crash,
+        install_authority_cleanup_barrier, install_authority_cleanup_final_unlink_barrier,
+        install_authority_cleanup_post_move_barrier, install_authority_cleanup_post_verify_barrier,
+        install_authority_cleanup_pre_rename_barrier, install_authority_cleanup_reclaim_barrier,
+        install_authority_cleanup_source_final_barrier, install_cleanup_maintenance_move_barrier,
+        install_governance_stream_cleanup_barrier, install_reinitialization_archive_barrier,
+        install_reinitialization_publication_barrier,
+        install_reinitialization_restore_link_barrier, lock_authority_cleanup_tests,
+        quarantine_verified_entry,
     };
     use ed25519_dalek::SigningKey;
+    use serde::Serialize;
     use serde_json::json;
     use std::fs;
+    use std::io::{Seek, SeekFrom, Write};
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use swarm_consensus::{
+        ConsensusCommittee, ConsensusError, ConsensusSignedEnvelope, ConsensusTransport,
+    };
     use swarm_core::agent::{
         AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode,
     };
@@ -4882,14 +15290,16 @@ mod tests {
     };
 
     fn persistence_path(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().join(format!(
             "swarm-governance-auth-{label}-{}-{}.json",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ))
+        ));
+        fs::create_dir(&directory).unwrap();
+        directory.join("state.json")
     }
 
     struct BarrierReleaseGuard(Option<Arc<std::sync::Barrier>>);
@@ -4946,6 +15356,1291 @@ mod tests {
         cleanup_persistence(&path);
     }
 
+    fn cleanup_pool_path(path: &Path) -> PathBuf {
+        path.parent()
+            .unwrap()
+            .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME)
+    }
+
+    fn cleanup_pool_binding_path(path: &Path) -> PathBuf {
+        cleanup_pool_path(path).join(GOVERNANCE_CLEANUP_POOL_BINDING_NAME)
+    }
+
+    fn cleanup_expectation(path: &Path) -> GovernanceCleanupArtifactExpectation {
+        let snapshot = super::read_governance_artifact_snapshot(path)
+            .unwrap()
+            .unwrap()
+            .0;
+        GovernanceCleanupArtifactExpectation {
+            device: snapshot.identity.device,
+            inode: snapshot.identity.inode,
+            content_digest: snapshot.content_digest,
+            byte_len: snapshot.byte_len,
+        }
+    }
+
+    fn read_cleanup_pool_binding_envelope(path: &Path) -> SignedStateEnvelope<CleanupPoolBinding> {
+        serde_json::from_slice(&fs::read(cleanup_pool_binding_path(path)).unwrap()).unwrap()
+    }
+
+    fn write_cleanup_pool_binding_envelope(
+        path: &Path,
+        envelope: &SignedStateEnvelope<CleanupPoolBinding>,
+    ) {
+        fs::write(
+            cleanup_pool_binding_path(path),
+            serde_json::to_vec_pretty(envelope).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cleanup_pool_binding_copies_are_authenticated_and_fixed_cardinality() {
+        let path = persistence_path("cleanup-pool-binding-copies");
+        let key = SigningKey::from_bytes(&[163; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let state: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        let checkpoint: GovernanceSequenceCheckpoint =
+            serde_json::from_str(&read_checkpoint(&path).statement.payload_json).unwrap();
+        let pool_envelope = read_cleanup_pool_binding_envelope(&path);
+        let pool = pool_envelope
+            .verify(SignedStateExpectation {
+                state_kind: CLEANUP_POOL_BINDING_KIND,
+                stream_id: CLEANUP_POOL_BINDING_STREAM,
+                expected_signer_agent_id: Some(&AgentId::from_verifying_key(&key.verifying_key())),
+                accepted_sequence: Some(1),
+            })
+            .unwrap();
+        assert_eq!(state.cleanup_pool_binding, checkpoint.cleanup_pool_binding);
+        assert_eq!(state.cleanup_pool_binding, pool.payload);
+        assert_eq!(
+            state.cleanup_pool_binding.slot_count,
+            GOVERNANCE_CLEANUP_POOL_SLOT_COUNT
+        );
+        assert_eq!(
+            state.cleanup_pool_binding.slot_names.len(),
+            GOVERNANCE_CLEANUP_POOL_SLOT_COUNT
+        );
+        assert_eq!(state.cleanup_pool_binding.generation_id.len(), 64);
+        assert_eq!(pool_envelope.sequence(), 1);
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_directory_replacement_across_restart_is_fail_closed_without_touching_either_tree()
+     {
+        let path = persistence_path("cleanup-pool-replacement-restart");
+        let key = SigningKey::from_bytes(&[164; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let pool = cleanup_pool_path(&path);
+        let old_pool = pool.with_file_name(".governance-cleanup-pool.old");
+        fs::rename(&pool, &old_pool).unwrap();
+        fs::create_dir(&pool).unwrap();
+        let marker = pool.join("foreign-marker");
+        fs::write(&marker, b"replacement-tree").unwrap();
+        let old_binding = old_pool.join(GOVERNANCE_CLEANUP_POOL_BINDING_NAME);
+        assert!(old_binding.exists());
+        let error =
+            load_signed_policy(&path, &key).expect_err("replacement pool must refuse startup");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"replacement-tree");
+        assert!(old_binding.exists());
+        fs::remove_file(&marker).unwrap();
+        fs::remove_dir(&pool).unwrap();
+        fs::rename(old_pool, pool).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_lock_inode_replacement_across_restart_is_fail_closed_without_touching_replacement()
+     {
+        let path = persistence_path("cleanup-pool-lock-replacement-restart");
+        let key = SigningKey::from_bytes(&[165; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let pool = cleanup_pool_path(&path);
+        let lock = pool.join(GOVERNANCE_CLEANUP_POOL_LOCK_NAME);
+        let old_lock = pool.join("lock.old");
+        fs::rename(&lock, &old_lock).unwrap();
+        let replacement = b"foreign-lock-replacement";
+        fs::write(&lock, replacement).unwrap();
+        let error =
+            load_signed_policy(&path, &key).expect_err("replacement lock must refuse startup");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(fs::read(&lock).unwrap(), replacement);
+        assert!(old_lock.exists());
+        fs::remove_file(&lock).unwrap();
+        fs::rename(old_lock, lock).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_missing_or_unsigned_binding_refuses_restart_without_recreating_it() {
+        let path = persistence_path("cleanup-pool-binding-refusal");
+        let key = SigningKey::from_bytes(&[166; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let binding = cleanup_pool_binding_path(&path);
+        let original = fs::read(&binding).unwrap();
+        fs::remove_file(&binding).unwrap();
+        let error = load_signed_policy(&path, &key).expect_err("missing binding must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert!(
+            !binding.exists(),
+            "ordinary load must not recreate a missing binding"
+        );
+        fs::write(&binding, b"unsigned binding").unwrap();
+        let error = load_signed_policy(&path, &key).expect_err("unsigned binding must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(fs::read(&binding).unwrap(), b"unsigned binding");
+        fs::write(&binding, original).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_state_checkpoint_binding_disagreement_refuses_restart_without_repair() {
+        let path = persistence_path("cleanup-pool-state-checkpoint-disagreement");
+        let key = SigningKey::from_bytes(&[167; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let mut state_envelope = read_envelope(&path);
+        let state_before = serde_json::to_vec_pretty(&state_envelope).unwrap();
+        let mut state: PersistedGovernanceState =
+            serde_json::from_str(&state_envelope.statement.payload_json).unwrap();
+        let mut generation = state
+            .cleanup_pool_binding
+            .generation_id
+            .clone()
+            .into_bytes();
+        generation[0] = if generation[0] == b'0' { b'1' } else { b'0' };
+        state.cleanup_pool_binding.generation_id = String::from_utf8(generation).unwrap();
+        state_envelope = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            state_envelope.sequence(),
+            state,
+            &key,
+        )
+        .unwrap();
+        write_envelope(&path, &state_envelope);
+        let error = load_signed_policy(&path, &key)
+            .expect_err("divergent signed bindings must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            serde_json::to_vec_pretty(&state_envelope).unwrap()
+        );
+        assert_ne!(fs::read(&path).unwrap(), state_before);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_generation_change_refuses_restart_without_touching_signed_streams() {
+        let path = persistence_path("cleanup-pool-generation-change");
+        let key = SigningKey::from_bytes(&[168; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let state_before = fs::read(&path).unwrap();
+        let checkpoint_path = GovernancePolicy::persistence_sequence_path(&path);
+        let checkpoint_before = fs::read(&checkpoint_path).unwrap();
+        let mut pool_envelope = read_cleanup_pool_binding_envelope(&path);
+        let mut binding: CleanupPoolBinding =
+            serde_json::from_str(&pool_envelope.statement.payload_json).unwrap();
+        let mut generation = binding.generation_id.clone().into_bytes();
+        generation[1] = if generation[1] == b'0' { b'1' } else { b'0' };
+        binding.generation_id = String::from_utf8(generation).unwrap();
+        pool_envelope = SignedStateEnvelope::sign(
+            CLEANUP_POOL_BINDING_KIND,
+            CLEANUP_POOL_BINDING_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            1,
+            binding,
+            &key,
+        )
+        .unwrap();
+        write_cleanup_pool_binding_envelope(&path, &pool_envelope);
+        let error =
+            load_signed_policy(&path, &key).expect_err("generation replacement must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), state_before);
+        assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_before);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn legacy_signed_stream_without_cleanup_pool_binding_refuses_ordinary_load() {
+        let path = persistence_path("legacy-without-cleanup-pool-binding");
+        let key = SigningKey::from_bytes(&[169; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let state = read_envelope(&path);
+        let mut state_payload: serde_json::Value =
+            serde_json::from_str(&state.statement.payload_json).unwrap();
+        state_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("cleanup_pool_binding");
+        let legacy_state = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            state.sequence(),
+            state_payload,
+            &key,
+        )
+        .unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&legacy_state).unwrap()).unwrap();
+        let checkpoint = read_checkpoint(&path);
+        let mut checkpoint_payload: serde_json::Value =
+            serde_json::from_str(&checkpoint.statement.payload_json).unwrap();
+        checkpoint_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("cleanup_pool_binding");
+        let legacy_checkpoint = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            checkpoint.sequence(),
+            checkpoint_payload,
+            &key,
+        )
+        .unwrap();
+        write_checkpoint_value(&path, &legacy_checkpoint);
+        let error = load_signed_policy(&path, &key)
+            .expect_err("legacy signed stream must require migration");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::DecodePayload { .. }
+            )
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_cleanup_pool_path_replacement_refuses_authority_without_touching_foreign_tree() {
+        let path = persistence_path("live-cleanup-pool-replacement");
+        let key = SigningKey::from_bytes(&[170; 32]);
+        let policy = Arc::new(initialize_signed_policy(&path, &key));
+        let pool = cleanup_pool_path(&path);
+        let old_pool = pool.with_file_name(".governance-cleanup-pool.live-old");
+        fs::rename(&pool, &old_pool).unwrap();
+        fs::create_dir(&pool).unwrap();
+        let marker = pool.join("foreign-live-marker");
+        fs::write(&marker, b"must-survive").unwrap();
+        let error = policy
+            .authority()
+            .expect_err("live pool replacement must veto authority");
+        assert!(matches!(
+            error,
+            GovernanceAuthorityError::Persistence(
+                GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+            )
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"must-survive");
+        fs::remove_file(&marker).unwrap();
+        fs::remove_dir(&pool).unwrap();
+        fs::rename(old_pool, pool).unwrap();
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_drain_moves_terminal_slot_and_reopens_capacity() {
+        let path = persistence_path("cleanup-maintenance-drain");
+        let key = SigningKey::from_bytes(&[231; 32]);
+        let artifact = path.with_file_name("cleanup-maintenance-artifact");
+        fs::write(&artifact, b"terminal cleanup material").unwrap();
+        assert!(matches!(
+            quarantine_verified_entry(&artifact, || true, |_| true),
+            QuarantineOutcome::Retained
+        ));
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let report = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+            guard,
+            "cleanup-maintenance-archive",
+        )
+        .unwrap();
+        assert_eq!(report.mode, GovernanceCleanupPoolMaintenanceMode::Drain);
+        assert_eq!(report.moved_slots.len(), 1);
+        assert!(report.opaque_slots.is_empty());
+        assert!(report.archive_path.join(&report.moved_slots[0]).exists());
+        let pool = cleanup_pool_path(&path);
+        assert!(!pool.join(&report.moved_slots[0]).exists());
+
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let second = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            guard,
+            "cleanup-maintenance-archive-2",
+        )
+        .unwrap();
+        assert!(second.moved_slots.is_empty());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+        let _ = fs::remove_dir_all(report.archive_path);
+        let _ = fs::remove_dir_all(second.archive_path);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_guard_reports_live_policy_contention_without_archive() {
+        let path = persistence_path("cleanup-maintenance-live-contention");
+        let key = SigningKey::from_bytes(&[232; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let archive = path
+            .parent()
+            .unwrap()
+            .join("cleanup-maintenance-live-archive");
+        let error = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path)
+            .expect_err("a live policy must hold the authority sidecar");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::MaintenanceBusy { .. }
+        ));
+        assert!(!archive.exists());
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_crash_points_refuse_ordinary_restart_and_resume() {
+        let points = [
+            ("prepared", CleanupMaintenanceCrashPoint::Prepared),
+            ("after-move", CleanupMaintenanceCrashPoint::AfterMove(1)),
+            (
+                "before-completed",
+                CleanupMaintenanceCrashPoint::BeforeCompleted,
+            ),
+        ];
+        for (index, (label, point)) in points.into_iter().enumerate() {
+            let path = persistence_path(&format!("cleanup-maintenance-crash-{label}"));
+            let key = SigningKey::from_bytes(&[233 + index as u8; 32]);
+            let artifact =
+                path.with_file_name(format!("cleanup-maintenance-crash-artifact-{label}"));
+            fs::write(&artifact, b"crash-recovery cleanup material").unwrap();
+            assert!(matches!(
+                quarantine_verified_entry(&artifact, || true, |_| true),
+                QuarantineOutcome::Retained
+            ));
+            let policy = initialize_signed_policy(&path, &key);
+            drop(policy);
+            inject_cleanup_maintenance_crash(&path, point);
+            let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = GovernancePolicy::drain_cleanup_pool(
+                    &path,
+                    AgentId::from_verifying_key(&key.verifying_key()),
+                    key.clone(),
+                    guard,
+                    "cleanup-maintenance-crash-archive",
+                );
+            }));
+            assert!(
+                crashed.is_err(),
+                "injected maintenance crash must fire: {label}"
+            );
+            let ordinary = load_signed_policy(&path, &key);
+            assert!(matches!(
+                ordinary,
+                Err(GovernancePersistenceError::CleanupMaintenanceJournal { .. })
+            ));
+            let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+            let report = GovernancePolicy::drain_cleanup_pool(
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key.clone(),
+                guard,
+                "cleanup-maintenance-crash-archive",
+            )
+            .unwrap();
+            assert_eq!(report.moved_slots.len(), 1);
+            assert!(report.archive_path.join(&report.moved_slots[0]).exists());
+            cleanup_persistence(&path);
+            let _ = fs::remove_file(artifact);
+            let _ = fs::remove_dir_all(report.archive_path);
+        }
+    }
+
+    #[test]
+    fn cleanup_pool_drain_refuses_malformed_slot_before_archive_mutation() {
+        let path = persistence_path("cleanup-maintenance-drain-malformed");
+        let key = SigningKey::from_bytes(&[236; 32]);
+        let artifact = path.with_file_name("cleanup-maintenance-malformed-artifact");
+        fs::write(&artifact, b"malformed cleanup material").unwrap();
+        assert!(matches!(
+            quarantine_verified_entry(&artifact, || true, |_| true),
+            QuarantineOutcome::Retained
+        ));
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let slot_journal = cleanup_pool_path(&path)
+            .join("slot-00")
+            .join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        fs::write(&slot_journal, b"tampered maintenance slot").unwrap();
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let error = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            guard,
+            "cleanup-maintenance-malformed-archive",
+        )
+        .expect_err("drain must preflight malformed slots");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupMaintenanceJournal { .. }
+        ));
+        assert!(
+            !path
+                .parent()
+                .unwrap()
+                .join("cleanup-maintenance-malformed-archive")
+                .exists()
+        );
+        assert_eq!(
+            fs::read(&slot_journal).unwrap(),
+            b"tampered maintenance slot"
+        );
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn cleanup_pool_reset_archives_malformed_slot_opaquely_and_reopens_capacity() {
+        let path = persistence_path("cleanup-maintenance-reset-malformed");
+        let key = SigningKey::from_bytes(&[237; 32]);
+        let artifact = path.with_file_name("cleanup-maintenance-reset-artifact");
+        fs::write(&artifact, b"opaque cleanup material").unwrap();
+        assert!(matches!(
+            quarantine_verified_entry(&artifact, || true, |_| true),
+            QuarantineOutcome::Retained
+        ));
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let slot_journal = cleanup_pool_path(&path)
+            .join("slot-00")
+            .join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        fs::write(&slot_journal, b"opaque malformed bytes").unwrap();
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let report = GovernancePolicy::reset_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+            guard,
+            "cleanup-maintenance-reset-archive",
+        )
+        .unwrap();
+        assert_eq!(report.moved_slots, vec!["slot-00".to_string()]);
+        assert_eq!(report.opaque_slots, vec!["slot-00".to_string()]);
+        assert_eq!(
+            fs::read(
+                report
+                    .archive_path
+                    .join("slot-00")
+                    .join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME)
+            )
+            .unwrap(),
+            b"opaque malformed bytes"
+        );
+        let second_artifact = path.with_file_name("cleanup-maintenance-reset-second-artifact");
+        fs::write(&second_artifact, b"new capacity material").unwrap();
+        assert!(matches!(
+            quarantine_verified_entry(&second_artifact, || true, |_| true),
+            QuarantineOutcome::Retained
+        ));
+        assert!(cleanup_pool_path(&path).join("slot-00").exists());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+        let _ = fs::remove_file(second_artifact);
+        let _ = fs::remove_dir_all(report.archive_path);
+    }
+
+    #[test]
+    fn preconstruction_retention_guard_authenticates_existing_stream() {
+        let path = persistence_path("cleanup-preconstruction-existing");
+        let key = SigningKey::from_bytes(&[250; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let artifact = path.with_file_name("cleanup-preconstruction-existing-artifact");
+        fs::write(&artifact, b"preconstruction existing material").unwrap();
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let guard = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            guard.retain_cleanup_artifact(&artifact, cleanup_expectation(&artifact)),
+            Ok(GovernanceCleanupPoolRetentionOutcome::Retained)
+        ));
+        drop(guard);
+        assert!(!artifact.exists());
+        let reopened = load_signed_policy(&path, &key).unwrap();
+        drop(reopened);
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn preconstruction_fresh_retention_binding_is_adopted_by_initialize() {
+        let path = persistence_path("cleanup-preconstruction-fresh");
+        let key = SigningKey::from_bytes(&[251; 32]);
+        let artifact = path.with_file_name("cleanup-preconstruction-fresh-artifact");
+        fs::write(&artifact, b"preconstruction fresh material").unwrap();
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let guard = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        let binding_before = read_cleanup_pool_binding_envelope(&path)
+            .verify(SignedStateExpectation {
+                state_kind: CLEANUP_POOL_BINDING_KIND,
+                stream_id: CLEANUP_POOL_BINDING_STREAM,
+                expected_signer_agent_id: Some(&agent),
+                accepted_sequence: Some(1),
+            })
+            .unwrap()
+            .payload;
+        assert!(matches!(
+            guard.retain_cleanup_artifact(&artifact, cleanup_expectation(&artifact)),
+            Ok(GovernanceCleanupPoolRetentionOutcome::Retained)
+        ));
+        drop(guard);
+        let policy = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            agent.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        let state: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert_eq!(state.cleanup_pool_binding, binding_before);
+        drop(policy);
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn preconstruction_retention_guard_requires_both_anchors_and_rejects_legacy_mixed_state() {
+        let path = persistence_path("cleanup-preconstruction-mixed");
+        let key = SigningKey::from_bytes(&[252; 32]);
+        fs::write(&path, b"legacy unsigned state").unwrap();
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let error = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent,
+            key,
+        )
+        .expect_err("mixed/legacy state must fail before pool creation");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert!(!cleanup_pool_path(&path).exists());
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn preconstruction_retention_guard_rejects_missing_checkpoint_without_touching_pool() {
+        let path = persistence_path("cleanup-preconstruction-missing-checkpoint");
+        let key = SigningKey::from_bytes(&[253; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sequence = GovernancePolicy::persistence_sequence_path(&path);
+        let sequence_bytes = fs::read(&sequence).unwrap();
+        fs::remove_file(&sequence).unwrap();
+        let pool_before = fs::read_dir(cleanup_pool_path(&path)).unwrap().count();
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let error = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent,
+            key,
+        )
+        .expect_err("missing checkpoint must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(
+            fs::read_dir(cleanup_pool_path(&path)).unwrap().count(),
+            pool_before
+        );
+        fs::write(sequence, sequence_bytes).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn preconstruction_retention_guard_rejects_replaced_pool_without_touching_replacement() {
+        let path = persistence_path("cleanup-preconstruction-replaced-pool");
+        let key = SigningKey::from_bytes(&[254; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let pool = cleanup_pool_path(&path);
+        let old_pool = pool.with_file_name(".cleanup-preconstruction-old-pool");
+        let _ = fs::remove_dir_all(&old_pool);
+        fs::rename(&pool, &old_pool).unwrap();
+        fs::create_dir(&pool).unwrap();
+        let marker = pool.join("replacement-marker");
+        fs::write(&marker, b"replacement survives").unwrap();
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let error = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent,
+            key,
+        )
+        .expect_err("replaced pool must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"replacement survives");
+        fs::remove_file(marker).unwrap();
+        fs::remove_dir(&pool).unwrap();
+        fs::rename(old_pool, pool).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn preconstruction_retention_guard_pool_lock_contention_is_typed_and_preserves_source() {
+        let path = persistence_path("cleanup-preconstruction-pool-contention");
+        let key = SigningKey::from_bytes(&[255; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let lock_path = cleanup_pool_path(&path).join(GOVERNANCE_CLEANUP_POOL_LOCK_NAME);
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        held.try_lock().unwrap();
+        let artifact = path.with_file_name("cleanup-preconstruction-pool-contention-artifact");
+        fs::write(&artifact, b"pool contention source").unwrap();
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let error = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent,
+            key,
+        )
+        .expect_err("pool lock contention must be typed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::MaintenanceBusy { .. }
+        ));
+        assert!(artifact.exists());
+        drop(held);
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn preconstruction_retention_guard_drop_allows_initialize_constructor() {
+        let path = persistence_path("cleanup-preconstruction-drop-constructor");
+        let key = SigningKey::from_bytes(&[1; 32]);
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let guard = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        drop(guard);
+        let policy = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            agent,
+            key,
+        )
+        .unwrap();
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn preconstruction_retention_guard_rejects_wrong_signer_before_pool_mutation() {
+        let path = persistence_path("cleanup-preconstruction-wrong-signer");
+        let key = SigningKey::from_bytes(&[2; 32]);
+        let wrong_key = SigningKey::from_bytes(&[3; 32]);
+        let agent = AgentId::from_verifying_key(&key.verifying_key());
+        let error = GovernancePolicy::acquire_cleanup_pool_retention_guard(
+            &path,
+            agent.clone(),
+            agent,
+            wrong_key,
+        )
+        .expect_err("wrong signer must fail before fresh pool creation");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert!(!cleanup_pool_path(&path).exists());
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn normal_retention_uses_authenticated_fixed_pool_and_returns_terminal_outcome() {
+        let path = persistence_path("cleanup-pool-normal-retention");
+        let key = SigningKey::from_bytes(&[236; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let artifact = path.with_file_name("normal-retention-artifact");
+        fs::write(&artifact, b"normal-operation cleanup material").unwrap();
+        let snapshot = super::read_governance_artifact_snapshot(&artifact)
+            .unwrap()
+            .unwrap()
+            .0;
+        let expected = GovernanceCleanupArtifactExpectation {
+            device: snapshot.identity.device,
+            inode: snapshot.identity.inode,
+            content_digest: snapshot.content_digest,
+            byte_len: snapshot.byte_len,
+        };
+        assert!(matches!(
+            policy.retain_cleanup_artifact(&artifact, expected),
+            Ok(GovernanceCleanupPoolRetentionOutcome::Retained)
+        ));
+        assert!(
+            !artifact.exists(),
+            "retained source must leave canonical name absent"
+        );
+        let pool = cleanup_pool_path(&path);
+        let slot_count = fs::read_dir(&pool)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("slot-"))
+            .count();
+        assert_eq!(slot_count, 1);
+        drop(policy);
+        let reopened = load_signed_policy(&path, &key).unwrap();
+        assert!(Arc::new(reopened).authority().is_ok());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn normal_retention_rejects_wrong_expectation_without_reserving_slot() {
+        let path = persistence_path("cleanup-pool-normal-retention-mismatch");
+        let key = SigningKey::from_bytes(&[237; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let artifact = path.with_file_name("normal-retention-mismatch-artifact");
+        fs::write(&artifact, b"actual cleanup material").unwrap();
+        let snapshot = super::read_governance_artifact_snapshot(&artifact)
+            .unwrap()
+            .unwrap()
+            .0;
+        let expected = GovernanceCleanupArtifactExpectation {
+            device: snapshot.identity.device,
+            inode: snapshot.identity.inode,
+            content_digest: "0".repeat(64),
+            byte_len: snapshot.byte_len,
+        };
+        assert!(matches!(
+            policy.retain_cleanup_artifact(&artifact, expected),
+            Ok(GovernanceCleanupPoolRetentionOutcome::Uncertain)
+        ));
+        assert!(artifact.exists());
+        let pool = cleanup_pool_path(&path);
+        assert_eq!(
+            fs::read_dir(&pool)
+                .unwrap()
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with("slot-"))
+                .count(),
+            0
+        );
+        drop(policy);
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn normal_retention_reports_pool_exhaustion_without_unbounded_growth() {
+        let path = persistence_path("cleanup-pool-normal-retention-exhaustion");
+        let key = SigningKey::from_bytes(&[238; 32]);
+        let mut artifacts = Vec::new();
+        for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
+            let artifact = path.with_file_name(format!("normal-retention-exhaustion-{index}"));
+            fs::write(&artifact, format!("retained-{index}")).unwrap();
+            assert!(matches!(
+                quarantine_verified_entry(&artifact, || true, |_| true),
+                QuarantineOutcome::Retained
+            ));
+            artifacts.push(artifact);
+        }
+        let policy = initialize_signed_policy(&path, &key);
+        let extra = path.with_file_name("normal-retention-exhaustion-extra");
+        fs::write(&extra, b"extra retained material").unwrap();
+        let snapshot = super::read_governance_artifact_snapshot(&extra)
+            .unwrap()
+            .unwrap()
+            .0;
+        let expected = GovernanceCleanupArtifactExpectation {
+            device: snapshot.identity.device,
+            inode: snapshot.identity.inode,
+            content_digest: snapshot.content_digest,
+            byte_len: snapshot.byte_len,
+        };
+        assert!(matches!(
+            policy.retain_cleanup_artifact(&extra, expected),
+            Ok(GovernanceCleanupPoolRetentionOutcome::PoolExhausted)
+        ));
+        assert!(extra.exists());
+        let pool = cleanup_pool_path(&path);
+        assert_eq!(
+            fs::read_dir(&pool)
+                .unwrap()
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with("slot-"))
+                .count(),
+            GOVERNANCE_CLEANUP_POOL_SLOT_COUNT
+        );
+        drop(policy);
+        cleanup_persistence(&path);
+        for artifact in artifacts {
+            let _ = fs::remove_file(artifact);
+        }
+        let _ = fs::remove_file(extra);
+    }
+
+    #[test]
+    fn cleanup_pool_reset_reopens_all_fixed_slots_for_normal_retention() {
+        let path = persistence_path("cleanup-pool-reset-full-capacity");
+        let key = SigningKey::from_bytes(&[246; 32]);
+        let mut old_artifacts = Vec::new();
+        for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
+            let artifact = path.with_file_name(format!("cleanup-reset-old-{index}"));
+            fs::write(&artifact, format!("old retained material {index}")).unwrap();
+            assert!(matches!(
+                quarantine_verified_entry(&artifact, || true, |_| true),
+                QuarantineOutcome::Retained
+            ));
+            old_artifacts.push(artifact);
+        }
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let report = GovernancePolicy::reset_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+            guard,
+            "cleanup-reset-full-capacity-archive",
+        )
+        .unwrap();
+        assert_eq!(report.moved_slots.len(), GOVERNANCE_CLEANUP_POOL_SLOT_COUNT);
+        assert!(report.opaque_slots.is_empty());
+        let pool = cleanup_pool_path(&path);
+        for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
+            assert!(!pool.join(cleanup_pool_slot_name(index)).exists());
+        }
+        let policy = load_signed_policy(&path, &key).unwrap();
+        let mut new_artifacts = Vec::new();
+        for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
+            let artifact = path.with_file_name(format!("cleanup-reset-new-{index}"));
+            fs::write(&artifact, format!("new retained material {index}")).unwrap();
+            let snapshot = super::read_governance_artifact_snapshot(&artifact)
+                .unwrap()
+                .unwrap()
+                .0;
+            let expected = GovernanceCleanupArtifactExpectation {
+                device: snapshot.identity.device,
+                inode: snapshot.identity.inode,
+                content_digest: snapshot.content_digest,
+                byte_len: snapshot.byte_len,
+            };
+            assert!(matches!(
+                policy.retain_cleanup_artifact(&artifact, expected),
+                Ok(GovernanceCleanupPoolRetentionOutcome::Retained)
+            ));
+            new_artifacts.push(artifact);
+        }
+        drop(policy);
+        cleanup_persistence(&path);
+        for artifact in old_artifacts.into_iter().chain(new_artifacts) {
+            let _ = fs::remove_file(artifact);
+        }
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_rejects_archive_collision_and_second_guard() {
+        let path = persistence_path("cleanup-maintenance-archive-collision");
+        let key = SigningKey::from_bytes(&[239; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let first = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let second = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path)
+            .expect_err("only one maintenance guard may hold the authority sidecar");
+        assert!(matches!(
+            second,
+            GovernancePersistenceError::MaintenanceBusy { .. }
+        ));
+        let archive = path.parent().unwrap().join("cleanup-maintenance-existing");
+        fs::create_dir(&archive).unwrap();
+        let marker = archive.join("foreign");
+        fs::write(&marker, b"must survive").unwrap();
+        let error = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            first,
+            "cleanup-maintenance-existing",
+        )
+        .expect_err("preexisting archive must fail before mutation");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupMaintenanceArchive { .. }
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"must survive");
+        cleanup_persistence(&path);
+        let _ = fs::remove_dir_all(archive);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_simultaneous_guard_acquisition_has_one_winner() {
+        let path = persistence_path("cleanup-maintenance-simultaneous-guard");
+        let key = SigningKey::from_bytes(&[247; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let start = Arc::new(std::sync::Barrier::new(3));
+        let first_path = path.clone();
+        let first_start = Arc::clone(&start);
+        let first = std::thread::spawn(move || {
+            first_start.wait();
+            GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&first_path)
+        });
+        let second_path = path.clone();
+        let second_start = Arc::clone(&start);
+        let second = std::thread::spawn(move || {
+            second_start.wait();
+            GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&second_path)
+        });
+        start.wait();
+        let first = first.join().unwrap();
+        let second = second.join().unwrap();
+        match (first, second) {
+            (Ok(guard), Err(error)) | (Err(error), Ok(guard)) => {
+                drop(guard);
+                assert!(matches!(
+                    error,
+                    GovernancePersistenceError::MaintenanceBusy { .. }
+                ));
+            }
+            (Ok(_), Ok(_)) => panic!("two concurrent maintenance guards won"),
+            (Err(first), Err(second)) => {
+                panic!("both concurrent maintenance guards failed: {first}; {second}")
+            }
+        }
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_pool_lock_contention_is_typed_and_pre_archive() {
+        let path = persistence_path("cleanup-maintenance-pool-lock-contention");
+        let key = SigningKey::from_bytes(&[248; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let lock_path = cleanup_pool_path(&path).join(GOVERNANCE_CLEANUP_POOL_LOCK_NAME);
+        let held_lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        held_lock.try_lock().unwrap();
+        let archive_name = "cleanup-maintenance-pool-lock-contention-archive";
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let error = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            guard,
+            archive_name,
+        )
+        .expect_err("pool-lock contention must fail before archive creation");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::MaintenanceBusy { .. }
+        ));
+        assert!(!path.parent().unwrap().join(archive_name).exists());
+        drop(held_lock);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_state_lock_contention_is_typed_and_pre_archive() {
+        let path = persistence_path("cleanup-maintenance-state-lock-contention");
+        let key = SigningKey::from_bytes(&[249; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let state_lock_path = GovernancePolicy::persistence_lock_path(&path);
+        let held_lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&state_lock_path)
+            .unwrap();
+        held_lock.try_lock().unwrap();
+        let archive_name = "cleanup-maintenance-state-lock-contention-archive";
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let error = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            guard,
+            archive_name,
+        )
+        .expect_err("state-lock contention must fail before archive creation");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::MaintenanceBusy { .. }
+        ));
+        assert!(!path.parent().unwrap().join(archive_name).exists());
+        drop(held_lock);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_archive_slot_collision_preserves_foreign_destination() {
+        let _test_lock = lock_authority_cleanup_tests();
+        let path = persistence_path("cleanup-maintenance-archive-slot-collision");
+        let key = SigningKey::from_bytes(&[244; 32]);
+        let artifact = path.with_file_name("cleanup-maintenance-slot-artifact");
+        fs::write(&artifact, b"terminal cleanup slot material").unwrap();
+        assert!(matches!(
+            quarantine_verified_entry(&artifact, || true, |_| true),
+            QuarantineOutcome::Retained
+        ));
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let archive_name = "cleanup-maintenance-archive-slot-collision-destination";
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let (reached, resume) =
+            install_cleanup_maintenance_move_barrier(&cleanup_pool_path(&path), "slot-00");
+        let operation_path = path.clone();
+        let operation_key = key.clone();
+        let operation = std::thread::spawn(move || {
+            GovernancePolicy::drain_cleanup_pool(
+                &operation_path,
+                AgentId::from_verifying_key(&operation_key.verifying_key()),
+                operation_key,
+                guard,
+                archive_name,
+            )
+        });
+        reached.wait();
+        let archive = path.parent().unwrap().join(archive_name);
+        let foreign_slot = archive.join("slot-00");
+        fs::create_dir(&foreign_slot).unwrap();
+        let marker = foreign_slot.join("foreign-marker");
+        fs::write(&marker, b"foreign archive destination").unwrap();
+        resume.wait();
+        let error = operation
+            .join()
+            .unwrap()
+            .expect_err("no-replace archive publication must refuse a foreign slot");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupMaintenance { .. }
+                | GovernancePersistenceError::CleanupMaintenanceArchive { .. }
+                | GovernancePersistenceError::CleanupMaintenanceJournal { .. }
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"foreign archive destination");
+        assert!(cleanup_pool_path(&path).join("slot-00").exists());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_held_parent_retarget_fails_closed_and_preserves_replacement() {
+        let _test_lock = lock_authority_cleanup_tests();
+        let path = persistence_path("cleanup-maintenance-parent-retarget");
+        let key = SigningKey::from_bytes(&[245; 32]);
+        let artifact = path.with_file_name("cleanup-maintenance-parent-artifact");
+        fs::write(&artifact, b"parent-retarget material").unwrap();
+        assert!(matches!(
+            quarantine_verified_entry(&artifact, || true, |_| true),
+            QuarantineOutcome::Retained
+        ));
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let archive_name = "cleanup-maintenance-parent-retarget-archive";
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let (reached, resume) =
+            install_cleanup_maintenance_move_barrier(&cleanup_pool_path(&path), "slot-00");
+        let operation_path = path.clone();
+        let operation_key = key.clone();
+        let operation = std::thread::spawn(move || {
+            GovernancePolicy::drain_cleanup_pool(
+                &operation_path,
+                AgentId::from_verifying_key(&operation_key.verifying_key()),
+                operation_key,
+                guard,
+                archive_name,
+            )
+        });
+        reached.wait();
+        let original_parent = path.parent().unwrap().to_path_buf();
+        let moved_parent = original_parent.with_file_name(".cleanup-parent-retarget-old");
+        let _ = fs::remove_dir_all(&moved_parent);
+        fs::rename(&original_parent, &moved_parent).unwrap();
+        fs::create_dir(&original_parent).unwrap();
+        let marker = original_parent.join("foreign-parent-marker");
+        fs::write(&marker, b"replacement parent survives").unwrap();
+        resume.wait();
+        let error = operation
+            .join()
+            .unwrap()
+            .expect_err("parent retarget must fail before slot move");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"replacement parent survives");
+        assert!(moved_parent.join(GOVERNANCE_CLEANUP_POOL_DIR_NAME).exists());
+        fs::remove_file(marker).unwrap();
+        fs::remove_dir(&original_parent).unwrap();
+        fs::rename(&moved_parent, &original_parent).unwrap();
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(artifact);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_pool_maintenance_rejects_archive_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let path = persistence_path("cleanup-maintenance-archive-symlink");
+        let key = SigningKey::from_bytes(&[240; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let archive_target = path.parent().unwrap().join("cleanup-maintenance-target");
+        fs::create_dir(&archive_target).unwrap();
+        let marker = archive_target.join("foreign");
+        fs::write(&marker, b"target survives").unwrap();
+        let archive_link = path.parent().unwrap().join("cleanup-maintenance-link");
+        symlink(&archive_target, &archive_link).unwrap();
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let error = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            guard,
+            "cleanup-maintenance-link",
+        )
+        .expect_err("symlink archive must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupMaintenanceArchive { .. }
+        ));
+        assert!(archive_link.is_symlink());
+        assert_eq!(fs::read(&marker).unwrap(), b"target survives");
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(archive_link);
+        let _ = fs::remove_dir_all(archive_target);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_rejects_wrong_signer_before_regular_archive_creation() {
+        let path = persistence_path("cleanup-maintenance-wrong-signer");
+        let key = SigningKey::from_bytes(&[241; 32]);
+        let wrong_key = SigningKey::from_bytes(&[243; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let archive_name = "cleanup-maintenance-wrong-signer-archive";
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let error = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            wrong_key,
+            guard,
+            archive_name,
+        )
+        .expect_err("a non-admitted signer must fail before archive creation");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert!(!path.parent().unwrap().join(archive_name).exists());
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cleanup_pool_maintenance_rejects_replaced_namespace_without_creating_archive() {
+        let path = persistence_path("cleanup-maintenance-replaced-namespace");
+        let key = SigningKey::from_bytes(&[242; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let pool = cleanup_pool_path(&path);
+        let old_pool = pool.with_file_name(".cleanup-pool-maintenance-old");
+        fs::rename(&pool, &old_pool).unwrap();
+        fs::create_dir(&pool).unwrap();
+        let marker = pool.join("replacement-marker");
+        fs::write(&marker, b"replacement survives").unwrap();
+        let guard = GovernancePolicy::acquire_cleanup_pool_maintenance_guard(&path).unwrap();
+        let error = GovernancePolicy::drain_cleanup_pool(
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            guard,
+            "cleanup-maintenance-replaced-archive",
+        )
+        .expect_err("replacement namespace must refuse maintenance");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolNamespaceChanged { .. }
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"replacement survives");
+        assert!(
+            !path
+                .parent()
+                .unwrap()
+                .join("cleanup-maintenance-replaced-archive")
+                .exists()
+        );
+        fs::remove_file(&marker).unwrap();
+        fs::remove_dir(&pool).unwrap();
+        fs::rename(old_pool, pool).unwrap();
+        cleanup_persistence(&path);
+    }
+
     fn read_envelope(path: &Path) -> SignedStateEnvelope<PersistedGovernanceState> {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
     }
@@ -4979,6 +16674,14 @@ mod tests {
         .unwrap();
     }
 
+    fn write_checkpoint_value<T: Serialize>(path: &Path, checkpoint: &SignedStateEnvelope<T>) {
+        fs::write(
+            GovernancePolicy::persistence_sequence_path(path),
+            serde_json::to_vec_pretty(checkpoint).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn rewrite_as_signed_pre_lock_stream(
         path: &Path,
         key: &SigningKey,
@@ -4991,6 +16694,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("lock_binding");
+        state_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("cleanup_pool_binding");
         let legacy_state = SignedStateEnvelope::sign(
             GOVERNANCE_STATE_KIND,
             GOVERNANCE_STATE_STREAM,
@@ -5029,6 +16736,10 @@ mod tests {
             serde_json::from_str(&envelope.statement.payload_json).unwrap();
         payload.as_object_mut().unwrap().remove("lock_binding");
         payload
+            .as_object_mut()
+            .unwrap()
+            .remove("cleanup_pool_binding");
+        payload
     }
 
     fn load_signed_policy(
@@ -5041,6 +16752,29 @@ mod tests {
             AgentId::from_verifying_key(&key.verifying_key()),
             key.clone(),
         )
+    }
+
+    fn copied_reinitialization_artifact(
+        original: &Path,
+        archive: &Path,
+    ) -> super::ReinitializationArtifact {
+        fs::copy(original, archive).unwrap();
+        let source = super::read_governance_artifact_snapshot(original)
+            .unwrap()
+            .unwrap()
+            .0;
+        let archive_identity = super::read_governance_artifact_identity(archive)
+            .unwrap()
+            .unwrap();
+        super::ReinitializationArtifact {
+            original: original.to_path_buf(),
+            archive: archive.to_path_buf(),
+            identity: source.identity,
+            content_digest: source.content_digest,
+            byte_len: source.byte_len,
+            archive_identity: Some(archive_identity),
+            restored_identity: None,
+        }
     }
 
     fn duplicate_locked_policy_snapshot(
@@ -5067,6 +16801,7 @@ mod tests {
         let sequence_path = GovernancePolicy::persistence_sequence_path(path);
         let _ = fs::remove_file(&sequence_path);
         let _ = fs::remove_file(GovernancePolicy::persistence_lock_path(path));
+        let _ = fs::remove_file(GovernancePolicy::persistence_authority_lock_path(path));
         for original in [path, sequence_path.as_path()] {
             let Some(parent) = original.parent() else {
                 continue;
@@ -5084,6 +16819,16 @@ mod tests {
                         let _ = fs::remove_file(entry.path());
                     }
                 }
+            }
+        }
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent.join(GOVERNANCE_CLEANUP_POOL_DIR_NAME));
+            let is_test_parent = parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("swarm-governance-auth-"));
+            if is_test_parent {
+                let _ = fs::remove_dir(parent);
             }
         }
     }
@@ -5111,6 +16856,66 @@ mod tests {
         blocker
     }
 
+    fn rewrite_same_inode(path: &Path, bytes: &[u8]) {
+        let mut file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_len(0).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(bytes).unwrap();
+        file.sync_all().unwrap();
+    }
+
+    #[derive(Debug, Default)]
+    struct CountingTransport {
+        rounds: std::sync::Mutex<usize>,
+        published: std::sync::Mutex<usize>,
+    }
+
+    impl CountingTransport {
+        fn rounds(&self) -> usize {
+            *self.rounds.lock().unwrap()
+        }
+    }
+
+    impl ConsensusTransport for CountingTransport {
+        fn accept_committee(&self, _committee: &ConsensusCommittee) -> Result<(), ConsensusError> {
+            *self.rounds.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        fn publish(&self, _envelope: &ConsensusSignedEnvelope) -> Result<(), ConsensusError> {
+            *self.published.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        fn drain(&self) -> Result<Vec<ConsensusSignedEnvelope>, ConsensusError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct HealthMemorySnapshot {
+        projection: super::PersistedGovernanceState,
+        pending_events: std::collections::VecDeque<super::GovernanceRuntimeEvent>,
+        checkpoint_lagging: Option<super::GovernanceCheckpointLag>,
+        checkpoint_repair_backoff: Option<super::GovernanceCheckpointRepairBackoff>,
+        pending_health_observation: Option<super::PendingHealthObservation>,
+        persistence_sequence: Option<u64>,
+        persistence_digest: Option<String>,
+    }
+
+    fn health_memory_snapshot(policy: &GovernancePolicy) -> HealthMemorySnapshot {
+        let state = policy.state.lock().unwrap();
+        HealthMemorySnapshot {
+            projection: super::PersistedGovernanceState::from_runtime(&state),
+            pending_events: state.pending_events.clone(),
+            checkpoint_lagging: state.checkpoint_lagging.clone(),
+            checkpoint_repair_backoff: state.checkpoint_repair_backoff,
+            pending_health_observation: state.pending_health_observation.clone(),
+            persistence_sequence: state.persistence_sequence,
+            persistence_digest: state.persistence_digest.clone(),
+        }
+    }
+
     fn request(action: ResponseAction) -> ActionRequest {
         ActionRequest {
             hunt_id: HuntId("hunt-governance-test".to_string()),
@@ -5130,6 +16935,80 @@ mod tests {
             peer_findings: Vec::new(),
             agent_health,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_pair_guard_transfers_without_reacquiring_and_releases_on_drop() {
+        let current = persistence_path("authority-pair-guard-current");
+        let legacy = persistence_path("authority-pair-guard-legacy");
+        let key = SigningKey::from_bytes(&[205; 32]);
+        let guard = super::acquire_governance_authority_pair_guard(&current, &legacy).unwrap();
+        let identity = super::governance_authority_lock_pair_identity(&current, &legacy).unwrap();
+        assert_eq!(
+            super::governance_authority_lock_identity(&current).unwrap(),
+            identity
+        );
+        assert_eq!(
+            super::governance_authority_lock_identity(&legacy).unwrap(),
+            identity
+        );
+        let policy = GovernancePolicy::initialize_persistence_with_authority_pair_guard(
+            GovernancePolicyConfig::default(),
+            &current,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+            guard,
+        )
+        .unwrap();
+        let contending = super::acquire_governance_authority_pair_guard(&current, &legacy);
+        assert!(matches!(
+            contending,
+            Err(GovernancePersistenceError::AuthorityStateLocked { .. })
+        ));
+        drop(policy);
+        let released = super::acquire_governance_authority_pair_guard(&current, &legacy)
+            .expect("transferred authority guard must release with policy drop");
+        drop(released);
+        cleanup_persistence(&current);
+        cleanup_persistence(&legacy);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_pair_constructor_failure_preserves_preexisting_primary_and_removes_new_legacy() {
+        let current = persistence_path("authority-pair-guard-preexisting-current");
+        let legacy = persistence_path("authority-pair-guard-new-legacy");
+        let key = SigningKey::from_bytes(&[206; 32]);
+        let current_sidecar = GovernancePolicy::persistence_authority_lock_path(&current);
+        let legacy_sidecar = GovernancePolicy::persistence_authority_lock_path(&legacy);
+        let preexisting = b"preexisting current authority inode";
+        fs::write(&current_sidecar, preexisting).unwrap();
+        let guard = super::acquire_governance_authority_pair_guard(&current, &legacy).unwrap();
+        assert!(legacy_sidecar.exists());
+        let state_lock_path = GovernancePolicy::persistence_lock_path(&current);
+        let held_state_lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&state_lock_path)
+            .unwrap();
+        held_state_lock.try_lock().unwrap();
+        assert!(
+            GovernancePolicy::initialize_persistence_with_authority_pair_guard(
+                GovernancePolicyConfig::default(),
+                &current,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+                guard,
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&current_sidecar).unwrap(), preexisting);
+        assert!(!legacy_sidecar.exists());
+        drop(held_state_lock);
+        cleanup_persistence(&current);
+        cleanup_persistence(&legacy);
     }
 
     #[test]
@@ -5242,6 +17121,11 @@ mod tests {
             &copied_lock,
         )
         .unwrap();
+        fs::copy(
+            GovernancePolicy::persistence_authority_lock_path(&source_path),
+            GovernancePolicy::persistence_authority_lock_path(&copied_path),
+        )
+        .unwrap();
         fs::set_permissions(&copied_lock, fs::Permissions::from_mode(0o600)).unwrap();
         let Err(error) = load_signed_policy(&copied_path, &key) else {
             panic!("a copied stream loaded on a different lock inode");
@@ -5252,6 +17136,895 @@ mod tests {
         ));
         cleanup_persistence(&source_path);
         cleanup_persistence(&copied_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_sidecar_is_hard_linked_lifetime_exclusive_and_fail_closed() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+        let key = SigningKey::from_bytes(&[186; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let first_path = persistence_path("authority-sidecar-first");
+        let alternate_path = persistence_path("authority-sidecar-alternate");
+        let first = initialize_signed_policy(&first_path, &key);
+        let first_sidecar = GovernancePolicy::persistence_authority_lock_path(&first_path);
+        let alternate_sidecar = GovernancePolicy::persistence_authority_lock_path(&alternate_path);
+        let first_metadata = fs::symlink_metadata(&first_sidecar).unwrap();
+        assert!(first_metadata.file_type().is_file());
+        assert_eq!(first_metadata.permissions().mode() & 0o777, 0o600);
+        let first_identity = GovernancePolicy::persistence_authority_lock_identity(&first_path)
+            .expect("initialized authority has a regular canonical sidecar");
+        assert_eq!(first_identity.device, first_metadata.dev());
+        assert_eq!(first_identity.inode, first_metadata.ino());
+
+        fs::hard_link(&first_sidecar, &alternate_sidecar).unwrap();
+        assert_eq!(
+            GovernancePolicy::persistence_authority_lock_identity(&alternate_path).unwrap(),
+            first_identity
+        );
+        assert_eq!(
+            GovernancePolicy::persistence_authority_lock_pair_identity(
+                &first_path,
+                &alternate_path,
+            )
+            .unwrap(),
+            first_identity
+        );
+        let error = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &alternate_path,
+            governing_id.clone(),
+            key.clone(),
+        )
+        .expect_err("an alternate state path cannot open a hard-linked live authority");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::AuthorityStateLocked { ref path }
+                if path == &alternate_sidecar
+        ));
+        assert!(
+            !GovernancePolicy::persistence_lock_path(&alternate_path).exists(),
+            "failed alternate initialization must not leave a state-lock residue"
+        );
+
+        drop(first);
+        let alternate = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &alternate_path,
+            governing_id,
+            key.clone(),
+        )
+        .expect("dropping the original policy releases the shared authority sidecar");
+        drop(alternate);
+
+        let mismatched_path = persistence_path("authority-sidecar-mismatch");
+        let mismatched = initialize_signed_policy(&mismatched_path, &key);
+        drop(mismatched);
+        let mismatched_identity =
+            GovernancePolicy::persistence_authority_lock_identity(&mismatched_path).unwrap();
+        assert_ne!(mismatched_identity, first_identity);
+        assert!(matches!(
+            GovernancePolicy::persistence_authority_lock_pair_identity(
+                &first_path,
+                &mismatched_path,
+            )
+            .unwrap_err(),
+            GovernancePersistenceError::AuthorityLockIdentityChanged { ref path, .. }
+                if path == &GovernancePolicy::persistence_authority_lock_path(&mismatched_path)
+        ));
+
+        let symlink_path = persistence_path("authority-sidecar-symlink");
+        let symlink_policy = initialize_signed_policy(&symlink_path, &key);
+        drop(symlink_policy);
+        let symlink_sidecar = GovernancePolicy::persistence_authority_lock_path(&symlink_path);
+        let symlink_target = symlink_path.with_extension("authority-target");
+        fs::write(&symlink_target, b"authority-target").unwrap();
+        fs::remove_file(&symlink_sidecar).unwrap();
+        symlink(&symlink_target, &symlink_sidecar).unwrap();
+        assert!(matches!(
+            GovernancePolicy::persistence_authority_lock_identity(&symlink_path).unwrap_err(),
+            GovernancePersistenceError::InvalidAuthorityLockFileType { ref path }
+                if path == &symlink_sidecar
+        ));
+        assert!(matches!(
+            GovernancePolicy::persistence_authority_lock_pair_identity(
+                &first_path,
+                &symlink_path,
+            )
+            .unwrap_err(),
+            GovernancePersistenceError::InvalidAuthorityLockFileType { ref path }
+                if path == &symlink_sidecar
+        ));
+        assert!(matches!(
+            load_signed_policy(&symlink_path, &key).unwrap_err(),
+            GovernancePersistenceError::InvalidAuthorityLockFileType { ref path }
+                if path == &symlink_sidecar
+        ));
+
+        let directory_path = persistence_path("authority-sidecar-directory");
+        let directory_policy = initialize_signed_policy(&directory_path, &key);
+        drop(directory_policy);
+        let directory_sidecar = GovernancePolicy::persistence_authority_lock_path(&directory_path);
+        fs::remove_file(&directory_sidecar).unwrap();
+        fs::create_dir(&directory_sidecar).unwrap();
+        assert!(matches!(
+            GovernancePolicy::persistence_authority_lock_identity(&directory_path).unwrap_err(),
+            GovernancePersistenceError::InvalidAuthorityLockFileType { ref path }
+                if path == &directory_sidecar
+        ));
+        assert!(matches!(
+            load_signed_policy(&directory_path, &key).unwrap_err(),
+            GovernancePersistenceError::InvalidAuthorityLockFileType { ref path }
+                if path == &directory_sidecar
+        ));
+
+        cleanup_persistence(&first_path);
+        cleanup_persistence(&alternate_path);
+        cleanup_persistence(&mismatched_path);
+        cleanup_persistence(&symlink_path);
+        cleanup_persistence(&directory_path);
+        let _ = fs::remove_file(symlink_target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_new_authority_lock_acquisition_removes_only_new_residues() {
+        let failures = [
+            (
+                "authority-lock-file-sync-failure",
+                InjectedAuthorityLockFailure::FileSync,
+            ),
+            (
+                "authority-lock-parent-sync-failure",
+                InjectedAuthorityLockFailure::ParentSync,
+            ),
+            (
+                "authority-lock-try-lock-failure",
+                InjectedAuthorityLockFailure::TryLock,
+            ),
+            (
+                "authority-lock-open-identity-failure",
+                InjectedAuthorityLockFailure::IdentityVerification,
+            ),
+            (
+                "authority-lock-post-acquire-identity-failure",
+                InjectedAuthorityLockFailure::PostAcquireVerification,
+            ),
+        ];
+        for (suffix, failure) in failures {
+            let path = persistence_path(suffix);
+            let authority_path = GovernancePolicy::persistence_authority_lock_path(&path);
+            let state_lock_path = GovernancePolicy::persistence_lock_path(&path);
+            let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+            let key = SigningKey::from_bytes(&[196; 32]);
+            inject_authority_lock_failure(&authority_path, failure);
+            assert!(
+                GovernancePolicy::initialize_persistence(
+                    GovernancePolicyConfig::default(),
+                    &path,
+                    AgentId::from_verifying_key(&key.verifying_key()),
+                    key.clone(),
+                )
+                .is_err()
+            );
+            assert!(
+                !authority_path.exists(),
+                "failed authority acquisition left a newly-created sidecar for {suffix}"
+            );
+            assert!(
+                !state_lock_path.exists(),
+                "failed authority acquisition left a newly-created state lock for {suffix}"
+            );
+            assert!(!path.exists());
+            assert!(!sequence_path.exists());
+            let reopened = GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .expect("cleanup must leave the stream reopenable after an injected failure");
+            drop(reopened);
+            cleanup_persistence(&path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_quarantine_preserves_barrier_replacement() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-barrier-replacement");
+        let key = SigningKey::from_bytes(&[199; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let state_lock = GovernancePolicy::persistence_lock_path(&path);
+        let foreign = b"foreign sidecar wins the cleanup race".to_vec();
+        let (reached, resume) = install_authority_cleanup_barrier(&sidecar);
+        let replacement_sidecar = sidecar.clone();
+        let replacement_bytes = foreign.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::remove_file(&replacement_sidecar).unwrap();
+            fs::write(&replacement_sidecar, replacement_bytes).unwrap();
+            resume.wait();
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+        assert_eq!(fs::read(&sidecar).unwrap(), foreign);
+        assert!(
+            !state_lock.exists(),
+            "foreign sidecar replacement must not strand the newly-created state lock"
+        );
+        drop(fs::remove_file(&sidecar));
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_post_verify_collision_preserves_foreign_destination() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-post-verify-collision");
+        let key = SigningKey::from_bytes(&[200; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign post-verify quarantine destination".to_vec();
+        let expected_foreign = foreign.clone();
+        let (reached, resume, destination) =
+            install_authority_cleanup_post_verify_barrier(&sidecar);
+        let destination_for_replacer = Arc::clone(&destination);
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            let quarantine = destination_for_replacer
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("cleanup publishes its reserved destination before the barrier");
+            fs::remove_file(&quarantine).unwrap();
+            fs::write(&quarantine, &foreign).unwrap();
+            resume.wait();
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+        assert_eq!(fs::read(&sidecar).unwrap(), Vec::<u8>::new());
+        let quarantine = destination.lock().unwrap().clone().unwrap();
+        assert_eq!(fs::read(quarantine).unwrap(), expected_foreign);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    fn run_private_restore_selection_control(
+        label: &str,
+        replace_candidate: bool,
+        replace_quarantine: bool,
+    ) {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path(label);
+        let key = SigningKey::from_bytes(&[219; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = format!("foreign private replacement for {label}").into_bytes();
+        let (reached, resume, destination) =
+            install_authority_cleanup_post_verify_barrier(&sidecar);
+        let replacer = std::thread::spawn({
+            let destination = Arc::clone(&destination);
+            let foreign = foreign.clone();
+            move || {
+                reached.wait();
+                let quarantine = destination
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("cleanup publishes the quarantine link before the decision seam");
+                let slot = quarantine.parent().unwrap().to_path_buf();
+                let candidate = slot.join(GOVERNANCE_CLEANUP_POOL_CANDIDATE_NAME);
+                let source_snapshot = super::read_governance_artifact_snapshot(&candidate)
+                    .unwrap()
+                    .unwrap()
+                    .0;
+                if replace_candidate {
+                    fs::remove_file(&candidate).unwrap();
+                    fs::write(&candidate, &foreign).unwrap();
+                }
+                if replace_quarantine {
+                    fs::remove_file(&quarantine).unwrap();
+                    fs::write(&quarantine, &foreign).unwrap();
+                }
+                resume.wait();
+                (source_snapshot, candidate, quarantine)
+            }
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        let (source_snapshot, candidate, quarantine) = replacer.join().unwrap();
+        if replace_candidate && !replace_quarantine {
+            let restored = super::read_governance_artifact_snapshot(&sidecar)
+                .unwrap()
+                .unwrap()
+                .0;
+            assert_eq!(restored, source_snapshot);
+            assert_eq!(fs::read(&candidate).unwrap(), foreign);
+        } else if replace_quarantine && !replace_candidate {
+            let restored = super::read_governance_artifact_snapshot(&sidecar)
+                .unwrap()
+                .unwrap()
+                .0;
+            assert_eq!(restored, source_snapshot);
+            assert_eq!(fs::read(&quarantine).unwrap(), foreign);
+        } else {
+            assert!(
+                !sidecar.exists(),
+                "two untrusted private links publish neither"
+            );
+            assert_eq!(fs::read(&candidate).unwrap(), foreign);
+            assert_eq!(fs::read(&quarantine).unwrap(), foreign);
+        }
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_single_quarantine_replacement_restores_trusted_candidate() {
+        run_private_restore_selection_control(
+            "authority-cleanup-single-quarantine-replacement",
+            false,
+            true,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_single_candidate_replacement_restores_trusted_quarantine() {
+        run_private_restore_selection_control(
+            "authority-cleanup-single-candidate-replacement",
+            true,
+            false,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_dual_private_replacement_publishes_neither_foreign_link() {
+        run_private_restore_selection_control(
+            "authority-cleanup-dual-private-replacement",
+            true,
+            true,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_pre_rename_collision_preserves_foreign_destination() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-pre-rename-collision");
+        let key = SigningKey::from_bytes(&[201; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign pre-rename quarantine destination".to_vec();
+        let expected_foreign = foreign.clone();
+        let (reached, resume, destination) = install_authority_cleanup_pre_rename_barrier(&sidecar);
+        let replacer_destination = Arc::clone(&destination);
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            let quarantine = replacer_destination
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("cleanup publishes its reserved destination before the barrier");
+            fs::remove_file(&quarantine).unwrap();
+            fs::write(&quarantine, &foreign).unwrap();
+            resume.wait();
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+        let quarantine = destination
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("test barrier retains the collision path");
+        assert_eq!(fs::read(&quarantine).unwrap(), expected_foreign);
+        fs::remove_file(quarantine).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_source_final_gap_preserves_foreign_source() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-source-final-gap");
+        let key = SigningKey::from_bytes(&[212; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign source won the final cleanup gap".to_vec();
+        let (reached, resume) = install_authority_cleanup_source_final_barrier(&sidecar);
+        let replacer_path = sidecar.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::remove_file(&replacer_path).unwrap();
+            fs::write(&replacer_path, &foreign).unwrap();
+            resume.wait();
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+        // The foreign source was moved into the private quarantine, while the
+        // simultaneously snapshotted trusted candidate is the only link that
+        // may be restored to the canonical name.
+        assert_eq!(fs::read(&sidecar).unwrap(), Vec::<u8>::new());
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_post_move_canonical_replacement_is_foreign_preserved() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-post-move-canonical-replacement");
+        let key = SigningKey::from_bytes(&[216; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign canonical replacement after source move".to_vec();
+        let (reached, resume, _) = install_authority_cleanup_post_move_barrier(&sidecar);
+        let replacement_path = sidecar.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::write(&replacement_path, &foreign).unwrap();
+            resume.wait();
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+        assert_eq!(
+            fs::read(&sidecar).unwrap(),
+            b"foreign canonical replacement after source move"
+        );
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_post_move_dirfd_preserves_foreign_source_after_directory_replacement() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-post-move-dirfd");
+        let key = SigningKey::from_bytes(&[213; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign source recovered from held retirement fd".to_vec();
+        let retirement_marker = b"foreign replacement retirement namespace".to_vec();
+        let (source_reached, source_resume) =
+            install_authority_cleanup_source_final_barrier(&sidecar);
+        let (move_reached, move_resume, retirement_destination) =
+            install_authority_cleanup_post_move_barrier(&sidecar);
+
+        let replacer_path = sidecar.clone();
+        let source_replacer = std::thread::spawn({
+            let foreign = foreign.clone();
+            move || {
+                source_reached.wait();
+                fs::remove_file(&replacer_path).unwrap();
+                fs::write(&replacer_path, foreign).unwrap();
+                source_resume.wait();
+            }
+        });
+        let move_replacer = std::thread::spawn({
+            let retirement_destination = Arc::clone(&retirement_destination);
+            let sidecar_name = sidecar.file_name().unwrap().to_os_string();
+            let retirement_marker = retirement_marker.clone();
+            move || {
+                move_reached.wait();
+                let retirement = retirement_destination
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("cleanup publishes the held retirement directory");
+                let backup = retirement.with_file_name(format!(
+                    "{}.held",
+                    retirement.file_name().unwrap().to_string_lossy()
+                ));
+                fs::rename(&retirement, &backup).unwrap();
+                fs::create_dir(&retirement).unwrap();
+                fs::write(retirement.join(sidecar_name), retirement_marker).unwrap();
+                move_resume.wait();
+                backup
+            }
+        });
+
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        source_replacer.join().unwrap();
+        let backup = move_replacer.join().unwrap();
+        let retirement = retirement_destination.lock().unwrap().clone().unwrap();
+
+        assert_eq!(fs::read(&sidecar).unwrap(), Vec::<u8>::new());
+        assert_eq!(
+            fs::read(backup.join(sidecar.file_name().unwrap())).unwrap(),
+            foreign
+        );
+        assert_eq!(
+            fs::read(retirement.join(sidecar.file_name().unwrap())).unwrap(),
+            retirement_marker
+        );
+
+        cleanup_persistence(&path);
+        let _ = fs::remove_dir_all(backup);
+        let _ = fs::remove_dir_all(retirement);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_pool_path_replacement_uses_held_slot_namespace() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-pool-path-replacement");
+        let key = SigningKey::from_bytes(&[217; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let (reached, resume, retirement_destination) =
+            install_authority_cleanup_post_move_barrier(&sidecar);
+        let pool_marker = b"foreign replacement pool namespace".to_vec();
+        let replacer = std::thread::spawn({
+            let retirement_destination = Arc::clone(&retirement_destination);
+            let pool_marker = pool_marker.clone();
+            move || {
+                reached.wait();
+                let slot = retirement_destination
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("cleanup publishes a fixed slot before the pool swap");
+                let pool = slot.parent().unwrap().to_path_buf();
+                let held_pool = pool.with_file_name(format!(
+                    "{}.held",
+                    pool.file_name().unwrap().to_string_lossy()
+                ));
+                fs::rename(&pool, &held_pool).unwrap();
+                fs::create_dir(&pool).unwrap();
+                fs::write(pool.join("foreign-marker"), pool_marker).unwrap();
+                resume.wait();
+                (held_pool, pool)
+            }
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        let (held_pool, replacement_pool) = replacer.join().unwrap();
+        assert_eq!(
+            fs::read(replacement_pool.join("foreign-marker")).unwrap(),
+            pool_marker
+        );
+        let slot_name = retirement_destination
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_os_string();
+        assert!(
+            held_pool
+                .join(slot_name)
+                .join(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME)
+                .exists()
+        );
+        cleanup_persistence(&path);
+        let _ = fs::remove_dir_all(held_pool);
+        let _ = fs::remove_dir_all(replacement_pool);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_pool_lock_replacement_is_fail_closed() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-pool-lock-replacement");
+        let key = SigningKey::from_bytes(&[218; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let (reached, resume, retirement_destination) =
+            install_authority_cleanup_post_move_barrier(&sidecar);
+        let replacement_lock = b"foreign pool lock replacement".to_vec();
+        let replacer = std::thread::spawn({
+            let retirement_destination = Arc::clone(&retirement_destination);
+            let replacement_lock = replacement_lock.clone();
+            move || {
+                reached.wait();
+                let slot = retirement_destination
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("cleanup publishes a fixed slot before lock replacement");
+                let pool = slot.parent().unwrap().to_path_buf();
+                let lock = pool.join(GOVERNANCE_CLEANUP_POOL_LOCK_NAME);
+                let held_lock = pool.join("lock.held");
+                fs::rename(&lock, &held_lock).unwrap();
+                fs::write(&lock, replacement_lock).unwrap();
+                resume.wait();
+                held_lock
+            }
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        let held_lock = replacer.join().unwrap();
+        let pool = sidecar
+            .parent()
+            .unwrap()
+            .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+        assert_eq!(
+            fs::read(pool.join(GOVERNANCE_CLEANUP_POOL_LOCK_NAME)).unwrap(),
+            replacement_lock
+        );
+        assert!(
+            held_lock.exists(),
+            "the held lock inode remains recoverable"
+        );
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(held_lock);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_original_parent_replacement_preserves_foreign_source() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let parent_marker = persistence_path("authority-cleanup-original-parent");
+        let parent = parent_marker.parent().unwrap().to_path_buf();
+        let path = parent.join("stream.json");
+        let key = SigningKey::from_bytes(&[214; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign source restored through held original parent".to_vec();
+        let parent_marker = b"foreign replacement parent survives".to_vec();
+        let (source_reached, source_resume) =
+            install_authority_cleanup_source_final_barrier(&sidecar);
+        let (move_reached, move_resume, retirement_destination) =
+            install_authority_cleanup_post_move_barrier(&sidecar);
+
+        let replacer_path = sidecar.clone();
+        let source_replacer = std::thread::spawn({
+            let foreign = foreign.clone();
+            move || {
+                source_reached.wait();
+                fs::remove_file(&replacer_path).unwrap();
+                fs::write(&replacer_path, foreign).unwrap();
+                source_resume.wait();
+            }
+        });
+        let parent_replacer = std::thread::spawn({
+            let retirement_destination = Arc::clone(&retirement_destination);
+            let sidecar_name = sidecar.file_name().unwrap().to_os_string();
+            let parent_marker = parent_marker.clone();
+            move || {
+                move_reached.wait();
+                let retirement = retirement_destination
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("cleanup publishes the retirement directory before parent swap");
+                let held_parent = retirement.with_file_name(format!(
+                    "{}.held",
+                    retirement.file_name().unwrap().to_string_lossy()
+                ));
+                fs::rename(&retirement, &held_parent).unwrap();
+                fs::create_dir(&retirement).unwrap();
+                fs::write(retirement.join(&sidecar_name), parent_marker).unwrap();
+                move_resume.wait();
+                held_parent
+            }
+        });
+
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        source_replacer.join().unwrap();
+        let held_parent = parent_replacer.join().unwrap();
+        let replacement_parent = retirement_destination
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("cleanup retains the fixed slot path");
+        let replacement_parent_sidecar = replacement_parent.join(sidecar.file_name().unwrap());
+        let held_parent_sidecar = held_parent.join(sidecar.file_name().unwrap());
+        assert_eq!(fs::read(&held_parent_sidecar).unwrap(), foreign);
+        assert_eq!(
+            fs::read(&replacement_parent_sidecar).unwrap(),
+            parent_marker
+        );
+
+        let _ = fs::remove_dir_all(held_parent);
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_reclaim_snapshot_replacement_preserves_foreign_entry() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-reclaim-final-gap");
+        let key = SigningKey::from_bytes(&[215; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign reclaim entry survives final snapshot gap".to_vec();
+        let (reached, resume, reclaim_destination) =
+            install_authority_cleanup_reclaim_barrier(&sidecar);
+        let replacer = std::thread::spawn({
+            let sidecar_name = sidecar.file_name().unwrap().to_os_string();
+            let reclaim_destination = Arc::clone(&reclaim_destination);
+            move || {
+                reached.wait();
+                let reclaim = reclaim_destination
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("cleanup publishes the held reclaim directory");
+                let entry = reclaim.join(&sidecar_name);
+                fs::remove_file(&entry).unwrap();
+                fs::write(&entry, foreign).unwrap();
+                resume.wait();
+            }
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+        let reclaim = reclaim_destination
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("test barrier retains the reclaim path");
+        assert_eq!(
+            fs::read(reclaim.join(sidecar.file_name().unwrap())).unwrap(),
+            b"foreign reclaim entry survives final snapshot gap"
+        );
+        cleanup_persistence(&path);
+        if let Some(retirement) = reclaim.parent() {
+            let _ = fs::remove_dir_all(retirement);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_final_unlink_barrier_preserves_foreign_destination() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-final-unlink-barrier");
+        let key = SigningKey::from_bytes(&[202; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign final-unlink destination".to_vec();
+        let expected_foreign = foreign.clone();
+        let (reached, resume, destination) =
+            install_authority_cleanup_final_unlink_barrier(&sidecar);
+        let replacer_destination = Arc::clone(&destination);
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            let quarantine = replacer_destination
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("cleanup publishes its reserved destination before the barrier");
+            fs::remove_file(&quarantine).unwrap();
+            fs::write(&quarantine, &foreign).unwrap();
+            resume.wait();
+        });
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+        let quarantine = destination
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("test barrier retains the collision path");
+        assert_eq!(fs::read(&sidecar).unwrap(), Vec::<u8>::new());
+        assert_eq!(fs::read(&quarantine).unwrap(), expected_foreign);
+        fs::remove_file(quarantine).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_authority_sidecar_replacement_refuses_mutation_without_deleting_foreign_file() {
+        let path = persistence_path("authority-sidecar-live-replacement");
+        let key = SigningKey::from_bytes(&[197; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let replacement_bytes = b"foreign authority replacement";
+        let before_memory = health_memory_snapshot(&policy);
+        let before_state = fs::read(&path).unwrap();
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let before_checkpoint = fs::read(&sequence_path).unwrap();
+        fs::remove_file(&sidecar).unwrap();
+        fs::write(&sidecar, replacement_bytes).unwrap();
+
+        let peer = SigningKey::from_bytes(&[198; 32]);
+        let error = policy
+            .register_peer_governor(&peer.verifying_key())
+            .expect_err("a live sidecar replacement must fail closed before mutation");
+        assert!(error.contains("authority lifetime lock path identity changed"));
+        assert_eq!(health_memory_snapshot(&policy), before_memory);
+        assert_eq!(fs::read(&path).unwrap(), before_state);
+        assert_eq!(fs::read(&sequence_path).unwrap(), before_checkpoint);
+        assert_eq!(fs::read(&sidecar).unwrap(), replacement_bytes);
+        drop(policy);
+        let _ = fs::remove_file(&sidecar);
+        cleanup_persistence(&path);
     }
 
     #[test]
@@ -5721,6 +18494,11 @@ mod tests {
             &restored_lock,
         )
         .unwrap();
+        fs::copy(
+            GovernancePolicy::persistence_authority_lock_path(&source_path),
+            GovernancePolicy::persistence_authority_lock_path(&restored_path),
+        )
+        .unwrap();
         fs::set_permissions(&restored_lock, fs::Permissions::from_mode(0o600)).unwrap();
 
         assert!(matches!(
@@ -5890,6 +18668,7 @@ mod tests {
             GovernancePolicy::migrate_persistence_lock(&active_path, governing_id, key)
                 .unwrap_err(),
             GovernancePersistenceError::StateLocked { .. }
+                | GovernancePersistenceError::AuthorityStateLocked { .. }
         ));
         assert_eq!(fs::read(&active_path).unwrap(), state_before);
         assert_eq!(
@@ -7400,20 +20179,23 @@ mod tests {
         else {
             panic!("precondition: healthy governance issues an approval");
         };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let decision = swarm_policy::PolicyDecision::require_human_with_rule(
+            "pre-partition-human-hold",
+            "human review required",
+        );
         let hold = policy
             .begin_human_authorization_hold(
                 &governed_request,
-                &serde_json::to_value(&receipt).unwrap(),
-                &swarm_policy::PolicyDecision::require_human_with_rule(
-                    "pre-partition-human-hold",
-                    "human review required",
-                ),
+                &receipt_value,
+                &decision,
                 receipt.payload.issued_at_ms + 1,
             )
             .unwrap();
         policy
             .bind_human_approval_set(&hold.hold_id, "approval-set:177", "digest:177")
             .unwrap();
+
         policy.observe_health(
             &governing_id,
             &[AgentHealthEntry {
@@ -7427,10 +20209,10 @@ mod tests {
             policy.status_report().partition_state,
             PartitionState::Partitioned
         );
-        let sequence = read_envelope(&path).sequence();
-        let state_bytes = fs::read(&path).unwrap();
-        let checkpoint_path = GovernancePolicy::persistence_sequence_path(&path);
-        let checkpoint_bytes = fs::read(&checkpoint_path).unwrap();
+        let partition_sequence = read_envelope(&path).sequence();
+        let partition_bytes = fs::read(&path).unwrap();
+        let partition_checkpoint_bytes =
+            fs::read(GovernancePolicy::persistence_sequence_path(&path)).unwrap();
 
         let error = policy
             .verify_and_consume_human_authorization(
@@ -7440,28 +20222,72 @@ mod tests {
                 receipt.payload.issued_at_ms + 3,
             )
             .expect_err("a pre-partition human hold must not route during partition");
-        assert!(error.contains("healthy governance"), "{error}");
-        assert_eq!(read_envelope(&path).sequence(), sequence);
-        assert_eq!(fs::read(&path).unwrap(), state_bytes);
-        assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_bytes);
+        assert!(
+            error.contains("partition")
+                || error.contains("Partitioned")
+                || error.contains("healthy"),
+            "unexpected refusal reason: {error}"
+        );
+        assert_eq!(
+            read_envelope(&path).sequence(),
+            partition_sequence,
+            "a refused hold must not advance the durable sequence"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            partition_bytes,
+            "a refused hold must not rewrite signed state"
+        );
+        assert_eq!(
+            fs::read(GovernancePolicy::persistence_sequence_path(&path)).unwrap(),
+            partition_checkpoint_bytes,
+            "a refused hold must not rewrite its checkpoint"
+        );
         assert!(
             policy
                 .pending_human_authorization("approval-set:177")
                 .is_ok(),
-            "a refused hold must remain pending"
+            "the one-time hold remains pending after a fail-closed refusal"
+        );
+
+        let retry_error = policy
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                "approval-set:177",
+                "digest:177",
+                receipt.payload.issued_at_ms + 4,
+            )
+            .expect_err("retrying the same pre-partition hold must remain refused");
+        assert_eq!(retry_error, error, "partition refusal is idempotent");
+        assert_eq!(read_envelope(&path).sequence(), partition_sequence);
+        assert_eq!(fs::read(&path).unwrap(), partition_bytes);
+        assert_eq!(
+            fs::read(GovernancePolicy::persistence_sequence_path(&path)).unwrap(),
+            partition_checkpoint_bytes
         );
 
         drop(policy);
         let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert_eq!(
+            reloaded.status_report().partition_state,
+            PartitionState::Partitioned
+        );
         assert!(
             reloaded
                 .verify_and_consume_human_authorization(
                     &hold.hold_id,
                     "approval-set:177",
                     "digest:177",
-                    receipt.payload.issued_at_ms + 4,
+                    receipt.payload.issued_at_ms + 5,
                 )
-                .is_err()
+                .is_err(),
+            "restart must preserve the fail-closed partition boundary"
+        );
+        assert!(
+            reloaded
+                .pending_human_authorization("approval-set:177")
+                .is_ok(),
+            "restart must preserve the unconsumed hold rather than minting authority"
         );
         drop(reloaded);
         cleanup_persistence(&path);
@@ -7474,17 +20300,1053 @@ mod tests {
         let governing_id = AgentId::from_verifying_key(&key.verifying_key());
         let policy = initialize_signed_policy(&path, &key);
         policy.observe_health(&governing_id, &[], 1_780_000_000_000);
-        let sequence = read_envelope(&path).sequence();
-        let state_bytes = fs::read(&path).unwrap();
-        let checkpoint_path = GovernancePolicy::persistence_sequence_path(&path);
-        let checkpoint_bytes = fs::read(&checkpoint_path).unwrap();
+        let stable_sequence = read_envelope(&path).sequence();
+        let stable_state = fs::read(&path).unwrap();
+        let stable_checkpoint =
+            fs::read(GovernancePolicy::persistence_sequence_path(&path)).unwrap();
+        let stable_status = policy.status_report_at(1_780_000_000_001);
 
         for observed_at_ms in 1_780_000_000_001..=1_780_000_000_010 {
             policy.observe_health(&governing_id, &[], observed_at_ms);
-            assert_eq!(read_envelope(&path).sequence(), sequence);
-            assert_eq!(fs::read(&path).unwrap(), state_bytes);
-            assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_bytes);
+            assert_eq!(
+                read_envelope(&path).sequence(),
+                stable_sequence,
+                "unchanged health at {observed_at_ms} must not advance the signed sequence"
+            );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                stable_state,
+                "unchanged health at {observed_at_ms} must not rewrite signed state"
+            );
+            assert_eq!(
+                fs::read(GovernancePolicy::persistence_sequence_path(&path)).unwrap(),
+                stable_checkpoint,
+                "unchanged health at {observed_at_ms} must not rewrite its checkpoint"
+            );
+            assert_eq!(
+                policy.status_report_at(observed_at_ms),
+                stable_status,
+                "unchanged health at {observed_at_ms} must not mutate durable status"
+            );
         }
+
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn health_checkpoint_repair_retries_only_at_the_logical_deadline() {
+        let path = persistence_path("health-checkpoint-repair-backoff");
+        let key = SigningKey::from_bytes(&[180; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let base_ms = 1_800_000_000_000;
+        policy.observe_health(&governing_id, &[], base_ms);
+
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+        let degraded_entries = [AgentHealthEntry {
+            id: "whisker-repair-backoff".to_string(),
+            role: AgentRole::Whisker,
+            health: AgentHealth::Degraded,
+        }];
+        let changed_degraded_entries = [AgentHealthEntry {
+            id: "whisker-repair-backoff-alternate".to_string(),
+            role: AgentRole::Whisker,
+            health: AgentHealth::Degraded,
+        }];
+        policy.observe_health(&governing_id, &degraded_entries, base_ms + 1);
+        let first_retry_at_ms = base_ms + 1 + GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS;
+        {
+            let state = policy.state.lock().unwrap();
+            assert!(state.checkpoint_lagging.is_some());
+            assert_eq!(
+                state
+                    .checkpoint_repair_backoff
+                    .expect("initial checkpoint failure establishes a retry deadline")
+                    .retry_at_ms,
+                first_retry_at_ms
+            );
+        }
+
+        // The first repair attempt fails while the checkpoint path is still
+        // blocked. Subsequent unchanged health observations must not keep
+        // retrying synchronously.
+        policy.observe_health(&governing_id, &degraded_entries, first_retry_at_ms);
+        {
+            let state = policy.state.lock().unwrap();
+            assert!(state.checkpoint_lagging.is_some());
+            let backoff = state
+                .checkpoint_repair_backoff
+                .expect("failed repair establishes an ephemeral retry deadline");
+            assert_eq!(
+                backoff.retry_at_ms,
+                first_retry_at_ms + GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS
+            );
+            assert!(!backoff.saturated);
+        }
+        fs::remove_dir(blocker).unwrap();
+        let stable_sequence = read_envelope(&path).sequence();
+        let stable_state = fs::read(&path).unwrap();
+        let stable_checkpoint = fs::read(&sequence_path).unwrap();
+        let stable_memory = health_memory_snapshot(&policy);
+        let retry_at_ms = first_retry_at_ms + GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS;
+
+        let mut expected_pending_health = stable_memory.pending_health_observation.clone();
+        let mut expected_sequence = stable_sequence;
+        let mut expected_state = stable_state.clone();
+        let mut expected_digest = stable_memory.persistence_digest.clone();
+        let mut expected_lag = stable_memory.checkpoint_lagging.clone();
+        let mut durable_pending_committed = false;
+        for (offset, observed_at_ms) in ((first_retry_at_ms + 1)..retry_at_ms).enumerate() {
+            let entries = if offset % 2 == 0 {
+                &degraded_entries
+            } else {
+                &changed_degraded_entries
+            };
+            policy.observe_health(&governing_id, entries, observed_at_ms);
+            let memory = health_memory_snapshot(&policy);
+            let observed_sequence = read_envelope(&path).sequence();
+            if observed_sequence != expected_sequence {
+                assert!(
+                    !durable_pending_committed,
+                    "health backoff may durably record the pending marker only once"
+                );
+                durable_pending_committed = true;
+                expected_sequence = observed_sequence;
+                expected_state = fs::read(&path).unwrap();
+                expected_digest = memory.persistence_digest.clone();
+                expected_lag = memory.checkpoint_lagging.clone();
+            }
+            if entries.as_slice() == changed_degraded_entries.as_slice()
+                || durable_pending_committed
+            {
+                expected_pending_health = Some(super::PendingHealthObservation {
+                    governing_agent_id: governing_id.clone(),
+                    entries: entries.to_vec(),
+                    observed_at_ms,
+                });
+            }
+            assert_eq!(
+                memory
+                    .projection
+                    .clone()
+                    .without_pending_health_observation(),
+                stable_memory
+                    .projection
+                    .clone()
+                    .without_pending_health_observation(),
+                "deferred health tick at {observed_at_ms} must restore the full health projection"
+            );
+            assert_eq!(
+                memory.pending_events, stable_memory.pending_events,
+                "deferred health tick at {observed_at_ms} must restore pending runtime events"
+            );
+            assert_eq!(
+                memory.checkpoint_lagging, expected_lag,
+                "deferred health tick at {observed_at_ms} must preserve checkpoint lag"
+            );
+            assert_eq!(
+                memory.checkpoint_repair_backoff, stable_memory.checkpoint_repair_backoff,
+                "deferred health tick at {observed_at_ms} must preserve retry state"
+            );
+            assert_eq!(
+                memory.persistence_sequence,
+                Some(expected_sequence),
+                "deferred health tick at {observed_at_ms} must advance at most once for the durable pending marker"
+            );
+            assert_eq!(
+                memory.persistence_digest, expected_digest,
+                "deferred health tick at {observed_at_ms} must not rewrite after the durable pending marker"
+            );
+            assert_eq!(
+                memory.pending_health_observation, expected_pending_health,
+                "only the explicit pending-health safety marker may retain the latest observation"
+            );
+            assert!(
+                policy.state.lock().unwrap().checkpoint_lagging.is_some(),
+                "repair must remain deferred before its logical deadline at {observed_at_ms}"
+            );
+            assert_eq!(
+                policy
+                    .state
+                    .lock()
+                    .unwrap()
+                    .checkpoint_repair_backoff
+                    .expect("backoff remains armed before its deadline")
+                    .retry_at_ms,
+                retry_at_ms,
+                "repeated failed health ticks must not move the retry deadline"
+            );
+            assert_eq!(fs::read(&path).unwrap(), expected_state);
+            assert_eq!(fs::read(&sequence_path).unwrap(), stable_checkpoint);
+        }
+
+        // The final tick carries the latest alternate snapshot. Repair the
+        // checkpoint first, then persist that snapshot as the next signed state.
+        policy.observe_health(&governing_id, &changed_degraded_entries, retry_at_ms);
+        let state = policy.state.lock().unwrap();
+        assert!(
+            state.checkpoint_lagging.is_none(),
+            "repair must be retried at the exact logical deadline"
+        );
+        assert!(
+            state.checkpoint_repair_backoff.is_none(),
+            "successful checkpoint repair clears the health-tick backoff"
+        );
+        assert!(
+            state.pending_health_observation.is_none(),
+            "the exact-deadline health commit clears the pending safety marker"
+        );
+        assert_eq!(
+            state.unhealthy_agents, changed_degraded_entries,
+            "the latest alternate health snapshot must be retained in memory"
+        );
+        assert_eq!(state.partition_state, PartitionState::Degraded);
+        drop(state);
+        assert_eq!(
+            policy.status_report_at(retry_at_ms).partition_state,
+            PartitionState::Degraded,
+            "status must reflect the latest alternate health snapshot"
+        );
+        let durable: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert_eq!(
+            durable.unhealthy_agents, changed_degraded_entries,
+            "the signed payload must reflect the latest alternate health snapshot"
+        );
+        assert_eq!(durable.partition_state, PartitionState::Degraded);
+        let repaired_sequence = expected_sequence + 1;
+        assert_eq!(read_envelope(&path).sequence(), repaired_sequence);
+        assert_eq!(
+            checkpoint_sequence(&read_checkpoint(&path)),
+            repaired_sequence,
+            "repair and the latest health snapshot must share the new checkpoint sequence"
+        );
+
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn health_checkpoint_backoff_skips_contingency_rounds_until_deadline() {
+        let path = persistence_path("health-checkpoint-round-backoff");
+        let key = SigningKey::from_bytes(&[181; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let transport = Arc::new(CountingTransport::default());
+        let config = GovernancePolicyConfig {
+            contingency_lease_ttl_ms: 1,
+            ..GovernancePolicyConfig::default()
+        };
+        let policy = GovernancePolicy::initialize_persistence(
+            config,
+            &path,
+            governing_id.clone(),
+            key.clone(),
+        )
+        .unwrap()
+        .with_transport(Arc::clone(&transport) as Arc<dyn ConsensusTransport>);
+        let base_ms = 1_810_000_000_000;
+        policy.observe_health(&governing_id, &[], base_ms);
+        assert_eq!(
+            transport.rounds(),
+            ResponseAction::governed_action_kinds().len(),
+            "initial healthy observation stages one lease for every governed action"
+        );
+
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+        let degraded_entries = [AgentHealthEntry {
+            id: "whisker-round-backoff".to_string(),
+            role: AgentRole::Whisker,
+            health: AgentHealth::Degraded,
+        }];
+        policy.observe_health(&governing_id, &degraded_entries, base_ms + 2);
+        let first_retry_at_ms = base_ms + 2 + GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS;
+        let rounds_before_failed_retry = transport.rounds();
+
+        // The failed repair at its first deadline must still roll the health
+        // observation back before the healthy branch can stage leases.
+        policy.observe_health(&governing_id, &[], first_retry_at_ms);
+        assert_eq!(
+            transport.rounds(),
+            rounds_before_failed_retry,
+            "a failed repair deadline must not run contingency rounds before rollback"
+        );
+        let retry_at_ms = first_retry_at_ms + GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS;
+        fs::remove_dir(blocker).unwrap();
+
+        let rounds_before_deferred_ticks = transport.rounds();
+        for observed_at_ms in (first_retry_at_ms + 1)..retry_at_ms {
+            // Healthy snapshots would call ensure_contingency_leases_locked
+            // after the old rollback guard and therefore expose twelve rounds
+            // per tick. They must remain side-effect-free while repair is
+            // deferred.
+            policy.observe_health(&governing_id, &[], observed_at_ms);
+            assert_eq!(
+                transport.rounds(),
+                rounds_before_deferred_ticks,
+                "health tick at {observed_at_ms} must not run a governance round before retry"
+            );
+            assert!(
+                policy.state.lock().unwrap().checkpoint_lagging.is_some(),
+                "checkpoint repair must remain deferred at {observed_at_ms}"
+            );
+        }
+
+        policy.observe_health(&governing_id, &[], retry_at_ms);
+        let rounds_at_deadline = transport.rounds() - rounds_before_deferred_ticks;
+        assert_eq!(
+            rounds_at_deadline,
+            ResponseAction::governed_action_kinds().len(),
+            "the exact retry deadline may stage one bounded lease round per governed action"
+        );
+        let state = policy.state.lock().unwrap();
+        assert!(state.checkpoint_lagging.is_none());
+        assert_eq!(state.partition_state, PartitionState::Healthy);
+        assert_eq!(
+            state.active_contingency_leases.len(),
+            ResponseAction::governed_action_kinds().len()
+        );
+        drop(state);
+
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn restrictive_health_pending_during_checkpoint_backoff_blocks_direct_authority() {
+        let path = persistence_path("restrictive-health-pending-authority");
+        let key = SigningKey::from_bytes(&[182; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let base_ms = 1_820_000_000_000;
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+
+        // The first health write changes only the healthy state's staged leases,
+        // so it commits a Healthy signed envelope while its checkpoint lags.
+        policy.observe_health(&governing_id, &[], base_ms);
+        {
+            let state = policy.state.lock().unwrap();
+            assert_eq!(state.partition_state, PartitionState::Healthy);
+            assert!(state.checkpoint_lagging.is_some());
+            assert!(state.checkpoint_repair_backoff.is_some());
+        }
+
+        let restrictive_entries = [AgentHealthEntry {
+            id: governing_id.to_string(),
+            role: AgentRole::Tom,
+            health: AgentHealth::Failed,
+        }];
+        // This is before the health retry deadline. The restrictive input must
+        // not leak into the rolled-back projection, but it must remain as an
+        // explicit fail-closed pending observation.
+        policy.observe_health(&governing_id, &restrictive_entries, base_ms + 1);
+        {
+            let state = policy.state.lock().unwrap();
+            assert_eq!(state.partition_state, PartitionState::Healthy);
+            assert_eq!(state.unhealthy_agents, Vec::<AgentHealthEntry>::new());
+            let pending = state
+                .pending_health_observation
+                .as_ref()
+                .expect("restrictive health input must remain pending");
+            assert_eq!(pending.governing_agent_id, governing_id);
+            assert_eq!(pending.entries, restrictive_entries);
+            assert_eq!(pending.observed_at_ms, base_ms + 1);
+        }
+        let durable: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert_eq!(durable.partition_state, PartitionState::Healthy);
+        assert!(durable.unhealthy_agents.is_empty());
+        assert_eq!(
+            durable.pending_health_observation.as_ref().unwrap().entries,
+            restrictive_entries
+        );
+        let durable_state_bytes = fs::read(&path).unwrap();
+        let durable_sequence = read_envelope(&path).sequence();
+        assert!(durable_sequence > 1);
+
+        // Repair is now possible, but the pending restrictive input must still
+        // prevent can_act from issuing a stale Healthy authorization.
+        fs::remove_dir(blocker).unwrap();
+        let decision = policy.can_act(&request(ResponseAction::BlockEgress {
+            target: "203.0.113.182".to_string(),
+        }));
+        let GovernanceDecision::Veto {
+            reason, receipt, ..
+        } = decision
+        else {
+            panic!("a pending restrictive health observation must fail closed");
+        };
+        assert!(reason.contains("deferred health observation"), "{reason}");
+        assert!(receipt.is_none());
+        {
+            let state = policy.state.lock().unwrap();
+            assert!(state.checkpoint_lagging.is_none());
+            assert!(state.pending_health_observation.is_some());
+            assert_eq!(state.partition_state, PartitionState::Healthy);
+        }
+        assert!(policy.is_partitioned());
+        assert_eq!(
+            policy.status_report().partition_state,
+            PartitionState::Partitioned,
+            "a restrictive pending projection must not expose stale Healthy status"
+        );
+        assert_eq!(read_envelope(&path).sequence(), durable_sequence);
+        assert_eq!(fs::read(&path).unwrap(), durable_state_bytes);
+        assert_eq!(
+            checkpoint_sequence(&read_checkpoint(&path)),
+            durable_sequence
+        );
+
+        // A subsequent health tick can clear the pending marker by committing
+        // the restrictive snapshot; authority remains refused at the actual
+        // partition boundary as well.
+        policy.observe_health(&governing_id, &restrictive_entries, base_ms + 2);
+        {
+            let state = policy.state.lock().unwrap();
+            assert_eq!(state.partition_state, PartitionState::Partitioned);
+            assert!(state.pending_health_observation.is_none());
+        }
+
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn durable_pending_health_survives_restart_and_tampering_fails_closed() {
+        let path = persistence_path("durable-pending-health-restart");
+        let key = SigningKey::from_bytes(&[183; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let base_ms = 1_830_000_000_000;
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+        policy.observe_health(&governing_id, &[], base_ms);
+        let restrictive_entries = [AgentHealthEntry {
+            id: governing_id.to_string(),
+            role: AgentRole::Tom,
+            health: AgentHealth::Failed,
+        }];
+        policy.observe_health(&governing_id, &restrictive_entries, base_ms + 1);
+        let durable: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert_eq!(
+            durable
+                .pending_health_observation
+                .as_ref()
+                .map(|pending| pending.entries.clone()),
+            Some(restrictive_entries.to_vec())
+        );
+        drop(policy);
+        fs::remove_dir(blocker).unwrap();
+
+        let reopened = Arc::new(load_signed_policy(&path, &key).unwrap());
+        assert!(reopened.is_partitioned());
+        assert_eq!(
+            reopened.status_report().partition_state,
+            PartitionState::Partitioned
+        );
+        let decision = reopened.can_act(&request(ResponseAction::BlockEgress {
+            target: "203.0.113.183".to_string(),
+        }));
+        let GovernanceDecision::Veto {
+            receipt, reason, ..
+        } = decision
+        else {
+            panic!("restarted pending health must veto stale Healthy authority");
+        };
+        assert!(receipt.is_none());
+        assert!(reason.contains("deferred health observation"), "{reason}");
+
+        reopened.observe_health(&governing_id, &restrictive_entries, base_ms + 2);
+        let committed: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert!(committed.pending_health_observation.is_none());
+        assert_eq!(committed.partition_state, PartitionState::Partitioned);
+        drop(reopened);
+
+        let tamper_path = persistence_path("durable-pending-health-tamper");
+        let tamper_source = initialize_signed_policy(&tamper_path, &key);
+        let tamper_envelope = read_envelope(&tamper_path);
+        drop(tamper_source);
+        let mut tampered_payload: serde_json::Value =
+            serde_json::from_str(&tamper_envelope.statement.payload_json).unwrap();
+        tampered_payload.as_object_mut().unwrap().insert(
+            "pending_health_observation".to_string(),
+            serde_json::json!({
+                "governing_agent_id": governing_id,
+                "entries": restrictive_entries,
+                "observed_at_ms": base_ms + 1,
+            }),
+        );
+        let mut forged = tamper_envelope;
+        forged.statement.payload_json = serde_json::to_string(&tampered_payload).unwrap();
+        write_envelope(&tamper_path, &forged);
+        assert!(matches!(
+            load_signed_policy(&tamper_path, &key).unwrap_err(),
+            GovernancePersistenceError::SignedState(
+                swarm_core::SignedStateError::InvalidSignature { .. }
+            )
+        ));
+        cleanup_persistence(&path);
+        cleanup_persistence(&tamper_path);
+    }
+
+    #[test]
+    fn same_sequence_pending_marker_never_diverges_after_partial_clear() {
+        let path = persistence_path("pending-health-partial-clear-divergence");
+        let key = SigningKey::from_bytes(&[188; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let checkpoint_blocker = block_atomic_write(&sequence_path);
+        let restrictive_entries = [AgentHealthEntry {
+            id: governing_id.to_string(),
+            role: AgentRole::Tom,
+            health: AgentHealth::Failed,
+        }];
+        policy.observe_health(&governing_id, &restrictive_entries, 1_835_000_000_001);
+        fs::remove_dir(checkpoint_blocker).unwrap();
+
+        let durable: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert_eq!(
+            durable
+                .pending_health_observation
+                .as_ref()
+                .map(|pending| pending.entries.clone()),
+            Some(restrictive_entries.to_vec())
+        );
+        let state_sequence = read_envelope(&path).sequence();
+
+        // Simulate a crash/failure after the checkpoint is cleared but before
+        // the matching state envelope can clear its marker. The durable state
+        // marker remains the only valid same-sequence predecessor.
+        let state_blocker = block_atomic_write(&path);
+        let clear_result = {
+            let state = policy.state.lock().unwrap();
+            let persistence = policy.persistence.as_ref().unwrap();
+            let local = state.local_governor.as_ref().unwrap();
+            let digest = state.persistence_digest.clone().unwrap();
+            persistence.clear_pending_health_marker(&state, state_sequence, local, digest)
+        };
+        assert!(clear_result.is_err());
+        fs::remove_dir(state_blocker).unwrap();
+        let checkpoint: GovernanceSequenceCheckpoint =
+            serde_json::from_str(&read_checkpoint(&path).statement.payload_json).unwrap();
+        assert!(
+            checkpoint.pending_health_observation.is_none(),
+            "partial marker clear must leave the checkpoint without a replacement marker"
+        );
+
+        let alternate = PendingHealthObservation {
+            governing_agent_id: governing_id.clone(),
+            entries: vec![AgentHealthEntry {
+                id: "alternate-health-observation".to_string(),
+                role: AgentRole::Whisker,
+                health: AgentHealth::Degraded,
+            }],
+            observed_at_ms: 1_835_000_000_002,
+        };
+        let divergent_result = {
+            let state = policy.state.lock().unwrap();
+            let persistence = policy.persistence.as_ref().unwrap();
+            persistence.write_pending_health_intent(&state, &alternate)
+        };
+        assert!(
+            divergent_result.is_err(),
+            "a different same-sequence marker must fail closed instead of writing checkpoint-only state"
+        );
+        assert!(
+            serde_json::from_str::<GovernanceSequenceCheckpoint>(
+                &read_checkpoint(&path).statement.payload_json,
+            )
+            .unwrap()
+            .pending_health_observation
+            .is_none(),
+            "failed divergent intent must not leave a checkpoint marker that conflicts with state"
+        );
+
+        drop(policy);
+        let reopened = load_signed_policy(&path, &key).unwrap();
+        assert!(
+            reopened.is_partitioned(),
+            "the original authenticated marker must remain a restart veto"
+        );
+        drop(reopened);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn signed_same_sequence_divergent_pending_markers_refuse_restart() {
+        let path = persistence_path("pending-health-signed-divergence");
+        let key = SigningKey::from_bytes(&[189; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+
+        let state_envelope = read_envelope(&path);
+        let checkpoint_envelope = read_checkpoint(&path);
+        let mut state_payload: PersistedGovernanceState =
+            serde_json::from_str(&state_envelope.statement.payload_json).unwrap();
+        let mut checkpoint_payload: GovernanceSequenceCheckpoint =
+            serde_json::from_str(&checkpoint_envelope.statement.payload_json).unwrap();
+        assert_eq!(state_envelope.sequence(), checkpoint_envelope.sequence());
+        state_payload.pending_health_observation = Some(PendingHealthObservation {
+            governing_agent_id: governing_id.clone(),
+            entries: vec![AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            observed_at_ms: 1_850_000_000_001,
+        });
+        checkpoint_payload.pending_health_observation = Some(PendingHealthObservation {
+            governing_agent_id: governing_id.clone(),
+            entries: vec![AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Degraded,
+            }],
+            observed_at_ms: 1_850_000_000_002,
+        });
+        let signed_state = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            governing_id.clone(),
+            state_envelope.sequence(),
+            state_payload,
+            &key,
+        )
+        .unwrap();
+        let signed_checkpoint = SignedStateEnvelope::sign(
+            GOVERNANCE_CHECKPOINT_KIND,
+            GOVERNANCE_STATE_STREAM,
+            governing_id,
+            checkpoint_envelope.sequence(),
+            checkpoint_payload,
+            &key,
+        )
+        .unwrap();
+        write_envelope(&path, &signed_state);
+        write_checkpoint(&path, &signed_checkpoint);
+
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        assert!(matches!(
+            load_signed_policy(&path, &key).unwrap_err(),
+            GovernancePersistenceError::InvalidSequence { ref path, .. }
+                if path == &sequence_path
+        ));
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn authority_mint_refuses_pending_health_before_and_after_restart() {
+        let path = persistence_path("authority-pending-health");
+        let key = SigningKey::from_bytes(&[190; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = Arc::new(initialize_signed_policy(&path, &key));
+        let blocker = block_atomic_write(&path);
+        policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            1_851_000_000_001,
+        );
+        assert!(matches!(
+            policy.authority(),
+            Err(super::GovernanceAuthorityError::PendingHealthObservation { .. })
+        ));
+        drop(policy);
+        fs::remove_dir(blocker).unwrap();
+
+        let reopened = Arc::new(load_signed_policy(&path, &key).unwrap());
+        assert!(matches!(
+            reopened.authority(),
+            Err(super::GovernanceAuthorityError::PendingHealthObservation { .. })
+        ));
+        reopened.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            1_851_000_001_001,
+        );
+        assert!(reopened.authority().is_ok());
+        drop(reopened);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn health_write_ahead_recovers_after_injected_parent_directory_sync_failure() {
+        let path = persistence_path("health-write-ahead-parent-sync");
+        let key = SigningKey::from_bytes(&[191; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        inject_atomic_parent_sync_failure(&sequence_path);
+        let restrictive_entries = [AgentHealthEntry {
+            id: governing_id.to_string(),
+            role: AgentRole::Tom,
+            health: AgentHealth::Failed,
+        }];
+        policy.observe_health(&governing_id, &restrictive_entries, 1_852_000_000_001);
+        let state_payload: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&path).statement.payload_json).unwrap();
+        assert!(
+            state_payload.pending_health_observation.is_some()
+                || state_payload.partition_state != PartitionState::Healthy,
+            "post-rename checkpoint sync failure must leave a signed restrictive recovery anchor"
+        );
+        drop(policy);
+
+        let reopened = Arc::new(load_signed_policy(&path, &key).unwrap());
+        assert!(reopened.is_partitioned());
+        let decision = reopened.can_act(&request(ResponseAction::BlockEgress {
+            target: "203.0.113.191".to_string(),
+        }));
+        assert!(matches!(decision, GovernanceDecision::Veto { .. }));
+        reopened.observe_health(&governing_id, &restrictive_entries, 1_852_000_001_001);
+        assert!(reopened.authority().is_ok());
+        drop(reopened);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn failed_restrictive_health_persistence_leaves_restart_veto_until_repair() {
+        let path = persistence_path("failed-health-persistence-restart-veto");
+        let key = SigningKey::from_bytes(&[187; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.187".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: healthy governance issues a receipt");
+        };
+        let blocker = block_atomic_write(&path);
+        let restrictive_entries = [AgentHealthEntry {
+            id: governing_id.to_string(),
+            role: AgentRole::Tom,
+            health: AgentHealth::Failed,
+        }];
+        policy.observe_health(&governing_id, &restrictive_entries, 1_840_000_000_001);
+        assert!(
+            policy
+                .state
+                .lock()
+                .unwrap()
+                .pending_health_observation
+                .is_some(),
+            "a failed restrictive health write must retain a fail-closed marker in memory"
+        );
+        drop(policy);
+        fs::remove_dir(blocker).unwrap();
+
+        let reopened = load_signed_policy(&path, &key).unwrap();
+        assert!(reopened.is_partitioned());
+        let decision = reopened.can_act(&governed_request);
+        let GovernanceDecision::Veto {
+            reason,
+            receipt: next,
+            ..
+        } = decision
+        else {
+            panic!("a failed restrictive health write must veto after restart");
+        };
+        assert!(next.is_none());
+        assert!(
+            reason.contains("deferred health observation")
+                || reason.contains("partition")
+                || reason.contains("Partitioned"),
+            "unexpected restart veto reason: {reason}"
+        );
+
+        reopened.observe_health(&governing_id, &restrictive_entries, 1_840_000_000_002);
+        let state = reopened.state.lock().unwrap();
+        assert!(state.pending_health_observation.is_none());
+        assert_eq!(state.partition_state, PartitionState::Partitioned);
+        drop(state);
+        assert!(
+            reopened
+                .verify_and_consume_action_authorization(
+                    &governed_request,
+                    &serde_json::to_value(receipt).unwrap(),
+                    1_840_000_000_003,
+                )
+                .is_err(),
+            "repair must preserve the actual restrictive partition veto"
+        );
+        drop(reopened);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn restrictive_health_write_ahead_intent_survives_each_injected_crash_step() {
+        let crash_points = [
+            (
+                "health-intent-crash-after-intent",
+                InjectedHealthCrashPoint::Intent,
+            ),
+            (
+                "health-intent-crash-after-state",
+                InjectedHealthCrashPoint::StateWrite,
+            ),
+            (
+                "health-intent-crash-after-checkpoint",
+                InjectedHealthCrashPoint::CheckpointWrite,
+            ),
+        ];
+        for (offset, (suffix, crash_point)) in crash_points.into_iter().enumerate() {
+            let path = persistence_path(suffix);
+            let key = SigningKey::from_bytes(&[200 + offset as u8; 32]);
+            let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+            let policy = initialize_signed_policy(&path, &key);
+            let request = request(ResponseAction::BlockEgress {
+                target: format!("203.0.113.20{}", offset),
+            });
+            policy.observe_health(&governing_id, &[], 1_860_000_000_000);
+            let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&request) else {
+                panic!("healthy precondition must issue a receipt");
+            };
+            let restrictive_entries = [AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }];
+            inject_health_crash(&path, crash_point);
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                policy.observe_health(&governing_id, &restrictive_entries, 1_860_000_000_001);
+            }));
+            assert!(crashed.is_err(), "injected crash point must fire: {suffix}");
+            drop(policy);
+
+            let reopened = load_signed_policy(&path, &key).unwrap();
+            assert!(
+                reopened.is_partitioned(),
+                "restart must retain the restrictive veto"
+            );
+            let decision = reopened.can_act(&request);
+            let GovernanceDecision::Veto {
+                receipt: next_receipt,
+                ..
+            } = decision
+            else {
+                panic!("restart after {suffix} must not authorize stale Healthy state");
+            };
+            assert!(next_receipt.is_none());
+            assert!(
+                reopened
+                    .verify_and_consume_action_authorization(
+                        &request,
+                        &serde_json::to_value(receipt).unwrap(),
+                        1_860_000_000_002,
+                    )
+                    .is_err(),
+                "the pre-crash Healthy receipt must remain unusable after {suffix}"
+            );
+            drop(reopened);
+            cleanup_persistence(&path);
+        }
+    }
+
+    #[test]
+    fn pending_health_rejects_partition_and_governor_mutations_after_repair() {
+        let path = persistence_path("pending-health-mutation-gates");
+        let key = SigningKey::from_bytes(&[188; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+        let base_ms = 1_850_000_000_000;
+        policy.observe_health(&governing_id, &[], base_ms);
+        policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            base_ms + 1,
+        );
+        let before_failed_repair = health_memory_snapshot(&policy);
+        let before_failed_state = fs::read(&path).unwrap();
+        let before_failed_checkpoint = fs::read(&sequence_path).unwrap();
+        let peer = SigningKey::from_bytes(&[189; 32]);
+        assert!(
+            policy
+                .register_peer_governor(&peer.verifying_key())
+                .is_err()
+        );
+        assert!(matches!(
+            policy.register_governor(AgentId::new("tom", "alternate"), key.clone()),
+            Err(GovernanceKeyError::Persistence { .. })
+        ));
+        policy.note_partition_veto(
+            &request(ResponseAction::BlockEgress {
+                target: "203.0.113.188".to_string(),
+            }),
+            "pending health",
+            base_ms + 2,
+        );
+        assert_eq!(health_memory_snapshot(&policy), before_failed_repair);
+        assert_eq!(fs::read(&path).unwrap(), before_failed_state);
+        assert_eq!(fs::read(&sequence_path).unwrap(), before_failed_checkpoint);
+
+        fs::remove_dir(blocker).unwrap();
+        {
+            let mut state = policy.state.lock().unwrap();
+            policy
+                .ensure_checkpoint_repaired_locked(&mut state)
+                .unwrap();
+        }
+        let repaired_state = health_memory_snapshot(&policy);
+        let repaired_state_bytes = fs::read(&path).unwrap();
+        let repaired_checkpoint_bytes = fs::read(&sequence_path).unwrap();
+        let repaired_sequence = read_envelope(&path).sequence();
+        assert!(
+            policy
+                .register_peer_governor(&peer.verifying_key())
+                .is_err()
+        );
+        assert!(matches!(
+            policy.register_governor(AgentId::new("tom", "alternate"), key),
+            Err(GovernanceKeyError::Persistence { .. })
+        ));
+        policy.note_partition_veto(
+            &request(ResponseAction::BlockEgress {
+                target: "203.0.113.188".to_string(),
+            }),
+            "pending health",
+            base_ms + 3,
+        );
+        assert_eq!(health_memory_snapshot(&policy), repaired_state);
+        assert_eq!(fs::read(&path).unwrap(), repaired_state_bytes);
+        assert_eq!(fs::read(&sequence_path).unwrap(), repaired_checkpoint_bytes);
+        assert_eq!(read_envelope(&path).sequence(), repaired_sequence);
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn legacy_signed_state_without_pending_health_defaults_to_no_pending_marker() {
+        let path = persistence_path("legacy-pending-health-default");
+        let key = SigningKey::from_bytes(&[184; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let original = read_envelope(&path);
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&original.statement.payload_json).unwrap();
+        payload
+            .as_object_mut()
+            .unwrap()
+            .remove("pending_health_observation");
+        let legacy = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            original.sequence(),
+            payload,
+            &key,
+        )
+        .unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        let reopened = load_signed_policy(&path, &key).unwrap();
+        let state = reopened.state.lock().unwrap();
+        assert!(state.pending_health_observation.is_none());
+        assert!(state.durable_pending_health_observation.is_none());
+        drop(state);
+        drop(reopened);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn checkpoint_repair_backoff_deadline_is_overflow_safe() {
+        let saturated = super::GovernanceCheckpointRepairBackoff::after(i64::MAX);
+        assert!(saturated.saturated);
+        assert!(!saturated.is_due(i64::MAX));
+
+        let exact_max = super::GovernanceCheckpointRepairBackoff::after(
+            i64::MAX - GOVERNANCE_CHECKPOINT_REPAIR_RETRY_INTERVAL_MS,
+        );
+        assert!(!exact_max.saturated);
+        assert_eq!(exact_max.retry_at_ms, i64::MAX);
+        assert!(exact_max.is_due(i64::MAX));
+    }
+
+    #[test]
+    fn pre_partition_human_hold_is_refused_while_governance_is_degraded() {
+        let path = persistence_path("pre-partition-human-hold-degraded");
+        let key = SigningKey::from_bytes(&[179; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.179".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: healthy governance issues an approval");
+        };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let decision = swarm_policy::PolicyDecision::require_human_with_rule(
+            "pre-partition-human-hold-degraded",
+            "human review required",
+        );
+        let hold = policy
+            .begin_human_authorization_hold(
+                &governed_request,
+                &receipt_value,
+                &decision,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .unwrap();
+        policy
+            .bind_human_approval_set(&hold.hold_id, "approval-set:179", "digest:179")
+            .unwrap();
+
+        policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: "whisker-degraded".to_string(),
+                role: AgentRole::Whisker,
+                health: AgentHealth::Degraded,
+            }],
+            receipt.payload.issued_at_ms + 2,
+        );
+        assert_eq!(
+            policy.status_report().partition_state,
+            PartitionState::Degraded
+        );
+        let sequence = read_envelope(&path).sequence();
+        let state_bytes = fs::read(&path).unwrap();
+
+        let error = policy
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                "approval-set:179",
+                "digest:179",
+                receipt.payload.issued_at_ms + 3,
+            )
+            .expect_err("a pre-degraded human hold must not bypass the health veto");
+        assert!(
+            error.contains("Degraded"),
+            "unexpected refusal reason: {error}"
+        );
+        assert_eq!(read_envelope(&path).sequence(), sequence);
+        assert_eq!(fs::read(&path).unwrap(), state_bytes);
+        assert!(
+            policy
+                .pending_human_authorization("approval-set:179")
+                .is_ok()
+        );
 
         drop(policy);
         cleanup_persistence(&path);
@@ -8027,6 +21889,7 @@ mod tests {
             AgentId::from_verifying_key(&partial_key.verifying_key()),
             partial_key,
             suffix,
+            None,
         )
         .expect_err("a partial archive failure must restore the prior stream");
         assert!(matches!(
@@ -8061,6 +21924,7 @@ mod tests {
             AgentId::from_verifying_key(&init_fail_key.verifying_key()),
             init_fail_key,
             "discarded-init-failure-test",
+            None,
         )
         .expect_err("a replacement initialization failure must restore the prior stream");
         assert!(matches!(
@@ -8074,6 +21938,896 @@ mod tests {
         );
         fs::remove_dir(blocker).unwrap();
         cleanup_persistence(&init_fail_path);
+    }
+
+    #[test]
+    fn reinitialization_archive_collision_is_no_replace_and_preserves_foreign_state() {
+        let path = persistence_path("reinit-archive-collision");
+        let key = SigningKey::from_bytes(&[122; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let original_state = fs::read(&path).unwrap();
+        let suffix = "discarded-foreign-collision";
+        let state_archive = path.with_extension(format!("json.{suffix}"));
+        let foreign = b"foreign archive candidate".to_vec();
+        fs::write(&state_archive, &foreign).unwrap();
+        let error = GovernancePolicy::reinitialize_persistence_with_suffix(
+            GovernancePolicyConfig::default(),
+            path.clone(),
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            suffix,
+            None,
+        )
+        .expect_err("a foreign archive destination must refuse reinitialization");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReinitializationFailed { .. }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original_state);
+        assert_eq!(fs::read(&state_archive).unwrap(), foreign);
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(state_archive);
+    }
+
+    #[test]
+    fn reinitialization_archives_are_private_authenticated_snapshots() {
+        let path = persistence_path("reinit-private-archive-snapshot");
+        let key = SigningKey::from_bytes(&[205; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+
+        let suffix = "discarded-private-snapshot";
+        let state_archive = path.with_extension(format!("json.{suffix}"));
+        let artifact = copied_reinitialization_artifact(&path, &state_archive);
+        let archive_snapshot = super::read_governance_artifact_snapshot(&state_archive)
+            .unwrap()
+            .unwrap()
+            .0;
+        assert_ne!(
+            archive_snapshot.identity, artifact.identity,
+            "rollback archives must be copied snapshots, never hard-link aliases"
+        );
+
+        let original_archive_bytes = fs::read(&state_archive).unwrap();
+        fs::write(&path, b"mutated source bytes after archive creation").unwrap();
+        assert_eq!(fs::read(&state_archive).unwrap(), original_archive_bytes);
+
+        // Replacing the archive with a hard-link alias is rejected by the
+        // identity+digest binding before rollback can consume it.
+        fs::remove_file(&state_archive).unwrap();
+        fs::hard_link(&path, &state_archive).unwrap();
+        fs::remove_file(&path).unwrap();
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let journal = ReinitializationRollbackJournal {
+            schema_version: REINITIALIZATION_JOURNAL_SCHEMA_VERSION,
+            transaction_id: "private-archive-alias-rejected".to_string(),
+            archive_suffix: suffix.to_string(),
+            state_path: path.clone(),
+            sequence_path: sequence_path.clone(),
+            artifacts: vec![artifact],
+            new_stream_artifacts: Vec::new(),
+            phase: ReinitializationJournalPhase::ArchivesCreated,
+        };
+        // The state archive is intentionally the alias above; recovery must
+        // reject it before it can consume the replacement inode.
+        super::write_reinitialization_journal(&path, &journal, &key).unwrap();
+        let error = load_signed_policy(&path, &key)
+            .expect_err("an archive alias replacing the private snapshot must fail closed");
+        assert!(matches!(error, GovernancePersistenceError::Write { .. }));
+        assert!(state_archive.exists());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(state_archive);
+    }
+
+    #[test]
+    fn reinitialization_missing_archive_identity_refuses_recovery() {
+        let path = persistence_path("reinit-missing-archive-identity");
+        let key = SigningKey::from_bytes(&[213; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let suffix = "discarded-missing-archive-identity";
+        let state_archive = path.with_extension(format!("json.{suffix}"));
+        let mut artifact = copied_reinitialization_artifact(&path, &state_archive);
+        artifact.archive_identity = None;
+        let journal = ReinitializationRollbackJournal {
+            schema_version: REINITIALIZATION_JOURNAL_SCHEMA_VERSION,
+            transaction_id: "missing-archive-identity".to_string(),
+            archive_suffix: suffix.to_string(),
+            state_path: path.clone(),
+            sequence_path,
+            artifacts: vec![artifact],
+            new_stream_artifacts: Vec::new(),
+            phase: ReinitializationJournalPhase::Prepared,
+        };
+        super::write_reinitialization_journal(&path, &journal, &key).unwrap();
+        let archive_bytes = fs::read(&state_archive).unwrap();
+        assert!(load_signed_policy(&path, &key).is_err());
+        assert_eq!(fs::read(&state_archive).unwrap(), archive_bytes);
+        assert!(super::reinitialization_journal_path(&path).exists());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(state_archive);
+    }
+
+    #[test]
+    fn reinitialization_journal_authentication_and_path_injection_refuse_restart() {
+        let path = persistence_path("reinit-journal-authentication");
+        let key = SigningKey::from_bytes(&[206; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let suffix = "discarded-journal-authentication";
+        let state_archive = path.with_extension(format!("json.{suffix}"));
+        let sequence_archive = sequence_path.with_extension(format!("json.{suffix}"));
+        let state_artifact = copied_reinitialization_artifact(&path, &state_archive);
+        let sequence_artifact = copied_reinitialization_artifact(&sequence_path, &sequence_archive);
+        fs::remove_file(&path).unwrap();
+        let journal = ReinitializationRollbackJournal {
+            schema_version: REINITIALIZATION_JOURNAL_SCHEMA_VERSION,
+            transaction_id: "journal-authentication".to_string(),
+            archive_suffix: suffix.to_string(),
+            state_path: path.clone(),
+            sequence_path: sequence_path.clone(),
+            artifacts: vec![state_artifact, sequence_artifact],
+            new_stream_artifacts: Vec::new(),
+            phase: ReinitializationJournalPhase::ArchivesCreated,
+        };
+        super::write_reinitialization_journal(&path, &journal, &key).unwrap();
+        let journal_path = super::reinitialization_journal_path(&path);
+        let mut tampered = fs::read(&journal_path).unwrap();
+        let byte = tampered
+            .iter_mut()
+            .find(|byte| **byte == b'j')
+            .expect("signed journal contains a mutable payload byte");
+        *byte = b'k';
+        fs::write(&journal_path, tampered).unwrap();
+        assert!(load_signed_policy(&path, &key).is_err());
+        assert!(journal_path.exists());
+
+        // A validly signed but path-injected journal is also rejected by the
+        // canonical same-parent stream validation.
+        let mut forged = journal.clone();
+        forged.sequence_path = path.with_file_name("foreign.sequence.json");
+        let signer = AgentId::from_verifying_key(&key.verifying_key());
+        let envelope = SignedStateEnvelope::sign(
+            super::REINITIALIZATION_JOURNAL_KIND,
+            super::REINITIALIZATION_JOURNAL_STREAM,
+            signer,
+            0,
+            forged,
+            &key,
+        )
+        .unwrap();
+        fs::write(&journal_path, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
+        assert!(load_signed_policy(&path, &key).is_err());
+        assert!(state_archive.exists());
+        assert!(sequence_archive.exists());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(state_archive);
+        let _ = fs::remove_file(sequence_archive);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphaned_cleanup_reservation_blocks_uncertain_authority_cleanup_until_recovered() {
+        let path = persistence_path("authority-cleanup-orphan-reservation");
+        let key = SigningKey::from_bytes(&[207; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let state_lock = GovernancePolicy::persistence_lock_path(&path);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&sequence_path).unwrap();
+        fs::remove_file(&state_lock).unwrap();
+        fs::remove_file(&sidecar).unwrap();
+        let pool = sidecar
+            .parent()
+            .unwrap()
+            .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+        let orphan_slot = pool.join(cleanup_pool_slot_name(0));
+        fs::create_dir_all(&orphan_slot).unwrap();
+        let orphan = orphan_slot.join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        let orphan_bytes = b"foreign orphan reservation";
+        fs::write(&orphan, orphan_bytes).unwrap();
+
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key.clone(),
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&orphan).unwrap(), orphan_bytes);
+        assert!(
+            !sidecar.exists(),
+            "the canonical sidecar is semantically quarantined into a fixed slot"
+        );
+
+        fs::remove_dir_all(&pool).unwrap();
+        let reopened = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        )
+        .expect("removing the recovered orphan must permit a fresh stream");
+        drop(reopened);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_pool_is_fixed_cardinality_and_exhaustion_is_fail_closed() {
+        let path = persistence_path("cleanup-pool-fixed-cardinality");
+        for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
+            fs::write(&path, format!("owned-entry-{index}")).unwrap();
+            let outcome = quarantine_verified_entry(&path, || true, |_| true);
+            assert_eq!(outcome, QuarantineOutcome::Retained, "slot {index}");
+        }
+        let pool = path
+            .parent()
+            .unwrap()
+            .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+        let slots = fs::read_dir(&pool)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("slot-"))
+            .count();
+        assert_eq!(slots, GOVERNANCE_CLEANUP_POOL_SLOT_COUNT);
+
+        fs::write(&path, b"the 65th entry must remain canonical").unwrap();
+        assert_eq!(
+            quarantine_verified_entry(&path, || true, |_| true),
+            QuarantineOutcome::PoolExhausted
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"the 65th entry must remain canonical"
+        );
+        let journal = pool
+            .join(cleanup_pool_slot_name(0))
+            .join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        assert!(fs::metadata(journal).unwrap().len() > 0);
+        cleanup_persistence(&path);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn non_drop_cleanup_failure_composition_preserves_structural_outcomes() {
+        let path = PathBuf::from("/tmp/governance-cleanup-composition");
+        let original = GovernancePersistenceError::StateLocked { path: path.clone() };
+        let exhausted = super::compose_operation_cleanup_failure(
+            &path,
+            original,
+            vec![GovernancePersistenceError::CleanupPoolExhausted { path: path.clone() }],
+        );
+        assert!(matches!(
+            exhausted,
+            GovernancePersistenceError::CleanupPoolExhausted { path: ref observed }
+                if observed == &path
+        ));
+
+        let original = GovernancePersistenceError::StateLocked { path: path.clone() };
+        let composed = super::compose_operation_cleanup_failure(
+            &path,
+            original,
+            vec![GovernancePersistenceError::CleanupMaintenance {
+                path: path.clone(),
+                reason: "foreign replacement was preserved; cleanup is uncertain".to_string(),
+            }],
+        );
+        match composed {
+            GovernancePersistenceError::CleanupMaintenance { reason, .. } => {
+                assert!(reason.contains("operation failed: governance state lock"));
+                assert!(reason.contains("foreign replacement was preserved"));
+            }
+            other => panic!("cleanup uncertainty must be returned as maintenance: {other:?}"),
+        }
+
+        let original = GovernancePersistenceError::StateLocked { path };
+        let unchanged = super::compose_operation_cleanup_failure(
+            Path::new("/tmp/governance-cleanup-composition"),
+            original,
+            Vec::new(),
+        );
+        assert!(matches!(
+            unchanged,
+            GovernancePersistenceError::StateLocked { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_pool_partial_or_tampered_slots_are_occupied_after_restart_scan() {
+        let path = persistence_path("cleanup-pool-tampered-restart");
+        let pool = path
+            .parent()
+            .unwrap()
+            .join(GOVERNANCE_CLEANUP_POOL_DIR_NAME);
+        fs::create_dir(&pool).unwrap();
+        for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
+            let slot = pool.join(cleanup_pool_slot_name(index));
+            fs::create_dir(&slot).unwrap();
+            // Deliberately malformed/partial records are still occupied. A
+            // restart must not parse or reuse them as deletion authority.
+            fs::write(slot.join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME), b"partial").unwrap();
+        }
+        let parent = bind_authority_cleanup_parent(&path).unwrap();
+        let error = match acquire_cleanup_pool_slot(&path, &parent) {
+            Ok(_) => panic!("all malformed slots remain occupied after restart"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::CleanupPoolExhausted { .. }
+        ));
+        assert_eq!(
+            fs::read(
+                pool.join(cleanup_pool_slot_name(0))
+                    .join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME)
+            )
+            .unwrap(),
+            b"partial"
+        );
+        cleanup_persistence(&path);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_pool_journal_same_inode_truncate_is_occupied() {
+        let path = persistence_path("cleanup-journal-same-inode-truncate");
+        fs::write(&path, b"owned cleanup source").unwrap();
+        let parent = bind_authority_cleanup_parent(&path).unwrap();
+        let mut slot = acquire_cleanup_pool_slot(&path, &parent).unwrap();
+        let journal = slot.path.join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        let identity = fs::symlink_metadata(&journal).unwrap().ino();
+        let file = fs::OpenOptions::new().write(true).open(&journal).unwrap();
+        file.set_len(0).unwrap();
+        file.sync_all().unwrap();
+        assert_eq!(fs::symlink_metadata(&journal).unwrap().ino(), identity);
+        assert!(
+            append_cleanup_pool_record(&mut slot, CleanupPoolPhase::Retained, Vec::new()).is_err()
+        );
+        drop(slot);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_pool_journal_same_inode_overwrite_is_occupied() {
+        let path = persistence_path("cleanup-journal-same-inode-overwrite");
+        fs::write(&path, b"owned cleanup source").unwrap();
+        let parent = bind_authority_cleanup_parent(&path).unwrap();
+        let mut slot = acquire_cleanup_pool_slot(&path, &parent).unwrap();
+        let journal = slot.path.join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        let mut bytes = fs::read(&journal).unwrap();
+        let identity = fs::symlink_metadata(&journal).unwrap().ino();
+        bytes[0] = if bytes[0] == b'{' { b'[' } else { b'{' };
+        rewrite_same_inode(&journal, &bytes);
+        assert_eq!(fs::symlink_metadata(&journal).unwrap().ino(), identity);
+        assert!(
+            append_cleanup_pool_record(&mut slot, CleanupPoolPhase::Retained, Vec::new()).is_err()
+        );
+        drop(slot);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_pool_journal_reordered_record_is_occupied() {
+        let path = persistence_path("cleanup-journal-reordered-record");
+        fs::write(&path, b"owned cleanup source").unwrap();
+        let parent = bind_authority_cleanup_parent(&path).unwrap();
+        let mut slot = acquire_cleanup_pool_slot(&path, &parent).unwrap();
+        append_cleanup_pool_record(&mut slot, CleanupPoolPhase::QuarantineMoved, Vec::new())
+            .unwrap();
+        let journal = slot.path.join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        let mut records = fs::read(&journal)
+            .unwrap()
+            .split_inclusive(|byte| *byte == b'\n')
+            .map(|line| line.to_vec())
+            .collect::<Vec<_>>();
+        records.reverse();
+        let reordered = records.into_iter().flatten().collect::<Vec<_>>();
+        rewrite_same_inode(&journal, &reordered);
+        assert!(
+            append_cleanup_pool_record(&mut slot, CleanupPoolPhase::Retained, Vec::new()).is_err()
+        );
+        drop(slot);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_pool_journal_forged_prior_digest_is_occupied() {
+        let path = persistence_path("cleanup-journal-forged-prior-digest");
+        fs::write(&path, b"owned cleanup source").unwrap();
+        let parent = bind_authority_cleanup_parent(&path).unwrap();
+        let mut slot = acquire_cleanup_pool_slot(&path, &parent).unwrap();
+        append_cleanup_pool_record(&mut slot, CleanupPoolPhase::QuarantineMoved, Vec::new())
+            .unwrap();
+        let journal = slot.path.join(GOVERNANCE_CLEANUP_POOL_JOURNAL_NAME);
+        let mut records = fs::read(&journal)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<super::CleanupPoolRecord>(line).unwrap())
+            .collect::<Vec<_>>();
+        records[1].previous_digest = Some("00".repeat(32));
+        records[1].record_digest = super::cleanup_pool_record_digest(&records[1]).unwrap();
+        let mut forged = Vec::new();
+        for record in records {
+            forged.extend_from_slice(&serde_json::to_vec(&record).unwrap());
+            forged.push(b'\n');
+        }
+        rewrite_same_inode(&journal, &forged);
+        assert!(
+            append_cleanup_pool_record(&mut slot, CleanupPoolPhase::Retained, Vec::new()).is_err()
+        );
+        drop(slot);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn reinitialization_durable_journal_restores_both_peers_after_restart() {
+        let path = persistence_path("reinit-durable-journal-restart");
+        let key = SigningKey::from_bytes(&[203; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let original_state = fs::read(&path).unwrap();
+        let original_sequence = fs::read(&sequence_path).unwrap();
+        let suffix = "discarded-durable-journal-restart";
+        let state_archive = path.with_extension(format!("json.{suffix}"));
+        let sequence_archive = sequence_path.with_extension(format!("json.{suffix}"));
+        let state_artifact = copied_reinitialization_artifact(&path, &state_archive);
+        let sequence_artifact = copied_reinitialization_artifact(&sequence_path, &sequence_archive);
+        fs::remove_file(&path).unwrap();
+        let journal = ReinitializationRollbackJournal {
+            schema_version: REINITIALIZATION_JOURNAL_SCHEMA_VERSION,
+            transaction_id: "later-peer-failure-restart".to_string(),
+            archive_suffix: suffix.to_string(),
+            state_path: path.clone(),
+            sequence_path: sequence_path.clone(),
+            artifacts: vec![state_artifact, sequence_artifact],
+            new_stream_artifacts: Vec::new(),
+            phase: ReinitializationJournalPhase::ArchivesCreated,
+        };
+        super::write_reinitialization_journal(&path, &journal, &key).unwrap();
+
+        let restarted = load_signed_policy(&path, &key)
+            .expect("restart must recover the complete state+sequence transaction");
+        drop(restarted);
+        assert_eq!(fs::read(&path).unwrap(), original_state);
+        assert_eq!(fs::read(&sequence_path).unwrap(), original_sequence);
+        assert!(!state_archive.exists());
+        assert!(!sequence_archive.exists());
+        assert!(!super::reinitialization_journal_path(&path).exists());
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn reinitialization_journal_later_peer_foreign_identity_is_preserved_until_retry() {
+        let path = persistence_path("reinit-journal-later-peer-foreign");
+        let key = SigningKey::from_bytes(&[204; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let suffix = "discarded-later-peer-foreign";
+        let state_archive = path.with_extension(format!("json.{suffix}"));
+        let sequence_archive = sequence_path.with_extension(format!("json.{suffix}"));
+        let state_artifact = copied_reinitialization_artifact(&path, &state_archive);
+        let sequence_artifact = copied_reinitialization_artifact(&sequence_path, &sequence_archive);
+        fs::remove_file(&path).unwrap();
+        let foreign = b"foreign later peer survives rollback".to_vec();
+        fs::remove_file(&sequence_path).unwrap();
+        fs::write(&sequence_path, &foreign).unwrap();
+        let journal = ReinitializationRollbackJournal {
+            schema_version: REINITIALIZATION_JOURNAL_SCHEMA_VERSION,
+            transaction_id: "later-peer-foreign-retry".to_string(),
+            archive_suffix: suffix.to_string(),
+            state_path: path.clone(),
+            sequence_path: sequence_path.clone(),
+            artifacts: vec![state_artifact, sequence_artifact],
+            new_stream_artifacts: Vec::new(),
+            phase: ReinitializationJournalPhase::ArchivesCreated,
+        };
+        super::write_reinitialization_journal(&path, &journal, &key).unwrap();
+
+        let error = load_signed_policy(&path, &key)
+            .expect_err("a foreign later peer must veto restart recovery");
+        assert!(matches!(error, GovernancePersistenceError::Write { .. }));
+        assert_eq!(fs::read(&sequence_path).unwrap(), foreign);
+        let restored_state = super::read_governance_artifact_snapshot(&path)
+            .unwrap()
+            .unwrap()
+            .0;
+        let archived_state = super::read_governance_artifact_snapshot(&state_archive)
+            .unwrap()
+            .unwrap()
+            .0;
+        assert_eq!(restored_state.content_digest, archived_state.content_digest);
+        assert_eq!(restored_state.byte_len, archived_state.byte_len);
+        assert!(state_archive.exists());
+        assert!(sequence_archive.exists());
+        assert!(super::reinitialization_journal_path(&path).exists());
+
+        fs::remove_file(&sequence_path).unwrap();
+        let restarted = load_signed_policy(&path, &key)
+            .expect("retry after the foreign later peer is removed must recover both peers");
+        drop(restarted);
+        assert!(!state_archive.exists());
+        assert!(!sequence_archive.exists());
+        assert!(!super::reinitialization_journal_path(&path).exists());
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn reinitialization_archive_final_gap_preserves_foreign_candidate() {
+        let path = persistence_path("reinit-archive-final-gap");
+        let key = SigningKey::from_bytes(&[123; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let suffix = "discarded-final-gap";
+        let state_archive = path.with_extension(format!("json.{suffix}"));
+        let foreign = b"foreign candidate won the final archive gap".to_vec();
+        let expected_foreign = foreign.clone();
+        let (reached, resume, destination) = install_reinitialization_archive_barrier(&path);
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            let archive = destination
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("reinitialization published its no-replace destination");
+            fs::write(&archive, &foreign).unwrap();
+            resume.wait();
+        });
+        let error = GovernancePolicy::reinitialize_persistence_with_suffix(
+            GovernancePolicyConfig::default(),
+            path.clone(),
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            suffix,
+            None,
+        )
+        .expect_err("a foreign final-gap candidate must make reinitialization fail closed");
+        replacer.join().unwrap();
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReinitializationFailed { .. }
+        ));
+        assert_eq!(fs::read(&state_archive).unwrap(), expected_foreign);
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(state_archive);
+    }
+
+    #[test]
+    fn reinitialization_foreign_source_after_quarantine_cannot_be_overwritten() {
+        let path = persistence_path("reinit-foreign-source-after-quarantine");
+        let key = SigningKey::from_bytes(&[216; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let foreign = b"foreign source appeared after quarantine absence check".to_vec();
+        let (reached, resume) = install_reinitialization_publication_barrier(&path);
+        let replacement_path = path.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::write(&replacement_path, &foreign).unwrap();
+            resume.wait();
+        });
+        let result = GovernancePolicy::reinitialize_persistence_with_suffix(
+            GovernancePolicyConfig::default(),
+            path.clone(),
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            "discarded-foreign-source-after-quarantine",
+            None,
+        );
+        replacer.join().unwrap();
+        let error = result.expect_err("foreign publication candidate must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReinitializationFailed { .. }
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"foreign source appeared after quarantine absence check"
+        );
+
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let journal = super::reinitialization_journal_path(&path);
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(journal);
+        for original in [&path, &sequence_path] {
+            let Some(parent) = original.parent() else {
+                continue;
+            };
+            let Some(prefix) = original.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if let Ok(entries) = fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    if entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(&format!("{prefix}.tmp-"))
+                    {
+                        let _ = fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_initialization_foreign_publication_candidate_is_not_overwritten() {
+        let path = persistence_path("fresh-initialization-foreign-publication");
+        let key = SigningKey::from_bytes(&[221; 32]);
+        let foreign = b"foreign fresh initialization publication candidate".to_vec();
+        let (reached, resume) = install_reinitialization_publication_barrier(&path);
+        let replacement_path = path.clone();
+        let foreign_for_replacer = foreign.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::write(&replacement_path, &foreign_for_replacer).unwrap();
+            resume.wait();
+        });
+        let result = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+        );
+        replacer.join().unwrap();
+        assert!(
+            result.is_err(),
+            "fresh publication must fail on a foreign name"
+        );
+        assert_eq!(fs::read(&path).unwrap(), foreign);
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn governance_loader_held_fd_rejects_symlink_and_inode_swap() {
+        let path = persistence_path("loader-held-fd-races");
+        let key = SigningKey::from_bytes(&[222; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let original_state = fs::read(&path).unwrap();
+        let persistence = policy.persistence.as_ref().unwrap();
+
+        let (reached, resume) = persistence.install_loader_barrier(&path);
+        let replacement_path = path.clone();
+        let foreign = b"foreign state inode replacement".to_vec();
+        let foreign_for_replacer = foreign.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::remove_file(&replacement_path).unwrap();
+            fs::write(&replacement_path, &foreign_for_replacer).unwrap();
+            resume.wait();
+        });
+        let error = persistence
+            .load(&LocalGovernorKey::new(key.clone()))
+            .expect_err("loader must reject a canonical inode swap after held-FD open");
+        replacer.join().unwrap();
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReadState { .. }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), foreign);
+
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, &original_state).unwrap();
+        let symlink_target = path.with_file_name("loader-held-fd-target.json");
+        fs::write(&symlink_target, &original_state).unwrap();
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&symlink_target, &path).unwrap();
+        let error = persistence
+            .load(&LocalGovernorKey::new(key))
+            .expect_err("loader must reject a symlinked canonical state anchor");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReadState { .. }
+        ));
+
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, &original_state).unwrap();
+        fs::remove_file(symlink_target).unwrap();
+        drop(policy);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn reinitialization_cleanup_identity_mismatch_preserves_foreign_state() {
+        let path = persistence_path("reinit-cleanup-foreign-state");
+        let key = SigningKey::from_bytes(&[124; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+        let foreign = b"foreign state appeared during partial rollback".to_vec();
+        let expected_foreign = foreign.clone();
+        let (reached, resume) = install_governance_stream_cleanup_barrier(&path);
+        let replacement_path = path.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::remove_file(&replacement_path).unwrap();
+            fs::write(&replacement_path, &foreign).unwrap();
+            resume.wait();
+        });
+        let error = GovernancePolicy::reinitialize_persistence_with_suffix(
+            GovernancePolicyConfig::default(),
+            path.clone(),
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key,
+            "discarded-cleanup-foreign-state",
+            None,
+        )
+        .expect_err("partial initialization must refuse foreign cleanup replacement");
+        replacer.join().unwrap();
+        fs::remove_dir(blocker).unwrap();
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReinitializationFailed { .. }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), expected_foreign);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn reinitialization_crash_matrix_recovers_each_transaction_boundary() {
+        let crash_points = [
+            (
+                "archive-created",
+                InjectedReinitializationCrashPoint::ArchiveCreated,
+            ),
+            (
+                "originals-quarantined",
+                InjectedReinitializationCrashPoint::OriginalsQuarantined,
+            ),
+            (
+                "state-renamed",
+                InjectedReinitializationCrashPoint::StateRenamed,
+            ),
+            (
+                "checkpoint-renamed",
+                InjectedReinitializationCrashPoint::CheckpointRenamed,
+            ),
+            (
+                "before-commit-journal",
+                InjectedReinitializationCrashPoint::BeforeCommitJournal,
+            ),
+        ];
+        for (offset, (label, crash_point)) in crash_points.into_iter().enumerate() {
+            let path = persistence_path(&format!("reinit-crash-matrix-{label}"));
+            let key = SigningKey::from_bytes(&[220 + offset as u8; 32]);
+            let policy = initialize_signed_policy(&path, &key);
+            drop(policy);
+            let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+            let original_state = fs::read(&path).unwrap();
+            let original_sequence = fs::read(&sequence_path).unwrap();
+            inject_reinitialization_crash(&path, crash_point);
+            let suffix = format!("discarded-crash-matrix-{label}");
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = GovernancePolicy::reinitialize_persistence_with_suffix(
+                    GovernancePolicyConfig::default(),
+                    path.clone(),
+                    AgentId::from_verifying_key(&key.verifying_key()),
+                    key.clone(),
+                    &suffix,
+                    None,
+                );
+            }));
+            assert!(crashed.is_err(), "injected crash point must fire: {label}");
+
+            let reopened = load_signed_policy(&path, &key)
+                .expect("restart must rollback the incomplete reinitialization");
+            drop(reopened);
+            assert_eq!(fs::read(&path).unwrap(), original_state);
+            assert_eq!(fs::read(&sequence_path).unwrap(), original_sequence);
+            assert!(
+                !super::reinitialization_journal_path(&path).exists(),
+                "recovery must retire the journal after {label}"
+            );
+            cleanup_persistence(&path);
+        }
+    }
+
+    #[test]
+    fn reinitialization_restore_rejects_same_content_foreign_inode_after_link() {
+        let path = persistence_path("reinit-restore-foreign-inode");
+        let key = SigningKey::from_bytes(&[226; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let original_snapshot = super::read_governance_artifact_snapshot(&path)
+            .unwrap()
+            .unwrap()
+            .0;
+        let original_bytes = fs::read(&path).unwrap();
+        inject_reinitialization_crash(
+            &path,
+            InjectedReinitializationCrashPoint::OriginalsQuarantined,
+        );
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = GovernancePolicy::reinitialize_persistence_with_suffix(
+                GovernancePolicyConfig::default(),
+                path.clone(),
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key.clone(),
+                "discarded-restore-foreign-inode",
+                None,
+            );
+        }));
+        assert!(crashed.is_err(), "injected quarantine crash must fire");
+
+        let (reached, resume) = install_reinitialization_restore_link_barrier(&path);
+        let replacement_path = path.clone();
+        let replacement_bytes = original_bytes.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::remove_file(&replacement_path).unwrap();
+            fs::write(&replacement_path, replacement_bytes).unwrap();
+            resume.wait();
+        });
+        let reopened = load_signed_policy(&path, &key);
+        replacer.join().unwrap();
+        let error = reopened.expect_err(
+            "same-content replacement after restore hard-link must fail closed on inode mismatch",
+        );
+        assert!(matches!(error, GovernancePersistenceError::Write { .. }));
+        let restored_snapshot = super::read_governance_artifact_snapshot(&path)
+            .unwrap()
+            .unwrap()
+            .0;
+        assert_eq!(
+            restored_snapshot.content_digest,
+            original_snapshot.content_digest
+        );
+        assert_eq!(restored_snapshot.byte_len, original_snapshot.byte_len);
+        assert_ne!(restored_snapshot.identity, original_snapshot.identity);
+        assert!(super::reinitialization_journal_path(&path).exists());
+        cleanup_persistence(&path);
+        let _ = fs::remove_file(super::reinitialization_journal_path(&path));
+    }
+
+    #[test]
+    fn reinitialization_commit_journal_parent_sync_failure_rolls_back() {
+        let path = persistence_path("reinit-commit-journal-parent-sync");
+        let key = SigningKey::from_bytes(&[225; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        drop(policy);
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let original_state = fs::read(&path).unwrap();
+        let original_sequence = fs::read(&sequence_path).unwrap();
+        inject_reinitialization_commit_journal_failure(&path);
+        let error = GovernancePolicy::reinitialize_persistence_with_suffix(
+            GovernancePolicyConfig::default(),
+            path.clone(),
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+            "discarded-commit-journal-parent-sync",
+            None,
+        )
+        .expect_err("a post-rename commit journal sync failure must fail closed");
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::ReinitializationFailed { .. }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original_state);
+        assert_eq!(fs::read(&sequence_path).unwrap(), original_sequence);
+        assert!(
+            !super::reinitialization_journal_path(&path).exists(),
+            "rollback must retire the commit journal after its sync failure"
+        );
+        cleanup_persistence(&path);
     }
 
     #[test]
@@ -8367,16 +23121,28 @@ mod tests {
             }],
             super::now_ms() + 1,
         );
-        assert_eq!(health_policy.status_report(), before);
-        assert!(
-            health_policy
-                .state
-                .lock()
-                .unwrap()
-                .unhealthy_agents
-                .is_empty()
+        let after = health_policy.status_report();
+        assert_eq!(after.total_governors, before.total_governors);
+        assert_eq!(after.healthy_governors, before.healthy_governors);
+        assert_eq!(after.quorum_threshold, before.quorum_threshold);
+        assert_eq!(
+            after.active_contingency_leases,
+            before.active_contingency_leases
         );
+        assert_eq!(after.partition_state, PartitionState::Degraded);
+        let state = health_policy.state.lock().unwrap();
+        assert!(state.unhealthy_agents.is_empty());
+        assert!(
+            state.durable_pending_health_observation.is_some(),
+            "a restrictive observation rejected by the state write must remain durably anchored"
+        );
+        assert!(state.pending_health_observation.is_some());
+        assert_eq!(state.partition_state, before.partition_state);
+        drop(state);
         assert_eq!(read_envelope(&health_path).sequence(), health_sequence);
+        let checkpoint: GovernanceSequenceCheckpoint =
+            serde_json::from_str(&read_checkpoint(&health_path).statement.payload_json).unwrap();
+        assert!(checkpoint.pending_health_observation.is_some());
         fs::remove_dir(blocker).unwrap();
         cleanup_persistence(&health_path);
 
@@ -8698,6 +23464,8 @@ mod tests {
             GovernanceSequenceCheckpoint {
                 accepted_sequence: higher_sequence,
                 lock_binding: original_checkpoint_payload.lock_binding.clone(),
+                cleanup_pool_binding: original_checkpoint_payload.cleanup_pool_binding.clone(),
+                pending_health_observation: None,
             },
             &key,
         )
@@ -8715,6 +23483,8 @@ mod tests {
         forged_high.statement.payload_json = serde_json::to_string(&GovernanceSequenceCheckpoint {
             accepted_sequence: higher_sequence,
             lock_binding: original_checkpoint_payload.lock_binding.clone(),
+            cleanup_pool_binding: original_checkpoint_payload.cleanup_pool_binding.clone(),
+            pending_health_observation: None,
         })
         .unwrap();
         write_checkpoint(&path, &forged_high);
@@ -8744,6 +23514,8 @@ mod tests {
             GovernanceSequenceCheckpoint {
                 accepted_sequence: higher_sequence,
                 lock_binding: original_checkpoint_payload.lock_binding.clone(),
+                cleanup_pool_binding: original_checkpoint_payload.cleanup_pool_binding.clone(),
+                pending_health_observation: None,
             },
             &attacker_key,
         )
@@ -8786,6 +23558,8 @@ mod tests {
         forged_low.statement.payload_json = serde_json::to_string(&GovernanceSequenceCheckpoint {
             accepted_sequence: original_sequence,
             lock_binding: original_checkpoint_payload.lock_binding,
+            cleanup_pool_binding: original_checkpoint_payload.cleanup_pool_binding,
+            pending_health_observation: None,
         })
         .unwrap();
         write_checkpoint(&path, &forged_low);
@@ -8852,6 +23626,11 @@ mod tests {
         fs::copy(
             GovernancePolicy::persistence_lock_path(&source_path),
             GovernancePolicy::persistence_lock_path(&path),
+        )
+        .unwrap();
+        fs::copy(
+            GovernancePolicy::persistence_authority_lock_path(&source_path),
+            GovernancePolicy::persistence_authority_lock_path(&path),
         )
         .unwrap();
         assert!(matches!(

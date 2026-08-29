@@ -127,6 +127,7 @@ type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send 
 struct IngestRuntimeRequestResponseRouter {
     stack: Arc<ArcSwap<IngestRuntimeStack>>,
     runtime: Arc<ArcSwap<IngestRequestRuntime>>,
+    stack: Arc<ArcSwap<IngestRuntimeStack>>,
     approval_harness: Option<Arc<DefaultApprovalHarness>>,
 }
 
@@ -184,7 +185,7 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         let eligible_voters = configured_approval_voters(&self.stack.load_full().service.config)
             .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
         let record = harness
-            .create_or_load_approval_set(
+            .create_approval_set(
                 eligible_voters,
                 ThresholdRule::AtLeast { required: 1 },
                 &route.hold().approval_evidence_ref(),
@@ -1513,6 +1514,60 @@ fn canonical_approval_voter_id(operator_id: &str) -> Option<String> {
 }
 
 #[derive(Debug, thiserror::Error)]
+enum ApprovalVoterConfigError {
+    #[error(
+        "governed approvals require at least one eligible approve principal with a canonical swarm:ed25519 public-key identity"
+    )]
+    NoEligibleApprover,
+}
+
+/// Resolve the only identities that may be placed in a persisted approval set.
+///
+/// A configured principal is eligible only when it explicitly grants `Approve`
+/// and its operator identity is the canonical representation of a valid Ed25519
+/// public key. The legacy single-principal fallback remains supported through
+/// `effective_principals()` when no explicit principal list is configured, but a
+/// non-empty explicit list never falls back to `auth.operator_id`.
+fn configured_approval_voters(
+    config: &SwarmConfig,
+) -> Result<Vec<String>, ApprovalVoterConfigError> {
+    let voters = config
+        .operator
+        .auth
+        .effective_principals()
+        .into_iter()
+        .filter(|principal| principal.scopes.contains(&OperatorScope::Approve))
+        .filter_map(|principal| canonical_approval_voter_id(&principal.operator_id))
+        .collect::<BTreeSet<_>>();
+
+    if voters.is_empty() {
+        return Err(ApprovalVoterConfigError::NoEligibleApprover);
+    }
+
+    Ok(voters.into_iter().collect())
+}
+
+fn canonical_approval_voter_id(operator_id: &str) -> Option<String> {
+    const PREFIX: &str = "swarm:ed25519:";
+
+    let public_key_hex = operator_id.strip_prefix(PREFIX)?;
+    if public_key_hex.len() != 64
+        || !public_key_hex
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        || public_key_hex
+            .chars()
+            .any(|character| character.is_ascii_uppercase())
+    {
+        return None;
+    }
+
+    let public_key = swarm_crypto::PublicKey::from_hex(public_key_hex).ok()?;
+    let canonical = format!("{PREFIX}{}", public_key.to_hex());
+    (operator_id == canonical).then_some(canonical)
+}
+
+#[derive(Debug, thiserror::Error)]
 enum IngestProcessingError {
     #[error("event timestamp {timestamp} must be a nonnegative Unix timestamp")]
     InvalidEventTimestamp { timestamp: i64 },
@@ -2089,6 +2144,7 @@ impl IngestState {
         Arc::new(IngestRuntimeRequestResponseRouter {
             stack: Arc::clone(&self.stack),
             runtime: Arc::clone(&self.request_runtime),
+            stack: Arc::clone(&self.stack),
             approval_harness: self.approval_harness.clone(),
         })
     }

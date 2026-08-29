@@ -174,6 +174,7 @@ impl HypothesisGraphConfig {
             max_tasks: self.max_tasks,
             max_task_lease_ms: self.max_lease_ms,
             max_task_retries: self.max_retries,
+            max_memory_ttl_ticks: self.max_memory_ttl_ticks,
             max_memory_records: self.max_memory_records,
             max_graph_depth: self.max_graph_depth,
             max_graph_fan_out: self.max_graph_fan_out,
@@ -181,9 +182,7 @@ impl HypothesisGraphConfig {
         }
     }
 
-    /// Validate the post-Plan-03 logical-time and per-tick ceilings.  These
-    /// limits are kept separate from graph cardinality limits so adding them
-    /// does not alter the historical `GraphResourceLimits` wire shape.
+    /// Validate the post-Plan-03 logical-time and per-tick ceilings.
     pub fn validate_reasoning_limits(
         &self,
     ) -> Result<(), crate::hypothesis_graph::GraphAdmissionError> {

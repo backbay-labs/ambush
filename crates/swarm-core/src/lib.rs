@@ -20,7 +20,8 @@ pub mod verdict;
 
 pub use hypothesis_graph::{
     EventNode, EvidenceWitness, GraphLogicalTime, GraphPolicyContract, GraphPolicyMode,
-    HypothesisGraph, TypedEvidencePayload,
+    GraphResourceLimits, HypothesisGraph, LogicalTaskDescriptor, TaskTerminalOutboxEntry,
+    TypedEvidencePayload,
 };
 
 pub use agent::{

@@ -92,24 +92,47 @@ fn memory(byte: u8, suffix: &str) -> StrategyMemory {
 
 fn assert_high_water_cas(store: &dyn HypothesisGraphStore) {
     let baseline = store.snapshot().unwrap();
-    let mut candidate = baseline.state.clone();
-    candidate.graph.version = candidate.graph.version.saturating_add(1);
-    candidate.logical_time_high_water = GraphLogicalTime::new(20);
-    let envelope = GraphCasEnvelope::new(baseline.revision.clone(), candidate)
-        .unwrap()
-        .authorized_by(&signer(1), "graph-cas:high-water-contract")
+    let mut advanced = baseline.state().clone();
+    advanced.logical_time_high_water = GraphLogicalTime::new(20);
+    let advanced = store
+        .compare_and_swap(baseline.revision(), advanced)
         .unwrap();
-    let error = store.compare_and_swap(envelope).unwrap_err();
+    assert_eq!(
+        advanced.state().logical_time_high_water,
+        GraphLogicalTime::new(20)
+    );
+
+    let mut lower = advanced.state().clone();
+    lower.logical_time_high_water = GraphLogicalTime::new(19);
+    let error = store
+        .compare_and_swap(advanced.revision(), lower)
+        .unwrap_err();
     assert!(matches!(
         error,
         GraphStoreError::InvalidState { reason }
             if reason.contains("store-owned logical time high-water")
     ));
-    assert_eq!(store.snapshot().unwrap(), baseline);
+    assert_eq!(
+        store.snapshot().unwrap().state().logical_time_high_water,
+        GraphLogicalTime::new(20)
+    );
 }
 
 #[test]
-fn cas_rejects_future_logical_high_water_for_both_backends() {
+fn snapshot_exposes_only_authenticated_read_views_and_owned_parts() {
+    let store =
+        MemoryHypothesisGraphStore::new(graph("graph:snapshot-contract"), signer(2)).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let expected_revision = snapshot.revision().clone();
+    let expected_digest = snapshot.state().digest().unwrap();
+    let (state, revision) = snapshot.into_parts();
+
+    assert_eq!(revision, expected_revision);
+    assert_eq!(state.revision().unwrap().digest, expected_digest);
+}
+
+#[test]
+fn cas_rejects_lower_and_preserves_higher_logical_high_water_for_both_backends() {
     let memory_store =
         MemoryHypothesisGraphStore::new(graph("graph:cas-memory"), signer(1)).unwrap();
     assert_high_water_cas(&memory_store);
