@@ -670,6 +670,7 @@ fn service_checkpoint_runtime_client_transport_is_closed() {
 }
 
 #[test]
+#[ignore = "requires Phase 285 complete-receipt ledger and receipt artifacts"]
 fn complete_receipt_validation_precedes_suppression_and_failures_forward() {
     let (ledger_path, ledger) = exact_artifact("PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", 1_048_576);
     let (receipt_path, receipt) = exact_artifact("PHASE285_COMPLETE_RECEIPT_PATH", 2_097_152);
@@ -731,6 +732,7 @@ fn topology_projection(variable: &str) -> (PathBuf, Vec<u8>, Value) {
 }
 
 #[test]
+#[ignore = "requires Phase 285 topology, credential, and parser projection artifacts"]
 fn topology_validator_binds_every_tuple_to_owner_block() {
     let canonical = topology_input("PHASE285_TOPOLOGY_CONFIG_PATH", 262_144);
     let probe = topology_input("PHASE285_TOPOLOGY_PROBE_CONFIG_PATH", 262_144);

@@ -1814,6 +1814,7 @@ async fn crash_after_ack_and_verify(label: &str, server: &str) -> TestResult<(St
 }
 
 #[tokio::test]
+#[ignore = "requires a restartable JetStream-enabled Phase 285 NATS harness"]
 async fn jetstream_checkpoint_survives_restart_for_current_predecessor_prepared_abort_and_genesis()
 -> TestResult {
     let case =
@@ -1838,6 +1839,7 @@ async fn jetstream_checkpoint_survives_restart_for_current_predecessor_prepared_
 }
 
 #[tokio::test]
+#[ignore = "requires a restartable JetStream-enabled Phase 285 NATS harness"]
 async fn jetstream_checkpoint_rejects_rolled_back_anchor_or_recreated_stream() -> TestResult {
     let mut ledger = CheckpointLedger::new(
         "jetstream_checkpoint_rejects_rolled_back_anchor_or_recreated_stream",
@@ -1937,6 +1939,7 @@ async fn jetstream_checkpoint_rejects_rolled_back_anchor_or_recreated_stream() -
 }
 
 #[tokio::test]
+#[ignore = "requires a restartable JetStream-enabled Phase 285 NATS harness"]
 async fn jetstream_checkpoint_rejects_unavailable_server_instead_of_skipping() -> TestResult {
     let mut ledger = CheckpointLedger::new(
         "jetstream_checkpoint_rejects_unavailable_server_instead_of_skipping",
@@ -2078,6 +2081,7 @@ async fn jetstream_checkpoint_rejects_unavailable_server_instead_of_skipping() -
 }
 
 #[tokio::test]
+#[ignore = "requires a restartable JetStream-enabled Phase 285 NATS harness"]
 async fn jetstream_checkpoint_uses_global_revision_not_store_generation() -> TestResult {
     let mut ledger =
         CheckpointLedger::new("jetstream_checkpoint_uses_global_revision_not_store_generation")?;

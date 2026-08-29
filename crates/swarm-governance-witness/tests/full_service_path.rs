@@ -4797,6 +4797,7 @@ fn write_constructor_deadline_receipt(
 }
 
 #[tokio::test]
+#[ignore = "requires the authenticated Phase 285 NATS topology and deadline receipt artifacts"]
 async fn full_service_path_constructor_deadline_is_exact_and_receipt_bound() -> ProtocolResult<()> {
     let client = connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
     let observations = [0, 2_999, 3_000, 3_001, u64::MAX].map(|input_millis| {
@@ -5266,6 +5267,7 @@ async fn assert_connection_service_ready_mismatch(
 }
 
 #[tokio::test]
+#[ignore = "requires the authenticated Phase 285 NATS topology and role credentials"]
 async fn full_service_path_rejects_runtime_private_subject_and_store_raw_api() -> ProtocolResult<()>
 {
     let fixture = Fixture::new(CasMode::Apply)?;
@@ -5366,6 +5368,7 @@ async fn full_service_path_rejects_runtime_private_subject_and_store_raw_api() -
 }
 
 #[tokio::test]
+#[ignore = "requires the authenticated Phase 285 NATS topology and role credentials"]
 async fn full_service_path_rejects_credential_account_and_mount_swaps() -> ProtocolResult<()> {
     let fixture = Fixture::new(CasMode::Apply)?;
     let (ready, entries) = store_ready_fixture_entries(&fixture)?;
@@ -5577,6 +5580,7 @@ async fn full_service_path_rejects_credential_account_and_mount_swaps() -> Proto
 }
 
 #[tokio::test]
+#[ignore = "requires the authenticated Phase 285 NATS topology and role credentials"]
 async fn full_service_path_validates_proxy_response_before_public_attestation() -> ProtocolResult<()>
 {
     let fixture = Fixture::new(CasMode::Apply)?;
@@ -5726,6 +5730,7 @@ async fn full_service_path_validates_proxy_response_before_public_attestation() 
 }
 
 #[tokio::test]
+#[ignore = "requires the authenticated Phase 285 NATS topology and role credentials"]
 async fn full_service_path_fails_closed_on_store_queue_exhaustion() -> ProtocolResult<()> {
     let (baseline, baseline_calls, request_bytes) = secondary_response_bytes_at_limit(None).await?;
     let baseline = baseline.map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;

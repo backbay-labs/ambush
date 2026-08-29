@@ -15,11 +15,12 @@ cleanup_temp_dir() {
   if [ -n "$PHASE285_WITNESS_TEMP_DIR" ]; then
     local target="$PHASE285_WITNESS_TEMP_DIR"
     if [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE" ] || [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ]; then
-      local observed_identity
-      observed_identity="$(stat -f '%d:%i' -- "$target" 2>/dev/null)" || {
+      local observed_metadata observed_identity
+      observed_metadata="$(phase285_directory_metadata "$target" 2>/dev/null)" || {
         echo "Phase 285 scratch bound inode is absent: $target" >&2
         return 1
       }
+      observed_identity="${observed_metadata#*:}"
       [ "$observed_identity" = "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE:$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ] || {
         echo "Phase 285 scratch bound inode was replaced: $target" >&2
         return 1
@@ -37,6 +38,25 @@ cleanup_temp_dir() {
       return 1
     }
   fi
+}
+
+phase285_directory_metadata() {
+  python3 -I - "$1" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path(sys.argv[1])
+metadata = os.lstat(path)
+if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+    raise SystemExit("PHASE285-DIRECTORY-METADATA[type]")
+stable = os.stat(path, follow_symlinks=False)
+identity = (metadata.st_dev, metadata.st_ino, metadata.st_mode)
+if identity != (stable.st_dev, stable.st_ino, stable.st_mode):
+    raise SystemExit("PHASE285-DIRECTORY-METADATA[unstable]")
+print(f"{stat.S_IMODE(metadata.st_mode):o}:{metadata.st_dev}:{metadata.st_ino}")
+PY
 }
 
 cleanup_temp_dir_on_exit() {
@@ -101,19 +121,22 @@ def git_boundary(argument):
     return pathlib.Path(result.stdout.strip()).resolve(strict=True)
 
 boundaries = [root, git_boundary("--git-dir"), git_boundary("--git-common-dir")]
-scratch = pathlib.Path(tempfile.mkdtemp(prefix=f"{prefix}.", dir=parent)).resolve(strict=True)
-if any(scratch.iterdir()):
-    shutil.rmtree(scratch)
-    if scratch.exists():
-        raise SystemExit("PHASE285-SCRATCH[nonempty-cleanup-failed]")
-    raise SystemExit("PHASE285-SCRATCH[nonempty-new-directory]")
-
 def within(child, ancestor):
     try:
         child.relative_to(ancestor)
         return True
     except ValueError:
         return False
+
+if any(parent == boundary or within(parent, boundary) for boundary in boundaries):
+    raise SystemExit("PHASE285-SCRATCH[parent-overlap]")
+
+scratch = pathlib.Path(tempfile.mkdtemp(prefix=f"{prefix}.", dir=parent)).resolve(strict=True)
+if any(scratch.iterdir()):
+    shutil.rmtree(scratch)
+    if scratch.exists():
+        raise SystemExit("PHASE285-SCRATCH[nonempty-cleanup-failed]")
+    raise SystemExit("PHASE285-SCRATCH[nonempty-new-directory]")
 
 if any(within(scratch, boundary) or within(boundary, scratch) for boundary in boundaries):
     scratch.rmdir()
@@ -124,23 +147,43 @@ print(scratch)
 PY
 }
 
+phase285_boundary_child_inventory() {
+  python3 -I - "$1" <<'PY'
+import base64
+import os
+import pathlib
+import sys
+
+boundary = pathlib.Path(sys.argv[1]).resolve(strict=True)
+names = sorted(os.fsencode(entry.name) for entry in os.scandir(boundary))
+encoded = b"".join(len(name).to_bytes(8, "big") + name for name in names)
+print(base64.b64encode(encoded).decode("ascii"))
+PY
+}
+
 phase285_scratch_hostile_controls() {
-  local site="$1" boundary output exit_code rejected=0
+  local site="$1" boundary output exit_code before_children after_children rejected=0
   local boundaries=(
     "$ROOT_DIR"
     "$(git rev-parse --path-format=absolute --git-dir)"
     "$(git rev-parse --path-format=absolute --git-common-dir)"
   )
   for boundary in "${boundaries[@]}"; do
+    before_children="$(phase285_boundary_child_inventory "$boundary")"
     exit_code=0
     output="$(TMPDIR="$boundary" phase285_create_confined_scratch "$site-hostile" 2>&1)" || exit_code=$?
-    [ "$exit_code" -ne 0 ] && [ "$output" = "PHASE285-SCRATCH[boundary-overlap]" ] || {
+    after_children="$(phase285_boundary_child_inventory "$boundary")"
+    [ "$exit_code" -ne 0 ] && [ "$output" = "PHASE285-SCRATCH[parent-overlap]" ] || {
       echo "Phase 285 hostile TMPDIR was not refused: site=$site boundary=$boundary output=$output" >&2
+      return 1
+    }
+    [ "$before_children" = "$after_children" ] || {
+      echo "Phase 285 hostile TMPDIR refusal created a child path: site=$site boundary=$boundary" >&2
       return 1
     }
     rejected=$((rejected + 1))
   done
-  echo "phase285_scratch_self_test site=$site boundaries=$rejected passed=1"
+  echo "phase285_scratch_self_test site=$site boundaries=$rejected child_paths_created=0 passed=1"
 }
 
 selectors() {
@@ -318,7 +361,14 @@ registry_rows() {
       if [ "$package" = shell ]; then
         IFS=$'\t' read -r target command < <(transport_tuple_for_case "$case_name")
       else
-        command="cargo test -p $package --test $target --locked --offline -- $case_name --exact"
+        case "$case_name" in
+          jetstream_cas_rejects_wrong_revision_header_or_ack|jetstream_cas_confirms_raw_sequence_and_bytes|jetstream_cas_rejects_del_purge_rollup_and_direct_reads|jetstream_checkpoint_*|full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion)
+            command="cargo test -p $package --test $target --locked --offline -- --ignored $case_name --exact"
+            ;;
+          *)
+            command="cargo test -p $package --test $target --locked --offline -- $case_name --exact"
+            ;;
+        esac
       fi
       printf '%s\t%s\t%s\t%s\t%s\n' \
         "$selector" "$package" "$target" "$command" "$case_name"
@@ -353,12 +403,12 @@ materialized_inventory_for_target() {
   esac
 }
 
-REGISTRY_SHA256="a3a3ec459600ac3163a9b66aa40aa39e9387c50cc75b1e765d9f0693ddb8983b"
+REGISTRY_SHA256="de986e0d0779f8b089f5160ff680145e4157ee4fcce08e3a5a577085d889d2e7"
 REGISTRY_ROW_COUNT=58
 
 registry_validator() {
   local registry_file="$1" mode="${2:-validate}" selector="${3:-}"
-  python3 - "$registry_file" "$REGISTRY_SHA256" "$REGISTRY_ROW_COUNT" "$mode" "$selector" <<'PY'
+  python3 -I - "$registry_file" "$REGISTRY_SHA256" "$REGISTRY_ROW_COUNT" "$mode" "$selector" <<'PY'
 import copy
 import hashlib
 import sys
@@ -540,8 +590,34 @@ print(f"aggregate_self_test_registry modes={len(expected)} mutations={len(mutati
 PY
 }
 
+phase285_portable_directory_metadata_self_test() {
+  local scratch metadata mode device inode
+  scratch="$(phase285_create_confined_scratch phase285-directory-metadata)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  metadata="$(phase285_directory_metadata "$scratch")"
+  IFS=: read -r mode device inode <<<"$metadata"
+  [ "$mode" = 700 ] && [[ "$device" =~ ^[0-9]+$ ]] && [[ "$inode" =~ ^[0-9]+$ ]] || {
+    echo "Phase 285 portable directory metadata differs: $metadata" >&2
+    return 1
+  }
+  python3 -I - "$ROOT_DIR/tools/check-phase285-witness-conformance.sh" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+for token in ("st" + "at -f", "st" + "at -c", "st" + "at --format"):
+    if token in source:
+        raise SystemExit(f"portable directory metadata source guard found CLI token: {token}")
+PY
+  cleanup_temp_dir
+  trap - EXIT
+  echo "phase285_directory_metadata_self_test mode=700 identity=stable cli_stat_flags=0 passed=1"
+}
+
 run_self_tests() {
   validate_aggregate_self_test_registry
+  phase285_portable_directory_metadata_self_test
   local count=0 mode
   while IFS= read -r mode; do
     [ -n "$mode" ] || continue
@@ -4149,8 +4225,8 @@ run_transport_selector() {
         ;;
       transport_layering_rejects_zero_or_omitted_mutation)
         grep -qx 'phase285_transport_self_test case=transport-layering-zero-or-omitted positive=1 mutation_failure=1 shared_validator_mutations=2' "$output_file" || return 1
-        grep -qx 'phase285_scratch_self_test site=conformance-transport boundaries=3 passed=1' "$output_file" || return 1
-        grep -qx 'phase285_scratch_self_test site=conformance-witness boundaries=3 passed=1' "$output_file" || return 1
+        grep -qx 'phase285_scratch_self_test site=conformance-transport boundaries=3 child_paths_created=0 passed=1' "$output_file" || return 1
+        grep -qx 'phase285_scratch_self_test site=conformance-witness boundaries=3 child_paths_created=0 passed=1' "$output_file" || return 1
         ;;
       *)
         [ "$(grep -c '^phase285_transport_self_test case=.* positive=1 mutation_failure=1$' "$output_file")" -eq 1 ] || return 1
@@ -5841,6 +5917,7 @@ anchors = [
     ("server_authority", "library", "fn server_connection_observation("),
     ("public_store_head", "library", '"observation public head differs from authenticated store head"'),
     ("proxy_store_envelope", "library", '"observation proxy/store envelope"'),
+    ("observation_ignore_boundary", "library", '#[ignore = "requires the authenticated Phase 285 NATS topology and observation artifacts"]'),
 ]
 scope_anchors = [
     ("observation_typed_nats_proxy", "observation", "NatsPublicWitnessStoreProxyClient::new("),
@@ -5854,7 +5931,11 @@ def scopes(library):
     observation_start="    async fn run_worker_observation_test_async() -> Vec<u8> {"
     observation_end="\n    fn ledger_field<'a>("
     grant_start="    async fn run_response_grant_recovery_leg(leg: GrantExpiryLegV1, mode: GrantRecoveryModeV1) {"
-    grant_end="\n    #[test]\n    fn worker_observations_are_real_and_reconciled()"
+    grant_end=(
+        "\n    #[test]\n"
+        "    #[ignore = \"requires the authenticated Phase 285 NATS topology and observation artifacts\"]\n"
+        "    fn worker_observations_are_real_and_reconciled()"
+    )
     for marker in (observation_start,observation_end,grant_start,grant_end):
         if library.count(marker)!=1: raise ValueError("observation_scope_boundary")
     return {
@@ -5946,9 +6027,11 @@ PY
   PHASE285_OBSERVATION_LEDGER_REQUIRED=1 PHASE285_OBSERVATION_LEDGER="$ledger" \
   PHASE285_OBSERVATION_TREE="$accepted_tree" PHASE285_OBSERVATION_INVOCATION_TOKEN="$token" \
   PHASE285_OBSERVATION_CASE=service_checkpoint_observations \
-    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled --exact | tee "$output"
   grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$output" || { echo "observation exact test counts differ" >&2; return 1; }
+  ci_harness_record_passed lib \
+    service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled "$output"
   python3 -I - "$ledger" "$accepted_tree" "$token" "$ROOT_DIR" "$scratch" <<'PY'
 import copy, hashlib, json, os, pathlib, re, selectors, signal, stat, subprocess, sys, time
 path, tree, token, root_text, scratch_text = sys.argv[1:]
@@ -6154,7 +6237,7 @@ def executable_snapshot(path,phase,captured):
         for chunk in iter(lambda:source.read(1_048_576),b""): digest.update(chunk)
     return (metadata.st_size,digest.hexdigest(),metadata.st_dev,metadata.st_ino)
 before=executable_snapshot(executable,"compile",compile_output)
-execute_command=[str(executable),"--test-threads=1","service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled","--exact"]
+execute_command=[str(executable),"--test-threads=1","--ignored","service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled","--exact"]
 execute_status,execute_output=run_bounded(execute_command,60,"execute")
 if execute_status!=101: fail("execute",f"exit-{execute_status}",execute_output)
 text=execute_output.decode("utf-8",errors="replace")
@@ -6185,6 +6268,8 @@ compile_receipt=hashlib.sha256(compile_output).hexdigest(); execute_receipt=hash
 print(f"service_checkpoint_observation_compiled_mutation mutation=public_head_absent compiled=1 compile_sha256={compile_receipt} executable_sha256={before[1]} executed=1 execute_sha256={execute_receipt} failed=1 intended=public_store_head")
 print("service_checkpoint_observations rows=1 worker=12 proxy=1 store=1 publisher=2 connections=3 cas_attempted=0 cas_applied=0 validator_mutations=10 compiled_mutations=1 passed=1")
 PY
+  cleanup_temp_dir
+  trap - EXIT
 }
 
 run_service_checkpoint_deadline_focus() {
@@ -6271,11 +6356,14 @@ PY
   PHASE285_DEADLINE_CASE=service_checkpoint_deadline \
     cargo test -p swarm-governance-witness --lib --locked --offline \
       deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive \
-      -- --exact --test-threads=1 | tee "$callsite_output"
+      -- --ignored --exact --test-threads=1 | tee "$callsite_output"
   grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$callsite_output" || {
     echo "deadline callsite exact test counts differ" >&2
     return 1
   }
+  ci_harness_record_passed lib \
+    deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive \
+    "$callsite_output"
   PHASE285_DEADLINE_CONSTRUCTOR_RECEIPT="$constructor_receipt" \
   PHASE285_DEADLINE_TREE="$accepted_tree" \
   PHASE285_DEADLINE_INVOCATION_TOKEN="$token" \
@@ -6284,11 +6372,13 @@ PY
   PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$(shasum -a 256 "$ROOT_DIR/tools/fixtures/phase285-witness-integrity.json" | awk '{print $1}')" \
     cargo test -p swarm-governance-witness --test full_service_path --locked --offline \
       full_service_path_constructor_deadline_is_exact_and_receipt_bound \
-      -- --exact --test-threads=1 | tee "$constructor_output"
+      -- --ignored --exact --test-threads=1 | tee "$constructor_output"
   grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$constructor_output" || {
     echo "deadline constructor exact test counts differ" >&2
     return 1
   }
+  ci_harness_record_passed full_service_path \
+    full_service_path_constructor_deadline_is_exact_and_receipt_bound "$constructor_output"
 
   python3 -I - "$ledger" "$budget_receipt" "$callsite_receipt" "$constructor_receipt" "$accepted_tree" "$token" \
     "$ROOT_DIR/crates/swarm-governance-witness/src/service_config.rs" \
@@ -7439,7 +7529,7 @@ for label, name, old, new, expected_count, replace_count, expected_failure in ca
         result = cargo([
             "test", "-p", "swarm-governance-witness", "--lib", "--locked", "--offline",
             "deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive",
-            "--", "--exact", "--test-threads=1",
+            "--", "--ignored", "--exact", "--test-threads=1",
         ], extra_environment={
             "PHASE285_DEADLINE_CALLSITE_RECEIPT": str(receipt_path),
             "PHASE285_DEADLINE_TREE": tree,
@@ -7499,7 +7589,7 @@ for label, name, old, new, expected_count, replace_count, expected_failure in co
         result = cargo([
             "test", "-p", "swarm-governance-witness", "--test", "full_service_path", "--locked", "--offline",
             "full_service_path_constructor_deadline_is_exact_and_receipt_bound",
-            "--", "--exact", "--test-threads=1",
+            "--", "--ignored", "--exact", "--test-threads=1",
         ], extra_environment={
             "PHASE285_DEADLINE_CONSTRUCTOR_RECEIPT": str(receipt_path),
             "PHASE285_DEADLINE_TREE": tree,
@@ -7601,7 +7691,7 @@ complete_receipt_artifact_hostile_controls() {
   if PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$case_dir/ledger.json" \
     PHASE285_COMPLETE_RECEIPT_PATH="$case_dir/receipt.json" \
     PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$(printf precreated | shasum -a 256 | awk '{print $1}')" \
-    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact >"$output" 2>&1; then
     echo "complete receipt precreated mutation survived" >&2; return 1
   fi
@@ -7636,7 +7726,7 @@ complete_receipt_artifact_hostile_controls() {
   output="$case_dir/stale.txt"
   if PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$case_dir/ledger.json" PHASE285_COMPLETE_RECEIPT_PATH="$case_dir/receipt.json" \
     PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$(printf stale | shasum -a 256 | awk '{print $1}')" \
-    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 --ignored \
       complete_receipt_validation_precedes_suppression_and_failures_forward --exact >"$output" 2>&1; then
     echo "complete receipt stale identity mutation survived" >&2; return 1
   fi
@@ -8136,12 +8226,13 @@ PY
 run_complete_receipt_focus() {
   local requested_signal="${1:-}" control_root="${2:-}"
   local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
-  local scratch artifact_dir ledger receipt snapshot internal_output external_output token
+  local scratch scratch_mode artifact_dir ledger receipt snapshot internal_output external_output token
   [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "complete receipt tree is malformed" >&2; return 1; }
   complete_receipt_source_guard normal
   if [ -n "$requested_signal" ]; then
     [[ "$control_root" = /* ]] || { echo "complete receipt signal control root must be absolute" >&2; return 2; }
-    [ -d "$control_root" ] && [ ! -L "$control_root" ] && [ "$(stat -f '%Lp' "$control_root")" = 700 ] \
+    scratch_mode="$(phase285_directory_metadata "$control_root" 2>/dev/null)" || scratch_mode=""
+    [ "${scratch_mode%%:*}" = 700 ] \
       && [ ! -e "$control_root/readiness.json" ] && [ ! -L "$control_root/readiness.json" ] \
       && [ ! -e "$control_root/release.json" ] && [ ! -L "$control_root/release.json" ] || {
       echo "complete receipt signal control root is invalid" >&2; return 2;
@@ -8151,8 +8242,8 @@ run_complete_receipt_focus() {
     scratch="$(phase285_create_confined_scratch phase285-complete-receipt)"
   fi
   PHASE285_WITNESS_TEMP_DIR="$scratch"
-  IFS=: read -r PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE PHASE285_COMPLETE_RECEIPT_BOUND_INODE \
-    < <(stat -f '%d:%i' -- "$scratch")
+  IFS=: read -r scratch_mode PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE PHASE285_COMPLETE_RECEIPT_BOUND_INODE \
+    < <(phase285_directory_metadata "$scratch")
   [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE" ] && [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ] || {
     echo "complete receipt scratch identity is absent" >&2; return 1;
   }
@@ -8178,23 +8269,27 @@ PY
   [ ! -e "$ledger" ] && [ ! -e "$receipt" ] || return 1
   PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$ledger" PHASE285_COMPLETE_RECEIPT_PATH="$receipt" \
   PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$token" \
-    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$internal_output"
   python3 -I - "$internal_output" <<'PY'
 import re, sys
 text=open(sys.argv[1],encoding="utf-8").read()
 if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","18")]: raise SystemExit("complete receipt internal transcript differs")
 PY
+  ci_harness_record_passed lib \
+    service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed "$internal_output"
   complete_receipt_artifact_snapshot "$artifact_dir" "$ledger" "$receipt" "$snapshot" record
   PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$ledger" PHASE285_COMPLETE_RECEIPT_PATH="$receipt" \
   PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$token" \
-    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 --ignored \
       complete_receipt_validation_precedes_suppression_and_failures_forward --exact | tee "$external_output"
   python3 -I - "$external_output" <<'PY'
 import re, sys
 text=open(sys.argv[1],encoding="utf-8").read()
 if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","2")]: raise SystemExit("complete receipt external transcript differs")
 PY
+  ci_harness_record_passed service_checkpoint \
+    complete_receipt_validation_precedes_suppression_and_failures_forward "$external_output"
   complete_receipt_artifact_snapshot "$artifact_dir" "$ledger" "$receipt" "$snapshot" verify
   complete_receipt_artifact_hostile_controls "$scratch" "$ledger" "$receipt"
   complete_receipt_real_signal_controls "$scratch" "$accepted_tree"
@@ -8374,8 +8469,8 @@ for name,source,reason in mutations:
     time.sleep(1.05); digests.add(digest); library.write_text(source)
     artifacts=parent/f"mutant-{name}"; artifacts.mkdir(); ledger=artifacts/"ledger.json"; receipt=artifacts/"receipt.json"
     env=base.copy(); env["PHASE285_COMPLETE_RECEIPT_LEDGER_PATH"]=str(ledger); env["PHASE285_COMPLETE_RECEIPT_PATH"]=str(receipt); env["PHASE285_SERVICE_CHECKPOINT_TREE"]=tree; env["PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN"]=hashlib.sha256((tree+":"+name).encode()).hexdigest()
-    internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
-    external=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","complete_receipt_validation_precedes_suppression_and_failures_forward","--exact"]
+    internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","--ignored","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
+    external=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","--ignored","complete_receipt_validation_precedes_suppression_and_failures_forward","--exact"]
     await_connection_quiescence()
     try: first=subprocess.run(internal,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
     except subprocess.TimeoutExpired as error: raise SystemExit(f"complete_receipt_mutant[{name}:internal-timeout]") from error
@@ -8390,7 +8485,7 @@ if digest in digests: raise SystemExit("complete_receipt_mutant[current_invocati
 time.sleep(1.05); digests.add(digest); library.write_text(source)
 artifacts=parent/"mutant-current-invocation"; artifacts.mkdir(); ledger=artifacts/"ledger.json"; receipt=artifacts/"receipt.json"
 env=base.copy(); env["PHASE285_COMPLETE_RECEIPT_LEDGER_PATH"]=str(ledger); env["PHASE285_COMPLETE_RECEIPT_PATH"]=str(receipt); env["PHASE285_SERVICE_CHECKPOINT_TREE"]=tree; env["PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN"]=hashlib.sha256((tree+":"+name).encode()).hexdigest()
-internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
+internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","--ignored","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
 await_connection_quiescence()
 try: result=subprocess.run(internal,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
 except subprocess.TimeoutExpired as error: raise SystemExit("complete_receipt_mutant[current_invocation:timeout]") from error
@@ -8440,7 +8535,7 @@ topology_owner_block_focus() {
   local tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?}" token harness_root canonical probe
   local rust_canonical rust_probe shell_canonical shell_probe topology_root snapshot internal_output external_output
   local config_output comparator_output projection_output
-  harness_root="${SWARM_NATS_HARNESS_SCRATCH:?}"
+  harness_root="${PHASE285_CI_ROUTE_TEMP_PARENT:-${SWARM_NATS_HARNESS_SCRATCH:?}}"
   canonical="${PHASE285_TOPOLOGY_CONFIG_PATH:?}"
   token="$(openssl rand -hex 32)"
   [[ "$token" =~ ^[0-9a-f]{64}$ ]] || return 1
@@ -8557,13 +8652,15 @@ PY
   PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH="$shell_canonical" \
   PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH="$shell_probe" \
   PHASE285_TOPOLOGY_INVOCATION_TOKEN="$token" \
-    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 --ignored \
       topology_validator_binds_every_tuple_to_owner_block --exact | tee "$external_output"
   python3 -I - "$external_output" <<'PY'
 import re,sys
 value=open(sys.argv[1],encoding="utf-8").read()
 if re.findall(r"^running (\d+) test",value,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",value,re.M)!=[("1","0","0","2")]: raise SystemExit("topology external transcript differs")
 PY
+  ci_harness_record_passed service_checkpoint \
+    topology_validator_binds_every_tuple_to_owner_block "$external_output"
   topology_artifact_snapshot verify "$snapshot" "$canonical:262144" "$probe:262144" \
     "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
     "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096" \
@@ -8657,12 +8754,12 @@ for label,source,reason in [("rust_literal_disconnect",literal_source,"probe par
       "PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH":str(artifact/"rust-canonical.json"),"PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH":str(artifact/"rust-probe.json"),
       "PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH":str(shell_canonical),"PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH":str(shell_probe),"PHASE285_TOPOLOGY_INVOCATION_TOKEN":token,
     })
-    internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
+    internal=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline","--","--test-threads=1","--ignored","service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed","--exact"]
     print(f"topology_projection_progress control={label} phase=internal timeout_seconds=300 state=start",flush=True)
     first=subprocess.run(internal,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=300)
     if first.returncode!=0 or "running 1 test" not in first.stdout or "1 passed; 0 failed" not in first.stdout: raise SystemExit(f"topology_projection[{label}:internal]\n{first.stdout}")
     print(f"topology_projection_progress control={label} phase=internal timeout_seconds=300 state=passed",flush=True)
-    external=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","topology_validator_binds_every_tuple_to_owner_block","--exact"]
+    external=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","--ignored","topology_validator_binds_every_tuple_to_owner_block","--exact"]
     print(f"topology_projection_progress control={label} phase=external timeout_seconds=300 state=start",flush=True)
     second=subprocess.run(external,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=300)
     if second.returncode==0 or "running 1 test" not in second.stdout or "0 passed; 1 failed" not in second.stdout or reason not in second.stdout: raise SystemExit(f"topology_projection[{label}:external]\n{second.stdout}")
@@ -8680,7 +8777,7 @@ for label,rust_can,rust_pro,shell_can,shell_pro,reason in [
  ("stale_projection_token",stale_rust_path,rust_probe,stale_shell_path,shell_probe,"projection-token"),
 ]:
     env=base.copy(); env.update({"PHASE285_SERVICE_CHECKPOINT_TREE":tree,"PHASE285_TOPOLOGY_INVOCATION_TOKEN":token,"PHASE285_TOPOLOGY_CONFIG_PATH":str(canonical_config),"PHASE285_TOPOLOGY_PROBE_CONFIG_PATH":str(probe_config),"PHASE285_TOPOLOGY_RUST_CANONICAL_PROJECTION_PATH":str(rust_can),"PHASE285_TOPOLOGY_RUST_PROBE_PROJECTION_PATH":str(rust_pro),"PHASE285_TOPOLOGY_SHELL_CANONICAL_PROJECTION_PATH":str(shell_can),"PHASE285_TOPOLOGY_SHELL_PROBE_PROJECTION_PATH":str(shell_pro)})
-    command=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","topology_validator_binds_every_tuple_to_owner_block","--exact"]
+    command=["cargo","test","-p","swarm-governance-witness","--test","service_checkpoint","--locked","--offline","--","--test-threads=1","--ignored","topology_validator_binds_every_tuple_to_owner_block","--exact"]
     print(f"topology_projection_progress control={label} phase=external timeout_seconds=120 state=start",flush=True)
     result=subprocess.run(command,cwd=exact,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
     if result.returncode==0 or "running 1 test" not in result.stdout or "0 passed; 1 failed" not in result.stdout or reason not in result.stdout: raise SystemExit(f"topology_projection[{label}:external]\n{result.stdout}")
@@ -8689,6 +8786,8 @@ for label,rust_can,rust_pro,shell_can,shell_pro,reason in [
     print(f"topology_projection_mutation mutation={label} compiled=1 external=1 failed=1 intended={reason} source_sha256={source_digest}")
 if len(digests)!=4 or len(set(digests))!=4: raise SystemExit("topology_projection[digests]")
 PY
+  rm -rf -- "$topology_root"
+  [ ! -e "$topology_root" ] || { echo "topology route cleanup left its target behind" >&2; return 1; }
 }
 
 topology_artifact_controls() {
@@ -8795,7 +8894,7 @@ run_selector() {
   fi
   local inventory_file="$temp_dir/inventory.txt"
   materialized_inventory_for_target "$package" "$target" | LC_ALL=C sort >"$inventory_file"
-  python3 - "$list_output" "$inventory_file" <<'PY'
+  python3 -I - "$list_output" "$inventory_file" <<'PY'
 import re
 import sys
 
@@ -8818,6 +8917,7 @@ print(f"target_inventory executed={len(found)} passed={len(found)} failed=0 igno
 PY
 
   local target_count expected_filtered case_name output_file executed=0
+  local -a case_args
   local expected_inner inner_ledger expected_union observed_union
   local first_expected_inner first_inner_ledger second_expected_inner
   local checkpoint_token_registry checkpoint_tree checkpoint_invocation_token capability_invocation_token
@@ -8847,6 +8947,14 @@ PY
   while IFS= read -r case_name; do
     [ -n "$case_name" ] || continue
     output_file="$temp_dir/$case_name.txt"
+    case "$case_name" in
+      jetstream_cas_rejects_wrong_revision_header_or_ack|jetstream_cas_confirms_raw_sequence_and_bytes|jetstream_cas_rejects_del_purge_rollup_and_direct_reads|jetstream_checkpoint_*|full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion)
+        case_args=(-- --ignored "$case_name" --exact)
+        ;;
+      *)
+        case_args=(-- "$case_name" --exact)
+        ;;
+    esac
     if [ "$selector" = jetstream-cas ]; then
       expected_inner="$temp_dir/$case_name.expected.tsv"
       inner_ledger="$temp_dir/$case_name.ledger.tsv"
@@ -8856,7 +8964,7 @@ PY
         PHASE285_WITNESS_INNER_LEDGER="$inner_ledger" \
         PHASE285_CHECKPOINT_LEDGER_REQUIRED=1 \
         PHASE285_CHECKPOINT_LEDGER="$inner_ledger" \
-        cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
+        cargo test -p "$package" --test "$target" --locked --offline "${case_args[@]}" >"$output_file" 2>&1; then
         cat "$output_file" >&2
         echo "named case failed: selector=$selector case=$case_name" >&2
         return 1
@@ -8870,7 +8978,7 @@ PY
         PHASE285_CHECKPOINT_LEDGER="$inner_ledger" \
         PHASE285_CHECKPOINT_INVOCATION_TOKEN="$checkpoint_invocation_token" \
         PHASE285_CHECKPOINT_TREE="$checkpoint_tree" \
-        cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
+        cargo test -p "$package" --test "$target" --locked --offline "${case_args[@]}" >"$output_file" 2>&1; then
         cat "$output_file" >&2
         echo "named case failed: selector=$selector case=$case_name" >&2
         return 1
@@ -8878,7 +8986,7 @@ PY
     elif [ "$selector" = public-dispatcher ] && [ "$executed" -eq 0 ]; then
       if ! PHASE285_DISPATCHER_MAPPING_LEDGER_REQUIRED=1 \
         PHASE285_DISPATCHER_MAPPING_LEDGER="$observed_union" \
-        cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
+        cargo test -p "$package" --test "$target" --locked --offline "${case_args[@]}" >"$output_file" 2>&1; then
         cat "$output_file" >&2
         echo "named case failed: selector=$selector case=$case_name" >&2
         return 1
@@ -8887,17 +8995,17 @@ PY
       if ! PHASE285_CAPABILITY_MATRIX_LEDGER_REQUIRED=1 \
         PHASE285_CAPABILITY_MATRIX_LEDGER="$observed_union" \
         PHASE285_CAPABILITY_MATRIX_INVOCATION_TOKEN="$capability_invocation_token" \
-        cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
+        cargo test -p "$package" --test "$target" --locked --offline "${case_args[@]}" >"$output_file" 2>&1; then
         cat "$output_file" >&2
         echo "named case failed: selector=$selector case=$case_name" >&2
         return 1
       fi
-    elif ! cargo test -p "$package" --test "$target" --locked --offline -- "$case_name" --exact >"$output_file" 2>&1; then
+    elif ! cargo test -p "$package" --test "$target" --locked --offline "${case_args[@]}" >"$output_file" 2>&1; then
       cat "$output_file" >&2
       echo "named case failed: selector=$selector case=$case_name" >&2
       return 1
     fi
-    python3 - "$output_file" "$case_name" "$expected_filtered" <<'PY'
+    python3 -I - "$output_file" "$case_name" "$expected_filtered" <<'PY'
 import re
 import sys
 
@@ -8918,6 +9026,17 @@ if summaries != [("1", "0", "0", str(expected_filtered))]:
 if len(name_lines) != 1:
     raise SystemExit(f"exact full test name not observed once for {case}: {len(name_lines)}")
 PY
+    case "$case_name" in
+      jetstream_cas_rejects_wrong_revision_header_or_ack|jetstream_cas_confirms_raw_sequence_and_bytes|jetstream_cas_rejects_del_purge_rollup_and_direct_reads)
+        ci_harness_record_passed jetstream_cas "$case_name" "$output_file"
+        ;;
+      jetstream_checkpoint_*)
+        ci_harness_record_passed jetstream_checkpoint "$case_name" "$output_file"
+        ;;
+      full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion)
+        ci_harness_record_passed full_service_path "$case_name" "$output_file"
+        ;;
+    esac
     if [ "$selector" = jetstream-cas ]; then
       inner_ledger_validator "$expected_inner" "$inner_ledger"
       if [ "$selector" = jetstream-cas ]; then
@@ -9070,6 +9189,8 @@ PY
   else
     echo "selector=$selector executed=$executed passed=$executed failed=0 ignored=0 mutation_failure_count=8"
   fi
+  cleanup_temp_dir
+  trap - EXIT
 }
 
 validate_service_checkpoint_exact_test() {
@@ -9247,7 +9368,7 @@ T="service_checkpoint_transport_semantics_tests::post_command_other_is_distinct_
 G="service_checkpoint_transport_semantics_tests::public_and_private_expired_response_grants_recover_exactly_once"
 
 def row(control_id,target,case,source_path,anchor,replacement,predicate):
-    command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",target,"--","--exact","--nocapture","--test-threads=1"]
+    command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",target,"--","--ignored","--exact","--nocapture","--test-threads=1"]
     if case is not None:
         command=["env",f"PHASE285_R1A_GRANT_CASE={case}",*command]
     mutation_spec={
@@ -10033,7 +10154,7 @@ allowed_cases={None,"held-public","held-private","no-hold-public","no-hold-priva
 if any(item["physical_case"] not in allowed_cases for item in rows):
     raise SystemExit("transport_registry[case]")
 for item in rows:
-    expected_command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",item["target"],"--","--exact","--nocapture","--test-threads=1"]
+    expected_command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",item["target"],"--","--ignored","--exact","--nocapture","--test-threads=1"]
     if item["physical_case"] is not None:
         expected_command=["env",f"PHASE285_R1A_GRANT_CASE={item['physical_case']}",*expected_command]
     if item["exact_command"]!=expected_command:
@@ -10066,7 +10187,7 @@ import hashlib,json,os,pathlib,sys
 T="service_checkpoint_transport_semantics_tests::post_command_other_is_distinct_from_pre_send_drain"
 
 def row(control_id,anchor,replacement,predicate):
-    command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",T,"--","--exact","--nocapture","--test-threads=1"]
+    command=["cargo","test","-p","swarm-governance-witness","--lib","--locked","--offline",T,"--","--ignored","--exact","--nocapture","--test-threads=1"]
     mutation_spec={
         "id":control_id,
         "target":T,
@@ -11109,7 +11230,7 @@ for index,case in enumerate(cases,1):
         "PHASE285_R1A_GRANT_CASE":case,
         "PHASE285_RELAY_TOPOLOGY_TOKEN":invocation_token,
     })
-    command=[str(selected),test_name,"--exact","--nocapture","--test-threads=1"]
+    command=[str(selected),test_name,"--ignored","--exact","--nocapture","--test-threads=1"]
     argv_digest=hashlib.sha256(json.dumps(command,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
     print(f"grant_positive_progress case={case} process={index}/4 state=start",flush=True)
     process=subprocess.Popen(
@@ -11342,7 +11463,7 @@ run_service_checkpoint_grant_focus() {
   output="$scratch/grants.txt"
   PHASE285_GRANT_ONLY=1 PHASE285_GRANT_LEDGER="$ledger" \
   PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
-    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
   validate_service_checkpoint_exact_test "$output" 18 \
     'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
@@ -11362,7 +11483,7 @@ run_service_checkpoint_relay_positive_focus() {
   output="$scratch/relay.txt"
   PHASE285_GRANT_LEDGER="$grant_ledger" PHASE285_RELAY_LEDGER="$relay_ledger" \
   PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
-    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 \
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
   validate_service_checkpoint_exact_test "$output" 18 \
     'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
@@ -11390,6 +11511,539 @@ for connection, client_id in zip(connections, ids):
     if hashlib.sha256(evidence).hexdigest() != connection.get("server_evidence_sha256"): raise SystemExit("relay_positive[server-evidence]")
 print("service_checkpoint_relay_positive public_legs=2 private_legs=2 identities=4 receipt=1 timeout=1 replay=1 passed=1")
 PY
+}
+
+ci_harness_target_inventory() {
+  local destination="$1" metadata
+  metadata="${destination}.metadata.json"
+  cargo metadata --locked --offline --no-deps --format-version 1 >"$metadata"
+  python3 -I - "$ROOT_DIR" "$metadata" >"$destination" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+data = json.loads(pathlib.Path(sys.argv[2]).read_text())
+packages = [package for package in data["packages"] if package["name"] == "swarm-governance-witness"]
+if len(packages) != 1:
+    raise SystemExit(f"ci_harness_targets[package-cardinality:{len(packages)}]")
+rows = []
+for target in packages[0]["targets"]:
+    kinds = target.get("kind", [])
+    if not target.get("test"):
+        continue
+    if kinds not in (["lib"], ["test"], ["bin"]):
+        raise SystemExit(f"ci_harness_targets[unsupported-test-kind:{target.get('name')}:{kinds}]")
+    kind = kinds[0]
+    name = target["name"]
+    source = pathlib.Path(target["src_path"])
+    try:
+        metadata = source.lstat()
+        resolved = source.resolve(strict=True)
+        relative = resolved.relative_to(root)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
+        raise SystemExit(f"ci_harness_targets[source-confinement:{name}:{error}]") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(f"ci_harness_targets[source-type:{name}]")
+    if resolved != pathlib.Path(os.path.abspath(source)):
+        raise SystemExit(f"ci_harness_targets[source-alias:{name}]")
+    key = "lib" if kind == "lib" else name if kind == "test" else f"bin:{name}"
+    rows.append((key, kind, name, relative.as_posix()))
+if sum(kind == "lib" for _, kind, _, _ in rows) != 1:
+    raise SystemExit("ci_harness_targets[lib-cardinality]")
+if len(rows) != len(set(row[0] for row in rows)) or len(rows) != len(set(row[3] for row in rows)):
+    raise SystemExit("ci_harness_targets[duplicate-key-or-source]")
+for row in sorted(rows):
+    print("\t".join(row))
+PY
+  rm -f -- "$metadata"
+  [ -s "$destination" ] || { echo "compiled test-harness target inventory is empty" >&2; return 1; }
+}
+
+ci_harness_compiled_ignored_inventory() {
+  local destination="$1" targets ordinary
+  targets="${destination}.targets.tsv"
+  ordinary="${destination}.ordinary.tsv"
+  local target kind name source output all_output
+  : >"$destination"
+  : >"$ordinary"
+  ci_harness_target_inventory "$targets"
+  while IFS=$'\t' read -r target kind name source; do
+    [ -n "$target" ] || continue
+    output="${destination}.${target}"
+    if [ "$kind" = lib ]; then
+      cargo test -p swarm-governance-witness --lib --locked --offline -- --list --ignored >"$output"
+      all_output="${destination}.${target}.all"
+      cargo test -p swarm-governance-witness --lib --locked --offline -- --list >"$all_output"
+    elif [ "$kind" = test ]; then
+      cargo test -p swarm-governance-witness --test "$name" --locked --offline -- --list --ignored >"$output"
+    elif [ "$kind" = bin ]; then
+      cargo test -p swarm-governance-witness --bin "$name" --locked --offline -- --list --ignored >"$output"
+    else
+      echo "unknown CI harness target kind: $kind" >&2
+      return 1
+    fi
+    python3 -I - "$target" "$output" >>"$destination" <<'PY'
+import re,sys
+target,path=sys.argv[1:]
+rows=[]
+for line in open(path,encoding="utf-8"):
+    match=re.fullmatch(r"([^:]+(?:::[^:]+)*): test\n?",line)
+    if match: rows.append((target,match.group(1)))
+if len(rows)!=len(set(rows)): raise SystemExit(f"ci_harness_compiled_inventory[duplicate:{target}]")
+for row in rows: print("\t".join(row))
+PY
+    if [ "$kind" = lib ]; then
+      python3 -I - "$target" "$all_output" "$output" >"$ordinary" <<'PY'
+import re,sys
+target,all_path,ignored_path=sys.argv[1:]
+def names(path):
+    rows=[]
+    for line in open(path,encoding="utf-8"):
+        match=re.fullmatch(r"([^:]+(?:::[^:]+)*): test\n?",line)
+        if match: rows.append(match.group(1))
+    if len(rows)!=len(set(rows)): raise SystemExit(f"ci_harness_compiled_inventory[duplicate:{target}:{path}]")
+    return rows
+all_names=names(all_path); ignored=set(names(ignored_path))
+for fqn in sorted(set(all_names)-ignored): print(f"{target}\t{fqn}")
+PY
+    fi
+  done <"$targets"
+  LC_ALL=C sort -o "$destination" "$destination"
+  [ -s "$destination" ] || { echo "compiled ignored inventory is empty" >&2; return 1; }
+  [ "$(wc -l <"$destination" | tr -d ' ')" -eq "$(LC_ALL=C sort -u "$destination" | wc -l | tr -d ' ')" ] || {
+    echo "compiled ignored inventory contains duplicates" >&2
+    return 1
+  }
+  local pure=$'lib\tdeadline_state_machine_tests::deadline_state_machine_is_receipt_anchored_and_mutation_sensitive'
+  if [ "$(grep -Fxc "$pure" "$ordinary")" -ne 1 ] || grep -Fqx "$pure" "$destination"; then
+    echo "ci_harness_registration[pure-ordinary-compiled]" >&2
+    return 1
+  fi
+  echo "ci_harness_targets compiled=$(wc -l <"$targets" | tr -d ' ') metadata_derived=1 ordinary_lib=$(wc -l <"$ordinary" | tr -d ' ') passed=1"
+}
+
+ci_harness_source_reason_guard() {
+  local inventory="$1" targets ordinary
+  targets="${inventory}.targets.tsv"
+  ordinary="${inventory}.ordinary.tsv"
+  python3 -I - "$ROOT_DIR" "$inventory" "$targets" "$ordinary" <<'PY'
+import pathlib,re,sys
+root=pathlib.Path(sys.argv[1]); inventory=pathlib.Path(sys.argv[2]); targets=pathlib.Path(sys.argv[3]); ordinary=pathlib.Path(sys.argv[4])
+rows=[tuple(line.rstrip("\n").split("\t")) for line in inventory.open()]
+target_rows=[tuple(line.rstrip("\n").split("\t")) for line in targets.open()]
+if any(len(row)!=4 for row in target_rows): raise SystemExit("ci_harness_registration[target-inventory-malformed]")
+sources={key:root/source for key,_kind,_name,source in target_rows}
+texts={name:path.read_text() for name,path in sources.items()}
+seam_anchors={
+ "deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive":"run_subscriber_callsite()",
+ "service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled":"run_worker_observation_test",
+ "service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed":"run_complete_receipt_suppression_test",
+ "service_checkpoint_transport_semantics_tests::post_command_other_is_distinct_from_pre_send_drain":"run_transport_other_test",
+ "service_checkpoint_transport_semantics_tests::public_and_private_expired_response_grants_recover_exactly_once":"run_response_grant_recovery_test",
+ "full_service_path_constructor_deadline_is_exact_and_receipt_bound":"connect_harness_role(",
+ "full_service_path_rejects_runtime_private_subject_and_store_raw_api":"initialize_harness_store_stream()",
+ "full_service_path_rejects_credential_account_and_mount_swaps":"StoreRoleConnectionV1::connect(",
+ "full_service_path_validates_proxy_response_before_public_attestation":"initialize_harness_store_stream()",
+ "full_service_path_fails_closed_on_store_queue_exhaustion":"Fixture::new(",
+ "jetstream_cas_rejects_wrong_revision_header_or_ack":"live_fixture(",
+ "jetstream_cas_confirms_raw_sequence_and_bytes":"live_fixture(",
+ "jetstream_cas_rejects_del_purge_rollup_and_direct_reads":"live_fixture(",
+ "jetstream_checkpoint_survives_restart_for_current_predecessor_prepared_abort_and_genesis":"current_server()",
+ "jetstream_checkpoint_rejects_rolled_back_anchor_or_recreated_stream":"live_fixture(",
+ "jetstream_checkpoint_rejects_unavailable_server_instead_of_skipping":"async_nats::connect(",
+ "jetstream_checkpoint_uses_global_revision_not_store_generation":"live_fixture(",
+ "complete_receipt_validation_precedes_suppression_and_failures_forward":"exact_artifact(",
+ "topology_validator_binds_every_tuple_to_owner_block":"topology_input(",
+}
+reasons=[]
+for target,fqn in rows:
+    name=fqn.rsplit("::",1)[-1]
+    pattern=rf'#\[ignore = "(requires [^"]+)"\]\s+(?:async\s+)?fn\s+{re.escape(name)}\s*\('
+    matches=re.findall(pattern,texts[target])
+    if len(matches)!=1: raise SystemExit(f"ci_harness_registration[ignore:{target}:{fqn}:{len(matches)}]")
+    reason=matches[0]
+    if not re.search(r"NATS|JetStream|credential|topology|artifact",reason,re.I):
+        raise SystemExit(f"ci_harness_registration[non-external:{fqn}:{reason}]")
+    start=texts[target].find(f"fn {name}")
+    if start<0: raise SystemExit(f"ci_harness_registration[function-missing:{fqn}]")
+    ends=[value for marker in ("\n#[", "\n    #[") if (value:=texts[target].find(marker,start+3))>=0]
+    body=texts[target][start:min(ends) if ends else len(texts[target])]
+    anchor=seam_anchors.get(fqn)
+    if anchor is None or anchor not in body:
+        raise SystemExit(f"ci_harness_registration[external-seam:{fqn}:{anchor}]")
+    reasons.append(reason)
+if set(seam_anchors)!={fqn for _,fqn in rows}: raise SystemExit("ci_harness_registration[seam-inventory]")
+source_ignored=[]
+for target,text in texts.items():
+    for reason,name in re.findall(r'#\[ignore = "([^"]+)"\]\s+(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(',text):
+        source_ignored.append((target,name,reason))
+for target,name,reason in source_ignored:
+    compiled=[fqn for row_target,fqn in rows if row_target==target and fqn.rsplit("::",1)[-1]==name]
+    if len(compiled)!=1: raise SystemExit(f"ci_harness_registration[source-ignored-not-compiled:{target}:{name}:{len(compiled)}]")
+if len(source_ignored)!=len(rows): raise SystemExit(f"ci_harness_registration[source-vs-compiled:{len(source_ignored)}:{len(rows)}]")
+pure="deadline_state_machine_tests::deadline_state_machine_is_receipt_anchored_and_mutation_sensitive"
+ordinary_rows=[tuple(line.rstrip("\n").split("\t")) for line in ordinary.open()]
+if ordinary_rows.count(("lib",pure))!=1 or pure in {fqn for _,fqn in rows}:
+    raise SystemExit("ci_harness_registration[pure-ordinary-compiled]")
+print(f"ci_harness_registration targets={len(target_rows)} ignored={len(rows)} external_reasons={len(reasons)} external_seams={len(seam_anchors)} exact_fqns={len(set(fqn for _,fqn in rows))} pure_ordinary=1 passed=1")
+PY
+}
+
+ci_harness_record_passed() {
+  local target="$1" fqn="$2" output="$3"
+  [ -n "${PHASE285_CI_HARNESS_EXECUTION_TRANSCRIPT:-}" ] || return 0
+  python3 -I - "$output" "$fqn" <<'PY'
+import re,sys
+text=open(sys.argv[1],encoding="utf-8").read(); fqn=sys.argv[2]
+running=re.findall(r"^running (\d+) test",text,re.M)
+summary=re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)
+named=re.findall(rf"^test {re.escape(fqn)} \.\.\. ok$",text,re.M)
+if running!=["1"] or len(summary)!=1 or summary[0][:3]!=("1","0","0") or len(named)!=1:
+    raise SystemExit(f"ci_harness_record[non-exact:{fqn}:{running}:{summary}:{len(named)}]")
+PY
+  printf '%s\t%s\n' "$target" "$fqn" >>"$PHASE285_CI_HARNESS_EXECUTION_TRANSCRIPT"
+}
+
+ci_harness_validate_execution_transcript() {
+  python3 -I - "$1" "$2" <<'PY'
+import sys
+def rows(path):
+    result=[]
+    for line in open(path,encoding="utf-8"):
+        fields=line.rstrip("\n").split("\t")
+        if len(fields)!=2 or not all(fields): raise SystemExit("ci_harness_execution[malformed]")
+        result.append(tuple(fields))
+    return result
+expected=rows(sys.argv[1]); observed=rows(sys.argv[2])
+if len(observed)!=len(set(observed)): raise SystemExit("ci_harness_execution[duplicate]")
+if sorted(observed)!=sorted(expected):
+    raise SystemExit(f"ci_harness_execution[mismatch:missing={sorted(set(expected)-set(observed))}:extra={sorted(set(observed)-set(expected))}]")
+print(f"ci_harness_execution exact={len(observed)} unique={len(set(observed))} passed=1")
+PY
+}
+
+run_ignored_exact_test() {
+  local target="$1" fqn="$2" output="$3"
+  if [ "$target" = lib ]; then
+    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored "$fqn" --exact >"$output" 2>&1
+  else
+    cargo test -p swarm-governance-witness --test "$target" --locked --offline -- --test-threads=1 --ignored "$fqn" --exact >"$output" 2>&1
+  fi
+  python3 -I - "$output" "$fqn" <<'PY'
+import re,sys
+text=open(sys.argv[1],encoding="utf-8").read(); fqn=sys.argv[2]
+running=re.findall(r"^running (\d+) test",text,re.M)
+summary=re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)
+named=re.findall(rf"^test {re.escape(fqn)} \.\.\. ok$",text,re.M)
+if running!=["1"]: raise SystemExit(f"ci_harness_exact[running:{fqn}:{running}]")
+if len(summary)!=1 or summary[0][:3]!=("1","0","0") or len(named)!=1: raise SystemExit(f"ci_harness_exact[summary:{fqn}:{summary}:{len(named)}]")
+print(f"ci_harness_exact fqn={fqn} running=1 passed=1 failed=0 ignored=0 filtered_out={summary[0][3]}")
+PY
+  ci_harness_record_passed "$target" "$fqn" "$output"
+}
+
+ci_harness_route_inventory() {
+  cat <<'EOF'
+deadline
+observation
+transport
+grants
+jetstream-cas
+jetstream-checkpoint
+full-service-path
+receipt-topology
+EOF
+}
+
+ci_harness_route_members() {
+  case "$1" in
+    deadline) cat <<'EOF'
+lib	deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive
+full_service_path	full_service_path_constructor_deadline_is_exact_and_receipt_bound
+EOF
+      ;;
+    observation) printf '%s\t%s\n' lib service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled ;;
+    transport) printf '%s\t%s\n' lib service_checkpoint_transport_semantics_tests::post_command_other_is_distinct_from_pre_send_drain ;;
+    grants) printf '%s\t%s\n' lib service_checkpoint_transport_semantics_tests::public_and_private_expired_response_grants_recover_exactly_once ;;
+    jetstream-cas) cat <<'EOF'
+jetstream_cas	jetstream_cas_rejects_wrong_revision_header_or_ack
+jetstream_cas	jetstream_cas_confirms_raw_sequence_and_bytes
+jetstream_cas	jetstream_cas_rejects_del_purge_rollup_and_direct_reads
+EOF
+      ;;
+    jetstream-checkpoint) cat <<'EOF'
+jetstream_checkpoint	jetstream_checkpoint_survives_restart_for_current_predecessor_prepared_abort_and_genesis
+jetstream_checkpoint	jetstream_checkpoint_rejects_rolled_back_anchor_or_recreated_stream
+jetstream_checkpoint	jetstream_checkpoint_rejects_unavailable_server_instead_of_skipping
+jetstream_checkpoint	jetstream_checkpoint_uses_global_revision_not_store_generation
+EOF
+      ;;
+    full-service-path) cat <<'EOF'
+full_service_path	full_service_path_rejects_runtime_private_subject_and_store_raw_api
+full_service_path	full_service_path_rejects_credential_account_and_mount_swaps
+full_service_path	full_service_path_validates_proxy_response_before_public_attestation
+full_service_path	full_service_path_fails_closed_on_store_queue_exhaustion
+EOF
+      ;;
+    receipt-topology) cat <<'EOF'
+lib	service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed
+service_checkpoint	complete_receipt_validation_precedes_suppression_and_failures_forward
+service_checkpoint	topology_validator_binds_every_tuple_to_owner_block
+EOF
+      ;;
+    *) echo "unknown CI harness route: $1" >&2; return 2 ;;
+  esac
+}
+
+ci_harness_dispatch_route() {
+  local route="$1" output
+  if [ "${PHASE285_CI_HARNESS_TRANSCRIPT_ONLY:-0}" = 1 ]; then
+    ci_harness_route_members "$route"
+    return
+  fi
+  case "$route" in
+    deadline) run_service_checkpoint_deadline_focus ;;
+    observation) run_service_checkpoint_observation_focus ;;
+    transport)
+      output="$(mktemp "${PHASE285_CI_ROUTE_TEMP_PARENT:-${SWARM_NATS_HARNESS_SCRATCH:?}}/ci-transport.XXXXXX")"
+      run_ignored_exact_test lib service_checkpoint_transport_semantics_tests::post_command_other_is_distinct_from_pre_send_drain "$output"
+      rm -f -- "$output"
+      ;;
+    grants)
+      output="$(mktemp "${PHASE285_CI_ROUTE_TEMP_PARENT:-${SWARM_NATS_HARNESS_SCRATCH:?}}/ci-grants.XXXXXX")"
+      run_ignored_exact_test lib service_checkpoint_transport_semantics_tests::public_and_private_expired_response_grants_recover_exactly_once "$output"
+      rm -f -- "$output"
+      ;;
+    jetstream-cas) run_selector jetstream-cas ;;
+    jetstream-checkpoint) run_selector jetstream-checkpoint ;;
+    full-service-path) run_selector full-service-path ;;
+    receipt-topology) topology_owner_block_focus ;;
+    *) echo "unknown CI harness route: $route" >&2; return 2 ;;
+  esac
+}
+
+ci_harness_dispatch_transcript() {
+  local expected="$1" transcript route expected_parent
+  expected_parent="$(cd -- "$(dirname -- "$expected")" && pwd -P)"
+  transcript="$(mktemp "$expected_parent/ci-dispatch.XXXXXX")"
+  : >"$transcript"
+  while IFS= read -r route; do
+    [ -n "$route" ] || continue
+    PHASE285_CI_HARNESS_TRANSCRIPT_ONLY=1 ci_harness_dispatch_route "$route" >>"$transcript"
+  done < <(ci_harness_route_inventory)
+  ci_harness_validate_execution_transcript "$expected" "$transcript"
+  rm -f -- "$transcript"
+}
+
+ci_harness_registration_guard() {
+  local mode="${1:-normal}" scratch inventory current_output
+  scratch="$(phase285_create_confined_scratch phase285-ci-registration)"
+  PHASE285_WITNESS_TEMP_DIR="$scratch"
+  trap cleanup_temp_dir_on_exit EXIT
+  inventory="$scratch/compiled-ignored.tsv"
+  ci_harness_compiled_ignored_inventory "$inventory"
+  ci_harness_source_reason_guard "$inventory"
+  current_output="$scratch/current-dispatch.txt"
+  bash "$ROOT_DIR/tools/check-phase285-witness-conformance.sh" --self-test ci-harness-dispatch-transcript "$inventory" >"$current_output"
+  grep -Eq '^ci_harness_execution exact=[1-9][0-9]* unique=[1-9][0-9]* passed=1$' "$current_output" || {
+    cat "$current_output" >&2
+    return 1
+  }
+  if [ "$mode" = self-test ]; then
+    python3 -I - "$ROOT_DIR" "$scratch" "$inventory" "${inventory}.targets.tsv" <<'PY'
+import hashlib,os,pathlib,shlex,shutil,stat,subprocess,sys
+root=pathlib.Path(sys.argv[1]); scratch=pathlib.Path(sys.argv[2]); inventory=pathlib.Path(sys.argv[3]); targets=pathlib.Path(sys.argv[4])
+source=(root/"tools/check-phase285-witness-conformance.sh").read_text()
+root_anchor='ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"'
+if source.find(root_anchor)>256: raise SystemExit("ci_harness_registration[root-anchor]")
+source=source.replace(root_anchor,f'ROOT_DIR="{root}"',1)
+mutations={
+ "omission":("observation\ntransport\ngrants\n","observation\ngrants\n"),
+ "addition":("observation\ntransport\ngrants\n","observation\ntransport\nforeign-route\ngrants\n"),
+ "duplication":("observation\ntransport\ngrants\n","observation\ntransport\ngrants\ngrants\n"),
+ "substitution":("observation) printf '%s\\t%s\\n' lib service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled ;;","observation) printf '%s\\t%s\\n' lib service_checkpoint_observation_tests::worker_observations_are_real_and_reconciled_substituted ;;"),
+}
+for label,(old,new) in mutations.items():
+    if source.count(old)!=1: raise SystemExit(f"ci_harness_registration[{label}:anchor:{source.count(old)}]")
+    path=scratch/f"checker-{label}.sh"; path.write_text(source.replace(old,new,1)); path.chmod(0o700)
+    result=subprocess.run(["bash",str(path),"--self-test","ci-harness-dispatch-transcript",str(inventory)],cwd=root,env=os.environ.copy(),text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+    if result.returncode==0: raise SystemExit(f"ci_harness_registration[survived:{label}]\n{result.stdout}")
+    print(f"ci_harness_registration_mutation_red mutation={label} dispatcher_executed=1 killed=1")
+
+tracked=subprocess.check_output(["git","-C",str(root),"ls-files","-z"]).split(b"\0")
+tracked=[os.fsdecode(name) for name in tracked if name]
+tracked_inventory=subprocess.check_output(["git","-C",str(root),"ls-files","-z"])
+status_inventory=subprocess.check_output(["git","-C",str(root),"status","--porcelain=v1","-z"])
+git_dir=subprocess.check_output(
+    ["git","-C",str(root),"rev-parse","--path-format=absolute","--git-dir"],
+    text=True,
+).strip()
+
+def file_identity(path):
+    metadata=path.lstat()
+    if stat.S_ISLNK(metadata.st_mode):
+        return ("symlink",stat.S_IMODE(metadata.st_mode),os.readlink(path))
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(f"ci_harness_registration[projection-source-type:{path}]")
+    return ("regular",stat.S_IMODE(metadata.st_mode),hashlib.sha256(path.read_bytes()).hexdigest())
+
+subject_identities={relative:file_identity(root/relative) for relative in tracked}
+
+def copied_workspace(label):
+    workspace=scratch/f"workspace-{label}"
+    workspace.mkdir()
+    for relative in tracked:
+        original=root/relative; copied=workspace/relative
+        copied.parent.mkdir(parents=True,exist_ok=True)
+        if original.is_symlink(): copied.symlink_to(os.readlink(original))
+        elif original.is_file(): shutil.copy2(original,copied)
+    copied_identities={relative:file_identity(workspace/relative) for relative in tracked}
+    if copied_identities!=subject_identities:
+        raise SystemExit(f"ci_harness_registration[{label}:initial-byte-identity]")
+    (workspace/".git").write_text(f"gitdir: {git_dir}\n")
+    checker=workspace/"tools/check-phase285-witness-conformance.sh"
+    checker_source=checker.read_text()
+    if checker_source.find(root_anchor)>256: raise SystemExit(f"ci_harness_registration[{label}:root-anchor]")
+    private=checker.with_suffix(".private")
+    private.write_text(checker_source.replace(root_anchor,f'ROOT_DIR="{workspace}"',1))
+    private.chmod(0o700)
+    os.replace(private,checker)
+    temp_parent=scratch/f"tmp-{label}"
+    temp_parent.mkdir(mode=0o700)
+    cargo_temp=scratch/f"cargo-tmp-{label}"
+    cargo_temp.mkdir(mode=0o700)
+    wrapper_parent=scratch/f"cargo-wrapper-{label}"
+    wrapper_parent.mkdir(mode=0o700)
+    real_cargo=shutil.which("cargo")
+    if real_cargo is None: raise SystemExit(f"ci_harness_registration[{label}:cargo-absent]")
+    cargo_wrapper=wrapper_parent/"cargo"
+    cargo_wrapper.write_text(
+        "#!/bin/bash\n"
+        f"export TMPDIR={shlex.quote(str(cargo_temp))}\n"
+        f"exec {shlex.quote(real_cargo)} \"$@\"\n"
+    )
+    cargo_wrapper.chmod(0o700)
+    target_parent=scratch/f"target-{label}"
+    return workspace,checker,temp_parent,cargo_temp,wrapper_parent,target_parent
+
+def copied_environment(temp_parent,wrapper_parent,target_parent):
+    environment=os.environ.copy()
+    environment["TMPDIR"]=str(temp_parent)
+    environment["CARGO_TARGET_DIR"]=str(target_parent)
+    environment["PATH"]=str(wrapper_parent)+os.pathsep+environment["PATH"]
+    if sys.platform == "darwin":
+        environment["SDKROOT"]=subprocess.check_output(
+            ["/usr/bin/xcrun","--show-sdk-path"], text=True
+        ).strip()
+    return environment
+
+def recursive_temp_inventory(temp_parent):
+    return sorted(
+        path.relative_to(temp_parent).as_posix()
+        for path in temp_parent.rglob("*")
+    )
+
+workspace,checker,temp_parent,cargo_temp,wrapper_parent,target_parent=copied_workspace("new-target")
+new_target=workspace/"crates/swarm-governance-witness/tests/new_live.rs"
+new_target.write_text(
+    '#[test]\n#[ignore = "requires an external NATS topology"]\n'
+    'fn unregistered_external_topology() {}\n'
+)
+environment=copied_environment(temp_parent,wrapper_parent,target_parent)
+result=subprocess.run(
+    ["bash",str(checker),"--self-test","ci-harness-registration-validate"],
+    cwd=workspace,env=environment,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+)
+expected="ci_harness_registration[external-seam:unregistered_external_topology:None]"
+if result.returncode==0 or expected not in result.stdout:
+    raise SystemExit(f"ci_harness_registration[new-target-wrong-reason:{result.returncode}]\n{result.stdout}")
+residue=recursive_temp_inventory(temp_parent)
+if residue: raise SystemExit(f"ci_harness_registration[new-target-residue:{residue}]")
+shutil.rmtree(target_parent)
+if target_parent.exists(): raise SystemExit("ci_harness_registration[new-target-target-residue]")
+shutil.rmtree(cargo_temp); shutil.rmtree(wrapper_parent)
+if cargo_temp.exists() or wrapper_parent.exists(): raise SystemExit("ci_harness_registration[new-target-owned-tool-residue]")
+print("ci_harness_registration_mutation_red mutation=auto-discovered-ignored-target compiled=1 killed=1 intended=external-seam")
+
+workspace,checker,temp_parent,cargo_temp,wrapper_parent,target_parent=copied_workspace("pure-attribute")
+library=workspace/"crates/swarm-governance-witness/src/lib.rs"
+library_source=library.read_text()
+pure_anchor="    #[test]\n    fn deadline_state_machine_is_receipt_anchored_and_mutation_sensitive()"
+if library_source.count(pure_anchor)!=1: raise SystemExit("ci_harness_registration[pure-attribute-anchor]")
+private=library.with_suffix(".private")
+private.write_text(library_source.replace(pure_anchor,pure_anchor.replace("#[test]","#[cfg(test)]"),1))
+os.replace(private,library)
+environment=copied_environment(temp_parent,wrapper_parent,target_parent)
+result=subprocess.run(
+    ["bash",str(checker),"--self-test","ci-harness-registration-validate"],
+    cwd=workspace,env=environment,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+)
+expected="ci_harness_registration[pure-ordinary-compiled]"
+if result.returncode==0 or expected not in result.stdout:
+    raise SystemExit(f"ci_harness_registration[pure-attribute-wrong-reason:{result.returncode}]\n{result.stdout}")
+residue=recursive_temp_inventory(temp_parent)
+if residue: raise SystemExit(f"ci_harness_registration[pure-attribute-residue:{residue}]")
+shutil.rmtree(target_parent)
+if target_parent.exists(): raise SystemExit("ci_harness_registration[pure-attribute-target-residue]")
+shutil.rmtree(cargo_temp); shutil.rmtree(wrapper_parent)
+if cargo_temp.exists() or wrapper_parent.exists(): raise SystemExit("ci_harness_registration[pure-attribute-owned-tool-residue]")
+print("ci_harness_registration_mutation_red mutation=pure-test-attribute compiled=1 killed=1 intended=pure-ordinary-compiled")
+
+if subprocess.check_output(["git","-C",str(root),"ls-files","-z"])!=tracked_inventory:
+    raise SystemExit("ci_harness_registration[subject-tracked-inventory-changed]")
+if subprocess.check_output(["git","-C",str(root),"status","--porcelain=v1","-z"])!=status_inventory:
+    raise SystemExit("ci_harness_registration[subject-status-inventory-changed]")
+if {relative:file_identity(root/relative) for relative in tracked}!=subject_identities:
+    raise SystemExit("ci_harness_registration[subject-byte-identity-changed]")
+
+target_count=sum(1 for line in targets.read_text().splitlines() if line)
+print(f"ci_harness_registration_self_test mutations={len(mutations)+2} compiled_targets={target_count} dispatcher_executions={len(mutations)+1} copied_workspaces=2 subject_writes=0 vacuous=0 passed=1")
+PY
+  elif [ "$mode" != normal ]; then
+    echo "unknown CI harness registration mode: $mode" >&2
+    return 2
+  fi
+  cleanup_temp_dir
+  trap - EXIT
+}
+
+run_service_checkpoint_ci_harness() {
+  local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
+  local route harness_parent inventory_parent route_parent expected observed exact_count
+  [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "CI harness tree is malformed" >&2; return 1; }
+  ci_harness_registration_guard self-test
+  harness_parent="$(phase285_create_confined_scratch phase285-ci-harness)"
+  inventory_parent="$harness_parent/inventory"
+  route_parent="$harness_parent/routes"
+  mkdir -m 700 -- "$inventory_parent" "$route_parent"
+  expected="$inventory_parent/compiled-ignored.tsv"
+  observed="$inventory_parent/executed.tsv"
+  : >"$observed"
+  PHASE285_WITNESS_TEMP_DIR="$harness_parent"
+  trap cleanup_temp_dir_on_exit EXIT
+  ci_harness_compiled_ignored_inventory "$expected"
+  export PHASE285_CI_HARNESS_EXECUTION_TRANSCRIPT="$observed"
+  while IFS= read -r route; do
+    [ -n "$route" ] || continue
+    (
+      export TMPDIR="$route_parent" PHASE285_CI_ROUTE_TEMP_PARENT="$route_parent"
+      ci_harness_dispatch_route "$route"
+    )
+    [ -z "$(phase285_boundary_child_inventory "$route_parent")" ] || {
+      echo "CI harness route left confined scratch residue: route=$route" >&2
+      return 1
+    }
+    echo "ci_harness_route_residue route=$route child_paths=0 passed=1"
+  done < <(ci_harness_route_inventory)
+  ci_harness_validate_execution_transcript "$expected" "$observed"
+  exact_count="$(wc -l <"$observed" | tr -d ' ')"
+  cleanup_temp_dir
+  trap - EXIT
+  [ ! -e "$harness_parent" ] || { echo "CI harness cleanup left its owned parent behind" >&2; return 1; }
+  echo "service_checkpoint_ci_harness ignored_fqns=$exact_count exact=$exact_count non_vacuous=$exact_count topology=relay artifacts=required passed=1"
 }
 
 case "${1:-}" in
@@ -11445,6 +12099,10 @@ case "${1:-}" in
     [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-secret-files" >&2; exit 2; }
     run_service_secret_files_focus
     ;;
+  --focused-service-checkpoint-ci-harness)
+    [ "$#" -eq 1 ] || { echo "usage: $0 --focused-service-checkpoint-ci-harness" >&2; exit 2; }
+    run_service_checkpoint_ci_harness
+    ;;
   --self-test)
     if [ "$#" -eq 4 ] && [ "$2" = complete-receipt-real-signal ]; then
       case "$3" in EXIT|HUP|INT|TERM) ;; *) echo "complete receipt signal is invalid" >&2; exit 2 ;; esac
@@ -11474,6 +12132,12 @@ case "${1:-}" in
         "$ROOT_DIR/crates/swarm-governance-witness/src/jetstream_store.rs" self-test
     elif [ "$#" -eq 2 ] && [ "$2" = transport-positive-readiness-parser ]; then
       transport_positive_readiness_parser_self_test
+    elif [ "$#" -eq 3 ] && [ "$2" = ci-harness-dispatch-transcript ]; then
+      ci_harness_dispatch_transcript "$3"
+    elif [ "$#" -eq 2 ] && [ "$2" = ci-harness-registration ]; then
+      ci_harness_registration_guard self-test
+    elif [ "$#" -eq 2 ] && [ "$2" = ci-harness-registration-validate ]; then
+      ci_harness_registration_guard normal
     elif [ "$#" -eq 2 ] && [ "$2" = jetstream-iterator-ledger ]; then
       checkpoint_iterator_ledger_validator \
         "${PHASE285_WITNESS_ITERATOR_ROOT:?}" \
@@ -11485,7 +12149,7 @@ case "${1:-}" in
     elif [ "$#" -eq 1 ]; then
       run_self_tests
     else
-      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|transport-semantics-source|transport-semantics-registry|complete-receipt-suppression|topology-owner-blocks|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger|transport-positive-readiness-parser]" >&2
+      echo "usage: $0 --self-test [transport-layering-zero-or-omitted|store-proxy-source|service-checkpoint-observation-source|transport-semantics-source|transport-semantics-registry|complete-receipt-suppression|topology-owner-blocks|jetstream-release-hook|jetstream-iterator-source|jetstream-iterator-ledger|transport-positive-readiness-parser|ci-harness-registration]" >&2
       exit 2
     fi
     ;;

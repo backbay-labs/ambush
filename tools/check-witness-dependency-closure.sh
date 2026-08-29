@@ -5,12 +5,12 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
-  echo "usage: $0 --library-only|--all-targets|--self-test [case]" >&2
+  echo "usage: $0 --library-only|--current-targets|--all-targets|--self-test [case]" >&2
   exit 2
 }
 
 case "${1:-}" in
-  --library-only|--all-targets)
+  --library-only|--current-targets|--all-targets)
     [ "$#" -eq 1 ] || usage
     ;;
   --self-test)
@@ -19,7 +19,7 @@ case "${1:-}" in
   *) usage ;;
 esac
 
-python3 - "$ROOT_DIR" "$@" <<'PY'
+python3 -I - "$ROOT_DIR" "$@" <<'PY'
 import json
 import os
 import pathlib
@@ -37,9 +37,10 @@ PACKAGE = "swarm-governance-witness"
 LIBRARY = "swarm_governance_witness"
 NORMAL = {
     "async-nats", "async-trait", "futures-util", "hex", "serde", "serde_json",
-    "sha2", "swarm-crypto", "swarm-governance", "thiserror", "tokio", "tracing",
+    "rustix", "sha2", "swarm-crypto", "swarm-governance", "thiserror", "tokio",
+    "tracing", "zeroize",
 }
-DEV = set()
+DEV = {"tokio"}
 BUILD = set()
 ALLOWED_INTERNAL = {
     "swarm-governance-witness", "swarm-governance", "swarm-consensus",
@@ -57,21 +58,31 @@ EXPECTED_BIN_PATHS = {
     "swarm-governance-witness-store": "src/bin/swarm-governance-witness-store.rs",
     "swarm-governance-witness-init": "src/bin/swarm-governance-witness-init.rs",
 }
+CURRENT_BIN_PATHS = {
+    name: path for name, path in EXPECTED_BIN_PATHS.items()
+    if name != "swarm-governance-witness-init"
+}
 CASES = (
     "missing-library-target",
     "forbidden-declared-normal",
     "forbidden-declared-dev",
     "forbidden-declared-build",
     "forbidden-resolved-normal",
+    "forbidden-resolved-foreign",
     "forbidden-resolved-dev",
     "forbidden-resolved-build",
     "missing-normal-signer-edge",
     "signer-remains-dev-only",
     "partial-cargo-tree-omission",
+    "host-tree-mismatch",
+    "all-target-subset-omission",
     "metadata-harness-boundary",
+    "self-test-parent-boundary",
     "reverse-governance-edge",
     "wrong-library-name",
-    "premature-binary-target",
+    "missing-current-target",
+    "extra-current-target",
+    "substituted-current-target",
     "same-name-internal-substitution",
     "syntax-invalid-binary-target",
     "type-invalid-binary-target",
@@ -82,15 +93,21 @@ EXPECTED_DIAGNOSTIC = {
     "forbidden-declared-dev": "violation=declared-dev",
     "forbidden-declared-build": "violation=declared-build",
     "forbidden-resolved-normal": "violation=resolved-normal",
+    "forbidden-resolved-foreign": "violation=resolved-normal-all-target",
     "forbidden-resolved-dev": "violation=resolved-dev",
     "forbidden-resolved-build": "violation=resolved-build",
     "missing-normal-signer-edge": "violation=declared-normal",
     "signer-remains-dev-only": "violation=declared-dev",
     "partial-cargo-tree-omission": "cargo-tree-normal",
-    "metadata-harness-boundary": "metadata harness boundary refusal before write",
+    "host-tree-mismatch": "cargo-tree-normal",
+    "all-target-subset-omission": "cargo-tree-normal-target-subset",
+    "metadata-harness-boundary": "metadata harness parent refusal before create",
+    "self-test-parent-boundary": "self-test scratch parent refusal before create",
     "reverse-governance-edge": "reverse governance dependency",
     "wrong-library-name": "library targets mismatch",
-    "premature-binary-target": "binary targets mismatch",
+    "missing-current-target": "explicit binary declarations mismatch",
+    "extra-current-target": "binary targets mismatch",
+    "substituted-current-target": "explicit binary declaration path mismatch: name=swarm-governance-witness-substitute expected=None actual=src/bin/swarm-governance-witness-store.rs",
     "same-name-internal-substitution": "must resolve exactly once",
     "syntax-invalid-binary-target": "target check failed bin swarm-governance-witness-store",
     "type-invalid-binary-target": "target check failed bin swarm-governance-witness-store",
@@ -100,11 +117,14 @@ STRUCTURED_VIOLATION_CASES = {
     "forbidden-declared-dev",
     "forbidden-declared-build",
     "forbidden-resolved-normal",
+    "forbidden-resolved-foreign",
     "forbidden-resolved-dev",
     "forbidden-resolved-build",
     "missing-normal-signer-edge",
     "signer-remains-dev-only",
     "partial-cargo-tree-omission",
+    "host-tree-mismatch",
+    "all-target-subset-omission",
 }
 
 
@@ -164,17 +184,14 @@ def dependency_names(table):
     return names
 
 
-def metadata(root):
-    output = command(
-        root,
-        "cargo",
-        "metadata",
-        "--format-version",
-        "1",
-        "--locked",
-        "--offline",
+def metadata(root, filter_platform=None):
+    arguments = [
+        "cargo", "metadata", "--format-version", "1", "--locked", "--offline",
         "--all-features",
-    )
+    ]
+    if filter_platform is not None:
+        arguments.extend(("--filter-platform", filter_platform))
+    output = command(root, *arguments)
     try:
         return json.loads(output)
     except json.JSONDecodeError as error:
@@ -343,26 +360,25 @@ def resolved_closure(data, root_id, root_kinds, transitive_kinds):
     return observed
 
 
-def cargo_tree_output(root, package_spec, edges):
-    return command(
-        root,
-        "cargo",
-        "tree",
-        "-p",
-        package_spec,
-        "--locked",
-        "--offline",
-        "--target",
-        "all",
-        "--all-features",
-        "--edges",
-        edges,
-        "--prefix",
-        "none",
-        "--no-dedupe",
-        "--format",
-        "{p}",
+def rustc_host(root):
+    rustc_version = command(root, "rustc", "-vV")
+    host_matches = re.findall(r"^host: (\S+)$", rustc_version, re.MULTILINE)
+    if len(host_matches) != 1:
+        fail("rustc host triple is missing or ambiguous")
+    return host_matches[0]
+
+
+def cargo_tree_output(root, package_spec, edges, target, all_features=True):
+    arguments = [
+        "cargo", "tree", "-p", package_spec, "--locked", "--offline",
+        "--target", target,
+    ]
+    if all_features:
+        arguments.append("--all-features")
+    arguments.extend(
+        ("--edges", edges, "--prefix", "none", "--no-dedupe", "--format", "{p}")
     )
+    return command(root, *arguments)
 
 
 def parse_cargo_tree_package_ids(root, data, output):
@@ -414,17 +430,25 @@ def parse_cargo_tree_package_ids(root, data, output):
     return observed
 
 
-def cargo_tree_package_ids(root, data, package_spec, edges, output_override=None):
+def cargo_tree_package_ids(
+    root,
+    data,
+    package_spec,
+    edges,
+    target,
+    output_override=None,
+    all_features=True,
+):
     output = (
         output_override
         if output_override is not None
-        else cargo_tree_output(root, package_spec, edges)
+        else cargo_tree_output(root, package_spec, edges, target, all_features)
     )
     return parse_cargo_tree_package_ids(root, data, output)
 
 
-def strict_partial_cargo_tree_output(root, data, root_id):
-    output = cargo_tree_output(root, PACKAGE, "normal")
+def strict_partial_cargo_tree_output(root, data, root_id, target):
+    output = cargo_tree_output(root, PACKAGE, "normal", target)
     unique_rows = list(
         dict.fromkeys(line.strip() for line in output.splitlines() if line.strip())
     )
@@ -454,9 +478,10 @@ def package_scoped_metadata(root, subject_data, package_id):
     if subject is None:
         fail(f"cannot scope metadata to unknown package ID {package_id}")
     features = sorted(subject.get("features", {}))
+    temporary_parent = validated_temp_parent("metadata harness", root)
     temporary = tempfile.TemporaryDirectory(
         prefix="phase285-metadata-scope.",
-        dir=os.environ.get("TMPDIR") or None,
+        dir=temporary_parent,
     )
     harness = pathlib.Path(temporary.name).resolve()
     try:
@@ -488,15 +513,12 @@ def package_scoped_metadata(root, subject_data, package_id):
             encoding="utf-8",
         )
         shutil.copy2(root / "Cargo.lock", harness / "Cargo.lock")
+        host = rustc_host(root)
         command(
-            harness,
-            "cargo",
-            "metadata",
-            "--format-version",
-            "1",
-            "--offline",
+            harness, "cargo", "metadata", "--format-version", "1", "--offline",
+            "--filter-platform", host,
         )
-        scoped = metadata(harness)
+        scoped = metadata(harness, host)
         harness_manifest = canonical(harness / "Cargo.toml")
         for package in scoped.get("packages", []):
             if canonical(package["manifest_path"]) == harness_manifest:
@@ -554,8 +576,15 @@ def check_target(root, target_kind, target_name):
         )
 
 
-def evaluate(root, all_targets=False, tree_output_overrides=None):
+def evaluate(root, target_mode="library-only", tree_output_overrides=None):
+    if target_mode is False:
+        target_mode = "library-only"
+    elif target_mode is True:
+        target_mode = "all-targets"
+    if target_mode not in {"library-only", "current-targets", "all-targets"}:
+        fail(f"unknown target mode {target_mode}")
     root = canonical(root)
+    validated_temp_parent("evaluation scratch", root)
     tree_output_overrides = tree_output_overrides or {}
     root_manifest = load_toml(root / "Cargo.toml")
     members = set(root_manifest.get("workspace", {}).get("members", []))
@@ -636,13 +665,55 @@ def evaluate(root, all_targets=False, tree_output_overrides=None):
         fail("library source path mismatch")
 
     binary_names = {target["name"] for target in binary_targets}
-    expected_bins = set(EXPECTED_BIN_PATHS) if all_targets else set()
+    explicit_bins = witness_manifest.get("bin", [])
+    if not isinstance(explicit_bins, list) or any(
+        not isinstance(entry, dict) for entry in explicit_bins
+    ):
+        fail("explicit binary declarations are malformed")
+    explicit_names = [entry.get("name") for entry in explicit_bins]
+    if (
+        any(set(entry) != {"name", "path"} for entry in explicit_bins)
+        or any(not isinstance(name, str) for name in explicit_names)
+        or len(explicit_names) != len(set(explicit_names))
+        or set(explicit_names) != binary_names
+    ):
+        fail(
+            "explicit binary declarations mismatch: "
+            f"expected={sorted(binary_names)} actual={sorted(str(name) for name in explicit_names)}"
+        )
+    for entry in explicit_bins:
+        name = entry["name"]
+        expected_path = EXPECTED_BIN_PATHS.get(name)
+        if expected_path is None or entry["path"] != expected_path:
+            fail(
+                "explicit binary declaration path mismatch: "
+                f"name={name} expected={expected_path} actual={entry['path']}"
+            )
+    expected_bins = (
+        set(CURRENT_BIN_PATHS)
+        if target_mode == "current-targets"
+        else set(EXPECTED_BIN_PATHS)
+        if target_mode == "all-targets"
+        else binary_names
+    )
     if len(binary_targets) != len(binary_names) or binary_names != expected_bins:
+        missing_bins = expected_bins - binary_names
+        extra_bins = binary_names - expected_bins
+        if (
+            target_mode == "all-targets"
+            and missing_bins == {"swarm-governance-witness-init"}
+            and not extra_bins
+            and len(binary_targets) == len(binary_names)
+        ):
+            fail(
+                "missing explicit witness target: swarm-governance-witness-init "
+                "(expected at src/bin/swarm-governance-witness-init.rs)"
+            )
         fail(
             f"binary targets mismatch: expected={sorted(expected_bins)} "
             f"actual={sorted(binary_names)}"
         )
-    if all_targets:
+    if target_mode != "library-only":
         for target in binary_targets:
             expected_path = canonical(
                 root / expected_member / EXPECTED_BIN_PATHS[target["name"]]
@@ -650,16 +721,30 @@ def evaluate(root, all_targets=False, tree_output_overrides=None):
             if canonical(target["src_path"]) != expected_path:
                 fail(f"binary source path mismatch: {target['name']}")
 
+    host = rustc_host(root)
     tree_closures = {
         "normal": cargo_tree_package_ids(
             root,
             data,
             PACKAGE,
             "normal",
+            host,
             tree_output_overrides.get("normal"),
         ),
-        "dev": cargo_tree_package_ids(root, data, PACKAGE, "normal,dev"),
-        "build": cargo_tree_package_ids(root, data, PACKAGE, "normal,build"),
+        "dev": cargo_tree_package_ids(root, data, PACKAGE, "normal,dev", host),
+        "build": cargo_tree_package_ids(root, data, PACKAGE, "normal,build", host),
+    }
+    all_target_tree_closures = {
+        "normal": cargo_tree_package_ids(
+            root,
+            data,
+            PACKAGE,
+            "normal",
+            "all",
+            tree_output_overrides.get("normal-all"),
+        ),
+        "dev": cargo_tree_package_ids(root, data, PACKAGE, "normal,dev", "all"),
+        "build": cargo_tree_package_ids(root, data, PACKAGE, "normal,build", "all"),
     }
     scoped_witness = package_scoped_metadata(root, data, allowed_ids[PACKAGE])
     closures = {
@@ -676,20 +761,33 @@ def evaluate(root, all_targets=False, tree_output_overrides=None):
             {"normal", "build"},
         ),
     }
+    direct_normal_ids = direct_dependency_ids(data, allowed_ids[PACKAGE], "normal")
     direct_dev_ids = direct_dependency_ids(data, allowed_ids[PACKAGE], "dev")
+    expected_dev_ids = {
+        identifier
+        for identifier in direct_normal_ids
+        if package_by_id[identifier]["name"] in DEV
+    }
+    if direct_dev_ids != expected_dev_ids:
+        record_violation(
+            "declared-dev",
+            "direct dependencies must reuse governed normal IDs: "
+            f"expected={sorted(expected_dev_ids)} actual={sorted(direct_dev_ids)}",
+        )
     metadata_dev_root_ids = {allowed_ids[PACKAGE]}
     tree_dev_root_ids = {allowed_ids[PACKAGE]}
-    for identifier in sorted(direct_dev_ids):
+    for identifier in sorted(expected_dev_ids):
         package = package_by_id.get(identifier)
         if package is None:
             fail(f"direct dev dependency references unknown package ID {identifier}")
-        scoped_dev = package_scoped_metadata(root, data, identifier)
         metadata_dev_root_ids.update(
-            resolved_closure(scoped_dev, identifier, {"normal"}, {"normal"})
+            resolved_closure(scoped_witness, identifier, {"normal"}, {"normal"})
         )
         package_spec = f"{package['name']}@{package['version']}"
         tree_dev_root_ids.update(
-            cargo_tree_package_ids(root, data, package_spec, "normal")
+            cargo_tree_package_ids(
+                root, data, package_spec, "normal", host, all_features=False
+            )
         )
     closures["dev-root"] = metadata_dev_root_ids
     closures["dev"] = closures["normal"] | metadata_dev_root_ids
@@ -707,6 +805,36 @@ def evaluate(root, all_targets=False, tree_output_overrides=None):
                 f"missing={sorted(metadata_ids - tree_ids)} "
                 f"extra={sorted(tree_ids - metadata_ids)}",
             )
+
+    for kind in ("normal", "dev", "build"):
+        host_ids = tree_closures[kind]
+        all_ids = all_target_tree_closures[kind]
+        if not host_ids <= all_ids:
+            record_violation(
+                f"cargo-tree-{kind}-target-subset",
+                f"host-only={sorted(host_ids - all_ids)}",
+            )
+        for identifier in all_ids:
+            package = package_by_id.get(identifier)
+            if package is None:
+                record_violation(
+                    f"cargo-tree-{kind}-all-target-identity",
+                    f"unknown locked package ID={identifier}",
+                )
+                continue
+            name = package["name"]
+            if name in FORBIDDEN_INTERNAL:
+                record_violation(
+                    f"resolved-{kind}-all-target",
+                    f"forbidden={name} ({identifier})",
+                )
+            if identifier in workspace_ids or name.startswith("swarm-"):
+                expected_id = allowed_ids.get(name)
+                if expected_id != identifier:
+                    record_violation(
+                        f"resolved-{kind}-all-target",
+                        f"unexpected internal={name} ({identifier})",
+                    )
 
     for kind, identifiers in closures.items():
         observed_internal = set()
@@ -749,22 +877,23 @@ def evaluate(root, all_targets=False, tree_output_overrides=None):
         )
 
     checked_targets = 0
-    if all_targets:
+    if target_mode != "library-only":
         check_target(root, "lib", LIBRARY)
         checked_targets += 1
-        for name in sorted(EXPECTED_BIN_PATHS):
+        for name in sorted(expected_bins):
             check_target(root, "bin", name)
             checked_targets += 1
     print(
         "witness_dependency_closure "
-        f"mode={'all-targets' if all_targets else 'library-only'} "
+        f"mode={target_mode} "
         f"libraries={len(library_targets)} binaries={len(binary_targets)} "
-        f"declared_normal={len(declared['normal'])} declared_dev={len(declared['dev'])} "
-        f"declared_build={len(declared['build'])} "
+        f"declared_normal={len(set(declared['normal']))} "
+        f"declared_dev={len(set(declared['dev']))} "
+        f"declared_build={len(set(declared['build']))} "
         f"resolved_normal={len(closures['normal'])} resolved_dev={len(closures['dev'])} "
         f"resolved_build={len(closures['build'])} "
         f"resolved_dev_root={len(closures['dev-root'])} internal_ids={len(allowed_ids)} "
-        f"cargo_tree_id_checks=4 checked_targets={checked_targets} forbidden=0"
+        f"cargo_tree_id_checks=7 checked_targets={checked_targets} forbidden=0"
     )
     return data
 
@@ -775,6 +904,25 @@ def within(path, parent):
         return True
     except ValueError:
         return False
+
+
+def validated_temp_parent(purpose, *subject_roots):
+    configured = os.environ.get("TMPDIR")
+    requested = pathlib.Path(configured) if configured else pathlib.Path(tempfile.gettempdir())
+    try:
+        parent = requested.resolve(strict=True)
+    except OSError as error:
+        fail(f"{purpose} parent is unavailable before create: {error}")
+    if not parent.is_dir():
+        fail(f"{purpose} parent is not a directory before create: {parent}")
+    boundaries = {ROOT, *map(canonical, subject_roots), *git_boundary_paths()}
+    for boundary in boundaries:
+        if parent == boundary or within(parent, boundary):
+            fail(
+                f"{purpose} parent refusal before create: "
+                f"parent={parent} boundary={boundary}"
+            )
+    return parent
 
 
 def git_boundary_paths():
@@ -983,6 +1131,13 @@ def mutate(root, container, case):
             "swarm-whisker.workspace = true\n\n[target.'cfg(unix)'.dependencies]",
         )
         refresh_lock(root)
+    elif case == "forbidden-resolved-foreign":
+        with governance_manifest.open("a", encoding="utf-8") as handle:
+            handle.write(
+                "\n[target.'cfg(target_os = \"windows\")'.dependencies]\n"
+                "swarm-whisker.workspace = true\n"
+            )
+        refresh_lock(root)
     elif case == "forbidden-resolved-dev":
         whisker_manifest = root / "crates" / "swarm-whisker" / "Cargo.toml"
         whisker_manifest.write_text(
@@ -1032,14 +1187,25 @@ def mutate(root, container, case):
             f'name = "{LIBRARY}"',
             'name = "wrong_witness_library"',
         )
-    elif case == "premature-binary-target":
-        name = "swarm-governance-witness"
+    elif case == "missing-current-target":
+        replace_once(
+            witness_manifest,
+            '[[bin]]\nname = "swarm-governance-witness-store"\npath = "src/bin/swarm-governance-witness-store.rs"\n\n',
+            "",
+        )
+    elif case == "extra-current-target":
+        name = "swarm-governance-witness-init"
         relative = EXPECTED_BIN_PATHS[name]
         with witness_manifest.open("a", encoding="utf-8") as handle:
             handle.write(f'\n[[bin]]\nname = "{name}"\npath = "{relative}"\n')
         source = root / "crates" / PACKAGE / relative
-        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("fn main() {}\n", encoding="utf-8")
+    elif case == "substituted-current-target":
+        replace_once(
+            witness_manifest,
+            'name = "swarm-governance-witness-store"',
+            'name = "swarm-governance-witness-substitute"',
+        )
     elif case == "same-name-internal-substitution":
         foreign = container / "foreign-swarm-crypto"
         foreign.mkdir()
@@ -1057,7 +1223,7 @@ def mutate(root, container, case):
         )
         refresh_lock(root)
     elif case in {"syntax-invalid-binary-target", "type-invalid-binary-target"}:
-        add_future_bins(root)
+        pass
     else:
         fail(f"unknown self-test {case}")
 
@@ -1065,11 +1231,11 @@ def mutate(root, container, case):
 def expect_mutation_failure(
     root,
     case,
-    all_targets=False,
+    target_mode="library-only",
     tree_output_overrides=None,
 ):
     try:
-        evaluate(root, all_targets, tree_output_overrides)
+        evaluate(root, target_mode, tree_output_overrides)
     except ClosureFailure as error:
         diagnostic = str(error)
         expected = EXPECTED_DIAGNOSTIC[case]
@@ -1089,9 +1255,48 @@ def expect_mutation_failure(
     fail(f"self-test mutation unexpectedly passed: {case}")
 
 
+def run_self_test_parent_control():
+    before = {entry.name for entry in ROOT.iterdir()}
+    environment = {**os.environ, "TMPDIR": str(ROOT)}
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "tools/check-witness-dependency-closure.sh"),
+            "--self-test",
+            "missing-library-target",
+        ],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    expected = EXPECTED_DIAGNOSTIC["self-test-parent-boundary"]
+    if result.returncode == 0 or expected not in result.stdout:
+        fail(
+            "self-test parent control failed for wrong reason: "
+            f"status={result.returncode} output={result.stdout!r}"
+        )
+    after = {entry.name for entry in ROOT.iterdir()}
+    if after != before:
+        fail(
+            "self-test parent refusal created a child path: "
+            f"added={sorted(after - before)} removed={sorted(before - after)}"
+        )
+    print(
+        "self_test_red case=self-test-parent-boundary "
+        "parent_prevalidated=1 child_paths_created=0 "
+        f"failure={expected}"
+    )
+
+
 def run_self_test(case):
+    temporary_parent = validated_temp_parent("self-test scratch", ROOT)
     subject_data = evaluate(ROOT, False)
-    temporary = tempfile.TemporaryDirectory(prefix="phase285-witness-closure.")
+    temporary = tempfile.TemporaryDirectory(
+        prefix="phase285-witness-closure.", dir=temporary_parent
+    )
     container = pathlib.Path(temporary.name).resolve()
     diagnostic = None
     identity_count = 0
@@ -1106,7 +1311,25 @@ def run_self_test(case):
             previous_tmpdir = os.environ.get("TMPDIR")
             os.environ["TMPDIR"] = str(boundary_tmp)
             try:
-                diagnostic = expect_mutation_failure(scratch, case, False)
+                scratch_packages = {
+                    package["name"]: package for package in scratch_data["packages"]
+                }
+                try:
+                    package_scoped_metadata(
+                        scratch,
+                        scratch_data,
+                        scratch_packages[PACKAGE]["id"],
+                    )
+                except ClosureFailure as error:
+                    diagnostic = str(error)
+                    expected = EXPECTED_DIAGNOSTIC[case]
+                    if expected not in diagnostic:
+                        fail(
+                            f"self-test {case} failed for wrong reason: "
+                            f"expected={expected!r} actual={diagnostic!r}"
+                        )
+                else:
+                    fail(f"self-test mutation unexpectedly passed: {case}")
             finally:
                 if previous_tmpdir is None:
                     os.environ.pop("TMPDIR", None)
@@ -1117,26 +1340,44 @@ def run_self_test(case):
             boundary_tmp.rmdir()
             if boundary_tmp.exists():
                 fail("metadata harness boundary cleanup left its TMPDIR path")
-        elif case == "partial-cargo-tree-omission":
+        elif case in {
+            "partial-cargo-tree-omission",
+            "host-tree-mismatch",
+            "all-target-subset-omission",
+        }:
             scratch_packages = {
                 package["name"]: package for package in scratch_data["packages"]
             }
             root_id = scratch_packages[PACKAGE]["id"]
-            partial_output = strict_partial_cargo_tree_output(
-                scratch,
-                scratch_data,
-                root_id,
-            )
+            if case == "host-tree-mismatch":
+                mutation_output = cargo_tree_output(
+                    scratch, PACKAGE, "normal", "all"
+                )
+            else:
+                mutation_output = strict_partial_cargo_tree_output(
+                    scratch,
+                    scratch_data,
+                    root_id,
+                    rustc_host(scratch),
+                )
             diagnostic = expect_mutation_failure(
                 scratch,
                 case,
                 False,
-                {"normal": partial_output},
+                {
+                    "normal-all" if case == "all-target-subset-omission" else "normal":
+                    mutation_output
+                },
             )
         else:
             mutate(scratch, container, case)
+        current_cases = {
+            "missing-current-target", "extra-current-target",
+            "substituted-current-target", "syntax-invalid-binary-target",
+            "type-invalid-binary-target",
+        }
         if case in {"syntax-invalid-binary-target", "type-invalid-binary-target"}:
-            evaluate(scratch, True)
+            evaluate(scratch, "current-targets")
             invalid = (
                 "fn main( {\n"
                 if case == "syntax-invalid-binary-target"
@@ -1149,9 +1390,13 @@ def run_self_test(case):
                 / EXPECTED_BIN_PATHS["swarm-governance-witness-store"]
             )
             target.write_text(invalid, encoding="utf-8")
-            diagnostic = expect_mutation_failure(scratch, case, True)
+            diagnostic = expect_mutation_failure(scratch, case, "current-targets")
+        elif case in current_cases:
+            diagnostic = expect_mutation_failure(scratch, case, "current-targets")
         elif case not in {
             "partial-cargo-tree-omission",
+            "host-tree-mismatch",
+            "all-target-subset-omission",
             "metadata-harness-boundary",
         }:
             diagnostic = expect_mutation_failure(scratch, case, False)
@@ -1167,16 +1412,21 @@ def run_self_test(case):
 
 try:
     if MODE == "--library-only":
-        evaluate(ROOT, False)
+        evaluate(ROOT, "library-only")
+    elif MODE == "--current-targets":
+        evaluate(ROOT, "current-targets")
     elif MODE == "--all-targets":
-        evaluate(ROOT, True)
+        evaluate(ROOT, "all-targets")
     else:
         selected = (CASE,) if CASE else CASES
         unknown = set(selected) - set(CASES)
         if unknown:
             fail(f"unknown self-test case: {sorted(unknown)}")
         for name in selected:
-            run_self_test(name)
+            if name == "self-test-parent-boundary":
+                run_self_test_parent_control()
+            else:
+                run_self_test(name)
         print(f"self_test executed={len(selected)} passed={len(selected)} failed=0")
 except ClosureFailure as error:
     print(f"witness dependency closure failed: {error}", file=sys.stderr)

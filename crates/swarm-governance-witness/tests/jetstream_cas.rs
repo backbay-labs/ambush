@@ -1204,6 +1204,7 @@ fn jetstream_cas_rejects_each_raw_config_mutation() -> TestResult {
 }
 
 #[tokio::test]
+#[ignore = "requires a JetStream-enabled Phase 285 NATS server and harness ledger"]
 async fn jetstream_cas_rejects_wrong_revision_header_or_ack() -> TestResult {
     let mut ledger = InnerLedger::new("jetstream_cas_rejects_wrong_revision_header_or_ack");
     let fixture = live_fixture("phase285_b_wrong_revision", InitialHeader::Put).await?;
@@ -1264,6 +1265,7 @@ async fn jetstream_cas_rejects_wrong_revision_header_or_ack() -> TestResult {
 }
 
 #[tokio::test]
+#[ignore = "requires a JetStream-enabled Phase 285 NATS server and harness ledger"]
 async fn jetstream_cas_confirms_raw_sequence_and_bytes() -> TestResult {
     let mut ledger = InnerLedger::new("jetstream_cas_confirms_raw_sequence_and_bytes");
     let fixture = live_fixture("phase285_b_confirmed", InitialHeader::Put)
@@ -1342,6 +1344,7 @@ async fn jetstream_cas_confirms_raw_sequence_and_bytes() -> TestResult {
 }
 
 #[tokio::test]
+#[ignore = "requires a JetStream-enabled Phase 285 NATS server and harness ledger"]
 async fn jetstream_cas_rejects_del_purge_rollup_and_direct_reads() -> TestResult {
     let mut ledger = InnerLedger::new("jetstream_cas_rejects_del_purge_rollup_and_direct_reads");
     for (bucket, operation, control_id) in [

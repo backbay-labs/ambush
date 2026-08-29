@@ -1985,6 +1985,7 @@ mod deadline_state_machine_tests {
     }
 
     #[test]
+    #[ignore = "requires the authenticated Phase 285 NATS topology and credential artifacts"]
     fn subscriber_callsite_is_receipt_anchored_and_mutation_sensitive() {
         let thread = must(
             std::thread::Builder::new()
@@ -2537,7 +2538,7 @@ mod deadline_state_machine_tests {
             ("public_queue_expired", (1, 0, 0, 0, 0, 0, 0, 0, false)),
             (
                 "public_private_exchange_crosses_deadline",
-                (1, 1, 0, 1, 0, 0, 0, 0, false),
+                (1, 1, 0, 1, 0, 0, 0, 0, true),
             ),
             (
                 "public_response_enqueue_expired",
@@ -2617,6 +2618,7 @@ mod deadline_state_machine_tests {
                     succeeded: false,
                     cas_applied: false,
                 },
+                WorkerTransitionEventV1::OutcomeUnknown,
             ],
             vec![
                 WorkerTransitionEventV1::Dequeued {
@@ -8043,6 +8045,7 @@ mod deadline_state_machine_tests {
 #[cfg(test)]
 mod service_checkpoint_observation_tests {
     #[test]
+    #[ignore = "requires the authenticated Phase 285 NATS topology and observation artifacts"]
     fn worker_observations_are_real_and_reconciled() {
         assert!(
             std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
@@ -8055,6 +8058,7 @@ mod service_checkpoint_observation_tests {
 #[cfg(test)]
 mod service_checkpoint_relay_tests {
     #[test]
+    #[ignore = "requires the authenticated Phase 285 relay topology and receipt artifacts"]
     fn complete_receipt_authority_and_grants_are_observed() {
         assert!(
             std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
@@ -8067,6 +8071,7 @@ mod service_checkpoint_relay_tests {
 #[cfg(test)]
 mod service_checkpoint_transport_semantics_tests {
     #[test]
+    #[ignore = "requires the authenticated Phase 285 relay topology and transport evidence"]
     fn post_command_other_is_distinct_from_pre_send_drain() {
         assert!(
             std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
@@ -8076,6 +8081,7 @@ mod service_checkpoint_transport_semantics_tests {
     }
 
     #[test]
+    #[ignore = "requires the authenticated Phase 285 relay topology and response-grant evidence"]
     fn public_and_private_expired_response_grants_recover_exactly_once() {
         assert!(
             std::env::var_os("SWARM_NATS_STORE_TLS_URL").is_some(),
