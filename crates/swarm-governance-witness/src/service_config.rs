@@ -1,12 +1,18 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use swarm_governance::persistence_protocol::{
     MAX_PROTOCOL_RECORD_BYTES, MAX_PROTOCOL_STRING_BYTES, ProtocolError, ProtocolResult,
 };
 use swarm_governance::witness_engine::store::WitnessAdmissionSetV1;
 use swarm_governance::witness_engine::store::WitnessStoreReadyResultV1;
 use swarm_governance::witness_service::WitnessServiceOperationV1;
+#[cfg(test)]
+use tokio::sync::{Notify, watch};
 use tokio::time::{Duration, Instant, timeout_at};
 
 pub(crate) const STORE_HANDLER_DEADLINE_MILLIS: u64 = 2_000;
@@ -31,6 +37,79 @@ pub const fn public_response_grant_millis() -> u64 {
 
 pub const fn response_grant_maximum() -> usize {
     RESPONSE_GRANT_MAXIMUM
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct SubscriberPollGateV1 {
+    subject: &'static str,
+    reached: Arc<AtomicBool>,
+    reached_notify: Arc<Notify>,
+    release: watch::Receiver<bool>,
+}
+
+#[cfg(test)]
+pub(crate) struct SubscriberPollGateControlV1 {
+    reached: Arc<AtomicBool>,
+    reached_notify: Arc<Notify>,
+    release: watch::Sender<bool>,
+}
+
+#[cfg(test)]
+impl SubscriberPollGateV1 {
+    pub(crate) fn new(
+        subject: &'static str,
+    ) -> (SubscriberPollGateV1, SubscriberPollGateControlV1) {
+        let reached = Arc::new(AtomicBool::new(false));
+        let reached_notify = Arc::new(Notify::new());
+        let (release, release_receiver) = watch::channel(false);
+        (
+            Self {
+                subject,
+                reached: reached.clone(),
+                reached_notify: reached_notify.clone(),
+                release: release_receiver,
+            },
+            SubscriberPollGateControlV1 {
+                reached,
+                reached_notify,
+                release,
+            },
+        )
+    }
+
+    pub(crate) async fn before_first_poll(&mut self, subject: &'static str) {
+        if self.subject != subject {
+            return;
+        }
+        self.reached.store(true, Ordering::SeqCst);
+        self.reached_notify.notify_waiters();
+        while !*self.release.borrow() {
+            if self.release.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl SubscriberPollGateControlV1 {
+    pub(crate) async fn wait_reached(&self) {
+        loop {
+            // Register before inspecting the predicate. `notify_waiters` does
+            // not retain a permit, so checking first can lose the transition
+            // between the load and `notified().await`.
+            let notified = self.reached_notify.notified();
+            if self.reached.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        let _ = self.release.send(true);
+    }
 }
 
 const _: () = assert!(STORE_HANDLER_DEADLINE_MILLIS == 2_000);
@@ -89,6 +168,10 @@ pub(crate) struct SubscriberAdmissionReceiptV1 {
     pub(crate) worker: WorkerKindV1,
     pub(crate) subject: String,
     pub(crate) payload_sha256: String,
+    #[cfg(test)]
+    pub(crate) payload: Vec<u8>,
+    #[cfg(test)]
+    pub(crate) deadline_identity: u64,
     pub(crate) reply: String,
     pub(crate) deadline_millis: u64,
 }
@@ -107,6 +190,11 @@ impl SubscriberAdmissionObserverV1 for NoopSubscriberAdmissionObserverV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub(crate) enum WorkerTransitionEventV1 {
+    #[cfg(test)]
+    ReceiptDeadlineIdentity {
+        worker: WorkerKindV1,
+        identity: u64,
+    },
     Dequeued {
         worker: WorkerKindV1,
     },
@@ -128,13 +216,14 @@ pub(crate) enum WorkerTransitionEventV1 {
     CasAppliedObservation {
         worker: WorkerKindV1,
     },
+    ResponseDeadlineCheck {
+        worker: WorkerKindV1,
+        open: bool,
+    },
+    #[serde(rename = "response_enqueue_attempt")]
     ResponseEnqueueAttempt {
         worker: WorkerKindV1,
-        accepted: bool,
-    },
-    PublishAttempt {
-        worker: WorkerKindV1,
-        published: bool,
+        enqueued: bool,
     },
     OutcomeUnknown,
 }
@@ -155,20 +244,79 @@ pub(crate) trait WorkerPublisherV1: Send + Sync {
     async fn publish(&self, reply: async_nats::Subject, payload: Vec<u8>) -> bool;
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResponsePreEnqueueCaptureV1 {
+    pub(crate) worker: WorkerKindV1,
+    pub(crate) reply: String,
+    pub(crate) payload: Vec<u8>,
+}
+
+#[cfg(test)]
+pub(crate) trait ResponsePreEnqueueObserverV1: Send + Sync {
+    fn observe(&self, capture: ResponsePreEnqueueCaptureV1);
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct NoopResponsePreEnqueueObserverV1;
+
+#[cfg(test)]
+impl ResponsePreEnqueueObserverV1 for NoopResponsePreEnqueueObserverV1 {
+    fn observe(&self, _capture: ResponsePreEnqueueCaptureV1) {}
+}
+
 #[derive(Clone)]
-pub(crate) struct NatsWorkerPublisherV1(pub(crate) async_nats::Client);
+pub(crate) struct NatsWorkerPublisherV1 {
+    client: async_nats::Client,
+    #[cfg(test)]
+    worker: WorkerKindV1,
+    #[cfg(test)]
+    observer: Arc<dyn ResponsePreEnqueueObserverV1>,
+}
+
+impl NatsWorkerPublisherV1 {
+    #[cfg(not(test))]
+    pub(crate) fn new(client: async_nats::Client) -> Self {
+        Self { client }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observed(
+        client: async_nats::Client,
+        worker: WorkerKindV1,
+        observer: Arc<dyn ResponsePreEnqueueObserverV1>,
+    ) -> Self {
+        Self {
+            client,
+            worker,
+            observer,
+        }
+    }
+}
 
 #[async_trait]
 impl WorkerPublisherV1 for NatsWorkerPublisherV1 {
     async fn publish(&self, reply: async_nats::Subject, payload: Vec<u8>) -> bool {
-        self.0.publish(reply, payload.into()).await.is_ok()
+        #[cfg(test)]
+        self.observer.observe(ResponsePreEnqueueCaptureV1 {
+            worker: self.worker,
+            reply: reply.to_string(),
+            payload: payload.clone(),
+        });
+        self.client.publish(reply, payload.into()).await.is_ok()
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReceiptDeadlineV1 {
     at: Instant,
+    #[cfg(test)]
+    identity: u64,
 }
+
+#[cfg(test)]
+static NEXT_RECEIPT_DEADLINE_IDENTITY: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReceiptExpiredV1;
@@ -186,6 +334,11 @@ impl<'a> WorkerTransitionV1<'a> {
         deadline: ReceiptDeadlineV1,
         observer: &'a dyn WorkerTransitionObserverV1,
     ) -> Self {
+        #[cfg(test)]
+        observer.observe(WorkerTransitionEventV1::ReceiptDeadlineIdentity {
+            worker,
+            identity: deadline.identity,
+        });
         Self {
             worker,
             deadline,
@@ -237,14 +390,14 @@ impl<'a> WorkerTransitionV1<'a> {
         Ok(output)
     }
 
-    pub(crate) fn response_enqueue(self) -> Result<(), ReceiptExpiredV1> {
-        let accepted = self.deadline.ensure_open().is_ok();
+    pub(crate) fn response_deadline_check(self) -> Result<(), ReceiptExpiredV1> {
+        let open = self.deadline.ensure_open().is_ok();
         self.observer
-            .observe(WorkerTransitionEventV1::ResponseEnqueueAttempt {
+            .observe(WorkerTransitionEventV1::ResponseDeadlineCheck {
                 worker: self.worker,
-                accepted,
+                open,
             });
-        accepted.then_some(()).ok_or(ReceiptExpiredV1)
+        open.then_some(()).ok_or(ReceiptExpiredV1)
     }
 
     pub(crate) async fn publish<P: WorkerPublisherV1>(
@@ -253,17 +406,17 @@ impl<'a> WorkerTransitionV1<'a> {
         reply: async_nats::Subject,
         payload: Vec<u8>,
     ) -> bool {
-        let published = self
+        let enqueued = self
             .deadline
             .run(publisher.publish(reply, payload))
             .await
-            .is_ok_and(|published| published);
+            .is_ok_and(|enqueued| enqueued);
         self.observer
-            .observe(WorkerTransitionEventV1::PublishAttempt {
+            .observe(WorkerTransitionEventV1::ResponseEnqueueAttempt {
                 worker: self.worker,
-                published,
+                enqueued,
             });
-        published
+        enqueued
     }
 
     pub(crate) fn outcome_unknown(self) {
@@ -300,7 +453,7 @@ pub(crate) async fn run_observed_worker_message<'a, P, H, F, E>(
     // consumed the remainder of its budget while completing may not enqueue a
     // stale response merely because both operations happened in one poll.
     tokio::task::yield_now().await;
-    if transition.response_enqueue().is_err() {
+    if transition.response_deadline_check().is_err() {
         return;
     }
     transition.publish(publisher, reply, bytes).await;
@@ -318,7 +471,14 @@ impl ReceiptDeadlineV1 {
     pub(crate) fn from_now(millis: u64) -> Self {
         Self {
             at: Instant::now() + Duration::from_millis(millis),
+            #[cfg(test)]
+            identity: NEXT_RECEIPT_DEADLINE_IDENTITY.fetch_add(1, Ordering::SeqCst) + 1,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn identity_for_test(self) -> u64 {
+        self.identity
     }
 
     pub(crate) fn ensure_open(self) -> Result<(), ReceiptExpiredV1> {
@@ -332,6 +492,27 @@ impl ReceiptDeadlineV1 {
         timeout_at(self.at, future)
             .await
             .map_err(|_| ReceiptExpiredV1)
+    }
+}
+
+#[cfg(test)]
+mod response_enqueue_schema_tests {
+    use super::*;
+
+    #[test]
+    fn local_enqueue_is_never_serialized_as_publication() {
+        let event = WorkerTransitionEventV1::ResponseEnqueueAttempt {
+            worker: WorkerKindV1::Public,
+            enqueued: true,
+        };
+        let Ok(encoded) = serde_json::to_string(&event) else {
+            panic!("response enqueue serialization failed");
+        };
+        assert_eq!(
+            encoded,
+            r#"{"event":"response_enqueue_attempt","worker":"public","enqueued":true}"#
+        );
+        assert!(!encoded.contains("publish"));
     }
 }
 
