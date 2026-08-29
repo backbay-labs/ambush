@@ -815,16 +815,16 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
   THE FIXTURE IS EXECUTABLE AND RUNS ON EVERY INVOCATION. It generates a real miniature cargo workspace (real crate names; stub path crates literally named `axum`/`clap`/`hyper`/`reqwest`, so no registry and no network), runs real `cargo metadata` over it, and runs the SAME rule engine with the SAME policy and baseline, unmodified. One control case that must exit 0 plus nine deliberately-broken variants that must each exit non-zero with a named diagnostic; four of the nine are inversions cargo itself accepts (dev cycles, build cycles, transitive transport edges). The gate was ALSO observed failing against the real tree: adding `clap` to `swarm-policy`'s `[dependencies]` and `swarm-runtime` to its `[dev-dependencies]` produced five diagnostics including `LAYERING-VIOLATION[advisory-declared] swarm-policy declares 'swarm-runtime' as a dev dependency`, and the tree was restored.
 ### Collective Cyber Reasoning (v1.79)
 
-The active v1.79 contract replaces the old executor-first queue with a collective reasoning milestone. Phase 285 is closed under a deliberately narrower, truthful assurance scope; phases 286-289 are accepted for implementation. Every metric below is evaluated against a checked-in benchmark manifest and a single-agent or pre-change control. No phase may claim a protected GitHub rule unless the repository independently proves provenance-distinct enforcement.
+The active v1.79 contract replaces the old executor-first queue with a collective reasoning milestone. Phase 285 is reopened for the governance/detector integration gate; phases 286-289 remain blocked in sequence until it closes. Every metric below is evaluated against a checked-in benchmark manifest and a single-agent or pre-change control. No phase may claim a protected GitHub rule unless the repository independently proves provenance-distinct enforcement.
 
 #### Phase 285: Assurance Foundation Closure
 
-- [x] **ASSURE-01**: The combined-tree assurance bundle contains a parsed assumption registry, exact invariant-to-function mappings, negative-falsifiability entries, fixture freshness evidence, and supply-chain evidence; the local gates exit 0 on the declared commit and exit non-zero for each documented unmapped, missing-negative, stale-fixture, and dependency-policy mutation.
-- [x] **ASSURE-02**: The SBOM is generated from locked `cargo metadata` resolution, includes package identities and dependency edges, validates against the declared CycloneDX schema, and rejects an invented dependency graph, invalid component type, or missing resolve edge in negative controls.
-- [x] **ASSURE-03**: A hosted Linux run executes the local assurance gates on a fresh, credential-free checkout, publishes commit-bound machine-readable results, and records the exact runner/toolchain/input identity needed to reproduce the result.
-- [x] **ASSURE-04**: Local and hosted evidence is reviewed on the combined tree, with no P0, P1, or P2 finding left unresolved in the phase review packet; isolated worktree or script-only green output is not sufficient evidence.
-- [x] **ASSURE-05**: The assurance docs distinguish `wired`, `executed`, `passed`, and `protected-required`; the external provenance-distinct GitHub App check and repository-settings enforcement are explicitly deferred and are not required for Phase 285 acceptance.
-- [x] **ASSURE-06**: Phase 285 verification is recorded as `passed` only for ASSURE-01..05 and the stated evidence boundary; it must not claim protected-branch enforcement, distributed failover coverage, or release authorization.
+- [ ] **ASSURE-01**: The final combined-tree assurance bundle contains a parsed assumption registry, exact invariant-to-function mappings, negative-falsifiability entries, fixture freshness evidence, and supply-chain evidence; the local gates exit 0 on the declared commit and exit non-zero for each documented unmapped, missing-negative, stale-fixture, and dependency-policy mutation.
+- [ ] **ASSURE-02**: The final combined tree generates its SBOM from locked `cargo metadata` resolution, includes package identities and dependency edges, validates against the declared CycloneDX schema, and rejects an invented dependency graph, invalid component type, or missing resolve edge in negative controls.
+- [ ] **ASSURE-03**: A hosted Linux run executes the declared gates for the final immutable commit on a fresh, credential-free checkout, publishes commit-bound machine-readable results, and records the exact runner/toolchain/input identity needed to reproduce the result.
+- [ ] **ASSURE-04**: Local and hosted evidence is reviewed on the exact combined tree, with no P0, P1, or P2 finding left unresolved in the phase review packet; isolated worktree, checkpoint, or script-only green output is not sufficient evidence.
+- [ ] **ASSURE-05**: The assurance docs distinguish `wired`, `executed`, `passed`, and `protected-required`; the external provenance-distinct GitHub App check and repository-settings enforcement are explicitly deferred and are not required for Phase 285 acceptance.
+- [ ] **ASSURE-06**: The reviewed persistence and external-witness contracts are implemented fail-closed through enforced governance and detector integration, including bounded session, storage, publication, recovery, retention, and cleanup semantics. Phase 285 verification is recorded as `passed` only after ASSURE-01..05 and this integration contract pass on one immutable local-and-hosted tree; it must not claim protected-branch enforcement, unimplemented distributed failover, or release authorization.
 
 #### Phase 286: Collective Hypothesis Graph
 
@@ -1538,12 +1538,12 @@ The former OPFOR/ATKSCORE/COEVOLVE/ARMSCI definitions are retained below for pro
 | FIXTURE-02 | Phase 284 | Satisfied |
 | FIXTURE-03 | Phase 284 | Satisfied |
 | FIXTURE-04 | Phase 284 | Satisfied |
-| ASSURE-01 | Phase 285 | Satisfied (revised scope) |
-| ASSURE-02 | Phase 285 | Satisfied (revised scope) |
-| ASSURE-03 | Phase 285 | Satisfied (revised scope) |
-| ASSURE-04 | Phase 285 | Satisfied (revised scope) |
-| ASSURE-05 | Phase 285 | Satisfied (external App enforcement deferred) |
-| ASSURE-06 | Phase 285 | Satisfied (scope verification only) |
+| ASSURE-01 | Phase 285 | Reopened - rerun on final combined tree |
+| ASSURE-02 | Phase 285 | Reopened - regenerate and mutate on final combined tree |
+| ASSURE-03 | Phase 285 | Pending exact-head hosted rerun |
+| ASSURE-04 | Phase 285 | Pending final combined-tree review |
+| ASSURE-05 | Phase 285 | Reopened - external App enforcement remains deferred |
+| ASSURE-06 | Phase 285 | Pending governance/detector integration and closure |
 | COG-01 | Phase 286 | Pending |
 | COG-02 | Phase 286 | Pending |
 | COG-03 | Phase 286 | Pending |
@@ -1734,7 +1734,7 @@ The former OPFOR/ATKSCORE/COEVOLVE/ARMSCI definitions are retained below for pro
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
 - v1.78 complete as scoped: phases 280-283 shipped; GATEFIX-01-04 and TCBOUND-01-04 are satisfied, while phase 282's measured SPLIT remainder remains explicit rather than silently claimed
 - v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83 rather than claimed
-- v1.79 active: 34 requirements across phases 284-289; Phase 285 is passed under the revised ASSURE-01..06 scope, and COG/ARENA/SYNTH/HERDMEM are accepted for implementation
+- v1.79 active: 34 requirements across phases 284-289; Phase 285 is reopened under ASSURE-01..06, Phase 286 Plan 04 is parked as an accepted checkpoint, and COG/ARENA/SYNTH/HERDMEM execution remains blocked in sequence
 - v1.80 historical only: the former OPFOR/ATKSCORE/COEVOLVE/ARMSCI block (phases 288-291) is superseded by active v1.79 ARENA/SYNTH and creates no queued acceptance set
 - v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)

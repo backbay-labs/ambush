@@ -4,16 +4,16 @@ milestone: v1.79
 milestone_name: Collective Cyber Reasoning
 current_phase: 285
 current_phase_name: Assurance Foundation Closure
-current_plan: null
+current_plan: 04
 status: in_progress
-last_updated: "2026-08-24T16:06:22Z"
-last_activity: 2026-08-24
+last_updated: "2026-08-29T08:34:26Z"
+last_activity: 2026-08-29
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 0
-  completed_plans: 0
-  percent: 17
+  total_plans: 13
+  completed_plans: 4
+  percent: 31
 ---
 
 # State
@@ -30,13 +30,13 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 **Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
 **Current Phase Name:** Assurance Foundation Closure
 **Total Phases:** 6 (284-289)
-**Current Plan:** Clean checkpoint sequence; next slice is the session-fence protocol repair required by the reviewed witness-adapter contract.
-**Total Plans in Phase:** No new GSD plan count; the remediation is banked as independently reviewed slices.
+**Current Plan:** Plan 04 — Tasks 04-01, 04-02, 04-03A1, 04-03A2a, 04-03A2b1, and 04-03A2b2 are accepted. A2b3 is durably banked at immutable commit `ed77183d3d13d046e446d2837e8c5d21d1d1765d` / tree `bdfadfa1e6872596e2f37da4fe6cbebf66ee66d4`, but remains unaccepted. The user-approved convergence line is frozen through local R1d candidate `d229f90c4984fd882d4401fdb7923549fa7b0dbe` / tree `15dce0b2e157c7bfb9e71fee94d3818851a5751a`, exact direct child of R1c `bf170c0ff562f0fa634f77cc45eef680f4e509c1`, after R1a `45f5104ed1c02bee2256357972d547e94f8424cf` and R1b `f79e67e9b6aff763ac9799723bc4a16a5d4a860e`. R1d has exact seven-path digest `5579e51a5346348b9050c7bf73c5cebb14b58edaedcc1436fd791e0ab3c68aa4`, a clean checkout, and independent immutable P0/P1/P2=`0/0/0`. It remains an unpushed local candidate, not accepted production: ordinary negative-registry dependency hydration is blocked by DNS-empty isolated caches, Docker/live NATS is unavailable, hosted CI cannot be observed, and neither production ref exists. Exact rejected R1a candidates remain evidence-only and never predecessors. A2c's three dirty paths remain frozen and unaccepted; A2c, A3, 04-03B, and later work remain blocked.
+**Total Plans in Phase:** 13; Plans 01-03B are accepted and summarized, and 9 plans remain.
 **Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
-**Last Activity:** 2026-08-24
-**Last Activity Description:** Banked and pushed the independently reviewed witness-adapter architecture at `eacadf6b071c158a677dd77441fec1be8d7e548f` (`checkpoint/v179-phase285-witness-adapter-contract`), with P0/P1/P2 all zero. Implementation remains open.
+**Last Activity:** 2026-08-29
+**Last Activity Description:** Froze local cumulative R1d commit `d229f90c4984fd882d4401fdb7923549fa7b0dbe` / tree `15dce0b2e157c7bfb9e71fee94d3818851a5751a` as the exact seven-path direct child of R1c. It closes transactional relay startup, exact 12-task/two-client bounded teardown, complete connz absence/readiness identity checks, exact fresh 9/3 subscriptions, distinct `NoResponders`/post-accept `Other` outcomes, bounded twelve-mutant provenance, refreshed source/API inventory, canonical curl binding, and final manifest/CI/gate pins. Final hostile review also found and closed a macOS `xcrun_db` hostile-TMPDIR side effect and eager `tempfile.gettempdir()` cache poisoning; the exact sanitized no-TMPDIR regression now passes without residue. Ordinary locked/offline workspace tests, dependency closure, all non-live integrity selectors, focused unit/static/mutation gates, and independent immutable review are green, while isolated negative-registry hydration, Docker/live NATS, hosted CI, and production refs remain unavailable.
 
-**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints for approval/voter governance (`f2eb791d`), the production protocol slice (`27b64174`), persistence architecture (`5be011a0`), and witness-adapter contract (`eacadf6b`), but it is not complete until the contract is implemented and a frozen combined tree passes workspace tests, strict clippy, formatting, diff checks, mutation controls, independent review, hosted CI, and closure evidence. Phase 286 Plan 04 is independently accepted at `1408620e` but remains sequenced behind Phase 285. Phase 287-289 plans are independently reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints through Plan 04 Task 04-03A2b2 (`30eb13c`); A2b3 `ed77183` is banked but unaccepted. Plans 01, 02, 03A, and 03B are complete; completed-plan count remains 4/13 because Plan 04 is open. R1a `45f5104`, R1b `f79e67e`, R1c `bf170c0`, and R1d `d229f90` are a frozen exact direct-child local candidate chain, not accepted production. R1d's final manifest/CI/gate pins are frozen; ordinary `cargo test --workspace --locked --offline` passed; witness unit tests passed 31 with 5 live ignores; governance passed 133; dependency closure passed library/current modes plus all 23 self-test mutations; integrity passed its 14-mutation self-test and all seven non-live selectors; strict Clippy/static checks passed; wiring killed 192 command plus 41 workflow mutations; differential killed 238 with zero subject writes; negative self-tests killed 44 structural plus 5 executable-mapping controls; and independent immutable review returned P0/P1/P2=`0/0/0`. Ordinary isolated negative-registry dependency hydration failed only because both gate-owned caches were empty and DNS could not resolve `index.crates.io`; Docker/live NATS and hosted CI are unavailable, so no production refs were pushed and acceptance is not claimed. A2c, A3, 04-03B, Plans 05A-07B, combined-tree assurance, hosted closure, and Phase 285 closure remain blocked. Phase 286 Plan 04 remains independently accepted at `1408620e` but blocked behind Phase 285. Phase 287-289 plans remain reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check.
 
 ## Memory
 
@@ -134,12 +134,12 @@ See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Session Continuity**
 
-Last Date: 2026-08-24 — convergence reset
-Stopped At: Reviewed witness-adapter contract checkpoint pushed; session-fence implementation is next.
+Last Date: 2026-08-29 — cumulative R1d frozen and independently reviewed as a local candidate
+Stopped At: Accepted A2b2 `30eb13c57a3dfdd54ae1eb9ee8fdd75a88067ef1` remains the accepted frontier. A2b3 `ed77183d3d13d046e446d2837e8c5d21d1d1765d` remains durably banked but unaccepted. The convergence branch is frozen through R1d `d229f90c4984fd882d4401fdb7923549fa7b0dbe` / tree `15dce0b2e157c7bfb9e71fee94d3818851a5751a`, exact direct child of R1c after R1a/R1b. Exact local review is P0/P1/P2=`0/0/0`; the checkout is clean. R1d remains unpushed/unaccepted because isolated dependency hydration, Docker/live NATS, hosted CI, and production refs are unavailable. A2c remains frozen at three dirty owned paths.
 Resume File: None — no `.continue-here` checkpoint exists.
-Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
-Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
+Incomplete plan: R1d production acceptance remains open; future-phase plan checkpoints are not execution authority.
+Interrupted agent: None. Implementation and immutable review are complete for the local R1d candidate.
 
 ## Next Command
 
-Implement the Phase 285 bounded session-fence repair from `checkpoint/v179-phase285-witness-adapter-contract` as a clean red-first slice on top of `eacadf6b`. Obtain an independent zero-P0/P1/P2 review and push the checkpoint before starting the witness engine/proxy adapter. Do not edit the dirty integration tree, execute Phase 287-289, reopen the deferred GitHub App check, or advance Phase 286 publication before the frozen combined Phase 285 gate passes.
+When the environment changes, resume only the literal R1d acceptance path against exact local candidate `d229f90c4984fd882d4401fdb7923549fa7b0dbe`: hydrate the isolated dependency caches, run the authenticated Docker/live-NATS chain, push candidate refs, require exact hosted CI, rerun immutable production review, and create the production ref only on all-green evidence. Do not edit the frozen candidate to work around unavailable infrastructure. Do not begin A2c, A3, or 04-03B and do not call R1 accepted production before those gates pass.
