@@ -1,0 +1,670 @@
+name: Phase 285 Exact Subject
+
+# Receipt boundary inherited from the reviewed R1d CI: this runs only the exact
+# pre-reviewed subject. Deliberate same-UID subject/tool tampering, Docker-daemon
+# abuse, transient replace-and-restore, and compromised GitHub-hosted
+# infrastructure are outside this narrow receipt. Pre/post inventories show
+# observed terminal stability, not continuous custody. This is not arbitrary
+# untrusted-candidate isolation, artifact attestation, native subject head_sha,
+# final Phase 285 closure, or external enforcement.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PHASE285_SUBJECT_REF: refs/heads/work/v179-phase285-convergence
+  PHASE285_SUBJECT_SHA: d229f90c4984fd882d4401fdb7923549fa7b0dbe
+  PHASE285_SUBJECT_TREE: 15dce0b2e157c7bfb9e71fee94d3818851a5751a
+  # Official v1.7.7 checksums.txt digest for the linux_amd64 release archive.
+  PHASE285_ACTIONLINT_ARCHIVE_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+
+jobs:
+  validate-subject:
+    name: validate the fixed exact subject
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Reject malformed or non-allowlisted inputs before checkout
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          PHASE285_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PHASE285_DISPATCH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$PHASE285_DEFAULT_BRANCH" = main
+          test "$PHASE285_DISPATCH_REF" = refs/heads/main
+          test "$PHASE285_SUBJECT_REF" = refs/heads/work/v179-phase285-convergence
+          test "$PHASE285_SUBJECT_SHA" = d229f90c4984fd882d4401fdb7923549fa7b0dbe
+          test "$PHASE285_SUBJECT_TREE" = 15dce0b2e157c7bfb9e71fee94d3818851a5751a
+          /usr/bin/git check-ref-format "$PHASE285_SUBJECT_REF"
+          printf 'phase285_exact_subject_inputs ref=%s sha=%s tree=%s passed=1\n' \
+            "$PHASE285_SUBJECT_REF" "$PHASE285_SUBJECT_SHA" "$PHASE285_SUBJECT_TREE"
+
+  validate-runner:
+    name: validate canonical runner surface
+    needs: validate-subject
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout immutable runner infrastructure
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+          lfs: false
+          submodules: false
+
+      - name: Prove canonical workflow and checker mutations
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          PHASE285_CONTROL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_CONTROL_SHA"
+          test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+          /usr/bin/python3 -I tools/phase285_exact_subject_parser.py --self-test
+          /usr/bin/python3 -I tools/phase285_exact_subject_parser.py \
+            check-runner-workflow .github/workflows/phase285-exact-subject.yml
+
+  subject-workflow-preflight:
+    name: lint the exact subject workflow before subject execution
+    needs: validate-runner
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout immutable runner infrastructure
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: control
+          clean: true
+          lfs: false
+          submodules: false
+
+      - name: Verify runner infrastructure and parser self-test
+        working-directory: control
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          CDPATH: ""
+          PHASE285_CONTROL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_CONTROL_SHA"
+          test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+          /usr/bin/python3 -I tools/phase285_exact_subject_parser.py --self-test
+          /usr/bin/python3 -I tools/phase285_exact_subject_parser.py \
+            check-runner-workflow .github/workflows/phase285-exact-subject.yml
+
+      - name: Checkout the exact subject ref without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: refs/heads/work/v179-phase285-convergence
+          fetch-depth: 1
+          persist-credentials: false
+          path: subject
+          clean: true
+          lfs: false
+          submodules: false
+
+      - name: Bind the detached checkout to the exact commit and tree
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          CDPATH: ""
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_NO_REPLACE_OBJECTS: "1"
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git cat-file -t "$PHASE285_SUBJECT_SHA")" = commit
+          test "$(/usr/bin/git rev-parse --verify "$PHASE285_SUBJECT_SHA^{commit}")" = "$PHASE285_SUBJECT_SHA"
+          /usr/bin/git checkout --detach "$PHASE285_SUBJECT_SHA"
+          test -z "$(/usr/bin/git symbolic-ref -q HEAD || true)"
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git rev-parse --verify 'HEAD^{tree}')" = "$PHASE285_SUBJECT_TREE"
+          test -z "$(/usr/bin/git for-each-ref --format='%(refname)' refs/replace/)"
+          grafts_path="$(/usr/bin/git rev-parse --git-path info/grafts)"
+          if test -e "$grafts_path"; then
+            test -f "$grafts_path"
+            test ! -L "$grafts_path"
+            test ! -s "$grafts_path"
+          fi
+          alternates_path="$(/usr/bin/git rev-parse --git-path objects/info/alternates)"
+          test ! -e "$alternates_path"
+          if /usr/bin/git config --local --get-regexp '^(replace\.|core\.replaceRefs)' >/dev/null; then
+            exit 3
+          fi
+          test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+          /usr/bin/git diff --no-ext-diff --quiet
+          /usr/bin/git diff --cached --no-ext-diff --quiet
+          printf 'phase285_preflight_subject_identity sha=%s tree=%s detached=1 clean=1 passed=1\n' \
+            "$PHASE285_SUBJECT_SHA" "$PHASE285_SUBJECT_TREE"
+
+      - name: Extract the exact subject monolith without executing it
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          CDPATH: ""
+          PHASE285_PREFLIGHT_EXTRACTED_SCRIPT: ${{ runner.temp }}/phase285-preflight-monolith.sh
+        run: |
+          set -euo pipefail
+          test ! -e "$PHASE285_PREFLIGHT_EXTRACTED_SCRIPT"
+          /usr/bin/python3 -I ../control/tools/phase285_exact_subject_parser.py extract \
+            .github/workflows/ci.yml "$PHASE285_PREFLIGHT_EXTRACTED_SCRIPT"
+          test -f "$PHASE285_PREFLIGHT_EXTRACTED_SCRIPT"
+          test ! -L "$PHASE285_PREFLIGHT_EXTRACTED_SCRIPT"
+          test "$(/usr/bin/stat -c '%a' "$PHASE285_PREFLIGHT_EXTRACTED_SCRIPT")" = 600
+
+      - name: Provision digest-bound actionlint and lint the exact subject workflow
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          CDPATH: ""
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_NO_REPLACE_OBJECTS: "1"
+          GIT_OPTIONAL_LOCKS: "0"
+          GOPATH: ${{ runner.temp }}/phase285-preflight-actionlint-gopath
+          PHASE285_ACTIONLINT_ARCHIVE: ${{ runner.temp }}/phase285-preflight-actionlint-1.7.7-linux-amd64.tar.gz
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$RUNNER_TEMP" = "$(/usr/bin/realpath -e "$RUNNER_TEMP")"
+          test "$GOPATH" = "$RUNNER_TEMP/phase285-preflight-actionlint-gopath"
+          test "$PHASE285_ACTIONLINT_ARCHIVE" = "$RUNNER_TEMP/phase285-preflight-actionlint-1.7.7-linux-amd64.tar.gz"
+          test "$PHASE285_ACTIONLINT_ARCHIVE_SHA256" = 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          test ! -e "$GOPATH"
+          test ! -e "$PHASE285_ACTIONLINT_ARCHIVE"
+          /usr/bin/install -d -m 0700 "$GOPATH" "$GOPATH/bin"
+          /usr/bin/curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --output "$PHASE285_ACTIONLINT_ARCHIVE" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          test -d "$GOPATH"
+          test ! -L "$GOPATH"
+          test "$(/usr/bin/realpath -e "$GOPATH")" = "$GOPATH"
+          test "$(/usr/bin/stat -c '%a' "$GOPATH")" = 700
+          test -d "$GOPATH/bin"
+          test ! -L "$GOPATH/bin"
+          test "$(/usr/bin/realpath -e "$GOPATH/bin")" = "$GOPATH/bin"
+          test "$(/usr/bin/stat -c '%a' "$GOPATH/bin")" = 700
+          test -f "$PHASE285_ACTIONLINT_ARCHIVE"
+          test ! -L "$PHASE285_ACTIONLINT_ARCHIVE"
+          test "$(/usr/bin/realpath -e "$PHASE285_ACTIONLINT_ARCHIVE")" = "$PHASE285_ACTIONLINT_ARCHIVE"
+          test "$(/usr/bin/stat -c '%a' "$PHASE285_ACTIONLINT_ARCHIVE")" = 600
+          actionlint_archive_provisioned="$(/usr/bin/sha256sum "$PHASE285_ACTIONLINT_ARCHIVE" | /usr/bin/awk '{print $1}')"
+          test "$actionlint_archive_provisioned" = "$PHASE285_ACTIONLINT_ARCHIVE_SHA256"
+          /usr/bin/tar --extract --gzip --file "$PHASE285_ACTIONLINT_ARCHIVE" \
+            --directory "$GOPATH/bin" --no-same-owner --no-same-permissions -- actionlint
+          /usr/bin/chmod 0500 "$GOPATH/bin/actionlint"
+          actionlint_binary_provisioned="$(/usr/bin/sha256sum "$GOPATH/bin/actionlint" | /usr/bin/awk '{print $1}')"
+          subject_workflow_path="$PWD/.github/workflows/ci.yml"
+          subject_workflow_blob="$(/usr/bin/git rev-parse "$PHASE285_SUBJECT_SHA:.github/workflows/ci.yml")"
+          subject_workflow_sha256="$(/usr/bin/sha256sum "$subject_workflow_path" | /usr/bin/awk '{print $1}')"
+          readonly actionlint_archive_provisioned actionlint_binary_provisioned
+          readonly subject_workflow_path subject_workflow_blob subject_workflow_sha256
+
+          verify_preflight_inventory() {
+            local alternates_path grafts_path observed_archive_sha observed_binary_sha
+            local observed_workflow_sha
+            test "$RUNNER_TEMP" = "$(/usr/bin/realpath -e "$RUNNER_TEMP")"
+            test "$GOPATH" = "$RUNNER_TEMP/phase285-preflight-actionlint-gopath"
+            test "$(/usr/bin/dirname "$GOPATH")" = "$RUNNER_TEMP"
+            test -d "$GOPATH"
+            test ! -L "$GOPATH"
+            test "$(/usr/bin/realpath -e "$GOPATH")" = "$GOPATH"
+            test "$(/usr/bin/stat -c '%a' "$GOPATH")" = 700
+            test -d "$GOPATH/bin"
+            test ! -L "$GOPATH/bin"
+            test "$(/usr/bin/dirname "$GOPATH/bin")" = "$GOPATH"
+            test "$(/usr/bin/realpath -e "$GOPATH/bin")" = "$GOPATH/bin"
+            test "$(/usr/bin/stat -c '%a' "$GOPATH/bin")" = 700
+            test "$PHASE285_ACTIONLINT_ARCHIVE" = "$RUNNER_TEMP/phase285-preflight-actionlint-1.7.7-linux-amd64.tar.gz"
+            test "$(/usr/bin/dirname "$PHASE285_ACTIONLINT_ARCHIVE")" = "$RUNNER_TEMP"
+            test -f "$PHASE285_ACTIONLINT_ARCHIVE"
+            test ! -L "$PHASE285_ACTIONLINT_ARCHIVE"
+            test "$(/usr/bin/realpath -e "$PHASE285_ACTIONLINT_ARCHIVE")" = "$PHASE285_ACTIONLINT_ARCHIVE"
+            test "$(/usr/bin/stat -c '%a' "$PHASE285_ACTIONLINT_ARCHIVE")" = 600
+            observed_archive_sha="$(/usr/bin/sha256sum "$PHASE285_ACTIONLINT_ARCHIVE" | /usr/bin/awk '{print $1}')"
+            test "$observed_archive_sha" = "$PHASE285_ACTIONLINT_ARCHIVE_SHA256"
+            test "$observed_archive_sha" = "$actionlint_archive_provisioned"
+            test -f "$GOPATH/bin/actionlint"
+            test ! -L "$GOPATH/bin/actionlint"
+            test -x "$GOPATH/bin/actionlint"
+            test "$(/usr/bin/dirname "$GOPATH/bin/actionlint")" = "$GOPATH/bin"
+            test "$(/usr/bin/realpath -e "$GOPATH/bin/actionlint")" = "$GOPATH/bin/actionlint"
+            test "$(/usr/bin/stat -c '%a' "$GOPATH/bin/actionlint")" = 500
+            observed_binary_sha="$(/usr/bin/sha256sum "$GOPATH/bin/actionlint" | /usr/bin/awk '{print $1}')"
+            test "$observed_binary_sha" = "$actionlint_binary_provisioned"
+            test "$(command -v "$GOPATH/bin/actionlint")" = "$GOPATH/bin/actionlint"
+            test "$subject_workflow_path" = "$PWD/.github/workflows/ci.yml"
+            test -f "$subject_workflow_path"
+            test ! -L "$subject_workflow_path"
+            test "$(/usr/bin/realpath -e "$subject_workflow_path")" = "$subject_workflow_path"
+            test "$(/usr/bin/stat -c '%a' "$subject_workflow_path")" = 644
+            test "$(/usr/bin/git ls-tree "$PHASE285_SUBJECT_SHA" -- .github/workflows/ci.yml | /usr/bin/awk '{print $1}')" = 100644
+            test "$(/usr/bin/git hash-object "$subject_workflow_path")" = "$subject_workflow_blob"
+            test "$(/usr/bin/git rev-parse "$PHASE285_SUBJECT_SHA:.github/workflows/ci.yml")" = "$subject_workflow_blob"
+            observed_workflow_sha="$(/usr/bin/sha256sum "$subject_workflow_path" | /usr/bin/awk '{print $1}')"
+            test "$observed_workflow_sha" = "$subject_workflow_sha256"
+            test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+            test "$(/usr/bin/git rev-parse --verify 'HEAD^{tree}')" = "$PHASE285_SUBJECT_TREE"
+            test -z "$(/usr/bin/git symbolic-ref -q HEAD || true)"
+            test -z "$(/usr/bin/git for-each-ref --format='%(refname)' refs/replace/)"
+            grafts_path="$(/usr/bin/git rev-parse --git-path info/grafts)"
+            if test -e "$grafts_path"; then
+              test -f "$grafts_path"
+              test ! -L "$grafts_path"
+              test ! -s "$grafts_path"
+            fi
+            alternates_path="$(/usr/bin/git rev-parse --git-path objects/info/alternates)"
+            test ! -e "$alternates_path"
+            if /usr/bin/git config --local --get-regexp '^(replace\.|core\.replaceRefs)' >/dev/null; then
+              return 3
+            fi
+            test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+            /usr/bin/git diff --no-ext-diff --quiet
+            /usr/bin/git diff --cached --no-ext-diff --quiet
+          }
+          verify_preflight_binding() {
+            verify_preflight_inventory
+            test "$("$GOPATH/bin/actionlint" -version | /usr/bin/sed -n '1p')" = 1.7.7
+            verify_preflight_inventory
+          }
+          readonly -f verify_preflight_inventory verify_preflight_binding
+          verify_preflight_binding
+          "$GOPATH/bin/actionlint" -shellcheck= "$subject_workflow_path"
+          verify_preflight_binding
+          printf 'phase285_subject_workflow_preflight archive_sha256=%s binary_sha256=%s workflow_blob=%s workflow_sha256=%s terminal_stability=1 continuous_custody=0 passed=1\n' \
+            "$actionlint_archive_provisioned" "$actionlint_binary_provisioned" \
+            "$subject_workflow_blob" "$subject_workflow_sha256"
+
+  workspace-tests:
+    name: exact-subject workspace tests
+    needs: subject-workflow-preflight
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the exact subject ref without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: refs/heads/work/v179-phase285-convergence
+          fetch-depth: 1
+          persist-credentials: false
+          path: subject
+          clean: true
+          lfs: false
+          submodules: false
+
+      - name: Bind the detached checkout to the exact commit and tree
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_NO_REPLACE_OBJECTS: "1"
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git cat-file -t "$PHASE285_SUBJECT_SHA")" = commit
+          test "$(/usr/bin/git rev-parse --verify "$PHASE285_SUBJECT_SHA^{commit}")" = "$PHASE285_SUBJECT_SHA"
+          /usr/bin/git checkout --detach "$PHASE285_SUBJECT_SHA"
+          if /usr/bin/git symbolic-ref -q HEAD >/dev/null; then
+            echo "subject checkout is not detached" >&2
+            exit 3
+          fi
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git rev-parse --verify 'HEAD^{tree}')" = "$PHASE285_SUBJECT_TREE"
+          test -z "$(/usr/bin/git for-each-ref --format='%(refname)' refs/replace/)"
+          grafts_path="$(/usr/bin/git rev-parse --git-path info/grafts)"
+          if test -e "$grafts_path"; then
+            test -f "$grafts_path"
+            test ! -L "$grafts_path"
+            test ! -s "$grafts_path"
+          fi
+          alternates_path="$(/usr/bin/git rev-parse --git-path objects/info/alternates)"
+          test ! -e "$alternates_path"
+          if /usr/bin/git config --local --get-regexp '^(replace\.|core\.replaceRefs)' >/dev/null; then
+            echo "subject checkout contains a replace-object configuration" >&2
+            exit 3
+          fi
+          test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+          /usr/bin/git diff --no-ext-diff --quiet
+          /usr/bin/git diff --cached --no-ext-diff --quiet
+          printf 'phase285_exact_subject_identity sha=%s tree=%s detached=1 clean=1 replace=0 graft=0 passed=1\n' \
+            "$PHASE285_SUBJECT_SHA" "$PHASE285_SUBJECT_TREE"
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+
+      - name: Bind the exact Rust release and compiler sources
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          test "$(rustc --version --verbose | /usr/bin/awk '/^release:/ {print $2}')" = 1.97.1
+          test "$(rustc --version --verbose | /usr/bin/awk '/^commit-hash:/ {print $2}')" = 8bab26f4f68e0e26f0bb7960be334d5b520ea452
+          test "$(cargo --version --verbose | /usr/bin/awk '/^release:/ {print $2}')" = 1.97.1
+          test "$(cargo --version --verbose | /usr/bin/awk '/^commit-hash:/ {print $2}')" = c980f4866141969fab6254a680546a277789d6f0
+
+      - name: Prepare a fresh job-local Cargo home
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          CARGO_HOME: ${{ runner.temp }}/phase285-workspace-cargo-home
+        run: |
+          set -euo pipefail
+          test ! -e "$CARGO_HOME"
+          /usr/bin/install -d -m 0700 "$CARGO_HOME"
+          test "$(/usr/bin/stat -c '%a' "$CARGO_HOME")" = 700
+
+      - name: Fetch lockfile-addressed Cargo sources for offline execution
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          CARGO_HOME: ${{ runner.temp }}/phase285-workspace-cargo-home
+        run: cargo fetch --locked
+
+      - name: Run locked workspace tests
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          CARGO_HOME: ${{ runner.temp }}/phase285-workspace-cargo-home
+          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-exact-workspace-target
+          CARGO_INCREMENTAL: "0"
+        run: cargo test --workspace --locked --offline
+
+      - name: Audit terminal workspace subject identity and cleanliness
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_NO_REPLACE_OBJECTS: "1"
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git rev-parse --verify 'HEAD^{tree}')" = "$PHASE285_SUBJECT_TREE"
+          test -z "$(/usr/bin/git symbolic-ref -q HEAD || true)"
+          test -z "$(/usr/bin/git for-each-ref --format='%(refname)' refs/replace/)"
+          grafts_path="$(/usr/bin/git rev-parse --git-path info/grafts)"
+          if test -e "$grafts_path"; then
+            test -f "$grafts_path"
+            test ! -L "$grafts_path"
+            test ! -s "$grafts_path"
+          fi
+          alternates_path="$(/usr/bin/git rev-parse --git-path objects/info/alternates)"
+          test ! -e "$alternates_path"
+          if /usr/bin/git config --local --get-regexp '^(replace\.|core\.replaceRefs)' >/dev/null; then
+            exit 3
+          fi
+          test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+          /usr/bin/git diff --no-ext-diff --quiet
+          /usr/bin/git diff --cached --no-ext-diff --quiet
+          printf 'phase285_workspace_terminal_inventory sha=%s tree=%s detached=1 clean=1 continuous_custody=0 passed=1\n' \
+            "$PHASE285_SUBJECT_SHA" "$PHASE285_SUBJECT_TREE"
+
+  assurance-monolith:
+    name: exact-subject assurance monolith
+    needs: subject-workflow-preflight
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout immutable runner infrastructure
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: control
+          clean: true
+          lfs: false
+          submodules: false
+
+      - name: Verify runner infrastructure and parser self-test
+        working-directory: control
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          PHASE285_CONTROL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_CONTROL_SHA"
+          test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+          /usr/bin/python3 -I tools/phase285_exact_subject_parser.py --self-test
+          /usr/bin/python3 -I tools/phase285_exact_subject_parser.py \
+            check-runner-workflow .github/workflows/phase285-exact-subject.yml
+
+      - name: Checkout the exact subject ref without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: refs/heads/work/v179-phase285-convergence
+          fetch-depth: 1
+          persist-credentials: false
+          path: subject
+          clean: true
+          lfs: false
+          submodules: false
+
+      - name: Bind the detached checkout to the exact commit and tree
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_NO_REPLACE_OBJECTS: "1"
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git cat-file -t "$PHASE285_SUBJECT_SHA")" = commit
+          test "$(/usr/bin/git rev-parse --verify "$PHASE285_SUBJECT_SHA^{commit}")" = "$PHASE285_SUBJECT_SHA"
+          /usr/bin/git checkout --detach "$PHASE285_SUBJECT_SHA"
+          if /usr/bin/git symbolic-ref -q HEAD >/dev/null; then
+            echo "subject checkout is not detached" >&2
+            exit 3
+          fi
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git rev-parse --verify 'HEAD^{tree}')" = "$PHASE285_SUBJECT_TREE"
+          test -z "$(/usr/bin/git for-each-ref --format='%(refname)' refs/replace/)"
+          grafts_path="$(/usr/bin/git rev-parse --git-path info/grafts)"
+          if test -e "$grafts_path"; then
+            test -f "$grafts_path"
+            test ! -L "$grafts_path"
+            test ! -s "$grafts_path"
+          fi
+          alternates_path="$(/usr/bin/git rev-parse --git-path objects/info/alternates)"
+          test ! -e "$alternates_path"
+          if /usr/bin/git config --local --get-regexp '^(replace\.|core\.replaceRefs)' >/dev/null; then
+            echo "subject checkout contains a replace-object configuration" >&2
+            exit 3
+          fi
+          test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+          /usr/bin/git diff --no-ext-diff --quiet
+          /usr/bin/git diff --cached --no-ext-diff --quiet
+          printf 'phase285_exact_subject_identity sha=%s tree=%s detached=1 clean=1 replace=0 graft=0 passed=1\n' \
+            "$PHASE285_SUBJECT_SHA" "$PHASE285_SUBJECT_TREE"
+
+      - name: Extract and hash the subject-owned monolith without evaluating YAML
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          PHASE285_EXTRACTED_SCRIPT: ${{ runner.temp }}/phase285-exact-subject-monolith.sh
+        run: |
+          set -euo pipefail
+          test ! -e "$PHASE285_EXTRACTED_SCRIPT"
+          /usr/bin/python3 -I ../control/tools/phase285_exact_subject_parser.py extract \
+            .github/workflows/ci.yml "$PHASE285_EXTRACTED_SCRIPT"
+          test -f "$PHASE285_EXTRACTED_SCRIPT"
+          test ! -L "$PHASE285_EXTRACTED_SCRIPT"
+          test "$(/usr/bin/stat -c '%a' "$PHASE285_EXTRACTED_SCRIPT")" = 600
+          printf 'phase285_exact_subject_extracted sha256=%s bytes=%s\n' \
+            "$(/usr/bin/sha256sum "$PHASE285_EXTRACTED_SCRIPT" | /usr/bin/awk '{print $1}')" \
+            "$(/usr/bin/wc -c < "$PHASE285_EXTRACTED_SCRIPT" | /usr/bin/tr -d ' ')"
+
+      - name: Install Rust 1.97.1 with Clippy
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+          components: clippy
+
+      - name: Bind the exact Rust release and compiler sources
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          test "$(rustc --version --verbose | /usr/bin/awk '/^release:/ {print $2}')" = 1.97.1
+          test "$(rustc --version --verbose | /usr/bin/awk '/^commit-hash:/ {print $2}')" = 8bab26f4f68e0e26f0bb7960be334d5b520ea452
+          test "$(cargo --version --verbose | /usr/bin/awk '/^release:/ {print $2}')" = 1.97.1
+          test "$(cargo --version --verbose | /usr/bin/awk '/^commit-hash:/ {print $2}')" = c980f4866141969fab6254a680546a277789d6f0
+
+      - name: Prepare a fresh job-local Cargo home
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          CARGO_HOME: ${{ runner.temp }}/phase285-monolith-cargo-home
+        run: |
+          set -euo pipefail
+          test ! -e "$CARGO_HOME"
+          /usr/bin/install -d -m 0700 "$CARGO_HOME"
+          test "$(/usr/bin/stat -c '%a' "$CARGO_HOME")" = 700
+
+      - name: Fetch lockfile-addressed Cargo sources for offline execution
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          CARGO_HOME: ${{ runner.temp }}/phase285-monolith-cargo-home
+        run: cargo fetch --locked
+
+      - name: Provision digest-bound actionlint and execute the exact monolith
+        working-directory: subject
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          CARGO_HOME: ${{ runner.temp }}/phase285-monolith-cargo-home
+          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-assurance-target
+          CARGO_INCREMENTAL: "0"
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_NO_REPLACE_OBJECTS: "1"
+          GIT_OPTIONAL_LOCKS: "0"
+          GOPATH: ${{ runner.temp }}/phase285-actionlint-gopath
+          PHASE285_ACTIONLINT_ARCHIVE: ${{ runner.temp }}/phase285-actionlint-1.7.7-linux-amd64.tar.gz
+          PHASE285_EXTRACTED_SCRIPT: ${{ runner.temp }}/phase285-exact-subject-monolith.sh
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$RUNNER_TEMP" = "$(/usr/bin/realpath -e "$RUNNER_TEMP")"
+          test "$GOPATH" = "$RUNNER_TEMP/phase285-actionlint-gopath"
+          test "$PHASE285_ACTIONLINT_ARCHIVE" = "$RUNNER_TEMP/phase285-actionlint-1.7.7-linux-amd64.tar.gz"
+          test "$PHASE285_ACTIONLINT_ARCHIVE_SHA256" = 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          test ! -e "$GOPATH"
+          test ! -e "$PHASE285_ACTIONLINT_ARCHIVE"
+          /usr/bin/install -d -m 0700 "$GOPATH" "$GOPATH/bin"
+          /usr/bin/curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --output "$PHASE285_ACTIONLINT_ARCHIVE" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          test -d "$GOPATH"
+          test ! -L "$GOPATH"
+          test "$(/usr/bin/realpath -e "$GOPATH")" = "$GOPATH"
+          test "$(/usr/bin/stat -c '%a' "$GOPATH")" = 700
+          test -d "$GOPATH/bin"
+          test ! -L "$GOPATH/bin"
+          test "$(/usr/bin/realpath -e "$GOPATH/bin")" = "$GOPATH/bin"
+          test "$(/usr/bin/stat -c '%a' "$GOPATH/bin")" = 700
+          test -f "$PHASE285_ACTIONLINT_ARCHIVE"
+          test ! -L "$PHASE285_ACTIONLINT_ARCHIVE"
+          test "$(/usr/bin/realpath -e "$PHASE285_ACTIONLINT_ARCHIVE")" = "$PHASE285_ACTIONLINT_ARCHIVE"
+          test "$(/usr/bin/stat -c '%a' "$PHASE285_ACTIONLINT_ARCHIVE")" = 600
+          actionlint_archive_provisioned="$(/usr/bin/sha256sum "$PHASE285_ACTIONLINT_ARCHIVE" | /usr/bin/awk '{print $1}')"
+          test "$actionlint_archive_provisioned" = "$PHASE285_ACTIONLINT_ARCHIVE_SHA256"
+          /usr/bin/tar --extract --gzip --file "$PHASE285_ACTIONLINT_ARCHIVE" \
+            --directory "$GOPATH/bin" --no-same-owner --no-same-permissions -- actionlint
+          /usr/bin/chmod 0500 "$GOPATH/bin/actionlint"
+          actionlint_binary_provisioned="$(/usr/bin/sha256sum "$GOPATH/bin/actionlint" | /usr/bin/awk '{print $1}')"
+          readonly actionlint_archive_provisioned actionlint_binary_provisioned
+
+          verify_actionlint_files() {
+            local observed_archive_sha observed_binary_sha
+            test "$RUNNER_TEMP" = "$(/usr/bin/realpath -e "$RUNNER_TEMP")"
+            test "$GOPATH" = "$RUNNER_TEMP/phase285-actionlint-gopath"
+            test "$(/usr/bin/dirname "$GOPATH")" = "$RUNNER_TEMP"
+            test -d "$GOPATH"
+            test ! -L "$GOPATH"
+            test "$(/usr/bin/realpath -e "$GOPATH")" = "$GOPATH"
+            test "$(/usr/bin/stat -c '%a' "$GOPATH")" = 700
+            test -d "$GOPATH/bin"
+            test ! -L "$GOPATH/bin"
+            test "$(/usr/bin/dirname "$GOPATH/bin")" = "$GOPATH"
+            test "$(/usr/bin/realpath -e "$GOPATH/bin")" = "$GOPATH/bin"
+            test "$(/usr/bin/stat -c '%a' "$GOPATH/bin")" = 700
+            test "$PHASE285_ACTIONLINT_ARCHIVE" = "$RUNNER_TEMP/phase285-actionlint-1.7.7-linux-amd64.tar.gz"
+            test "$(/usr/bin/dirname "$PHASE285_ACTIONLINT_ARCHIVE")" = "$RUNNER_TEMP"
+            test -f "$PHASE285_ACTIONLINT_ARCHIVE"
+            test ! -L "$PHASE285_ACTIONLINT_ARCHIVE"
+            test "$(/usr/bin/realpath -e "$PHASE285_ACTIONLINT_ARCHIVE")" = "$PHASE285_ACTIONLINT_ARCHIVE"
+            test "$(/usr/bin/stat -c '%a' "$PHASE285_ACTIONLINT_ARCHIVE")" = 600
+            observed_archive_sha="$(/usr/bin/sha256sum "$PHASE285_ACTIONLINT_ARCHIVE" | /usr/bin/awk '{print $1}')"
+            test "$observed_archive_sha" = "$PHASE285_ACTIONLINT_ARCHIVE_SHA256"
+            test "$observed_archive_sha" = "$actionlint_archive_provisioned"
+            test -f "$GOPATH/bin/actionlint"
+            test ! -L "$GOPATH/bin/actionlint"
+            test -x "$GOPATH/bin/actionlint"
+            test "$(/usr/bin/dirname "$GOPATH/bin/actionlint")" = "$GOPATH/bin"
+            test "$(/usr/bin/realpath -e "$GOPATH/bin/actionlint")" = "$GOPATH/bin/actionlint"
+            test "$(/usr/bin/stat -c '%a' "$GOPATH/bin/actionlint")" = 500
+            observed_binary_sha="$(/usr/bin/sha256sum "$GOPATH/bin/actionlint" | /usr/bin/awk '{print $1}')"
+            test "$observed_binary_sha" = "$actionlint_binary_provisioned"
+            test "$(go env GOPATH)/bin/actionlint" = "$GOPATH/bin/actionlint"
+            test "$(command -v "$GOPATH/bin/actionlint")" = "$GOPATH/bin/actionlint"
+          }
+          verify_actionlint_binding() {
+            verify_actionlint_files
+            test "$("$GOPATH/bin/actionlint" -version | /usr/bin/sed -n '1p')" = 1.7.7
+            verify_actionlint_files
+          }
+          verify_terminal_subject() {
+            local alternates_path grafts_path
+            test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+            test "$(/usr/bin/git rev-parse --verify 'HEAD^{tree}')" = "$PHASE285_SUBJECT_TREE"
+            test -z "$(/usr/bin/git symbolic-ref -q HEAD || true)"
+            test -z "$(/usr/bin/git for-each-ref --format='%(refname)' refs/replace/)"
+            grafts_path="$(/usr/bin/git rev-parse --git-path info/grafts)"
+            if test -e "$grafts_path"; then
+              test -f "$grafts_path"
+              test ! -L "$grafts_path"
+              test ! -s "$grafts_path"
+            fi
+            alternates_path="$(/usr/bin/git rev-parse --git-path objects/info/alternates)"
+            test ! -e "$alternates_path"
+            if /usr/bin/git config --local --get-regexp '^(replace\.|core\.replaceRefs)' >/dev/null; then
+              return 3
+            fi
+            test -z "$(/usr/bin/git status --porcelain=v1 --untracked-files=all)"
+            /usr/bin/git diff --no-ext-diff --quiet
+            /usr/bin/git diff --cached --no-ext-diff --quiet
+          }
+          readonly -f verify_actionlint_files verify_actionlint_binding verify_terminal_subject
+          export GITHUB_SHA="$PHASE285_SUBJECT_SHA"
+          test "$GITHUB_SHA" = "$PHASE285_SUBJECT_SHA"
+          test "$(/usr/bin/git rev-parse --verify HEAD)" = "$PHASE285_SUBJECT_SHA"
+          verify_actionlint_binding
+          /bin/bash --noprofile --norc -e -o pipefail "$PHASE285_EXTRACTED_SCRIPT"
+          verify_actionlint_binding
+          verify_terminal_subject
+          printf 'phase285_monolith_terminal_inventory archive_sha256=%s binary_sha256=%s sha=%s tree=%s clean=1 continuous_custody=0 passed=1\n' \
+            "$actionlint_archive_provisioned" "$actionlint_binary_provisioned" \
+            "$PHASE285_SUBJECT_SHA" "$PHASE285_SUBJECT_TREE"
