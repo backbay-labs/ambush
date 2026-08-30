@@ -3802,14 +3802,15 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
                     observed_digest: state.digest()?,
                 });
             }
-            if state.fencing_counter < current.fencing_counter {
+            if state.fencing_counter != current.fencing_counter {
                 return Err(GraphStoreError::InvalidState {
-                    reason: "compare-and-swap candidate fencing counter regressed".to_string(),
+                    reason: "generic CAS cannot replace the store-owned fencing counter"
+                        .to_string(),
                 });
             }
-            if state.logical_time_high_water < current.logical_time_high_water {
+            if state.logical_time_high_water != current.logical_time_high_water {
                 return Err(GraphStoreError::InvalidState {
-                    reason: "compare-and-swap candidate logical time high-water regressed"
+                    reason: "generic CAS cannot replace the store-owned logical time high-water"
                         .to_string(),
                 });
             }
@@ -3820,8 +3821,6 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
             }
             state.validate_with_limits(&self.limits)?;
             current.graph = state.graph;
-            current.fencing_counter = state.fencing_counter;
-            current.logical_time_high_water = state.logical_time_high_water;
             Ok(StateMutation {
                 value: (),
                 changed: true,
@@ -6662,14 +6661,15 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
                     observed_digest: state.digest()?,
                 });
             }
-            if state.fencing_counter < current.fencing_counter {
+            if state.fencing_counter != current.fencing_counter {
                 return Err(GraphStoreError::InvalidState {
-                    reason: "compare-and-swap candidate fencing counter regressed".to_string(),
+                    reason: "generic CAS cannot replace the store-owned fencing counter"
+                        .to_string(),
                 });
             }
-            if state.logical_time_high_water < current.logical_time_high_water {
+            if state.logical_time_high_water != current.logical_time_high_water {
                 return Err(GraphStoreError::InvalidState {
-                    reason: "compare-and-swap candidate logical time high-water regressed"
+                    reason: "generic CAS cannot replace the store-owned logical time high-water"
                         .to_string(),
                 });
             }
@@ -6680,8 +6680,6 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
             }
             state.validate_with_limits(&self.limits)?;
             current.graph = state.graph.clone();
-            current.fencing_counter = state.fencing_counter;
-            current.logical_time_high_water = state.logical_time_high_water;
             Ok(StateMutation {
                 value: (),
                 changed: true,
@@ -7527,21 +7525,68 @@ mod tests {
     }
 
     #[test]
-    fn cas_rejects_fencing_counter_regression_without_mutation() {
+    fn cas_rejects_store_owned_counter_changes_without_mutation() {
+        fn assert_rejected(store: &dyn HypothesisGraphStore) {
+            store
+                .claim_task(request(1, "cas-counters"), GraphLogicalTime::new(100), 20)
+                .unwrap();
+            let before = store.snapshot().unwrap();
+
+            for fencing_counter in [before.state.fencing_counter.saturating_sub(1), u64::MAX] {
+                let mut candidate = before.state.clone();
+                candidate.graph.version = candidate.graph.version.saturating_add(1);
+                candidate.fencing_counter = fencing_counter;
+                assert!(matches!(
+                    store.compare_and_swap(&before.revision, candidate),
+                    Err(GraphStoreError::InvalidState { reason })
+                        if reason.contains("store-owned fencing counter")
+                ));
+                assert_eq!(store.snapshot().unwrap(), before);
+            }
+
+            let mut future_clock = before.state.clone();
+            future_clock.graph.version = future_clock.graph.version.saturating_add(1);
+            future_clock.logical_time_high_water = GraphLogicalTime::new(1_000_000);
+            assert!(matches!(
+                store.compare_and_swap(&before.revision, future_clock),
+                Err(GraphStoreError::InvalidState { reason })
+                    if reason.contains("store-owned logical time high-water")
+            ));
+            assert_eq!(store.snapshot().unwrap(), before);
+        }
+
         let store = MemoryHypothesisGraphStore::new(graph(), signer(18)).unwrap();
+        assert_rejected(&store);
+
+        let path = temp_dir("cas-store-owned-counters");
+        let file = FileHypothesisGraphStore::new(&path, graph(), signer(19)).unwrap();
+        assert_rejected(&file);
+        drop(file);
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn generic_cas_still_updates_graph_without_changing_store_owned_counters() {
+        let store = MemoryHypothesisGraphStore::new(graph(), signer(20)).unwrap();
         store
-            .claim_task(request(1, "cas-fence"), GraphLogicalTime::new(100), 20)
+            .claim_task(request(1, "cas-graph-only"), GraphLogicalTime::new(100), 20)
             .unwrap();
         let before = store.snapshot().unwrap();
         let mut candidate = before.state.clone();
         candidate.graph.version = candidate.graph.version.saturating_add(1);
-        candidate.fencing_counter = before.state.fencing_counter.saturating_sub(1);
-        assert!(matches!(
-            store.compare_and_swap(&before.revision, candidate),
-            Err(GraphStoreError::InvalidState { reason })
-                if reason.contains("fencing counter regressed")
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
+        let committed = store.compare_and_swap(&before.revision, candidate).unwrap();
+        assert_eq!(
+            committed.state.fencing_counter,
+            before.state.fencing_counter
+        );
+        assert_eq!(
+            committed.state.logical_time_high_water,
+            before.state.logical_time_high_water
+        );
+        assert_eq!(
+            committed.state.graph.version,
+            before.state.graph.version.saturating_add(1)
+        );
     }
 
     #[test]
