@@ -6707,11 +6707,28 @@ def terminate_boundary_process(process):
         process.kill()
         process.wait(timeout=5)
 
-def run_boundary_command(receipt, arguments, timeout_seconds, receipt_started_ns):
-    environment = base_environment.copy()
+def boundary_environment(parent_environment):
+    environment = parent_environment.copy()
     for name in list(environment):
         if name in {"RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"} or name.startswith("SCCACHE_"):
             environment.pop(name, None)
+    # The parent CI environment deliberately enables Cargo color globally.
+    # This parser consumes a mixed JSON/progress stream and rejects unknown
+    # non-JSON lines, so ANSI decoration would turn Cargo's documented
+    # `Compiling`/`Checking`/`Finished` progress into a false unknown token on
+    # a cold cache. Bind the child producer to undecorated output instead of
+    # weakening the parser to strip arbitrary terminal control sequences.
+    environment["CARGO_TERM_COLOR"] = "never"
+    return environment
+
+hostile_color_environment = base_environment.copy()
+hostile_color_environment["CARGO_TERM_COLOR"] = "always"
+if boundary_environment(hostile_color_environment).get("CARGO_TERM_COLOR") != "never":
+    raise SystemExit("deadline boundary environment retained hostile Cargo color")
+print("deadline_boundary_environment_self_test hostile_cargo_color=always child_cargo_color=never")
+
+def run_boundary_command(receipt, arguments, timeout_seconds, receipt_started_ns):
+    environment = boundary_environment(base_environment)
     command = ["cargo", *arguments, "--message-format=json"]
     print(
         f"deadline_boundary_progress receipt={receipt} phase=compile state=start timeout_seconds={timeout_seconds} reason=none",

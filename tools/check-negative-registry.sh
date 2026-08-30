@@ -1174,7 +1174,7 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "7ad7f702d39e1a74dd746f802889f85acdc6618309e292e718acb6e0f0769f72",
     "Cargo.lock": "4a899e087f951de34c86b177c3c34658e15d75d55b3ce7ba307106770eb39903",
-    ".github/workflows/ci.yml": "db631194b2a0ff4daf727cfaabce56c0453ff3c8f7ae917c142dbe46b2a2ff8b",
+    ".github/workflows/ci.yml": "0f7584f2a1aedc67de38cb907bd3f2a0683163cf1e2cc647b815862a34d934f8",
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
