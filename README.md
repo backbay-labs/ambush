@@ -29,6 +29,7 @@
   <a href="#see-it-hunt">See it hunt</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;
   <a href="#the-swarm-is-the-runtime">The swarm</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;
   <a href="#the-colony">The Colony</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;
+  <a href="#bring-your-own-agent">BYO agent</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;
   <a href="#the-swarm-evolves-too">Evolution</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;
   <a href="#why-you-can-let-it-act">Why let it act</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;
   <a href="#prove-it-yourself">Prove it</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;
@@ -133,9 +134,9 @@ Depth in [docs/PHEROMONES.md](docs/PHEROMONES.md).
   </picture>
 </p>
 
-Eight agents in one process, sharing one dispatcher, one substrate, and one health model.
-No agent commands another. Only Tom can authorize a destructive action, and only against
-a signed receipt.
+Today's build compiles eight agents into one process, sharing one dispatcher, one
+substrate, and one health model. No agent commands another. Only Tom can authorize a
+destructive action, and only against a signed receipt.
 
 <details>
 <summary><b>The eight agents, their lanes, and what turns each one on</b></summary>
@@ -152,6 +153,47 @@ a signed receipt.
 | **Kitten** | Evolution | Mutation cycles, population and lineage, ranking, proof and canary handoff | `evolution.enabled` |
 
 </details>
+
+## Bring your own agent
+
+The eight roles ship in Rust, but nothing about the substrate requires that. An agent is
+a small contract in [`swarm-core`](crates/swarm-core/src/agent.rs):
+
+```rust
+#[async_trait]
+pub trait SwarmAgent: Send + Sync {
+    fn identity(&self) -> &VerifyingKey;   // an admitted Ed25519 key
+    fn id(&self) -> &AgentId;
+    fn role(&self) -> AgentRole;
+    async fn tick(&mut self, env: &SwarmEnvironment) -> Result<Vec<SwarmAction>, SwarmError>;
+    fn health(&self) -> AgentHealth;
+}
+```
+
+Nothing there says *detector*, *fast*, or *deterministic*. And because agents never call
+each other, a new one does not have to speak anyone else's protocol: it reads the
+substrate and returns signed observations. That is the entire integration surface.
+
+Which is what makes a model-backed agent — Claude, Codex, Hermes, or your own — a
+tractable thing to admit into a runtime that can isolate production hosts:
+
+- **It deposits evidence, not alerts.** `DepositPheromone` is one signed source among many.
+- **It cannot escalate alone.** The distinct-source rule that stops a noisy detector from
+  paging you is the same rule that stops a confident hallucination.
+- **It cannot authorize.** The strongest action available to any agent is
+  `RequestResponse`. Only Tom issues receipts, in deterministic Rust.
+- **It cannot widen the hot path.** Whisker is the only role on the critical lane, so a
+  four-second model call runs on an async lane or not at all.
+- **It cannot take the runtime down.** A tick that panics is caught at the agent boundary
+  and attributed to a role.
+
+The pattern holds because the swarm never trusts any single agent. That property was built
+to keep one detector from paging you at 3am. It turns out to be the containment a
+probabilistic agent needs.
+
+> **Not shipped yet.** Agents are compiled in. There is no out-of-process host, no wire
+> protocol, and `AgentRole` is a closed enum, so a third-party agent claims one of the
+> eight roles today. The contract is the design; the loader is the work. Tracked below.
 
 ## The swarm evolves too
 
@@ -517,6 +559,10 @@ gets harder to evade every time someone tries. Monthly cadence, targeting April
 - **Machine-checked evolution.** Z3 and Lean 4 gates on the promotion path, so a
   promoted detector carries a proof of its safety invariants rather than a
   passing test run.
+- **Open agent protocol.** An out-of-process agent host and a published deposit
+  contract, so an agent written in any language, or backed by a model, joins the swarm
+  as an admitted identity over the wire instead of being compiled into the runtime. The
+  trust argument does not change: it deposits evidence, and it still cannot authorize.
 - **Federated colonies.** Cross-operator pheromone and receipt exchange, where
   each operator activates locally and shares evidence rather than control.
 - **Provenance-grade memory.** Four parallel graphs, temporal, causal, entity, and
