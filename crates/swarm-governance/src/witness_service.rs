@@ -1080,9 +1080,7 @@ fn domain_separated_bytes(domain: &[u8], canonical: &[u8]) -> ProtocolResult<Vec
     Ok(material)
 }
 
-pub mod witness_candidate_verifier {
-    include!("witness_candidate_verifier.rs");
-}
+pub mod witness_candidate_verifier;
 pub use witness_candidate_verifier::{
     VerifiedCandidateAdmissionV1, VerifiedPrepareResolutionV1, VerifiedPrepareTransitionV1,
     WITNESS_ADMISSION_DOMAIN_V1, WitnessAdmissionRecordV1, WitnessCandidateVerifier,

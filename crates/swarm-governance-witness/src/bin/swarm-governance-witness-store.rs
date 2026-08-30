@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use swarm_governance_witness::{load_store_proxy_process_config, run_store_proxy_process};
 
 #[tokio::main]

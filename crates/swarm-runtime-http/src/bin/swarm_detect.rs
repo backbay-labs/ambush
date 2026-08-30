@@ -225,6 +225,38 @@ fn default_partition_governance_state_path(
         .join("governance-partition-state.json")
 }
 
+fn legacy_partition_governance_state_path(config_path: &std::path::Path) -> PathBuf {
+    let config_dir = config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    if config_dir
+        .file_name()
+        .is_some_and(|name| name == "rulesets")
+    {
+        config_dir
+            .parent()
+            .unwrap_or(config_dir)
+            .join("data/governance-partition-state.json")
+    } else {
+        config_dir.join("governance-partition-state.json")
+    }
+}
+
+fn partition_governance_state_path_for_bootstrap(
+    config_path: &std::path::Path,
+    identity: &swarm_core::config::IdentityConfig,
+    key_status: AgentKeyLoadStatus,
+) -> Result<PathBuf, std::io::Error> {
+    let stable = default_partition_governance_state_path(config_path, identity);
+    if key_status == AgentKeyLoadStatus::Loaded && !stable.try_exists()? {
+        let legacy = legacy_partition_governance_state_path(config_path);
+        if legacy.try_exists()? {
+            return Ok(legacy);
+        }
+    }
+    Ok(stable)
+}
+
 fn admit_runtime_identity(
     registry: &FileAgentIdentityRegistry,
     role: AgentRole,
@@ -882,8 +914,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             contingency_lease_ttl_ms: config.runtime.partition_contingency_lease_ttl_ms,
             contingency_blast_radius_cap: config.runtime.partition_contingency_blast_radius_cap,
         };
-        let governance_path =
-            default_partition_governance_state_path(&cli.config, &config.identity);
+        let governance_path = partition_governance_state_path_for_bootstrap(
+            &cli.config,
+            &config.identity,
+            tom_key_status,
+        )?;
         let governance_policy = Arc::new(governance_policy_for_bootstrap(
             governance_config,
             &governance_path,
@@ -1531,6 +1566,7 @@ mod tests {
     use super::{
         Cli, ShippedGovernanceWiring, build_approval_harness,
         default_partition_governance_state_path, governance_policy_for_bootstrap,
+        legacy_partition_governance_state_path, partition_governance_state_path_for_bootstrap,
         register_optional_calico_agent, register_optional_sphinx_agent, watch_paths_differ,
     };
     use clap::Parser;
@@ -1656,6 +1692,57 @@ mod tests {
             ),
             PathBuf::from("/var/lib/swarm/governance-partition-state.json")
         );
+    }
+
+    #[test]
+    fn loaded_tom_identity_discovers_the_pre_upgrade_governance_stream() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-governance-legacy-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let config_path = root.join("rulesets/swarm.yaml");
+        let identity_config = swarm_core::config::IdentityConfig {
+            agent_key_dir: root.join("stable/agent-keys").display().to_string(),
+            registry_dir: root.join("stable/registry").display().to_string(),
+        };
+        let legacy_path = legacy_partition_governance_state_path(&config_path);
+        std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        let store = FileAgentKeyStore::open(&identity_config.agent_key_dir).unwrap();
+        let (identity, created) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(created, AgentKeyLoadStatus::Created);
+        let policy = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &legacy_path,
+            &identity,
+            created,
+        )
+        .unwrap();
+        drop(policy);
+        let (_, loaded) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(loaded, AgentKeyLoadStatus::Loaded);
+
+        let selected =
+            partition_governance_state_path_for_bootstrap(&config_path, &identity_config, loaded)
+                .unwrap();
+        assert_eq!(selected, legacy_path);
+        let reopened = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &selected,
+            &identity,
+            loaded,
+        )
+        .expect("the pre-upgrade signed stream remains bootable in place");
+        drop(reopened);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

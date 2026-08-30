@@ -5074,12 +5074,12 @@ fn atomic_write_json_at(
                 path: path.to_path_buf(),
             });
         }
-        let mode = target_stat.st_mode & 0o7777;
+        let mode = u64::from(target_stat.st_mode & 0o7777);
         if mode != 0o600 {
             return Err(GraphStoreError::InsecurePermissions {
                 path: path.to_path_buf(),
                 expected: 0o600,
-                observed: u32::from(mode),
+                observed: u32::try_from(mode).unwrap_or(u32::MAX),
             });
         }
     } else {

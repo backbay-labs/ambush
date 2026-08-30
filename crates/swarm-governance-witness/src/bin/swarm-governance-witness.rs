@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use swarm_governance_witness::{load_public_witness_process_config, run_public_witness_process};
 
 #[tokio::main]

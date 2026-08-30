@@ -205,7 +205,7 @@ elif [ "$#" -ne 0 ]; then
   echo "usage: $0 [--self-test phase285-second-governor-signer]" >&2
   exit 2
 fi
-phase285_second_signer_check "$ROOT_DIR"
+phase285_second_signer_check "$ROOT_DIR" >/dev/null
 
 SINGLE_GOVERNOR_PYTHON=""
 for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
@@ -334,8 +334,8 @@ cargo = pathlib.Path(sys.argv[3])
 assurance_target = pathlib.Path(sys.argv[4])
 cache_source = pathlib.Path(sys.argv[5])
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
-EXPECTED_ROOT_MANIFEST_DIGEST = "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b"
-EXPECTED_ROOT_LOCK_DIGEST = "36d0fc55404cc6bcc9b1555d3a4b84e99e9de6a6a49eb86cf7def6624f9bd5e7"
+EXPECTED_ROOT_MANIFEST_DIGEST = "87061d05b125cfa348c0e4a25e1859760c3b62f5e11fc144db2ba27bc319eb06"
+EXPECTED_ROOT_LOCK_DIGEST = "ede98f3d0b27d62303baa16625e89fc3039a6644d71aa8fe09b1b530aa5c2d03"
 EXPECTED_WORKSPACE_PACKAGES = {
     "swarm-agents",
     "swarm-cli",
@@ -344,6 +344,7 @@ EXPECTED_WORKSPACE_PACKAGES = {
     "swarm-crypto",
     "swarm-evolution",
     "swarm-governance",
+    "swarm-governance-witness",
     "swarm-guard",
     "swarm-ingest-json",
     "swarm-ingest-runtime",
@@ -360,16 +361,16 @@ EXPECTED_WORKSPACE_PACKAGES = {
     "swarm-whisker",
 }
 EXPECTED_AUTHORITY_IMPL_DIGEST = "8da26c153a0436586d711477061eeeceee911e66752ac17952397b14631e57e5"
-EXPECTED_GOVERNANCE_SOURCE_DIGEST = "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896"
+EXPECTED_GOVERNANCE_SOURCE_DIGEST = "6a453d7d0cadc046609d5f58f01b8c93da315d98024a304db87c53dd6a9cb2f9"
 EXPECTED_STRICT_AUTHORITY_IMPL_DIGESTS = {
     (canonical, "implstd::fmt::DebugforGovernanceAuthority"):
         "351c05a0947ce39862c748abd2f3a30e1fdd3fed287829554ac153b05e1ef515",
     (canonical, "implGovernancePolicy"):
-        "a1c1ede69bb5cfb718970ddc2df051e3efd0768167be55d58df36fb54d58988e",
+        "befb6d6d94f6643fc013639b2728da72786a19bab38a0a396b072d181016ef25",
     (canonical, "implGovernanceAuthority"):
         "8da26c153a0436586d711477061eeeceee911e66752ac17952397b14631e57e5",
     (pathlib.Path("crates/swarm-ingest-runtime/src/ingest/mod.rs"), "implIngestState"):
-        "eb3c0c4082592c6408a367d31ff42a9682329e1576b12e61ac9198804a16cc88",
+        "baaef7c76e385aec0bc87dfe45a86b5f18e16b9e8c682b5dbb2fc3b1385c4e17",
     (pathlib.Path("crates/swarm-runtime/src/containment.rs"), "implContainmentSweep"):
         "154b2b98b5c74743b77a1afd1a974543cd743d32a4adc4654c35d4294cef03c4",
     (pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"), "implHumanApprovalResumeDispatcher"):
@@ -411,6 +412,7 @@ EXPECTED_STRICT_AUTHORITY_PUBLIC_APIS = {
 }
 EXPECTED_AUTHORITY_REVERSE_CLOSURE = {
     "swarm-governance",
+    "swarm-governance-witness",
     "swarm-runtime",
     "swarm-ingest-runtime",
     "swarm-runtime-http",
@@ -421,6 +423,7 @@ EXPECTED_AUTHORITY_REVERSE_CLOSURE = {
 }
 EXPECTED_CLOSURE_MANIFEST_DIGESTS = {
     "swarm-governance": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
+    "swarm-governance-witness": "03c056a47f2e50807fed692c994fa2df3e976ef1b239878ee95face93796493d",
     "swarm-runtime": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "swarm-ingest-runtime": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
     "swarm-runtime-http": "890644cbb2cd57bed43de30491b60d1fef5b8e64038520d5249af531a292b88f",
@@ -431,33 +434,49 @@ EXPECTED_CLOSURE_MANIFEST_DIGESTS = {
 }
 EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
-        (2, "f3345ca1525686353fb3dfccef2df4ae9b561b1b8c1dae065f285d01b3fe1b61"),
+        (14, "aea9bc3f8eefe405350f9adab474d9ee963e975458fb4d18f344b6f92cf444ce"),
+    "swarm-governance-witness":
+        (16, "f88fe7c4abfacc87421b58a993de56f143342bb57fcd0ce72816613e2ff0a617"),
     "swarm-runtime":
-        (127, "25f4c2939179f05df6545b3dfc89a5162e5ff0b5465056945667b24405af0df2"),
+        (133, "c01258669da1ce444f7450c87eaf2a93aa28a7eb5525a5e4755707968d956234"),
     "swarm-ingest-runtime":
-        (14, "058ccc0dfa06a4d13d3edb22a534ee2fd142f8d764545d948fe0573e325d2a41"),
+        (14, "aa68bbbe869250092bbb2833a6fcb0e5fe011bb0128b5d874d53731eee540c89"),
     "swarm-runtime-http":
-        (22, "b6e62e6c68f65da711fd5362a7ddfde3e28663d18a7a8a225212c83902c01020"),
+        (22, "e3b69f6bb535c9ce89f90394cd0a020c1b1b82a1f35c88e7e762b6af2275bee6"),
     "swarm-agents":
         (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
     "swarm-evolution":
-        (6, "de3afe080980d4901954dbddbef02f987a5eaef896b8af193efc05f0c4f028e9"),
+        (6, "2eec23888968fe35f5cbb0c81125cf1b24fe49f53d4b0fb90851c51ccbecff5b"),
     "swarm-runtime-workbench":
         (11, "b333bbfdc9f25b31982e33c30e49dc4663704b04ebc58531e93732300140f1f5"),
     "swarm-cli":
-        (7, "31d1d554fba3635556d968f045861270859a24c7e1131607a8666467b09494db"),
+        (7, "ebe0ae8023e9d6bb141e173c7067b0c0fcb69fa1593aaae1e42fee1a3e96e45e"),
 }
 EXPECTED_PRIVACY_SOURCE_DIGESTS = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"):
-        "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896",
+        "6a453d7d0cadc046609d5f58f01b8c93da315d98024a304db87c53dd6a9cb2f9",
+    pathlib.Path("crates/swarm-governance/src/persistence_protocol.rs"):
+        "1fc3837ca0fdd6739352053266017162051925feb655a3b4f21fde77b5b8cfe0",
+    pathlib.Path("crates/swarm-governance/src/witness_engine.rs"):
+        "0ab35a8afcb3f080db48635008df18710e06a806d40d866d8a0f86eb35c56bbc",
+    pathlib.Path("crates/swarm-governance/src/witness_engine/store.rs"):
+        "9f639fbe2ef85da384527355632ffd3aa42e48189cfcb8a8c1ee3139d00249bf",
+    pathlib.Path("crates/swarm-governance/src/witness_engine/store/in_memory.rs"):
+        "426ac04999f7cd618e00c3c18d5e40e0e8e10ec663f201df30feddb966f26bda",
+    pathlib.Path("crates/swarm-governance/src/witness_engine/store/proxy.rs"):
+        "d627b503fe6c600f24ef1ac835a5e6d459073920faa3a357ec719fefb41f924e",
+    pathlib.Path("crates/swarm-governance/src/witness_service.rs"):
+        "a9891401a96c7b3dc20fa59830d31e3e3637d8c27a49ddcf5528124d37b6c2af",
+    pathlib.Path("crates/swarm-governance/src/witness_service/witness_candidate_verifier.rs"):
+        "6b861f64ed9c927ee671a22cebf3d1dc39947899a4b6a6b9115c685e5f55cebd",
     pathlib.Path("crates/swarm-runtime/src/containment.rs"):
         "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
     pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"):
         "de7ad808ff477c7d1432b47360f4139e9ddaa5d5449a4fa5d21e28b5e86c8c8e",
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/mod.rs"):
-        "33a272f43e892f47816eb6fe183f41d9afda86b3093b5258da0c7c6e8a3c7c47",
+        "6abc1813c6c20a861aa42bf992ea6a92b5fd2133ebe80b7133263bea0cd8b1f0",
     pathlib.Path("crates/swarm-runtime-http/src/bin/swarm_detect.rs"):
-        "51f81097ef4e5ba17f9a3757e8e413118f36572f9c844fef20729d4532da9a10",
+        "e3ffb354d20f96d47f5a8e283d04e24dfe8da94ac9985c5c117bea938a8fbb83",
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/demo.rs"):
         "18ed6e3ee9ea5d49a237de45067cf555f6e620264d9fd46c812180d10e110b0b",
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/governance_resume.rs"):
@@ -474,6 +493,13 @@ EXPECTED_PRIVACY_SOURCE_DIGESTS = {
 EXPECTED_PRIVACY_CLOSURES = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"): {
         pathlib.Path("crates/swarm-governance/src/lib.rs"),
+        pathlib.Path("crates/swarm-governance/src/persistence_protocol.rs"),
+        pathlib.Path("crates/swarm-governance/src/witness_engine.rs"),
+        pathlib.Path("crates/swarm-governance/src/witness_engine/store.rs"),
+        pathlib.Path("crates/swarm-governance/src/witness_engine/store/in_memory.rs"),
+        pathlib.Path("crates/swarm-governance/src/witness_engine/store/proxy.rs"),
+        pathlib.Path("crates/swarm-governance/src/witness_service.rs"),
+        pathlib.Path("crates/swarm-governance/src/witness_service/witness_candidate_verifier.rs"),
     },
     pathlib.Path("crates/swarm-runtime/src/containment.rs"): {
         pathlib.Path("crates/swarm-runtime/src/containment.rs"),
@@ -496,6 +522,11 @@ EXPECTED_PRIVACY_CLOSURES = {
 }
 EXPECTED_CLOSURE_TARGET_ATTRIBUTES = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"): "#![forbid(unsafe_code)]",
+    pathlib.Path("crates/swarm-governance-witness/src/lib.rs"): "#![forbid(unsafe_code)]",
+    pathlib.Path("crates/swarm-governance-witness/src/bin/swarm-governance-witness.rs"):
+        "#![forbid(unsafe_code)]",
+    pathlib.Path("crates/swarm-governance-witness/src/bin/swarm-governance-witness-store.rs"):
+        "#![forbid(unsafe_code)]",
     pathlib.Path("crates/swarm-runtime/src/lib.rs"): "#![cfg_attr(not(test), forbid(unsafe_code))]",
     pathlib.Path("crates/swarm-runtime/src/bin/generate_adversary_emulation_report.rs"): "#![forbid(unsafe_code)]",
     pathlib.Path("crates/swarm-runtime/src/bin/swarm_debug_attest.rs"): "#![forbid(unsafe_code)]",
@@ -511,9 +542,15 @@ EXPECTED_CLOSURE_TARGET_ATTRIBUTES = {
 }
 EXPECTED_CLOSURE_TARGET_DEP_INFO = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"):
-        (1, "1879d6894abd451daf1965b928f0c487dee2a48b768b01d84795eecd54fcf840"),
+        (8, "f9ed6a705aad92bc1177359a874183d7c16fe26a24ce35d101320146cec12301"),
+    pathlib.Path("crates/swarm-governance-witness/src/lib.rs"):
+        (9, "8f3bdefe46ef31f3b48dfbc2aad1fca78853dcc70101f96eac7669831ec85243"),
+    pathlib.Path("crates/swarm-governance-witness/src/bin/swarm-governance-witness.rs"):
+        (1, "6556bcf8c511d576153dd6884819191b09b5da6ee7b638b3ca434376ce735c07"),
+    pathlib.Path("crates/swarm-governance-witness/src/bin/swarm-governance-witness-store.rs"):
+        (1, "f2942e31522c4ab748a8b448b19cac6e9f4878e8ff85b009b34a60a6569b7f78"),
     pathlib.Path("crates/swarm-runtime/src/lib.rs"):
-        (63, "6eb983a48cf0b0ce3a372cbd5ff43d772b671adbf8bb57f2d70d083499993e17"),
+        (66, "fafb667daf3e888aa38f9a7ef7911bec1670e197a1551412ca2cf3e958b380e3"),
     pathlib.Path("crates/swarm-runtime/src/bin/generate_adversary_emulation_report.rs"):
         (1, "2ac1fea5085cb1261d4a641a2d187f760a9695914438b5e79024cec0b7281ce9"),
     pathlib.Path("crates/swarm-runtime/src/bin/swarm_debug_attest.rs"):
@@ -570,7 +607,7 @@ EXPECTED_CLOSURE_PATH_DIRECTIVES = {
 }
 EXPECTED_CLOSURE_NON_RS_RUST_DIGESTS = {
     pathlib.Path("crates/swarm-cli/src/core.inc"):
-        "a0def11bbf07f546082a72487d6260087822afc35e98f05b0817362a5c9692e2",
+        "fcf7396863c83532664b0a00395b8a7862b0036c5f512e2771eeac8765129e76",
 }
 failed = False
 
@@ -628,6 +665,12 @@ EXPECTED_MINT_HEADER = (
     "->Result<GovernanceAuthority,GovernanceAuthorityError>"
 )
 
+RUST_RAW_STRING = re.compile(r'(?:b|c)?r(?P<hashes>#{0,255})"')
+RUST_CHARACTER_LITERAL = re.compile(
+    r"'(?:\\(?:[nrt0\\'\"]|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]{1,6}\})|"
+    r"[^\\'\r\n])'"
+)
+
 def production_source(raw: str) -> str:
     out = []
     index = 0
@@ -674,10 +717,31 @@ def production_source(raw: str) -> str:
             out.extend("  ")
             index += 2
             continue
+        # Match against the original buffer at `index`. Slicing `raw[index:]`
+        # for every byte makes this scanner quadratic on large Rust modules and
+        # caused the clean-tree assurance subprocess to exceed its ten-minute
+        # fail-closed timeout.
+        raw_string = (
+            RUST_RAW_STRING.match(raw, index) if char in {"b", "c", "r"} else None
+        )
+        if raw_string is not None:
+            terminator = '"' + raw_string.group("hashes")
+            end = raw.find(terminator, raw_string.end())
+            if end < 0:
+                raise ValueError("unclosed Rust raw string")
+            end += len(terminator)
+            out.extend("\n" if value == "\n" else " " for value in raw[index:end])
+            index = end
+            continue
         if char == '"':
             in_string = True
             out.append(" ")
             index += 1
+            continue
+        character = RUST_CHARACTER_LITERAL.match(raw, index) if char == "'" else None
+        if character is not None:
+            out.extend(" " * (character.end() - index))
+            index = character.end()
             continue
         out.append(char)
         index += 1
@@ -799,16 +863,6 @@ def external_module_children(relative: pathlib.Path) -> set[pathlib.Path]:
     source_path = root / relative
     raw = source_path.read_text(encoding="utf-8")
     source = without_cfg_test_modules(production_source(raw))
-    inline = re.search(
-        r"(?m)^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[A-Za-z_]\w*\s*\{",
-        source,
-    )
-    if inline:
-        line = source.count("\n", 0, inline.start()) + 1
-        raise ValueError(
-            f"{relative}:{line}: production inline modules are forbidden in a "
-            "private-authority field's privacy closure"
-        )
     declaration = re.compile(
         r"(?m)^(?P<attrs>(?:[ \t]*#\s*\[[^\]\n]*\][ \t]*\n)*)"
         r"[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+"
@@ -1138,15 +1192,16 @@ def cfg_test_external_module_sources() -> set[pathlib.Path]:
                 candidates = [declaring.parent / literal] if isinstance(literal, str) else []
             else:
                 module = match.group("name")
-                candidates = [
-                    declaring.parent / f"{module}.rs",
-                    declaring.parent / module / "mod.rs",
-                ]
-                if declaring.stem not in {"lib", "main", "mod"}:
-                    candidates.extend((
+                if declaring.stem in {"lib", "main", "mod"}:
+                    candidates = [
+                        declaring.parent / f"{module}.rs",
+                        declaring.parent / module / "mod.rs",
+                    ]
+                else:
+                    candidates = [
                         declaring.parent / declaring.stem / f"{module}.rs",
                         declaring.parent / declaring.stem / module / "mod.rs",
-                    ))
+                    ]
             resolved = [candidate.resolve() for candidate in candidates if candidate.is_file()]
             if len(resolved) != 1:
                 print(
@@ -1186,10 +1241,17 @@ if strict_digest:
             failed = True
         if source_path.is_file() and not source_path.is_symlink():
             raw_sources[relative] = source_path.read_text(encoding="utf-8")
-sources = {
-    path: without_cfg_test_modules(production_source(raw))
-    for path, raw in raw_sources.items()
-}
+sources = {}
+for path, raw in raw_sources.items():
+    try:
+        sources[path] = without_cfg_test_modules(production_source(raw))
+    except ValueError as error:
+        print(
+            f"governance capability inventory: cannot sanitize production source "
+            f"{path}: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 def reject(label: str, pattern: str) -> None:
     global failed
     matches = [path for path, source in sources.items() if re.search(pattern, source, re.DOTALL)]
@@ -2533,6 +2595,26 @@ impl IngestState {
 expect_strict_privacy_rejected \
   "$privacy_nested" \
   "a newly declared nested descendant authority leak"
+
+privacy_inline="$(plant_strict_privacy_fixture inline)"
+printf '%s\n' '
+mod privacy_escape_inline {
+    use super::IngestState;
+
+    fn z(state: &IngestState) -> Option<&dyn std::any::Any> {
+        state
+            .governance_authority
+            .as_ref()
+            .map(|value| value as &dyn std::any::Any)
+    }
+
+    impl IngestState {
+        pub fn erased_inline(&self) -> Option<&dyn std::any::Any> { z(self) }
+    }
+}' >> "$privacy_inline/crates/swarm-ingest-runtime/src/ingest/governance_resume.rs"
+expect_strict_privacy_rejected \
+  "$privacy_inline" \
+  "a newly declared inline descendant authority leak"
 
 privacy_redirect="$(plant_strict_privacy_fixture redirect)"
 cp \

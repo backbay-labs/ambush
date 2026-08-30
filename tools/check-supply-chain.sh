@@ -489,7 +489,7 @@ allowed_paths = [
 ]
 namespace = "cargo-home-sources-v1-"
 expected_counts = {
-  ".github/workflows/ci.yml" => 12,
+  ".github/workflows/ci.yml" => 14,
   ".github/workflows/release.yml" => 2,
 }
 recognized = [
@@ -565,13 +565,13 @@ validate_cache_steps = lambda do |name, context, steps|
       next
     end
     reference = pieces.last
-    if reference != "v4"
-      problems << "#{label}: cache action must use exact @v4"
+    if reference != "0057852bfaa89a56745cba8c7296529d2fc39830"
+      problems << "#{label}: cache action must use the exact reviewed commit"
     end
     if action_identity == "actions/cache"
       combined_count += 1
     else
-      problems << "#{label}: split cache restore/save actions are forbidden; use actions/cache@v4"
+      problems << "#{label}: split cache restore/save actions are forbidden; use actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
     end
 
     inputs = step["with"]
@@ -642,7 +642,7 @@ documents.keys.sort.each do |name|
 
   expected = expected_counts.fetch(name, 0)
   if combined_count != expected
-    problems << "#{name}: expected #{expected} committed actions/cache@v4 step(s), found #{combined_count}"
+    problems << "#{name}: expected #{expected} committed actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 step(s), found #{combined_count}"
   end
 end
 
@@ -665,11 +665,11 @@ action_documents.keys.sort.each do |name|
   combined_total += count
 end
 
-if combined_total != 14
-  problems << "tracked workflow inventory must contain exactly 14 actions/cache@v4 steps, found #{combined_total}"
+if combined_total != 16
+  problems << "tracked workflow inventory must contain exactly 16 actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 steps, found #{combined_total}"
 end
 if composite_cache_total != 0
-  problems << "tracked composite actions must contain zero actions/cache@v4 steps, found #{composite_cache_total}"
+  problems << "tracked composite actions must contain zero actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 steps, found #{composite_cache_total}"
 end
 
 STDOUT.write(JSON.generate({
@@ -864,7 +864,7 @@ jobs:
   ignored:
     steps:
       - name: Renamed cache step
-        uses: "actions/cache@v4"
+        uses: "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
         with:
           path: |
             ~/.cargo/bin
@@ -1098,8 +1098,8 @@ for name in cache_workflows:
     quoted_cache = replaced(
         workflows,
         name,
-        "        uses: actions/cache@v4\n",
-        '        uses: "actions/cache@v4"\n',
+        "        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
+        '        uses: "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"\n',
         f"{name} quoted cache control",
     )
     require_valid(f"{name} quoted cache control", quoted_cache)
@@ -1107,8 +1107,8 @@ for name in cache_workflows:
     capitalized_cache = replaced(
         workflows,
         name,
-        "        uses: actions/cache@v4\n",
-        "        uses: Actions/Cache@V4\n",
+        "        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
+        "        uses: Actions/Cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
         f"{name} capitalized cache control",
     )
     require_valid(f"{name} capitalized cache control", capitalized_cache)
@@ -1123,8 +1123,8 @@ frozen_release_bypass = replaced_last(
 frozen_release_bypass = replaced_last(
     frozen_release_bypass,
     release_name,
-    "        uses: actions/cache@v4\n",
-    '        uses: "actions/cache@v4"\n',
+    "        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
+    '        uses: "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"\n',
     "frozen release quoted cache action",
 )
 frozen_release_bypass = replaced_last(
@@ -1146,7 +1146,7 @@ require_invalid(
 missing_committed_cache = replaced(
     workflows,
     ci_name,
-    "        uses: actions/cache@v4\n",
+    "        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
     "        uses: actions/checkout@v4\n",
     "missing committed cache inventory mutation",
 )
@@ -1154,8 +1154,8 @@ require_invalid(
     "missing committed cache inventory mutation",
     missing_committed_cache,
     [
-        ".github/workflows/ci.yml: expected 12 committed actions/cache@v4 step(s), found 11",
-        "tracked workflow inventory must contain exactly 14 actions/cache@v4 steps, found 13",
+        ".github/workflows/ci.yml: expected 14 committed actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 step(s), found 13",
+        "tracked workflow inventory must contain exactly 16 actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 steps, found 15",
     ],
 )
 
@@ -1166,7 +1166,7 @@ cache_paths: &cache_paths |
 jobs:
   aliases:
     steps:
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: *cache_paths
           key: cargo-home-sources-v1-alias
@@ -1189,8 +1189,8 @@ require_invalid(
 yaml_duplicate_key_mutation = replaced(
     workflows,
     ci_name,
-    "        uses: actions/cache@v4\n",
-    "        uses: actions/cache@v4\n        uses: actions/checkout@v4\n",
+    "        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
+    "        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        uses: actions/checkout@v4\n",
     "workflow YAML duplicate uses-key mutation",
 )
 require_invalid(
@@ -1204,7 +1204,7 @@ yaml_custom_tag_mutation[".github/workflows/cache-tag.yaml"] = """name: tag
 jobs:
   tagged:
     steps:
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: !forged |
             ~/.cargo/registry/index/

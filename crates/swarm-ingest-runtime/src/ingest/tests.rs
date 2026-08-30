@@ -1044,6 +1044,76 @@ fn bridge_queue_proposal(
         .map(|lookup| lookup.report)
 }
 
+#[test]
+fn configured_approval_voters_use_effective_approve_principals_in_deterministic_order() {
+    let legacy = Ed25519Signer::from_secret_material("legacy-voter-must-not-widen");
+    let first = Ed25519Signer::from_secret_material("multi-principal-voter-first");
+    let second = Ed25519Signer::from_secret_material("multi-principal-voter-second");
+    let legacy_id = format!("swarm:ed25519:{}", legacy.public_key_hex());
+    let first_id = format!("swarm:ed25519:{}", first.public_key_hex());
+    let second_id = format!("swarm:ed25519:{}", second.public_key_hex());
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.operator_id = legacy_id.clone();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: second_id.clone(),
+            token_env: "SWARM_APPROVAL_SECOND".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: "read-only-principal".to_string(),
+            token_env: "SWARM_APPROVAL_READ_ONLY".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+        },
+        OperatorPrincipalConfig {
+            operator_id: first_id.clone(),
+            token_env: "SWARM_APPROVAL_FIRST".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+    ];
+
+    let mut expected = vec![first_id, second_id];
+    expected.sort();
+    let voters = super::configured_approval_voters(&config).unwrap();
+    assert_eq!(voters, expected);
+    assert!(!voters.contains(&legacy_id));
+}
+
+#[test]
+fn configured_approval_voters_fail_closed_for_malformed_explicit_approvers() {
+    let mut config = test_config("suspicious_process_tree");
+    let legacy = Ed25519Signer::from_secret_material("legacy-auth-id");
+    config.operator.auth.operator_id = format!("swarm:ed25519:{}", legacy.public_key_hex());
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "operator-legacy-approver".to_string(),
+        token_env: "SWARM_APPROVAL_LEGACY".to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+
+    assert!(matches!(
+        super::configured_approval_voters(&config),
+        Err(super::ApprovalVoterConfigError::NoEligibleApprover)
+    ));
+}
+
+#[test]
+fn configured_approval_voters_keep_canonical_legacy_fallback() {
+    let signer = Ed25519Signer::from_secret_material("canonical-legacy-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.principals.clear();
+
+    assert_eq!(
+        super::configured_approval_voters(&config).unwrap(),
+        vec![voter_id]
+    );
+}
+
 #[tokio::test]
 async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_lane() {
     // Floor below the candidate's measured 0.143 catch rate: assurance genuinely

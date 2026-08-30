@@ -140,15 +140,15 @@ if case == "phase285-raw-kv-subject":
     if not source.is_dir():
         raise SystemExit("PHASE285-NEGATIVE[missing-witness-source]")
     expected_source_sha256 = {
-        "bin/swarm-governance-witness-store.rs": "73b24fe4b21039f2091ac10a7ccdbac01fef994e8c4faa776b068a4679fcc054",
-        "bin/swarm-governance-witness.rs": "f2e8373c591043e7f0e4912d6be2003f8d737f6b8999618fc8b711d3e9aff83a",
+        "bin/swarm-governance-witness-store.rs": "a943bf8660d9493820245a73df262f07096136833bf9b82c9d5ca4cd79327564",
+        "bin/swarm-governance-witness.rs": "93182d13a5550fe2ac0db8b4fb4fd126c5173e614676133ab3d735026d0d1a91",
         "jetstream_store.rs": "7ad46939bc08a9dbe361c1455c9d23b56ed223feb00ce28b9d81ef48fbcaf928",
         "lib.rs": "6794e88e8b7dbcfe037375c197d7f35c187aa14aa02489cdc4cd1df11a6235e0",
         "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
         "public_dispatcher.rs": "dc481dd5c2a7e995a73986f788ccbb3f48cf1975fec33ceb3c442d7607d7ec91",
         "raw_config.rs": "4bc8a3aabaf986ca3e74008f785444acd39df034f3e562f1f13e4e6a999ec015",
         "runtime_client.rs": "45d1b01655bbd8bb35c8ceb3f9d5f2b3898bc20ea627133aca8300ef410d0474",
-        "secure_file.rs": "ca8b34c44b0bf54cb7ce621f89b974f1f2bf14babe99388888714eb1ac64f2cb",
+        "secure_file.rs": "2f5502d32597bd85e2780129244e977d0df733e4b3f32dab2f0321b4a59b222c",
         "service_config.rs": "884914bd6bd531f7ba108be7501920fc6d2dd71d8bf73c62bace71dc6faf6e36",
         "store_proxy_service.rs": "a54dbcfd14c354c494e5a53e3f46a2cb4ae139cf1ed348ac3dbb546f1616ca6c",
     }
@@ -1173,12 +1173,12 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 }
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "87061d05b125cfa348c0e4a25e1859760c3b62f5e11fc144db2ba27bc319eb06",
-    "Cargo.lock": "1e8dbd9f057574d4fc833054100db482ac7d6eff1d3baa98f1c7a5a9ea8ad673",
-    ".github/workflows/ci.yml": "1c66535bf247f0ba968acf19b5ac06c2e56defd77fd8c72378762185f1c0c784",
-    ".github/workflows/release.yml": "937af30a8bc982a73615ca49e1e48f4d64049e82a7a28113cd1c72c2110d8e51",
-    "tools/check-supply-chain.sh": "212b37c57bcd372fc74ca29b8e537297196c28c399d98e7613fa24c6413c2fd0",
+    "Cargo.lock": "ede98f3d0b27d62303baa16625e89fc3039a6644d71aa8fe09b1b530aa5c2d03",
+    ".github/workflows/ci.yml": "5c2b773203c15e8cb27998724d79f30f52e2d7ae10dc0613cf5f8e978f0d5e35",
+    ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
+    "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "7055a4030de03f379587f6f707b8ea8aaa3d013c01939142fd75af38a8cd7830",
+    "tools/check-single-governor-key.sh": "1e406c660390a27fcb322e262763c6486b96fbc6838d4bc20dda500215d58e1c",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -1188,11 +1188,11 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "crates/swarm-runtime-workbench/Cargo.toml": "eab3a2b0578a2366e26604a69ca649ba03ce032d3fc45696876ae222573d24ce",
     "crates/swarm-cli/Cargo.toml": "0593667747de0b4cd7792170f2c6bfa8fb0a5051767dca97ede20fad44a23dfe",
     "crates/swarm-cli/src/core.inc": "fcf7396863c83532664b0a00395b8a7862b0036c5f512e2771eeac8765129e76",
-    "crates/swarm-governance/src/lib.rs": "107518ea5c5d066d5b3d0ba9ff40fb5dc335ed12d7ff00fadfe7afedd25fa353",
+    "crates/swarm-governance/src/lib.rs": "6a453d7d0cadc046609d5f58f01b8c93da315d98024a304db87c53dd6a9cb2f9",
     "crates/swarm-runtime/src/containment.rs": "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
     "crates/swarm-runtime/src/dispatcher.rs": "de7ad808ff477c7d1432b47360f4139e9ddaa5d5449a4fa5d21e28b5e86c8c8e",
-    "crates/swarm-ingest-runtime/src/ingest/mod.rs": "33a272f43e892f47816eb6fe183f41d9afda86b3093b5258da0c7c6e8a3c7c47",
-    "crates/swarm-runtime-http/src/bin/swarm_detect.rs": "51f81097ef4e5ba17f9a3757e8e413118f36572f9c844fef20729d4532da9a10",
+    "crates/swarm-ingest-runtime/src/ingest/mod.rs": "6abc1813c6c20a861aa42bf992ea6a92b5fd2133ebe80b7133263bea0cd8b1f0",
+    "crates/swarm-runtime-http/src/bin/swarm_detect.rs": "e3ffb354d20f96d47f5a8e283d04e24dfe8da94ac9985c5c117bea938a8fbb83",
     "crates/swarm-ingest-runtime/src/ingest/demo.rs": "18ed6e3ee9ea5d49a237de45067cf555f6e620264d9fd46c812180d10e110b0b",
     "crates/swarm-ingest-runtime/src/ingest/governance_resume.rs": "492614aa84da4f8da399408bf99a64009d1d686c8f79b70b06579a39e19a9645",
     "crates/swarm-ingest-runtime/src/ingest/health.rs": "3b875c6701baec37cf71692c9937d2e1a08bd477391c7529b05fb5a4c8325acd",
@@ -1202,13 +1202,13 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
 }
 GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
-        (14, "aa7b332570ba6f3cc5fb24aeb4279d3a1739ce46e098d07e3233576ebcb7919c"),
+        (14, "aea9bc3f8eefe405350f9adab474d9ee963e975458fb4d18f344b6f92cf444ce"),
     "swarm-runtime":
         (133, "c01258669da1ce444f7450c87eaf2a93aa28a7eb5525a5e4755707968d956234"),
     "swarm-ingest-runtime":
-        (14, "2a62160bf16fb4f781ab50e09a83b7ac6a9bfb9d512ca98592d007d98a9f36d3"),
+        (14, "aa68bbbe869250092bbb2833a6fcb0e5fe011bb0128b5d874d53731eee540c89"),
     "swarm-runtime-http":
-        (22, "017516d1f5b0a6f7178c760644f824c5d2d39e18d856c9111d8623224a50fb68"),
+        (22, "e3b69f6bb535c9ce89f90394cd0a020c1b1b82a1f35c88e7e762b6af2275bee6"),
     "swarm-agents":
         (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
     "swarm-evolution":
@@ -1245,8 +1245,8 @@ GOVERNANCE_ASSURANCE_TARGET_ROOTS = {
 }
 SINGLE_GOVERNOR_GATE_REL = "tools/check-single-governor-key.sh"
 SINGLE_GOVERNOR_GATE_OUTPUT = (
-    "single-governor-key gate: 94 fixture cases behaved as documented "
-    "(76 adversarial, 18 controls); no key collection on the governance signing "
+    "single-governor-key gate: 95 fixture cases behaved as documented "
+    "(77 adversarial, 18 controls); no key collection on the governance signing "
     "path; shipped governance authority is one opaque concrete handle with an "
     "authenticated mint (crates/swarm-governance/src crates/swarm-consensus/src "
     "crates/swarm-policy/src)"
@@ -4492,17 +4492,17 @@ def bootstrap_boundary_self_test(base):
             "        shell: /bin/bash -e {0}",
             1,
         ),
-        "unpinned-checkout": workflow_text.replace(
+        "unpinned-checkout": mutate_workflow_job(
+            "mapping-contract",
             f"uses: {PINNED_CHECKOUT}",
             "uses: actions/checkout@v4",
-            1,
         ),
-        "prior-github-path-writer": workflow_text.replace(
+        "prior-github-path-writer": mutate_workflow_job(
+            "mapping-contract",
             "    steps:\n      - name: Checkout the candidate without persisted credentials",
             "    steps:\n      - name: Candidate-controlled PATH writer\n"
             "        run: echo attacker >> $GITHUB_PATH\n\n"
             "      - name: Checkout the candidate without persisted credentials",
-            1,
         ),
         "workflow-environment": workflow_text.replace(
             "jobs:\n", "env:\n  BASH_ENV: attacker\n\njobs:\n", 1,

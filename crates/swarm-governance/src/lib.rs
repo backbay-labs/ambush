@@ -656,7 +656,7 @@ struct GovernanceCheckpointLag {
     reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedGovernanceState {
     lock_binding: GovernanceLockBinding,
@@ -3086,6 +3086,13 @@ impl GovernancePolicy {
         if state.partition_state == PartitionState::Healthy {
             self.ensure_contingency_leases_locked(&mut state, observed_at_ms);
         }
+        // Health is sampled on every dispatcher tick. Avoid turning an
+        // unchanged projection into two fsyncs and an artificial sequence
+        // advance. Expired leases and replenished leases are part of the
+        // persisted projection, so real durable changes still commit.
+        if PersistedGovernanceState::from_runtime(&state) == previous_persisted {
+            return;
+        }
         match self.persist_locked(&mut state) {
             Err(error) => {
                 previous_persisted.restore_into(&mut state);
@@ -3554,6 +3561,12 @@ impl GovernancePolicy {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.ensure_checkpoint_repaired_locked(&mut state)?;
+        if state.partition_state != PartitionState::Healthy {
+            return Err(format!(
+                "human authorization requires healthy governance; current partition state is {:?}",
+                state.partition_state
+            ));
+        }
         let Some(hold_index) = state
             .pending_human_authorizations
             .iter()
@@ -7193,6 +7206,109 @@ mod tests {
                 .is_err()
         );
         drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn pre_partition_human_hold_is_refused_during_partition_without_mutation() {
+        let path = persistence_path("pre-partition-human-hold-partition");
+        let key = SigningKey::from_bytes(&[177; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.177".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: healthy governance issues an approval");
+        };
+        let hold = policy
+            .begin_human_authorization_hold(
+                &governed_request,
+                &serde_json::to_value(&receipt).unwrap(),
+                &swarm_policy::PolicyDecision::require_human_with_rule(
+                    "pre-partition-human-hold",
+                    "human review required",
+                ),
+                receipt.payload.issued_at_ms + 1,
+            )
+            .unwrap();
+        policy
+            .bind_human_approval_set(&hold.hold_id, "approval-set:177", "digest:177")
+            .unwrap();
+        policy.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            receipt.payload.issued_at_ms + 2,
+        );
+        assert_eq!(
+            policy.status_report().partition_state,
+            PartitionState::Partitioned
+        );
+        let sequence = read_envelope(&path).sequence();
+        let state_bytes = fs::read(&path).unwrap();
+        let checkpoint_path = GovernancePolicy::persistence_sequence_path(&path);
+        let checkpoint_bytes = fs::read(&checkpoint_path).unwrap();
+
+        let error = policy
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                "approval-set:177",
+                "digest:177",
+                receipt.payload.issued_at_ms + 3,
+            )
+            .expect_err("a pre-partition human hold must not route during partition");
+        assert!(error.contains("healthy governance"), "{error}");
+        assert_eq!(read_envelope(&path).sequence(), sequence);
+        assert_eq!(fs::read(&path).unwrap(), state_bytes);
+        assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_bytes);
+        assert!(
+            policy
+                .pending_human_authorization("approval-set:177")
+                .is_ok(),
+            "a refused hold must remain pending"
+        );
+
+        drop(policy);
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert!(
+            reloaded
+                .verify_and_consume_human_authorization(
+                    &hold.hold_id,
+                    "approval-set:177",
+                    "digest:177",
+                    receipt.payload.issued_at_ms + 4,
+                )
+                .is_err()
+        );
+        drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn unchanged_health_observation_does_not_persist_or_advance_sequence() {
+        let path = persistence_path("unchanged-health-no-persist");
+        let key = SigningKey::from_bytes(&[178; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        policy.observe_health(&governing_id, &[], 1_780_000_000_000);
+        let sequence = read_envelope(&path).sequence();
+        let state_bytes = fs::read(&path).unwrap();
+        let checkpoint_path = GovernancePolicy::persistence_sequence_path(&path);
+        let checkpoint_bytes = fs::read(&checkpoint_path).unwrap();
+
+        for observed_at_ms in 1_780_000_000_001..=1_780_000_000_010 {
+            policy.observe_health(&governing_id, &[], observed_at_ms);
+            assert_eq!(read_envelope(&path).sequence(), sequence);
+            assert_eq!(fs::read(&path).unwrap(), state_bytes);
+            assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_bytes);
+        }
+
+        drop(policy);
         cleanup_persistence(&path);
     }
 

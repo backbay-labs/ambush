@@ -62,7 +62,7 @@ fn validate_metadata(
     }
     if policy == StableFilePolicyV1::Private
         && (metadata.st_uid != rustix::process::geteuid().as_raw()
-            || (metadata.st_mode as u32 & PRIVATE_MODE_MASK) != 0)
+            || (u64::from(metadata.st_mode) & u64::from(PRIVATE_MODE_MASK)) != 0)
     {
         return Err(StableFileErrorV1::Metadata);
     }

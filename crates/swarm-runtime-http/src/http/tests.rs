@@ -13,6 +13,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{any, post};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,6 +53,7 @@ use swarm_ingest_runtime::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
 };
 use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
+use swarm_policy::governance::GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX;
 use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision};
 use swarm_response::SwarmFindingEnvelope;
 use swarm_runtime::approval::{DefaultApprovalHarness, ThresholdRule};
@@ -530,6 +532,67 @@ async fn spawn_approval_resume_capture_server() -> (
         let _ = server.await;
     });
     (format!("http://{address}"), state, shutdown_tx, handle)
+}
+
+#[derive(Clone)]
+struct SequencedApprovalResumeState {
+    capture: ApprovalResumeCaptureState,
+    statuses: Arc<AsyncMutex<VecDeque<StatusCode>>>,
+}
+
+async fn sequenced_approval_resume_handler(
+    State(state): State<SequencedApprovalResumeState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    state.capture.authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    state
+        .capture
+        .requests
+        .lock()
+        .await
+        .push((uri.path().to_string(), body));
+    let status = state
+        .statuses
+        .lock()
+        .await
+        .pop_front()
+        .unwrap_or(StatusCode::OK);
+    (status, Json(json!({"ok": status.is_success()})))
+}
+
+async fn spawn_sequenced_approval_resume_server(
+    statuses: Vec<StatusCode>,
+) -> (
+    String,
+    ApprovalResumeCaptureState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let capture = ApprovalResumeCaptureState::default();
+    let state = SequencedApprovalResumeState {
+        capture: capture.clone(),
+        statuses: Arc::new(AsyncMutex::new(statuses.into())),
+    };
+    let app = Router::new()
+        .route("/{*path}", post(sequenced_approval_resume_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (format!("http://{address}"), capture, shutdown_tx, handle)
 }
 
 #[derive(Clone)]
@@ -3630,6 +3693,126 @@ async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
     assert!(requests[0].1.get("receipt_pack").is_some());
     assert!(requests[0].1.get("receipt_pack_id").is_none());
     drop(requests);
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(EVIDENCE_KEY_ENV);
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn governed_duplicate_vote_retries_the_exact_pack_after_callback_failure() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_EVIDENCE_KEY";
+    const TOKEN: &str = "governed-approval-retry-token";
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(EVIDENCE_KEY_ENV, "governed-approval-retry-key");
+    }
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_sequenced_approval_resume_server(vec![
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::OK,
+        ])
+        .await;
+    let signer = Ed25519Signer::from_secret_material("governed-approval-retry-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let mut config = operator_config();
+    config.operator.runtime_base_url = runtime_base_url;
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: voter_id.clone(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+    }];
+    let root = unique_temp_dir("governed-approval-retry");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let harness = surface.state.approval.as_ref().unwrap();
+    let set = harness
+        .create_approval_set(
+            vec![voter_id.clone()],
+            ThresholdRule::AtLeast { required: 1 },
+            &format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}hold-retry"),
+        )
+        .unwrap();
+    let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+        .ledger_id
+        .clone();
+    let signature = signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": voter_id.clone(),
+        }))
+        .unwrap(),
+    );
+
+    let vote_request = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                    "voter_id": voter_id.clone(),
+                    "signature": signature.clone(),
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+
+    let first = surface.router().oneshot(vote_request()).await.unwrap();
+    assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
+    let first_packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(first_packs.packs.len(), 1);
+    let persisted_pack_id = first_packs.packs[0].pack_id.clone();
+
+    let second = surface.router().oneshot(vote_request()).await.unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(second_packs.packs.len(), 1);
+    assert_eq!(second_packs.packs[0].pack_id, persisted_pack_id);
+    let requests = capture.requests.lock().await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
+    assert_eq!(requests[0].1["receipt_pack_id"], persisted_pack_id);
+    drop(requests);
+
+    let altered = Ed25519Signer::from_secret_material("altered-governed-vote").sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id,
+            "ledger_id": ledger_id,
+            "voter_id": voter_id.clone(),
+        }))
+        .unwrap(),
+    );
+    let altered_response = surface
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"voter_id": voter_id, "signature": altered}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(altered_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(capture.requests.lock().await.len(), 2);
+
     let _ = shutdown_tx.send(());
     let _ = server.await;
     unsafe {

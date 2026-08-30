@@ -1,5 +1,6 @@
 // Independent service-side candidate admission and pure Prepare transition.
 
+use super::{WitnessServiceFailureCodeV1, WitnessServiceRequestBodyV1, WitnessServiceRequestV1};
 use crate::persistence_protocol::{
     AuthorityPairIdentityV1, CandidateV1, GenesisPredecessorV1, PROTOCOL_SCHEMA_VERSION,
     ProtocolError, ProtocolLimitsV1, ProtocolResult, PublicationMappingV1,
@@ -10,11 +11,8 @@ use crate::persistence_protocol::{
 };
 use crate::witness_engine::store::WitnessAdmissionEntryV1;
 use crate::witness_engine::{
-    WitnessStoreEnvelopeV1, WitnessStoreExpectationV1, WitnessStoredPreparedV1,
-    WitnessStoreTransitionV1, validate_store_transition,
-};
-use super::{
-    WitnessServiceFailureCodeV1, WitnessServiceRequestBodyV1, WitnessServiceRequestV1,
+    WitnessStoreEnvelopeV1, WitnessStoreExpectationV1, WitnessStoreTransitionV1,
+    WitnessStoredPreparedV1, validate_store_transition,
 };
 use serde::{Deserialize, Serialize};
 use swarm_crypto::{DetachedSignature, Ed25519Signer};
@@ -239,8 +237,7 @@ fn verify_public_prepare_inner(
     if current_envelope.session.as_ref() != Some(session) {
         return Err(WitnessServiceFailureCodeV1::StaleSession);
     }
-    if expected_head.as_deref()
-        != current_envelope.current.as_ref().map(|stored| &stored.head)
+    if expected_head.as_deref() != current_envelope.current.as_ref().map(|stored| &stored.head)
         || candidate.preimage.predecessor_head.as_ref() != expected_head.as_deref()
     {
         return Err(WitnessServiceFailureCodeV1::ExpectedHeadMismatch);
@@ -554,12 +551,7 @@ impl VerifiedPrepareResolutionV1 {
     pub fn into_outcome_for_store(
         self,
         current: &WitnessStoreEnvelopeV1,
-    ) -> ProtocolResult<(
-        WitnessSessionV1,
-        String,
-        String,
-        WitnessPrepareOutcomeV1,
-    )> {
+    ) -> ProtocolResult<(WitnessSessionV1, String, String, WitnessPrepareOutcomeV1)> {
         current.validate()?;
         if current.store_state_digest()? != self.store_state_digest {
             return Err(ProtocolError::WitnessOutcomeMismatch);
@@ -574,9 +566,7 @@ impl VerifiedPrepareResolutionV1 {
             VerifiedPrepareResolutionKindV1::AlreadyPrepared if same => {
                 WitnessPrepareOutcomeV1::AlreadyPrepared(stored.prepared.clone())
             }
-            VerifiedPrepareResolutionKindV1::Conflict if !same => {
-                WitnessPrepareOutcomeV1::Conflict
-            }
+            VerifiedPrepareResolutionKindV1::Conflict if !same => WitnessPrepareOutcomeV1::Conflict,
             _ => return Err(ProtocolError::WitnessOutcomeMismatch),
         };
         Ok((self.session, self.txid, self.candidate_digest, outcome))
@@ -752,12 +742,13 @@ pub fn prepare_verified_candidate(
         prepared: verified.prepared,
     });
     proposed.genesis_abort = None;
-    proposed.store_generation = proposed
-        .store_generation
-        .checked_add(1)
-        .ok_or(ProtocolError::Overflow {
-            counter: "store_generation",
-        })?;
+    proposed.store_generation =
+        proposed
+            .store_generation
+            .checked_add(1)
+            .ok_or(ProtocolError::Overflow {
+                counter: "store_generation",
+            })?;
     // The outer signature is excluded from the signing preimage and is
     // replaced by `seal`; retaining the old bytes here cannot authorize it.
     proposed.signing_bytes()?;
