@@ -52,7 +52,7 @@ cargo install --git https://github.com/backbay-labs/ambush swarm-runtime-http --
 > An XDR tells you what it blocked.<br>
 > **Ambush proves what it saw, what it was allowed to do, and why it was allowed to do it.**
 
-Ambush is a swarm that hunts, and it is built to be trusted with the trigger.
+Ambush is a cyber swarm of agents that hunt like a colony and answer like a court.
 
 Eight typed agents share one substrate. **No agent holds the picture.** Each one
 deposits what it saw as a signed, decaying trace onto the host it saw it on, and
@@ -60,10 +60,10 @@ the threat assembles itself out of what accumulates. There is no central
 correlator, no saved search, and no orchestrator handing out work. Detection is
 what the substrate does.
 
-A swarm that can isolate your production fleet has to be governable. Every
+A swarm that can isolate your production fleet has to answer for it. Every
 destructive action routes through a gate that will not open without a signed
-authorization the dispatcher revalidates, and every decision seals into a receipt
-that verifies offline.
+authorization, revalidated by the dispatcher before it reaches an adapter. Every
+decision seals into a receipt that verifies offline.
 
 Detect-only is the default. Live response is one config line, and the runtime
 will refuse to enable it on a substrate that cannot survive a restart.
