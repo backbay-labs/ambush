@@ -73,8 +73,9 @@ pub use envelope::{
 pub use hypothesis_graph_store::{
     ConfiguredHypothesisGraphStore, DurableTaskRecord, FileHypothesisGraphStore, GraphStoreError,
     GraphStoreRevision, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
-    MemoryHypothesisGraphStore, TaskClaimResult, TaskFailure, TaskMutationResult, TaskStore,
-    TaskTerminalResult, validate_task_logical_identity, validate_task_terminal_envelope,
+    MemoryHypothesisGraphStore, TaskClaimResult, TaskFailure, TaskFailureEnvelope,
+    TaskMutationResult, TaskStore, TaskTerminalResult, validate_task_failure_envelope,
+    validate_task_logical_identity, validate_task_terminal_envelope,
 };
 pub use incident::{
     AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,

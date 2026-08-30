@@ -26,9 +26,10 @@ use std::sync::{
 #[cfg(test)]
 use std::time::Duration;
 use swarm_core::hypothesis_graph::{
-    FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime, GraphResourceLimits,
-    HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, LeaseId, TaskClaimRequest, TaskId, TaskLease,
-    TaskRecord, TaskState, TaskTerminalEnvelope, TaskTerminalProof, derive_logical_task_id,
+    EvidenceWitness, FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime,
+    GraphResourceLimits, HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, IdempotencyKey, LeaseId,
+    TaskCapabilityProof, TaskClaimRequest, TaskId, TaskLease, TaskRecord, TaskState,
+    TaskTerminalEnvelope, TaskTerminalProof, derive_logical_task_id,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::{
@@ -2646,18 +2647,15 @@ fn complete_task_op(
 #[allow(clippy::too_many_arguments)]
 fn fail_task_op(
     state: &mut GraphStoreState,
-    task_id: &str,
     expected_generation: u64,
-    lease_id: &LeaseId,
-    fence: FencingToken,
     now: GraphLogicalTime,
-    failure: TaskFailure,
+    envelope: TaskFailureEnvelope,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
     observe_logical_time(state, now)?;
-    let entry = task_entry_mut(state, task_id)?;
+    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
     ensure_task_generation(entry, expected_generation)?;
-    let lease = ensure_lease(entry, lease_id, fence)?;
+    let lease = ensure_lease(entry, &envelope.lease_id, envelope.fencing_token)?;
     if entry.task.state != TaskState::Claimed {
         return Err(GraphStoreError::InvalidTransition {
             reason: "only claimed tasks can fail".to_string(),
@@ -2673,38 +2671,42 @@ fn fail_task_op(
             task_id: entry.task.request.task_id.clone(),
         });
     }
-    failure.validate()?;
-    if failure.failed_at > now {
+    validate_task_failure_envelope(&entry.task, &envelope, limits)?;
+    if envelope.failure.failed_at > now {
         return Err(GraphStoreError::InvalidTransition {
             reason: "failure time is ahead of the injected logical clock".to_string(),
         });
     }
-    if failure.failed_at < lease.issued_at || failure.failed_at > lease.expires_at {
-        return Err(GraphStoreError::InvalidTransition {
-            reason: "failure time must fall within the active lease".to_string(),
-        });
-    }
-    let proof = TaskTerminalProof::new(
-        entry.task.generation,
-        lease,
-        TaskState::Failed,
-        failure.failed_by,
-        failure.failed_at,
-        limits.max_task_lease_ms,
-    )
-    .map_err(GraphStoreError::Admission)?;
-    entry.task.terminal_history.push(proof);
-    entry.task.state = TaskState::Failed;
-    entry.task.generation = entry.task.generation.saturating_add(1);
-    entry.task.lease = None;
-    entry.task.completion = None;
-    entry.generation =
+    let next_task_generation =
+        entry
+            .task
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "task generation overflow".to_string(),
+            })?;
+    let next_entry_generation =
         entry
             .generation
             .checked_add(1)
             .ok_or_else(|| GraphStoreError::InvalidState {
                 reason: "task generation overflow".to_string(),
             })?;
+    let proof = TaskTerminalProof::new(
+        entry.task.generation,
+        lease,
+        TaskState::Failed,
+        envelope.failure.failed_by,
+        envelope.failure.failed_at,
+        limits.max_task_lease_ms,
+    )
+    .map_err(GraphStoreError::Admission)?;
+    entry.task.terminal_history.push(proof);
+    entry.task.state = TaskState::Failed;
+    entry.task.generation = next_task_generation;
+    entry.task.lease = None;
+    entry.task.completion = None;
+    entry.generation = next_entry_generation;
     Ok(StateMutation {
         value: TaskMutationMarker {
             task: entry.task.clone(),
@@ -2857,6 +2859,199 @@ pub struct TaskFailure {
     pub failed_by: AgentId,
     pub failed_at: GraphLogicalTime,
     pub summary_digest: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskFailureMaterial<'a> {
+    task_id: &'a TaskId,
+    idempotency_key: &'a IdempotencyKey,
+    lease_id: &'a LeaseId,
+    fencing_token: FencingToken,
+    failure: &'a TaskFailure,
+    capability: &'a TaskCapabilityProof,
+    terminal_scope: &'a str,
+}
+
+/// A signed failure publication bound to one exact claim, capability, lease,
+/// and fence. The structural constructor intentionally leaves the witness
+/// absent so an assembled request cannot be mistaken for durable authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskFailureEnvelope {
+    pub task_id: TaskId,
+    pub idempotency_key: IdempotencyKey,
+    pub lease_id: LeaseId,
+    pub fencing_token: FencingToken,
+    pub failure: TaskFailure,
+    pub capability: TaskCapabilityProof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_witness: Option<EvidenceWitness>,
+}
+
+impl TaskFailureEnvelope {
+    pub fn new(
+        task_id: TaskId,
+        idempotency_key: IdempotencyKey,
+        lease_id: LeaseId,
+        fencing_token: FencingToken,
+        failure: TaskFailure,
+        capability: TaskCapabilityProof,
+    ) -> Result<Self, GraphStoreError> {
+        let envelope = Self {
+            task_id,
+            idempotency_key,
+            lease_id,
+            fencing_token,
+            failure,
+            capability,
+            terminal_witness: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn signed_with(
+        mut self,
+        signer: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let signer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+        if signer_identity != self.failure.failed_by || signer_identity != self.capability.claimant
+        {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "failure signer does not match the claimant actor".to_string(),
+                },
+            ));
+        }
+        let scoped_agent_id = scoped_agent_id.into();
+        if scoped_agent_id.trim().is_empty() || scoped_agent_id.len() > 128 {
+            return Err(GraphStoreError::InvalidState {
+                reason: "failure terminal scope is invalid".to_string(),
+            });
+        }
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.terminal_witness = Some(
+            EvidenceWitness::new(signer, self.capability.role, scoped_agent_id, &bytes)
+                .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_for_scope(&self, terminal_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskFailureMaterial {
+            task_id: &self.task_id,
+            idempotency_key: &self.idempotency_key,
+            lease_id: &self.lease_id,
+            fencing_token: self.fencing_token,
+            failure: &self.failure,
+            capability: &self.capability,
+            terminal_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let terminal_scope = self
+            .terminal_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(terminal_scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphStoreError> {
+        self.failure.validate()?;
+        if self.capability.task_id != self.task_id {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "failure capability task does not match envelope task".to_string(),
+            });
+        }
+        if self.capability.claimant != self.failure.failed_by {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "failure actor and capability claimant must match".to_string(),
+                },
+            ));
+        }
+        if let Some(witness) = &self.terminal_witness {
+            if witness.producer_identity != self.failure.failed_by
+                || witness.producer_role != self.capability.role
+            {
+                return Err(GraphStoreError::Admission(
+                    GraphAdmissionError::InvalidWitness {
+                        reason: "failure witness does not bind actor and capability role"
+                            .to_string(),
+                    },
+                ));
+            }
+            witness
+                .validate(&self.canonical_bytes_without_witness()?)
+                .map_err(GraphStoreError::Admission)?;
+        }
+        Ok(())
+    }
+
+    fn validate_for_task(
+        &self,
+        task: &TaskRecord,
+        limits: &GraphResourceLimits,
+    ) -> Result<(), GraphStoreError> {
+        self.validate()?;
+        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)
+            .map_err(GraphStoreError::Admission)?;
+        if task.state != TaskState::Claimed || task.completion.is_some() {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "failure envelope requires an active claimed task".to_string(),
+            });
+        }
+        let lease = task
+            .lease
+            .as_ref()
+            .ok_or_else(|| GraphStoreError::InvalidTransition {
+                reason: "failure envelope requires the task's active lease".to_string(),
+            })?;
+        self.capability
+            .validate_for_claim(&task.request)
+            .map_err(GraphStoreError::Admission)?;
+        if self.task_id != task.request.task_id
+            || self.idempotency_key != task.request.idempotency_key
+            || self.lease_id != lease.lease_id
+            || self.fencing_token != lease.fencing_token
+            || self.failure.failed_by != lease.holder
+        {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "failure envelope does not bind the active task lease".to_string(),
+            });
+        }
+        if self.failure.failed_at < lease.issued_at || self.failure.failed_at > lease.expires_at {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "failure time must fall within the active lease".to_string(),
+            });
+        }
+        let Some(witness) = self.terminal_witness.as_ref() else {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "durable task failure requires a signed terminal witness".to_string(),
+                },
+            ));
+        };
+        witness
+            .validate(&self.canonical_bytes_without_witness()?)
+            .map_err(GraphStoreError::Admission)
+    }
+}
+
+/// Validate a signed failure publication at the durable task-store boundary.
+pub fn validate_task_failure_envelope(
+    task: &TaskRecord,
+    envelope: &TaskFailureEnvelope,
+    limits: &GraphResourceLimits,
+) -> Result<(), GraphStoreError> {
+    envelope.validate_for_task(task, limits)
 }
 
 impl TaskFailure {
@@ -3093,12 +3288,9 @@ pub trait HypothesisGraphStore: Send + Sync {
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn fail_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        failure: TaskFailure,
+        envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn expire_task(
         &self,
@@ -3355,24 +3547,12 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn fail_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        failure: TaskFailure,
+        envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            fail_task_op(
-                state,
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                failure,
-                &self.limits,
-            )
+            fail_task_op(state, expected_generation, now, envelope, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6244,24 +6424,12 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn fail_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        failure: TaskFailure,
+        envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            fail_task_op(
-                state,
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                failure,
-                &self.limits,
-            )
+            fail_task_op(state, expected_generation, now, envelope, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6436,20 +6604,13 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn fail_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        failure: TaskFailure,
+        envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => {
-                store.fail_task(task_id, expected_generation, lease_id, fence, now, failure)
-            }
-            Self::LocalFiles(store) => {
-                store.fail_task(task_id, expected_generation, lease_id, fence, now, failure)
-            }
+            Self::Memory(store) => store.fail_task(expected_generation, now, envelope),
+            Self::LocalFiles(store) => store.fail_task(expected_generation, now, envelope),
         }
     }
 
@@ -6552,6 +6713,37 @@ mod tests {
         )
         .unwrap()
         .signed_with(&claimant, format!("task-terminal:{}", request.task_id))
+        .unwrap()
+    }
+
+    fn signed_failure_envelope(
+        request: &TaskClaimRequest,
+        lease: &TaskLease,
+        failed_at: GraphLogicalTime,
+        summary_digest: &str,
+        signer_byte: u8,
+    ) -> TaskFailureEnvelope {
+        let claimant = signer(signer_byte);
+        let capability = TaskCapabilityProof::signed_with(
+            request.task_id.clone(),
+            request.claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &claimant,
+            format!("task-capability:{}", request.task_id),
+        )
+        .unwrap();
+        TaskFailureEnvelope::new(
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            TaskFailure::new(request.claimant.clone(), failed_at, summary_digest).unwrap(),
+            capability,
+        )
+        .unwrap()
+        .signed_with(&claimant, format!("task-failure:{}", request.task_id))
         .unwrap()
     }
 
@@ -6737,18 +6929,16 @@ mod tests {
             .unwrap();
         let failure_lease = failure_claim.lease.clone().unwrap();
         let before_failure = store.snapshot().unwrap();
-        let failure = TaskFailure::new(
-            failure_request.claimant,
+        let failure = signed_failure_envelope(
+            &failure_request,
+            &failure_lease,
             GraphLogicalTime::new(109),
             "summary:failure-barrier",
-        )
-        .unwrap();
+            2,
+        );
         assert!(matches!(
             store.fail_task(
-                "task:failure-barrier",
                 failure_claim.task_generation,
-                &failure_lease.lease_id,
-                failure_lease.fencing_token,
                 GraphLogicalTime::new(110),
                 failure,
             ),
@@ -6854,6 +7044,94 @@ mod tests {
                 .task
                 .state,
             TaskState::Completed
+        );
+        drop(store);
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn durable_failure_requires_claimant_signature_and_binds_exact_failure() {
+        let path = temp_dir("signed-terminal-failure");
+        let store = FileHypothesisGraphStore::new(&path, graph(), signer(22)).unwrap();
+        let request = request(23, "signed-failure");
+        let claim = store
+            .claim_task(request.clone(), GraphLogicalTime::new(100), 20)
+            .unwrap();
+        let lease = claim.lease.clone().unwrap();
+        let claimant = signer(23);
+        let capability = TaskCapabilityProof::signed_with(
+            request.task_id.clone(),
+            request.claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &claimant,
+            "task-capability:signed-failure",
+        )
+        .unwrap();
+        let unsigned = TaskFailureEnvelope::new(
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            TaskFailure::new(
+                request.claimant.clone(),
+                GraphLogicalTime::new(110),
+                "summary:signed-failure",
+            )
+            .unwrap(),
+            capability,
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        assert!(matches!(
+            store.fail_task(
+                claim.task_generation,
+                GraphLogicalTime::new(110),
+                unsigned.clone(),
+            ),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+        assert!(matches!(
+            unsigned.signed_with(&signer(24), "task-failure:signed-failure"),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+
+        let mut tampered = signed_failure_envelope(
+            &request,
+            &lease,
+            GraphLogicalTime::new(110),
+            "summary:signed-failure",
+            23,
+        );
+        tampered.failure.summary_digest = "summary:attacker-selected".to_string();
+        assert!(matches!(
+            store.fail_task(claim.task_generation, GraphLogicalTime::new(110), tampered,),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let valid = signed_failure_envelope(
+            &request,
+            &lease,
+            GraphLogicalTime::new(110),
+            "summary:signed-failure",
+            23,
+        );
+        assert_eq!(
+            store
+                .fail_task(claim.task_generation, GraphLogicalTime::new(110), valid,)
+                .unwrap()
+                .task
+                .state,
+            TaskState::Failed
         );
         drop(store);
         let _ = fs::remove_dir_all(path);

@@ -257,6 +257,17 @@ fn partition_governance_state_path_for_bootstrap(
     Ok(stable)
 }
 
+fn partition_governance_state_path_for_reinitialization(
+    config_path: &std::path::Path,
+    identity: &swarm_core::config::IdentityConfig,
+) -> Result<PathBuf, std::io::Error> {
+    // Recovery authenticates an existing Tom key and must archive the same
+    // stream ordinary bootstrap would open for that key. Selecting only the
+    // new stable path can leave a live legacy stream behind to resurface if
+    // the replacement is later removed.
+    partition_governance_state_path_for_bootstrap(config_path, identity, AgentKeyLoadStatus::Loaded)
+}
+
 fn admit_runtime_identity(
     registry: &FileAgentIdentityRegistry,
     role: AgentRole,
@@ -858,15 +869,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &config.identity,
         ))
         .map_err(std::io::Error::other)?;
-        let tom_identity =
-            load_persisted_agent_identity(&identity_store, AgentRole::Tom, "primary")?;
+        let tom_identity = identity_store
+            .load_existing(AgentRole::Tom, "primary")
+            .map_err(std::io::Error::other)?;
         admit_required_tom_identity(
             &identity_registry,
             &tom_identity,
             swarm_runtime::runtime_events::now_ms(),
         )?;
         let governance_path =
-            default_partition_governance_state_path(&cli.config, &config.identity);
+            partition_governance_state_path_for_reinitialization(&cli.config, &config.identity)?;
         GovernancePolicy::reinitialize_persistence(
             GovernancePolicyConfig {
                 contingency_lease_ttl_ms: config.runtime.partition_contingency_lease_ttl_ms,
@@ -1567,7 +1579,8 @@ mod tests {
         Cli, ShippedGovernanceWiring, build_approval_harness,
         default_partition_governance_state_path, governance_policy_for_bootstrap,
         legacy_partition_governance_state_path, partition_governance_state_path_for_bootstrap,
-        register_optional_calico_agent, register_optional_sphinx_agent, watch_paths_differ,
+        partition_governance_state_path_for_reinitialization, register_optional_calico_agent,
+        register_optional_sphinx_agent, watch_paths_differ,
     };
     use clap::Parser;
     use std::path::PathBuf;
@@ -1742,6 +1755,45 @@ mod tests {
         .expect("the pre-upgrade signed stream remains bootable in place");
         drop(reopened);
         drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reinitialization_targets_the_active_legacy_or_stable_governance_stream() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-governance-reinitialize-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let config_path = root.join("rulesets/swarm.yaml");
+        let identity_config = swarm_core::config::IdentityConfig {
+            agent_key_dir: root.join("stable/agent-keys").display().to_string(),
+            registry_dir: root.join("stable/registry").display().to_string(),
+        };
+        let stable_path = default_partition_governance_state_path(&config_path, &identity_config);
+        let legacy_path = legacy_partition_governance_state_path(&config_path);
+        std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_path, b"legacy-stream").unwrap();
+
+        assert_eq!(
+            partition_governance_state_path_for_reinitialization(&config_path, &identity_config,)
+                .unwrap(),
+            legacy_path,
+            "recovery must archive the legacy stream that bootstrap currently selects"
+        );
+
+        std::fs::create_dir_all(stable_path.parent().unwrap()).unwrap();
+        std::fs::write(&stable_path, b"stable-stream").unwrap();
+        assert_eq!(
+            partition_governance_state_path_for_reinitialization(&config_path, &identity_config,)
+                .unwrap(),
+            stable_path,
+            "a present stable stream remains authoritative over legacy residue"
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 

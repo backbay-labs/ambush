@@ -1219,7 +1219,8 @@ pub struct EvidenceWitness {
 }
 
 impl EvidenceWitness {
-    fn new(
+    /// Sign exact canonical material for a typed graph publication.
+    pub fn new(
         key: &Keypair,
         role: GraphProducerRole,
         scoped_agent_id: impl Into<String>,
@@ -1240,7 +1241,8 @@ impl EvidenceWitness {
         })
     }
 
-    fn validate(&self, bytes: &[u8]) -> Result<(), GraphAdmissionError> {
+    /// Verify this witness against the exact canonical material it attests.
+    pub fn validate(&self, bytes: &[u8]) -> Result<(), GraphAdmissionError> {
         validate_schema(self.schema_version)?;
         validate_text("witness.scoped_agent_id", &self.scoped_agent_id, 128)?;
         validate_text("witness.producer_identity", &self.producer_identity.0, 256)?;
