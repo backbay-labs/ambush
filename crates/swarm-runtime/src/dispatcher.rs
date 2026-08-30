@@ -13,7 +13,7 @@ use futures_util::FutureExt;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swarm_consensus::ConsensusGovernanceReceipt;
 use swarm_core::agent::{
@@ -434,6 +434,23 @@ pub trait RequestResponseRouter: Send + Sync {
         pack_id: &str,
     ) -> Result<Option<ApprovalReceiptPackReport>, RuntimeError>;
 
+    /// Return the immutable terminal outcome for an already executed governed
+    /// human approval. Implementations must durably key the result by the exact
+    /// receipt-pack identity so a lost HTTP response can be retried safely.
+    async fn load_human_resume_outcome(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<AuditTrail>, RuntimeError>;
+
+    /// Durably publish the terminal outcome before the resume HTTP response is
+    /// allowed to succeed. Re-persisting the same audit is idempotent; a
+    /// different audit for the same receipt pack must fail closed.
+    async fn persist_human_resume_outcome(
+        &self,
+        pack_id: &str,
+        audit: &AuditTrail,
+    ) -> Result<(), RuntimeError>;
+
     /// Reconstitute execution context from a persisted hold without evaluating
     /// mutable ordinary policy a second time. This awaited step must be
     /// side-effect-free: it runs before the dispatcher samples the trusted clock
@@ -460,11 +477,24 @@ pub struct HumanApprovalResumeDispatcher {
     expected_threshold: ThresholdRule,
 }
 
+/// Result of a governed human resume. `replayed` means the exact receipt pack
+/// had already executed and this audit came from the immutable outcome store.
+pub struct HumanApprovalResumeResult {
+    pub audit: AuditTrail,
+    pub replayed: bool,
+    pub action_kind: Option<String>,
+}
+
 trait HumanResumeClock: Send + Sync {
     fn now_ms(&self) -> i64;
 }
 
 struct HostHumanResumeClock;
+
+fn human_resume_serialization_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 impl HumanResumeClock for HostHumanResumeClock {
     fn now_ms(&self) -> i64 {
@@ -559,6 +589,18 @@ impl HumanApprovalResumeDispatcher {
         &self,
         receipt_pack: ApprovalReceiptPackReport,
     ) -> Result<AuditTrail, RuntimeError> {
+        Ok(self.resume_with_status(receipt_pack).await?.audit)
+    }
+
+    pub async fn resume_with_status(
+        &self,
+        receipt_pack: ApprovalReceiptPackReport,
+    ) -> Result<HumanApprovalResumeResult, RuntimeError> {
+        // Serialize the consume/execute/persist transition process-wide. Every
+        // dispatcher instance is short-lived, so the lock cannot live on Self.
+        // This also makes a concurrent post-quorum callback wait for the first
+        // callback's durable outcome instead of racing the one-time hold.
+        let _resume_guard = human_resume_serialization_lock().lock().await;
         let persisted = self
             .router
             .load_persisted_human_approval(&receipt_pack.pack_id)
@@ -574,7 +616,19 @@ impl HumanApprovalResumeDispatcher {
                 "human approval pack does not match the persisted artifact".into(),
             ));
         }
+        if let Some(outcome) = self
+            .router
+            .load_human_resume_outcome(&receipt_pack.pack_id)
+            .await?
+        {
+            return Ok(HumanApprovalResumeResult {
+                audit: outcome,
+                replayed: true,
+                action_kind: None,
+            });
+        }
         let hold = self.reconcile_persisted_human_approval(&receipt_pack)?;
+        let action_kind = hold.request.action.kind().to_string();
         let approval_set_id = hold.approval_set_id.as_deref().ok_or_else(|| {
             RuntimeError::GovernanceAuthorization(
                 "pending human authorization is not bound to an approval set".into(),
@@ -622,13 +676,22 @@ impl HumanApprovalResumeDispatcher {
                 "consumed human hold changed during resume".into(),
             ));
         }
+        let pack_id = receipt_pack.pack_id.clone();
         let admitted = RoutedActionRequest::new(
             permit.bind_trusted_now_ms(trusted_now_ms),
             Some(consumed.verified_governance_receipt),
             Some(receipt_pack),
         )
         .map_err(RuntimeError::GovernanceAuthorization)?;
-        self.router.route_request(admitted).await
+        let audit = self.router.route_request(admitted).await?;
+        self.router
+            .persist_human_resume_outcome(&pack_id, &audit)
+            .await?;
+        Ok(HumanApprovalResumeResult {
+            audit,
+            replayed: false,
+            action_kind: Some(action_kind),
+        })
     }
 }
 
@@ -2115,8 +2178,8 @@ mod tests {
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use std::collections::VecDeque;
     use std::path::PathBuf;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use swarm_agents::tom_agent::{
         GovernanceDecision, GovernancePolicy, GovernancePolicyConfig, TomAgent,
@@ -2231,6 +2294,7 @@ mod tests {
         executor_calls: AtomicUsize,
         effect_calls: AtomicUsize,
         execution_now_ms: AtomicI64,
+        outcome: Mutex<Option<AuditTrail>>,
     }
 
     #[async_trait]
@@ -2290,6 +2354,37 @@ mod tests {
             pack_id: &str,
         ) -> Result<Option<ApprovalReceiptPackReport>, crate::RuntimeError> {
             Ok((pack_id == self.pack.pack_id).then(|| self.pack.clone()))
+        }
+
+        async fn load_human_resume_outcome(
+            &self,
+            pack_id: &str,
+        ) -> Result<Option<AuditTrail>, crate::RuntimeError> {
+            Ok((pack_id == self.pack.pack_id)
+                .then(|| self.outcome.lock().unwrap().clone())
+                .flatten())
+        }
+
+        async fn persist_human_resume_outcome(
+            &self,
+            pack_id: &str,
+            audit: &AuditTrail,
+        ) -> Result<(), crate::RuntimeError> {
+            if pack_id != self.pack.pack_id {
+                return Err(crate::RuntimeError::GovernanceAuthorization(
+                    "resume outcome pack id is not trusted".to_string(),
+                ));
+            }
+            let mut outcome = self.outcome.lock().unwrap();
+            if let Some(existing) = outcome.as_ref()
+                && serde_json::to_value(existing).unwrap() != serde_json::to_value(audit).unwrap()
+            {
+                return Err(crate::RuntimeError::GovernanceAuthorization(
+                    "resume outcome conflicts with persisted result".to_string(),
+                ));
+            }
+            *outcome = Some(audit.clone());
+            Ok(())
         }
 
         async fn restore_human_preflight(
@@ -2435,6 +2530,7 @@ mod tests {
             executor_calls: AtomicUsize::new(0),
             effect_calls: AtomicUsize::new(0),
             execution_now_ms: AtomicI64::new(i64::MIN),
+            outcome: Mutex::new(None),
         });
         (governance, router, clock, pack, set.set_id)
     }

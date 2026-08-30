@@ -211,6 +211,31 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
             .map(|lookup| lookup.report))
     }
 
+    async fn load_human_resume_outcome(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<swarm_spine::AuditTrail>, RuntimeError> {
+        let harness = self.approval_harness.as_ref().ok_or_else(|| {
+            RuntimeError::GovernanceAuthorization("human approval harness is not configured".into())
+        })?;
+        harness
+            .load_human_resume_outcome(pack_id)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))
+    }
+
+    async fn persist_human_resume_outcome(
+        &self,
+        pack_id: &str,
+        audit: &swarm_spine::AuditTrail,
+    ) -> Result<(), RuntimeError> {
+        let harness = self.approval_harness.as_ref().ok_or_else(|| {
+            RuntimeError::GovernanceAuthorization("human approval harness is not configured".into())
+        })?;
+        harness
+            .persist_human_resume_outcome(pack_id, audit)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))
+    }
+
     async fn restore_human_preflight(
         &self,
         hold: &GovernedHumanAuthorizationHold,

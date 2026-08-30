@@ -91,31 +91,30 @@ async fn governed_approval_resume_handler(
     let resume_dispatcher = state.human_approval_resume_dispatcher().ok_or_else(|| {
         PlatformApiError::service_unavailable("governance authority is not configured")
     })?;
-    let action_kind = resume_dispatcher
-        .reconcile_persisted_human_approval(&receipt_pack.report)
-        .map_err(|error| PlatformApiError::conflict(error.to_string()))?
-        .request
-        .action
-        .kind()
-        .to_string();
-    let audit = resume_dispatcher
-        .resume(receipt_pack.report.clone())
+    let resume = resume_dispatcher
+        .resume_with_status(receipt_pack.report.clone())
         .await
         .map_err(|error| PlatformApiError::conflict(error.to_string()))?;
+    let audit = resume.audit;
     let (response_receipt_id, response_error) = response_receipt_details(&audit);
-    state.publish_runtime_event(RuntimeEvent::ResponseExecution {
-        emitted_at_ms: now_ms(),
-        agent_id: principal.operator_id.to_string(),
-        hunt_id: audit.hunt_id.clone(),
-        action_kind,
-        response_kind: audit.response_kind().to_string(),
-        policy_verdict: audit.policy.verdict,
-        rule_name: audit.policy.rule_name.clone(),
-        reason: audit.policy.reason.clone(),
-        receipt_id: response_receipt_id.clone(),
-        governing_agent_id: None,
-        error: response_error,
-    });
+    if !resume.replayed {
+        let action_kind = resume.action_kind.ok_or_else(|| {
+            PlatformApiError::internal("fresh governed resume did not identify its action kind")
+        })?;
+        state.publish_runtime_event(RuntimeEvent::ResponseExecution {
+            emitted_at_ms: now_ms(),
+            agent_id: principal.operator_id.to_string(),
+            hunt_id: audit.hunt_id.clone(),
+            action_kind,
+            response_kind: audit.response_kind().to_string(),
+            policy_verdict: audit.policy.verdict,
+            rule_name: audit.policy.rule_name.clone(),
+            reason: audit.policy.reason.clone(),
+            receipt_id: response_receipt_id.clone(),
+            governing_agent_id: None,
+            error: response_error,
+        });
+    }
     Ok(Json(GovernedApprovalResumeResponse {
         approval_set_id,
         receipt_pack_id: receipt_pack.report.pack_id,

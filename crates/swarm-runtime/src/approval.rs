@@ -14,7 +14,7 @@ use swarm_crypto::{
     CryptoError, DetachedSignature, Ed25519Signer, Keypair, canonical_json_bytes, sha256,
     sha256_hex, verify_detached_signature,
 };
-use swarm_spine::{SpineError, build_signed_envelope, verify_envelope};
+use swarm_spine::{AuditTrail, SpineError, build_signed_envelope, verify_envelope};
 
 /// Approval vote persisted on a ledger entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -440,6 +440,9 @@ pub enum ApprovalReceiptPackStoreError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("approval resume outcome for receipt pack `{pack_id}` conflicts with durable state")]
+    ResumeOutcomeConflict { pack_id: String },
 }
 
 /// Errors surfaced by approval workflows.
@@ -545,6 +548,14 @@ struct ApprovalVerdictIndex {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ApprovalReceiptPackIndex {
     entries: Vec<ApprovalReceiptPackRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovalResumeOutcome {
+    schema_version: u32,
+    receipt_pack_id: String,
+    audit: AuditTrail,
 }
 
 #[derive(Debug, Clone)]
@@ -879,6 +890,12 @@ impl FileApprovalReceiptPackStore {
                 source,
             }
         })?;
+        fs::create_dir_all(root.join("resume-outcomes")).map_err(|source| {
+            ApprovalReceiptPackStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
         Ok(Self { root })
     }
 
@@ -890,6 +907,73 @@ impl FileApprovalReceiptPackStore {
 
     fn index_path(&self) -> PathBuf {
         self.root.join("index.json")
+    }
+
+    fn resume_outcome_path(&self, pack_id: &str) -> PathBuf {
+        self.root
+            .join("resume-outcomes")
+            .join(format!("{}.json", sanitize_id(pack_id)))
+    }
+
+    fn load_resume_outcome(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<AuditTrail>, ApprovalReceiptPackStoreError> {
+        let path = self.resume_outcome_path(pack_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let outcome = read_json::<ApprovalResumeOutcome, ApprovalReceiptPackStoreError>(
+            &path,
+            |path, source| ApprovalReceiptPackStoreError::Read { path, source },
+            |path, source| ApprovalReceiptPackStoreError::Parse { path, source },
+        )?;
+        if outcome.schema_version != 1 || outcome.receipt_pack_id != pack_id {
+            return Err(ApprovalReceiptPackStoreError::ResumeOutcomeConflict {
+                pack_id: pack_id.to_string(),
+            });
+        }
+        Ok(Some(outcome.audit))
+    }
+
+    fn persist_resume_outcome(
+        &self,
+        pack_id: &str,
+        audit: &AuditTrail,
+    ) -> Result<(), ApprovalReceiptPackStoreError> {
+        let path = self.resume_outcome_path(pack_id);
+        let outcome = ApprovalResumeOutcome {
+            schema_version: 1,
+            receipt_pack_id: pack_id.to_string(),
+            audit: audit.clone(),
+        };
+        if let Some(existing) = self.load_resume_outcome(pack_id)? {
+            let existing = serde_json::to_value(existing).map_err(|source| {
+                ApprovalReceiptPackStoreError::Parse {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            let proposed = serde_json::to_value(audit).map_err(|source| {
+                ApprovalReceiptPackStoreError::Parse {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            return if existing == proposed {
+                Ok(())
+            } else {
+                Err(ApprovalReceiptPackStoreError::ResumeOutcomeConflict {
+                    pack_id: pack_id.to_string(),
+                })
+            };
+        }
+        write_pretty_json(
+            &path,
+            &outcome,
+            |path, source| ApprovalReceiptPackStoreError::Write { path, source },
+            |path, source| ApprovalReceiptPackStoreError::Parse { path, source },
+        )
     }
 
     fn read_index(&self) -> Result<ApprovalReceiptPackIndex, ApprovalReceiptPackStoreError> {
@@ -1419,6 +1503,36 @@ impl DefaultApprovalHarness {
     pub fn list_receipt_packs(&self) -> Result<ApprovalReceiptPackList, ApprovalError> {
         let _store_guard = self.store_lock.acquire()?;
         self.receipt_pack_store()?.list().map_err(Into::into)
+    }
+
+    pub fn load_human_resume_outcome(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<AuditTrail>, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
+        let store = self.receipt_pack_store()?;
+        if store.load(pack_id)?.is_none() {
+            return Err(ApprovalError::ApprovalReceiptPackNotFound {
+                pack_id: pack_id.to_string(),
+            });
+        }
+        store.load_resume_outcome(pack_id).map_err(Into::into)
+    }
+
+    pub fn persist_human_resume_outcome(
+        &self,
+        pack_id: &str,
+        audit: &AuditTrail,
+    ) -> Result<(), ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
+        let store = self.receipt_pack_store()?;
+        if store.load(pack_id)?.is_none() {
+            return Err(ApprovalError::ApprovalReceiptPackNotFound {
+                pack_id: pack_id.to_string(),
+            });
+        }
+        store.persist_resume_outcome(pack_id, audit)?;
+        Ok(())
     }
 
     pub fn verify_receipt_pack(&self, pack_id: &str) -> Result<bool, ApprovalError> {

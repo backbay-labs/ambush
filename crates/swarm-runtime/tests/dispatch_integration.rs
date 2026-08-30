@@ -317,6 +317,7 @@ struct RuntimeBackedRouter<P, E> {
     approval_harness: DefaultApprovalHarness,
     human_voter: Ed25519Signer,
     trusted_human_packs: Arc<Mutex<BTreeMap<String, ApprovalReceiptPackReport>>>,
+    trusted_human_outcomes: Arc<Mutex<BTreeMap<String, AuditTrail>>>,
     fail_routes_remaining: Arc<AtomicUsize>,
 }
 
@@ -341,6 +342,7 @@ impl<P, E> RuntimeBackedRouter<P, E> {
             .unwrap(),
             human_voter: Ed25519Signer::from_secret_material("dispatcher-human-voter"),
             trusted_human_packs: Arc::new(Mutex::new(BTreeMap::new())),
+            trusted_human_outcomes: Arc::new(Mutex::new(BTreeMap::new())),
             fail_routes_remaining: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -494,6 +496,36 @@ where
             .unwrap()
             .get(pack_id)
             .cloned())
+    }
+
+    async fn load_human_resume_outcome(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<AuditTrail>, RuntimeError> {
+        Ok(self
+            .trusted_human_outcomes
+            .lock()
+            .unwrap()
+            .get(pack_id)
+            .cloned())
+    }
+
+    async fn persist_human_resume_outcome(
+        &self,
+        pack_id: &str,
+        audit: &AuditTrail,
+    ) -> Result<(), RuntimeError> {
+        let mut outcomes = self.trusted_human_outcomes.lock().unwrap();
+        if let Some(existing) = outcomes.get(pack_id) {
+            if serde_json::to_value(existing).unwrap() != serde_json::to_value(audit).unwrap() {
+                return Err(RuntimeError::GovernanceAuthorization(
+                    "test human resume outcome conflicts with persisted result".into(),
+                ));
+            }
+            return Ok(());
+        }
+        outcomes.insert(pack_id.to_string(), audit.clone());
+        Ok(())
     }
 
     async fn restore_human_preflight(
@@ -1697,7 +1729,7 @@ async fn governed_human_resume_executes_once_without_re_evaluating_policy()
     let audit = resume.resume(pack.clone()).await?;
 
     assert_eq!(audit.hunt_id, "hunt-governed-human-resume");
-    assert!(matches!(audit.response, AuditResponseRecord::Success(_)));
+    assert!(matches!(&audit.response, AuditResponseRecord::Success(_)));
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
@@ -1705,8 +1737,11 @@ async fn governed_human_resume_executes_once_without_re_evaluating_policy()
     let replay = resume
         .resume(pack)
         .await
-        .expect_err("a human and governance approval pair must be one-shot");
-    assert!(replay.to_string().contains("pending human authorization"));
+        .expect("a completed approval retry must return the immutable prior audit");
+    assert_eq!(
+        serde_json::to_value(&replay)?,
+        serde_json::to_value(&audit)?
+    );
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
@@ -1927,7 +1962,14 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
 
-    resume.resume(valid).await?;
+    let (first, concurrent_retry) =
+        tokio::join!(resume.resume(valid.clone()), resume.resume(valid.clone()));
+    first?;
+    concurrent_retry.expect("a concurrent callback must return the committed audit");
+    resume
+        .resume(valid)
+        .await
+        .expect("a lost response retry must return the committed audit");
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
@@ -2089,7 +2131,7 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
         AgentId::new("tom", "primary"),
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
     )?);
-    let replay = HumanApprovalResumeDispatcher::new(
+    HumanApprovalResumeDispatcher::new(
         consumed_reload
             .authority()
             .expect("consumed governance should mint an authority"),
@@ -2099,8 +2141,7 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
     )
     .resume(pack)
     .await
-    .expect_err("restart must preserve one-time consumption");
-    assert!(replay.to_string().contains("pending human authorization"));
+    .expect("restart retry must return the durable committed outcome");
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);

@@ -4284,7 +4284,16 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
         )
         .await
         .unwrap();
-    assert!(!duplicate_vote.status().is_success());
+    let duplicate_status = duplicate_vote.status();
+    let duplicate_body = to_bytes(duplicate_vote.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        duplicate_status,
+        StatusCode::OK,
+        "unexpected duplicate vote response: {}",
+        String::from_utf8_lossy(&duplicate_body)
+    );
 
     let replay = reqwest::Client::new()
         .post(format!(
@@ -4295,7 +4304,7 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
         .send()
         .await
         .unwrap();
-    assert_eq!(replay.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(replay.status(), reqwest::StatusCode::OK);
     tokio::task::yield_now().await;
     while let Ok(event) = runtime_rx.try_recv() {
         if let RuntimeEvent::ResponseExecution { response_kind, .. } = event {
