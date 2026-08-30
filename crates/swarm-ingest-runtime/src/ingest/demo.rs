@@ -466,7 +466,7 @@ fn built_in_first_run_event() -> Result<TelemetryEvent, FirstRunWizardError> {
     Ok(super::validate_and_parse(json!({
         "source": "synthetic",
         "event_id": "evt-first-run-1",
-        "timestamp": 1_700_000_000_000i64,
+        "timestamp": super::now_ms(),
         "host_id": "host-first-run",
         "payload": {
             "kind": "process_start",

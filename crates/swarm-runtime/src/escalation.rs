@@ -421,7 +421,18 @@ mod tests {
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::{AgentId, EscalationEvent, Severity};
-    use swarm_pheromone::{DepositSigningPayload, InMemoryPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_pheromone::{
+        DepositSigningPayload, InMemoryPheromoneSubstrate as ReplayInMemoryPheromoneSubstrate,
+        PheromoneSubstrate,
+    };
+
+    struct InMemoryPheromoneSubstrate;
+
+    impl InMemoryPheromoneSubstrate {
+        fn replay(config: PheromoneConfig) -> ReplayInMemoryPheromoneSubstrate {
+            ReplayInMemoryPheromoneSubstrate::new_for_replay(config)
+        }
+    }
 
     fn test_config() -> PheromoneConfig {
         PheromoneConfig {
@@ -481,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn below_threshold_returns_no_events() {
-        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::replay(test_config()));
         substrate
             .deposit(make_deposit(&signing_key_a(), 0.3, 1_700_000_000))
             .await
@@ -501,7 +512,7 @@ mod tests {
     #[tokio::test]
     async fn single_source_above_threshold_returns_no_event() {
         let key = signing_key_a();
-        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::replay(test_config()));
         substrate
             .deposit(make_deposit(&key, 0.9, 1_700_000_000))
             .await
@@ -523,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn dual_source_alert_threshold_emits_alert_event() {
-        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::replay(test_config()));
         for key in [&signing_key_a(), &signing_key_b()] {
             substrate
                 .deposit(make_deposit(key, 0.9, 1_700_000_000))
@@ -545,7 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn dual_source_incident_threshold_emits_incident_event() {
-        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::replay(test_config()));
         for key in [&signing_key_a(), &signing_key_b()] {
             for _ in 0..3 {
                 substrate
@@ -568,7 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn mode_progresses_from_normal_to_alert_to_incident() {
-        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::replay(test_config()));
         let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
 
         for key in [&signing_key_a(), &signing_key_b()] {
@@ -597,7 +608,7 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_alerts_do_not_deescalate_incident_mode() {
-        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::replay(test_config()));
         let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
         monitor.mode_state.transition_to(
             SwarmMode::Incident,

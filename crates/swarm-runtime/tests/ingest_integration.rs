@@ -16,6 +16,8 @@ use swarm_runtime::startup_attestation::{
 };
 use tower::ServiceExt;
 
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
+
 fn default_config_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../rulesets/default.yaml")
 }
@@ -23,6 +25,7 @@ fn default_config_path() -> PathBuf {
 fn config_with_strategy(strategy: &str) -> Result<SwarmConfig, Box<dyn std::error::Error>> {
     let mut cfg = load_config(default_config_path())?;
     cfg.detection.strategy = strategy.to_string();
+    cfg.pheromone.default_half_life_secs = TEST_LIVE_HALF_LIFE_SECS;
     Ok(cfg)
 }
 

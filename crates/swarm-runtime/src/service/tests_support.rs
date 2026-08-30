@@ -32,7 +32,10 @@
     use swarm_guard::{
         Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
     };
-    use swarm_pheromone::{InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate};
+    use swarm_pheromone::{
+        InMemoryPheromoneSubstrate as ReplayInMemoryPheromoneSubstrate,
+        LocalJournalPheromoneSubstrate as ReplayLocalJournalPheromoneSubstrate,
+    };
     use swarm_policy::static_gate::StaticApprovalGate;
     use swarm_policy::{ActionRequest, ApprovalContext, CapabilityLease, PolicyVerdict};
     use swarm_response::adapters::SandboxExecutor;
@@ -48,6 +51,25 @@
         TelemetryPayload,
     };
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
+
+    struct InMemoryPheromoneSubstrate;
+
+    impl InMemoryPheromoneSubstrate {
+        fn replay(config: PheromoneConfig) -> ReplayInMemoryPheromoneSubstrate {
+            ReplayInMemoryPheromoneSubstrate::new_for_replay(config)
+        }
+    }
+
+    struct LocalJournalPheromoneSubstrate;
+
+    impl LocalJournalPheromoneSubstrate {
+        fn open_replay(
+            config: PheromoneConfig,
+            path: impl AsRef<std::path::Path>,
+        ) -> Result<ReplayLocalJournalPheromoneSubstrate, swarm_pheromone::SubstrateError> {
+            ReplayLocalJournalPheromoneSubstrate::open_for_replay(config, path)
+        }
+    }
 
     fn test_signing_key() -> ed25519_dalek::SigningKey {
         ed25519_dalek::SigningKey::from_bytes(&[42u8; 32])

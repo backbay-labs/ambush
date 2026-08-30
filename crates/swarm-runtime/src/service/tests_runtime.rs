@@ -2,7 +2,7 @@
     async fn process_event_creates_and_replays_bundle() {
         let service = runtime_service();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
             event_id: "evt-1".to_string(),
@@ -85,7 +85,7 @@
             ),
         );
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let agent_id = test_agent_id();
         let first_event = TelemetryEvent {
             source: "synthetic".to_string(),
@@ -185,7 +185,7 @@
     async fn process_event_preserves_stable_identity_in_request_and_receipt() {
         let service = runtime_service();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
             event_id: "evt-stable-identity".to_string(),
@@ -244,7 +244,7 @@
     async fn process_event_enriches_findings_before_bundle_persistence() {
         let service = runtime_service();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-enrichment-1", "powershell.exe -enc AAA=");
         let context = approval_context(1_700_000_000_005, "corr-enrichment");
         let agent_id = test_agent_id();
@@ -313,7 +313,7 @@
             ),
         );
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-siem-1", "powershell.exe -enc AAA=");
         let context = approval_context(1_700_000_000_021, "corr-siem");
         let agent_id = test_agent_id();
@@ -420,7 +420,7 @@
             .unwrap();
         service_runtime.block_on(async {
             let detector = SuspiciousProcessTreeDetector::default();
-            let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+            let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
             let event = suspicious_event("evt-siem-shutdown-1", "powershell.exe -enc AAA=");
             let context = approval_context(1_700_000_000_031, "corr-siem-shutdown");
             let agent_id = test_agent_id();
@@ -459,7 +459,7 @@
     async fn process_event_records_success_metrics_in_prometheus() {
         let service = runtime_service_with_prometheus();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-metrics-success", "powershell.exe -enc AAA=");
         let context = approval_context(1_700_000_000_010, "corr-success");
         let agent_id = test_agent_id();
@@ -516,7 +516,7 @@
         )
         .with_prometheus(CriticalPathMetrics::new());
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-metrics-guard", "powershell.exe -enc AAA=");
         let context = approval_context(1_700_000_000_011, "corr-guard");
         let agent_id = test_agent_id();
@@ -567,7 +567,7 @@
         )
         .with_prometheus(CriticalPathMetrics::new());
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-metrics-timeout", "powershell.exe -enc AAA=");
         let context = approval_context(1_700_000_000_012, "corr-timeout");
         let agent_id = test_agent_id();
@@ -606,7 +606,7 @@
     async fn process_event_refuses_raw_governed_action_before_policy_metrics() {
         let service = runtime_service_with_prometheus();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-metrics-human", "powershell.exe -enc AAA=");
         let context = approval_context(1_700_000_000_013, "corr-human");
         let agent_id = test_agent_id();
@@ -649,7 +649,7 @@
                 SandboxExecutor,
             ),
         );
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
 
         let error = service
             .ensure_substrate_ready(&substrate)
@@ -682,7 +682,7 @@
             ),
         );
         let substrate =
-            LocalJournalPheromoneSubstrate::open(service.config.pheromone.clone(), &path).unwrap();
+            LocalJournalPheromoneSubstrate::open_replay(service.config.pheromone.clone(), &path).unwrap();
 
         let health = service.ensure_substrate_ready(&substrate).await.unwrap();
         assert!(health.ready);
@@ -695,7 +695,7 @@
     async fn process_event_with_store_persists_and_loads_by_receipt_id() {
         let service = runtime_service();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let store_root = std::env::temp_dir().join("swarm-runtime-file-store");
         let _ = std::fs::remove_dir_all(&store_root);
         let store = FileReplayBundleStore::open(&store_root).unwrap();
@@ -770,7 +770,7 @@
     async fn rehearse_bundle_persists_typed_preview_and_forces_dry_run() {
         let (service, modes) = runtime_service_with_recording_modes();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-rehearsal-1", "powershell.exe -enc AAA=");
         let source_context = approval_context(1_700_000_000_100, "corr-rehearsal-source");
         let agent_id = test_agent_id();

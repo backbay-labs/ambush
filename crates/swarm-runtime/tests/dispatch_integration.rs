@@ -624,16 +624,18 @@ fn test_health_state() -> Arc<ArcSwap<Vec<AgentHealthEntry>>> {
 }
 
 fn test_substrate() -> ConfiguredPheromoneSubstrate {
-    ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new(PheromoneConfig {
-        default_half_life_secs: 3600.0,
-        evaporation_threshold: 0.01,
-        min_sources_for_escalation: 2,
-        alert_threshold: 2.0,
-        incident_threshold: 5.0,
-        deescalation_cooldown_secs: 300,
-        response_playbook: Default::default(),
-        backend: PheromoneBackendConfig::InMemory,
-    }))
+    ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new_for_replay(
+        PheromoneConfig {
+            default_half_life_secs: 3600.0,
+            evaporation_threshold: 0.01,
+            min_sources_for_escalation: 2,
+            alert_threshold: 2.0,
+            incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
+            backend: PheromoneBackendConfig::InMemory,
+        },
+    ))
 }
 
 fn phase127_playbook() -> ResponsePlaybookConfig {
@@ -680,7 +682,7 @@ fn phase127_pheromone_config() -> PheromoneConfig {
 fn shared_test_substrate(
     config: PheromoneConfig,
 ) -> (InMemoryPheromoneSubstrate, ConfiguredPheromoneSubstrate) {
-    let substrate = InMemoryPheromoneSubstrate::new(config);
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config);
     (
         substrate.clone(),
         ConfiguredPheromoneSubstrate::InMemory(substrate),

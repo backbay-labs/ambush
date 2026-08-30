@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::agent::AgentRole;
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::pheromone::{
@@ -41,6 +42,34 @@ const MAX_LOCAL_DEPOSIT_JOURNAL_BYTES: u64 =
 // them, while still expiring under the configured decay policy so delayed
 // control-record floods cannot consume the bounded retention window.
 const CONTROL_RECORD_RETENTION_STRENGTH: f64 = 1.0;
+const MAX_LIVE_DEPOSIT_FUTURE_SKEW_SECS: i64 = 5 * 60;
+
+#[derive(Debug, Clone, Copy, Default)]
+enum DepositAdmissionClock {
+    #[default]
+    System,
+    Replay,
+}
+
+impl DepositAdmissionClock {
+    fn trusted_now(self) -> Result<Option<i64>, SubstrateError> {
+        match self {
+            Self::System => trusted_system_unix_seconds().map(Some),
+            Self::Replay => Ok(None),
+        }
+    }
+}
+
+pub(crate) fn trusted_system_unix_seconds() -> Result<i64, SubstrateError> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|source| SubstrateError::Clock {
+            reason: format!("system clock is before the Unix epoch: {source}"),
+        })?;
+    i64::try_from(elapsed.as_secs()).map_err(|_| SubstrateError::Clock {
+        reason: "system clock exceeds the supported signed Unix timestamp range".to_string(),
+    })
+}
 
 #[cfg(all(test, unix))]
 static REWRITE_PARENT_SYNC_FAILURE_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -115,6 +144,26 @@ pub enum SubstrateError {
 
     #[error("deposit rejected: {reason}")]
     InvalidDeposit { reason: String },
+
+    #[error("trusted substrate clock is unavailable: {reason}")]
+    Clock { reason: String },
+
+    #[error(
+        "deposit timestamp {timestamp} exceeds trusted current time {trusted_now} plus the {max_future_skew_secs}-second future-skew allowance"
+    )]
+    FutureDeposit {
+        timestamp: i64,
+        trusted_now: i64,
+        max_future_skew_secs: i64,
+    },
+
+    #[error(
+        "deposit decay half-life {declared_half_life_secs} does not match the effective threat-class policy half-life {effective_half_life_secs}"
+    )]
+    DepositPolicyMismatch {
+        declared_half_life_secs: f64,
+        effective_half_life_secs: f64,
+    },
 
     #[error(
         "deposit timestamp {timestamp} is already evaporated at logical timestamp high-water {timestamp_high_water}"
@@ -422,21 +471,26 @@ impl RetainedDeposits {
         &mut self,
         deposit: VerifiedDeposit,
         limits: DepositRetentionLimits,
+        policy_half_life_secs: f64,
         evaporation_threshold: f64,
+        trusted_now: Option<i64>,
     ) -> Result<usize, SubstrateError> {
         let threat_class = deposit.threat_class.clone();
-        let timestamp_high_water = self
+        let logical_high_water = self
             .timestamp_high_water
             .get(&threat_class)
             .map_or(deposit.timestamp, |current| {
                 (*current).max(deposit.timestamp)
             });
-        if is_retention_expired(&deposit, timestamp_high_water, evaporation_threshold) {
-            return Err(SubstrateError::ExpiredDeposit {
-                timestamp: deposit.timestamp,
-                timestamp_high_water,
-            });
-        }
+        let timestamp_high_water =
+            trusted_now.map_or(logical_high_water, |now| now.max(logical_high_water));
+        validate_deposit_retention(
+            &deposit,
+            timestamp_high_water,
+            policy_half_life_secs,
+            evaporation_threshold,
+            trusted_now,
+        )?;
         self.timestamp_high_water
             .insert(threat_class, timestamp_high_water);
         self.encoded_bytes = self.encoded_bytes.saturating_add(deposit.encoded_len);
@@ -506,16 +560,72 @@ pub(crate) fn retention_initial_strength(deposit: &PheromoneDeposit) -> f64 {
 pub(crate) fn is_retention_expired(
     deposit: &PheromoneDeposit,
     now: i64,
+    policy_half_life_secs: f64,
     evaporation_threshold: f64,
 ) -> bool {
-    let initial_strength = retention_initial_strength(deposit);
-    let retained_strength = if now <= deposit.timestamp {
-        initial_strength
-    } else {
-        let elapsed = (now - deposit.timestamp) as f64;
-        initial_strength * (0.5_f64).powf(elapsed / deposit.decay_half_life)
-    };
+    let retained_strength = decayed_strength(
+        deposit,
+        now,
+        retention_initial_strength(deposit),
+        policy_half_life_secs,
+    );
     retained_strength < evaporation_threshold
+}
+
+fn decayed_strength(
+    deposit: &PheromoneDeposit,
+    now: i64,
+    initial_strength: f64,
+    policy_half_life_secs: f64,
+) -> f64 {
+    if now <= deposit.timestamp {
+        return initial_strength;
+    }
+    let elapsed = (now - deposit.timestamp) as f64;
+    initial_strength * (0.5_f64).powf(elapsed / deposit.decay_half_life.min(policy_half_life_secs))
+}
+
+pub(crate) fn validate_deposit_policy(
+    deposit: &PheromoneDeposit,
+    policy_half_life_secs: f64,
+) -> Result<(), SubstrateError> {
+    if deposit.decay_half_life == policy_half_life_secs {
+        return Ok(());
+    }
+    Err(SubstrateError::DepositPolicyMismatch {
+        declared_half_life_secs: deposit.decay_half_life,
+        effective_half_life_secs: policy_half_life_secs,
+    })
+}
+
+pub(crate) fn validate_deposit_retention(
+    deposit: &PheromoneDeposit,
+    timestamp_high_water: i64,
+    policy_half_life_secs: f64,
+    evaporation_threshold: f64,
+    trusted_now: Option<i64>,
+) -> Result<(), SubstrateError> {
+    if let Some(now) = trusted_now
+        && deposit.timestamp > now.saturating_add(MAX_LIVE_DEPOSIT_FUTURE_SKEW_SECS)
+    {
+        return Err(SubstrateError::FutureDeposit {
+            timestamp: deposit.timestamp,
+            trusted_now: now,
+            max_future_skew_secs: MAX_LIVE_DEPOSIT_FUTURE_SKEW_SECS,
+        });
+    }
+    if is_retention_expired(
+        deposit,
+        timestamp_high_water,
+        policy_half_life_secs,
+        evaporation_threshold,
+    ) {
+        return Err(SubstrateError::ExpiredDeposit {
+            timestamp: deposit.timestamp,
+            timestamp_high_water,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -906,6 +1016,7 @@ impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
 pub struct InMemoryPheromoneSubstrate {
     config: PheromoneConfig,
     admission_control: AdmissionControl,
+    admission_clock: DepositAdmissionClock,
     retention_limits: DepositRetentionLimits,
     deposits: Arc<RwLock<RetainedDeposits>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
@@ -916,9 +1027,25 @@ pub struct InMemoryPheromoneSubstrate {
 
 impl InMemoryPheromoneSubstrate {
     pub fn new(config: PheromoneConfig) -> Self {
+        Self::with_admission_clock(config, DepositAdmissionClock::System)
+    }
+
+    /// Construct an explicitly logical-time substrate for bounded offline replay.
+    ///
+    /// Live and service construction must use [`Self::new`], whose trusted wall
+    /// clock prevents stale or future deposits from consuming retention.
+    pub fn new_for_replay(config: PheromoneConfig) -> Self {
+        Self::with_admission_clock(config, DepositAdmissionClock::Replay)
+    }
+
+    fn with_admission_clock(
+        config: PheromoneConfig,
+        admission_clock: DepositAdmissionClock,
+    ) -> Self {
         Self {
             config,
             admission_control: AdmissionControl::default(),
+            admission_clock,
             retention_limits: DepositRetentionLimits::default(),
             deposits: Arc::new(RwLock::new(RetainedDeposits::default())),
             escalations: Arc::new(RwLock::new(Vec::new())),
@@ -937,6 +1064,17 @@ impl InMemoryPheromoneSubstrate {
 
     #[cfg(test)]
     fn with_retention_limits(
+        config: PheromoneConfig,
+        retention_limits: DepositRetentionLimits,
+    ) -> Self {
+        Self {
+            retention_limits,
+            ..Self::new_for_replay(config)
+        }
+    }
+
+    #[cfg(test)]
+    fn with_live_retention_limits(
         config: PheromoneConfig,
         retention_limits: DepositRetentionLimits,
     ) -> Self {
@@ -962,11 +1100,18 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
         let policy = self
             .config
             .resolve_threat_class_policy(threat_class_config.as_ref());
+        validate_deposit_policy(&deposit, policy.half_life_secs)?;
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        guard.push(deposit, self.retention_limits, policy.evaporation_threshold)?;
+        guard.push(
+            deposit,
+            self.retention_limits,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+            self.admission_clock.trusted_now()?,
+        )?;
         Ok(())
     }
 
@@ -1141,7 +1286,12 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .map_err(|_| SubstrateError::PoisonedLock)?;
         let removed = guard.retain(|deposit| {
             let policy = resolved_policy(&self.config, &config_guard, &deposit.threat_class);
-            !is_retention_expired(deposit, now, policy.evaporation_threshold)
+            !is_retention_expired(
+                deposit,
+                now,
+                policy.half_life_secs,
+                policy.evaporation_threshold,
+            )
         });
         Ok(removed)
     }
@@ -1182,6 +1332,7 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
 pub struct LocalJournalPheromoneSubstrate {
     config: PheromoneConfig,
     admission_control: AdmissionControl,
+    admission_clock: DepositAdmissionClock,
     retention_limits: DepositRetentionLimits,
     journal_path: PathBuf,
     escalation_journal_path: PathBuf,
@@ -1199,13 +1350,62 @@ pub struct LocalJournalPheromoneSubstrate {
 
 impl LocalJournalPheromoneSubstrate {
     pub fn open(config: PheromoneConfig, path: impl AsRef<Path>) -> Result<Self, SubstrateError> {
-        Self::open_with_retention_limits(config, path, DepositRetentionLimits::default())
+        Self::open_with_admission_clock(
+            config,
+            path,
+            DepositRetentionLimits::default(),
+            DepositAdmissionClock::System,
+        )
     }
 
+    /// Open an explicitly logical-time journal for bounded offline replay.
+    ///
+    /// Live and service construction must use [`Self::open`].
+    pub fn open_for_replay(
+        config: PheromoneConfig,
+        path: impl AsRef<Path>,
+    ) -> Result<Self, SubstrateError> {
+        Self::open_with_admission_clock(
+            config,
+            path,
+            DepositRetentionLimits::default(),
+            DepositAdmissionClock::Replay,
+        )
+    }
+
+    #[cfg(test)]
     fn open_with_retention_limits(
         config: PheromoneConfig,
         path: impl AsRef<Path>,
         retention_limits: DepositRetentionLimits,
+    ) -> Result<Self, SubstrateError> {
+        Self::open_with_admission_clock(
+            config,
+            path,
+            retention_limits,
+            DepositAdmissionClock::Replay,
+        )
+    }
+
+    #[cfg(test)]
+    fn open_with_live_retention_limits(
+        config: PheromoneConfig,
+        path: impl AsRef<Path>,
+        retention_limits: DepositRetentionLimits,
+    ) -> Result<Self, SubstrateError> {
+        Self::open_with_admission_clock(
+            config,
+            path,
+            retention_limits,
+            DepositAdmissionClock::System,
+        )
+    }
+
+    fn open_with_admission_clock(
+        config: PheromoneConfig,
+        path: impl AsRef<Path>,
+        retention_limits: DepositRetentionLimits,
+        admission_clock: DepositAdmissionClock,
     ) -> Result<Self, SubstrateError> {
         let journal_path = path.as_ref().to_path_buf();
         let escalation_journal_path = escalation_journal_path(&journal_path);
@@ -1220,6 +1420,7 @@ impl LocalJournalPheromoneSubstrate {
             retention_limits,
             &config,
             &threat_class_configs,
+            admission_clock.trusted_now()?,
         )?;
         if rewrite_required {
             rewrite_verified_deposit_jsonl(&journal_path, &deposits.entries)?;
@@ -1241,6 +1442,7 @@ impl LocalJournalPheromoneSubstrate {
         Ok(Self {
             config,
             admission_control: AdmissionControl::default(),
+            admission_clock,
             retention_limits,
             journal_path,
             escalation_journal_path,
@@ -1280,13 +1482,19 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
         let policy = self
             .config
             .resolve_threat_class_policy(threat_class_config.as_ref());
+        validate_deposit_policy(&deposit, policy.half_life_secs)?;
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
         let mut candidate = guard.clone();
-        let pruned =
-            candidate.push(deposit, self.retention_limits, policy.evaporation_threshold)?;
+        let pruned = candidate.push(
+            deposit,
+            self.retention_limits,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+            self.admission_clock.trusted_now()?,
+        )?;
         if pruned == 0 {
             let persisted =
                 candidate
@@ -1508,7 +1716,12 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
         let mut candidate = guard.clone();
         let removed = candidate.retain(|deposit| {
             let policy = resolved_policy(&self.config, &config_guard, &deposit.threat_class);
-            !is_retention_expired(deposit, now, policy.evaporation_threshold)
+            !is_retention_expired(
+                deposit,
+                now,
+                policy.half_life_secs,
+                policy.evaporation_threshold,
+            )
         });
         match rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries) {
             Ok(()) => {}
@@ -1618,14 +1831,14 @@ pub(crate) fn concentration_for(
         .iter()
         .filter(|deposit| &deposit.threat_class == threat_class)
     {
-        if deposit.is_evaporated(now, policy.evaporation_threshold) {
+        let strength = decayed_strength(deposit, now, deposit.confidence, policy.half_life_secs);
+        if strength < policy.evaporation_threshold {
             continue;
         }
         if is_suppressed_by_feedback(deposit, &suppression) {
             continue;
         }
         let agent_identity = independent_source_identity(deposit);
-        let strength = deposit.strength_at(now);
         if strength <= 0.0 {
             continue;
         }
@@ -1860,6 +2073,7 @@ fn load_retained_deposit_jsonl(
     limits: DepositRetentionLimits,
     config: &PheromoneConfig,
     threat_class_configs: &BTreeMap<ThreatClass, ThreatClassConfig>,
+    trusted_now: Option<i64>,
 ) -> Result<(RetainedDeposits, bool), SubstrateError> {
     let observed_bytes = match fs::metadata(path) {
         Ok(metadata) => metadata.len(),
@@ -1921,7 +2135,13 @@ fn load_retained_deposit_jsonl(
         let location = format!("{} line {line_number}", path.display());
         let entry = decode_deposit_payload(&line, location)?;
         let policy = resolved_policy(config, threat_class_configs, &entry.threat_class);
-        match retained.push(entry, limits, policy.evaporation_threshold) {
+        match retained.push(
+            entry,
+            limits,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+            trusted_now,
+        ) {
             Ok(removed) => pruned = pruned.saturating_add(removed),
             Err(SubstrateError::ExpiredDeposit { .. }) => {
                 pruned = pruned.saturating_add(1);
@@ -2625,7 +2845,7 @@ mod tests {
     }
 
     fn in_memory() -> InMemoryPheromoneSubstrate {
-        InMemoryPheromoneSubstrate::new(substrate_config())
+        InMemoryPheromoneSubstrate::new_for_replay(substrate_config())
     }
 
     #[tokio::test]
@@ -2968,10 +3188,11 @@ mod tests {
             ))
             .await
             .unwrap();
+        let mut already_evaporated = sample_deposit("whisker-a", 0, 0.03);
+        already_evaporated.decay_half_life = 60.0;
+        sign_deposit(&mut already_evaporated, &signing_key_for_label("whisker-a"));
         assert!(matches!(
-            substrate
-                .deposit(sample_deposit("whisker-a", 0, 0.03))
-                .await,
+            substrate.deposit(already_evaporated).await,
             Err(super::SubstrateError::ExpiredDeposit {
                 timestamp: 0,
                 timestamp_high_water: 0,
@@ -3082,7 +3303,8 @@ mod tests {
         };
 
         {
-            let substrate = LocalJournalPheromoneSubstrate::open(config.clone(), &path).unwrap();
+            let substrate =
+                LocalJournalPheromoneSubstrate::open_for_replay(config.clone(), &path).unwrap();
             substrate
                 .deposit(sample_deposit("whisker-a", 100, 0.9))
                 .await
@@ -3093,7 +3315,7 @@ mod tests {
                 .unwrap();
         }
 
-        let reopened = LocalJournalPheromoneSubstrate::open(config, &path).unwrap();
+        let reopened = LocalJournalPheromoneSubstrate::open_for_replay(config, &path).unwrap();
         let deposits = reopened.recent_deposits(10).await.unwrap();
         assert_eq!(deposits.len(), 2);
         assert_eq!(deposits[0].timestamp, 200);
@@ -3194,50 +3416,80 @@ mod tests {
             compacted_bytes: 768 * 1024,
             max_journal_bytes: 1024 * 1024,
         };
-        let memory = InMemoryPheromoneSubstrate::with_retention_limits(config.clone(), limits);
-        let local = LocalJournalPheromoneSubstrate::open_with_retention_limits(
+        let memory = InMemoryPheromoneSubstrate::with_live_retention_limits(config.clone(), limits);
+        let local = LocalJournalPheromoneSubstrate::open_with_live_retention_limits(
             config.clone(),
             &path,
             limits,
         )
         .unwrap();
 
-        let live = sample_deposit("live-evidence", 100_000, 0.9);
+        let trusted_now = super::trusted_system_unix_seconds().unwrap();
+        let live = sample_deposit("live-evidence", trusted_now, 0.9);
         memory.deposit(live.clone()).await.unwrap();
         local.deposit(live).await.unwrap();
 
-        for index in 0..4 {
-            let expired = sample_deposit(&format!("expired-flood-{index}"), index, 0.9);
+        let mut policy_mismatch = sample_deposit("policy-mismatch", trusted_now, 0.9);
+        policy_mismatch.decay_half_life = 7_200.0;
+        sign_deposit(
+            &mut policy_mismatch,
+            &signing_key_for_label("policy-mismatch"),
+        );
+        for result in [
+            memory.deposit(policy_mismatch.clone()).await,
+            local.deposit(policy_mismatch).await,
+        ] {
             assert!(matches!(
-                memory.deposit(expired.clone()).await,
-                Err(super::SubstrateError::ExpiredDeposit {
-                    timestamp_high_water: 100_000,
-                    ..
-                })
-            ));
-            assert!(matches!(
-                local.deposit(expired).await,
-                Err(super::SubstrateError::ExpiredDeposit {
-                    timestamp_high_water: 100_000,
-                    ..
+                result,
+                Err(super::SubstrateError::DepositPolicyMismatch {
+                    declared_half_life_secs: 7_200.0,
+                    effective_half_life_secs: 3_600.0,
                 })
             ));
         }
 
-        let expired_control = sample_deposit("expired-control", 0, 0.0);
+        for index in 0..4 {
+            let mut expired = sample_deposit(&format!("expired-flood-{index}"), index, 0.9);
+            expired.threat_class = ThreatClass::DefenseEvasion;
+            sign_deposit(
+                &mut expired,
+                &signing_key_for_label(&format!("expired-flood-{index}")),
+            );
+            assert!(matches!(
+                memory.deposit(expired.clone()).await,
+                Err(super::SubstrateError::ExpiredDeposit {
+                    timestamp_high_water,
+                    ..
+                }) if timestamp_high_water >= trusted_now
+            ));
+            assert!(matches!(
+                local.deposit(expired).await,
+                Err(super::SubstrateError::ExpiredDeposit {
+                    timestamp_high_water,
+                    ..
+                }) if timestamp_high_water >= trusted_now
+            ));
+        }
+
+        let mut expired_control = sample_deposit("expired-control", 0, 0.0);
+        expired_control.threat_class = ThreatClass::DefenseEvasion;
+        sign_deposit(
+            &mut expired_control,
+            &signing_key_for_label("expired-control"),
+        );
         assert!(matches!(
             memory.deposit(expired_control.clone()).await,
             Err(super::SubstrateError::ExpiredDeposit {
-                timestamp_high_water: 100_000,
+                timestamp_high_water,
                 ..
-            })
+            }) if timestamp_high_water >= trusted_now
         ));
         assert!(matches!(
             local.deposit(expired_control).await,
             Err(super::SubstrateError::ExpiredDeposit {
-                timestamp_high_water: 100_000,
+                timestamp_high_water,
                 ..
-            })
+            }) if timestamp_high_water >= trusted_now
         ));
 
         for deposits in [
@@ -3245,7 +3497,8 @@ mod tests {
             local.recent_deposits(10).await.unwrap(),
         ] {
             assert_eq!(deposits.len(), 1);
-            assert_eq!(deposits[0].timestamp, 100_000);
+            assert_eq!(deposits[0].timestamp, trusted_now);
+            assert_eq!(deposits[0].threat_class, ThreatClass::Execution);
         }
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
         drop(local);
@@ -3253,17 +3506,120 @@ mod tests {
         // Upgrade/recovery remains available if an older writer appended a
         // valid but already-evaporated delayed record before this admission
         // rule existed: startup drops it and rewrites the bounded journal.
-        let persisted_expired = sample_deposit("legacy-expired-flood", 5, 0.9);
+        let mut persisted_expired = sample_deposit("legacy-expired-flood", 5, 0.9);
+        persisted_expired.decay_half_life = f64::MAX;
+        sign_deposit(
+            &mut persisted_expired,
+            &signing_key_for_label("legacy-expired-flood"),
+        );
         super::append_jsonl_line(&path, &persisted_expired).unwrap();
 
         let reopened =
-            LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits)
+            LocalJournalPheromoneSubstrate::open_with_live_retention_limits(config, &path, limits)
                 .unwrap();
         let reopened_deposits = reopened.recent_deposits(10).await.unwrap();
         assert_eq!(reopened_deposits.len(), 1);
-        assert_eq!(reopened_deposits[0].timestamp, 100_000);
+        assert_eq!(reopened_deposits[0].timestamp, trusted_now);
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
         drop(reopened);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::escalation_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_class_config_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
+    }
+
+    #[tokio::test]
+    async fn live_substrates_reject_future_deposits_without_persisting_them() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("swarm-pheromone-future-deposit-{unique}.jsonl"));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let memory = InMemoryPheromoneSubstrate::new(config.clone());
+        let local = LocalJournalPheromoneSubstrate::open(config.clone(), &path).unwrap();
+        let trusted_now = super::trusted_system_unix_seconds().unwrap();
+        let future = sample_deposit("future-evidence", trusted_now.saturating_add(600), 0.9);
+
+        for result in [
+            memory.deposit(future.clone()).await,
+            local.deposit(future.clone()).await,
+        ] {
+            assert!(matches!(
+                result,
+                Err(super::SubstrateError::FutureDeposit {
+                    timestamp,
+                    trusted_now: observed_now,
+                    max_future_skew_secs: 300,
+                }) if timestamp == future.timestamp && observed_now >= trusted_now
+            ));
+        }
+        assert!(memory.recent_deposits(10).await.unwrap().is_empty());
+        assert!(local.recent_deposits(10).await.unwrap().is_empty());
+        assert!(
+            !path.exists(),
+            "rejected deposits must not create the journal"
+        );
+        drop(local);
+
+        // A future record left by a legacy writer also fails closed at startup
+        // rather than poisoning the per-class timestamp high-water.
+        super::append_jsonl_line(&path, &future).unwrap();
+        assert!(matches!(
+            LocalJournalPheromoneSubstrate::open(config, &path),
+            Err(super::SubstrateError::FutureDeposit {
+                timestamp,
+                max_future_skew_secs: 300,
+                ..
+            }) if timestamp == future.timestamp
+        ));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::escalation_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_class_config_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
+    }
+
+    #[tokio::test]
+    async fn legacy_deposit_decay_is_capped_by_current_policy_at_query_time() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-pheromone-legacy-half-life-cap-{unique}.jsonl"
+        ));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let mut legacy = sample_deposit("legacy-half-life", 100, 0.9);
+        legacy.decay_half_life = f64::MAX;
+        sign_deposit(&mut legacy, &signing_key_for_label("legacy-half-life"));
+        super::append_jsonl_line(&path, &legacy).unwrap();
+
+        let substrate = LocalJournalPheromoneSubstrate::open_for_replay(config, &path).unwrap();
+        assert_eq!(substrate.recent_deposits(10).await.unwrap().len(), 1);
+        let concentration = substrate
+            .query_concentration(&ThreatClass::Execution, 36_100)
+            .await
+            .unwrap();
+        assert_eq!(concentration.total_strength, 0.0);
+        assert_eq!(concentration.distinct_sources, 0);
+        drop(substrate);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(super::escalation_journal_path(&path));
@@ -3286,7 +3642,9 @@ mod tests {
         };
         let mut retained = super::RetainedDeposits::default();
         for _ in 0..4 {
-            retained.push(deposit.clone(), limits, 0.01).unwrap();
+            retained
+                .push(deposit.clone(), limits, 3_600.0, 0.01, None)
+                .unwrap();
         }
         assert_eq!(retained.len(), 2);
         assert!(retained.encoded_bytes <= limits.compacted_bytes);
@@ -3320,7 +3678,13 @@ mod tests {
         ];
         for entry in entries {
             retained
-                .push(super::VerifiedDeposit::admit(entry).unwrap(), limits, 0.01)
+                .push(
+                    super::VerifiedDeposit::admit(entry).unwrap(),
+                    limits,
+                    3_600.0,
+                    0.01,
+                    None,
+                )
                 .unwrap();
         }
 
@@ -3519,7 +3883,7 @@ mod tests {
         raw.as_object_mut().unwrap().remove("schema_version");
         std::fs::write(&path, format!("{}\n", serde_json::to_string(&raw).unwrap())).unwrap();
 
-        let reopened = LocalJournalPheromoneSubstrate::open(config, &path).unwrap();
+        let reopened = LocalJournalPheromoneSubstrate::open_for_replay(config, &path).unwrap();
         let deposits = reopened.recent_deposits(10).await.unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(

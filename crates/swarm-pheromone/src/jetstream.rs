@@ -2,7 +2,8 @@ use crate::substrate::{
     AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, MAX_ACTIVE_DEPOSITS,
     PheromoneSubstrate, SubstrateError, SubstrateHealth, VerifiedDeposit, concentration_for,
     decode_deposit_payload, filter_deposits, filter_escalations, is_retention_expired,
-    normalize_threat_intel_value, retention_initial_strength,
+    normalize_threat_intel_value, retention_initial_strength, trusted_system_unix_seconds,
+    validate_deposit_policy, validate_deposit_retention,
 };
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
@@ -129,10 +130,105 @@ struct JetStreamConnection {
     store: async_nats::jetstream::kv::Store,
 }
 
+#[cfg(feature = "nats")]
+enum NatsAuthentication {
+    None,
+    Token(String),
+    UserPassword { username: String, password: String },
+}
+
+#[cfg(feature = "nats")]
+struct NatsEndpoint {
+    server_url: String,
+    display_url: String,
+    authentication: NatsAuthentication,
+}
+
+#[cfg(feature = "nats")]
+fn decode_nats_credential(component: &str, label: &'static str) -> Result<String, SubstrateError> {
+    percent_encoding::percent_decode_str(component)
+        .decode_utf8()
+        .map(|decoded| decoded.into_owned())
+        .map_err(|_| SubstrateError::Nats {
+            operation: "parse endpoint",
+            reason: format!("NATS {label} is not valid UTF-8"),
+        })
+}
+
+#[cfg(feature = "nats")]
+fn parse_nats_endpoint(raw_url: &str) -> Result<NatsEndpoint, SubstrateError> {
+    let mut parsed = url::Url::parse(raw_url).map_err(|error| SubstrateError::Nats {
+        operation: "parse endpoint",
+        reason: format!("invalid NATS endpoint: {error}"),
+    })?;
+    if !matches!(parsed.scheme(), "nats" | "tls" | "ws" | "wss") {
+        return Err(SubstrateError::Nats {
+            operation: "parse endpoint",
+            reason: format!("unsupported NATS endpoint scheme `{}`", parsed.scheme()),
+        });
+    }
+
+    let username = decode_nats_credential(parsed.username(), "username")?;
+    let password = parsed
+        .password()
+        .map(|value| decode_nats_credential(value, "password"))
+        .transpose()?;
+    let authentication = match (username.is_empty(), password) {
+        (true, None) => NatsAuthentication::None,
+        (false, None) => NatsAuthentication::Token(username),
+        (false, Some(password)) => NatsAuthentication::UserPassword { username, password },
+        (true, Some(_)) => {
+            return Err(SubstrateError::Nats {
+                operation: "parse endpoint",
+                reason: "NATS endpoint password requires a username".to_string(),
+            });
+        }
+    };
+    parsed.set_username("").map_err(|()| SubstrateError::Nats {
+        operation: "parse endpoint",
+        reason: "NATS endpoint does not support an authority username".to_string(),
+    })?;
+    parsed
+        .set_password(None)
+        .map_err(|()| SubstrateError::Nats {
+            operation: "parse endpoint",
+            reason: "NATS endpoint does not support an authority password".to_string(),
+        })?;
+    let server_url = parsed.to_string();
+    Ok(NatsEndpoint {
+        display_url: server_url.clone(),
+        server_url,
+        authentication,
+    })
+}
+
+#[cfg(feature = "nats")]
+async fn connect_nats_endpoint(
+    endpoint: NatsEndpoint,
+) -> Result<async_nats::Client, SubstrateError> {
+    let options = match endpoint.authentication {
+        NatsAuthentication::None => async_nats::ConnectOptions::new(),
+        NatsAuthentication::Token(token) => async_nats::ConnectOptions::with_token(token),
+        NatsAuthentication::UserPassword { username, password } => {
+            async_nats::ConnectOptions::with_user_and_password(username, password)
+        }
+    };
+    options
+        .connect(endpoint.server_url)
+        .await
+        .map_err(|error| nats_error("connect", error))
+}
+
 impl fmt::Debug for JetStreamPheromoneSubstrate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(feature = "nats")]
+        let endpoint = parse_nats_endpoint(&self.url)
+            .map(|parsed| parsed.display_url)
+            .unwrap_or_else(|_| "<invalid NATS endpoint>".to_string());
+        #[cfg(not(feature = "nats"))]
+        let endpoint = "<NATS support disabled>";
         f.debug_struct("JetStreamPheromoneSubstrate")
-            .field("url", &self.url)
+            .field("url", &endpoint)
             .field("bucket", &self.bucket)
             .finish()
     }
@@ -213,7 +309,8 @@ impl JetStreamPheromoneSubstrate {
 
     #[cfg(feature = "nats")]
     async fn ensure_connected(&self) -> Result<&JetStreamConnection, SubstrateError> {
-        let url = self.url.clone();
+        let endpoint = parse_nats_endpoint(&self.url)?;
+        let display_url = endpoint.display_url.clone();
         let bucket = self.bucket.clone();
         let connect_timeout_ms = self.connect_timeout_ms;
 
@@ -221,16 +318,15 @@ impl JetStreamPheromoneSubstrate {
             .get_or_try_init(|| async move {
                 let client = timeout(
                     std::time::Duration::from_millis(connect_timeout_ms),
-                    async_nats::connect(url.as_str()),
+                    connect_nats_endpoint(endpoint),
                 )
                 .await
                 .map_err(|_| SubstrateError::Nats {
                     operation: "connect",
                     reason: format!(
-                        "timed out after {connect_timeout_ms}ms while connecting to {url}"
+                        "timed out after {connect_timeout_ms}ms while connecting to {display_url}"
                     ),
-                })?
-                .map_err(|error| nats_error("connect", error))?;
+                })??;
                 let jetstream = async_nats::jetstream::new(client.clone());
                 let store = ensure_kv_bucket(&jetstream, &bucket).await?;
                 Ok(JetStreamConnection { client, store })
@@ -577,7 +673,12 @@ impl JetStreamPheromoneSubstrate {
 
             let location = format!("jetstream://{}/{}", self.bucket, key);
             let deposit = decode_deposit_payload(&payload, location)?;
-            if is_retention_expired(&deposit, now, self.config.evaporation_threshold) {
+            if is_retention_expired(
+                &deposit,
+                now,
+                self.config.default_half_life_secs,
+                self.config.evaporation_threshold,
+            ) {
                 connection
                     .store
                     .delete(&key)
@@ -783,7 +884,12 @@ impl JetStreamPheromoneSubstrate {
             let policy = self
                 .config
                 .resolve_threat_class_policy(threat_class_configs.get(&deposit.threat_class));
-            if !is_retention_expired(&deposit, now, policy.evaporation_threshold) {
+            if !is_retention_expired(
+                &deposit,
+                now,
+                policy.half_life_secs,
+                policy.evaporation_threshold,
+            ) {
                 continue;
             }
 
@@ -813,13 +919,35 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
         let deposit = VerifiedDeposit::admit(deposit)?;
         self.admission_control
             .validate_deposit_admission(&deposit)?;
+        let threat_class_config = self.load_threat_class_config(&deposit.threat_class).await?;
+        let policy = self
+            .config
+            .resolve_threat_class_policy(threat_class_config.as_ref());
+        validate_deposit_policy(&deposit, policy.half_life_secs)?;
+        let trusted_now = trusted_system_unix_seconds()?;
+        validate_deposit_retention(
+            &deposit,
+            trusted_now,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+            Some(trusted_now),
+        )?;
         let connection = self.ensure_connected().await?;
         let payload = serde_json::to_vec(&*deposit).map_err(|source| SubstrateError::Encode {
             context: "jetstream pheromone deposit".to_string(),
             source,
         })?;
-        let gc_page = expiration_gc_page(&deposit, self.config.evaporation_threshold);
-        let key = deposit_key(&deposit, &payload, self.config.evaporation_threshold);
+        let gc_page = expiration_gc_page(
+            &deposit,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+        );
+        let key = deposit_key(
+            &deposit,
+            &payload,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+        );
 
         let revision = connection
             .store
@@ -1248,8 +1376,13 @@ async fn ensure_kv_bucket(
 }
 
 #[cfg(feature = "nats")]
-fn deposit_key(deposit: &PheromoneDeposit, payload: &[u8], evaporation_threshold: f64) -> String {
-    let gc_page = expiration_gc_page(deposit, evaporation_threshold);
+fn deposit_key(
+    deposit: &PheromoneDeposit,
+    payload: &[u8],
+    policy_half_life_secs: f64,
+    evaporation_threshold: f64,
+) -> String {
+    let gc_page = expiration_gc_page(deposit, policy_half_life_secs, evaporation_threshold);
     let threat_class = threat_class_segment(&deposit.threat_class);
     let agent_hash = hash_prefix(deposit.agent_id.0.as_bytes(), 12);
     let deposit_hash = hash_prefix(payload, 12);
@@ -1422,20 +1555,28 @@ fn threat_intel_indicator_segment(indicator_type: &ThreatIntelIndicatorType) -> 
 }
 
 #[cfg(feature = "nats")]
-fn expiration_gc_page(deposit: &PheromoneDeposit, evaporation_threshold: f64) -> i64 {
-    let deadline = evaporation_deadline(deposit, evaporation_threshold);
+fn expiration_gc_page(
+    deposit: &PheromoneDeposit,
+    policy_half_life_secs: f64,
+    evaporation_threshold: f64,
+) -> i64 {
+    let deadline = evaporation_deadline(deposit, policy_half_life_secs, evaporation_threshold);
     div_ceil_i64(deadline.max(0), GC_PAGE_SPAN_SECS)
 }
 
 #[cfg(feature = "nats")]
-fn evaporation_deadline(deposit: &PheromoneDeposit, evaporation_threshold: f64) -> i64 {
+fn evaporation_deadline(
+    deposit: &PheromoneDeposit,
+    policy_half_life_secs: f64,
+    evaporation_threshold: f64,
+) -> i64 {
     let initial_strength = retention_initial_strength(deposit);
     if initial_strength <= evaporation_threshold || deposit.decay_half_life <= 0.0 {
         return deposit.timestamp;
     }
 
-    let elapsed_until_evaporation =
-        deposit.decay_half_life * (initial_strength / evaporation_threshold).log2();
+    let elapsed_until_evaporation = deposit.decay_half_life.min(policy_half_life_secs)
+        * (initial_strength / evaporation_threshold).log2();
     deposit
         .timestamp
         .saturating_add(elapsed_until_evaporation.ceil() as i64)
@@ -1489,12 +1630,13 @@ fn nats_error(operation: &'static str, error: impl fmt::Display) -> SubstrateErr
 mod tests {
     use super::{
         DEFAULT_JETSTREAM_GC_PAGE_SIZE, DEFAULT_NATS_CONNECT_TIMEOUT_MS,
-        JetStreamPheromoneSubstrate, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, VerifiedDepositCache,
-        deposit_key_timestamp, evaporation_deadline, expiration_gc_page, gc_sweep_page,
-        retain_newest_deposit_key,
+        JetStreamPheromoneSubstrate, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication,
+        VerifiedDepositCache, deposit_key_timestamp, evaporation_deadline, expiration_gc_page,
+        gc_sweep_page, parse_nats_endpoint, retain_newest_deposit_key,
     };
     use crate::{PheromoneSubstrate, substrate::VerifiedDeposit};
     use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
@@ -1522,8 +1664,27 @@ mod tests {
         }
     }
 
+    fn now_timestamp() -> i64 {
+        i64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_secs(),
+        )
+        .expect("unix timestamp exceeds i64")
+    }
+
+    fn signing_key_for_label(label: &str) -> SigningKey {
+        let digest = Sha256::digest(label.as_bytes());
+        let mut seed = [0_u8; 32];
+        seed.copy_from_slice(&digest);
+        SigningKey::from_bytes(&seed)
+    }
+
     fn sample_deposit(agent_id: &str, timestamp: i64, confidence: f64) -> PheromoneDeposit {
-        PheromoneDeposit {
+        let key = signing_key_for_label(agent_id);
+        let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
+        let mut deposit = PheromoneDeposit {
             schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({"signal": "jetstream-test"}),
             threat_class: ThreatClass::Execution,
@@ -1531,12 +1692,16 @@ mod tests {
             confidence,
             timestamp,
             decay_half_life: 3600.0,
-            agent_id: AgentId(agent_id.to_string()),
-            agent_identity: String::new(),
+            agent_id: derived_agent_id.clone(),
+            agent_identity: derived_agent_id.0,
             agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
-        }
+        };
+        let signing_bytes = crate::substrate::signing_payload_bytes_for_deposit(&deposit).unwrap();
+        deposit.signature = key.sign(&signing_bytes).to_bytes().to_vec();
+        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+        deposit
     }
 
     fn verified_sample_deposit() -> VerifiedDeposit {
@@ -1568,6 +1733,40 @@ mod tests {
             cache.insert(format!("deposit-{index:05}"), index as u64, deposit.clone());
         }
         assert_eq!(cache.entries.len(), MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES);
+    }
+
+    #[test]
+    fn nats_endpoint_credentials_are_decoded_for_authentication_and_redacted_from_debug() {
+        let endpoint = parse_nats_endpoint("nats://runtime:p%40ss@127.0.0.1:4222").unwrap();
+        assert_eq!(endpoint.server_url, "nats://127.0.0.1:4222");
+        match endpoint.authentication {
+            NatsAuthentication::UserPassword { username, password } => {
+                assert_eq!(username, "runtime");
+                assert_eq!(password, "p@ss");
+            }
+            _ => panic!("expected user/password authentication"),
+        }
+
+        let substrate = JetStreamPheromoneSubstrate::with_bucket(
+            substrate_config(),
+            "nats://runtime:p%40ss@127.0.0.1:4222",
+            "debug-redaction",
+        );
+        let debug = format!("{substrate:?}");
+        assert!(debug.contains("nats://127.0.0.1:4222"));
+        assert!(!debug.contains("runtime"));
+        assert!(!debug.contains("p%40ss"));
+        assert!(!debug.contains("p@ss"));
+    }
+
+    #[test]
+    fn nats_endpoint_supports_token_authentication_and_rejects_non_nats_schemes() {
+        let endpoint = parse_nats_endpoint("nats://opaque-token@127.0.0.1:4222").unwrap();
+        assert!(matches!(
+            endpoint.authentication,
+            NatsAuthentication::Token(token) if token == "opaque-token"
+        ));
+        assert!(parse_nats_endpoint("https://127.0.0.1:4222").is_err());
     }
 
     #[test]
@@ -1630,10 +1829,10 @@ mod tests {
     #[test]
     fn zero_strength_control_records_are_not_assigned_to_an_immediate_gc_page() {
         let deposit = sample_deposit("control", 100, 0.0);
-        let deadline = evaporation_deadline(&deposit, 0.01);
+        let deadline = evaporation_deadline(&deposit, 3_600.0, 0.01);
 
         assert!(deadline > deposit.timestamp);
-        assert!(expiration_gc_page(&deposit, 0.01) > gc_sweep_page(deposit.timestamp));
+        assert!(expiration_gc_page(&deposit, 3_600.0, 0.01) > gc_sweep_page(deposit.timestamp));
     }
 
     fn sample_escalation(mode: SwarmMode, timestamp: i64) -> EscalationRecord {
@@ -1669,7 +1868,9 @@ mod tests {
     }
 
     fn nats_url() -> String {
-        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string())
+        std::env::var("SWARM_NATS_RUNTIME_URL")
+            .or_else(|_| std::env::var("NATS_URL"))
+            .unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string())
     }
 
     fn unique_bucket(label: &str) -> String {
@@ -1692,6 +1893,10 @@ mod tests {
         {
             Ok(substrate) => Some((bucket, substrate)),
             Err(error) => {
+                assert!(
+                    std::env::var_os("SWARM_NATS_HARNESS_SCRATCH").is_none(),
+                    "repository-owned NATS harness failed to materialize JetStream test: {error}"
+                );
                 eprintln!("NATS server not available at {url}, skipping JetStream test: {error}");
                 None
             }
@@ -1747,12 +1952,13 @@ mod tests {
         let Some((bucket, substrate)) = connect_for_test("restart").await else {
             return;
         };
+        let base = now_timestamp() - 2;
         substrate
-            .deposit(sample_deposit("whisker-a", 100, 0.9))
+            .deposit(sample_deposit("whisker-a", base, 0.9))
             .await
             .unwrap();
         substrate
-            .deposit(sample_deposit("whisker-b", 200, 0.8))
+            .deposit(sample_deposit("whisker-b", base + 1, 0.8))
             .await
             .unwrap();
         wait_until(|| async { substrate.recent_deposits(10).await.unwrap().len() == 2 }).await;
@@ -1767,8 +1973,8 @@ mod tests {
         .unwrap();
         let deposits = reopened.recent_deposits(10).await.unwrap();
         assert_eq!(deposits.len(), 2);
-        assert_eq!(deposits[0].timestamp, 200);
-        assert_eq!(deposits[1].timestamp, 100);
+        assert_eq!(deposits[0].timestamp, base + 1);
+        assert_eq!(deposits[1].timestamp, base);
 
         let health = reopened.health().await.unwrap();
         assert!(health.ready);
@@ -1781,12 +1987,13 @@ mod tests {
         let Some((_bucket, substrate)) = connect_for_test("gc").await else {
             return;
         };
+        let now = now_timestamp();
         substrate
-            .deposit(sample_deposit("whisker-a", 0, 0.1))
+            .deposit(sample_deposit("whisker-a", now - 1, 0.1))
             .await
             .unwrap();
         substrate
-            .deposit(sample_deposit("whisker-b", 100_000, 0.9))
+            .deposit(sample_deposit("whisker-b", now, 0.9))
             .await
             .unwrap();
         wait_until(|| async { substrate.recent_deposits(10).await.unwrap().len() == 2 }).await;
@@ -1795,18 +2002,21 @@ mod tests {
         assert_eq!(deposits.len(), 2);
 
         let concentration = substrate
-            .query_concentration(&ThreatClass::Execution, 100_000)
+            .query_concentration(&ThreatClass::Execution, now + 14_000)
             .await
             .unwrap();
         assert_eq!(concentration.distinct_sources, 1);
-        assert!(concentration.total_strength >= 0.9);
+        assert!(concentration.total_strength > substrate_config().evaporation_threshold);
 
-        let removed = substrate.gc_evaporated(100_000).await.unwrap();
+        let removed = substrate.gc_evaporated(now + 14_000).await.unwrap();
         assert_eq!(removed, 1);
 
         let deposits = substrate.recent_deposits(10).await.unwrap();
         assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].agent_id.0, "whisker-b");
+        assert_eq!(
+            deposits[0].agent_id,
+            AgentId::from_verifying_key(&signing_key_for_label("whisker-b").verifying_key())
+        );
     }
 
     #[tokio::test]
@@ -1824,26 +2034,37 @@ mod tests {
                 .await
                 .unwrap();
 
+        let now = now_timestamp();
         substrate
-            .deposit(sample_deposit("whisker-a", 0, 0.1))
+            .deposit(sample_deposit("whisker-a", now - 2, 0.1))
             .await
             .unwrap();
         substrate
-            .deposit(sample_deposit("whisker-b", 20_000, 0.2))
+            .deposit(sample_deposit("whisker-b", now - 1, 0.2))
             .await
             .unwrap();
         substrate
-            .deposit(sample_deposit("whisker-c", 100_000, 0.9))
+            .deposit(sample_deposit("whisker-c", now, 0.9))
             .await
             .unwrap();
 
-        assert_eq!(substrate.gc_evaporated(100_000).await.unwrap(), 1);
-        assert_eq!(substrate.gc_evaporated(100_000).await.unwrap(), 1);
-        assert_eq!(substrate.gc_evaporated(100_000).await.unwrap(), 0);
+        let mut removed = 0;
+        for _ in 0..64 {
+            let batch = substrate.gc_evaporated(now + 18_000).await.unwrap();
+            assert!(batch <= 1, "one-page GC exceeded its configured page bound");
+            removed += batch;
+            if removed == 2 {
+                break;
+            }
+        }
+        assert_eq!(removed, 2);
 
         let deposits = substrate.recent_deposits(10).await.unwrap();
         assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].agent_id.0, "whisker-c");
+        assert_eq!(
+            deposits[0].agent_id,
+            AgentId::from_verifying_key(&signing_key_for_label("whisker-c").verifying_key())
+        );
     }
 
     #[tokio::test]

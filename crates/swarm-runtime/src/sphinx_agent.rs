@@ -2163,7 +2163,9 @@ mod tests {
         SWARM_PROVIDENCE_FEEDBACK_SCHEMA_VERSION, Severity, SphinxMemoryPayloadKind,
         SphinxMemoryQuery, SwarmAction,
     };
-    use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_pheromone::{
+        ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate,
+    };
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -2195,8 +2197,9 @@ mod tests {
     }
 
     fn substrate(config: &swarm_core::config::SwarmConfig) -> ConfiguredPheromoneSubstrate {
-        ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
-            .expect("test substrate should initialize")
+        ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new_for_replay(
+            config.pheromone.clone(),
+        ))
     }
 
     fn test_signing_key() -> SigningKey {

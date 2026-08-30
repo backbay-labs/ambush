@@ -225,7 +225,7 @@ async fn network_connect_end_to_end_produces_signed_command_and_control_deposit(
         "suspicious_ports": [4444],
     }))?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
     let outcome = detect_and_deposit(
         &detector,
         &substrate,
@@ -281,7 +281,9 @@ async fn composite_execution_sequence_reaches_three_distinct_sources_and_alerts(
             stage_name: "lolbin runner",
         }),
     ]);
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(execution_pheromone_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        execution_pheromone_config(),
+    ));
     let events = [
         staged_process_event(
             "stage-1",
@@ -378,7 +380,9 @@ async fn infrastructure_and_behavioral_execution_signals_share_alert_lane()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = config_with_execution_and_infrastructure_strategies()?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.pheromone.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        config.pheromone.clone(),
+    ));
     let infrastructure_key = SigningKey::from_bytes(&[43u8; 32]);
     let infrastructure_agent_id = AgentId::from_verifying_key(&infrastructure_key.verifying_key());
     let behavioral_key = SigningKey::from_bytes(&[44u8; 32]);

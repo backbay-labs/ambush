@@ -143,7 +143,7 @@
     async fn rehearse_bundle_supports_expanded_firewall_action_preview() {
         let (service, modes) = runtime_service_with_recording_modes();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-rehearsal-firewall", "powershell.exe -enc AAA=");
         let source_context = approval_context(1_700_000_000_320, "corr-rehearsal-firewall");
         let agent_id = test_agent_id();
@@ -210,7 +210,7 @@
     async fn rehearse_bundle_fails_closed_before_executor_when_scope_metadata_is_missing() {
         let (service, modes) = runtime_service_with_recording_modes();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-rehearsal-invalid", "powershell.exe -enc AAA=");
         let source_context = approval_context(1_700_000_000_300, "corr-rehearsal-invalid");
         let agent_id = test_agent_id();

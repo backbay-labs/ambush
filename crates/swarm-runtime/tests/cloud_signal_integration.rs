@@ -23,6 +23,8 @@ use swarm_runtime::config::load_config;
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_runtime::investigation::{InvestigationOutcome, InvestigationStrategy};
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
+
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
 use swarm_whisker::{CloudTrailEvent, KubernetesAuditEvent, TelemetryEvent, TelemetryPayload};
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
@@ -51,10 +53,12 @@ impl InvestigationStrategy for NoOpInvestigation {
 }
 
 fn config() -> Result<SwarmConfig, Box<dyn std::error::Error>> {
-    Ok(load_config(concat!(
+    let mut config = load_config(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../rulesets/default.yaml"
-    ))?)
+    ))?;
+    config.pheromone.default_half_life_secs = TEST_LIVE_HALF_LIFE_SECS;
+    Ok(config)
 }
 
 fn config_with_strategy(strategy: &str) -> Result<SwarmConfig, Box<dyn std::error::Error>> {
@@ -377,7 +381,7 @@ async fn cloud_bridges_feed_shared_detection_pipeline_and_surface_bridge_health(
 
     let config = config_with_cloud_bridges(&cloudtrail_path, &kubernetes_path)?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
     let registry = BridgeRuntimeRegistry::from_config(&config)?;
     let bridge_health = registry.shared_health();
     let (telemetry_tx, mut telemetry_rx) = mpsc::channel(8);

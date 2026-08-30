@@ -2552,7 +2552,9 @@ mod tests {
     use swarm_core::agent::{AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode};
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::AgentId;
-    use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_pheromone::{
+        ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate,
+    };
     use swarm_whisker::{
         BehavioralAnomalyProfile, DnsExfiltrationProfile, FilelessExecutionProfile,
     };
@@ -2777,8 +2779,9 @@ mod tests {
     }
 
     fn substrate(config: &swarm_core::config::SwarmConfig) -> ConfiguredPheromoneSubstrate {
-        ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
-            .expect("test substrate should initialize")
+        ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new_for_replay(
+            config.pheromone.clone(),
+        ))
     }
 
     #[test]

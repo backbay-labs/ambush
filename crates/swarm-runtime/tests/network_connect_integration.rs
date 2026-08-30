@@ -55,7 +55,7 @@ async fn network_connect_strategy_detects_suspicious_port_and_deposits_command_a
         "suspicious_ports": [4444],
     }))?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
     let outcome = detect_and_deposit(
         &detector,
         &substrate,
@@ -98,7 +98,7 @@ async fn network_connect_strategy_detects_low_jitter_beacon_sequence()
         "beacon_max_jitter_ratio": 0.20,
     }))?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
     let timestamps = [
         1_700_000_100_000,
         1_700_000_130_000,

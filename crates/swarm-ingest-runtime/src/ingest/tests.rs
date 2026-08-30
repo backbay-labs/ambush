@@ -77,6 +77,11 @@ use swarm_spine::{
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
 use tower::ServiceExt;
 
+// Historical fixture timestamps remain deterministic while the configured runtime exercises the
+// production, wall-clock-backed admission path. Keep their retention horizon long enough that the
+// fixtures test ingest behavior instead of eventually expiring as the calendar advances.
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
+
 fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
     vec![PolicyRuleConfig {
         name: "ingest-test-execution-allow".to_string(),
@@ -143,7 +148,7 @@ fn test_config(strategy: &str) -> SwarmConfig {
             profiles: DetectorProfilesConfig::default(),
         },
         pheromone: PheromoneConfig {
-            default_half_life_secs: 3600.0,
+            default_half_life_secs: TEST_LIVE_HALF_LIFE_SECS,
             evaporation_threshold: 0.01,
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
@@ -467,7 +472,7 @@ async fn seed_platform_host_deposit(
         severity: Severity::High,
         confidence,
         timestamp,
-        decay_half_life: 3600.0,
+        decay_half_life: TEST_LIVE_HALF_LIFE_SECS,
         agent_id: agent_id.clone(),
         agent_identity: agent_id.0,
         agent_role: None,
@@ -4299,8 +4304,8 @@ mod providence_feedback {
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
             confidence,
-            timestamp,
-            decay_half_life: 3600.0,
+            timestamp: timestamp.div_euclid(1_000),
+            decay_half_life: TEST_LIVE_HALF_LIFE_SECS,
             agent_id: agent_id.clone(),
             agent_identity: agent_id.0,
             agent_role: None,
@@ -4519,7 +4524,7 @@ mod providence_feedback {
 
         let before_confirm = state
             .current_substrate()
-            .query_concentration(&ThreatClass::Execution, super::now_ms())
+            .query_concentration(&ThreatClass::Execution, super::now_ms().div_euclid(1_000))
             .await
             .unwrap()
             .total_strength;
@@ -4540,7 +4545,7 @@ mod providence_feedback {
 
         let after_confirm = state
             .current_substrate()
-            .query_concentration(&ThreatClass::Execution, super::now_ms())
+            .query_concentration(&ThreatClass::Execution, super::now_ms().div_euclid(1_000))
             .await
             .unwrap()
             .total_strength;
@@ -4561,7 +4566,7 @@ mod providence_feedback {
 
         let suppressed = state
             .current_substrate()
-            .query_concentration(&ThreatClass::Execution, super::now_ms())
+            .query_concentration(&ThreatClass::Execution, super::now_ms().div_euclid(1_000))
             .await
             .unwrap()
             .total_strength;

@@ -107,7 +107,7 @@ async fn composite_detector_deposits_from_both_strategies() -> Result<(), Box<dy
 {
     let config = runtime_config()?;
     let detector = composite_detector();
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
 
     let agent_id = AgentId::from_verifying_key(&test_signing_key().verifying_key());
     let process_outcome = detect_and_deposit(

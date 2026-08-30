@@ -531,7 +531,7 @@ async fn signed_providence_feedback_deposit(
         threat_class: target.threat_class.clone(),
         severity: target.severity,
         confidence,
-        timestamp: recorded_at_ms,
+        timestamp: recorded_at_ms.div_euclid(1_000),
         decay_half_life: policy.half_life_secs,
         agent_id: AgentId::from_verifying_key(&state.signing_key.verifying_key()),
         agent_identity: AgentId::from_verifying_key(&state.signing_key.verifying_key()).0,
@@ -569,7 +569,7 @@ fn providence_feedback_evidence(deposit: &PheromoneDeposit) -> ProvidenceFeedbac
             .indicator
             .get("observed_at_ms")
             .and_then(Value::as_i64)
-            .unwrap_or(deposit.timestamp),
+            .unwrap_or_else(|| deposit.timestamp.saturating_mul(1_000)),
         signature_hex: hex::encode(&deposit.signature),
     }
 }

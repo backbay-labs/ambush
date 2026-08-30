@@ -142,7 +142,9 @@ fn shipped_ruleset_carries_the_thresholds_this_file_reasons_about() {
 async fn two_saturated_shipped_detections_never_reach_the_alert_threshold() {
     let config = shipped_config();
     let pheromone = shipped_pheromone_config(&config);
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(pheromone.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        pheromone.clone(),
+    ));
     let detector = build_detector_from_strategy("suspicious_process_tree", &config.detection)
         .expect("the shipped strategy builds");
 
@@ -205,7 +207,9 @@ async fn two_saturated_shipped_detections_never_reach_the_alert_threshold() {
 async fn unit_confidence_pair_clears_the_threshold_for_one_second_only() {
     let config = shipped_config();
     let pheromone = shipped_pheromone_config(&config);
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(pheromone.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        pheromone.clone(),
+    ));
     for seed in [11u8, 22u8] {
         substrate
             .deposit(unit_confidence_deposit(&signing_key(seed), T))
@@ -265,7 +269,9 @@ async fn unit_confidence_pair_clears_the_threshold_for_one_second_only() {
 async fn the_mode_latch_holds_alert_for_the_full_deescalation_cooldown() {
     let config = shipped_config();
     let pheromone = shipped_pheromone_config(&config);
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(pheromone.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        pheromone.clone(),
+    ));
     for seed in [11u8, 22u8] {
         substrate
             .deposit(unit_confidence_deposit(&signing_key(seed), T))
@@ -313,7 +319,9 @@ async fn the_mode_latch_holds_alert_for_the_full_deescalation_cooldown() {
 async fn a_second_event_from_the_same_two_agents_crosses_the_threshold() {
     let config = shipped_config();
     let pheromone = shipped_pheromone_config(&config);
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(pheromone.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        pheromone.clone(),
+    ));
     let detector = build_detector_from_strategy("suspicious_process_tree", &config.detection)
         .expect("the shipped strategy builds");
 
@@ -408,7 +416,9 @@ async fn the_hundred_millisecond_cadence_misses_only_the_last_tenth_of_the_bound
 
         // A fresh substrate and monitor per arrival offset: this measures first
         // sighting, not a latch left over from the previous iteration.
-        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(pheromone.clone()));
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+            pheromone.clone(),
+        ));
         for seed in [11u8, 22u8] {
             substrate
                 .deposit(unit_confidence_deposit(&signing_key(seed), T))

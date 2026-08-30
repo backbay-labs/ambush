@@ -1281,6 +1281,7 @@ async fn process_demo_replay_step(
     step: swarm_runtime::replay::ReplayScenarioStep,
 ) -> Result<(), IngestProcessingError> {
     let stack = state.stack.load_full();
+    let replay_now_ms = normalized_ingest_timestamp_ms(step.event.timestamp)?;
     let approval = ApprovalContext {
         live_mode: stack.service.mode() == RuntimeMode::LiveResponse,
         receipt_chain: Vec::new(),
@@ -1288,7 +1289,7 @@ async fn process_demo_replay_step(
         // Demo replay re-evaluates historical scenarios at the recorded event
         // time so approval correlation stays deterministic across re-runs.
         // Live ingest uses wall-clock `now_ms()` in `process_runtime_event`.
-        now_ms: step.event.timestamp,
+        now_ms: replay_now_ms,
     };
     let replay_action = step.action.clone();
     let live_governed_action = stack.service.mode() == RuntimeMode::LiveResponse

@@ -925,7 +925,9 @@ mod tests {
     };
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::{AgentId, Severity, SwarmAction};
-    use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_pheromone::{
+        ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate,
+    };
 
     fn temp_root(label: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -997,8 +999,9 @@ mod tests {
     }
 
     fn substrate(config: &swarm_core::config::SwarmConfig) -> ConfiguredPheromoneSubstrate {
-        ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
-            .expect("test substrate should initialize")
+        ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new_for_replay(
+            config.pheromone.clone(),
+        ))
     }
 
     fn env(now: i64, pheromones: Vec<PheromoneDeposit>) -> SwarmEnvironment {

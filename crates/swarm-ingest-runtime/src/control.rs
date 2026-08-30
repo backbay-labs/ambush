@@ -1711,6 +1711,11 @@ mod tests {
     };
     use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
+    // The configured control plane intentionally uses the production admission clock. Its fixed
+    // historical fixtures therefore need a deterministic retention horizon that outlives the
+    // test data rather than a one-hour production-style default.
+    const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
+
     fn unique_temp_dir(label: &str) -> PathBuf {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1806,7 +1811,7 @@ mod tests {
                 profiles: swarm_core::config::DetectorProfilesConfig::default(),
             },
             pheromone: PheromoneConfig {
-                default_half_life_secs: 3600.0,
+                default_half_life_secs: TEST_LIVE_HALF_LIFE_SECS,
                 evaporation_threshold: 0.01,
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
@@ -2540,7 +2545,7 @@ mod tests {
         plane
             .store_threat_class_config(ThreatClassConfig {
                 threat_class: ThreatClass::Execution,
-                half_life_secs: 3600.0,
+                half_life_secs: TEST_LIVE_HALF_LIFE_SECS,
                 evaporation_threshold: 0.01,
                 alert_threshold: 1.5,
                 incident_threshold: 5.0,
@@ -2558,7 +2563,7 @@ mod tests {
                 severity: Severity::High,
                 confidence: 0.8,
                 timestamp: 1_700_000_000,
-                decay_half_life: 3600.0,
+                decay_half_life: TEST_LIVE_HALF_LIFE_SECS,
                 agent_id: agent_id.clone(),
                 agent_identity: agent_id.0.clone(),
                 agent_role: None,

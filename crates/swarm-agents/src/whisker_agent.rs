@@ -240,7 +240,9 @@ mod tests {
     }
 
     fn substrate(config: &PheromoneConfig) -> ConfiguredPheromoneSubstrate {
-        ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new(config.clone()))
+        ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new_for_replay(
+            config.clone(),
+        ))
     }
 
     fn event() -> TelemetryEvent {

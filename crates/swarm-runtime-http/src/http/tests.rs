@@ -420,6 +420,13 @@ fn event(event_id: &str, command_line: &str) -> TelemetryEvent {
     }
 }
 
+fn live_event(event_id: &str, command_line: &str, now_ms: i64) -> TelemetryEvent {
+    TelemetryEvent {
+        timestamp: now_ms.div_euclid(1_000),
+        ..event(event_id, command_line)
+    }
+}
+
 fn approval_context(now_ms: i64) -> ApprovalContext {
     ApprovalContext {
         live_mode: true,
@@ -2043,16 +2050,21 @@ async fn notification_dead_letter_routes_list_and_replay_entries() {
 
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
     let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+    let event_now_ms = swarm_runtime::runtime_events::now_ms();
     let _ = surface
         .state
         .control
         .stack
         .process_event(
             &swarm_whisker::SuspiciousProcessTreeDetector::default(),
-            &event("evt-http-notify-1", "powershell.exe -enc AAA="),
+            &live_event(
+                "evt-http-notify-1",
+                "powershell.exe -enc AAA=",
+                event_now_ms,
+            ),
             EventExecutionContext {
                 agent_id: &agent_id,
-                approval: &approval_context(1_700_000_000_010),
+                approval: &approval_context(event_now_ms),
                 signing_key: &signing_key,
             },
             |_finding| {
@@ -2182,16 +2194,17 @@ async fn read_endpoints_return_runtime_and_governance_artifacts() {
 
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
     let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+    let event_now_ms = swarm_runtime::runtime_events::now_ms();
     let processed = surface
         .state
         .control
         .stack
         .process_event(
             &swarm_whisker::SuspiciousProcessTreeDetector::default(),
-            &event("evt-http-1", "powershell.exe -enc AAA="),
+            &live_event("evt-http-1", "powershell.exe -enc AAA=", event_now_ms),
             EventExecutionContext {
                 agent_id: &agent_id,
-                approval: &approval_context(1_700_000_000_001),
+                approval: &approval_context(event_now_ms),
                 signing_key: &signing_key,
             },
             |_finding| {
@@ -2443,10 +2456,11 @@ async fn live_governed_demo_cannot_be_resumed_by_human_approval() {
     });
 
     let scenario_path = root.join("human-gate-demo.yaml");
+    let replay_now_ms = swarm_runtime::runtime_events::now_ms();
     let manifest = ReplayScenarioManifest {
         name: "operator approval replay".to_string(),
         description: "operator approval replay scenario".to_string(),
-        seed_time_ms: 1_700_000_200_000,
+        seed_time_ms: replay_now_ms,
         requested_by: "demo-operator".to_string(),
         receipt_chain: Vec::new(),
         metadata: ReplayScenarioMetadata {
@@ -2465,7 +2479,7 @@ async fn live_governed_demo_cannot_be_resumed_by_human_approval() {
                 action: ResponseAction::IsolateHost {
                     host_id: "host-1".to_string(),
                 },
-                event: event("evt-approval-1", "powershell.exe -enc AAA="),
+                event: live_event("evt-approval-1", "powershell.exe -enc AAA=", replay_now_ms),
             }],
         },
         expectations: Default::default(),

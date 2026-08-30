@@ -688,7 +688,8 @@ mod tests {
     use swarm_core::types::{AgentId, Severity};
     use swarm_pheromone::substrate::validate_deposit_signature;
     use swarm_pheromone::{
-        InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate, PheromoneSubstrate,
+        InMemoryPheromoneSubstrate as ReplayInMemoryPheromoneSubstrate,
+        LocalJournalPheromoneSubstrate as ReplayLocalJournalPheromoneSubstrate, PheromoneSubstrate,
     };
     use swarm_whisker::{
         DetectionFinding, DetectionStrategy, DnsExfiltrationDetector, DnsQueryEvent,
@@ -696,6 +697,25 @@ mod tests {
         NetworkConnectProfile, ProcessMemoryAccessEvent, ProcessStartEvent,
         SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
     };
+
+    struct InMemoryPheromoneSubstrate;
+
+    impl InMemoryPheromoneSubstrate {
+        fn replay(config: PheromoneConfig) -> ReplayInMemoryPheromoneSubstrate {
+            ReplayInMemoryPheromoneSubstrate::new_for_replay(config)
+        }
+    }
+
+    struct LocalJournalPheromoneSubstrate;
+
+    impl LocalJournalPheromoneSubstrate {
+        fn open_replay(
+            config: PheromoneConfig,
+            path: impl AsRef<std::path::Path>,
+        ) -> Result<ReplayLocalJournalPheromoneSubstrate, swarm_pheromone::SubstrateError> {
+            ReplayLocalJournalPheromoneSubstrate::open_for_replay(config, path)
+        }
+    }
 
     #[derive(Clone)]
     struct StaticDetector {
@@ -854,8 +874,10 @@ policy:
         let runtime_agent_id = AgentId::from_verifying_key(&test_signing_key().verifying_key());
 
         {
-            let substrate =
-                LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), journal_path)?;
+            let substrate = LocalJournalPheromoneSubstrate::open_replay(
+                config.pheromone.clone(),
+                journal_path,
+            )?;
             let detector =
                 build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
 
@@ -889,7 +911,7 @@ policy:
         }
 
         let substrate =
-            LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), journal_path)?;
+            LocalJournalPheromoneSubstrate::open_replay(config.pheromone.clone(), journal_path)?;
         let detector =
             build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
         let anomaly_event = process_start_event(
@@ -917,7 +939,7 @@ policy:
     #[tokio::test]
     async fn detector_findings_are_deposited_into_substrate() {
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
             event_id: "evt-1".to_string(),
@@ -953,7 +975,7 @@ policy:
     #[tokio::test]
     async fn detector_findings_use_threat_class_half_life_override() {
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         substrate
             .store_threat_class_config(ThreatClassConfig {
                 threat_class: swarm_core::pheromone::ThreatClass::Execution,
@@ -998,7 +1020,7 @@ policy:
     #[tokio::test]
     async fn dns_findings_are_enriched_by_matching_threat_intel() {
         let detector = DnsExfiltrationDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         substrate
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::Domain,
@@ -1063,7 +1085,7 @@ policy:
             ..NetworkConnectProfile::default()
         })
         .unwrap();
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         substrate
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::IpAddress,
@@ -1112,7 +1134,7 @@ policy:
     #[tokio::test]
     async fn process_findings_are_enriched_by_matching_url_threat_intel() {
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         substrate
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::Url,
@@ -1180,7 +1202,7 @@ policy:
                 finding("dns_exfiltration", "finding-2"),
             ],
         };
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
             event_id: "evt-1".to_string(),
@@ -1231,7 +1253,7 @@ policy:
     #[tokio::test]
     async fn fileless_memory_access_event_deposits_defense_evasion_pheromone() {
         let detector = FilelessExecutionDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         let event = memory_access_event("evt-fileless-defense", "explorer.exe");
         let findings = detector.evaluate(&event);
         let mut deposits = super::resolve_deposits(
@@ -1271,7 +1293,7 @@ policy:
     #[tokio::test]
     async fn fileless_privileged_target_event_deposits_privilege_escalation_pheromone() {
         let detector = FilelessExecutionDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let substrate = InMemoryPheromoneSubstrate::replay(pheromone_config());
         let event = memory_access_event("evt-fileless-priv", "lsass.exe");
         let findings = detector.evaluate(&event);
         let mut deposits = super::resolve_deposits(
@@ -1360,9 +1382,11 @@ policy:
         let runtime_agent_id = AgentId::from_verifying_key(&test_signing_key().verifying_key());
 
         {
-            let substrate =
-                LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), &journal_path)
-                    .unwrap();
+            let substrate = LocalJournalPheromoneSubstrate::open_replay(
+                config.pheromone.clone(),
+                &journal_path,
+            )
+            .unwrap();
             let detector =
                 build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
 
@@ -1413,7 +1437,8 @@ policy:
         }
 
         let substrate =
-            LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), &journal_path).unwrap();
+            LocalJournalPheromoneSubstrate::open_replay(config.pheromone.clone(), &journal_path)
+                .unwrap();
         let detector =
             build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
         let anomaly_event = process_start_event(

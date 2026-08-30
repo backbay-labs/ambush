@@ -141,7 +141,7 @@ fn finding(strategy_id: &str, finding_id: &str) -> DetectionFinding {
 
 #[tokio::test]
 async fn below_threshold_no_escalation() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     substrate
         .deposit(make_deposit(
             &signing_key_a(),
@@ -170,7 +170,7 @@ async fn below_threshold_no_escalation() {
 
 #[tokio::test]
 async fn single_source_above_threshold_no_escalation() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     let key = signing_key_a();
     for _ in 0..3 {
         substrate
@@ -192,7 +192,7 @@ async fn single_source_above_threshold_no_escalation() {
 
 #[tokio::test]
 async fn dual_source_above_alert_threshold() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     for key in [&signing_key_a(), &signing_key_b()] {
         substrate
             .deposit(make_deposit(
@@ -235,7 +235,7 @@ async fn dual_source_above_alert_threshold() {
 
 #[tokio::test]
 async fn dual_source_above_incident_threshold() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     for key in [&signing_key_a(), &signing_key_b()] {
         for _ in 0..3 {
             substrate
@@ -266,7 +266,7 @@ async fn dual_source_above_incident_threshold() {
 
 #[tokio::test]
 async fn threat_class_alert_override_applies_without_restart() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     substrate
         .store_threat_class_config(ThreatClassConfig {
             threat_class: ThreatClass::Execution,
@@ -303,7 +303,7 @@ async fn threat_class_alert_override_applies_without_restart() {
 
 #[tokio::test]
 async fn mode_progression_normal_to_alert_to_incident() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
 
     for key in [&signing_key_a(), &signing_key_b()] {
@@ -358,7 +358,7 @@ async fn mode_progression_normal_to_alert_to_incident() {
 #[tokio::test]
 async fn concentration_monitor_deescalates_after_cooldown() {
     let config = test_config();
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     let mut monitor = ConcentrationMonitor::new(config.clone(), Arc::clone(&substrate));
     let start = 1_700_000_000;
 
@@ -412,7 +412,7 @@ async fn concentration_monitor_deescalates_after_cooldown() {
 #[tokio::test]
 async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
     let config = threat_intel_alert_config();
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     substrate
         .store_threat_intel_entry(ThreatIntelEntry {
             indicator_type: ThreatIntelIndicatorType::Domain,
@@ -481,7 +481,7 @@ async fn cross_strategy_findings_from_one_agent_do_not_trigger_alert_escalation(
     // strategy-scoped suffix must not satisfy the two-source escalation gate.
     let mut config = test_config();
     config.alert_threshold = 1.5;
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     let detector = StaticDetector {
         findings: vec![
             finding("suspicious_process_tree", "finding-1"),
@@ -522,7 +522,7 @@ async fn cross_strategy_findings_from_one_agent_do_not_trigger_alert_escalation(
 #[tokio::test]
 async fn repeated_same_strategy_findings_from_one_agent_do_not_trigger_cross_strategy_alert() {
     let config = test_config();
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     let detector = StaticDetector {
         findings: vec![
             finding("suspicious_process_tree", "finding-1"),

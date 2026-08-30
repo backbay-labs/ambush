@@ -3196,6 +3196,7 @@ dependencies = [
  "async-trait",
  "ed25519-dalek",
  "hex",
+ "percent-encoding",
  "serde",
  "serde_json",
  "sha2",
@@ -3205,6 +3206,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "url",
 ]
 
 [[package]]
