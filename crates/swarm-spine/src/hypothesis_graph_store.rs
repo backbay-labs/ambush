@@ -2525,48 +2525,37 @@ fn claim_task_op(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn renew_task_op(
     state: &mut GraphStoreState,
-    task_id: &str,
-    expected_generation: u64,
-    lease_id: &LeaseId,
-    fence: FencingToken,
-    now: GraphLogicalTime,
-    duration_ms: u64,
+    envelope: TaskRenewalEnvelope,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    observe_logical_time(state, now)?;
-    let entry = task_entry_mut(state, task_id)?;
-    ensure_task_generation(entry, expected_generation)?;
-    let old_lease = ensure_lease(entry, lease_id, fence)?;
-    if entry.task.state != TaskState::Claimed {
-        return Err(GraphStoreError::InvalidTransition {
-            reason: "only claimed tasks can renew".to_string(),
-        });
-    }
-    if now < old_lease.issued_at {
-        return Err(GraphStoreError::InvalidTransition {
-            reason: "renewal clock precedes lease issuance".to_string(),
-        });
-    }
-    if now >= old_lease.expires_at {
-        return Err(GraphStoreError::LeaseExpired {
-            task_id: entry.task.request.task_id.clone(),
-        });
-    }
+    let current = state
+        .tasks
+        .get(&envelope.task_id)
+        .ok_or_else(|| GraphStoreError::TaskNotFound {
+            task_id: envelope.task_id.to_string(),
+        })?
+        .clone();
+    ensure_task_generation(&current, envelope.expected_generation)?;
+    envelope.validate_for_task(&current.task, limits)?;
+    observe_logical_time(state, envelope.renewed_at)?;
+    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
+    let old_lease = ensure_lease(entry, &envelope.lease_id, envelope.fencing_token)?;
     let renewed = TaskLease::new(
         old_lease.lease_id.clone(),
         old_lease.holder.clone(),
-        now,
-        now.checked_add(
-            i64::try_from(duration_ms).map_err(|_| GraphStoreError::InvalidLease {
-                reason: "duration does not fit logical time".to_string(),
+        envelope.renewed_at,
+        envelope
+            .renewed_at
+            .checked_add(i64::try_from(envelope.duration_ms).map_err(|_| {
+                GraphStoreError::InvalidLease {
+                    reason: "duration does not fit logical time".to_string(),
+                }
+            })?)
+            .ok_or_else(|| GraphStoreError::InvalidLease {
+                reason: "renewal expiry overflows logical time".to_string(),
             })?,
-        )
-        .ok_or_else(|| GraphStoreError::InvalidLease {
-            reason: "renewal expiry overflows logical time".to_string(),
-        })?,
         old_lease.fencing_token,
     )
     .map_err(GraphStoreError::Admission)?;
@@ -2718,31 +2707,33 @@ fn fail_task_op(
 
 fn expire_task_op(
     state: &mut GraphStoreState,
-    task_id: &str,
-    expected_generation: u64,
-    now: GraphLogicalTime,
+    envelope: TaskExpiryEnvelope,
+    authority: &AgentId,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    observe_logical_time(state, now)?;
+    let current = state
+        .tasks
+        .get(&envelope.task_id)
+        .ok_or_else(|| GraphStoreError::TaskNotFound {
+            task_id: envelope.task_id.to_string(),
+        })?
+        .clone();
+    ensure_task_generation(&current, envelope.expected_generation)?;
+    envelope.validate_for_task(&current.task, authority, limits)?;
+    observe_logical_time(state, envelope.observed_at)?;
     {
-        let entry = task_entry_mut(state, task_id)?;
-        ensure_task_generation(entry, expected_generation)?;
-        if entry.task.state != TaskState::Claimed {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "only claimed tasks can expire".to_string(),
-            });
-        }
+        let entry = task_entry_mut(state, envelope.task_id.as_str())?;
         entry.task = entry
             .task
             .clone()
-            .expire(now, limits.max_task_lease_ms)
+            .expire(envelope.observed_at, limits.max_task_lease_ms)
             .map_err(GraphStoreError::Admission)?;
     }
     // Expiry is itself a fencing barrier.  Advance the durable counter before
     // publishing the expired record so the token of the expired lease can
     // never authorize a later operation, including after a restart.
     next_fence(state)?;
-    let entry = task_entry_mut(state, task_id)?;
+    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
     entry.generation =
         entry
             .generation
@@ -2848,6 +2839,388 @@ fn reclaim_task_op(
 struct TaskMutationMarker {
     task: TaskRecord,
     idempotent: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskRenewalMaterial<'a> {
+    task_id: &'a TaskId,
+    idempotency_key: &'a IdempotencyKey,
+    expected_generation: u64,
+    lease_id: &'a LeaseId,
+    fencing_token: FencingToken,
+    renewed_at: GraphLogicalTime,
+    duration_ms: u64,
+    capability: &'a TaskCapabilityProof,
+    renewal_scope: &'a str,
+}
+
+/// Claimant-signed authority to extend one exact active lease. The durable
+/// task generation, idempotency key, lease, fence, timestamp, and duration are
+/// all covered by the signature so a shared store handle cannot renew another
+/// worker's claim from a read-only snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRenewalEnvelope {
+    pub task_id: TaskId,
+    pub idempotency_key: IdempotencyKey,
+    pub expected_generation: u64,
+    pub lease_id: LeaseId,
+    pub fencing_token: FencingToken,
+    pub renewed_at: GraphLogicalTime,
+    pub duration_ms: u64,
+    pub capability: TaskCapabilityProof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_witness: Option<EvidenceWitness>,
+}
+
+impl TaskRenewalEnvelope {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        task_id: TaskId,
+        idempotency_key: IdempotencyKey,
+        expected_generation: u64,
+        lease_id: LeaseId,
+        fencing_token: FencingToken,
+        renewed_at: GraphLogicalTime,
+        duration_ms: u64,
+        capability: TaskCapabilityProof,
+    ) -> Result<Self, GraphStoreError> {
+        let envelope = Self {
+            task_id,
+            idempotency_key,
+            expected_generation,
+            lease_id,
+            fencing_token,
+            renewed_at,
+            duration_ms,
+            capability,
+            renewal_witness: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn signed_with(
+        mut self,
+        signer: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let signer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+        if signer_identity != self.capability.claimant {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "renewal signer does not match the capability claimant".to_string(),
+                },
+            ));
+        }
+        let scoped_agent_id = scoped_agent_id.into();
+        if scoped_agent_id.trim().is_empty() || scoped_agent_id.len() > 128 {
+            return Err(GraphStoreError::InvalidState {
+                reason: "renewal scope is invalid".to_string(),
+            });
+        }
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.renewal_witness = Some(
+            EvidenceWitness::new(signer, self.capability.role, scoped_agent_id, &bytes)
+                .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_for_scope(&self, renewal_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskRenewalMaterial {
+            task_id: &self.task_id,
+            idempotency_key: &self.idempotency_key,
+            expected_generation: self.expected_generation,
+            lease_id: &self.lease_id,
+            fencing_token: self.fencing_token,
+            renewed_at: self.renewed_at,
+            duration_ms: self.duration_ms,
+            capability: &self.capability,
+            renewal_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let renewal_scope = self
+            .renewal_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(renewal_scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphStoreError> {
+        self.renewed_at
+            .validate()
+            .map_err(GraphStoreError::Admission)?;
+        if self.expected_generation == 0 || self.duration_ms == 0 {
+            return Err(GraphStoreError::InvalidLease {
+                reason: "renewal generation and duration must be positive".to_string(),
+            });
+        }
+        if self.capability.task_id != self.task_id {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "renewal capability task does not match envelope task".to_string(),
+            });
+        }
+        if let Some(witness) = &self.renewal_witness {
+            if witness.producer_identity != self.capability.claimant
+                || witness.producer_role != self.capability.role
+            {
+                return Err(GraphStoreError::Admission(
+                    GraphAdmissionError::InvalidWitness {
+                        reason: "renewal witness does not bind claimant and capability role"
+                            .to_string(),
+                    },
+                ));
+            }
+            witness
+                .validate(&self.canonical_bytes_without_witness()?)
+                .map_err(GraphStoreError::Admission)?;
+        }
+        Ok(())
+    }
+
+    fn validate_for_task(
+        &self,
+        task: &TaskRecord,
+        limits: &GraphResourceLimits,
+    ) -> Result<(), GraphStoreError> {
+        self.validate()?;
+        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)
+            .map_err(GraphStoreError::Admission)?;
+        if task.state != TaskState::Claimed || task.completion.is_some() {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "renewal envelope requires an active claimed task".to_string(),
+            });
+        }
+        let lease = task
+            .lease
+            .as_ref()
+            .ok_or_else(|| GraphStoreError::InvalidTransition {
+                reason: "renewal envelope requires the task's active lease".to_string(),
+            })?;
+        self.capability
+            .validate_for_claim(&task.request)
+            .map_err(GraphStoreError::Admission)?;
+        if self.task_id != task.request.task_id
+            || self.idempotency_key != task.request.idempotency_key
+            || self.lease_id != lease.lease_id
+            || self.fencing_token != lease.fencing_token
+            || self.capability.claimant != lease.holder
+        {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "renewal envelope does not bind the active task lease".to_string(),
+            });
+        }
+        if self.renewed_at < lease.issued_at {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "renewal clock precedes lease issuance".to_string(),
+            });
+        }
+        if self.renewed_at >= lease.expires_at {
+            return Err(GraphStoreError::LeaseExpired {
+                task_id: task.request.task_id.clone(),
+            });
+        }
+        if self.duration_ms > limits.max_task_lease_ms {
+            return Err(GraphStoreError::InvalidLease {
+                reason: "renewal duration exceeds the graph lease limit".to_string(),
+            });
+        }
+        let Some(witness) = self.renewal_witness.as_ref() else {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "durable task renewal requires a claimant signature".to_string(),
+                },
+            ));
+        };
+        witness
+            .validate(&self.canonical_bytes_without_witness()?)
+            .map_err(GraphStoreError::Admission)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskExpiryMaterial<'a> {
+    task_id: &'a TaskId,
+    idempotency_key: &'a IdempotencyKey,
+    expected_generation: u64,
+    lease_id: &'a LeaseId,
+    fencing_token: FencingToken,
+    observed_at: GraphLogicalTime,
+    expiry_scope: &'a str,
+}
+
+/// Scheduler-signed observation that one exact lease expired. The store only
+/// accepts a witness from its configured signing identity, preventing callers
+/// with a shared handle from advancing durable logical time themselves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskExpiryEnvelope {
+    pub task_id: TaskId,
+    pub idempotency_key: IdempotencyKey,
+    pub expected_generation: u64,
+    pub lease_id: LeaseId,
+    pub fencing_token: FencingToken,
+    pub observed_at: GraphLogicalTime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expiry_witness: Option<EvidenceWitness>,
+}
+
+impl TaskExpiryEnvelope {
+    pub fn new(
+        task_id: TaskId,
+        idempotency_key: IdempotencyKey,
+        expected_generation: u64,
+        lease_id: LeaseId,
+        fencing_token: FencingToken,
+        observed_at: GraphLogicalTime,
+    ) -> Result<Self, GraphStoreError> {
+        let envelope = Self {
+            task_id,
+            idempotency_key,
+            expected_generation,
+            lease_id,
+            fencing_token,
+            observed_at,
+            expiry_witness: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn signed_with(
+        mut self,
+        authority: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let scoped_agent_id = scoped_agent_id.into();
+        if scoped_agent_id.trim().is_empty() || scoped_agent_id.len() > 128 {
+            return Err(GraphStoreError::InvalidState {
+                reason: "expiry scope is invalid".to_string(),
+            });
+        }
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.expiry_witness = Some(
+            EvidenceWitness::new(
+                authority,
+                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
+                scoped_agent_id,
+                &bytes,
+            )
+            .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_for_scope(&self, expiry_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskExpiryMaterial {
+            task_id: &self.task_id,
+            idempotency_key: &self.idempotency_key,
+            expected_generation: self.expected_generation,
+            lease_id: &self.lease_id,
+            fencing_token: self.fencing_token,
+            observed_at: self.observed_at,
+            expiry_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let expiry_scope = self
+            .expiry_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(expiry_scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphStoreError> {
+        self.observed_at
+            .validate()
+            .map_err(GraphStoreError::Admission)?;
+        if self.expected_generation == 0 {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "expiry generation must be positive".to_string(),
+            });
+        }
+        if let Some(witness) = &self.expiry_witness {
+            if witness.producer_role != swarm_core::hypothesis_graph::GraphProducerRole::Planner {
+                return Err(GraphStoreError::Admission(
+                    GraphAdmissionError::InvalidWitness {
+                        reason: "expiry witness must use the planner authority role".to_string(),
+                    },
+                ));
+            }
+            witness
+                .validate(&self.canonical_bytes_without_witness()?)
+                .map_err(GraphStoreError::Admission)?;
+        }
+        Ok(())
+    }
+
+    fn validate_for_task(
+        &self,
+        task: &TaskRecord,
+        authority: &AgentId,
+        limits: &GraphResourceLimits,
+    ) -> Result<(), GraphStoreError> {
+        self.validate()?;
+        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)
+            .map_err(GraphStoreError::Admission)?;
+        if task.state != TaskState::Claimed || task.completion.is_some() {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "expiry envelope requires an active claimed task".to_string(),
+            });
+        }
+        let lease = task
+            .lease
+            .as_ref()
+            .ok_or_else(|| GraphStoreError::InvalidTransition {
+                reason: "expiry envelope requires the task's active lease".to_string(),
+            })?;
+        if self.task_id != task.request.task_id
+            || self.idempotency_key != task.request.idempotency_key
+            || self.lease_id != lease.lease_id
+            || self.fencing_token != lease.fencing_token
+        {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "expiry envelope does not bind the active task lease".to_string(),
+            });
+        }
+        if self.observed_at < lease.expires_at {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "expiry observation precedes lease expiry".to_string(),
+            });
+        }
+        let Some(witness) = self.expiry_witness.as_ref() else {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "durable task expiry requires an authority signature".to_string(),
+                },
+            ));
+        };
+        if &witness.producer_identity != authority {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "expiry witness does not match the configured store authority"
+                        .to_string(),
+                },
+            ));
+        }
+        witness
+            .validate(&self.canonical_bytes_without_witness()?)
+            .map_err(GraphStoreError::Admission)
+    }
 }
 
 /// A failure is terminal just like completion, but deliberately does not
@@ -3273,12 +3646,7 @@ pub trait HypothesisGraphStore: Send + Sync {
     ) -> Result<TaskClaimResult, GraphStoreError>;
     fn renew_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskRenewalEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError>;
     fn complete_task(
         &self,
@@ -3294,9 +3662,7 @@ pub trait HypothesisGraphStore: Send + Sync {
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn expire_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        now: GraphLogicalTime,
+        envelope: TaskExpiryEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn reclaim_task(
         &self,
@@ -3511,25 +3877,10 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn renew_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskRenewalEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) = self.mutate(None, |state| {
-            renew_task_op(
-                state,
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                lease_duration_ms,
-                &self.limits,
-            )
-        })?;
+        let (snapshot, marker) =
+            self.mutate(None, |state| renew_task_op(state, envelope, &self.limits))?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
@@ -3559,12 +3910,10 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn expire_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        now: GraphLogicalTime,
+        envelope: TaskExpiryEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            expire_task_op(state, task_id, expected_generation, now, &self.limits)
+            expire_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6388,25 +6737,10 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn renew_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskRenewalEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) = self.mutate(None, |state| {
-            renew_task_op(
-                state,
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                lease_duration_ms,
-                &self.limits,
-            )
-        })?;
+        let (snapshot, marker) =
+            self.mutate(None, |state| renew_task_op(state, envelope, &self.limits))?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
@@ -6436,12 +6770,10 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn expire_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        now: GraphLogicalTime,
+        envelope: TaskExpiryEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            expire_task_op(state, task_id, expected_generation, now, &self.limits)
+            expire_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6563,30 +6895,11 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn renew_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskRenewalEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.renew_task(
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                lease_duration_ms,
-            ),
-            Self::LocalFiles(store) => store.renew_task(
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                lease_duration_ms,
-            ),
+            Self::Memory(store) => store.renew_task(envelope),
+            Self::LocalFiles(store) => store.renew_task(envelope),
         }
     }
 
@@ -6616,13 +6929,11 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn expire_task(
         &self,
-        task_id: &str,
-        expected_generation: u64,
-        now: GraphLogicalTime,
+        envelope: TaskExpiryEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.expire_task(task_id, expected_generation, now),
-            Self::LocalFiles(store) => store.expire_task(task_id, expected_generation, now),
+            Self::Memory(store) => store.expire_task(envelope),
+            Self::LocalFiles(store) => store.expire_task(envelope),
         }
     }
 
@@ -6747,6 +7058,63 @@ mod tests {
         .unwrap()
     }
 
+    fn signed_renewal_envelope(
+        request: &TaskClaimRequest,
+        lease: &TaskLease,
+        expected_generation: u64,
+        renewed_at: GraphLogicalTime,
+        duration_ms: u64,
+        signer_byte: u8,
+    ) -> TaskRenewalEnvelope {
+        let claimant = signer(signer_byte);
+        let capability = TaskCapabilityProof::signed_with(
+            request.task_id.clone(),
+            request.claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &claimant,
+            format!("task-capability:{}", request.task_id),
+        )
+        .unwrap();
+        TaskRenewalEnvelope::new(
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            expected_generation,
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            renewed_at,
+            duration_ms,
+            capability,
+        )
+        .unwrap()
+        .signed_with(&claimant, format!("task-renewal:{}", request.task_id))
+        .unwrap()
+    }
+
+    fn signed_expiry_envelope(
+        request: &TaskClaimRequest,
+        lease: &TaskLease,
+        expected_generation: u64,
+        observed_at: GraphLogicalTime,
+        authority_byte: u8,
+    ) -> TaskExpiryEnvelope {
+        TaskExpiryEnvelope::new(
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            expected_generation,
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            observed_at,
+        )
+        .unwrap()
+        .signed_with(
+            &signer(authority_byte),
+            format!("task-expiry:{}", request.task_id),
+        )
+        .unwrap()
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6767,7 +7135,13 @@ mod tests {
         assert_eq!(first.lease, duplicate.lease);
         let old = first.lease.clone().unwrap();
         let expired = store
-            .expire_task("task:one", 1, GraphLogicalTime::new(110))
+            .expire_task(signed_expiry_envelope(
+                &first.task.request,
+                &old,
+                first.task_generation,
+                GraphLogicalTime::new(110),
+                7,
+            ))
             .unwrap();
         assert_eq!(expired.task.state, TaskState::Expired);
         assert!(
@@ -7183,17 +7557,134 @@ mod tests {
         let lease = claim.lease.unwrap();
         let before = store.snapshot().unwrap();
         assert!(matches!(
-            store.renew_task(
-                "task:renew-backdated",
+            store.renew_task(signed_renewal_envelope(
+                &claim.task.request,
+                &lease,
                 claim.task_generation,
-                &lease.lease_id,
-                lease.fencing_token,
                 GraphLogicalTime::new(99),
                 20,
-            ),
+                1,
+            )),
             Err(GraphStoreError::InvalidTransition { .. })
         ));
         assert_eq!(store.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn durable_renewal_requires_claimant_signature_and_binds_duration() {
+        let store = MemoryHypothesisGraphStore::new(graph(), signer(30)).unwrap();
+        let claim = store
+            .claim_task(
+                request(31, "signed-renewal"),
+                GraphLogicalTime::new(100),
+                20,
+            )
+            .unwrap();
+        let lease = claim.lease.clone().unwrap();
+        let signed = signed_renewal_envelope(
+            &claim.task.request,
+            &lease,
+            claim.task_generation,
+            GraphLogicalTime::new(105),
+            20,
+            31,
+        );
+        let before = store.snapshot().unwrap();
+
+        let mut unsigned = signed.clone();
+        unsigned.renewal_witness = None;
+        assert!(matches!(
+            store.renew_task(unsigned),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let mut tampered = signed.clone();
+        tampered.duration_ms = 21;
+        assert!(matches!(
+            store.renew_task(tampered),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let mut foreign = signed.clone();
+        foreign.renewal_witness = None;
+        assert!(matches!(
+            foreign.signed_with(&signer(32), "task-renewal:signed-renewal"),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let renewed = store.renew_task(signed).unwrap();
+        assert_eq!(renewed.task.state, TaskState::Claimed);
+        assert_eq!(
+            renewed.lease.unwrap().expires_at,
+            GraphLogicalTime::new(125)
+        );
+    }
+
+    #[test]
+    fn durable_expiry_requires_configured_authority_and_binds_observed_time() {
+        let store = MemoryHypothesisGraphStore::new(graph(), signer(33)).unwrap();
+        let claim = store
+            .claim_task(request(34, "signed-expiry"), GraphLogicalTime::new(100), 20)
+            .unwrap();
+        let lease = claim.lease.clone().unwrap();
+        let signed = signed_expiry_envelope(
+            &claim.task.request,
+            &lease,
+            claim.task_generation,
+            GraphLogicalTime::new(120),
+            33,
+        );
+        let before = store.snapshot().unwrap();
+
+        let mut unsigned = signed.clone();
+        unsigned.expiry_witness = None;
+        assert!(matches!(
+            store.expire_task(unsigned),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let foreign = signed_expiry_envelope(
+            &claim.task.request,
+            &lease,
+            claim.task_generation,
+            GraphLogicalTime::new(120),
+            35,
+        );
+        assert!(matches!(
+            store.expire_task(foreign),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let mut tampered = signed.clone();
+        tampered.observed_at = GraphLogicalTime::new(121);
+        assert!(matches!(
+            store.expire_task(tampered),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let expired = store.expire_task(signed).unwrap();
+        assert_eq!(expired.task.state, TaskState::Expired);
+        assert!(
+            store.snapshot().unwrap().state.logical_time_high_water >= GraphLogicalTime::new(120)
+        );
     }
 
     #[test]
@@ -7302,25 +7793,20 @@ mod tests {
             .unwrap();
         assert_eq!(claimed_memory.task, claimed_file.task);
         let lease = claimed_memory.lease.clone().unwrap();
-        let renewed_memory = memory
-            .renew_task(
-                "task:vector",
-                claimed_memory.task_generation,
-                &lease.lease_id,
-                lease.fencing_token,
-                GraphLogicalTime::new(105),
-                20,
-            )
-            .unwrap();
+        let renewal = signed_renewal_envelope(
+            &claimed_memory.task.request,
+            &lease,
+            claimed_memory.task_generation,
+            GraphLogicalTime::new(105),
+            20,
+            1,
+        );
+        let renewed_memory = memory.renew_task(renewal.clone()).unwrap();
         let renewed_file = file
-            .renew_task(
-                "task:vector",
-                claimed_file.task_generation,
-                &lease.lease_id,
-                lease.fencing_token,
-                GraphLogicalTime::new(105),
-                20,
-            )
+            .renew_task(TaskRenewalEnvelope {
+                expected_generation: claimed_file.task_generation,
+                ..renewal
+            })
             .unwrap();
         assert_eq!(renewed_memory.task, renewed_file.task);
         let completion = TaskCompletion::new(

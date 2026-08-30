@@ -1688,7 +1688,12 @@ async fn governed_human_resume_executes_once_without_re_evaluating_policy()
     dispatcher.tick_once().await;
 
     let pack = router.approve_pending_human_hold();
-    let resume = HumanApprovalResumeDispatcher::new(governance.authority(), router);
+    let resume = HumanApprovalResumeDispatcher::new(
+        governance.authority(),
+        router,
+        pack.approval_set.eligible_voters.clone(),
+        pack.approval_set.threshold.clone(),
+    );
     let audit = resume.resume(pack.clone()).await?;
 
     assert_eq!(audit.hunt_id, "hunt-governed-human-resume");
@@ -1846,7 +1851,12 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
         .expect("dispatcher persisted a human approval set")
         .set_id;
     let denied = router.build_human_pack(&set_id, false, unix_now_ms());
-    let resume = HumanApprovalResumeDispatcher::new(governance.authority(), router.clone());
+    let resume = HumanApprovalResumeDispatcher::new(
+        governance.authority(),
+        router.clone(),
+        denied.approval_set.eligible_voters.clone(),
+        denied.approval_set.threshold.clone(),
+    );
     let denied_error = resume
         .resume(denied)
         .await
@@ -1969,7 +1979,12 @@ async fn failed_router_burns_owned_human_and_governance_admission() -> Result<()
 
     let pack = router.approve_pending_human_hold();
     router.fail_routes_remaining.store(1, Ordering::SeqCst);
-    let resume = HumanApprovalResumeDispatcher::new(governance.authority(), router);
+    let resume = HumanApprovalResumeDispatcher::new(
+        governance.authority(),
+        router,
+        pack.approval_set.eligible_voters.clone(),
+        pack.approval_set.threshold.clone(),
+    );
     let route_error = resume
         .resume(pack.clone())
         .await
@@ -2058,6 +2073,8 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
             .authority()
             .expect("reloaded governance should mint an authority"),
         router.clone(),
+        pack.approval_set.eligible_voters.clone(),
+        pack.approval_set.threshold.clone(),
     );
     resume.resume(pack.clone()).await?;
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
@@ -2077,6 +2094,8 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
             .authority()
             .expect("consumed governance should mint an authority"),
         router,
+        pack.approval_set.eligible_voters.clone(),
+        pack.approval_set.threshold.clone(),
     )
     .resume(pack)
     .await

@@ -41,23 +41,23 @@ note: method defined here
    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error[E0308]: mismatched types
-  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:24:54
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:25:9
    |
-24 |     let _resume = HumanApprovalResumeDispatcher::new(fake, router);
-   |                   ---------------------------------- ^^^^ expected `GovernanceAuthority`, found `Fake`
-   |                   |
-   |                   arguments to this function are incorrect
+24 |     let _resume = HumanApprovalResumeDispatcher::new(
+   |                   ---------------------------------- arguments to this function are incorrect
+25 |         fake,
+   |         ^^^^ expected `GovernanceAuthority`, found `Fake`
    |
 note: associated function defined here
   --> src/dispatcher.rs
    |
-   |     pub fn new(governance: GovernanceAuthority, router: Arc<dyn RequestResponseRouter>) -> Self {
+   |     pub fn new(
    |            ^^^
 
 error[E0308]: mismatched types
-  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:28:61
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:33:61
    |
-28 |     let authority: &swarm_governance::GovernanceAuthority = fake;
+33 |     let authority: &swarm_governance::GovernanceAuthority = fake;
    |                    --------------------------------------   ^^^^ expected `&GovernanceAuthority`, found `&Fake`
    |                    |
    |                    expected due to this

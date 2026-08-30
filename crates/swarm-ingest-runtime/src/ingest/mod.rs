@@ -1863,12 +1863,17 @@ impl IngestState {
     pub(crate) fn human_approval_resume_dispatcher(
         &self,
     ) -> Option<swarm_runtime::dispatcher::HumanApprovalResumeDispatcher> {
-        self.governance_authority.clone().map(|governance| {
+        let governance = self.governance_authority.clone()?;
+        let eligible_voters =
+            configured_approval_voters(&self.stack.load_full().service.config).ok()?;
+        Some(
             swarm_runtime::dispatcher::HumanApprovalResumeDispatcher::new(
                 governance,
                 self.current_request_response_router(),
-            )
-        })
+                eligible_voters,
+                ThresholdRule::AtLeast { required: 1 },
+            ),
+        )
     }
 
     /// Process-local identity used by shipped composition tests to prove that

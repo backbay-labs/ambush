@@ -370,11 +370,11 @@ EXPECTED_STRICT_AUTHORITY_IMPL_DIGESTS = {
     (canonical, "implGovernanceAuthority"):
         "960ffd9693b8aa84064bd1abc40130ed38d52aaa5d0e5635b7353d7d2b84a2e7",
     (pathlib.Path("crates/swarm-ingest-runtime/src/ingest/mod.rs"), "implIngestState"):
-        "baaef7c76e385aec0bc87dfe45a86b5f18e16b9e8c682b5dbb2fc3b1385c4e17",
+        "0c9b09744f7ee7fe88540b9c50c6ce7e1778aa8225d16e9e265f1d2041fc0140",
     (pathlib.Path("crates/swarm-runtime/src/containment.rs"), "implContainmentSweep"):
         "154b2b98b5c74743b77a1afd1a974543cd743d32a4adc4654c35d4294cef03c4",
     (pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"), "implHumanApprovalResumeDispatcher"):
-        "6b03eb42ca018fe2458444f8e4739ae4893a70edddb8b3794dfefecaddf73177",
+        "119ce97cd5618b4d51c0fa5e6fa5195f1286feb5309691b327484e0e172106e4",
     (pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"), "implAgentDispatcher"):
         "7d9e8c068da1a14d9d84a20fb15ec51333cd28d8cbf26980477292557cb00484",
     (pathlib.Path("crates/swarm-runtime-http/src/bin/swarm_detect.rs"), "implShippedGovernanceWiring"):
@@ -403,7 +403,7 @@ EXPECTED_STRICT_AUTHORITY_PUBLIC_APIS = {
     ),
     (
         pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"),
-        "pubfnnew(governance:GovernanceAuthority,router:Arc<dynRequestResponseRouter>)->Self",
+        "pubfnnew(governance:GovernanceAuthority,router:Arc<dynRequestResponseRouter>,expected_eligible_voters:Vec<String>,expected_threshold:ThresholdRule)->Self",
     ),
     (
         pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"),
@@ -436,11 +436,11 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (14, "6f949c0cffbec7e59227db917a819b101873676678bcb3d8bf6e93f6a280f042"),
     "swarm-governance-witness":
-        (16, "f88fe7c4abfacc87421b58a993de56f143342bb57fcd0ce72816613e2ff0a617"),
+        (16, "02c83d33e86fcadf101d161346e230f2ae6638914fd49313b974de6e8a1568aa"),
     "swarm-runtime":
-        (133, "7b86cd3dee05bf0e24892896ca2bb22550ef012d54c5d47ca390f1648dd9df10"),
+        (133, "8291bea21e9e36c69a1ea0731bee0437b1f45add23509424ba3595e604e403a6"),
     "swarm-ingest-runtime":
-        (14, "1e2b257f782cb68d2afd6a4e5cbf4db1684d6b88c0505042513956b1f07bf3be"),
+        (14, "55be586435129ff19a506ece1bfa0809ab1ab6671789ac8a34fe499f1757b17c"),
     "swarm-runtime-http":
         (22, "29d2ce5a056beb0b1e2d1ca5e3db876cefeaac1b56cc9fd9b235dd01c0f9317b"),
     "swarm-agents":
@@ -472,9 +472,9 @@ EXPECTED_PRIVACY_SOURCE_DIGESTS = {
     pathlib.Path("crates/swarm-runtime/src/containment.rs"):
         "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
     pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"):
-        "67abcc83cade8935c9c351175c0e443845195192c09149b104eecada129be44f",
+        "36fb11b96db6193792e528e205b05878321e888be617ef734a9e2989e514bff2",
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/mod.rs"):
-        "ac3982edd29d58287f493ec538b63a97e2ee9c04cc53db01f0030f8c52609061",
+        "a8e4ef6801cf5c24323cac6c9bc519c3b7349c0cf37881f414511067ececbc96",
     pathlib.Path("crates/swarm-runtime-http/src/bin/swarm_detect.rs"):
         "c7ec84268d37198f5b6ce2f7f13697fbc2babb733da1111e8a08b59fd89fb2d9",
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/demo.rs"):

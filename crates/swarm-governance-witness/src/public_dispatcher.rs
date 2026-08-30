@@ -328,6 +328,7 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
 
         let capacity = dispatcher.config.ingress_queue_capacity;
         let worker_count = dispatcher.config.max_in_flight;
+        let max_request_bytes = dispatcher.config.max_request_bytes;
         let observer = dispatcher.worker_observer.clone();
         let dispatcher = Arc::new(dispatcher);
         let (sender, receiver) = mpsc::channel(capacity);
@@ -349,6 +350,7 @@ impl<C: PublicWitnessStoreProxyClient + 'static> PublicWitnessServiceRunner<C> {
                 subscriber,
                 sender.clone(),
                 admission_observer.clone(),
+                max_request_bytes,
                 #[cfg(test)]
                 subscriber_poll_gate.clone(),
             ));
@@ -451,6 +453,7 @@ fn spawn_public_subscription(
     mut subscriber: async_nats::Subscriber,
     ingress: mpsc::Sender<PublicIngressMessage>,
     admission_observer: Arc<dyn SubscriberAdmissionObserverV1>,
+    max_request_bytes: usize,
     #[cfg(test)] mut subscriber_poll_gate: Option<SubscriberPollGateV1>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -464,6 +467,7 @@ fn spawn_public_subscription(
                 message,
                 &ingress,
                 admission_observer.as_ref(),
+                max_request_bytes,
             ) {
                 // The bounded queue refusal happens synchronously here,
                 // before a worker task, dispatcher, or store call can begin.
@@ -478,9 +482,12 @@ pub(crate) fn admit_public_subscription_message(
     message: async_nats::Message,
     ingress: &mpsc::Sender<PublicIngressMessage>,
     admission_observer: &dyn SubscriberAdmissionObserverV1,
+    max_request_bytes: usize,
 ) -> bool {
-    let receipt_deadline = ReceiptDeadlineV1::public();
     if message.subject.as_str() != expected_subject {
+        return false;
+    }
+    if message.payload.len() > max_request_bytes {
         return false;
     }
     let Some(reply) = message.reply else {
@@ -489,6 +496,7 @@ pub(crate) fn admit_public_subscription_message(
     if !is_bounded_inbox_reply(&reply) {
         return false;
     }
+    let receipt_deadline = ReceiptDeadlineV1::public();
     let payload = message.payload.to_vec();
     let receipt = SubscriberAdmissionReceiptV1 {
         worker: WorkerKindV1::Public,

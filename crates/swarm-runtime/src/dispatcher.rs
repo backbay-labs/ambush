@@ -1,5 +1,5 @@
 use crate::approval::{
-    ApprovalReceiptPackReport, ApprovalSetReport, approval_set_digest,
+    ApprovalReceiptPackReport, ApprovalSetReport, ThresholdRule, approval_set_digest,
     verify_governed_human_receipt_pack, verify_receipt_pack,
 };
 use crate::detection::metrics::CriticalPathMetrics;
@@ -456,6 +456,8 @@ pub struct HumanApprovalResumeDispatcher {
     governance: GovernanceAuthority,
     router: Arc<dyn RequestResponseRouter>,
     clock: Arc<dyn HumanResumeClock>,
+    expected_eligible_voters: Vec<String>,
+    expected_threshold: ThresholdRule,
 }
 
 trait HumanResumeClock: Send + Sync {
@@ -471,11 +473,23 @@ impl HumanResumeClock for HostHumanResumeClock {
 }
 
 impl HumanApprovalResumeDispatcher {
-    pub fn new(governance: GovernanceAuthority, router: Arc<dyn RequestResponseRouter>) -> Self {
+    pub fn new(
+        governance: GovernanceAuthority,
+        router: Arc<dyn RequestResponseRouter>,
+        expected_eligible_voters: Vec<String>,
+        expected_threshold: ThresholdRule,
+    ) -> Self {
+        let expected_eligible_voters = expected_eligible_voters
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         Self {
             governance,
             router,
             clock: Arc::new(HostHumanResumeClock),
+            expected_eligible_voters,
+            expected_threshold,
         }
     }
 
@@ -497,6 +511,14 @@ impl HumanApprovalResumeDispatcher {
     ) -> Result<GovernedHumanAuthorizationHold, RuntimeError> {
         verify_receipt_pack(receipt_pack)
             .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
+        if receipt_pack.approval_set.eligible_voters != self.expected_eligible_voters
+            || receipt_pack.approval_set.threshold != self.expected_threshold
+        {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "persisted approval set does not match the configured approvers and threshold"
+                    .to_string(),
+            ));
+        }
         let approval_set_digest = approval_set_digest(&receipt_pack.approval_set)
             .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
         self.governance
@@ -513,11 +535,20 @@ impl HumanApprovalResumeDispatcher {
         governance: GovernanceAuthority,
         router: Arc<dyn RequestResponseRouter>,
         clock: Arc<dyn HumanResumeClock>,
+        expected_eligible_voters: Vec<String>,
+        expected_threshold: ThresholdRule,
     ) -> Self {
+        let expected_eligible_voters = expected_eligible_voters
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         Self {
             governance,
             router,
             clock,
+            expected_eligible_voters,
+            expected_threshold,
         }
     }
 
@@ -2411,14 +2442,22 @@ mod tests {
     #[tokio::test]
     async fn human_resume_reconciles_an_unbound_persisted_approval_once() {
         let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(false, false);
+        let expected_voters = pack.approval_set.eligible_voters.clone();
+        let expected_threshold = pack.approval_set.threshold.clone();
         assert!(
             governance.pending_human_authorization(&set_id).is_err(),
             "precondition: the simulated crash left the hold unbound"
         );
-        HumanApprovalResumeDispatcher::with_clock(governance.authority(), router.clone(), clock)
-            .resume(pack)
-            .await
-            .expect("a verified persisted pack must repair and consume the unbound hold");
+        HumanApprovalResumeDispatcher::with_clock(
+            governance.authority(),
+            router.clone(),
+            clock,
+            expected_voters,
+            expected_threshold,
+        )
+        .resume(pack)
+        .await
+        .expect("a verified persisted pack must repair and consume the unbound hold");
         assert!(governance.pending_human_authorization(&set_id).is_err());
         assert_eq!(router.lease_calls.load(Ordering::SeqCst), 1);
         assert_eq!(router.executor_calls.load(Ordering::SeqCst), 1);
@@ -2426,12 +2465,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn human_resume_refuses_self_declared_approvers_before_reconciliation() {
+        let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(false, false);
+        assert!(governance.pending_human_authorization(&set_id).is_err());
+        let dispatcher = HumanApprovalResumeDispatcher::with_clock(
+            governance.authority(),
+            router.clone(),
+            clock,
+            vec!["configured-approver-not-in-pack".to_string()],
+            pack.approval_set.threshold.clone(),
+        );
+
+        let error = dispatcher
+            .reconcile_persisted_human_approval(&pack)
+            .expect_err("a pack-carried approver set must not define recovery authority");
+        assert!(
+            error.to_string().contains("configured approvers"),
+            "{error}"
+        );
+        assert!(
+            governance.pending_human_authorization(&set_id).is_err(),
+            "rejected reconciliation must leave the governance hold unbound"
+        );
+        assert_eq!(router.lease_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(router.executor_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(router.effect_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn human_resume_rechecks_freshness_after_awaited_preflight_restore() {
         let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(true, true);
+        let expected_voters = pack.approval_set.eligible_voters.clone();
+        let expected_threshold = pack.approval_set.threshold.clone();
         let resume = HumanApprovalResumeDispatcher::with_clock(
             governance.authority(),
             router.clone(),
             clock,
+            expected_voters,
+            expected_threshold,
         );
 
         let error = resume
@@ -2447,10 +2518,14 @@ mod tests {
         let (fresh_governance, fresh_router, fresh_clock, fresh_pack, _) =
             human_resume_clock_fixture(false, true);
         let expected_execution_now_ms = fresh_clock.now_ms();
+        let expected_voters = fresh_pack.approval_set.eligible_voters.clone();
+        let expected_threshold = fresh_pack.approval_set.threshold.clone();
         HumanApprovalResumeDispatcher::with_clock(
             fresh_governance.authority(),
             fresh_router.clone(),
             fresh_clock,
+            expected_voters,
+            expected_threshold,
         )
         .resume(fresh_pack)
         .await

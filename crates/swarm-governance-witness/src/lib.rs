@@ -1597,6 +1597,7 @@ mod deadline_state_machine_tests {
                     message,
                     &sender,
                     &admission_observer,
+                    MAX_PROTOCOL_RECORD_BYTES,
                 ),
                 Some(Ok(()))
             ),
@@ -1649,7 +1650,13 @@ mod deadline_state_machine_tests {
             length: payload.len(),
         };
         assert!(
-            admit_public_subscription_message(subject, message, &sender, &admission_observer,),
+            admit_public_subscription_message(
+                subject,
+                message,
+                &sender,
+                &admission_observer,
+                MAX_PROTOCOL_RECORD_BYTES,
+            ),
             "public raw subscription message was not admitted"
         );
         assert!(
@@ -1939,6 +1946,65 @@ mod deadline_state_machine_tests {
         must(file.write_all(&bytes), "deadline budget receipt write");
         must(file.write_all(b"\n"), "deadline budget receipt frame");
         must(file.sync_all(), "deadline budget receipt sync");
+    }
+
+    #[test]
+    fn oversized_subscription_payloads_are_rejected_before_typed_ingress() {
+        const LIMIT: usize = 4;
+        let payload = vec![0_u8; LIMIT + 1];
+
+        let (public_sender, mut public_receiver) = mpsc::channel(1);
+        let (public_receipt_sender, mut public_receipt_receiver) = mpsc::channel(1);
+        let public_observer = RecordingSubscriberAdmissionObserverV1 {
+            sender: public_receipt_sender,
+        };
+        let public_subject = "swarm.governance.witness.v1.fence";
+        let public_message = async_nats::Message {
+            subject: public_subject.into(),
+            reply: Some("_INBOX.phase285-public-oversized".into()),
+            payload: payload.clone().into(),
+            headers: None,
+            status: None,
+            description: None,
+            length: payload.len(),
+        };
+        assert!(!admit_public_subscription_message(
+            public_subject,
+            public_message,
+            &public_sender,
+            &public_observer,
+            LIMIT,
+        ));
+        assert!(public_receiver.try_recv().is_err());
+        assert!(public_receipt_receiver.try_recv().is_err());
+
+        let (private_sender, mut private_receiver) = mpsc::channel(1);
+        let (private_receipt_sender, mut private_receipt_receiver) = mpsc::channel(1);
+        let private_observer = RecordingSubscriberAdmissionObserverV1 {
+            sender: private_receipt_sender,
+        };
+        let private_subject = store_proxy_subjects()[1];
+        let private_message = async_nats::Message {
+            subject: private_subject.into(),
+            reply: Some("_INBOX.phase285-private-oversized".into()),
+            payload: payload.clone().into(),
+            headers: None,
+            status: None,
+            description: None,
+            length: payload.len(),
+        };
+        assert!(
+            admit_private_subscription_message(
+                private_subject,
+                private_message,
+                &private_sender,
+                &private_observer,
+                LIMIT,
+            )
+            .is_none()
+        );
+        assert!(private_receiver.try_recv().is_err());
+        assert!(private_receipt_receiver.try_recv().is_err());
     }
 
     #[test]

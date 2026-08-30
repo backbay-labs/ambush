@@ -581,6 +581,7 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
             .map_err(|_| StoreProxyRunnerErrorV1::Subscription)?;
         let capacity = service.config.ingress_queue_capacity;
         let worker_count = service.config.max_in_flight;
+        let max_request_bytes = service.config.max_request_bytes;
         let admission_observer = service.subscriber_admission_observer.clone();
         let observer = service.worker_observer.clone();
         #[cfg(test)]
@@ -612,6 +613,7 @@ impl<S: WitnessAtomicStore + 'static> StoreProxyServiceRunner<S> {
                         message,
                         &sender,
                         admission_observer.as_ref(),
+                        max_request_bytes,
                     ) && let Some(bytes) = service.overload_response(subject, &payload)
                     {
                         let _ = client.publish(reply, bytes.into()).await;
@@ -716,15 +718,19 @@ pub(crate) fn admit_private_subscription_message(
     message: async_nats::Message,
     ingress: &mpsc::Sender<PrivateIngressMessage>,
     admission_observer: &dyn SubscriberAdmissionObserverV1,
+    max_request_bytes: usize,
 ) -> Option<Result<(), (async_nats::Subject, Vec<u8>)>> {
-    let receipt_deadline = ReceiptDeadlineV1::private();
     if message.subject.as_str() != expected_subject {
+        return None;
+    }
+    if message.payload.len() > max_request_bytes {
         return None;
     }
     let reply = message.reply?;
     if !bounded_inbox(&reply) {
         return None;
     }
+    let receipt_deadline = ReceiptDeadlineV1::private();
     let payload = message.payload.to_vec();
     let receipt = SubscriberAdmissionReceiptV1 {
         worker: WorkerKindV1::Private,

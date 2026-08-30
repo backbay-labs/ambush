@@ -21,7 +21,12 @@ fn install_containment(sweep: ContainmentSweep, fake: Fake) {
 }
 
 fn install_human_resume(fake: Fake, router: Arc<dyn RequestResponseRouter>) {
-    let _resume = HumanApprovalResumeDispatcher::new(fake, router);
+    let _resume = HumanApprovalResumeDispatcher::new(
+        fake,
+        router,
+        vec!["configured-approver".to_string()],
+        swarm_runtime::approval::ThresholdRule::AtLeast { required: 1 },
+    );
 }
 
 fn pass_release_verifier(receipt: &RollbackReceipt, fake: &Fake) {
