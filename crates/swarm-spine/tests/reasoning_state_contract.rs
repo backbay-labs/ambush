@@ -23,7 +23,7 @@ use swarm_core::types::AgentId;
 use swarm_crypto::Keypair;
 use swarm_spine::{
     FileHypothesisGraphStore, FileStrategyMemoryStore, GraphStoreError, HypothesisGraphStore,
-    MemoryHypothesisGraphStore, MemoryStrategyMemoryStore, StrategyMemoryStore,
+    MemoryHypothesisGraphStore, MemoryStrategyMemoryStore, StrategyMemoryStore, TaskClaimEnvelope,
     validate_task_terminal_envelope,
 };
 
@@ -92,34 +92,24 @@ fn memory(byte: u8, suffix: &str) -> StrategyMemory {
 
 fn assert_high_water_cas(store: &dyn HypothesisGraphStore) {
     let baseline = store.snapshot().unwrap();
-    let mut advanced = baseline.state.clone();
-    advanced.logical_time_high_water = GraphLogicalTime::new(20);
-    let advanced = store
-        .compare_and_swap(&baseline.revision, advanced)
-        .unwrap();
-    assert_eq!(
-        advanced.state.logical_time_high_water,
-        GraphLogicalTime::new(20)
-    );
-
-    let mut lower = advanced.state.clone();
-    lower.logical_time_high_water = GraphLogicalTime::new(19);
-    let error = store
-        .compare_and_swap(&advanced.revision, lower)
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        GraphStoreError::InvalidState { reason }
-            if reason.contains("logical time high-water regressed")
-    ));
-    assert_eq!(
-        store.snapshot().unwrap().state.logical_time_high_water,
-        GraphLogicalTime::new(20)
-    );
+    for replacement in [GraphLogicalTime::new(20), GraphLogicalTime::new(-1)] {
+        let mut candidate = baseline.state.clone();
+        candidate.graph.version = candidate.graph.version.saturating_add(1);
+        candidate.logical_time_high_water = replacement;
+        let error = store
+            .compare_and_swap(&baseline.revision, candidate)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            GraphStoreError::InvalidState { reason }
+                if reason.contains("store-owned logical time high-water")
+        ));
+        assert_eq!(store.snapshot().unwrap(), baseline);
+    }
 }
 
 #[test]
-fn cas_rejects_lower_and_preserves_higher_logical_high_water_for_both_backends() {
+fn cas_rejects_both_future_and_regressed_logical_high_water_for_both_backends() {
     let memory_store =
         MemoryHypothesisGraphStore::new(graph("graph:cas-memory"), signer(1)).unwrap();
     assert_high_water_cas(&memory_store);
@@ -135,13 +125,31 @@ fn cas_rejects_lower_and_preserves_higher_logical_high_water_for_both_backends()
 #[test]
 fn terminal_validator_uses_core_exact_task_boundary_without_seed_fiction() {
     let key = signer(10);
-    let store = MemoryHypothesisGraphStore::new(graph("graph:terminal"), signer(11)).unwrap();
+    let authority = signer(11);
+    let store =
+        MemoryHypothesisGraphStore::new(graph("graph:terminal"), authority.clone()).unwrap();
     let claim = request(&key, "task:terminal", "evidence:terminal");
-    let claimed = store
-        .claim_task(claim.clone(), GraphLogicalTime::new(100), 100)
-        .unwrap()
-        .task;
     let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
+    let claim_capability = TaskCapabilityProof::signed_with(
+        claim.task_id.clone(),
+        claimant.clone(),
+        GraphProducerRole::Hunter,
+        TaskKind::AcquireEvidence,
+        claim.canonical_digest().unwrap(),
+        &key,
+        "hunter-terminal-claim",
+    )
+    .unwrap();
+    let claim_envelope = TaskClaimEnvelope::new(
+        claim.clone(),
+        GraphLogicalTime::new(100),
+        100,
+        claim_capability,
+    )
+    .unwrap()
+    .authorized_by(&authority, "planner-terminal-claim")
+    .unwrap();
+    let claimed = store.claim_task(claim_envelope).unwrap().task;
     let capability = TaskCapabilityProof::signed_with(
         claimed.request.task_id.clone(),
         claimant.clone(),

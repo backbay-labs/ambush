@@ -4216,6 +4216,11 @@ pub struct TaskTerminalProof {
     pub prior_lease: TaskLease,
     pub completer: AgentId,
     pub completed_at: GraphLogicalTime,
+    /// Authenticated bounded diagnostic/reference for failed transitions.
+    /// `None` preserves compatibility with terminal proofs written before the
+    /// failure envelope carried a durable summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_summary_digest: Option<String>,
 }
 
 impl TaskTerminalProof {
@@ -4235,6 +4240,29 @@ impl TaskTerminalProof {
             prior_lease,
             completer,
             completed_at,
+            failure_summary_digest: None,
+        };
+        proof.validate(max_task_lease_ms)?;
+        Ok(proof)
+    }
+
+    pub fn new_failed(
+        prior_generation: u64,
+        prior_lease: TaskLease,
+        completer: AgentId,
+        completed_at: GraphLogicalTime,
+        failure_summary_digest: impl Into<String>,
+        max_task_lease_ms: u64,
+    ) -> Result<Self, GraphAdmissionError> {
+        let proof = Self {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            prior_state: TaskState::Claimed,
+            terminal_state: TaskState::Failed,
+            prior_generation,
+            prior_lease,
+            completer,
+            completed_at,
+            failure_summary_digest: Some(failure_summary_digest.into()),
         };
         proof.validate(max_task_lease_ms)?;
         Ok(proof)
@@ -4289,6 +4317,14 @@ impl TaskTerminalProof {
             return Err(GraphAdmissionError::InvalidTransition {
                 reason: "expired proof must finish at or after lease expiry".to_string(),
             });
+        }
+        if let Some(summary) = &self.failure_summary_digest {
+            if self.terminal_state != TaskState::Failed {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "only failed terminal proofs may carry a failure summary".to_string(),
+                });
+            }
+            validate_text("task.terminal_proof.failure_summary_digest", summary, 128)?;
         }
         Ok(())
     }
@@ -7086,6 +7122,8 @@ struct TaskTerminalProofWire {
     prior_lease: TaskLease,
     completer: AgentId,
     completed_at: GraphLogicalTime,
+    #[serde(default)]
+    failure_summary_digest: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for TaskTerminalProof {
@@ -7102,6 +7140,7 @@ impl<'de> Deserialize<'de> for TaskTerminalProof {
             prior_lease: wire.prior_lease,
             completer: wire.completer,
             completed_at: wire.completed_at,
+            failure_summary_digest: wire.failure_summary_digest,
         };
         record
             .validate(persistence_limits().max_task_lease_ms)

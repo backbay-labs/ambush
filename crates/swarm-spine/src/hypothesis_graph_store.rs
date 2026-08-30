@@ -2349,10 +2349,12 @@ fn ensure_lease(
 
 fn create_task_op(
     state: &mut GraphStoreState,
-    request: TaskClaimRequest,
+    envelope: TaskCreationEnvelope,
+    authority: &AgentId,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    validate_request(&request)?;
+    envelope.validate_for_store(authority)?;
+    let request = envelope.request;
     if let Some(existing) = state.tasks.get(&request.task_id) {
         if same_claim_identity(&existing.task.request, &request) {
             return Ok(StateMutation {
@@ -2406,13 +2408,14 @@ fn create_task_op(
 
 fn claim_task_op(
     state: &mut GraphStoreState,
-    request: TaskClaimRequest,
-    now: GraphLogicalTime,
-    duration_ms: u64,
+    envelope: TaskClaimEnvelope,
+    authority: &AgentId,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    validate_request(&request)?;
-    now.validate().map_err(GraphStoreError::Admission)?;
+    envelope.validate_for_store(authority, limits)?;
+    let request = envelope.request;
+    let now = envelope.claimed_at;
+    let duration_ms = envelope.duration_ms;
     let existing = state.tasks.get(&request.task_id).cloned();
     if let Some(ref existing) = existing {
         if !same_claim_identity(&existing.task.request, &request) {
@@ -2681,12 +2684,12 @@ fn fail_task_op(
             .ok_or_else(|| GraphStoreError::InvalidState {
                 reason: "task generation overflow".to_string(),
             })?;
-    let proof = TaskTerminalProof::new(
+    let proof = TaskTerminalProof::new_failed(
         entry.task.generation,
         lease,
-        TaskState::Failed,
         envelope.failure.failed_by,
         envelope.failure.failed_at,
+        envelope.failure.summary_digest,
         limits.max_task_lease_ms,
     )
     .map_err(GraphStoreError::Admission)?;
@@ -2813,6 +2816,285 @@ fn reclaim_task_op(
 struct TaskMutationMarker {
     task: TaskRecord,
     idempotent: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskCreationMaterial<'a> {
+    request: &'a TaskClaimRequest,
+    capability: &'a TaskCapabilityProof,
+    authority_scope: &'a str,
+}
+
+/// Dual-authority admission for a pending durable task. The claimant owns the
+/// exact request and the configured scheduler/store authority owns admission
+/// of its logical request time into the durable high-water mark.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCreationEnvelope {
+    pub request: TaskClaimRequest,
+    pub capability: TaskCapabilityProof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_witness: Option<EvidenceWitness>,
+}
+
+impl TaskCreationEnvelope {
+    pub fn new(
+        request: TaskClaimRequest,
+        capability: TaskCapabilityProof,
+    ) -> Result<Self, GraphStoreError> {
+        let envelope = Self {
+            request,
+            capability,
+            authority_witness: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn authorized_by(
+        mut self,
+        authority: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let scoped_agent_id = scoped_agent_id.into();
+        validate_authority_scope("task creation", &scoped_agent_id)?;
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.authority_witness = Some(
+            EvidenceWitness::new(
+                authority,
+                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
+                scoped_agent_id,
+                &bytes,
+            )
+            .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskCreationMaterial {
+            request: &self.request,
+            capability: &self.capability,
+            authority_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let authority_scope = self
+            .authority_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(authority_scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphStoreError> {
+        validate_request(&self.request)?;
+        self.capability
+            .validate_for_claim(&self.request)
+            .map_err(GraphStoreError::Admission)?;
+        validate_optional_scheduler_witness(
+            self.authority_witness.as_ref(),
+            &self.canonical_bytes_without_witness()?,
+        )
+    }
+
+    fn validate_for_store(&self, authority: &AgentId) -> Result<(), GraphStoreError> {
+        self.validate()?;
+        require_configured_scheduler_witness(
+            self.authority_witness.as_ref(),
+            authority,
+            &self.canonical_bytes_without_witness()?,
+            "durable task creation requires scheduler authority",
+        )
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskClaimMaterial<'a> {
+    request: &'a TaskClaimRequest,
+    claimed_at: GraphLogicalTime,
+    duration_ms: u64,
+    capability: &'a TaskCapabilityProof,
+    authority_scope: &'a str,
+}
+
+/// Dual-authority admission for an exact task lease. The claimant proves
+/// ownership of the request; the configured scheduler/store authority proves
+/// the authoritative lease time and duration before either durable counter is
+/// advanced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskClaimEnvelope {
+    pub request: TaskClaimRequest,
+    pub claimed_at: GraphLogicalTime,
+    pub duration_ms: u64,
+    pub capability: TaskCapabilityProof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_witness: Option<EvidenceWitness>,
+}
+
+impl TaskClaimEnvelope {
+    pub fn new(
+        request: TaskClaimRequest,
+        claimed_at: GraphLogicalTime,
+        duration_ms: u64,
+        capability: TaskCapabilityProof,
+    ) -> Result<Self, GraphStoreError> {
+        let envelope = Self {
+            request,
+            claimed_at,
+            duration_ms,
+            capability,
+            authority_witness: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn authorized_by(
+        mut self,
+        authority: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let scoped_agent_id = scoped_agent_id.into();
+        validate_authority_scope("task claim", &scoped_agent_id)?;
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.authority_witness = Some(
+            EvidenceWitness::new(
+                authority,
+                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
+                scoped_agent_id,
+                &bytes,
+            )
+            .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskClaimMaterial {
+            request: &self.request,
+            claimed_at: self.claimed_at,
+            duration_ms: self.duration_ms,
+            capability: &self.capability,
+            authority_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let authority_scope = self
+            .authority_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(authority_scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphStoreError> {
+        validate_request(&self.request)?;
+        self.claimed_at
+            .validate()
+            .map_err(GraphStoreError::Admission)?;
+        if self.claimed_at < self.request.requested_at {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "task claim time precedes its signed request".to_string(),
+            });
+        }
+        if self.duration_ms == 0 {
+            return Err(GraphStoreError::InvalidLease {
+                reason: "task claim duration must be positive".to_string(),
+            });
+        }
+        self.capability
+            .validate_for_claim(&self.request)
+            .map_err(GraphStoreError::Admission)?;
+        validate_optional_scheduler_witness(
+            self.authority_witness.as_ref(),
+            &self.canonical_bytes_without_witness()?,
+        )
+    }
+
+    fn validate_for_store(
+        &self,
+        authority: &AgentId,
+        limits: &GraphResourceLimits,
+    ) -> Result<(), GraphStoreError> {
+        self.validate()?;
+        if self.duration_ms > limits.max_task_lease_ms {
+            return Err(GraphStoreError::InvalidLease {
+                reason: "task claim duration exceeds the graph lease limit".to_string(),
+            });
+        }
+        require_configured_scheduler_witness(
+            self.authority_witness.as_ref(),
+            authority,
+            &self.canonical_bytes_without_witness()?,
+            "durable task claim requires scheduler authority",
+        )
+    }
+}
+
+fn validate_authority_scope(kind: &str, scope: &str) -> Result<(), GraphStoreError> {
+    if scope.trim().is_empty() || scope.len() > 128 {
+        return Err(GraphStoreError::InvalidState {
+            reason: format!("{kind} authority scope is invalid"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_optional_scheduler_witness(
+    witness: Option<&EvidenceWitness>,
+    canonical_bytes: &[u8],
+) -> Result<(), GraphStoreError> {
+    if let Some(witness) = witness {
+        if witness.producer_role != swarm_core::hypothesis_graph::GraphProducerRole::Planner {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidWitness {
+                    reason: "task scheduler authority must use the planner role".to_string(),
+                },
+            ));
+        }
+        witness
+            .validate(canonical_bytes)
+            .map_err(GraphStoreError::Admission)?;
+    }
+    Ok(())
+}
+
+fn require_configured_scheduler_witness(
+    witness: Option<&EvidenceWitness>,
+    authority: &AgentId,
+    canonical_bytes: &[u8],
+    missing_reason: &str,
+) -> Result<(), GraphStoreError> {
+    let Some(witness) = witness else {
+        return Err(GraphStoreError::Admission(
+            GraphAdmissionError::InvalidWitness {
+                reason: missing_reason.to_string(),
+            },
+        ));
+    };
+    if &witness.producer_identity != authority {
+        return Err(GraphStoreError::Admission(
+            GraphAdmissionError::InvalidWitness {
+                reason: "task scheduler witness does not match the configured store authority"
+                    .to_string(),
+            },
+        ));
+    }
+    witness
+        .validate(canonical_bytes)
+        .map_err(GraphStoreError::Admission)
 }
 
 #[derive(Debug, Serialize)]
@@ -3791,25 +4073,20 @@ pub trait HypothesisGraphStore: Send + Sync {
         expected: &GraphStoreRevision,
         state: GraphStoreState,
     ) -> Result<GraphStoreSnapshot, GraphStoreError>;
-    fn create_task(&self, request: TaskClaimRequest)
-    -> Result<TaskMutationResult, GraphStoreError>;
+    fn create_task(
+        &self,
+        envelope: TaskCreationEnvelope,
+    ) -> Result<TaskMutationResult, GraphStoreError>;
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
+        envelope: TaskCreationEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError>;
-    fn claim_task(
-        &self,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
-    ) -> Result<TaskClaimResult, GraphStoreError>;
+    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError>;
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskClaimEnvelope,
     ) -> Result<TaskClaimResult, GraphStoreError>;
     fn renew_task(
         &self,
@@ -3995,32 +4272,28 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn create_task(
         &self,
-        request: TaskClaimRequest,
+        envelope: TaskCreationEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) =
-            self.mutate(None, |state| create_task_op(state, request, &self.limits))?;
+        let (snapshot, marker) = self.mutate(None, |state| {
+            create_task_op(state, envelope, &self.signer_id, &self.limits)
+        })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
+        envelope: TaskCreationEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            create_task_op(state, request, &self.limits)
+            create_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
-    fn claim_task(
-        &self,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
-    ) -> Result<TaskClaimResult, GraphStoreError> {
+    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
+            claim_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -4028,12 +4301,10 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskClaimEnvelope,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
+            claim_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6844,32 +7115,28 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn create_task(
         &self,
-        request: TaskClaimRequest,
+        envelope: TaskCreationEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) =
-            self.mutate(None, |state| create_task_op(state, request, &self.limits))?;
+        let (snapshot, marker) = self.mutate(None, |state| {
+            create_task_op(state, envelope, &self.signer_id, &self.limits)
+        })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
+        envelope: TaskCreationEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            create_task_op(state, request, &self.limits)
+            create_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
-    fn claim_task(
-        &self,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
-    ) -> Result<TaskClaimResult, GraphStoreError> {
+    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
+            claim_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6877,12 +7144,10 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskClaimEnvelope,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
+            claim_task_op(state, envelope, &self.signer_id, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6989,49 +7254,40 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn create_task(
         &self,
-        request: TaskClaimRequest,
+        envelope: TaskCreationEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.create_task(request),
-            Self::LocalFiles(store) => store.create_task(request),
+            Self::Memory(store) => store.create_task(envelope),
+            Self::LocalFiles(store) => store.create_task(envelope),
         }
     }
 
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
+        envelope: TaskCreationEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.create_task_cas(expected, request),
-            Self::LocalFiles(store) => store.create_task_cas(expected, request),
+            Self::Memory(store) => store.create_task_cas(expected, envelope),
+            Self::LocalFiles(store) => store.create_task_cas(expected, envelope),
         }
     }
 
-    fn claim_task(
-        &self,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
-    ) -> Result<TaskClaimResult, GraphStoreError> {
+    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.claim_task(request, now, lease_duration_ms),
-            Self::LocalFiles(store) => store.claim_task(request, now, lease_duration_ms),
+            Self::Memory(store) => store.claim_task(envelope),
+            Self::LocalFiles(store) => store.claim_task(envelope),
         }
     }
 
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        request: TaskClaimRequest,
-        now: GraphLogicalTime,
-        lease_duration_ms: u64,
+        envelope: TaskClaimEnvelope,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.claim_task_cas(expected, request, now, lease_duration_ms),
-            Self::LocalFiles(store) => {
-                store.claim_task_cas(expected, request, now, lease_duration_ms)
-            }
+            Self::Memory(store) => store.claim_task_cas(expected, envelope),
+            Self::LocalFiles(store) => store.claim_task_cas(expected, envelope),
         }
     }
 
@@ -7132,6 +7388,59 @@ mod tests {
 
     fn request(byte: u8, task_suffix: &str) -> TaskClaimRequest {
         request_at(byte, task_suffix, GraphLogicalTime::new(100))
+    }
+
+    fn capability_for_request(
+        request: &TaskClaimRequest,
+        claimant_byte: u8,
+    ) -> TaskCapabilityProof {
+        let claimant = signer(claimant_byte);
+        TaskCapabilityProof::signed_with(
+            request.task_id.clone(),
+            request.claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &claimant,
+            format!("task-capability:{}", request.task_id),
+        )
+        .unwrap()
+    }
+
+    fn signed_creation_envelope(
+        request: TaskClaimRequest,
+        claimant_byte: u8,
+        authority_byte: u8,
+    ) -> TaskCreationEnvelope {
+        let capability = capability_for_request(&request, claimant_byte);
+        let task_id = request.task_id.clone();
+        TaskCreationEnvelope::new(request, capability)
+            .unwrap()
+            .authorized_by(&signer(authority_byte), format!("task-create:{task_id}"))
+            .unwrap()
+    }
+
+    fn claim_envelope(
+        request: TaskClaimRequest,
+        claimed_at: GraphLogicalTime,
+        duration_ms: u64,
+        claimant_byte: u8,
+    ) -> TaskClaimEnvelope {
+        let capability = capability_for_request(&request, claimant_byte);
+        TaskClaimEnvelope::new(request, claimed_at, duration_ms, capability).unwrap()
+    }
+
+    fn signed_claim_envelope(
+        request: TaskClaimRequest,
+        claimed_at: GraphLogicalTime,
+        duration_ms: u64,
+        claimant_byte: u8,
+        authority_byte: u8,
+    ) -> TaskClaimEnvelope {
+        let task_id = request.task_id.clone();
+        claim_envelope(request, claimed_at, duration_ms, claimant_byte)
+            .authorized_by(&signer(authority_byte), format!("task-claim:{task_id}"))
+            .unwrap()
     }
 
     fn signed_terminal_envelope(
@@ -7317,10 +7626,22 @@ mod tests {
     #[test]
     fn operation_log_is_idempotent_and_fenced_across_reclaim() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(7)).unwrap();
-        let first = store.claim_task(request(1, "one"), GraphLogicalTime::new(100), 10);
+        let first = store.claim_task(signed_claim_envelope(
+            request(1, "one"),
+            GraphLogicalTime::new(100),
+            10,
+            1,
+            7,
+        ));
         let first = first.unwrap();
         let duplicate = store
-            .claim_task(request(1, "one"), GraphLogicalTime::new(100), 10)
+            .claim_task(signed_claim_envelope(
+                request(1, "one"),
+                GraphLogicalTime::new(100),
+                10,
+                1,
+                7,
+            ))
             .unwrap();
         assert!(duplicate.idempotent);
         assert_eq!(first.lease, duplicate.lease);
@@ -7405,14 +7726,22 @@ mod tests {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(13)).unwrap();
         let first_request = request_at(1, "retry", GraphLogicalTime::new(100));
         let first = store
-            .claim_task(first_request, GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                first_request,
+                GraphLogicalTime::new(100),
+                20,
+                1,
+                13,
+            ))
             .unwrap();
         let retry = store
-            .claim_task(
+            .claim_task(signed_claim_envelope(
                 request_at(1, "retry", GraphLogicalTime::new(105)),
                 GraphLogicalTime::new(105),
                 20,
-            )
+                1,
+                13,
+            ))
             .unwrap();
         assert!(retry.idempotent);
         assert_eq!(retry.revision, first.revision);
@@ -7421,10 +7750,96 @@ mod tests {
     }
 
     #[test]
+    fn creation_and_claim_require_configured_scheduler_clock_authority() {
+        let store = MemoryHypothesisGraphStore::new(graph(), signer(40)).unwrap();
+        let creation_request = request(41, "authorized-creation");
+        let creation_capability = capability_for_request(&creation_request, 41);
+        let claimant_only_creation =
+            TaskCreationEnvelope::new(creation_request.clone(), creation_capability).unwrap();
+        let before_creation = store.snapshot().unwrap();
+        assert!(matches!(
+            store.create_task(claimant_only_creation),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_creation);
+
+        let foreign_creation = signed_creation_envelope(creation_request.clone(), 41, 43);
+        assert!(matches!(
+            store.create_task(foreign_creation),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_creation);
+
+        let created = store
+            .create_task(signed_creation_envelope(creation_request, 41, 40))
+            .unwrap();
+        assert_eq!(created.task.state, TaskState::Pending);
+        assert_eq!(
+            store.snapshot().unwrap().state.logical_time_high_water,
+            GraphLogicalTime::new(100)
+        );
+
+        let claim_request = request(42, "authorized-claim");
+        let claimant_only =
+            claim_envelope(claim_request.clone(), GraphLogicalTime::new(100), 20, 42);
+        let signed = signed_claim_envelope(
+            claim_request.clone(),
+            GraphLogicalTime::new(100),
+            20,
+            42,
+            40,
+        );
+        let before_claim = store.snapshot().unwrap();
+        assert!(matches!(
+            store.claim_task(claimant_only),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_claim);
+
+        let foreign = signed_claim_envelope(claim_request, GraphLogicalTime::new(100), 20, 42, 43);
+        assert!(matches!(
+            store.claim_task(foreign),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_claim);
+
+        let mut poisoned_clock = signed.clone();
+        poisoned_clock.claimed_at = GraphLogicalTime::new(i64::MAX);
+        assert!(matches!(
+            store.claim_task(poisoned_clock),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_claim);
+
+        let claimed = store.claim_task(signed).unwrap();
+        assert_eq!(claimed.task.state, TaskState::Claimed);
+        assert_eq!(
+            store.snapshot().unwrap().state.logical_time_high_water,
+            GraphLogicalTime::new(100)
+        );
+    }
+
+    #[test]
     fn generic_cas_rejects_stale_terminal_task_resurrection() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(44)).unwrap();
         let claimed = store
-            .claim_task(request(45, "resurrection"), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request(45, "resurrection"),
+                GraphLogicalTime::new(100),
+                20,
+                45,
+                44,
+            ))
             .unwrap();
         let stale = store.snapshot().unwrap();
         let lease = claimed.lease.clone().unwrap();
@@ -7463,11 +7878,13 @@ mod tests {
     fn terminal_transition_barrier_rejects_expired_injected_clock() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(14)).unwrap();
         let claim = store
-            .claim_task(
+            .claim_task(signed_claim_envelope(
                 request(1, "completion-barrier"),
                 GraphLogicalTime::new(100),
                 10,
-            )
+                1,
+                14,
+            ))
             .unwrap();
         let lease = claim.lease.clone().unwrap();
         let before = store.snapshot().unwrap();
@@ -7493,7 +7910,13 @@ mod tests {
 
         let failure_request = request(2, "failure-barrier");
         let failure_claim = store
-            .claim_task(failure_request.clone(), GraphLogicalTime::new(100), 10)
+            .claim_task(signed_claim_envelope(
+                failure_request.clone(),
+                GraphLogicalTime::new(100),
+                10,
+                2,
+                14,
+            ))
             .unwrap();
         let failure_lease = failure_claim.lease.clone().unwrap();
         let before_failure = store.snapshot().unwrap();
@@ -7520,11 +7943,13 @@ mod tests {
         let path = temp_dir("signed-terminal-completion");
         let store = FileHypothesisGraphStore::new(&path, graph(), signer(20)).unwrap();
         let claim = store
-            .claim_task(
+            .claim_task(signed_claim_envelope(
                 request(21, "signed-terminal"),
                 GraphLogicalTime::new(100),
                 20,
-            )
+                21,
+                20,
+            ))
             .unwrap();
         let lease = claim.lease.clone().unwrap();
         let claimant = signer(21);
@@ -7623,7 +8048,13 @@ mod tests {
         let store = FileHypothesisGraphStore::new(&path, graph(), signer(22)).unwrap();
         let request = request(23, "signed-failure");
         let claim = store
-            .claim_task(request.clone(), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request.clone(),
+                GraphLogicalTime::new(100),
+                20,
+                23,
+                22,
+            ))
             .unwrap();
         let lease = claim.lease.clone().unwrap();
         let claimant = signer(23);
@@ -7693,15 +8124,31 @@ mod tests {
             "summary:signed-failure",
             23,
         );
+        let failed = store
+            .fail_task(claim.task_generation, GraphLogicalTime::new(110), valid)
+            .unwrap();
+        assert_eq!(failed.task.state, TaskState::Failed);
         assert_eq!(
-            store
-                .fail_task(claim.task_generation, GraphLogicalTime::new(110), valid,)
-                .unwrap()
+            failed
                 .task
-                .state,
-            TaskState::Failed
+                .terminal_history
+                .last()
+                .unwrap()
+                .failure_summary_digest,
+            Some("summary:signed-failure".to_string())
         );
         drop(store);
+        let reopened = FileHypothesisGraphStore::open_with_signer(&path, signer(22)).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().state.tasks[&TaskId::new("task:signed-failure")]
+                .task
+                .terminal_history
+                .last()
+                .unwrap()
+                .failure_summary_digest,
+            Some("summary:signed-failure".to_string())
+        );
+        drop(reopened);
         let _ = fs::remove_dir_all(path);
     }
 
@@ -7722,9 +8169,15 @@ mod tests {
 
     #[test]
     fn cas_rejects_store_owned_counter_changes_without_mutation() {
-        fn assert_rejected(store: &dyn HypothesisGraphStore) {
+        fn assert_rejected(store: &dyn HypothesisGraphStore, authority_byte: u8) {
             store
-                .claim_task(request(1, "cas-counters"), GraphLogicalTime::new(100), 20)
+                .claim_task(signed_claim_envelope(
+                    request(1, "cas-counters"),
+                    GraphLogicalTime::new(100),
+                    20,
+                    1,
+                    authority_byte,
+                ))
                 .unwrap();
             let before = store.snapshot().unwrap();
 
@@ -7752,11 +8205,11 @@ mod tests {
         }
 
         let store = MemoryHypothesisGraphStore::new(graph(), signer(18)).unwrap();
-        assert_rejected(&store);
+        assert_rejected(&store, 18);
 
         let path = temp_dir("cas-store-owned-counters");
         let file = FileHypothesisGraphStore::new(&path, graph(), signer(19)).unwrap();
-        assert_rejected(&file);
+        assert_rejected(&file, 19);
         drop(file);
         let _ = fs::remove_dir_all(path);
     }
@@ -7765,7 +8218,13 @@ mod tests {
     fn generic_cas_still_updates_graph_without_changing_store_owned_counters() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(20)).unwrap();
         store
-            .claim_task(request(1, "cas-graph-only"), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request(1, "cas-graph-only"),
+                GraphLogicalTime::new(100),
+                20,
+                1,
+                20,
+            ))
             .unwrap();
         let before = store.snapshot().unwrap();
         let mut candidate = before.state.clone();
@@ -7789,11 +8248,13 @@ mod tests {
     fn renewal_rejects_backdated_logical_time_without_mutation() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(19)).unwrap();
         let claim = store
-            .claim_task(
+            .claim_task(signed_claim_envelope(
                 request(1, "renew-backdated"),
                 GraphLogicalTime::new(100),
                 20,
-            )
+                1,
+                19,
+            ))
             .unwrap();
         let lease = claim.lease.unwrap();
         let before = store.snapshot().unwrap();
@@ -7815,11 +8276,13 @@ mod tests {
     fn durable_renewal_requires_claimant_signature_and_binds_duration() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(30)).unwrap();
         let claim = store
-            .claim_task(
+            .claim_task(signed_claim_envelope(
                 request(31, "signed-renewal"),
                 GraphLogicalTime::new(100),
                 20,
-            )
+                31,
+                30,
+            ))
             .unwrap();
         let lease = claim.lease.clone().unwrap();
         let signed = signed_renewal_envelope(
@@ -7874,7 +8337,13 @@ mod tests {
     fn durable_expiry_requires_configured_authority_and_binds_observed_time() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(33)).unwrap();
         let claim = store
-            .claim_task(request(34, "signed-expiry"), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request(34, "signed-expiry"),
+                GraphLogicalTime::new(100),
+                20,
+                34,
+                33,
+            ))
             .unwrap();
         let lease = claim.lease.clone().unwrap();
         let signed = signed_expiry_envelope(
@@ -7932,11 +8401,13 @@ mod tests {
     fn durable_reclaim_requires_claimant_and_configured_authority_signatures() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(36)).unwrap();
         let claim = store
-            .claim_task(
+            .claim_task(signed_claim_envelope(
                 request(37, "signed-reclaim"),
                 GraphLogicalTime::new(100),
                 20,
-            )
+                37,
+                36,
+            ))
             .unwrap();
         let lease = claim.lease.clone().unwrap();
         let expired = store
@@ -8051,7 +8522,13 @@ mod tests {
         let external_anchor_path = store.monotonic_anchor.path().to_path_buf();
         let old_external_anchor = fs::read(&external_anchor_path).unwrap();
 
-        store.create_task(request(1, "full-root-rollback")).unwrap();
+        store
+            .create_task(signed_creation_envelope(
+                request(1, "full-root-rollback"),
+                1,
+                25,
+            ))
+            .unwrap();
         let current_external_anchor = fs::read(&external_anchor_path).unwrap();
         assert_ne!(current_external_anchor, old_external_anchor);
         drop(store);
@@ -8077,10 +8554,22 @@ mod tests {
         let request = request(1, "file");
         let memory = MemoryHypothesisGraphStore::new(graph(), key.clone()).unwrap();
         let file_claim = first
-            .claim_task(request.clone(), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request.clone(),
+                GraphLogicalTime::new(100),
+                20,
+                1,
+                9,
+            ))
             .unwrap();
         let memory_claim = memory
-            .claim_task(request, GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request,
+                GraphLogicalTime::new(100),
+                20,
+                1,
+                9,
+            ))
             .unwrap();
         assert_eq!(
             first.snapshot().unwrap().canonical_bytes().unwrap(),
@@ -8112,10 +8601,22 @@ mod tests {
         );
 
         let claimed_memory = memory
-            .claim_task(request(1, "vector"), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request(1, "vector"),
+                GraphLogicalTime::new(100),
+                20,
+                1,
+                11,
+            ))
             .unwrap();
         let claimed_file = file
-            .claim_task(request(1, "vector"), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request(1, "vector"),
+                GraphLogicalTime::new(100),
+                20,
+                1,
+                11,
+            ))
             .unwrap();
         assert_eq!(claimed_memory.task, claimed_file.task);
         let lease = claimed_memory.lease.clone().unwrap();
@@ -8197,7 +8698,13 @@ mod tests {
         }
         let reopened = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
         reopened
-            .claim_task(request(1, "anchor"), GraphLogicalTime::new(100), 20)
+            .claim_task(signed_claim_envelope(
+                request(1, "anchor"),
+                GraphLogicalTime::new(100),
+                20,
+                1,
+                12,
+            ))
             .unwrap();
         fs::write(&state_path, initial_state).unwrap();
         drop(reopened);
@@ -8297,7 +8804,11 @@ mod tests {
             Err(GraphStoreError::LockContended { .. })
         ));
         assert!(matches!(
-            store.create_task(request(1, "lock-replacement")),
+            store.create_task(signed_creation_envelope(
+                request(1, "lock-replacement"),
+                1,
+                18,
+            )),
             Err(GraphStoreError::LockBinding { .. })
         ));
         drop(store);
@@ -8528,7 +9039,11 @@ mod tests {
         let writer = Arc::clone(&store);
         let (result_tx, result_rx) = mpsc::channel();
         let join = std::thread::spawn(move || {
-            let result = writer.create_task(request(1, "namespace-barrier"));
+            let result = writer.create_task(signed_creation_envelope(
+                request(1, "namespace-barrier"),
+                1,
+                21,
+            ));
             let _ = result_tx.send(result);
         });
         let ready = ready_rx.recv_timeout(Duration::from_secs(5));
@@ -8602,7 +9117,11 @@ mod tests {
             let store = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
             install_test_commit_failure(path.clone(), boundary);
             assert!(matches!(
-                store.create_task(request(32, &format!("txn-{index}"))),
+                store.create_task(signed_creation_envelope(
+                    request(32, &format!("txn-{index}")),
+                    32,
+                    31,
+                )),
                 Err(GraphStoreError::Write { .. })
             ));
             drop(store);
@@ -8663,7 +9182,13 @@ mod tests {
         let old_high_water_tail = fs::read(&high_water_tail_path).unwrap();
         let external_path = store.monotonic_anchor.path().to_path_buf();
         let old_external = fs::read(&external_path).unwrap();
-        store.create_task(request(34, "external-prefix")).unwrap();
+        store
+            .create_task(signed_creation_envelope(
+                request(34, "external-prefix"),
+                34,
+                33,
+            ))
+            .unwrap();
         drop(store);
         fs::write(&state_path, old_state).unwrap();
         fs::write(&anchor_path, old_anchor).unwrap();
@@ -8786,7 +9311,11 @@ mod tests {
             let store = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
             install_test_commit_failure(path.clone(), CommitFailureBoundary::State);
             assert!(matches!(
-                store.create_task(request(56, &format!("rollback-{index}"))),
+                store.create_task(signed_creation_envelope(
+                    request(56, &format!("rollback-{index}")),
+                    56,
+                    55,
+                )),
                 Err(GraphStoreError::Write { .. })
             ));
             drop(store);
@@ -8848,13 +9377,22 @@ mod tests {
         install_test_persistence_barrier(store.state_path().to_path_buf(), ready_tx, release_rx);
         let mut guard = PersistenceBarrierGuard::new(store.state_path().to_path_buf(), release_tx);
         let first_store = Arc::clone(&store);
-        let first_thread =
-            std::thread::spawn(move || first_store.create_task(request(60, "same-handle-first")));
+        let first_thread = std::thread::spawn(move || {
+            first_store.create_task(signed_creation_envelope(
+                request(60, "same-handle-first"),
+                60,
+                59,
+            ))
+        });
         ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let second_store = Arc::clone(&store);
         let (second_tx, second_rx) = mpsc::channel();
         let second_thread = std::thread::spawn(move || {
-            let result = second_store.create_task(request(61, "same-handle-second"));
+            let result = second_store.create_task(signed_creation_envelope(
+                request(61, "same-handle-second"),
+                61,
+                59,
+            ));
             let _ = second_tx.send(result);
         });
         assert!(second_rx.recv_timeout(Duration::from_millis(100)).is_err());
@@ -8883,8 +9421,13 @@ mod tests {
         let mut guard =
             PersistenceBarrierGuard::new_pre_rename(store.state_path().to_path_buf(), release_tx);
         let writer = Arc::clone(&store);
-        let writer_thread =
-            std::thread::spawn(move || writer.create_task(request(63, "displaced-root")));
+        let writer_thread = std::thread::spawn(move || {
+            writer.create_task(signed_creation_envelope(
+                request(63, "displaced-root"),
+                63,
+                62,
+            ))
+        });
         ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         fs::rename(&path, &displaced).unwrap();
         guard.release();
@@ -8906,7 +9449,13 @@ mod tests {
         let path = temp_dir("external-rotation-count");
         let key = signer(64);
         let store = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
-        store.create_task(request(65, "before-rotation")).unwrap();
+        store
+            .create_task(signed_creation_envelope(
+                request(65, "before-rotation"),
+                65,
+                64,
+            ))
+            .unwrap();
         let external_lock = store.monotonic_anchor.acquire_lock().unwrap();
         let records = store
             .monotonic_anchor
@@ -8928,7 +9477,13 @@ mod tests {
                 .unwrap()
         );
         drop(external_lock);
-        store.create_task(request(66, "after-rotation")).unwrap();
+        store
+            .create_task(signed_creation_envelope(
+                request(66, "after-rotation"),
+                66,
+                64,
+            ))
+            .unwrap();
         drop(store);
         let reopened = FileHypothesisGraphStore::open_with_signer(&path, key).unwrap();
         assert_eq!(reopened.snapshot().unwrap().revision.generation, 2);
