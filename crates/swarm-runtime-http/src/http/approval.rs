@@ -174,7 +174,6 @@ pub(super) async fn approval_vote_append_handler(
         Ok(_) => {}
         Err(ApprovalError::DuplicateVoter { .. })
             if governed
-                && existing.quorum_state.quorum_met
                 && existing.report.entries.iter().any(|entry| {
                     entry.voter_id == request.voter_id && entry.signature == request.signature
                 }) => {}

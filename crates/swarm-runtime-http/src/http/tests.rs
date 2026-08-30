@@ -3907,7 +3907,6 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
         spawn_sequenced_approval_resume_server(vec![
             StatusCode::SERVICE_UNAVAILABLE,
             StatusCode::OK,
-            StatusCode::OK,
         ])
         .await;
     let signer = Ed25519Signer::from_secret_material("governed-approval-retry-voter");
@@ -3941,7 +3940,7 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
     let set = harness
         .create_approval_set(
             vec![voter_id.clone(), second_voter_id.clone()],
-            ThresholdRule::AtLeast { required: 1 },
+            ThresholdRule::AtLeast { required: 2 },
             &format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}hold-retry"),
         )
         .unwrap();
@@ -3986,10 +3985,22 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
         .oneshot(vote_request(TOKEN, &voter_id, &signature))
         .await
         .unwrap();
-    assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(first.status(), StatusCode::OK);
     let first_packs = harness.list_receipt_packs().unwrap();
-    assert_eq!(first_packs.packs.len(), 1);
-    let persisted_pack_id = first_packs.packs[0].pack_id.clone();
+    assert!(first_packs.packs.is_empty());
+    assert!(capture.requests.lock().await.is_empty());
+
+    let prequorum_duplicate = surface
+        .router()
+        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .await
+        .unwrap();
+    assert_eq!(prequorum_duplicate.status(), StatusCode::OK);
+    let prequorum_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    assert_eq!(prequorum_ledger.report.entries.len(), 1);
+    assert!(!prequorum_ledger.quorum_state.quorum_met);
+    assert!(harness.list_receipt_packs().unwrap().packs.is_empty());
+    assert!(capture.requests.lock().await.is_empty());
 
     let second = surface
         .router()
@@ -4000,13 +4011,12 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
         ))
         .await
         .unwrap();
-    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::BAD_GATEWAY);
     let second_packs = harness.list_receipt_packs().unwrap();
     assert_eq!(second_packs.packs.len(), 1);
-    assert_eq!(second_packs.packs[0].pack_id, persisted_pack_id);
+    let persisted_pack_id = second_packs.packs[0].pack_id.clone();
     let requests = capture.requests.lock().await;
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0], requests[1]);
+    assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1["receipt_pack_id"], persisted_pack_id);
     drop(requests);
 
@@ -4020,8 +4030,8 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
     assert_eq!(duplicate_packs.packs.len(), 1);
     assert_eq!(duplicate_packs.packs[0].pack_id, persisted_pack_id);
     let requests = capture.requests.lock().await;
-    assert_eq!(requests.len(), 3);
-    assert_eq!(requests[0], requests[2]);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
     drop(requests);
 
     let altered = Ed25519Signer::from_secret_material("altered-governed-vote").sign(
@@ -4048,7 +4058,7 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
         .await
         .unwrap();
     assert_eq!(altered_response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(capture.requests.lock().await.len(), 3);
+    assert_eq!(capture.requests.lock().await.len(), 2);
 
     let _ = shutdown_tx.send(());
     let _ = server.await;
