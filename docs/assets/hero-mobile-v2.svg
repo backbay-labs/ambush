@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" width="560" height="300" role="img" aria-label="Ambush: autonomous threat hunting in Rust. Eight detection trails converge from every direction and lock onto a single target.">
+  <defs>
+    <linearGradient id="hm-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#070a09"/><stop offset="1" stop-color="#0d1512"/></linearGradient>
+    <radialGradient id="hm-glow" cx="50%" cy="47%" r="60%"><stop offset="0" stop-color="#34d399" stop-opacity="0.19"/><stop offset="0.5" stop-color="#34d399" stop-opacity="0.05"/><stop offset="1" stop-color="#34d399" stop-opacity="0"/></radialGradient>
+    <pattern id="hm-field" width="34" height="34" patternUnits="userSpaceOnUse"><circle cx="6" cy="9" r="0.9" fill="#4ade80" fill-opacity="0.10"/><circle cx="23" cy="24" r="0.6" fill="#4ade80" fill-opacity="0.07"/></pattern>
+    <radialGradient id="hm-fade" cx="50%" cy="50%" r="60%"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <mask id="hm-mask"><rect width="560" height="300" fill="url(#hm-fade)"/></mask>
+  </defs>
+  <rect width="560" height="300" fill="url(#hm-bg)"/>
+  <rect width="560" height="300" fill="url(#hm-field)" mask="url(#hm-mask)"/>
+  <rect width="560" height="300" fill="url(#hm-glow)"/>
+  <g>
+    <path d="M579 78 C564 125 518 116 483 106" fill="none" stroke="#4ade80" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="2.5 7" stroke-linecap="round"/>
+    <circle cx="558.3" cy="106.9" r="1.30" fill="#4ade80" fill-opacity="0.30"/>
+    <circle cx="545.2" cy="112.3" r="1.59" fill="#4ade80" fill-opacity="0.38"/>
+    <circle cx="530.7" cy="114.1" r="2.04" fill="#4ade80" fill-opacity="0.48"/>
+    <circle cx="515.5" cy="113.2" r="2.67" fill="#4ade80" fill-opacity="0.60"/>
+    <circle cx="500.1" cy="110.5" r="3.50" fill="#4ade80" fill-opacity="0.74"/>
+    <circle cx="485.1" cy="106.8" r="4.53" fill="#4ade80" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#4ade80" fill-opacity="0"><animateMotion dur="4.4s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M579 78 C564 125 518 116 483 106"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="4.4s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="4.4s" repeatCount="indefinite"/></circle>
+    <path d="M606 117 C564 80 528 106 501 127" fill="none" stroke="#4ade80" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="2.5 7" stroke-linecap="round"/>
+    <circle cx="569.7" cy="98.8" r="1.30" fill="#4ade80" fill-opacity="0.30"/>
+    <circle cx="554.5" cy="98.7" r="1.59" fill="#4ade80" fill-opacity="0.38"/>
+    <circle cx="540.2" cy="102.4" r="2.04" fill="#4ade80" fill-opacity="0.48"/>
+    <circle cx="526.7" cy="108.9" r="2.67" fill="#4ade80" fill-opacity="0.60"/>
+    <circle cx="514.3" cy="117.2" r="3.50" fill="#4ade80" fill-opacity="0.74"/>
+    <circle cx="502.8" cy="126.2" r="4.53" fill="#4ade80" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#4ade80" fill-opacity="0"><animateMotion dur="4.8s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M606 117 C564 80 528 106 501 127"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="4.8s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="4.8s" repeatCount="indefinite"/></circle>
+    <path d="M606 163 C564 200 528 174 501 153" fill="none" stroke="#f59e0b" stroke-opacity="0.34" stroke-width="1.3" stroke-dasharray="none" stroke-linecap="round"/>
+    <circle cx="569.7" cy="181.2" r="1.30" fill="#f59e0b" fill-opacity="0.30"/>
+    <circle cx="554.5" cy="181.3" r="1.59" fill="#f59e0b" fill-opacity="0.38"/>
+    <circle cx="540.2" cy="177.6" r="2.04" fill="#f59e0b" fill-opacity="0.48"/>
+    <circle cx="526.7" cy="171.1" r="2.67" fill="#f59e0b" fill-opacity="0.60"/>
+    <circle cx="514.3" cy="162.8" r="3.50" fill="#f59e0b" fill-opacity="0.74"/>
+    <circle cx="502.8" cy="153.8" r="4.53" fill="#f59e0b" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#f59e0b" fill-opacity="0"><animateMotion dur="5.2s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M606 163 C564 200 528 174 501 153"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="5.2s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="5.2s" repeatCount="indefinite"/></circle>
+    <path d="M579 202 C564 155 518 164 483 174" fill="none" stroke="#4ade80" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="2.5 7" stroke-linecap="round"/>
+    <circle cx="558.3" cy="173.1" r="1.30" fill="#4ade80" fill-opacity="0.30"/>
+    <circle cx="545.2" cy="167.7" r="1.59" fill="#4ade80" fill-opacity="0.38"/>
+    <circle cx="530.7" cy="165.9" r="2.04" fill="#4ade80" fill-opacity="0.48"/>
+    <circle cx="515.5" cy="166.8" r="2.67" fill="#4ade80" fill-opacity="0.60"/>
+    <circle cx="500.1" cy="169.5" r="3.50" fill="#4ade80" fill-opacity="0.74"/>
+    <circle cx="485.1" cy="173.2" r="4.53" fill="#4ade80" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#4ade80" fill-opacity="0"><animateMotion dur="5.7s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M579 202 C564 155 518 164 483 174"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="5.7s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="5.7s" repeatCount="indefinite"/></circle>
+    <path d="M-19 202 C-4 155 42 164 77 174" fill="none" stroke="#4ade80" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="2.5 7" stroke-linecap="round"/>
+    <circle cx="1.7" cy="173.1" r="1.30" fill="#4ade80" fill-opacity="0.30"/>
+    <circle cx="14.8" cy="167.7" r="1.59" fill="#4ade80" fill-opacity="0.38"/>
+    <circle cx="29.3" cy="165.9" r="2.04" fill="#4ade80" fill-opacity="0.48"/>
+    <circle cx="44.5" cy="166.8" r="2.67" fill="#4ade80" fill-opacity="0.60"/>
+    <circle cx="59.9" cy="169.5" r="3.50" fill="#4ade80" fill-opacity="0.74"/>
+    <circle cx="74.9" cy="173.2" r="4.53" fill="#4ade80" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#4ade80" fill-opacity="0"><animateMotion dur="6.1s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M-19 202 C-4 155 42 164 77 174"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="6.1s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="6.1s" repeatCount="indefinite"/></circle>
+    <path d="M-46 163 C-4 200 32 174 59 153" fill="none" stroke="#4ade80" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="2.5 7" stroke-linecap="round"/>
+    <circle cx="-9.7" cy="181.2" r="1.30" fill="#4ade80" fill-opacity="0.30"/>
+    <circle cx="5.5" cy="181.3" r="1.59" fill="#4ade80" fill-opacity="0.38"/>
+    <circle cx="19.8" cy="177.6" r="2.04" fill="#4ade80" fill-opacity="0.48"/>
+    <circle cx="33.3" cy="171.1" r="2.67" fill="#4ade80" fill-opacity="0.60"/>
+    <circle cx="45.7" cy="162.8" r="3.50" fill="#4ade80" fill-opacity="0.74"/>
+    <circle cx="57.2" cy="153.8" r="4.53" fill="#4ade80" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#4ade80" fill-opacity="0"><animateMotion dur="6.5s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M-46 163 C-4 200 32 174 59 153"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="6.5s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="6.5s" repeatCount="indefinite"/></circle>
+    <path d="M-46 117 C-4 80 32 106 59 127" fill="none" stroke="#4ade80" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="2.5 7" stroke-linecap="round"/>
+    <circle cx="-9.7" cy="98.8" r="1.30" fill="#4ade80" fill-opacity="0.30"/>
+    <circle cx="5.5" cy="98.7" r="1.59" fill="#4ade80" fill-opacity="0.38"/>
+    <circle cx="19.8" cy="102.4" r="2.04" fill="#4ade80" fill-opacity="0.48"/>
+    <circle cx="33.3" cy="108.9" r="2.67" fill="#4ade80" fill-opacity="0.60"/>
+    <circle cx="45.7" cy="117.2" r="3.50" fill="#4ade80" fill-opacity="0.74"/>
+    <circle cx="57.2" cy="126.2" r="4.53" fill="#4ade80" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#4ade80" fill-opacity="0"><animateMotion dur="6.9s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M-46 117 C-4 80 32 106 59 127"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="6.9s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="6.9s" repeatCount="indefinite"/></circle>
+    <path d="M-19 78 C-4 125 42 116 77 106" fill="none" stroke="#4ade80" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="2.5 7" stroke-linecap="round"/>
+    <circle cx="1.7" cy="106.9" r="1.30" fill="#4ade80" fill-opacity="0.30"/>
+    <circle cx="14.8" cy="112.3" r="1.59" fill="#4ade80" fill-opacity="0.38"/>
+    <circle cx="29.3" cy="114.1" r="2.04" fill="#4ade80" fill-opacity="0.48"/>
+    <circle cx="44.5" cy="113.2" r="2.67" fill="#4ade80" fill-opacity="0.60"/>
+    <circle cx="59.9" cy="110.5" r="3.50" fill="#4ade80" fill-opacity="0.74"/>
+    <circle cx="74.9" cy="106.8" r="4.53" fill="#4ade80" fill-opacity="0.90"/>
+    <circle r="2.1" fill="#4ade80" fill-opacity="0"><animateMotion dur="7.3s" repeatCount="indefinite" keyPoints="0.28;1" keyTimes="0;1" calcMode="linear" path="M-19 78 C-4 125 42 116 77 106"/><animate attributeName="fill-opacity" values="0;0.9;0" dur="7.3s" repeatCount="indefinite"/><animate attributeName="r" values="1.3;3.0" dur="7.3s" repeatCount="indefinite"/></circle>
+  </g>
+  <g stroke="#f59e0b" stroke-opacity="0.58" stroke-width="1.7" fill="none" stroke-linecap="square">
+    <path d="M90 88.8 H76 V103"/>
+    <path d="M90 191.2 H76 V177"/>
+    <path d="M470 88.8 H484 V103"/>
+    <path d="M470 191.2 H484 V177"/>
+  </g>
+  <g stroke="#4ade80" stroke-opacity="0.28" stroke-width="1">
+    <path d="M20 26 H32 M26 20 V32"/>
+    <path d="M528 26 H540 M534 20 V32"/>
+    <path d="M20 274 H32 M26 268 V280"/>
+    <path d="M528 274 H540 M534 268 V280"/>
+  </g>
+  <text x="280" y="45" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10" font-weight="600" letter-spacing="3.4" fill="#8fb8a4" fill-opacity="0.80">AUTONOMOUS THREAT HUNTING</text>
+  <text x="280" y="159" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="56" font-weight="700" letter-spacing="9" fill="#eaf3ee">AMBUSH</text>
+  <text x="280" y="243" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="8.6" letter-spacing="1.8" fill="#7c9187" fill-opacity="0.90">EIGHT AGENTS &#183; ONE SUBSTRATE</text>
+</svg>

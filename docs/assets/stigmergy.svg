@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-label="Stigmergic detection: three detectors deposit signed pheromones on one host; concentration accumulates and decays until it crosses the alert threshold with enough distinct sources, and the runtime escalates.">
+  <defs>
+    <linearGradient id="sg-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#070a09"/><stop offset="1" stop-color="#0d1512"/></linearGradient>
+    <linearGradient id="sg-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ade80" stop-opacity="0.30"/><stop offset="1" stop-color="#4ade80" stop-opacity="0.02"/></linearGradient>
+  </defs>
+  <rect width="1000" height="400" rx="10" fill="url(#sg-bg)"/>
+  <rect width="1000" height="400" rx="10" fill="none" stroke="#4ade80" stroke-opacity="0.10"/>
+  <text x="186" y="34" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11" letter-spacing="1.7" fill="#7c9187">host-ops-1 &#183; execution</text>
+  <text x="954" y="34" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" letter-spacing="1.4" fill="#5d7269">half-life 45s</text>
+  <text x="174" y="73.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10.5" fill="#8fb8a4">network_connect</text>
+  <line x1="265" y1="70" x2="954" y2="70" stroke="#4ade80" stroke-opacity="0.10" stroke-width="1" stroke-dasharray="2 5"/>
+  <circle cx="265.4" cy="70" r="4.26" fill="#4ade80" fill-opacity="0.73"/>
+  <circle cx="351.5" cy="70" r="4.01" fill="#4ade80" fill-opacity="0.67"/>
+  <circle cx="437.6" cy="70" r="3.78" fill="#4ade80" fill-opacity="0.62"/>
+  <circle cx="523.7" cy="70" r="3.57" fill="#4ade80" fill-opacity="0.57"/>
+  <circle cx="609.7" cy="70" r="3.38" fill="#4ade80" fill-opacity="0.53"/>
+  <circle cx="695.8" cy="70" r="3.21" fill="#4ade80" fill-opacity="0.49"/>
+  <circle cx="781.9" cy="70" r="3.06" fill="#4ade80" fill-opacity="0.46"/>
+  <circle cx="867.9" cy="70" r="2.92" fill="#4ade80" fill-opacity="0.43"/>
+  <circle cx="954.0" cy="70" r="2.79" fill="#4ade80" fill-opacity="0.40"/>
+  <text x="281" y="61" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.5" fill="#5d7269">198.51.100.20:4444</text>
+  <text x="174" y="101.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10.5" fill="#8fb8a4">suspicious_process_tree</text>
+  <line x1="504" y1="98" x2="954" y2="98" stroke="#4ade80" stroke-opacity="0.10" stroke-width="1" stroke-dasharray="2 5"/>
+  <circle cx="503.8" cy="98" r="4.60" fill="#4ade80" fill-opacity="0.80"/>
+  <circle cx="560.1" cy="98" r="4.41" fill="#4ade80" fill-opacity="0.76"/>
+  <circle cx="616.3" cy="98" r="4.23" fill="#4ade80" fill-opacity="0.72"/>
+  <circle cx="672.6" cy="98" r="4.07" fill="#4ade80" fill-opacity="0.68"/>
+  <circle cx="728.9" cy="98" r="3.91" fill="#4ade80" fill-opacity="0.65"/>
+  <circle cx="785.2" cy="98" r="3.76" fill="#4ade80" fill-opacity="0.62"/>
+  <circle cx="841.4" cy="98" r="3.63" fill="#4ade80" fill-opacity="0.59"/>
+  <circle cx="897.7" cy="98" r="3.50" fill="#4ade80" fill-opacity="0.56"/>
+  <circle cx="954.0" cy="98" r="3.38" fill="#4ade80" fill-opacity="0.53"/>
+  <text x="520" y="89" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.5" fill="#5d7269">WINWORD → powershell</text>
+  <text x="174" y="129.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10.5" fill="#8fb8a4">suspicious_scripting</text>
+  <line x1="689" y1="126" x2="954" y2="126" stroke="#4ade80" stroke-opacity="0.10" stroke-width="1" stroke-dasharray="2 5"/>
+  <circle cx="689.2" cy="126" r="3.92" fill="#4ade80" fill-opacity="0.65"/>
+  <circle cx="722.3" cy="126" r="3.83" fill="#4ade80" fill-opacity="0.63"/>
+  <circle cx="755.4" cy="126" r="3.75" fill="#4ade80" fill-opacity="0.61"/>
+  <circle cx="788.5" cy="126" r="3.67" fill="#4ade80" fill-opacity="0.60"/>
+  <circle cx="821.6" cy="126" r="3.59" fill="#4ade80" fill-opacity="0.58"/>
+  <circle cx="854.7" cy="126" r="3.52" fill="#4ade80" fill-opacity="0.56"/>
+  <circle cx="887.8" cy="126" r="3.44" fill="#4ade80" fill-opacity="0.55"/>
+  <circle cx="920.9" cy="126" r="3.37" fill="#4ade80" fill-opacity="0.53"/>
+  <circle cx="954.0" cy="126" r="3.31" fill="#4ade80" fill-opacity="0.52"/>
+  <text x="705" y="117" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.5" fill="#5d7269">-enc AAA=</text>
+  <polygon points="186.0,300 186.0,300.0 192.6,300.0 199.2,300.0 205.9,300.0 212.5,300.0 219.1,300.0 225.7,300.0 232.3,300.0 239.0,300.0 245.6,300.0 252.2,300.0 258.8,300.0 265.4,254.6 272.1,255.0 278.7,255.3 285.3,255.7 291.9,256.0 298.6,256.3 305.2,256.7 311.8,257.0 318.4,257.3 325.0,257.7 331.7,258.0 338.3,258.3 344.9,258.6 351.5,258.9 358.1,259.3 364.8,259.6 371.4,259.9 378.0,260.2 384.6,260.5 391.2,260.8 397.9,261.1 404.5,261.4 411.1,261.7 417.7,262.0 424.3,262.3 431.0,262.6 437.6,262.9 444.2,263.1 450.8,263.4 457.4,263.7 464.1,264.0 470.7,264.3 477.3,264.5 483.9,264.8 490.6,265.1 497.2,265.3 503.8,214.5 510.4,215.1 517.0,215.8 523.7,216.4 530.3,217.1 536.9,217.7 543.5,218.3 550.1,219.0 556.8,219.6 563.4,220.2 570.0,220.8 576.6,221.4 583.2,222.0 589.9,222.6 596.5,223.2 603.1,223.8 609.7,224.4 616.3,225.0 623.0,225.5 629.6,226.1 636.2,226.7 642.8,227.2 649.4,227.8 656.1,228.3 662.7,228.9 669.3,229.4 675.9,230.0 682.6,230.5 689.2,191.5 695.8,192.3 702.4,193.1 709.0,193.9 715.7,194.7 722.3,195.6 728.9,196.4 735.5,197.2 742.1,197.9 748.8,198.7 755.4,199.5 762.0,200.3 768.6,201.0 775.2,201.8 781.9,202.5 788.5,203.3 795.1,204.0 801.7,204.8 808.3,205.5 815.0,206.2 821.6,207.0 828.2,207.7 834.8,208.4 841.4,209.1 848.1,209.8 854.7,210.5 861.3,211.2 867.9,211.8 874.6,212.5 881.2,213.2 887.8,213.8 894.4,214.5 901.0,215.2 907.7,215.8 914.3,216.5 920.9,217.1 927.5,217.7 934.1,218.4 940.8,219.0 947.4,219.6 954.0,220.2 954.0,300" fill="url(#sg-fill)"/>
+  <polyline points="186.0,300.0 192.6,300.0 199.2,300.0 205.9,300.0 212.5,300.0 219.1,300.0 225.7,300.0 232.3,300.0 239.0,300.0 245.6,300.0 252.2,300.0 258.8,300.0 265.4,254.6 272.1,255.0 278.7,255.3 285.3,255.7 291.9,256.0 298.6,256.3 305.2,256.7 311.8,257.0 318.4,257.3 325.0,257.7 331.7,258.0 338.3,258.3 344.9,258.6 351.5,258.9 358.1,259.3 364.8,259.6 371.4,259.9 378.0,260.2 384.6,260.5 391.2,260.8 397.9,261.1 404.5,261.4 411.1,261.7 417.7,262.0 424.3,262.3 431.0,262.6 437.6,262.9 444.2,263.1 450.8,263.4 457.4,263.7 464.1,264.0 470.7,264.3 477.3,264.5 483.9,264.8 490.6,265.1 497.2,265.3 503.8,214.5 510.4,215.1 517.0,215.8 523.7,216.4 530.3,217.1 536.9,217.7 543.5,218.3 550.1,219.0 556.8,219.6 563.4,220.2 570.0,220.8 576.6,221.4 583.2,222.0 589.9,222.6 596.5,223.2 603.1,223.8 609.7,224.4 616.3,225.0 623.0,225.5 629.6,226.1 636.2,226.7 642.8,227.2 649.4,227.8 656.1,228.3 662.7,228.9 669.3,229.4 675.9,230.0 682.6,230.5 689.2,191.5 695.8,192.3 702.4,193.1 709.0,193.9 715.7,194.7 722.3,195.6 728.9,196.4 735.5,197.2 742.1,197.9 748.8,198.7 755.4,199.5 762.0,200.3 768.6,201.0 775.2,201.8 781.9,202.5 788.5,203.3 795.1,204.0 801.7,204.8 808.3,205.5 815.0,206.2 821.6,207.0 828.2,207.7 834.8,208.4 841.4,209.1 848.1,209.8 854.7,210.5 861.3,211.2 867.9,211.8 874.6,212.5 881.2,213.2 887.8,213.8 894.4,214.5 901.0,215.2 907.7,215.8 914.3,216.5 920.9,217.1 927.5,217.7 934.1,218.4 940.8,219.0 947.4,219.6 954.0,220.2" fill="none" stroke="#4ade80" stroke-width="2" stroke-linejoin="round"/>
+  <line x1="186" y1="201.0" x2="954" y2="201.0" stroke="#f59e0b" stroke-opacity="0.60" stroke-width="1.2" stroke-dasharray="5 5"/>
+  <text x="186" y="193" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" fill="#b98a3f">alert_threshold 1.20</text>
+  <line x1="689.2" y1="191.5" x2="689.2" y2="300" stroke="#f59e0b" stroke-opacity="0.45" stroke-width="1"/>
+  <circle cx="689.2" cy="191.5" r="5" fill="#f59e0b"/>
+  <circle cx="689.2" cy="191.5" r="5" fill="none" stroke="#f59e0b" stroke-width="1.4"><animate attributeName="r" values="5;15" dur="3s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.75;0" dur="3s" repeatCount="indefinite"/></circle>
+  <line x1="186" y1="300" x2="954" y2="300" stroke="#4ade80" stroke-opacity="0.20"/>
+  <text x="174" y="234" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10.5" fill="#8fb8a4">concentration</text>
+  <text x="689" y="334" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11" letter-spacing="1.5" fill="#f59e0b">ESCALATE</text>
+  <text x="689" y="350" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.5" fill="#5d7269">3 distinct sources &#8805; 2</text>
+  <text x="186" y="334" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.5" fill="#5d7269">two deposits alone stay under the line</text>
+</svg>

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 392" width="1000" height="392" role="img" aria-label="Defense in depth: five layers wrap the deterministic critical lane - fail-closed authorization, a named trusted computing base, the guard pipeline, adversarial pressure, and signed evidence. Each one fails closed.">
+  <defs>
+    <linearGradient id="sc-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#070a09"/><stop offset="1" stop-color="#0d1512"/></linearGradient>
+    <linearGradient id="sc-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ade80" stop-opacity="0.30"/><stop offset="1" stop-color="#4ade80" stop-opacity="0.02"/></linearGradient>
+  </defs>
+  <rect width="1000" height="392" rx="10" fill="url(#sc-bg)"/>
+  <rect width="1000" height="392" rx="10" fill="none" stroke="#4ade80" stroke-opacity="0.10"/>
+  <rect x="26" y="28" width="948" height="332" rx="9" fill="#22d3ee" fill-opacity="0.045" stroke="#22d3ee" stroke-opacity="0.45"/>
+  <rect x="42" y="20" width="152" height="16" fill="#070a09"/>
+  <text x="51" y="32.5" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#22d3ee" fill-opacity="0.95">SIGNED EVIDENCE</text>
+  <rect x="679" y="20" width="285" height="16" fill="#070a09"/>
+  <text x="949" y="32" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">canonical JSON &#183; Ed25519 &#183; Merkle checkpoints</text>
+  <rect x="56" y="58" width="888" height="278" rx="9" fill="#4ade80" fill-opacity="0.045" stroke="#4ade80" stroke-opacity="0.45"/>
+  <rect x="72" y="50" width="198" height="16" fill="#070a09"/>
+  <text x="81" y="62.5" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#4ade80" fill-opacity="0.95">ADVERSARIAL PRESSURE</text>
+  <rect x="683" y="50" width="251" height="16" fill="#070a09"/>
+  <text x="919" y="62" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">evasion corpus &#183; decoys &#183; replay suites</text>
+  <rect x="86" y="88" width="828" height="224" rx="9" fill="#34d399" fill-opacity="0.045" stroke="#34d399" stroke-opacity="0.45"/>
+  <rect x="102" y="80" width="143" height="16" fill="#070a09"/>
+  <text x="111" y="92.5" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#34d399" fill-opacity="0.95">GUARD PIPELINE</text>
+  <rect x="642" y="80" width="262" height="16" fill="#070a09"/>
+  <text x="889" y="92" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">forbidden path &#183; egress &#183; secrets &#183; shell</text>
+  <rect x="116" y="118" width="768" height="170" rx="9" fill="#34d399" fill-opacity="0.045" stroke="#34d399" stroke-opacity="0.45"/>
+  <rect x="132" y="110" width="216" height="16" fill="#070a09"/>
+  <text x="141" y="122.5" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#34d399" fill-opacity="0.95">TRUSTED COMPUTING BASE</text>
+  <rect x="711" y="110" width="163" height="16" fill="#070a09"/>
+  <text x="859" y="122" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">ADR 0009 &#183; layering gate</text>
+  <rect x="146" y="148" width="708" height="116" rx="9" fill="#f59e0b" fill-opacity="0.045" stroke="#f59e0b" stroke-opacity="0.45"/>
+  <rect x="162" y="140" width="243" height="16" fill="#070a09"/>
+  <text x="171" y="152.5" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#f59e0b" fill-opacity="0.95">FAIL-CLOSED AUTHORIZATION</text>
+  <rect x="698" y="140" width="146" height="16" fill="#070a09"/>
+  <text x="829" y="152" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">no receipt, no action</text>
+  <rect x="176" y="178" width="648" height="62" rx="8" fill="#4ade80" fill-opacity="0.11" stroke="#4ade80" stroke-opacity="0.75"/>
+  <text x="500" y="205" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="700" letter-spacing="0.6" fill="#eaf3ee">DETERMINISTIC CRITICAL LANE</text>
+  <text x="500" y="226" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" fill="#7c9187">ingest &#8594; detect &#8594; deposit &#8594; escalate &#8594; route</text>
+</svg>
