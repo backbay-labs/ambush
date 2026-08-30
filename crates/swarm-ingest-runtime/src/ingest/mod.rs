@@ -41,7 +41,7 @@ use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::AgentId;
 use swarm_governance::GovernanceAuthority;
-use swarm_pheromone::PheromoneSubstrate;
+use swarm_pheromone::{DepositQuery, PheromoneSubstrate};
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::governance::GovernedHumanAuthorizationHold;
 use swarm_policy::{ActionRequest, ApprovalContext};
@@ -94,7 +94,7 @@ use swarm_runtime::threat_intel_runtime::SharedThreatIntelFeedHealth;
 use swarm_runtime::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
-    ConfiguredReplayBundleStore, CorrelatedIncident, ReplayBundleStore,
+    ConfiguredReplayBundleStore, CorrelatedIncident, IncidentStore, ReplayBundleStore,
 };
 use swarm_whisker::{CompositeDetector, DetectionFinding, TelemetryEvent};
 use tracing::Instrument;
@@ -2016,15 +2016,59 @@ impl IngestState {
         self.stack.load_full().service.config.pheromone.clone()
     }
 
-    fn next_providence_feedback_timestamp_ms(&self) -> i64 {
+    async fn next_providence_feedback_timestamp_ms(&self) -> Result<i64, String> {
+        let incident_store = self.current_incident_store();
+        let stored_incidents = incident_store
+            .health()
+            .map_err(|error| error.to_string())?
+            .stored_incidents;
+        let incident_high_water = incident_store
+            .recent(stored_incidents)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .flat_map(|record| record.feedback_audit_entries)
+            .map(|entry| entry.received_at_ms)
+            .max()
+            .unwrap_or(0);
+        // A prior request can durably write its signed substrate deposit and
+        // then stop before the incident audit is persisted. Include the
+        // verified substrate view so restart ordering survives that exact
+        // partial-commit window as well as a completed audit write.
+        let feedback_agent_id = AgentId::from_verifying_key(&self.signing_key.verifying_key());
+        let substrate_high_water = self
+            .current_substrate()
+            .query_deposits(DepositQuery::default())
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|deposit| {
+                deposit.agent_id == feedback_agent_id
+                    && deposit.indicator.get("schema").and_then(Value::as_str)
+                        == Some(swarm_core::types::SWARM_PROVIDENCE_FEEDBACK_SCHEMA)
+            })
+            .filter_map(|deposit| {
+                deposit
+                    .indicator
+                    .get("observed_at_ms")
+                    .and_then(Value::as_i64)
+            })
+            .max()
+            .unwrap_or(0);
+        let durable_high_water = incident_high_water.max(substrate_high_water);
         let observed = now_ms();
         let previous = self
             .providence_feedback_clock_ms
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
-                Some(observed.max(current.saturating_add(1)))
+                Some(
+                    observed
+                        .max(durable_high_water.saturating_add(1))
+                        .max(current.saturating_add(1)),
+                )
             })
             .unwrap_or_else(|current| current);
-        observed.max(previous.saturating_add(1))
+        Ok(observed
+            .max(durable_high_water.saturating_add(1))
+            .max(previous.saturating_add(1)))
     }
 
     /// The lease store the CURRENT runtime writes containment leases to.

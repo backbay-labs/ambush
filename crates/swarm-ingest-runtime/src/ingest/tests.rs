@@ -4215,16 +4215,16 @@ mod providence_feedback {
         );
     }
 
-    #[test]
-    fn feedback_clock_is_strictly_monotonic_across_state_clones() {
+    #[tokio::test]
+    async fn feedback_clock_is_strictly_monotonic_across_state_clones() {
         let state = IngestState::from_config(
             super::temp_path("feedback-monotonic-clock"),
             super::test_config("suspicious_process_tree"),
         )
         .unwrap();
         let clone = state.clone();
-        let first = state.next_providence_feedback_timestamp_ms();
-        let second = clone.next_providence_feedback_timestamp_ms();
+        let first = state.next_providence_feedback_timestamp_ms().await.unwrap();
+        let second = clone.next_providence_feedback_timestamp_ms().await.unwrap();
         assert!(second > first);
     }
 
@@ -4291,6 +4291,98 @@ mod providence_feedback {
                 false_positive_measurements: Vec::new(),
             })
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn feedback_clock_resumes_above_durable_incident_audit_after_restart() {
+        let incident_root = temp_dir("feedback-durable-clock");
+        let mut config = super::test_config("suspicious_process_tree");
+        config.correlation.incident_store = BundleStoreConfig::LocalFiles {
+            directory: incident_root.display().to_string(),
+        };
+        config.pheromone.backend = PheromoneBackendConfig::LocalJournal {
+            path: incident_root
+                .join("pheromone-feedback.jsonl")
+                .display()
+                .to_string(),
+        };
+        let config_path = super::temp_path("feedback-durable-clock-config");
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let state = IngestState::from_config_with_signing_key(
+            config_path.clone(),
+            config.clone(),
+            signing_key.clone(),
+        )
+        .unwrap();
+        seed_feedback_incident(
+            &state,
+            "incident-durable-clock",
+            "event-durable-clock",
+            "host-durable-clock",
+            "suspicious_process_tree",
+            1_700_000_000_000,
+        );
+        let durable_high_water = now_ms().saturating_add(60_000);
+        let mut incident = state
+            .current_incident_store()
+            .load_by_incident_id("incident-durable-clock")
+            .unwrap()
+            .unwrap()
+            .incident;
+        incident
+            .feedback_audit_entries
+            .push(swarm_spine::AnalystFeedbackAuditEntry {
+                feedback_id: "durable-feedback".to_string(),
+                received_at_ms: durable_high_water,
+                action: ProvidenceFeedbackAction::Confirm,
+                analyst_id: "analyst-durable".to_string(),
+                incident_id: incident.incident_id.clone(),
+                finding_id: Some("finding-event-durable-clock".to_string()),
+                reason: None,
+                request_signature: "sha256=durable".to_string(),
+                evidence: None,
+                soar_lineage: None,
+                payload: json!({"source": "durable-clock-test"}),
+                outcome: json!({"status": "recorded"}),
+            });
+        state.current_incident_store().persist(&incident).unwrap();
+        let substrate_high_water = durable_high_water.saturating_add(30_000);
+        crate::ingest::providence_handlers::apply_providence_feedback(
+            &state,
+            &SwarmProvidenceFeedbackRequest {
+                action: ProvidenceFeedbackAction::Confirm,
+                incident_id: "incident-durable-clock".to_string(),
+                finding_id: Some("finding-event-durable-clock".to_string()),
+                analyst_id: "analyst-partial-commit".to_string(),
+                reason: Some("durable substrate before audit".to_string()),
+            },
+            &swarm_runtime::providence::ProvidenceFeedbackTarget {
+                incident_id: "incident-durable-clock".to_string(),
+                finding_id: "finding-event-durable-clock".to_string(),
+                hunt_id: "event-durable-clock".to_string(),
+                event_id: "event-durable-clock".to_string(),
+                host_id: Some("host-durable-clock".to_string()),
+                strategy_id: Some("suspicious_process_tree".to_string()),
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+            },
+            "partial-commit-feedback",
+            substrate_high_water,
+        )
+        .await
+        .unwrap();
+        drop(state);
+
+        let reopened =
+            IngestState::from_config_with_signing_key(config_path, config, signing_key).unwrap();
+        assert!(
+            reopened
+                .next_providence_feedback_timestamp_ms()
+                .await
+                .unwrap()
+                > substrate_high_water,
+            "a restarted process must seed above both durable audit and partial-commit substrate state"
+        );
     }
 
     async fn seed_feedback_deposit(
