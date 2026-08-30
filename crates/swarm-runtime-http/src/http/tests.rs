@@ -42,7 +42,7 @@ use swarm_core::types::{
     ResponseBlastRadiusPreview, ResponseRehearsalPreview, ResponseRehearsalScopeKind,
     ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity, SwarmAction,
 };
-use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
+use swarm_crypto::{DetachedSignature, Ed25519Signer, canonical_json_bytes};
 use swarm_evolution::evidence::{
     EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
     EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
@@ -3703,33 +3703,47 @@ async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
 }
 
 #[tokio::test]
-async fn governed_duplicate_vote_retries_the_exact_pack_after_callback_failure() {
+async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_failure() {
     const TOKEN_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_TOKEN";
+    const SECOND_TOKEN_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_SECOND_TOKEN";
     const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_EVIDENCE_KEY";
     const TOKEN: &str = "governed-approval-retry-token";
+    const SECOND_TOKEN: &str = "governed-approval-retry-second-token";
     unsafe {
         std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(SECOND_TOKEN_ENV, SECOND_TOKEN);
         std::env::set_var(EVIDENCE_KEY_ENV, "governed-approval-retry-key");
     }
     let (runtime_base_url, capture, shutdown_tx, server) =
         spawn_sequenced_approval_resume_server(vec![
             StatusCode::SERVICE_UNAVAILABLE,
             StatusCode::OK,
+            StatusCode::OK,
         ])
         .await;
     let signer = Ed25519Signer::from_secret_material("governed-approval-retry-voter");
     let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let second_signer = Ed25519Signer::from_secret_material("governed-approval-retry-second-voter");
+    let second_voter_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
     let mut config = operator_config();
     config.operator.runtime_base_url = runtime_base_url;
     config.operator.auth.context_token_env = TOKEN_ENV.to_string();
     config.operator.auth.operator_id = voter_id.clone();
     config.operator.auth.token_env = TOKEN_ENV.to_string();
-    config.operator.auth.principals = vec![OperatorPrincipalConfig {
-        operator_id: voter_id.clone(),
-        token_env: TOKEN_ENV.to_string(),
-        token_expires_at_ms: None,
-        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
-    }];
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: voter_id.clone(),
+            token_env: TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: second_voter_id.clone(),
+            token_env: SECOND_TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+    ];
     let root = unique_temp_dir("governed-approval-retry");
     let mut paths = surface_paths(&root);
     paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
@@ -3737,7 +3751,7 @@ async fn governed_duplicate_vote_retries_the_exact_pack_after_callback_failure()
     let harness = surface.state.approval.as_ref().unwrap();
     let set = harness
         .create_approval_set(
-            vec![voter_id.clone()],
+            vec![voter_id.clone(), second_voter_id.clone()],
             ThresholdRule::AtLeast { required: 1 },
             &format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}hold-retry"),
         )
@@ -3753,30 +3767,50 @@ async fn governed_duplicate_vote_retries_the_exact_pack_after_callback_failure()
         }))
         .unwrap(),
     );
+    let second_signature = second_signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": second_voter_id.clone(),
+        }))
+        .unwrap(),
+    );
 
-    let vote_request = || {
+    let vote_request = |token: &str, voter_id: &str, signature: &DetachedSignature| {
         Request::builder()
             .method("POST")
             .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
-            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
                 json!({
-                    "voter_id": voter_id.clone(),
-                    "signature": signature.clone(),
+                    "voter_id": voter_id,
+                    "signature": signature,
                 })
                 .to_string(),
             ))
             .unwrap()
     };
 
-    let first = surface.router().oneshot(vote_request()).await.unwrap();
+    let first = surface
+        .router()
+        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .await
+        .unwrap();
     assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
     let first_packs = harness.list_receipt_packs().unwrap();
     assert_eq!(first_packs.packs.len(), 1);
     let persisted_pack_id = first_packs.packs[0].pack_id.clone();
 
-    let second = surface.router().oneshot(vote_request()).await.unwrap();
+    let second = surface
+        .router()
+        .oneshot(vote_request(
+            SECOND_TOKEN,
+            &second_voter_id,
+            &second_signature,
+        ))
+        .await
+        .unwrap();
     assert_eq!(second.status(), StatusCode::OK);
     let second_packs = harness.list_receipt_packs().unwrap();
     assert_eq!(second_packs.packs.len(), 1);
@@ -3785,6 +3819,20 @@ async fn governed_duplicate_vote_retries_the_exact_pack_after_callback_failure()
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0], requests[1]);
     assert_eq!(requests[0].1["receipt_pack_id"], persisted_pack_id);
+    drop(requests);
+
+    let duplicate = surface
+        .router()
+        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::OK);
+    let duplicate_packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(duplicate_packs.packs.len(), 1);
+    assert_eq!(duplicate_packs.packs[0].pack_id, persisted_pack_id);
+    let requests = capture.requests.lock().await;
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0], requests[2]);
     drop(requests);
 
     let altered = Ed25519Signer::from_secret_material("altered-governed-vote").sign(
@@ -3811,12 +3859,13 @@ async fn governed_duplicate_vote_retries_the_exact_pack_after_callback_failure()
         .await
         .unwrap();
     assert_eq!(altered_response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(capture.requests.lock().await.len(), 2);
+    assert_eq!(capture.requests.lock().await.len(), 3);
 
     let _ = shutdown_tx.send(());
     let _ = server.await;
     unsafe {
         std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(SECOND_TOKEN_ENV);
         std::env::remove_var(EVIDENCE_KEY_ENV);
     }
     let _ = fs::remove_dir_all(root);

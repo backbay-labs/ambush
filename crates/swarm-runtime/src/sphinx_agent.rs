@@ -253,8 +253,8 @@ impl SphinxAgent {
                 }));
 
             match entity.role.as_str() {
-                "parent_process" => parent_process_node_id = Some(node_id),
-                "process" => process_node_id = Some(node_id),
+                "parent_process" | "parent_process_name" => parent_process_node_id = Some(node_id),
+                "process" | "process_name" => process_node_id = Some(node_id),
                 "source_ip" => source_ip_node_id = Some(node_id),
                 "destination_ip" => destination_ip_node_id = Some(node_id),
                 _ => {}
@@ -2139,9 +2139,9 @@ fn signed_memory_query_deposit(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
-        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, extract_entities, parse_memory_query,
-        signed_memory_query_deposit,
+        CausalRelation, DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
+        KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, entity_node_id,
+        extract_entities, parse_memory_query, signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
@@ -2447,6 +2447,52 @@ mod tests {
                 ("destination_ip", "198.51.100.7"),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn detector_process_aliases_create_the_parent_child_causal_edge() {
+        let root = temp_root("detector-process-aliases");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+        let mut deposit = pheromone("evt-detector-aliases", 1_800_499_000);
+        deposit.indicator = serde_json::json!({
+            "event_id": "evt-detector-aliases",
+            "observed_at_ms": 1_800_499_000_000_i64,
+            "evidence": {
+                "parent_process": "winword.exe",
+                "process_name": "powershell.exe"
+            }
+        });
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(vec![deposit], 1_800_499_001))
+            .await
+            .expect("detector-shaped deposit should persist");
+
+        let snapshot = FileKnowledgeGraphStore::open(root.join("knowledge-graph"))
+            .unwrap()
+            .load_snapshot()
+            .unwrap()
+            .unwrap();
+        let parent = entity_node_id(EntityKind::Process, "winword.exe");
+        let process = entity_node_id(EntityKind::Process, "powershell.exe");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(edge)
+                if edge.relation == CausalRelation::ProcessParentChild
+                    && edge.from_node_id == parent
+                    && edge.to_node_id == process
+        )));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

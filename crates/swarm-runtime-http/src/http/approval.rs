@@ -160,20 +160,16 @@ pub(super) async fn approval_vote_append_handler(
         .report
         .promotion_evidence_ref
         .starts_with(GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX);
-    let retry_persisted_pack =
-        match harness.append_signed_vote(&ledger_id, &request.voter_id, &request.signature) {
-            Ok(_) => false,
-            Err(ApprovalError::DuplicateVoter { .. })
-                if governed
-                    && existing.quorum_state.quorum_met
-                    && existing.report.entries.iter().any(|entry| {
-                        entry.voter_id == request.voter_id && entry.signature == request.signature
-                    }) =>
-            {
-                true
-            }
-            Err(error) => return Err(map_approval_error(error)),
-        };
+    match harness.append_signed_vote(&ledger_id, &request.voter_id, &request.signature) {
+        Ok(_) => {}
+        Err(ApprovalError::DuplicateVoter { .. })
+            if governed
+                && existing.quorum_state.quorum_met
+                && existing.report.entries.iter().any(|entry| {
+                    entry.voter_id == request.voter_id && entry.signature == request.signature
+                }) => {}
+        Err(error) => return Err(map_approval_error(error)),
+    }
     let updated = harness
         .load_ledger(&ledger_id)
         .map_err(map_approval_error)?
@@ -181,29 +177,13 @@ pub(super) async fn approval_vote_append_handler(
             OperatorApiError::internal("approval ledger was updated but could not be reloaded")
         })?;
     if updated.quorum_state.quorum_met {
-        let receipt_pack = if retry_persisted_pack {
-            ensure_persisted_receipt_pack_for_retry(
-                harness,
-                &updated.report.approval_set_id,
-                &updated.report.ledger_id,
-                &state.approval_receipt_signer_id,
-                &state.approval_receipt_signing_key_env,
-            )?
-        } else {
-            let verdict = harness
-                .create_verdict(&updated.report.approval_set_id, &updated.report.ledger_id)
-                .map_err(map_approval_error)?;
-            if !matches!(verdict.report.status, ApprovalVerdictStatus::Approved) {
-                return Ok(Json(updated));
-            }
-            harness
-                .export_receipt_pack(
-                    &verdict.report.verdict_id,
-                    &state.approval_receipt_signer_id,
-                    &state.approval_receipt_signing_key_env,
-                )
-                .map_err(map_approval_error)?
-        };
+        let receipt_pack = load_or_create_single_receipt_pack(
+            harness,
+            &updated.report.approval_set_id,
+            &updated.report.ledger_id,
+            &state.approval_receipt_signer_id,
+            &state.approval_receipt_signing_key_env,
+        )?;
         if governed {
             let authorization = headers
                 .get(header::AUTHORIZATION)
@@ -234,7 +214,7 @@ pub(super) async fn approval_vote_append_handler(
     Ok(Json(updated))
 }
 
-fn ensure_persisted_receipt_pack_for_retry(
+fn load_or_create_single_receipt_pack(
     harness: &swarm_runtime::approval::DefaultApprovalHarness,
     approval_set_id: &str,
     ledger_id: &str,
@@ -254,14 +234,14 @@ fn ensure_persisted_receipt_pack_for_retry(
             .map_err(map_approval_error)?
             .ok_or_else(|| {
                 OperatorApiError::internal(format!(
-                    "persisted receipt pack `{}` disappeared before governed retry",
+                    "persisted receipt pack `{}` disappeared before quorum resume",
                     record.pack_id
                 ))
             });
     }
     if !matching.is_empty() {
         return Err(OperatorApiError::internal(format!(
-            "governed quorum retry found multiple persisted receipt packs for ledger `{ledger_id}`: {}",
+            "quorum resume found multiple persisted receipt packs for ledger `{ledger_id}`: {}",
             matching.len()
         )));
     }
@@ -285,13 +265,13 @@ fn ensure_persisted_receipt_pack_for_retry(
             .map_err(map_approval_error)?
             .ok_or_else(|| {
                 OperatorApiError::internal(format!(
-                    "persisted verdict `{}` disappeared before governed retry",
+                    "persisted verdict `{}` disappeared before quorum resume",
                     record.verdict_id
                 ))
             })?,
         records => {
             return Err(OperatorApiError::internal(format!(
-                "governed quorum retry found multiple persisted verdicts for ledger `{ledger_id}`: {}",
+                "quorum resume found multiple persisted verdicts for ledger `{ledger_id}`: {}",
                 records.len()
             )));
         }

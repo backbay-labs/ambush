@@ -935,13 +935,15 @@ fn sample_governance_with_config(
     config: GovernancePolicyConfig,
     key_bytes: [u8; 32],
 ) -> TestGovernance {
+    static TEMP_PATH_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "swarm-dispatch-{label}-{}-{}",
+        "swarm-dispatch-{label}-{}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("current time should be after unix epoch")
-            .as_nanos()
+            .as_nanos(),
+        TEMP_PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed),
     ));
     let policy = Arc::new(
         GovernancePolicy::initialize_persistence(
