@@ -1,7 +1,7 @@
 use crate::substrate::{
     AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, PheromoneSubstrate,
-    SubstrateError, SubstrateHealth, concentration_for, decode_deposit_payload, filter_deposits,
-    filter_escalations, normalize_threat_intel_value, validate_deposit_signature,
+    SubstrateError, SubstrateHealth, VerifiedDeposit, concentration_for, decode_deposit_payload,
+    filter_deposits, filter_escalations, normalize_threat_intel_value, validate_deposit_signature,
 };
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
@@ -188,7 +188,7 @@ impl JetStreamPheromoneSubstrate {
         &self,
         threat_class: Option<&ThreatClass>,
         since_timestamp: Option<i64>,
-    ) -> Result<Vec<PheromoneDeposit>, SubstrateError> {
+    ) -> Result<Vec<VerifiedDeposit>, SubstrateError> {
         let connection = self.ensure_connected().await?;
         let mut keys = connection
             .store

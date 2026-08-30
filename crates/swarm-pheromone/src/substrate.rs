@@ -9,7 +9,9 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use swarm_core::agent::AgentRole;
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
@@ -22,6 +24,14 @@ use swarm_core::types::{AgentId, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity};
 
 pub(crate) const BEHAVIORAL_BASELINE_STATE_KIND: &str = "behavioral_baseline_snapshot";
 type BehavioralBaselineEnvelope = SignedStateEnvelope<BehavioralBaselineSnapshot>;
+
+const MAX_ACTIVE_DEPOSITS: usize = 10_000;
+const MAX_ACTIVE_DEPOSIT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SINGLE_DEPOSIT_BYTES: usize = 256 * 1024;
+const COMPACTED_DEPOSIT_COUNT: usize = 7_500;
+const COMPACTED_DEPOSIT_BYTES: usize = 24 * 1024 * 1024;
+const MAX_LOCAL_DEPOSIT_JOURNAL_BYTES: u64 =
+    (MAX_ACTIVE_DEPOSIT_BYTES + MAX_ACTIVE_DEPOSITS) as u64;
 
 /// Errors raised by the pheromone substrate.
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +89,15 @@ pub enum SubstrateError {
 
     #[error("deposit rejected: {reason}")]
     InvalidDeposit { reason: String },
+
+    #[error(
+        "substrate journal `{path}` is {observed_bytes} bytes; hard limit is {max_bytes} bytes"
+    )]
+    JournalLimitExceeded {
+        path: PathBuf,
+        observed_bytes: u64,
+        max_bytes: u64,
+    },
 
     #[error(
         "behavioral baseline snapshot verification failed for strategy `{strategy_id}`: {source}"
@@ -168,7 +187,7 @@ fn ensure_supported_deposit_schema_version(schema_version: u32) -> Result<(), Su
 pub(crate) fn decode_deposit_payload(
     payload: &[u8],
     location: impl Into<String>,
-) -> Result<PheromoneDeposit, SubstrateError> {
+) -> Result<VerifiedDeposit, SubstrateError> {
     let location = location.into();
     let raw =
         serde_json::from_slice::<JsonValue>(payload).map_err(|source| SubstrateError::Decode {
@@ -181,8 +200,9 @@ pub(crate) fn decode_deposit_payload(
         .map(|value| value as u32)
         .unwrap_or_else(PheromoneDeposit::previous_schema_version);
     ensure_supported_deposit_schema_version(schema_version)?;
-    serde_json::from_value::<PheromoneDeposit>(raw)
-        .map_err(|source| SubstrateError::Decode { location, source })
+    let deposit = serde_json::from_value::<PheromoneDeposit>(raw)
+        .map_err(|source| SubstrateError::Decode { location, source })?;
+    VerifiedDeposit::admit(deposit)
 }
 
 /// Validate that a [`PheromoneDeposit`] carries a valid Ed25519 signature
@@ -267,6 +287,115 @@ pub fn validate_deposit_signature(deposit: &PheromoneDeposit) -> Result<(), Subs
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DepositRetentionLimits {
+    max_count: usize,
+    max_bytes: usize,
+    compacted_count: usize,
+    compacted_bytes: usize,
+    max_journal_bytes: u64,
+}
+
+impl Default for DepositRetentionLimits {
+    fn default() -> Self {
+        Self {
+            max_count: MAX_ACTIVE_DEPOSITS,
+            max_bytes: MAX_ACTIVE_DEPOSIT_BYTES,
+            compacted_count: COMPACTED_DEPOSIT_COUNT,
+            compacted_bytes: COMPACTED_DEPOSIT_BYTES,
+            max_journal_bytes: MAX_LOCAL_DEPOSIT_JOURNAL_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct VerifiedDeposit {
+    deposit: PheromoneDeposit,
+    encoded_len: usize,
+}
+
+impl VerifiedDeposit {
+    fn admit(deposit: PheromoneDeposit) -> Result<Self, SubstrateError> {
+        let encoded_len = serde_json::to_vec(&deposit)
+            .map_err(|source| SubstrateError::Encode {
+                context: "verified pheromone deposit".to_string(),
+                source,
+            })?
+            .len();
+        if encoded_len > MAX_SINGLE_DEPOSIT_BYTES {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "encoded deposit is {encoded_len} bytes; hard limit is {MAX_SINGLE_DEPOSIT_BYTES} bytes"
+                ),
+            });
+        }
+        validate_deposit_signature(&deposit)?;
+        Ok(Self {
+            deposit,
+            encoded_len,
+        })
+    }
+}
+
+impl Deref for VerifiedDeposit {
+    type Target = PheromoneDeposit;
+
+    fn deref(&self) -> &Self::Target {
+        &self.deposit
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct RetainedDeposits {
+    entries: Vec<VerifiedDeposit>,
+    encoded_bytes: usize,
+}
+
+impl RetainedDeposits {
+    fn from_entries(entries: Vec<VerifiedDeposit>) -> Self {
+        let encoded_bytes = entries.iter().map(|entry| entry.encoded_len).sum();
+        Self {
+            entries,
+            encoded_bytes,
+        }
+    }
+
+    fn push(&mut self, deposit: VerifiedDeposit, limits: DepositRetentionLimits) -> usize {
+        self.encoded_bytes = self.encoded_bytes.saturating_add(deposit.encoded_len);
+        self.entries.push(deposit);
+        self.compact_if_needed(limits)
+    }
+
+    fn compact_if_needed(&mut self, limits: DepositRetentionLimits) -> usize {
+        if self.entries.len() <= limits.max_count && self.encoded_bytes <= limits.max_bytes {
+            return 0;
+        }
+        let mut remove_count = 0usize;
+        while self.entries.len().saturating_sub(remove_count) > 1
+            && (self.entries.len().saturating_sub(remove_count) > limits.compacted_count
+                || self.encoded_bytes > limits.compacted_bytes)
+        {
+            self.encoded_bytes = self
+                .encoded_bytes
+                .saturating_sub(self.entries[remove_count].encoded_len);
+            remove_count = remove_count.saturating_add(1);
+        }
+        self.entries.drain(..remove_count);
+        remove_count
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&PheromoneDeposit) -> bool) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|entry| keep(entry));
+        self.encoded_bytes = self.entries.iter().map(|entry| entry.encoded_len).sum();
+        before.saturating_sub(self.entries.len())
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -461,7 +590,6 @@ impl ConfiguredPheromoneSubstrate {
 #[async_trait]
 impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
-        validate_deposit_signature(&deposit)?;
         match self {
             Self::InMemory(substrate) => substrate.deposit(deposit).await,
             Self::LocalJournal(substrate) => substrate.deposit(deposit).await,
@@ -658,7 +786,8 @@ impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
 pub struct InMemoryPheromoneSubstrate {
     config: PheromoneConfig,
     admission_control: AdmissionControl,
-    deposits: Arc<RwLock<Vec<PheromoneDeposit>>>,
+    retention_limits: DepositRetentionLimits,
+    deposits: Arc<RwLock<RetainedDeposits>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
@@ -670,7 +799,8 @@ impl InMemoryPheromoneSubstrate {
         Self {
             config,
             admission_control: AdmissionControl::default(),
-            deposits: Arc::new(RwLock::new(Vec::new())),
+            retention_limits: DepositRetentionLimits::default(),
+            deposits: Arc::new(RwLock::new(RetainedDeposits::default())),
             escalations: Arc::new(RwLock::new(Vec::new())),
             threat_class_configs: Arc::new(RwLock::new(BTreeMap::new())),
             threat_intel_entries: Arc::new(RwLock::new(BTreeMap::new())),
@@ -684,19 +814,30 @@ impl InMemoryPheromoneSubstrate {
     ) -> Result<(), SubstrateError> {
         self.admission_control.set_admitted_identities(identities)
     }
+
+    #[cfg(test)]
+    fn with_retention_limits(
+        config: PheromoneConfig,
+        retention_limits: DepositRetentionLimits,
+    ) -> Self {
+        Self {
+            retention_limits,
+            ..Self::new(config)
+        }
+    }
 }
 
 #[async_trait]
 impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
-        validate_deposit_signature(&deposit)?;
+        let deposit = VerifiedDeposit::admit(deposit)?;
         self.admission_control
             .validate_deposit_admission(&deposit)?;
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        guard.push(deposit);
+        guard.push(deposit, self.retention_limits);
         Ok(())
     }
 
@@ -771,7 +912,12 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .read()
             .map_err(|_| SubstrateError::PoisonedLock)?;
         let policy = resolved_policy(&self.config, &config_guard, threat_class);
-        Ok(concentration_for(&guard, threat_class, now, &policy))
+        Ok(concentration_for(
+            &guard.entries,
+            threat_class,
+            now,
+            &policy,
+        ))
     }
 
     async fn query_deposits(
@@ -782,7 +928,7 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .deposits
             .read()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        Ok(filter_deposits(&guard, query))
+        Ok(filter_deposits(&guard.entries, query))
     }
 
     async fn query_escalations(
@@ -864,12 +1010,11 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .threat_class_configs
             .read()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        let before = guard.len();
-        guard.retain(|deposit| {
+        let removed = guard.retain(|deposit| {
             let policy = resolved_policy(&self.config, &config_guard, &deposit.threat_class);
             !deposit.is_evaporated(now, policy.evaporation_threshold)
         });
-        Ok(before - guard.len())
+        Ok(removed)
     }
 
     async fn gc_expired_threat_intel(&self, now: i64) -> Result<usize, SubstrateError> {
@@ -908,13 +1053,14 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
 pub struct LocalJournalPheromoneSubstrate {
     config: PheromoneConfig,
     admission_control: AdmissionControl,
+    retention_limits: DepositRetentionLimits,
     journal_path: PathBuf,
     escalation_journal_path: PathBuf,
     threat_class_config_journal_path: PathBuf,
     threat_intel_journal_path: PathBuf,
     behavioral_baseline_journal_path: PathBuf,
     behavioral_baseline_sequence_path: PathBuf,
-    deposits: Arc<RwLock<Vec<PheromoneDeposit>>>,
+    deposits: Arc<RwLock<RetainedDeposits>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
@@ -924,6 +1070,14 @@ pub struct LocalJournalPheromoneSubstrate {
 
 impl LocalJournalPheromoneSubstrate {
     pub fn open(config: PheromoneConfig, path: impl AsRef<Path>) -> Result<Self, SubstrateError> {
+        Self::open_with_retention_limits(config, path, DepositRetentionLimits::default())
+    }
+
+    fn open_with_retention_limits(
+        config: PheromoneConfig,
+        path: impl AsRef<Path>,
+        retention_limits: DepositRetentionLimits,
+    ) -> Result<Self, SubstrateError> {
         let journal_path = path.as_ref().to_path_buf();
         let escalation_journal_path = escalation_journal_path(&journal_path);
         let threat_class_config_journal_path = threat_class_config_journal_path(&journal_path);
@@ -931,7 +1085,12 @@ impl LocalJournalPheromoneSubstrate {
         let behavioral_baseline_journal_path = behavioral_baseline_journal_path(&journal_path);
         let behavioral_baseline_sequence_path = behavioral_baseline_sequence_path(&journal_path);
         ensure_parent_dir(&journal_path)?;
-        let deposits = load_deposit_jsonl(&journal_path)?;
+        enforce_journal_file_limit(&journal_path, retention_limits.max_journal_bytes)?;
+        let mut deposits = RetainedDeposits::from_entries(load_deposit_jsonl(&journal_path)?);
+        let pruned = deposits.compact_if_needed(retention_limits);
+        if pruned > 0 {
+            rewrite_verified_deposit_jsonl(&journal_path, &deposits.entries)?;
+        }
         let escalations = load_jsonl(&escalation_journal_path)?;
         let threat_class_configs = load_threat_class_configs(&threat_class_config_journal_path)?;
         let threat_intel_entries = load_threat_intel_entries(&threat_intel_journal_path)?;
@@ -949,6 +1108,7 @@ impl LocalJournalPheromoneSubstrate {
         Ok(Self {
             config,
             admission_control: AdmissionControl::default(),
+            retention_limits,
             journal_path,
             escalation_journal_path,
             threat_class_config_journal_path,
@@ -975,15 +1135,28 @@ impl LocalJournalPheromoneSubstrate {
 #[async_trait]
 impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
-        validate_deposit_signature(&deposit)?;
+        let deposit = VerifiedDeposit::admit(deposit)?;
         self.admission_control
             .validate_deposit_admission(&deposit)?;
-        append_jsonl_line(&self.journal_path, &deposit)?;
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        guard.push(deposit);
+        let mut candidate = guard.clone();
+        let pruned = candidate.push(deposit, self.retention_limits);
+        if pruned == 0 {
+            let persisted =
+                candidate
+                    .entries
+                    .last()
+                    .ok_or_else(|| SubstrateError::InvalidDeposit {
+                        reason: "retention removed the newly admitted deposit".to_string(),
+                    })?;
+            append_jsonl_line(&self.journal_path, &persisted.deposit)?;
+        } else {
+            rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries)?;
+        }
+        *guard = candidate;
         Ok(())
     }
 
@@ -1076,7 +1249,12 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .read()
             .map_err(|_| SubstrateError::PoisonedLock)?;
         let policy = resolved_policy(&self.config, &config_guard, threat_class);
-        Ok(concentration_for(&guard, threat_class, now, &policy))
+        Ok(concentration_for(
+            &guard.entries,
+            threat_class,
+            now,
+            &policy,
+        ))
     }
 
     async fn query_deposits(
@@ -1087,7 +1265,7 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .deposits
             .read()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        Ok(filter_deposits(&guard, query))
+        Ok(filter_deposits(&guard.entries, query))
     }
 
     async fn query_escalations(
@@ -1175,13 +1353,14 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .threat_class_configs
             .read()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        let before = guard.len();
-        guard.retain(|deposit| {
+        let mut candidate = guard.clone();
+        let removed = candidate.retain(|deposit| {
             let policy = resolved_policy(&self.config, &config_guard, &deposit.threat_class);
             !deposit.is_evaporated(now, policy.evaporation_threshold)
         });
-        rewrite_jsonl(&self.journal_path, &guard)?;
-        Ok(before - guard.len())
+        rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries)?;
+        *guard = candidate;
+        Ok(removed)
     }
 
     async fn gc_expired_threat_intel(&self, now: i64) -> Result<usize, SubstrateError> {
@@ -1266,7 +1445,7 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
 }
 
 pub(crate) fn concentration_for(
-    deposits: &[PheromoneDeposit],
+    deposits: &[VerifiedDeposit],
     threat_class: &ThreatClass,
     now: i64,
     policy: &ThreatClassPolicy,
@@ -1286,9 +1465,7 @@ pub(crate) fn concentration_for(
         if is_suppressed_by_feedback(deposit, &suppression) {
             continue;
         }
-        let Some(agent_identity) = independent_source_identity(deposit) else {
-            continue;
-        };
+        let agent_identity = independent_source_identity(deposit);
         let strength = deposit.strength_at(now);
         if strength <= 0.0 {
             continue;
@@ -1310,19 +1487,14 @@ pub(crate) fn concentration_for(
 ///
 /// `agent_id` is intentionally not used here: it may carry a strategy scope
 /// suffix (for example, `identity:strategy-a`) and therefore is not an
-/// independent source. Concentration is also computed over persisted reads,
-/// so reverify the complete deposit signature here; a journal-tampered body,
-/// identity, key, or strategy label cannot contribute strength or source
-/// diversity to an escalation decision. This is an intentional O(n) Ed25519
-/// verification cost on each concentration query in exchange for fail-closed
-/// read integrity.
-fn independent_source_identity(deposit: &PheromoneDeposit) -> Option<&str> {
-    validate_deposit_signature(deposit).ok()?;
-    Some(deposit.agent_identity.as_str())
+/// independent source. The [`VerifiedDeposit`] boundary guarantees that the
+/// signature and key-derived identity were checked once at admission or load.
+fn independent_source_identity(deposit: &VerifiedDeposit) -> &str {
+    deposit.agent_identity.as_str()
 }
 
 pub(crate) fn filter_deposits(
-    deposits: &[PheromoneDeposit],
+    deposits: &[VerifiedDeposit],
     query: DepositQuery,
 ) -> Vec<PheromoneDeposit> {
     let suppression = latest_feedback_suppression_states(deposits);
@@ -1342,7 +1514,7 @@ pub(crate) fn filter_deposits(
                     .is_none_or(|host_id| deposit_host_id(deposit) == Some(host_id))
                 && !is_suppressed_by_feedback(deposit, &suppression)
         })
-        .cloned()
+        .map(|deposit| deposit.deposit.clone())
         .collect::<Vec<_>>();
     filtered.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
     if query.limit > 0 {
@@ -1365,7 +1537,7 @@ fn deposit_host_id(deposit: &PheromoneDeposit) -> Option<&str> {
 }
 
 fn latest_feedback_suppression_states(
-    deposits: &[PheromoneDeposit],
+    deposits: &[VerifiedDeposit],
 ) -> BTreeMap<FeedbackSuppressionKey, (FeedbackSuppressionState, i64)> {
     let mut states = BTreeMap::new();
     for deposit in deposits {
@@ -1383,7 +1555,7 @@ fn latest_feedback_suppression_states(
 }
 
 fn is_suppressed_by_feedback(
-    deposit: &PheromoneDeposit,
+    deposit: &VerifiedDeposit,
     suppression: &BTreeMap<FeedbackSuppressionKey, (FeedbackSuppressionState, i64)>,
 ) -> bool {
     if is_providence_feedback_deposit(deposit) {
@@ -1398,7 +1570,7 @@ fn is_suppressed_by_feedback(
 }
 
 fn feedback_suppression_marker(
-    deposit: &PheromoneDeposit,
+    deposit: &VerifiedDeposit,
 ) -> Option<(FeedbackSuppressionKey, FeedbackSuppressionState)> {
     let indicator = deposit.indicator.as_object()?;
     if indicator.get("schema").and_then(serde_json::Value::as_str)
@@ -1427,7 +1599,7 @@ fn feedback_suppression_marker(
     ))
 }
 
-fn deposit_suppression_key(deposit: &PheromoneDeposit) -> Option<FeedbackSuppressionKey> {
+fn deposit_suppression_key(deposit: &VerifiedDeposit) -> Option<FeedbackSuppressionKey> {
     Some(FeedbackSuppressionKey {
         threat_class: deposit.threat_class.clone(),
         event_id: deposit
@@ -1438,7 +1610,7 @@ fn deposit_suppression_key(deposit: &PheromoneDeposit) -> Option<FeedbackSuppres
     })
 }
 
-fn is_providence_feedback_deposit(deposit: &PheromoneDeposit) -> bool {
+fn is_providence_feedback_deposit(deposit: &VerifiedDeposit) -> bool {
     deposit
         .indicator
         .get("schema")
@@ -1503,7 +1675,28 @@ where
     Ok(entries)
 }
 
-fn load_deposit_jsonl(path: &Path) -> Result<Vec<PheromoneDeposit>, SubstrateError> {
+fn enforce_journal_file_limit(path: &Path, max_bytes: u64) -> Result<(), SubstrateError> {
+    let observed_bytes = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(SubstrateError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if observed_bytes > max_bytes {
+        return Err(SubstrateError::JournalLimitExceeded {
+            path: path.to_path_buf(),
+            observed_bytes,
+            max_bytes,
+        });
+    }
+    Ok(())
+}
+
+fn load_deposit_jsonl(path: &Path) -> Result<Vec<VerifiedDeposit>, SubstrateError> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -1531,6 +1724,17 @@ fn load_deposit_jsonl(path: &Path) -> Result<Vec<PheromoneDeposit>, SubstrateErr
     Ok(entries)
 }
 
+fn rewrite_verified_deposit_jsonl(
+    path: &Path,
+    entries: &[VerifiedDeposit],
+) -> Result<(), SubstrateError> {
+    let deposits = entries
+        .iter()
+        .map(|entry| &entry.deposit)
+        .collect::<Vec<_>>();
+    rewrite_jsonl(path, &deposits)
+}
+
 fn append_jsonl_line<T>(path: &Path, entry: &T) -> Result<(), SubstrateError>
 where
     T: Serialize,
@@ -1552,6 +1756,10 @@ where
     writeln!(file, "{serialized}").map_err(|source| SubstrateError::Write {
         path: path.to_path_buf(),
         source,
+    })?;
+    file.sync_data().map_err(|source| SubstrateError::Write {
+        path: path.to_path_buf(),
+        source,
     })
 }
 
@@ -1560,23 +1768,69 @@ where
     T: Serialize,
 {
     ensure_parent_dir(path)?;
-    let mut file = fs::File::create(path).map_err(|source| SubstrateError::Write {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("pheromone.jsonl");
+    static NEXT_REWRITE: AtomicU64 = AtomicU64::new(0);
+    let (temp_path, mut file) = loop {
+        let nonce = NEXT_REWRITE.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(
+            ".{file_name}.rewrite-{}-{nonce}",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&candidate)
+        {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(SubstrateError::Write {
+                    path: candidate,
+                    source,
+                });
+            }
+        }
+    };
 
-    for entry in entries {
-        let serialized = serde_json::to_string(entry).map_err(|source| SubstrateError::Parse {
-            path: path.to_path_buf(),
-            line: 0,
+    let rewrite_result = (|| {
+        for entry in entries {
+            let serialized =
+                serde_json::to_string(entry).map_err(|source| SubstrateError::Parse {
+                    path: path.to_path_buf(),
+                    line: 0,
+                    source,
+                })?;
+            writeln!(file, "{serialized}").map_err(|source| SubstrateError::Write {
+                path: temp_path.clone(),
+                source,
+            })?;
+        }
+        file.sync_all().map_err(|source| SubstrateError::Write {
+            path: temp_path.clone(),
             source,
         })?;
-        writeln!(file, "{serialized}").map_err(|source| SubstrateError::Write {
+        fs::rename(&temp_path, path).map_err(|source| SubstrateError::Write {
             path: path.to_path_buf(),
             source,
         })?;
+        Ok::<(), SubstrateError>(())
+    })();
+    if let Err(error) = rewrite_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
     }
-
+    #[cfg(unix)]
+    if let Err(source) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
+        tracing::warn!(
+            path = %parent.display(),
+            error = %source,
+            "pheromone journal replacement committed but parent directory sync failed"
+        );
+    }
     Ok(())
 }
 
@@ -2282,33 +2536,27 @@ mod tests {
     }
 
     #[test]
-    fn concentration_ignores_malformed_cryptographic_identity() {
+    fn verified_deposit_rejects_malformed_cryptographic_identity_before_query() {
         let key = signing_key_for_label("malformed-identity");
         let mut deposit = strategy_scoped_deposit("malformed-identity", "strategy-a", 100, 1.0);
         deposit.agent_identity = "not-a-derived-identity".to_string();
         sign_deposit(&mut deposit, &key);
 
-        let policy = substrate_config().resolve_threat_class_policy(None);
-        let concentration =
-            super::concentration_for(&[deposit], &ThreatClass::Execution, 100, &policy);
-
-        assert_eq!(concentration.distinct_sources, 0);
-        assert_eq!(concentration.total_strength, 0.0);
-        assert_eq!(concentration.peak_confidence, 0.0);
+        assert!(matches!(
+            super::VerifiedDeposit::admit(deposit),
+            Err(super::SubstrateError::InvalidDeposit { .. })
+        ));
     }
 
     #[test]
-    fn concentration_ignores_body_tampered_after_signing() {
+    fn verified_deposit_rejects_body_tamper_before_query() {
         let mut deposit = strategy_scoped_deposit("tampered-body", "strategy-a", 100, 1.0);
         deposit.confidence = 0.25;
 
-        let policy = substrate_config().resolve_threat_class_policy(None);
-        let concentration =
-            super::concentration_for(&[deposit], &ThreatClass::Execution, 100, &policy);
-
-        assert_eq!(concentration.distinct_sources, 0);
-        assert_eq!(concentration.total_strength, 0.0);
-        assert_eq!(concentration.peak_confidence, 0.0);
+        assert!(matches!(
+            super::VerifiedDeposit::admit(deposit),
+            Err(super::SubstrateError::InvalidDeposit { .. })
+        ));
     }
 
     #[tokio::test]
@@ -2545,6 +2793,145 @@ mod tests {
         let _ = std::fs::remove_file(escalation_path);
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_file(threat_intel_path);
+    }
+
+    #[tokio::test]
+    async fn deposit_retention_bounds_memory_and_compacts_the_durable_journal() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("swarm-pheromone-retention-{unique}.jsonl"));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let limits = super::DepositRetentionLimits {
+            max_count: 4,
+            max_bytes: 1024 * 1024,
+            compacted_count: 2,
+            compacted_bytes: 768 * 1024,
+            max_journal_bytes: 1024 * 1024,
+        };
+
+        let memory = InMemoryPheromoneSubstrate::with_retention_limits(config.clone(), limits);
+        let local = LocalJournalPheromoneSubstrate::open_with_retention_limits(
+            config.clone(),
+            &path,
+            limits,
+        )
+        .unwrap();
+        for timestamp in 100..105 {
+            let deposit = sample_deposit("retained-agent", timestamp, 0.9);
+            memory.deposit(deposit.clone()).await.unwrap();
+            local.deposit(deposit).await.unwrap();
+        }
+
+        let memory_entries = memory.recent_deposits(10).await.unwrap();
+        let local_entries = local.recent_deposits(10).await.unwrap();
+        assert_eq!(memory_entries.len(), 2);
+        assert_eq!(local_entries.len(), 2);
+        assert_eq!(
+            local_entries
+                .iter()
+                .map(|deposit| deposit.timestamp)
+                .collect::<Vec<_>>(),
+            vec![104, 103]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            2,
+            "durable compaction must match the bounded in-memory view"
+        );
+        drop(local);
+
+        let reopened =
+            LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits)
+                .unwrap();
+        assert_eq!(reopened.recent_deposits(10).await.unwrap().len(), 2);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::escalation_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_class_config_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
+    }
+
+    #[test]
+    fn deposit_retention_enforces_total_and_per_deposit_byte_limits() {
+        let deposit =
+            super::VerifiedDeposit::admit(sample_deposit("byte-limit", 100, 0.9)).unwrap();
+        let limits = super::DepositRetentionLimits {
+            max_count: 100,
+            max_bytes: deposit.encoded_len * 3,
+            compacted_count: 100,
+            compacted_bytes: deposit.encoded_len * 2,
+            max_journal_bytes: 1024 * 1024,
+        };
+        let mut retained = super::RetainedDeposits::default();
+        for _ in 0..4 {
+            retained.push(deposit.clone(), limits);
+        }
+        assert_eq!(retained.len(), 2);
+        assert!(retained.encoded_bytes <= limits.compacted_bytes);
+
+        let mut oversized = sample_deposit("oversized", 100, 0.9);
+        oversized.indicator["oversized"] =
+            serde_json::Value::String("x".repeat(super::MAX_SINGLE_DEPOSIT_BYTES));
+        sign_deposit(&mut oversized, &signing_key_for_label("oversized"));
+        assert!(matches!(
+            super::VerifiedDeposit::admit(oversized),
+            Err(super::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("hard limit")
+        ));
+    }
+
+    #[test]
+    fn local_journal_verifies_signatures_once_at_load_and_bounds_preexisting_files() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("swarm-pheromone-verified-load-{unique}.jsonl"));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let mut tampered = serde_json::to_value(sample_deposit("tampered-load", 100, 0.9)).unwrap();
+        tampered["confidence"] = serde_json::json!(0.1);
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&tampered).unwrap()),
+        )
+        .unwrap();
+        assert!(matches!(
+            LocalJournalPheromoneSubstrate::open(config.clone(), &path),
+            Err(super::SubstrateError::InvalidDeposit { .. })
+        ));
+
+        std::fs::write(&path, vec![b'x'; 33]).unwrap();
+        let limits = super::DepositRetentionLimits {
+            max_count: 4,
+            max_bytes: 32,
+            compacted_count: 2,
+            compacted_bytes: 16,
+            max_journal_bytes: 32,
+        };
+        assert!(matches!(
+            LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits),
+            Err(super::SubstrateError::JournalLimitExceeded {
+                observed_bytes: 33,
+                max_bytes: 32,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
