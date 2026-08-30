@@ -6,7 +6,7 @@ use ed25519_dalek::{Signature as DalekSignature, SigningKey, Verifier, Verifying
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::ops::Deref;
@@ -466,6 +466,32 @@ struct RetainedDeposits {
     timestamp_high_water: BTreeMap<ThreatClass, i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DepositRetentionPartition {
+    threat_class: ThreatClass,
+    signer_identity: String,
+    control_record: bool,
+}
+
+impl DepositRetentionPartition {
+    fn for_deposit(deposit: &PheromoneDeposit) -> Self {
+        Self {
+            threat_class: deposit.threat_class.clone(),
+            // `agent_identity` is bound exactly to the signing key by
+            // `validate_deposit_signature`; unlike `agent_id`, it cannot carry
+            // attacker-selected strategy suffixes that manufacture partitions.
+            signer_identity: deposit.agent_identity.clone(),
+            control_record: deposit.confidence == 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct DepositRetentionPartitionState {
+    indexes: VecDeque<usize>,
+    encoded_bytes: usize,
+}
+
 impl RetainedDeposits {
     fn push(
         &mut self,
@@ -502,23 +528,69 @@ impl RetainedDeposits {
         if self.entries.len() <= limits.max_count && self.encoded_bytes <= limits.max_bytes {
             return 0;
         }
-        let mut remove_count = 0usize;
-        while self.entries.len().saturating_sub(remove_count) > 1
-            && (self.entries.len().saturating_sub(remove_count) > limits.compacted_count
+        let mut partitions =
+            BTreeMap::<DepositRetentionPartition, DepositRetentionPartitionState>::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            let partition = partitions
+                .entry(DepositRetentionPartition::for_deposit(entry))
+                .or_default();
+            partition.indexes.push_back(index);
+            partition.encoded_bytes = partition.encoded_bytes.saturating_add(entry.encoded_len);
+        }
+
+        let mut removed = vec![false; self.entries.len()];
+        let mut remaining_count = self.entries.len();
+        while remaining_count > 1
+            && (remaining_count > limits.compacted_count
                 || self.encoded_bytes > limits.compacted_bytes)
         {
-            self.encoded_bytes = self
-                .encoded_bytes
-                .saturating_sub(self.entries[remove_count].encoded_len);
-            remove_count = remove_count.saturating_add(1);
+            let count_is_over_limit = remaining_count > limits.compacted_count;
+            let selected = partitions
+                .iter()
+                .filter(|(_, state)| !state.indexes.is_empty())
+                .max_by(|(left_key, left), (right_key, right)| {
+                    let primary = if count_is_over_limit {
+                        left.indexes.len().cmp(&right.indexes.len())
+                    } else {
+                        left.encoded_bytes.cmp(&right.encoded_bytes)
+                    };
+                    primary
+                        // Equal-size partitions retain the historical FIFO
+                        // behavior, which is deterministic and preserves the
+                        // feedback tombstone cleanup contract below.
+                        .then_with(|| right.indexes.front().cmp(&left.indexes.front()))
+                        .then_with(|| left_key.cmp(right_key))
+                })
+                .map(|(key, _)| key.clone());
+            let Some(selected) = selected else {
+                break;
+            };
+            let Some(partition) = partitions.get_mut(&selected) else {
+                break;
+            };
+            let Some(index) = partition.indexes.pop_front() else {
+                break;
+            };
+            let encoded_len = self.entries[index].encoded_len;
+            partition.encoded_bytes = partition.encoded_bytes.saturating_sub(encoded_len);
+            self.encoded_bytes = self.encoded_bytes.saturating_sub(encoded_len);
+            removed[index] = true;
+            remaining_count = remaining_count.saturating_sub(1);
         }
-        let mut orphaned_feedback_keys = self.entries[..remove_count]
+
+        let mut orphaned_feedback_keys = self
+            .entries
             .iter()
-            .filter_map(feedback_suppression_marker)
+            .enumerate()
+            .filter(|(index, _)| removed[*index])
+            .filter_map(|(_, entry)| feedback_suppression_marker(entry))
             .map(|(key, _)| key)
             .collect::<BTreeSet<_>>();
         if !orphaned_feedback_keys.is_empty() {
-            for entry in &self.entries[remove_count..] {
+            for (index, entry) in self.entries.iter().enumerate() {
+                if removed[index] {
+                    continue;
+                }
                 if let Some((key, _)) = feedback_suppression_marker(entry) {
                     orphaned_feedback_keys.remove(&key);
                 }
@@ -526,7 +598,12 @@ impl RetainedDeposits {
         }
 
         let before = self.entries.len();
-        self.entries.drain(..remove_count);
+        self.entries = self
+            .entries
+            .drain(..)
+            .enumerate()
+            .filter_map(|(index, entry)| (!removed[index]).then_some(entry))
+            .collect();
         if !orphaned_feedback_keys.is_empty() {
             self.entries.retain(|entry| {
                 deposit_suppression_key(entry)
@@ -3393,6 +3470,157 @@ mod tests {
         let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
         let _ = std::fs::remove_file(super::behavioral_baseline_journal_path(&path));
         let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
+    }
+
+    #[tokio::test]
+    async fn retention_compaction_preserves_independent_signed_threat_partitions() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-pheromone-partitioned-retention-{unique}.jsonl"
+        ));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let limits = super::DepositRetentionLimits {
+            max_count: 4,
+            max_bytes: 1024 * 1024,
+            compacted_count: 3,
+            compacted_bytes: 768 * 1024,
+            max_journal_bytes: 1024 * 1024,
+        };
+        let memory = InMemoryPheromoneSubstrate::with_retention_limits(config.clone(), limits);
+        let local = LocalJournalPheromoneSubstrate::open_with_retention_limits(
+            config.clone(),
+            &path,
+            limits,
+        )
+        .unwrap();
+
+        let execution = sample_deposit("execution-live", 100, 0.9);
+        let mut credential = sample_deposit("credential-live", 101, 0.8);
+        credential.threat_class = ThreatClass::CredentialAccess;
+        sign_deposit(&mut credential, &signing_key_for_label("credential-live"));
+        for deposit in [execution, credential] {
+            memory.deposit(deposit.clone()).await.unwrap();
+            local.deposit(deposit).await.unwrap();
+        }
+
+        for timestamp in 200..203 {
+            let mut flood = sample_deposit("one-admitted-flood-signer", timestamp, 0.9);
+            flood.threat_class = ThreatClass::DefenseEvasion;
+            sign_deposit(
+                &mut flood,
+                &signing_key_for_label("one-admitted-flood-signer"),
+            );
+            memory.deposit(flood.clone()).await.unwrap();
+            local.deposit(flood).await.unwrap();
+        }
+
+        for deposits in [
+            memory.recent_deposits(10).await.unwrap(),
+            local.recent_deposits(10).await.unwrap(),
+        ] {
+            assert_eq!(deposits.len(), 3);
+            assert!(
+                deposits
+                    .iter()
+                    .any(|deposit| deposit.threat_class == ThreatClass::Execution)
+            );
+            assert!(
+                deposits
+                    .iter()
+                    .any(|deposit| deposit.threat_class == ThreatClass::CredentialAccess)
+            );
+            assert_eq!(
+                deposits
+                    .iter()
+                    .filter(|deposit| deposit.threat_class == ThreatClass::DefenseEvasion)
+                    .count(),
+                1
+            );
+        }
+
+        drop(local);
+        let reopened =
+            LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits)
+                .unwrap();
+        let reopened_deposits = reopened.recent_deposits(10).await.unwrap();
+        assert_eq!(reopened_deposits.len(), 3);
+        assert!(
+            reopened_deposits
+                .iter()
+                .any(|deposit| deposit.threat_class == ThreatClass::Execution)
+        );
+        assert!(
+            reopened_deposits
+                .iter()
+                .any(|deposit| deposit.threat_class == ThreatClass::CredentialAccess)
+        );
+        drop(reopened);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::escalation_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_class_config_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
+    }
+
+    #[test]
+    fn retention_compaction_separates_control_records_from_signed_evidence() {
+        let limits = super::DepositRetentionLimits {
+            max_count: 3,
+            max_bytes: 1024 * 1024,
+            compacted_count: 2,
+            compacted_bytes: 768 * 1024,
+            max_journal_bytes: 1024 * 1024,
+        };
+        let mut retained = super::RetainedDeposits::default();
+        retained
+            .push(
+                super::VerifiedDeposit::admit(sample_deposit("shared-signer", 100, 0.9)).unwrap(),
+                limits,
+                3_600.0,
+                0.01,
+                None,
+            )
+            .unwrap();
+        for timestamp in 101..104 {
+            retained
+                .push(
+                    super::VerifiedDeposit::admit(sample_deposit("shared-signer", timestamp, 0.0))
+                        .unwrap(),
+                    limits,
+                    3_600.0,
+                    0.01,
+                    None,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(retained.len(), 2);
+        assert_eq!(
+            retained
+                .entries
+                .iter()
+                .filter(|deposit| deposit.confidence > 0.0)
+                .count(),
+            1
+        );
+        assert_eq!(
+            retained
+                .entries
+                .iter()
+                .filter(|deposit| deposit.confidence == 0.0)
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]

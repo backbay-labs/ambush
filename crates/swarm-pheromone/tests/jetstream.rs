@@ -607,7 +607,10 @@ async fn gc_removes_evaporated_entries_and_preserves_fresh_concentration() {
     assert!(concentration.total_strength > substrate_config().evaporation_threshold);
 
     let removed = substrate.gc_evaporated(now + 14_000).await.unwrap();
-    assert_eq!(removed, 1);
+    assert_eq!(
+        removed, 0,
+        "the scoped concentration index eagerly purges certainly expired GC pages"
+    );
 
     let deposits = substrate.recent_deposits(10).await.unwrap();
     assert_eq!(deposits.len(), 1);
