@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4842,6 +4843,7 @@ where
 {
     use std::fs::OpenOptions;
     use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let source = std::env::var(source_variable).map_err(|_| ProtocolError::InvalidField {
         field: source_variable.to_string(),
         reason: "wrapped TLS credential is required".to_string(),
@@ -4862,6 +4864,7 @@ where
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
+        .mode(0o600)
         .open(&path)
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
     file.write_all(
@@ -4915,6 +4918,77 @@ async fn connect_harness_role(
         .connect(url)
         .await
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))
+}
+
+struct HarnessPrivateRelayV1 {
+    subscription_tasks: Vec<tokio::task::JoinHandle<()>>,
+    request_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Drop for HarnessPrivateRelayV1 {
+    fn drop(&mut self) {
+        for task in &self.subscription_tasks {
+            task.abort();
+        }
+        let tasks = self
+            .request_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for task in tasks.iter() {
+            task.abort();
+        }
+    }
+}
+
+async fn start_harness_private_relay() -> ProtocolResult<Option<HarnessPrivateRelayV1>> {
+    if std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_none() {
+        return Ok(None);
+    }
+    let client = connect_harness_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?;
+    let request_tasks = Arc::new(Mutex::new(Vec::new()));
+    let mut subscriptions = Vec::new();
+    for ordinary in store_proxy_subjects() {
+        let suffix = ordinary
+            .strip_prefix("swarm.governance.witness.store.v1.")
+            .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+        let routed = format!("swarm.governance.witness.relay.store.v1.{suffix}");
+        let forward = format!("swarm.governance.witness.relay.forward.store.v1.{suffix}");
+        let mut subscriber = client
+            .subscribe(routed)
+            .await
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+        let relay_client = client.clone();
+        let tracked_requests = request_tasks.clone();
+        subscriptions.push(tokio::spawn(async move {
+            while let Some(message) = subscriber.next().await {
+                let Some(reply) = message.reply else {
+                    continue;
+                };
+                let client = relay_client.clone();
+                let forward = forward.clone();
+                let request = tokio::spawn(async move {
+                    let Ok(response) = client.request(forward, message.payload).await else {
+                        return;
+                    };
+                    if client.publish(reply, response.payload).await.is_ok() {
+                        let _ = client.flush().await;
+                    }
+                });
+                tracked_requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(request);
+            }
+        }));
+    }
+    client
+        .flush()
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    Ok(Some(HarnessPrivateRelayV1 {
+        subscription_tasks: subscriptions,
+        request_tasks,
+    }))
 }
 
 async fn assert_live_subject_refused(
@@ -5199,6 +5273,7 @@ async fn selected_overload_response_at_limit(
     let runner = StoreProxyServiceRunner::start(connection, service)
         .await
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let _relay = start_harness_private_relay().await?;
     let client = connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let first_client = client.clone();
@@ -5250,7 +5325,7 @@ async fn assert_connection_service_ready_mismatch(
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
     let connection = StoreRoleConnectionV1::connect(connection_config, connection_ready)
         .await
-        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+        .map_err(|error| ProtocolError::CanonicalEncoding(format!("{label}: {error}")))?;
     assert!(
         matches!(
             StoreProxyServiceRunner::start(connection, service).await,
@@ -5629,6 +5704,7 @@ async fn full_service_path_validates_proxy_response_before_public_attestation() 
     let _runner = StoreProxyServiceRunner::start(store_connection, service)
         .await
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let _relay = start_harness_private_relay().await?;
     witness_client
         .flush()
         .await
@@ -5802,6 +5878,7 @@ async fn full_service_path_fails_closed_on_store_queue_exhaustion() -> ProtocolR
     let _runner = StoreProxyServiceRunner::start(connection, service)
         .await
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let _relay = start_harness_private_relay().await?;
     let client = connect_harness_role("SWARM_NATS_WITNESS_CREDENTIAL_PATH", "witness").await?;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let first_client = client.clone();

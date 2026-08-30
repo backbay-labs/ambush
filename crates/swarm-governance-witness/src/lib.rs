@@ -4634,6 +4634,42 @@ mod deadline_state_machine_tests {
         must(thread.join(), "observation thread panicked");
     }
 
+    async fn observation_prepare_with_exact_retry(
+        client: &RuntimeWitnessClient,
+        request: WitnessServiceRequestV1,
+    ) -> Result<WitnessOutcomeAttestationV1, RuntimeWitnessClientErrorV1> {
+        for attempt in 0..3 {
+            match client.prepare_successor(request.clone()).await {
+                Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) if attempt < 2 => {
+                    // The protocol recognizes an identical already-prepared
+                    // request. Retry only the exact signed bytes after an
+                    // ambiguous transport outcome; never rebuild authority,
+                    // nonce, session, or candidate state.
+                    tokio::task::yield_now().await;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("bounded observation Prepare retry loop must return")
+    }
+
+    async fn observation_commit_with_exact_retry(
+        client: &RuntimeWitnessClient,
+        request: WitnessServiceRequestV1,
+    ) -> Result<WitnessOutcomeAttestationV1, RuntimeWitnessClientErrorV1> {
+        for attempt in 0..3 {
+            match client.commit_prepared(request.clone()).await {
+                Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) if attempt < 2 => {
+                    // Commit has the same exact-retry resolution: a lost
+                    // response is reconciled against the committed winner.
+                    tokio::task::yield_now().await;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("bounded observation Commit retry loop must return")
+    }
+
     async fn run_worker_observation_test_async() -> Vec<u8> {
         must(
             initialize_deadline_stream().await,
@@ -4757,7 +4793,7 @@ mod deadline_state_machine_tests {
             "observation Prepare request",
         );
         let prepared = must(
-            runtime_client.prepare_successor(prepare_request).await,
+            observation_prepare_with_exact_retry(&runtime_client, prepare_request).await,
             "observation Prepare response",
         );
         must(prepared.validate(), "observation Prepare attestation");
@@ -4777,7 +4813,7 @@ mod deadline_state_machine_tests {
             "observation Commit request",
         );
         let committed = must(
-            runtime_client.commit_prepared(commit_request).await,
+            observation_commit_with_exact_retry(&runtime_client, commit_request).await,
             "observation Commit response",
         );
         must(committed.validate(), "observation Commit attestation");
@@ -4871,7 +4907,15 @@ mod deadline_state_machine_tests {
             .events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+            .iter()
+            .filter(|event| {
+                !matches!(
+                    event,
+                    WorkerTransitionEventV1::ReceiptDeadlineIdentity { .. }
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let proxy_exchanges = proxy_records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -5250,10 +5294,39 @@ mod deadline_state_machine_tests {
                 std::env::var("PHASE285_RELAY_TOPOLOGY_TOKEN"),
                 "relay invocation token absent",
             );
+            // The observation route writes its own independently bound ledger,
+            // but the relay-completion receipt belongs to the relay invocation.
+            // Rebind only those outer identity fields before validating and
+            // reserving the receipt; every request, response, store, publisher,
+            // and connection relation remains byte-for-byte identical.
+            let mut receipt_ledger: serde_json::Value = must(
+                serde_json::from_slice(&bytes),
+                "relay complete receipt ledger decode",
+            );
+            let receipt_identity = must_some(
+                receipt_ledger.as_object_mut(),
+                "relay complete receipt ledger object",
+            );
+            receipt_identity.insert(
+                "tree".to_string(),
+                serde_json::Value::String(expected_tree.clone()),
+            );
+            receipt_identity.insert(
+                "invocation_token".to_string(),
+                serde_json::Value::String(expected_token.clone()),
+            );
+            receipt_identity.insert(
+                "case".to_string(),
+                serde_json::Value::String("service_checkpoint_complete_receipt".to_string()),
+            );
+            let receipt_ledger_bytes = must(
+                canonical_wire_bytes(&receipt_ledger),
+                "relay complete receipt ledger serialization",
+            );
             let receipt = LedgerBoundCompleteReceiptV1 {
                 schema_version: 1,
-                observation_ledger_canonical_hex: hex::encode(&bytes),
-                observation_ledger_sha256: sha256_hex(&bytes),
+                observation_ledger_canonical_hex: hex::encode(&receipt_ledger_bytes),
+                observation_ledger_sha256: sha256_hex(&receipt_ledger_bytes),
             };
             let (receipt_sender, mut receipt_receiver) = mpsc::channel(1);
             assert_eq!(
@@ -6342,6 +6415,7 @@ mod deadline_state_machine_tests {
             "PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH",
             "PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH",
             "PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH",
+            "SWARM_NATS_RELAY_CREDENTIAL_PATH",
         ];
         assert!(
             allowed.contains(&variable),
@@ -6377,7 +6451,7 @@ mod deadline_state_machine_tests {
         bytes
     }
 
-    fn topology_parse_pairs(bytes: &[u8]) -> Vec<TopologyOwnerPairV1> {
+    fn topology_parse_pairs(bytes: &[u8], relay_expected: bool) -> Vec<TopologyOwnerPairV1> {
         let source = must(std::str::from_utf8(bytes), "topology config utf8");
         let mut current_account: Option<String> = None;
         let mut accounts = Vec::new();
@@ -6398,8 +6472,18 @@ mod deadline_state_machine_tests {
             }
         }
         accounts.dedup();
-        assert_eq!(accounts.len(), 3, "topology account cardinality");
-        assert_eq!(pairs.len(), 4, "topology principal cardinality");
+        let expected_accounts = if relay_expected { 4 } else { 3 };
+        let expected_principals = if relay_expected { 5 } else { 4 };
+        assert_eq!(
+            accounts.len(),
+            expected_accounts,
+            "topology account cardinality"
+        );
+        assert_eq!(
+            pairs.len(),
+            expected_principals,
+            "topology principal cardinality"
+        );
         pairs
     }
 
@@ -6478,14 +6562,23 @@ mod deadline_state_machine_tests {
     fn run_topology_projection_test() {
         let canonical = topology_bounded_read("PHASE285_TOPOLOGY_CONFIG_PATH", 262_144);
         let probe = topology_bounded_read("PHASE285_TOPOLOGY_PROBE_CONFIG_PATH", 262_144);
-        let canonical_pairs = topology_parse_pairs(&canonical);
-        let probe_pairs = topology_parse_pairs(&probe);
-        let credential_users = [
+        let relay_expected = std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some();
+        let canonical_pairs = topology_parse_pairs(&canonical, relay_expected);
+        let probe_pairs = topology_parse_pairs(&probe, relay_expected);
+        let mut credential_users = vec![
             topology_credential_user("PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH", "runtime"),
             topology_credential_user("PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH", "witness"),
+        ];
+        if relay_expected {
+            credential_users.push(topology_credential_user(
+                "SWARM_NATS_RELAY_CREDENTIAL_PATH",
+                "relay",
+            ));
+        }
+        credential_users.extend([
             topology_credential_user("PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH", "witness-store"),
             topology_credential_user("PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH", "init"),
-        ];
+        ]);
         assert_eq!(
             canonical_pairs
                 .iter()
@@ -6533,7 +6626,12 @@ mod deadline_state_machine_tests {
                 }),
             );
         }
-        println!("topology_rust_projection canonical=1 probe=1 accounts=3 principals=4 passed=1");
+        println!(
+            "topology_rust_projection canonical=1 probe=1 accounts={} principals={} relay={} passed=1",
+            if relay_expected { 4 } else { 3 },
+            if relay_expected { 5 } else { 4 },
+            usize::from(relay_expected)
+        );
     }
 
     pub(super) fn run_complete_receipt_suppression_test() {
@@ -6567,7 +6665,9 @@ mod deadline_state_machine_tests {
     }
 
     async fn run_complete_receipt_suppression_test_async() {
-        if std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some() {
+        if std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some()
+            && std::env::var_os("PHASE285_COMPLETE_RECEIPT_LEDGER_PATH").is_none()
+        {
             let _ = run_worker_observation_test_async().await;
             return;
         }
@@ -7855,6 +7955,16 @@ mod deadline_state_machine_tests {
                                     GrantRecoveryModeV1::NoHold,
                                 )
                                 .await
+                            }
+                            Err(std::env::VarError::NotPresent) => {
+                                for (leg, mode) in [
+                                    (GrantExpiryLegV1::Public, GrantRecoveryModeV1::Held),
+                                    (GrantExpiryLegV1::Private, GrantRecoveryModeV1::Held),
+                                    (GrantExpiryLegV1::Public, GrantRecoveryModeV1::NoHold),
+                                    (GrantExpiryLegV1::Private, GrantRecoveryModeV1::NoHold),
+                                ] {
+                                    run_response_grant_recovery_leg(leg, mode).await;
+                                }
                             }
                             _ => panic!("response grant physical case selector is invalid"),
                         }

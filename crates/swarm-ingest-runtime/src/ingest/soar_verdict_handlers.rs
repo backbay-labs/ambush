@@ -125,34 +125,36 @@ pub(crate) async fn soar_verdict_handler(
         apply_providence_feedback(&state, &normalized, &target, &feedback_id, received_at_ms)
             .await?;
 
-    let mut incident = lookup.incident.clone();
-    incident
-        .feedback_audit_entries
-        .push(AnalystFeedbackAuditEntry {
-            feedback_id: feedback_id.clone(),
-            received_at_ms,
-            action: request.action,
-            analyst_id: request.analyst_id.clone(),
-            incident_id: request.incident_id.clone(),
-            finding_id: request
-                .finding_id
-                .clone()
-                .or(Some(target.finding_id.clone())),
-            reason: request.reason.clone(),
-            request_signature: signature,
-            evidence: Some(applied.evidence),
-            soar_lineage: Some(verdict_lineage.clone()),
-            payload: payload_value,
-            outcome: applied.outcome.clone(),
-        });
+    let audit_entry = AnalystFeedbackAuditEntry {
+        feedback_id: feedback_id.clone(),
+        received_at_ms,
+        action: request.action,
+        analyst_id: request.analyst_id.clone(),
+        incident_id: request.incident_id.clone(),
+        finding_id: request
+            .finding_id
+            .clone()
+            .or(Some(target.finding_id.clone())),
+        reason: request.reason.clone(),
+        request_signature: signature,
+        evidence: Some(applied.evidence),
+        soar_lineage: Some(verdict_lineage.clone()),
+        payload: payload_value,
+        outcome: applied.outcome.clone(),
+    };
     let mut measurement =
         false_positive_measurement(&normalized, &target, &feedback_id, received_at_ms);
     measurement.soar_lineage = Some(verdict_lineage.clone());
-    incident.upsert_false_positive_measurement(measurement);
     state
         .current_incident_store()
-        .persist(&incident)
-        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+        .record_feedback_outcome(&request.incident_id, audit_entry, measurement)
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            ProvidenceFeedbackError::not_found(format!(
+                "incident `{}` disappeared before the SOAR verdict was recorded",
+                request.incident_id
+            ))
+        })?;
 
     Ok((
         StatusCode::OK,

@@ -166,11 +166,11 @@ fn independently_validate_artifacts(ledger_bytes: &[u8], receipt_bytes: &[u8]) {
         {"event":"post_preflight","worker":"private"},
         {"cas_attempted":false,"event":"proxy_store_begin","operation":"read_entry","worker":"private"},
         {"cas_applied":false,"event":"proxy_store_end","operation":"read_entry","succeeded":true,"worker":"private"},
-        {"accepted":true,"event":"response_enqueue_attempt","worker":"private"},
-        {"event":"publish_attempt","published":true,"worker":"private"},
+        {"event":"response_deadline_check","open":true,"worker":"private"},
+        {"enqueued":true,"event":"response_enqueue_attempt","worker":"private"},
         {"cas_applied":false,"event":"proxy_store_end","operation":"read_entry","succeeded":true,"worker":"public"},
-        {"accepted":true,"event":"response_enqueue_attempt","worker":"public"},
-        {"event":"publish_attempt","published":true,"worker":"public"}
+        {"event":"response_deadline_check","open":true,"worker":"public"},
+        {"enqueued":true,"event":"response_enqueue_attempt","worker":"public"}
     ]);
     let worker_events = field(&ledger, "worker_events", "worker operation");
     let worker_event_rows = required(worker_events.as_array(), "worker operation");
@@ -265,51 +265,56 @@ fn independently_validate_artifacts(ledger_bytes: &[u8], receipt_bytes: &[u8]) {
         "proxy cross-copy"
     );
 
-    let publisher_attempts = required(
-        field(&ledger, "publisher_attempts", "publisher fabrication").as_array(),
-        "publisher fabrication",
+    let response_enqueue_attempts = required(
+        field(
+            &ledger,
+            "response_enqueue_attempts",
+            "response enqueue fabrication",
+        )
+        .as_array(),
+        "response enqueue fabrication",
     );
-    let expected_publishers = [(8_u64, "private"), (11_u64, "public")];
+    let expected_enqueues = [(8_u64, "private"), (11_u64, "public")];
     assert_eq!(
-        publisher_attempts.len(),
-        expected_publishers.len(),
-        "publisher fabrication"
+        response_enqueue_attempts.len(),
+        expected_enqueues.len(),
+        "response enqueue fabrication"
     );
-    for (attempt, (ordinal, worker)) in publisher_attempts.iter().zip(expected_publishers) {
+    for (attempt, (ordinal, worker)) in response_enqueue_attempts.iter().zip(expected_enqueues) {
         let ordinal_index =
-            usize::try_from(ordinal).unwrap_or_else(|_| panic!("publisher fabrication"));
+            usize::try_from(ordinal).unwrap_or_else(|_| panic!("response enqueue fabrication"));
         let event = worker_event_rows
             .get(ordinal_index)
-            .unwrap_or_else(|| panic!("publisher fabrication"));
+            .unwrap_or_else(|| panic!("response enqueue fabrication"));
         assert_eq!(
-            number(attempt, "ordinal", "publisher fabrication"),
+            number(attempt, "ordinal", "response enqueue fabrication"),
             ordinal,
-            "publisher fabrication"
+            "response enqueue fabrication"
         );
         assert_eq!(
-            string(attempt, "worker", "publisher fabrication"),
+            string(attempt, "worker", "response enqueue fabrication"),
             worker,
-            "publisher fabrication"
+            "response enqueue fabrication"
         );
         assert_eq!(
-            field(attempt, "published", "publisher fabrication").as_bool(),
+            field(attempt, "enqueued", "response enqueue fabrication").as_bool(),
             Some(true),
-            "publisher fabrication"
+            "response enqueue fabrication"
         );
         assert_eq!(
-            string(event, "event", "publisher fabrication"),
-            "publish_attempt",
-            "publisher fabrication"
+            string(event, "event", "response enqueue fabrication"),
+            "response_enqueue_attempt",
+            "response enqueue fabrication"
         );
         assert_eq!(
-            string(event, "worker", "publisher fabrication"),
+            string(event, "worker", "response enqueue fabrication"),
             worker,
-            "publisher fabrication"
+            "response enqueue fabrication"
         );
         assert_eq!(
-            field(event, "published", "publisher fabrication").as_bool(),
+            field(event, "enqueued", "response enqueue fabrication").as_bool(),
             Some(true),
-            "publisher fabrication"
+            "response enqueue fabrication"
         );
     }
     let store = required(
@@ -579,7 +584,7 @@ fn independently_validate_artifacts(ledger_bytes: &[u8], receipt_bytes: &[u8]) {
         ("proxy_exchanges", 1),
         ("private_exchanges", 3),
         ("store_operations", 1),
-        ("publisher_attempts", 2),
+        ("response_enqueue_attempts", 2),
         ("connections", 3),
         ("cas_attempted", 0),
         ("cas_applied", 0),
@@ -609,8 +614,8 @@ fn independently_validate_artifacts(ledger_bytes: &[u8], receipt_bytes: &[u8]) {
             field(&ledger, "store_operations", "ledger digests"),
         ),
         (
-            "publisher_attempts_sha256",
-            field(&ledger, "publisher_attempts", "ledger digests"),
+            "response_enqueue_attempts_sha256",
+            field(&ledger, "response_enqueue_attempts", "ledger digests"),
         ),
         ("public_admission_sha256", admission),
         ("publisher_sha256", publisher),
@@ -699,7 +704,7 @@ fn topology_input(variable: &str, maximum: u64) -> Vec<u8> {
     bytes
 }
 
-fn independently_parse_topology_pairs(bytes: &[u8]) -> Vec<Value> {
+fn independently_parse_topology_pairs(bytes: &[u8], relay_expected: bool) -> Vec<Value> {
     let source = must(std::str::from_utf8(bytes), "topology config utf8");
     let mut account = None;
     let mut accounts = Vec::new();
@@ -715,8 +720,16 @@ fn independently_parse_topology_pairs(bytes: &[u8]) -> Vec<Value> {
         }
     }
     accounts.dedup();
-    assert_eq!(accounts.len(), 3, "topology account count");
-    assert_eq!(pairs.len(), 4, "topology principal count");
+    assert_eq!(
+        accounts.len(),
+        if relay_expected { 4 } else { 3 },
+        "topology account count"
+    );
+    assert_eq!(
+        pairs.len(),
+        if relay_expected { 5 } else { 4 },
+        "topology principal count"
+    );
     pairs
 }
 
@@ -736,12 +749,19 @@ fn topology_projection(variable: &str) -> (PathBuf, Vec<u8>, Value) {
 fn topology_validator_binds_every_tuple_to_owner_block() {
     let canonical = topology_input("PHASE285_TOPOLOGY_CONFIG_PATH", 262_144);
     let probe = topology_input("PHASE285_TOPOLOGY_PROBE_CONFIG_PATH", 262_144);
-    for variable in [
+    let relay_expected = std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some();
+    let mut credential_variables = vec![
         "PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH",
         "PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH",
+    ];
+    if relay_expected {
+        credential_variables.push("SWARM_NATS_RELAY_CREDENTIAL_PATH");
+    }
+    credential_variables.extend([
         "PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH",
         "PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH",
-    ] {
+    ]);
+    for variable in credential_variables {
         let credential = topology_input(variable, 4_096);
         let _: Value = must(
             serde_json::from_slice(&credential),
@@ -817,18 +837,30 @@ fn topology_validator_binds_every_tuple_to_owner_block() {
     }
     assert_eq!(
         field(&rust_canonical, "pairs", "canonical pairs"),
-        &Value::Array(independently_parse_topology_pairs(&canonical))
+        &Value::Array(independently_parse_topology_pairs(
+            &canonical,
+            relay_expected
+        ))
     );
     assert_eq!(
         field(&rust_probe, "pairs", "probe pairs"),
-        &Value::Array(independently_parse_topology_pairs(&probe))
+        &Value::Array(independently_parse_topology_pairs(&probe, relay_expected))
     );
-    let canonical_inventory = json!([
-        {"account":"PHASE285_RUNTIME","principal":"phase285_foreign"},
-        {"account":"PHASE285_WITNESS","principal":"phase285_witness"},
-        {"account":"PHASE285_WITNESS_STORE","principal":"phase285_witness_store"},
-        {"account":"PHASE285_WITNESS_STORE","principal":"phase285_expected"}
+    let mut canonical_inventory = vec![
+        json!({"account":"PHASE285_RUNTIME","principal":"phase285_foreign"}),
+        json!({"account":"PHASE285_WITNESS","principal":"phase285_witness"}),
+    ];
+    if relay_expected {
+        canonical_inventory.push(json!({
+            "account":"PHASE285_RELAY",
+            "principal":"phase285_relay"
+        }));
+    }
+    canonical_inventory.extend([
+        json!({"account":"PHASE285_WITNESS_STORE","principal":"phase285_witness_store"}),
+        json!({"account":"PHASE285_WITNESS_STORE","principal":"phase285_expected"}),
     ]);
+    let canonical_inventory = Value::Array(canonical_inventory);
     assert_eq!(
         field(&rust_canonical, "pairs", "canonical policy"),
         &canonical_inventory
@@ -838,6 +870,9 @@ fn topology_validator_binds_every_tuple_to_owner_block() {
         &canonical_inventory
     );
     println!(
-        "topology_external canonical=1 probe=1 rust=2 shell=2 accounts=3 principals=4 passed=1"
+        "topology_external canonical=1 probe=1 rust=2 shell=2 accounts={} principals={} relay={} passed=1",
+        if relay_expected { 4 } else { 3 },
+        if relay_expected { 5 } else { 4 },
+        usize::from(relay_expected)
     );
 }

@@ -4294,7 +4294,7 @@ mod providence_feedback {
     }
 
     #[tokio::test]
-    async fn feedback_clock_resumes_above_durable_incident_audit_after_restart() {
+    async fn feedback_clock_reservation_survives_partial_commit_and_restart() {
         let incident_root = temp_dir("feedback-durable-clock");
         let mut config = super::test_config("suspicious_process_tree");
         config.correlation.incident_store = BundleStoreConfig::LocalFiles {
@@ -4346,7 +4346,8 @@ mod providence_feedback {
                 outcome: json!({"status": "recorded"}),
             });
         state.current_incident_store().persist(&incident).unwrap();
-        let substrate_high_water = durable_high_water.saturating_add(30_000);
+        let reserved_high_water = state.next_providence_feedback_timestamp_ms().await.unwrap();
+        assert!(reserved_high_water > durable_high_water);
         crate::ingest::providence_handlers::apply_providence_feedback(
             &state,
             &SwarmProvidenceFeedbackRequest {
@@ -4367,7 +4368,7 @@ mod providence_feedback {
                 severity: Severity::High,
             },
             "partial-commit-feedback",
-            substrate_high_water,
+            reserved_high_water,
         )
         .await
         .unwrap();
@@ -4380,8 +4381,8 @@ mod providence_feedback {
                 .next_providence_feedback_timestamp_ms()
                 .await
                 .unwrap()
-                > substrate_high_water,
-            "a restarted process must seed above both durable audit and partial-commit substrate state"
+                > reserved_high_water,
+            "a restarted process must advance beyond a reservation whose substrate write completed before its audit"
         );
     }
 

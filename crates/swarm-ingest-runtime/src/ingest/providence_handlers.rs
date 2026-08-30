@@ -168,18 +168,20 @@ pub(crate) async fn providence_feedback_handler(
         payload: payload_value,
         outcome: applied.outcome.clone(),
     };
-    let mut incident = lookup.incident.clone();
-    incident.feedback_audit_entries.push(audit_entry);
-    incident.upsert_false_positive_measurement(false_positive_measurement(
-        &request,
-        &target,
-        &feedback_id,
-        received_at_ms,
-    ));
     state
         .current_incident_store()
-        .persist(&incident)
-        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+        .record_feedback_outcome(
+            &request.incident_id,
+            audit_entry,
+            false_positive_measurement(&request, &target, &feedback_id, received_at_ms),
+        )
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            ProvidenceFeedbackError::not_found(format!(
+                "incident `{}` disappeared before feedback was recorded",
+                request.incident_id
+            ))
+        })?;
 
     Ok((
         StatusCode::OK,

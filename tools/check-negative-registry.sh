@@ -143,7 +143,7 @@ if case == "phase285-raw-kv-subject":
         "bin/swarm-governance-witness-store.rs": "a943bf8660d9493820245a73df262f07096136833bf9b82c9d5ca4cd79327564",
         "bin/swarm-governance-witness.rs": "93182d13a5550fe2ac0db8b4fb4fd126c5173e614676133ab3d735026d0d1a91",
         "jetstream_store.rs": "7ad46939bc08a9dbe361c1455c9d23b56ed223feb00ce28b9d81ef48fbcaf928",
-        "lib.rs": "f82aaeaa3631cecba79bf3d676a942d85efa708e89f85e9173cf6b2f5d23a8f5",
+        "lib.rs": "8b85d6992e1a8ddbdb6ef732d7a48fe7ac47229bf8ff704b0d50361220455ce3",
         "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
         "public_dispatcher.rs": "c2f7796a9856600515232d807688663eb9c01949fd587d65a51f010b17db0e86",
         "raw_config.rs": "4bc8a3aabaf986ca3e74008f785444acd39df034f3e562f1f13e4e6a999ec015",
@@ -1174,11 +1174,11 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "7ad7f702d39e1a74dd746f802889f85acdc6618309e292e718acb6e0f0769f72",
     "Cargo.lock": "4a899e087f951de34c86b177c3c34658e15d75d55b3ce7ba307106770eb39903",
-    ".github/workflows/ci.yml": "0f7584f2a1aedc67de38cb907bd3f2a0683163cf1e2cc647b815862a34d934f8",
+    ".github/workflows/ci.yml": "3285dff1fde536cf655e2768e4cc17cd599515bdecebb77f13e368879c1f0aa7",
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "33312eb903b5fda60e77091dc26bb062e154d69bfd21b2a2d48478051cc7007d",
+    "tools/check-single-governor-key.sh": "d57e7e84b03aada1f2940ed2341ab286854af7f845090560ba779399147c9080",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -1191,14 +1191,14 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "crates/swarm-governance/src/lib.rs": "1cf3f10dc555c9c8de2d3db1f02ef6dd2c79e461d9d213549c0273e8b06eef71",
     "crates/swarm-runtime/src/containment.rs": "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
     "crates/swarm-runtime/src/dispatcher.rs": "1cdb52025a333d42a623ad0df08a34c05722a4a8aa3532af763415bc73e6f9e0",
-    "crates/swarm-ingest-runtime/src/ingest/mod.rs": "906d46420a8ab7f85802c0062a960aec87ad19ceab3b94dd064a36e28e380bda",
+    "crates/swarm-ingest-runtime/src/ingest/mod.rs": "a17f2173304adc98c96182f199bd788346d638d5e96ed2fc0fb6e5f68d4dc3ce",
     "crates/swarm-runtime-http/src/bin/swarm_detect.rs": "f909db3b9ded397cc87455c62350df8b10a68b6865eca524cb164ca3ba8baf7c",
     "crates/swarm-ingest-runtime/src/ingest/demo.rs": "d0d3146879c0dce2ffbb4198305254c1cb544e8e17fbd9a9d1c36f29e1f33c64",
     "crates/swarm-ingest-runtime/src/ingest/governance_resume.rs": "a9e902f8ca76aab03c2c4ea612ac0a834caeff012135d22029509e267ba2ae32",
     "crates/swarm-ingest-runtime/src/ingest/health.rs": "3b875c6701baec37cf71692c9937d2e1a08bd477391c7529b05fb5a4c8325acd",
     "crates/swarm-ingest-runtime/src/ingest/platform_api.rs": "6a47977b16fd895e5bea265ce18335f6f8b291db28b9ab758591cfd4d8e7bc14",
-    "crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs": "d70500e49306cae98a68154caeeb7eb16e5a5cf5e980ddd605229ab2aaa69856",
-    "crates/swarm-ingest-runtime/src/ingest/soar_verdict_handlers.rs": "c0a9d45eaf9302b1617295dfd7257e0158e35f1d16cd7bb429d45df9228f83fb",
+    "crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs": "18851cb42818784fce99ad68b930eae1ca514d6b05486666f3055d862968df17",
+    "crates/swarm-ingest-runtime/src/ingest/soar_verdict_handlers.rs": "0ff48f14ce2eafb19f4600b7b49f8297222d45eac3af3ec2a67f934a12a06eba",
 }
 GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
@@ -1206,7 +1206,7 @@ GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-runtime":
         (133, "8ac09aa65386fed38a0990dc6f7c97b95df178524a191e2cd5c026293564c1b6"),
     "swarm-ingest-runtime":
-        (14, "42dd050d67944e2320e1a0e70581ca85328737ba577ee277af39822f4e2ac0b5"),
+        (14, "e71df92a402c4dbc5f0e36319aeca0132d46d3c5d4f2d02f00415ecfb437d100"),
     "swarm-runtime-http":
         (22, "9dea36f32378484d96596ab95b198d6ebbc239a8e810172d9e1e2efb800de6d6"),
     "swarm-agents":

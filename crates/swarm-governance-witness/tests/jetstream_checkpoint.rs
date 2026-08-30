@@ -1959,23 +1959,33 @@ async fn jetstream_checkpoint_rejects_unavailable_server_instead_of_skipping() -
         .connect(current_server()?)
         .await?;
     let foreign = async_nats::jetstream::new(foreign_client);
-    let foreign_view: Response<Value> = foreign
-        .request(
+    let foreign_view = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        foreign.request::<_, _, Response<Value>>(
             format!(
                 "STREAM.INFO.{}",
                 fixture.ready.bucket_configuration.stream_name
             ),
             &json!({}),
-        )
-        .await?;
+        ),
+    )
+    .await;
     let foreign_result = match foreign_view {
-        Response::Err { error } => json!({
+        Ok(Ok(Response::Err { error })) => json!({
             "result": "refused",
+            "boundary": "jetstream_error",
             "http_code": error.code(),
             "error_code": serde_json::to_value(error.error_code())?,
             "description": error.to_string(),
         }),
-        Response::Ok(_) => {
+        Ok(Err(_)) | Err(_) => json!({
+            "result": "refused",
+            "boundary": "no_foreign_stream_response",
+            "http_code": null,
+            "error_code": null,
+            "description": "foreign account received no stream metadata",
+        }),
+        Ok(Ok(Response::Ok(_))) => {
             return Err(io::Error::other("foreign account observed expected stream").into());
         }
     };

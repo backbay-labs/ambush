@@ -3730,8 +3730,10 @@ def validate_unavailable(row):
     keys = ["stream_name","bucket_name","stream_id","foreign_result","rogue_sequence","iterator_result","inspect_result","read_result","cas_result"]
     exact(value, keys, "unavailable evidence")
     foreign = value["foreign_result"]
-    exact(foreign, ["result","http_code","error_code","description"], "foreign result")
-    if value["stream_name"] != "KV_phase285_c_account" or value["bucket_name"] != "phase285_c_account" or value["stream_id"] != "stream-phase285_c_account" or foreign["result"] != "refused" or foreign["http_code"] != 404 or foreign["error_code"] != 10059 or foreign["description"] != "stream not found (code 404, error code 10059)" or value["rogue_sequence"] != 3 or not typed_error(value["iterator_result"], "bounds") or any(not typed_error(value[key], "unavailable") for key in ["inspect_result","read_result","cas_result"]):
+    exact(foreign, ["result","boundary","http_code","error_code","description"], "foreign result")
+    foreign_js_refusal = foreign == {"result":"refused","boundary":"jetstream_error","http_code":404,"error_code":10059,"description":"stream not found (code 404, error code 10059)"}
+    foreign_transport_refusal = foreign == {"result":"refused","boundary":"no_foreign_stream_response","http_code":None,"error_code":None,"description":"foreign account received no stream metadata"}
+    if value["stream_name"] != "KV_phase285_c_account" or value["bucket_name"] != "phase285_c_account" or value["stream_id"] != "stream-phase285_c_account" or not (foreign_js_refusal or foreign_transport_refusal) or value["rogue_sequence"] != 3 or not typed_error(value["iterator_result"], "bounds") or any(not typed_error(value[key], "unavailable") for key in ["inspect_result","read_result","cas_result"]):
         raise ValueError("unavailable/account/iterator relation differs")
 
 def validate_global(row):
@@ -4062,7 +4064,7 @@ add_field_mutants(anchor_index, {
 }, "anchor")
 unicode_timestamp = copy.deepcopy(rows); unicode_timestamp[anchor_index]["evidence"]["before_created"] = "٢٠٢٦-08-25T00:00:00.000000000Z"; refresh(unicode_timestamp[anchor_index]); mutants.append(("anchor_unicode_digit_timestamp", unicode_timestamp))
 add_field_mutants(unavailable_index, {
-    "stream_name":"", "bucket_name":"", "stream_id":"", "foreign_result":{"result":"refused","http_code":403,"error_code":10059,"description":"stream not found (code 404, error code 10059)"},
+    "stream_name":"", "bucket_name":"", "stream_id":"", "foreign_result":{"result":"refused","boundary":"jetstream_error","http_code":403,"error_code":10059,"description":"stream not found (code 404, error code 10059)"},
     "rogue_sequence":0, "iterator_result":{"result":"err","error":"missing"}, "inspect_result":{"result":"ok"}, "read_result":{"result":"ok"}, "cas_result":{"result":"ok"},
 }, "unavailable")
 global_value = rows[global_index]["evidence"]
@@ -7794,7 +7796,7 @@ for forbidden in ("std::process::Command", "with-nats-jetstream", "bash", "temp_
     if forbidden in owned: raise SystemExit(f"complete_receipt_source[forbidden:{forbidden}]")
 if library.count("fn validate_complete_receipt(") != 1 or "pub fn validate_complete_receipt(" in library:
     raise SystemExit("complete_receipt_source[closed-validator]")
-for fragment in ("fn independently_validate_artifacts(", "WitnessServiceResponseV1::decode_for_client_request", "WitnessStoreProxyRequestV1::decode", "WitnessStoreReadResultV1", "proxy cross-copy", "publisher fabrication", "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", "PHASE285_COMPLETE_RECEIPT_PATH"):
+for fragment in ("fn independently_validate_artifacts(", "WitnessServiceResponseV1::decode_for_client_request", "WitnessStoreProxyRequestV1::decode", "WitnessStoreReadResultV1", "proxy cross-copy", "response enqueue fabrication", "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", "PHASE285_COMPLETE_RECEIPT_PATH"):
     if fragment not in external: raise SystemExit(f"complete_receipt_external[missing:{fragment}]")
 for forbidden in ("run_complete_receipt_suppression_test", "validate_complete_receipt", "std::process::Command"):
     if forbidden in external: raise SystemExit(f"complete_receipt_external[forbidden:{forbidden}]")
@@ -8305,7 +8307,7 @@ PY
   python3 -I - "$internal_output" <<'PY'
 import re, sys
 text=open(sys.argv[1],encoding="utf-8").read()
-if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","18")]: raise SystemExit("complete receipt internal transcript differs")
+if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","36")]: raise SystemExit("complete receipt internal transcript differs")
 PY
   ci_harness_record_passed lib \
     service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed "$internal_output"
@@ -8333,7 +8335,7 @@ PY
 run_complete_receipt_mutants() {
   local accepted_tree="$1" parent_scratch="$2"
   python3 -I - "$ROOT_DIR" "$parent_scratch" "$accepted_tree" <<'PY'
-import hashlib, json, os, pathlib, shutil, subprocess, sys, time, urllib.request
+import hashlib, json, os, pathlib, shutil, subprocess, sys, time, urllib.error, urllib.request
 root=pathlib.Path(sys.argv[1]).resolve(); parent=pathlib.Path(sys.argv[2]).resolve(); tree=sys.argv[3]
 exact=parent/"exact-tree"; exact.mkdir()
 archive=subprocess.Popen(["git","-C",str(root),"archive",tree],stdout=subprocess.PIPE)
@@ -8351,13 +8353,21 @@ insert_anchor='''        let worker_bytes = must(
             canonical_wire_bytes(&worker_events),
             "observation worker bytes",
         );'''
-request_bytes_anchor='''        let request_bytes = must(request.canonical_bytes(), "observation request bytes");'''
+response_received_anchor='''        let response_received_at_nanos = observation_clock.now();'''
 response_binding='''        let response = if let Some(relay) = relay_legs.as_mut() {'''
 worker_binding='''        let worker_events = observer
             .events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();'''
+            .iter()
+            .filter(|event| {
+                !matches!(
+                    event,
+                    WorkerTransitionEventV1::ReceiptDeadlineIdentity { .. }
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();'''
 store_binding='''        let store_operations = facts
             .records
             .lock()
@@ -8370,8 +8380,27 @@ mutations=[]
 text=replace_once(original,response_binding,response_binding.replace("let response =","let mut response ="),"public_store_head")
 injected='''        response.response = WitnessReadResponseV1::Head(Box::new(None));
         response.signature = evidence_signer.sign(&must(response.signing_bytes(), "mutated public head signing bytes"));
-'''+request_bytes_anchor
-text=replace_once(text,request_bytes_anchor,injected,"public_store_head")
+'''+response_received_anchor
+text=replace_once(text,response_received_anchor,injected,"public_store_head")
+producer_public_head='''        let public_head = match &response.response {
+            WitnessReadResponseV1::Head(head) => must_some(
+                head.as_ref().as_ref(),
+                "observation public ReadHead is absent",
+            ),
+            _ => panic!("observation public response is not ReadHead"),
+        };
+        assert_eq!(
+            public_head, selected_head,
+            "observation public head differs from authenticated store head"
+        );'''
+text=replace_once(text,producer_public_head,"        let _ = (&response, selected_head);","public_store_head")
+relay_response_binding='''            assert_eq!(
+                held.response_bytes, response_bytes,
+                "live relay response bytes"
+            );'''
+text=replace_once(text,relay_response_binding,"            let _ = (&held.response_bytes, &response_bytes);","public_store_head")
+relay_replay_binding='''            assert_eq!(replay, response, "live relay replay response differs");'''
+text=replace_once(text,relay_replay_binding,"            let _ = (&replay, &response);","public_store_head")
 old='''        if head.as_ref().as_ref() != Some(selected_head)
             || read.target_txid != selected_head.txid
             || ledger_string(&row, "selected_head_txid", "public_store_head")? != selected_head.txid
@@ -8463,8 +8492,8 @@ mutations.append(("proxy_cross_copy",text,"proxy cross-copy"))
 publisher_collection='''        let response_enqueue_attempts: Vec<_> = worker_events'''
 text=replace_once(original,publisher_collection,publisher_collection.replace("let response_enqueue_attempts", "let mut response_enqueue_attempts"),"response_enqueue_fabrication")
 text=replace_once(text,insert_anchor,'        response_enqueue_attempts[0].ordinal = 11;\n        response_enqueue_attempts[0].worker = WorkerKindV1::Public;\n'+insert_anchor,"response_enqueue_fabrication")
-text=replace_once(text,'        let expected = [(8_u64, "private"), (11_u64, "public")];','        let expected = [(11_u64, "public"), (11_u64, "public")];',"publisher_fabrication")
-mutations.append(("publisher_fabrication",text,"publisher fabrication"))
+text=replace_once(text,'        let expected = [(8_u64, "private"), (11_u64, "public")];','        let expected = [(11_u64, "public"), (11_u64, "public")];',"response_enqueue_fabrication")
+mutations.append(("response_enqueue_fabrication",text,"response enqueue fabrication"))
 
 identity_guard='''        if ledger_string(&row, "tree", "current_invocation")? != expected_tree
             || ledger_string(&row, "invocation_token", "current_invocation")?
@@ -8481,12 +8510,31 @@ for variable in list(base):
     if variable.startswith("PHASE285_TOPOLOGY_"): del base[variable]
 nats_http_url=base.get("NATS_HTTP_URL")
 if not nats_http_url: raise SystemExit("complete_receipt_mutant[nats-monitor-absent]")
+monitor_port_path_raw=base.get("SWARM_NATS_CURRENT_HTTP_PORT_FILE")
+if not monitor_port_path_raw: raise SystemExit("complete_receipt_mutant[nats-monitor-port-file-absent]")
+monitor_port_path=pathlib.Path(monitor_port_path_raw)
+if not monitor_port_path.is_absolute() or monitor_port_path.parent.resolve(strict=True)!=pathlib.Path(base["SWARM_NATS_HARNESS_SCRATCH"]).resolve(strict=True): raise SystemExit("complete_receipt_mutant[nats-monitor-port-file-boundary]")
+def current_monitor_url():
+    before=monitor_port_path.lstat()
+    if monitor_port_path.is_symlink() or not monitor_port_path.is_file() or before.st_size>6: raise SystemExit("complete_receipt_mutant[nats-monitor-port-file-identity]")
+    raw=monitor_port_path.read_bytes(); after=monitor_port_path.lstat()
+    if (before.st_dev,before.st_ino,before.st_mode,before.st_size)!=(after.st_dev,after.st_ino,after.st_mode,after.st_size): raise SystemExit("complete_receipt_mutant[nats-monitor-port-file-changed]")
+    if not raw.endswith(b"\n") or raw.count(b"\n")!=1 or not raw[:-1].isdigit(): raise SystemExit("complete_receipt_mutant[nats-monitor-port-file-framing]")
+    port=int(raw[:-1])
+    if not 1<=port<=65535: raise SystemExit("complete_receipt_mutant[nats-monitor-port-file-range]")
+    return f"http://127.0.0.1:{port}"
 def connection_count():
-    with urllib.request.urlopen(nats_http_url+"/connz", timeout=1.0) as response:
-        return int(json.load(response)["num_connections"])
+    deadline=time.monotonic()+10.0; last_error=None
+    while time.monotonic()<deadline:
+        try:
+            with urllib.request.urlopen(current_monitor_url()+"/connz", timeout=1.0) as response:
+                return int(json.load(response)["num_connections"])
+        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            last_error=error; time.sleep(0.05)
+    raise SystemExit("complete_receipt_mutant[nats-monitor-unavailable]") from last_error
 baseline_connections=connection_count()
 def await_connection_quiescence():
-    deadline=time.monotonic()+3.0
+    deadline=time.monotonic()+10.0
     while time.monotonic()<deadline:
         if connection_count()<=baseline_connections: return
         time.sleep(0.02)
@@ -8566,6 +8614,8 @@ topology_owner_block_focus() {
   local tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?}" token harness_root canonical probe
   local rust_canonical rust_probe shell_canonical shell_probe topology_root snapshot internal_output external_output
   local config_output comparator_output projection_output
+  local credential_path
+  local -a topology_credential_paths topology_snapshot_inputs
   harness_root="${PHASE285_CI_ROUTE_TEMP_PARENT:-${SWARM_NATS_HARNESS_SCRATCH:?}}"
   canonical="${PHASE285_TOPOLOGY_CONFIG_PATH:?}"
   token="$(openssl rand -hex 32)"
@@ -8584,11 +8634,22 @@ topology_owner_block_focus() {
   comparator_output="$topology_root/comparator-controls.txt"
   projection_output="$topology_root/projection-controls.txt"
 
-  python3 -I - "$canonical" "$probe" \
-    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH:?}" \
-    "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH:?}" \
-    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH:?}" \
-    "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH:?}" <<'PY'
+  topology_credential_paths=(
+    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH:?}"
+    "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH:?}"
+  )
+  if [ -n "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" ]; then
+    topology_credential_paths+=("${SWARM_NATS_RELAY_CREDENTIAL_PATH:?}")
+  fi
+  topology_credential_paths+=(
+    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH:?}"
+    "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH:?}"
+  )
+  for credential_path in "${topology_credential_paths[@]}"; do
+    topology_snapshot_inputs+=("$credential_path:4096")
+  done
+
+  python3 -I - "$canonical" "$probe" "${topology_credential_paths[@]}" <<'PY'
 import os, pathlib, re, secrets, stat, sys
 config,probe,*credentials=map(pathlib.Path,sys.argv[1:])
 def bounded(path,maximum):
@@ -8599,11 +8660,12 @@ def bounded(path,maximum):
     return value
 source=bounded(config,262144).decode()
 for credential in credentials: bounded(credential,4096)
-accounts=["PHASE285_RUNTIME","PHASE285_WITNESS","PHASE285_WITNESS_STORE"]
-users=["phase285_foreign","phase285_witness","phase285_witness_store","phase285_expected"]
+relay="PHASE285_RELAY {" in source
+accounts=["PHASE285_RUNTIME","PHASE285_WITNESS"]+(["PHASE285_RELAY"] if relay else [])+["PHASE285_WITNESS_STORE"]
+users=["phase285_foreign","phase285_witness"]+(["phase285_relay"] if relay else [])+["phase285_witness_store","phase285_expected"]
 replacements={name:f"{name}_{secrets.token_hex(16).upper()}" for name in accounts}
 replacements.update({name:f"{name}_{secrets.token_hex(16)}" for name in users})
-if len(set(replacements.values()))!=7: raise SystemExit("topology_probe_freshness")
+if len(replacements)!=len(accounts)+len(users) or len(set(replacements.values()))!=len(replacements): raise SystemExit("topology_probe_freshness")
 value=source
 for old in sorted(replacements,key=len,reverse=True):
     new=replacements[old]
@@ -8625,20 +8687,15 @@ PY
   export PHASE285_TOPOLOGY_INVOCATION_TOKEN="$token"
 
   topology_artifact_snapshot record "$snapshot" "$canonical:262144" "$probe:262144" \
-    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
-    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096"
+    "${topology_snapshot_inputs[@]}"
 
   run_complete_receipt_focus | tee "$internal_output"
   topology_artifact_snapshot extend "$snapshot" "$canonical:262144" "$probe:262144" \
-    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
-    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096" \
+    "${topology_snapshot_inputs[@]}" \
     "$rust_canonical:16384" "$rust_probe:16384"
 
   python3 -I - "$canonical" "$probe" "$shell_canonical" "$shell_probe" "$tree" "$token" \
-    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH:?}" \
-    "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH:?}" \
-    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH:?}" \
-    "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH:?}" <<'PY'
+    "${topology_credential_paths[@]}" <<'PY'
 import hashlib,json,os,pathlib,stat,sys
 canonical,probe,shell_canonical,shell_probe=map(pathlib.Path,sys.argv[1:5]); tree,token=sys.argv[5:7]; credentials=list(map(pathlib.Path,sys.argv[7:]))
 def bounded(path,maximum):
@@ -8647,7 +8704,7 @@ def bounded(path,maximum):
     value=path.read_bytes(); after=path.lstat()
     if (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_size)!=(after.st_dev,after.st_ino,after.st_mode,after.st_size): raise SystemExit("topology_artifact_identity")
     return value
-def pairs(value):
+def pairs(value,expected_accounts,expected_principals):
     owner=None; accounts=[]; result=[]
     for line in value.decode().splitlines():
         if line.startswith("  ") and not line.startswith("    ") and line.endswith(" {"):
@@ -8656,13 +8713,15 @@ def pairs(value):
             principal=line.strip().split('"')[1]
             if owner is None: raise SystemExit("topology_shell_owner")
             result.append({"account":owner,"principal":principal})
-    if len(dict.fromkeys(accounts))!=3 or len(result)!=4: raise SystemExit("topology_shell_cardinality")
+    if len(dict.fromkeys(accounts))!=expected_accounts or len(result)!=expected_principals: raise SystemExit("topology_shell_cardinality")
     return result
 canonical_bytes=bounded(canonical,262144); probe_bytes=bounded(probe,262144)
+relay=b"PHASE285_RELAY {" in canonical_bytes
+expected_accounts=4 if relay else 3; expected_principals=5 if relay else 4
 credential_users=[]
 for path in credentials:
     credential=json.loads(bounded(path,4096)); credential_users.append(credential["username"])
-canonical_pairs=pairs(canonical_bytes); probe_pairs=pairs(probe_bytes)
+canonical_pairs=pairs(canonical_bytes,expected_accounts,expected_principals); probe_pairs=pairs(probe_bytes,expected_accounts,expected_principals)
 if [row["principal"] for row in canonical_pairs]!=credential_users: raise SystemExit("topology_shell_credential_binding")
 common={"canonical_config_sha256":hashlib.sha256(canonical_bytes).hexdigest(),"case":"service_checkpoint_topology_owner_blocks","invocation_token":token,"probe_config_sha256":hashlib.sha256(probe_bytes).hexdigest(),"schema_version":1,"tree":tree}
 for path,kind,rows in [(shell_canonical,"canonical",canonical_pairs),(shell_probe,"probe",probe_pairs)]:
@@ -8673,8 +8732,7 @@ for path,kind,rows in [(shell_canonical,"canonical",canonical_pairs),(shell_prob
     if bounded(path,16384)!=framed: raise SystemExit("topology_projection_reopen")
 PY
   topology_artifact_snapshot extend "$snapshot" "$canonical:262144" "$probe:262144" \
-    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
-    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096" \
+    "${topology_snapshot_inputs[@]}" \
     "$rust_canonical:16384" "$rust_probe:16384" "$shell_canonical:16384" "$shell_probe:16384"
 
   PHASE285_TOPOLOGY_CONFIG_PATH="$canonical" PHASE285_TOPOLOGY_PROBE_CONFIG_PATH="$probe" \
@@ -8693,8 +8751,7 @@ PY
   ci_harness_record_passed service_checkpoint \
     topology_validator_binds_every_tuple_to_owner_block "$external_output"
   topology_artifact_snapshot verify "$snapshot" "$canonical:262144" "$probe:262144" \
-    "${PHASE285_TOPOLOGY_RUNTIME_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_WITNESS_CREDENTIAL_PATH}:4096" \
-    "${PHASE285_TOPOLOGY_STORE_CREDENTIAL_PATH}:4096" "${PHASE285_TOPOLOGY_INIT_CREDENTIAL_PATH}:4096" \
+    "${topology_snapshot_inputs[@]}" \
     "$rust_canonical:16384" "$rust_probe:16384" "$shell_canonical:16384" "$shell_probe:16384"
   bash "$ROOT_DIR/tools/with-nats-jetstream.sh" --topology-validator "$canonical" self-test | tee "$config_output"
   topology_validator_comparator_controls "$canonical" "$topology_root" | tee "$comparator_output"
@@ -8706,7 +8763,13 @@ config,comparator,projection=[open(path,encoding="utf-8").read() for path in sys
 digests=re.findall(r"digest=([0-9a-f]{64})",config)+re.findall(r"source_sha256=([0-9a-f]{64})",comparator)+re.findall(r"source_sha256=([0-9a-f]{64})",projection)
 if len(digests)!=33 or len(set(digests))!=33: raise SystemExit(f"topology_mutation_digest_inventory[{len(digests)}:{len(set(digests))}]")
 PY
-  echo "topology_owner_blocks configs=2 accounts=3 principals=4 config_mutations=23 comparator_mutations=3 projection_mutations=7 mutations=33 unique=33 vacuous=0 passed=1"
+  if [ -n "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" ]; then
+    echo "topology_owner_blocks configs=2 accounts=4 principals=5 relay=1 config_mutations=23 comparator_mutations=3 projection_mutations=7 mutations=33 unique=33 vacuous=0 passed=1"
+  else
+    echo "topology_owner_blocks configs=2 accounts=3 principals=4 relay=0 config_mutations=23 comparator_mutations=3 projection_mutations=7 mutations=33 unique=33 vacuous=0 passed=1"
+  fi
+  rm -rf -- "$topology_root"
+  [ ! -e "$topology_root" ] || { echo "topology route cleanup left its target behind" >&2; return 1; }
 }
 
 topology_validator_comparator_controls() {
@@ -8720,10 +8783,19 @@ validator=harness[start:end]
 def load(source):
     namespace={"re":re,"source":canonical}; exec(source,namespace); return namespace["validate"]
 current=load(validator); current(canonical)
+relay="PHASE285_RELAY {" in canonical
+if relay:
+    import_old='account: PHASE285_RELAY, subject: "swarm.governance.witness.relay.v1.fence"'
+    import_new='account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.relay.v1.fence"'
+    export_old='service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RELAY]'
+else:
+    import_old='account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"'
+    import_new='account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.v1.fence"'
+    export_old='service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME]'
 rows=[
  ("delete_response_grant_comparator",'        if row["response_grant"]!=grant: raise ValueError(f\'topology[response-grant:{row["username"]}]\')\n','',canonical.replace('allow_responses: { max: 1, expires: "12s" }','allow_responses: { max: 2, expires: "12s" }',1),"topology[response-grant:phase285_witness]"),
- ("delete_import_account_comparator",'        if graph["imports"][owner]!=expected_imports[owner]: raise ValueError(f"topology[imports:{owner}]")\n','',canonical.replace('account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.v1.fence"',1),"topology[imports:PHASE285_RUNTIME]"),
- ("delete_export_account_comparator",'        if graph["exports"][owner]!=expected_exports[owner]: raise ValueError(f"topology[exports:{owner}]")\n','',canonical.replace('service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME]','service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE]',1),"topology[exports:PHASE285_WITNESS]"),
+ ("delete_import_account_comparator",'        if graph["imports"][owner]!=expected_imports[owner]: raise ValueError(f"topology[imports:{owner}]")\n','',canonical.replace(import_old,import_new,1),"topology[imports:PHASE285_RUNTIME]"),
+ ("delete_export_account_comparator",'        if graph["exports"][owner]!=expected_exports[owner]: raise ValueError(f"topology[exports:{owner}]")\n','',canonical.replace(export_old,'service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE]',1),"topology[exports:PHASE285_WITNESS]"),
 ]
 digests=[]
 for label,old,new,hostile,reason in rows:
@@ -8759,16 +8831,26 @@ library=exact/"crates/swarm-governance-witness/src/lib.rs"; original=library.rea
 def replace_once(text,old,new,label):
     if text.count(old)!=1: raise SystemExit(f"topology_projection[{label}:anchor:{text.count(old)}]")
     return text.replace(old,new,1)
-literal='''        let probe_pairs = vec![
-            TopologyOwnerPairV1 { account: "PHASE285_RUNTIME".to_string(), principal: "phase285_foreign".to_string() },
-            TopologyOwnerPairV1 { account: "PHASE285_WITNESS".to_string(), principal: "phase285_witness".to_string() },
-            TopologyOwnerPairV1 { account: "PHASE285_WITNESS_STORE".to_string(), principal: "phase285_witness_store".to_string() },
-            TopologyOwnerPairV1 { account: "PHASE285_WITNESS_STORE".to_string(), principal: "phase285_expected".to_string() },
-        ];'''
-literal_source=replace_once(original,"        let probe_pairs = topology_parse_pairs(&probe);",literal,"rust_literal_disconnect")
-swap_anchor='''        assert_eq!(pairs.len(), 4, "topology principal cardinality");
+relay="PHASE285_RELAY {" in canonical_config.read_text()
+literal_rows=[
+    ("PHASE285_RUNTIME","phase285_foreign"),
+    ("PHASE285_WITNESS","phase285_witness"),
+]+([("PHASE285_RELAY","phase285_relay")] if relay else [])+[
+    ("PHASE285_WITNESS_STORE","phase285_witness_store"),
+    ("PHASE285_WITNESS_STORE","phase285_expected"),
+]
+literal='        let probe_pairs = vec![\n'+''.join(
+    f'            TopologyOwnerPairV1 {{ account: "{account}".to_string(), principal: "{principal}".to_string() }},\n'
+    for account,principal in literal_rows
+)+'        ];'
+literal_source=replace_once(original,"        let probe_pairs = topology_parse_pairs(&probe, relay_expected);",literal,"rust_literal_disconnect")
+swap_anchor='''        assert_eq!(
+            pairs.len(),
+            expected_principals,
+            "topology principal cardinality"
+        );
         pairs'''
-swap_source=replace_once(original,swap_anchor,'''        assert_eq!(pairs.len(), 4, "topology principal cardinality");
+swap_source=replace_once(original,swap_anchor,'''        assert_eq!(pairs.len(), expected_principals, "topology principal cardinality");
         let first_owner = pairs[0].account.clone();
         pairs[0].account = pairs[1].account.clone();
         pairs[1].account = first_owner;
@@ -8817,8 +8899,6 @@ for label,rust_can,rust_pro,shell_can,shell_pro,reason in [
     print(f"topology_projection_mutation mutation={label} compiled=1 external=1 failed=1 intended={reason} source_sha256={source_digest}")
 if len(digests)!=4 or len(set(digests))!=4: raise SystemExit("topology_projection[digests]")
 PY
-  rm -rf -- "$topology_root"
-  [ ! -e "$topology_root" ] || { echo "topology route cleanup left its target behind" >&2; return 1; }
 }
 
 topology_artifact_controls() {
@@ -11485,7 +11565,7 @@ PY
 
 run_service_checkpoint_grant_focus() {
   local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
-  local scratch ledger output
+  local scratch ledger output mode
   [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint grant tree is malformed" >&2; return 1; }
   scratch="$(phase285_create_confined_scratch phase285-grants)"
   PHASE285_WITNESS_TEMP_DIR="$scratch"
@@ -11496,9 +11576,13 @@ run_service_checkpoint_grant_focus() {
   PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
     cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
-  validate_service_checkpoint_exact_test "$output" 18 \
+  validate_service_checkpoint_exact_test "$output" 36 \
     'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
-  validate_service_checkpoint_grant_ledger "$ledger" "$accepted_tree" normal
+  mode=normal
+  if [ -n "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" ]; then
+    mode=relay
+  fi
+  validate_service_checkpoint_grant_ledger "$ledger" "$accepted_tree" "$mode"
 }
 
 relay_recreation_canonical_route_guard() {
@@ -12444,7 +12528,7 @@ run_service_checkpoint_relay_positive_focus() {
   PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
     cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
-  validate_service_checkpoint_exact_test "$output" 18 \
+  validate_service_checkpoint_exact_test "$output" 36 \
     'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
   validate_service_checkpoint_grant_ledger "$grant_ledger" "$accepted_tree" relay
   python3 -I - "$relay_ledger" "$accepted_tree" "$PHASE285_RELAY_TOPOLOGY_TOKEN" <<'PY'

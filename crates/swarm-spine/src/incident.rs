@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{
@@ -192,7 +193,11 @@ impl CorrelatedIncident {
             .iter_mut()
             .find(|existing| existing.finding_id == measurement.finding_id)
         {
-            *existing = measurement;
+            if (measurement.reviewed_at_ms, measurement.feedback_id.as_str())
+                > (existing.reviewed_at_ms, existing.feedback_id.as_str())
+            {
+                *existing = measurement;
+            }
         } else {
             self.false_positive_measurements.push(measurement);
         }
@@ -312,6 +317,9 @@ pub enum IncidentStoreError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("Providence feedback timestamp high-water is exhausted")]
+    FeedbackTimestampExhausted,
 }
 
 /// Store contract for durable incident artifacts.
@@ -327,6 +335,12 @@ pub trait IncidentStore: Send + Sync {
         incident_id: &str,
         entry: AnalystFeedbackAuditEntry,
     ) -> Result<Option<IncidentRecord>, IncidentStoreError>;
+    fn record_feedback_outcome(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+        measurement: FalsePositiveMeasurement,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError>;
     fn load_by_incident_id(
         &self,
         incident_id: &str,
@@ -334,6 +348,8 @@ pub trait IncidentStore: Send + Sync {
     fn load_by_hunt_id(&self, hunt_id: &str) -> Result<Option<IncidentLookup>, IncidentStoreError>;
     fn recent(&self, limit: usize) -> Result<Vec<IncidentRecord>, IncidentStoreError>;
     fn health(&self) -> Result<IncidentStoreHealth, IncidentStoreError>;
+    fn reserve_feedback_timestamp_ms(&self, observed_at_ms: i64)
+    -> Result<i64, IncidentStoreError>;
 }
 
 /// Configured incident store backend.
@@ -386,6 +402,20 @@ impl IncidentStore for ConfiguredIncidentStore {
         }
     }
 
+    fn record_feedback_outcome(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+        measurement: FalsePositiveMeasurement,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.record_feedback_outcome(incident_id, entry, measurement),
+            Self::LocalFiles(store) => {
+                store.record_feedback_outcome(incident_id, entry, measurement)
+            }
+        }
+    }
+
     fn load_by_incident_id(
         &self,
         incident_id: &str,
@@ -416,12 +446,23 @@ impl IncidentStore for ConfiguredIncidentStore {
             Self::LocalFiles(store) => store.health(),
         }
     }
+
+    fn reserve_feedback_timestamp_ms(
+        &self,
+        observed_at_ms: i64,
+    ) -> Result<i64, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.reserve_feedback_timestamp_ms(observed_at_ms),
+            Self::LocalFiles(store) => store.reserve_feedback_timestamp_ms(observed_at_ms),
+        }
+    }
 }
 
 /// In-memory incident store for tests and operator snapshots.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryIncidentStore {
     incidents: Arc<RwLock<Vec<CorrelatedIncident>>>,
+    feedback_timestamp_high_water_ms: Arc<AtomicI64>,
 }
 
 impl IncidentStore for MemoryIncidentStore {
@@ -430,10 +471,21 @@ impl IncidentStore for MemoryIncidentStore {
             .incidents
             .write()
             .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        let mut incident = incident.clone();
+        if let Some(existing) = guard
+            .iter()
+            .find(|existing| existing.incident_id == incident.incident_id)
+        {
+            merge_incident_operational_state(&mut incident, existing);
+        }
         guard.retain(|existing| existing.incident_id != incident.incident_id);
         guard.push(incident.clone());
+        advance_feedback_timestamp_high_water(
+            &self.feedback_timestamp_high_water_ms,
+            incident_feedback_timestamp_high_water(&incident),
+        );
         Ok(IncidentRecord::from_incident(
-            incident,
+            &incident,
             "memory".to_string(),
         ))
     }
@@ -475,7 +527,39 @@ impl IncidentStore for MemoryIncidentStore {
         else {
             return Ok(None);
         };
+        advance_feedback_timestamp_high_water(
+            &self.feedback_timestamp_high_water_ms,
+            entry.received_at_ms,
+        );
         incident.feedback_audit_entries.push(entry);
+        Ok(Some(IncidentRecord::from_incident(
+            incident,
+            "memory".to_string(),
+        )))
+    }
+
+    fn record_feedback_outcome(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+        measurement: FalsePositiveMeasurement,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let mut guard = self
+            .incidents
+            .write()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        let Some(incident) = guard
+            .iter_mut()
+            .find(|incident| incident.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        advance_feedback_timestamp_high_water(
+            &self.feedback_timestamp_high_water_ms,
+            entry.received_at_ms,
+        );
+        incident.feedback_audit_entries.push(entry);
+        incident.upsert_false_positive_measurement(measurement);
         Ok(Some(IncidentRecord::from_incident(
             incident,
             "memory".to_string(),
@@ -545,12 +629,25 @@ impl IncidentStore for MemoryIncidentStore {
             details: "ephemeral in-process incident store".to_string(),
         })
     }
+
+    fn reserve_feedback_timestamp_ms(
+        &self,
+        observed_at_ms: i64,
+    ) -> Result<i64, IncidentStoreError> {
+        reserve_atomic_feedback_timestamp(&self.feedback_timestamp_high_water_ms, observed_at_ms)
+    }
 }
 
 /// File-backed incident store for restart-safe review artifacts.
 #[derive(Debug, Clone)]
 pub struct FileIncidentStore {
     root: PathBuf,
+    mutation_lock: Arc<Mutex<()>>,
+}
+
+struct IncidentMutationGuard<'a> {
+    _process_guard: MutexGuard<'a, ()>,
+    _file_guard: File,
 }
 
 impl FileIncidentStore {
@@ -560,7 +657,10 @@ impl FileIncidentStore {
             path: root.clone(),
             source,
         })?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            mutation_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     fn incidents_dir(&self) -> PathBuf {
@@ -569,6 +669,35 @@ impl FileIncidentStore {
 
     fn index_path(&self) -> PathBuf {
         self.root.join("index.json")
+    }
+
+    fn mutation_lock_path(&self) -> PathBuf {
+        self.root.join(".incident-store.lock")
+    }
+
+    fn lock_mutation(&self) -> Result<IncidentMutationGuard<'_>, IncidentStoreError> {
+        let process_guard = self
+            .mutation_lock
+            .lock()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        let path = self.mutation_lock_path();
+        let file_guard = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| IncidentStoreError::Write {
+                path: path.clone(),
+                source,
+            })?;
+        file_guard
+            .lock()
+            .map_err(|source| IncidentStoreError::Write { path, source })?;
+        Ok(IncidentMutationGuard {
+            _process_guard: process_guard,
+            _file_guard: file_guard,
+        })
     }
 
     fn read_index(&self) -> Result<IncidentIndex, IncidentStoreError> {
@@ -630,13 +759,30 @@ impl FileIncidentStore {
 
 impl IncidentStore for FileIncidentStore {
     fn persist(&self, incident: &CorrelatedIncident) -> Result<IncidentRecord, IncidentStoreError> {
-        let bundle_path = self.write_incident(incident)?;
+        let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
+        let mut incident = incident.clone();
+        if let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.incident_id == incident.incident_id)
+            .cloned()
+        {
+            let existing = self.read_incident(record)?;
+            merge_incident_operational_state(&mut incident, &existing.incident);
+        }
+        let bundle_path = self.write_incident(&incident)?;
         index
             .entries
             .retain(|entry| entry.incident_id != incident.incident_id);
-        let record = IncidentRecord::from_incident(incident, bundle_path);
+        let record = IncidentRecord::from_incident(&incident, bundle_path);
         index.entries.push(record.clone());
+        index.feedback_timestamp_high_water_ms = Some(
+            index
+                .feedback_timestamp_high_water_ms
+                .unwrap_or(0)
+                .max(incident_feedback_timestamp_high_water(&incident)),
+        );
         self.write_index(&index)?;
         Ok(record)
     }
@@ -646,6 +792,7 @@ impl IncidentStore for FileIncidentStore {
         incident_id: &str,
         external_reference: ExternalReference,
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
         let Some(entry_index) = index
             .entries
@@ -672,6 +819,7 @@ impl IncidentStore for FileIncidentStore {
         incident_id: &str,
         entry: AnalystFeedbackAuditEntry,
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
         let Some(entry_index) = index
             .entries
@@ -682,10 +830,52 @@ impl IncidentStore for FileIncidentStore {
         };
         let record = index.entries[entry_index].clone();
         let mut lookup = self.read_incident(record)?;
+        let received_at_ms = entry.received_at_ms;
         lookup.incident.feedback_audit_entries.push(entry);
         let bundle_path = self.write_incident(&lookup.incident)?;
         let updated = IncidentRecord::from_incident(&lookup.incident, bundle_path);
         index.entries[entry_index] = updated.clone();
+        index.feedback_timestamp_high_water_ms = Some(
+            index
+                .feedback_timestamp_high_water_ms
+                .unwrap_or(0)
+                .max(received_at_ms),
+        );
+        self.write_index(&index)?;
+        Ok(Some(updated))
+    }
+
+    fn record_feedback_outcome(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+        measurement: FalsePositiveMeasurement,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
+        let mut index = self.read_index()?;
+        let Some(entry_index) = index
+            .entries
+            .iter()
+            .position(|candidate| candidate.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        let record = index.entries[entry_index].clone();
+        let mut lookup = self.read_incident(record)?;
+        let received_at_ms = entry.received_at_ms;
+        lookup.incident.feedback_audit_entries.push(entry);
+        lookup
+            .incident
+            .upsert_false_positive_measurement(measurement);
+        let bundle_path = self.write_incident(&lookup.incident)?;
+        let updated = IncidentRecord::from_incident(&lookup.incident, bundle_path);
+        index.entries[entry_index] = updated.clone();
+        index.feedback_timestamp_high_water_ms = Some(
+            index
+                .feedback_timestamp_high_water_ms
+                .unwrap_or(0)
+                .max(received_at_ms),
+        );
         self.write_index(&index)?;
         Ok(Some(updated))
     }
@@ -694,6 +884,7 @@ impl IncidentStore for FileIncidentStore {
         &self,
         incident_id: &str,
     ) -> Result<Option<IncidentLookup>, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
         let index = self.read_index()?;
         if let Some(record) = index
             .entries
@@ -706,6 +897,7 @@ impl IncidentStore for FileIncidentStore {
     }
 
     fn load_by_hunt_id(&self, hunt_id: &str) -> Result<Option<IncidentLookup>, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
         let mut entries = self.read_index()?.entries;
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         if let Some(record) = entries.into_iter().find(|entry| {
@@ -720,6 +912,7 @@ impl IncidentStore for FileIncidentStore {
     }
 
     fn recent(&self, limit: usize) -> Result<Vec<IncidentRecord>, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
         let mut entries = self.read_index()?.entries;
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         entries.truncate(limit);
@@ -727,6 +920,7 @@ impl IncidentStore for FileIncidentStore {
     }
 
     fn health(&self) -> Result<IncidentStoreHealth, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
         fs::create_dir_all(self.incidents_dir()).map_err(|source| IncidentStoreError::Write {
             path: self.root.clone(),
             source,
@@ -740,11 +934,132 @@ impl IncidentStore for FileIncidentStore {
             details: format!("incident directory at {}", self.root.display()),
         })
     }
+
+    fn reserve_feedback_timestamp_ms(
+        &self,
+        observed_at_ms: i64,
+    ) -> Result<i64, IncidentStoreError> {
+        let _guard = self.lock_mutation()?;
+        let mut index = self.read_index()?;
+        // Legacy indexes predate the explicit high-water and are migrated by
+        // scanning their retained audit metadata exactly once. Every current
+        // reservation is then O(1), independent of incident/deposit volume.
+        let current = index.feedback_timestamp_high_water_ms.unwrap_or_else(|| {
+            index
+                .entries
+                .iter()
+                .flat_map(|entry| &entry.feedback_audit_entries)
+                .map(|entry| entry.received_at_ms)
+                .max()
+                .unwrap_or(0)
+        });
+        let next = current
+            .checked_add(1)
+            .map(|next| observed_at_ms.max(next))
+            .ok_or(IncidentStoreError::FeedbackTimestampExhausted)?;
+        index.feedback_timestamp_high_water_ms = Some(next);
+        self.write_index(&index)?;
+        Ok(next)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct IncidentIndex {
     entries: Vec<IncidentRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feedback_timestamp_high_water_ms: Option<i64>,
+}
+
+/// Preserve append-only operator state when a caller persists a correlation
+/// snapshot that was loaded before concurrent feedback or callback handling.
+/// Existing records win identity collisions because audit entries are
+/// immutable once durable; latest timestamps win the mutable projections.
+fn merge_incident_operational_state(
+    candidate: &mut CorrelatedIncident,
+    existing: &CorrelatedIncident,
+) {
+    for external_reference in existing.external_references.iter().cloned() {
+        upsert_external_reference_list(&mut candidate.external_references, external_reference);
+    }
+    if existing
+        .providence_reconciliation
+        .as_ref()
+        .is_some_and(|current| {
+            candidate
+                .providence_reconciliation
+                .as_ref()
+                .is_none_or(|proposed| current.reconciled_at_ms >= proposed.reconciled_at_ms)
+        })
+    {
+        candidate.providence_reconciliation = existing.providence_reconciliation.clone();
+    }
+    for durable in &existing.providence_callback_audit_entries {
+        match candidate
+            .providence_callback_audit_entries
+            .iter_mut()
+            .find(|entry| entry.callback_id == durable.callback_id)
+        {
+            Some(proposed) => *proposed = durable.clone(),
+            None => candidate
+                .providence_callback_audit_entries
+                .push(durable.clone()),
+        }
+    }
+    candidate
+        .providence_callback_audit_entries
+        .sort_by(|left, right| {
+            left.received_at_ms
+                .cmp(&right.received_at_ms)
+                .then_with(|| left.callback_id.cmp(&right.callback_id))
+        });
+    for durable in &existing.feedback_audit_entries {
+        match candidate
+            .feedback_audit_entries
+            .iter_mut()
+            .find(|entry| entry.feedback_id == durable.feedback_id)
+        {
+            Some(proposed) => *proposed = durable.clone(),
+            None => candidate.feedback_audit_entries.push(durable.clone()),
+        }
+    }
+    candidate.feedback_audit_entries.sort_by(|left, right| {
+        left.received_at_ms
+            .cmp(&right.received_at_ms)
+            .then_with(|| left.feedback_id.cmp(&right.feedback_id))
+    });
+    for measurement in existing.false_positive_measurements.iter().cloned() {
+        candidate.upsert_false_positive_measurement(measurement);
+    }
+}
+
+fn incident_feedback_timestamp_high_water(incident: &CorrelatedIncident) -> i64 {
+    incident
+        .feedback_audit_entries
+        .iter()
+        .map(|entry| entry.received_at_ms)
+        .max()
+        .unwrap_or(0)
+}
+
+fn advance_feedback_timestamp_high_water(high_water: &AtomicI64, candidate: i64) {
+    let _ = high_water.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+        (candidate > current).then_some(candidate)
+    });
+}
+
+fn reserve_atomic_feedback_timestamp(
+    high_water: &AtomicI64,
+    observed_at_ms: i64,
+) -> Result<i64, IncidentStoreError> {
+    let previous = high_water
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            current.checked_add(1).map(|next| observed_at_ms.max(next))
+        })
+        .map_err(|_| IncidentStoreError::FeedbackTimestampExhausted)?;
+    previous
+        .checked_add(1)
+        .map(|next| observed_at_ms.max(next))
+        .ok_or(IncidentStoreError::FeedbackTimestampExhausted)
 }
 
 fn sorted_recent_incidents(incidents: &[CorrelatedIncident]) -> Vec<CorrelatedIncident> {
@@ -916,8 +1231,8 @@ fn upsert_external_reference_list(
 mod tests {
     use super::{
         AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
-        FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension, IncidentMemberDecision,
-        IncidentStore, IncidentStoreHealth,
+        FalsePositiveMeasurement, FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension,
+        IncidentMemberDecision, IncidentStore, IncidentStoreHealth, MemoryIncidentStore,
     };
     use swarm_core::config::BundleStoreConfig;
     use swarm_core::pheromone::ThreatClass;
@@ -1117,7 +1432,175 @@ mod tests {
             reloaded.incident.feedback_audit_entries[0].action,
             ProvidenceFeedbackAction::Dismiss
         );
+        assert_eq!(
+            FileIncidentStore::open(&root)
+                .unwrap()
+                .reserve_feedback_timestamp_ms(1)
+                .unwrap(),
+            1_700_000_000_601,
+            "the durable reservation must advance beyond the retained audit after restart"
+        );
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn memory_store_reserves_unique_monotonic_feedback_timestamps() {
+        let store = MemoryIncidentStore::default();
+        assert_eq!(store.reserve_feedback_timestamp_ms(100).unwrap(), 100);
+        assert_eq!(store.reserve_feedback_timestamp_ms(1).unwrap(), 101);
+
+        let reservations = (0..32)
+            .map(|_| {
+                let store = store.clone();
+                std::thread::spawn(move || store.reserve_feedback_timestamp_ms(1).unwrap())
+            })
+            .map(|reservation| reservation.join().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(reservations.len(), 32);
+        assert_eq!(reservations.first().copied(), Some(102));
+        assert_eq!(reservations.last().copied(), Some(133));
+    }
+
+    fn assert_stale_persist_preserves_feedback(store: &dyn IncidentStore) {
+        let incident = sample_incident();
+        store.persist(&incident).unwrap();
+        let mut stale = store
+            .load_by_incident_id(&incident.incident_id)
+            .unwrap()
+            .unwrap()
+            .incident;
+        store
+            .record_feedback_outcome(
+                &incident.incident_id,
+                AnalystFeedbackAuditEntry {
+                    feedback_id: "feedback:durable".to_string(),
+                    received_at_ms: 1_700_000_002_000,
+                    action: ProvidenceFeedbackAction::Dismiss,
+                    analyst_id: "analyst:durable".to_string(),
+                    incident_id: incident.incident_id.clone(),
+                    finding_id: Some("finding:durable".to_string()),
+                    reason: None,
+                    request_signature: "sha256=durable".to_string(),
+                    evidence: None,
+                    soar_lineage: None,
+                    payload: serde_json::json!({"source": "durable"}),
+                    outcome: serde_json::json!({"status": "recorded"}),
+                },
+                FalsePositiveMeasurement {
+                    finding_id: "finding:durable".to_string(),
+                    hunt_id: "hunt:durable".to_string(),
+                    strategy_id: "strategy:durable".to_string(),
+                    host_id: None,
+                    feedback_id: "feedback:durable".to_string(),
+                    reviewed_at_ms: 1_700_000_002_000,
+                    analyst_id: "analyst:durable".to_string(),
+                    action: ProvidenceFeedbackAction::Dismiss,
+                    reason: None,
+                    soar_lineage: None,
+                    false_positive: true,
+                },
+            )
+            .unwrap()
+            .unwrap();
+
+        stale.summary = "refreshed correlation snapshot".to_string();
+        store.persist(&stale).unwrap();
+        let reloaded = store
+            .load_by_incident_id(&incident.incident_id)
+            .unwrap()
+            .unwrap()
+            .incident;
+        assert_eq!(reloaded.summary, "refreshed correlation snapshot");
+        assert_eq!(reloaded.feedback_audit_entries.len(), 1);
+        assert_eq!(
+            reloaded.feedback_audit_entries[0].feedback_id,
+            "feedback:durable"
+        );
+        assert_eq!(reloaded.false_positive_measurements.len(), 1);
+        assert_eq!(
+            reloaded.false_positive_measurements[0].feedback_id,
+            "feedback:durable"
+        );
+    }
+
+    #[test]
+    fn stale_correlation_persist_cannot_erase_concurrent_feedback() {
+        assert_stale_persist_preserves_feedback(&MemoryIncidentStore::default());
+
+        let root = std::env::temp_dir().join("swarm-spine-incidents-stale-persist");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        assert_stale_persist_preserves_feedback(&store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_store_records_concurrent_feedback_outcomes_without_lost_updates() {
+        let root = std::env::temp_dir().join("swarm-spine-incidents-concurrent-feedback");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        let incident = sample_incident();
+        store.persist(&incident).unwrap();
+
+        let writers = (0..16_i64)
+            .map(|index| {
+                let root = root.clone();
+                let incident_id = incident.incident_id.clone();
+                std::thread::spawn(move || {
+                    let store = FileIncidentStore::open(root).unwrap();
+                    let feedback_id = format!("feedback-{index}");
+                    let finding_id = format!("finding-{index}");
+                    store
+                        .record_feedback_outcome(
+                            &incident_id,
+                            AnalystFeedbackAuditEntry {
+                                feedback_id: feedback_id.clone(),
+                                received_at_ms: 1_700_000_001_000 + index,
+                                action: ProvidenceFeedbackAction::Dismiss,
+                                analyst_id: format!("analyst-{index}"),
+                                incident_id: incident_id.clone(),
+                                finding_id: Some(finding_id.clone()),
+                                reason: None,
+                                request_signature: format!("sha256={index}"),
+                                evidence: None,
+                                soar_lineage: None,
+                                payload: serde_json::json!({"index": index}),
+                                outcome: serde_json::json!({"status": "recorded"}),
+                            },
+                            FalsePositiveMeasurement {
+                                finding_id,
+                                hunt_id: format!("hunt-{index}"),
+                                strategy_id: "strategy".to_string(),
+                                host_id: None,
+                                feedback_id,
+                                reviewed_at_ms: 1_700_000_001_000 + index,
+                                analyst_id: format!("analyst-{index}"),
+                                action: ProvidenceFeedbackAction::Dismiss,
+                                reason: None,
+                                soar_lineage: None,
+                                false_positive: true,
+                            },
+                        )
+                        .unwrap()
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        let loaded = store
+            .load_by_incident_id(&incident.incident_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.incident.feedback_audit_entries.len(), 16);
+        assert_eq!(loaded.incident.false_positive_measurements.len(), 16);
+        assert_eq!(
+            store.reserve_feedback_timestamp_ms(1).unwrap(),
+            1_700_000_001_016
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

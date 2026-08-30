@@ -25,6 +25,22 @@ FOREIGN_ACCOUNT="$RUNTIME_ACCOUNT"
 FOREIGN_USER="$RUNTIME_USER"
 FOREIGN_PASSWORD="$RUNTIME_PASSWORD"
 START_TIMEOUT_SECS="${SWARM_NATS_START_TIMEOUT_SECS:-90}"
+WITNESS_FIXTURE_BUCKETS=(
+  phase285_b_wrong_revision
+  phase285_b_confirmed
+  phase285_b_del
+  phase285_b_purge
+  phase285_b_unknown
+  phase285_b_direct
+  phase285_c_current
+  phase285_c_predecessor
+  phase285_c_prepared
+  phase285_c_abort
+  phase285_c_genesisabort
+  phase285_c_anchor
+  phase285_c_account
+  phase285_c_global
+)
 
 paths_overlap() {
   [[ "$1" == "$2" || "$1" == "$2/"* || "$2" == "$1/"* ]]
@@ -81,7 +97,16 @@ cleanup_confined_scratch() {
 }
 
 write_configuration() {
-  local scratch="$1" topology_mode="${2:-normal}"
+  local scratch="$1" topology_mode="${2:-normal}" bucket fixture_init_permissions=""
+  for bucket in "${WITNESS_FIXTURE_BUCKETS[@]}"; do
+    fixture_init_permissions+=$(printf ',\n            "%s",\n            "%s",\n            "%s",\n            "%s",\n            "%s"' \
+      "\$JS.API.STREAM.CREATE.KV_$bucket" \
+      "\$JS.API.STREAM.INFO.KV_$bucket" \
+      "\$JS.API.STREAM.MSG.GET.KV_$bucket" \
+      "\$JS.API.DIRECT.GET.KV_$bucket.>" \
+      "\$KV.$bucket.>")
+  done
+  fixture_init_permissions+=$',\n            "$JS.API.STREAM.DELETE.KV_phase285_c_anchor"'
   cat >"$scratch/nats.conf" <<EOF
 server_name: phase285-nats-harness
 port: 4222
@@ -193,7 +218,7 @@ accounts {
             "\$JS.API.STREAM.INFO.KV_phase285_service",
             "\$JS.API.STREAM.MSG.GET.KV_phase285_service",
             "\$KV.phase285_service.__witness_bucket_manifest",
-            "\$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"
+            "\$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"$fixture_init_permissions
           ],
           subscribe: ["_INBOX.>"]
         }
@@ -389,7 +414,11 @@ source = path.read_text()
 # PHASE285_TOPOLOGY_VALIDATOR_BEGIN
 PUBLIC=[f"swarm.governance.witness.v1.{suffix}" for suffix in ["fence","establish","discover","prepare","commit","abort","read_prepared","read_head","fetch_payload"]]
 PRIVATE=[f"swarm.governance.witness.store.v1.{suffix}" for suffix in ["inspect_ready","read_entry","compare_and_swap"]]
+WITNESS_FIXTURE_BUCKETS=["phase285_b_wrong_revision","phase285_b_confirmed","phase285_b_del","phase285_b_purge","phase285_b_unknown","phase285_b_direct","phase285_c_current","phase285_c_predecessor","phase285_c_prepared","phase285_c_abort","phase285_c_genesisabort","phase285_c_anchor","phase285_c_account","phase285_c_global"]
 INIT=["$JS.API.STREAM.CREATE.KV_phase285_service","$JS.API.STREAM.UPDATE.KV_phase285_service","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_service.__witness_bucket_manifest","$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"]
+for bucket in WITNESS_FIXTURE_BUCKETS:
+    INIT.extend([f"$JS.API.STREAM.CREATE.KV_{bucket}",f"$JS.API.STREAM.INFO.KV_{bucket}",f"$JS.API.STREAM.MSG.GET.KV_{bucket}",f"$JS.API.DIRECT.GET.KV_{bucket}.>",f"$KV.{bucket}.>"])
+INIT.append("$JS.API.STREAM.DELETE.KV_phase285_c_anchor")
 RELAY_PRESENT="PHASE285_RELAY {" in source
 ACCOUNTS=["PHASE285_RUNTIME","PHASE285_WITNESS"] + (["PHASE285_RELAY"] if RELAY_PRESENT else []) + ["PHASE285_WITNESS_STORE"]
 PRINCIPALS=[("PHASE285_RUNTIME","phase285_foreign"),("PHASE285_WITNESS","phase285_witness")] + ([('PHASE285_RELAY','phase285_relay')] if RELAY_PRESENT else []) + [("PHASE285_WITNESS_STORE","phase285_witness_store"),("PHASE285_WITNESS_STORE","phase285_expected")]
@@ -526,7 +555,7 @@ def validate(value):
 # PHASE285_TOPOLOGY_VALIDATOR_END
 
 validate(source)
-if mode == "validate": print(f"phase285_authority_topology accounts={len(ACCOUNTS)} principals={len(PRINCIPALS)} public=9 private=3 init=6 relay={int(RELAY_PRESENT)} passed=1"); raise SystemExit(0)
+if mode == "validate": print(f"phase285_authority_topology accounts={len(ACCOUNTS)} principals={len(PRINCIPALS)} public=9 private=3 init={len(INIT)} relay={int(RELAY_PRESENT)} passed=1"); raise SystemExit(0)
 if mode != "self-test": raise SystemExit("unknown topology validator mode")
 
 def once(text,old,new,label):
@@ -538,12 +567,25 @@ def swap(text,left,right,label):
 def mutate_init(text,transform):
     start=text.index('user: "phase285_expected"'); end=text.index("    exports:",start)
     return text[:start]+transform(text[start:end])+text[end:]
+def mutate_store_users(text,transform):
+    start=text.index('user: "phase285_witness_store"'); end=text.index("    exports:",start)
+    return text[:start]+transform(text[start:end])+text[end:]
 def once_after(text,anchor,old,new,label):
     start=text.index(anchor); position=text.find(old,start)
     if position<0: raise SystemExit(f"topology mutation anchor differs: {label}:0")
     return text[:position]+new+text[position+len(old):]
-runtime_fence='service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence" }'
-witness_inspect='service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready" }'
+if RELAY_PRESENT:
+    runtime_fence='service: { account: PHASE285_RELAY, subject: "swarm.governance.witness.relay.v1.fence" }, to: "swarm.governance.witness.v1.fence"'
+    witness_inspect='service: { account: PHASE285_RELAY, subject: "swarm.governance.witness.relay.store.v1.inspect_ready" }, to: "swarm.governance.witness.store.v1.inspect_ready"'
+    runtime_fence_wrong_to=runtime_fence.replace('to: "swarm.governance.witness.v1.fence"','to: "swarm.governance.witness.v1.wrong"')
+    runtime_fence_wrong_account=runtime_fence.replace("account: PHASE285_RELAY","account: PHASE285_WITNESS_STORE")
+    export_fence='{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RELAY] }'
+else:
+    runtime_fence='service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence" }'
+    witness_inspect='service: { account: PHASE285_WITNESS_STORE, subject: "swarm.governance.witness.store.v1.inspect_ready" }'
+    runtime_fence_wrong_to=runtime_fence[:-2]+', to: "swarm.governance.witness.v1.wrong" }'
+    runtime_fence_wrong_account=runtime_fence.replace("PHASE285_WITNESS","PHASE285_WITNESS_STORE")
+    export_fence='{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME] }'
 mutations=[]
 mutations.append(("runtime_witness_import_block_move",swap(source,runtime_fence,witness_inspect,"BLOCK_MOVE")))
 mutations.extend([
@@ -556,23 +598,23 @@ mutations.extend([
  ("runtime_private_import",once(source,runtime_fence,witness_inspect,"runtime_private_import")),
  ("witness_raw_js",once(source,'"swarm.governance.witness.store.v1.compare_and_swap"\n        ],','"swarm.governance.witness.store.v1.compare_and_swap", "$JS.API.>"\n        ],',"witness_raw_js")),
  ("store_public_service",once(source,'"swarm.governance.witness.store.v1.compare_and_swap",\n            "_INBOX.>"','"swarm.governance.witness.v1.prepare",\n            "_INBOX.>"',"store_public_service")),
- ("init_serving",once(source,'subscribe: ["_INBOX.>"]','subscribe: ["_INBOX.>", "swarm.governance.witness.store.v1.inspect_ready"]',"init_serving")),
+ ("init_serving",mutate_init(source,lambda block: once(block,'subscribe: ["_INBOX.>"]','subscribe: ["_INBOX.>", "swarm.governance.witness.store.v1.inspect_ready"]',"init_serving"))),
  ("init_raw_authority_widening",once(once(source,'"$JS.API.STREAM.CREATE.KV_phase285_service"','"$JS.API.>"',"init_raw_authority_widening"),'"$KV.phase285_service.__witness_bucket_manifest"','"$KV.>"',"init_raw_authority_widening")),
  ("init_manifest_admitted_subject_swap",mutate_init(source,lambda block: swap(block,'"$KV.phase285_service.__witness_bucket_manifest"','"$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"',"INIT_SUBJECT_SWAP"))),
- ("import_to_substitution",once(source,runtime_fence,runtime_fence[:-2]+', to: "swarm.governance.witness.v1.wrong" }',"import_to_substitution")),
- ("import_source_account_substitution",once(source,runtime_fence,runtime_fence.replace("PHASE285_WITNESS","PHASE285_WITNESS_STORE"),"import_source_account_substitution")),
- ("export_allowed_account_substitution",once(source,'{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_RUNTIME] }','{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE] }',"export_allowed_account_substitution")),
+ ("import_to_substitution",once(source,runtime_fence,runtime_fence_wrong_to,"import_to_substitution")),
+ ("import_source_account_substitution",once(source,runtime_fence,runtime_fence_wrong_account,"import_source_account_substitution")),
+ ("export_allowed_account_substitution",once(source,export_fence,'{ service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS_STORE] }',"export_allowed_account_substitution")),
  ("response_grant_move",once_after(source,'user: "phase285_witness"','allow_responses: { max: 1, expires: "12s" }','allow_responses: { max: 2, expires: "12s" }',"response_grant_move")),
  ("cross_principal_permission_swap",swap(source,'"swarm.governance.witness.store.v1.inspect_ready",\n          "swarm.governance.witness.store.v1.read_entry",\n          "swarm.governance.witness.store.v1.compare_and_swap"','"$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef",\n            "$JS.API.STREAM.INFO.KV_phase285_service",\n            "$JS.API.STREAM.MSG.GET.KV_phase285_service"',"PERMISSION_SWAP")),
 ])
 mutations.extend([
- ("extra_store_principal_raw_authority",once(source,'      }\n    ]\n    exports: [','      },\n      {\n        user: "phase285_extra", password: "phase285-extra-password",\n        permissions: { publish: ["$JS.API.>"], subscribe: ["_INBOX.>"] }\n      }\n    ]\n    exports: [',"extra_store_principal_raw_authority")),
+ ("extra_store_principal_raw_authority",mutate_store_users(source,lambda block: once(block,'      }\n    ]\n','      },\n      {\n        user: "phase285_extra", password: "phase285-extra-password",\n        permissions: { publish: ["$JS.API.>"], subscribe: ["_INBOX.>"] }\n      }\n    ]\n',"extra_store_principal_raw_authority"))),
  ("duplicate_store_imports_declaration",once(source,'    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"','    imports: []\n    imports: []\n    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"',"duplicate_store_imports_declaration")),
- ("duplicate_runtime_exports_declaration",once(source,'    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','    exports: []\n    exports: []\n    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"',"duplicate_runtime_exports_declaration")),
+ ("duplicate_runtime_exports_declaration",once(source,'    imports: [\n      { '+runtime_fence,'    exports: []\n    exports: []\n    imports: [\n      { '+runtime_fence,"duplicate_runtime_exports_declaration")),
 ])
 mutations.extend([
  ("malformed_store_import_row",once(source,'    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"','    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.store.v1.inspect_ready", phase285_unexpected: "present" } }\n    ]\n    exports: [\n      { service: "swarm.governance.witness.store.v1.inspect_ready"',"malformed_store_import_row")),
- ("malformed_runtime_export_row",once(source,'    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"','    exports: [\n      { service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS], phase285_unexpected: "present" }\n    ]\n    imports: [\n      { service: { account: PHASE285_WITNESS, subject: "swarm.governance.witness.v1.fence"',"malformed_runtime_export_row")),
+ ("malformed_runtime_export_row",once(source,'    imports: [\n      { '+runtime_fence,'    exports: [\n      { service: "swarm.governance.witness.v1.fence", accounts: [PHASE285_WITNESS], phase285_unexpected: "present" }\n    ]\n    imports: [\n      { '+runtime_fence,"malformed_runtime_export_row")),
 ])
 intended_reasons={
  "extra_store_principal_raw_authority":"topology[principal-inventory:PHASE285_WITNESS_STORE]",
@@ -1053,14 +1095,14 @@ PY
 }
 
 validate_account_isolation() {
-  local port="$1" mode="$2"
-  python3 -I - "$port" "$mode" "$EXPECTED_USER" "$EXPECTED_PASSWORD" "$FOREIGN_USER" "$FOREIGN_PASSWORD" <<'PY'
-import json, socket, sys
+  local port="$1" mode="$2" stream="${3:-KV_phase285_service}"
+  python3 -I - "$port" "$mode" "$stream" "$EXPECTED_USER" "$EXPECTED_PASSWORD" "$FOREIGN_USER" "$FOREIGN_PASSWORD" <<'PY'
+import json, socket, sys, time
 
 port, mode = int(sys.argv[1]), sys.argv[2]
-expected = (sys.argv[3], sys.argv[4])
-foreign = (sys.argv[5], sys.argv[6])
-stream = "KV_phase285_service"
+stream = sys.argv[3]
+expected = (sys.argv[4], sys.argv[5])
+foreign = (sys.argv[6], sys.argv[7])
 
 def request(credentials, subject, payload):
     inbox = "_INBOX.phase285.authority"
@@ -1076,8 +1118,22 @@ def request(credentials, subject, payload):
         ).encode() + body + b"\r\nPING\r\n"
         connection.sendall(commands)
         received = b""
-        while b"MSG " not in received or b"PONG\r\n" not in received:
-            received += connection.recv(65536)
+        response_deadline = time.monotonic() + 2
+        while b"MSG " not in received and b"-ERR " not in received:
+            remaining = response_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            connection.settimeout(remaining)
+            try:
+                received += connection.recv(65536)
+            except TimeoutError:
+                break
+        if b"MSG " not in received:
+            if b"-ERR " in received:
+                return {"transport_permission_error": True}
+            if b"PONG\r\n" in received:
+                return {"transport_no_response": True}
+            raise SystemExit(f"NATS request did not flush: {received!r}")
         marker = received.index(b"MSG ")
         header_end = received.index(b"\r\n", marker)
         header = received[marker:header_end].split()
@@ -1104,7 +1160,11 @@ visible = request(expected, f"$JS.API.STREAM.INFO.{stream}", {})
 if "error" in visible or visible.get("config", {}).get("name") != stream:
     raise SystemExit(f"expected account cannot inspect its authority fixture: {visible!r}")
 foreign_view = request(foreign, f"$JS.API.STREAM.INFO.{stream}", {})
-if "error" not in foreign_view:
+if (
+    "error" not in foreign_view
+    and foreign_view.get("transport_permission_error") is not True
+    and foreign_view.get("transport_no_response") is not True
+):
     raise SystemExit(f"foreign account observed expected authority fixture: {foreign_view!r}")
 PY
 }
@@ -1118,7 +1178,7 @@ checkpoint_control() (
   local event_trace="${observation}.events"
   local expected_token="${SWARM_NATS_CHECKPOINT_TOKEN:-}"
   local deadline mount_before mount_after image_before image_after container_before container_after live_leader
-  local checkpoint_client_port checkpoint_http_port checkpoint_http_url
+  local checkpoint_client_port checkpoint_http_port checkpoint_http_url checkpoint_stream
   [[ -n "$expected_token" && "$token" == "$expected_token" ]] || {
     echo "PHASE285-HARNESS[checkpoint-token]" >&2
     return 1
@@ -1138,8 +1198,8 @@ checkpoint_control() (
     }
     sleep 1
   done
-  python3 -I - "$acknowledgement" "$token" <<'PY'
-import json, pathlib, sys
+  checkpoint_stream="$(python3 -I - "$acknowledgement" "$token" <<'PY'
+import json, pathlib, re, sys
 path, token = pathlib.Path(sys.argv[1]), sys.argv[2]
 raw = path.read_bytes()
 if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
@@ -1149,11 +1209,13 @@ if set(event) != {"stream", "sequence", "duplicate", "proposed_digest", "token"}
     raise SystemExit("ack event field set differs")
 if event["token"] != token or event["duplicate"] is not False or event["sequence"] <= 0:
     raise SystemExit("ack event identity differs")
-if not isinstance(event["stream"], str) or not event["stream"]:
-    raise SystemExit("ack stream absent")
+if not isinstance(event["stream"], str) or re.fullmatch(r"KV_phase285_[A-Za-z0-9_-]{1,128}", event["stream"]) is None:
+    raise SystemExit("ack stream malformed")
 if not isinstance(event["proposed_digest"], str) or len(event["proposed_digest"]) != 64:
     raise SystemExit("ack proposed digest malformed")
+print(event["stream"])
 PY
+  )" || return 1
   (set -o noclobber; printf '1\tack_observed\t%s\n' "$token" >"$event_trace") 2>/dev/null || return 1
   container_before="$(compose_for ps -q nats)"
   [[ -n "$container_before" ]] || return 1
@@ -1186,9 +1248,11 @@ PY
   [[ -n "$live_leader" ]] || return 1
   [[ "$(curl -fsS "$checkpoint_http_url/jsz?config=true" | python3 -I -c 'import json,sys; print(str(json.load(sys.stdin).get("config", {}).get("sync_always", False)).lower())')" == true ]] || return 1
   validate_nats_login "$checkpoint_client_port" "$EXPECTED_USER" "$EXPECTED_PASSWORD" success
-  validate_account_isolation "$checkpoint_client_port" inspect
+  validate_account_isolation "$checkpoint_client_port" inspect "$checkpoint_stream"
   printf '%s\n' "$checkpoint_client_port" >"$SCRATCH/current-client-port.next"
   mv -- "$SCRATCH/current-client-port.next" "$SCRATCH/current-client-port"
+  printf '%s\n' "$checkpoint_http_port" >"$SCRATCH/current-http-port.next"
+  mv -- "$SCRATCH/current-http-port.next" "$SCRATCH/current-http-port"
   container_after="$(compose_for ps -q nats)"
   image_after="$(docker inspect "$container_after" --format '{{.Config.Image}}')"
   mount_after="$(docker inspect "$container_after" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}:{{.RW}}{{end}}{{end}}')"
@@ -1240,6 +1304,8 @@ checkpoint_unavailable_control() (
     done
     printf '%s\n' "$unavailable_client_port" >"$SCRATCH/current-client-port.next"
     mv -- "$SCRATCH/current-client-port.next" "$SCRATCH/current-client-port"
+    printf '%s\n' "$unavailable_http_port" >"$SCRATCH/current-http-port.next"
+    mv -- "$SCRATCH/current-http-port.next" "$SCRATCH/current-http-port"
   else
     return 64
   fi
@@ -1419,6 +1485,8 @@ EOF
   export SWARM_NATS_CHECKPOINT_TOKEN="$HARNESS_NONCE"
   printf '%s\n' "$NATS_PORT" >"$SCRATCH/current-client-port"
   export SWARM_NATS_CURRENT_PORT_FILE="$SCRATCH/current-client-port"
+  printf '%s\n' "$NATS_HTTP_PORT" >"$SCRATCH/current-http-port"
+  export SWARM_NATS_CURRENT_HTTP_PORT_FILE="$SCRATCH/current-http-port"
   set +e
   "$@" 2>&1 | tee -a "$transcript"
   child_status=${PIPESTATUS[0]}
