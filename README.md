@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(max-width: 500px)" srcset="docs/assets/hero-mobile.svg" />
-    <img src="docs/assets/hero.svg" alt="Ambush" width="900" />
+    <source media="(max-width: 500px)" srcset="docs/assets/hero-mobile-v2.svg" />
+    <img src="docs/assets/hero-v2.svg" alt="Ambush" width="900" />
   </picture>
 </p>
 
@@ -428,8 +428,8 @@ Adapter credentials resolve through `@secret:<name>` references against
 
 <p align="center">
   <picture>
-    <source media="(max-width: 500px)" srcset="docs/assets/security-mobile.svg" />
-    <img src="docs/assets/security.svg" alt="Defense in depth: a deterministic critical lane at the core, wrapped by fail-closed authorization, a named trusted computing base, a guard pipeline, adversarial pressure, and signed evidence" width="900" />
+    <source media="(max-width: 500px)" srcset="docs/assets/security-mobile-v2.svg" />
+    <img src="docs/assets/security-v2.svg" alt="Defense in depth: a deterministic critical lane at the core, wrapped by fail-closed authorization, a named trusted computing base, a guard pipeline, adversarial pressure, and signed evidence" width="900" />
   </picture>
 </p>
 
