@@ -438,11 +438,11 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance-witness":
         (16, "f88fe7c4abfacc87421b58a993de56f143342bb57fcd0ce72816613e2ff0a617"),
     "swarm-runtime":
-        (133, "c01258669da1ce444f7450c87eaf2a93aa28a7eb5525a5e4755707968d956234"),
+        (133, "b31da0ccd4342927347b379e1da3313ab79128cbdbd60f54157c2e9d61260202"),
     "swarm-ingest-runtime":
         (14, "aa68bbbe869250092bbb2833a6fcb0e5fe011bb0128b5d874d53731eee540c89"),
     "swarm-runtime-http":
-        (22, "e3b69f6bb535c9ce89f90394cd0a020c1b1b82a1f35c88e7e762b6af2275bee6"),
+        (22, "e2e60b8e142f3615470d4134fb5d66d17e98a21612ffe4e3b5b10ca13ae8ae01"),
     "swarm-agents":
         (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
     "swarm-evolution":
