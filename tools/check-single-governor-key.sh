@@ -361,7 +361,7 @@ EXPECTED_WORKSPACE_PACKAGES = {
     "swarm-whisker",
 }
 EXPECTED_AUTHORITY_IMPL_DIGEST = "960ffd9693b8aa84064bd1abc40130ed38d52aaa5d0e5635b7353d7d2b84a2e7"
-EXPECTED_GOVERNANCE_SOURCE_DIGEST = "7c467d658e671d2cfd6fefd22c3310b9619bdd4927179fba60f3ba43046c2c14"
+EXPECTED_GOVERNANCE_SOURCE_DIGEST = "1cf3f10dc555c9c8de2d3db1f02ef6dd2c79e461d9d213549c0273e8b06eef71"
 EXPECTED_STRICT_AUTHORITY_IMPL_DIGESTS = {
     (canonical, "implstd::fmt::DebugforGovernanceAuthority"):
         "351c05a0947ce39862c748abd2f3a30e1fdd3fed287829554ac153b05e1ef515",
@@ -434,7 +434,7 @@ EXPECTED_CLOSURE_MANIFEST_DIGESTS = {
 }
 EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
-        (14, "6f949c0cffbec7e59227db917a819b101873676678bcb3d8bf6e93f6a280f042"),
+        (14, "fa359ba1da72ec1543ac52678c2cc7cae86870843656e8dec3a35506facdbe76"),
     "swarm-governance-witness":
         (16, "02c83d33e86fcadf101d161346e230f2ae6638914fd49313b974de6e8a1568aa"),
     "swarm-runtime":
@@ -454,7 +454,7 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
 }
 EXPECTED_PRIVACY_SOURCE_DIGESTS = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"):
-        "7c467d658e671d2cfd6fefd22c3310b9619bdd4927179fba60f3ba43046c2c14",
+        "1cf3f10dc555c9c8de2d3db1f02ef6dd2c79e461d9d213549c0273e8b06eef71",
     pathlib.Path("crates/swarm-governance/src/persistence_protocol.rs"):
         "1fc3837ca0fdd6739352053266017162051925feb655a3b4f21fde77b5b8cfe0",
     pathlib.Path("crates/swarm-governance/src/witness_engine.rs"):
@@ -2144,7 +2144,10 @@ plant_compiler_input_fixture() {
 }
 
 prepare_source_cargo_home() {
-  local source_cargo_home="$ROOT_DIR/target/single-governor-source-inventory/cargo-home"
+  # The cache links are invocation-scoped. A protected negative-registry run
+  # intentionally supplies a different cache source; reusing its empty
+  # directory during a later standalone run produces a false offline failure.
+  local source_cargo_home="$FIXTURE_DIR/source-cargo-home"
   mkdir -p "$source_cargo_home"
   local cache_name
   for cache_name in registry git; do
