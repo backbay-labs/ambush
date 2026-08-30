@@ -1616,6 +1616,75 @@ async fn handler_accepts_valid_batch() {
     assert!(body.rejected.is_empty());
 }
 
+#[test]
+fn live_ingest_timestamp_validation_handles_seconds_milliseconds_and_invalid_values() {
+    assert_eq!(
+        super::normalized_ingest_timestamp_ms(1_700_000_000).unwrap(),
+        1_700_000_000_000
+    );
+    assert_eq!(
+        super::normalized_ingest_timestamp_ms(1_700_000_000_000).unwrap(),
+        1_700_000_000_000
+    );
+    assert!(matches!(
+        super::normalized_ingest_timestamp_ms(-1),
+        Err(super::IngestProcessingError::InvalidEventTimestamp { timestamp: -1 })
+    ));
+    assert!(matches!(
+        super::validate_live_event_timestamp(1_800_000_301, 1_800_000_000_000),
+        Err(super::IngestProcessingError::FutureEventTimestamp { .. })
+    ));
+}
+
+#[tokio::test]
+async fn handler_rejects_future_timestamp_before_detection_or_deposit() {
+    let state = test_ingest_state();
+    let app = ingest_router(state.clone());
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let mut event = valid_process_event_json();
+    event["timestamp"] = json!(now_ms + 6 * 60 * 1_000);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![event])).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = parse_response(response).await;
+    assert!(body.accepted.is_empty());
+    assert_eq!(body.rejected.len(), 1);
+    assert!(matches!(
+        body.rejected[0].status,
+        super::IngestEventStatus::Rejected
+    ));
+    assert!(
+        body.rejected[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("trusted ingest ceiling"))
+    );
+    assert!(
+        state
+            .current_substrate()
+            .recent_deposits(10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn handler_rejects_malformed_batch() {
     let app = ingest_router(test_ingest_state());

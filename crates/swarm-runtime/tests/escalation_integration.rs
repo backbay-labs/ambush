@@ -307,15 +307,17 @@ async fn mode_progression_normal_to_alert_to_incident() {
     let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
 
     for key in [&signing_key_a(), &signing_key_b()] {
-        substrate
-            .deposit(make_deposit(
-                key,
-                ThreatClass::Execution,
-                1.1,
-                1_700_000_000,
-            ))
-            .await
-            .unwrap();
+        for _ in 0..2 {
+            substrate
+                .deposit(make_deposit(
+                    key,
+                    ThreatClass::Execution,
+                    0.6,
+                    1_700_000_000,
+                ))
+                .await
+                .unwrap();
+        }
     }
     let alert = monitor.evaluate_all(1_700_000_000).await.unwrap();
     assert_eq!(alert.current_mode, SwarmMode::Alert);
@@ -361,10 +363,12 @@ async fn concentration_monitor_deescalates_after_cooldown() {
     let start = 1_700_000_000;
 
     for key in [&signing_key_a(), &signing_key_b()] {
-        substrate
-            .deposit(make_deposit(key, ThreatClass::Execution, 1.1, start))
-            .await
-            .unwrap();
+        for _ in 0..2 {
+            substrate
+                .deposit(make_deposit(key, ThreatClass::Execution, 0.6, start))
+                .await
+                .unwrap();
+        }
     }
 
     let alert = monitor.evaluate_all(start).await.unwrap();

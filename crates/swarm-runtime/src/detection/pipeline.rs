@@ -71,7 +71,13 @@ where
     S: PheromoneSubstrate,
 {
     hydrate_stateful_detectors(detector, substrate, agent_id).await?;
-    refresh_adaptive_detectors(detector, substrate, pheromone, event.timestamp).await?;
+    refresh_adaptive_detectors(
+        detector,
+        substrate,
+        pheromone,
+        normalized_timestamp_seconds(event.timestamp),
+    )
+    .await?;
     let findings =
         enrich_findings_with_threat_intel(substrate, event, evaluate_event(detector, event))
             .await?;
@@ -522,10 +528,18 @@ fn annotate_threat_intel_evidence(
 }
 
 fn normalized_timestamp_ms(timestamp: i64) -> i64 {
-    if timestamp.abs() < 100_000_000_000 {
+    if timestamp < 100_000_000_000 {
         timestamp.saturating_mul(1_000)
     } else {
         timestamp
+    }
+}
+
+fn normalized_timestamp_seconds(timestamp: i64) -> i64 {
+    if timestamp < 100_000_000_000 {
+        timestamp
+    } else {
+        timestamp / 1_000
     }
 }
 
@@ -568,7 +582,7 @@ where
             threat_class: finding.threat_class.clone(),
             severity: finding.severity,
             confidence: finding.confidence,
-            timestamp: event.timestamp,
+            timestamp: normalized_timestamp_seconds(event.timestamp),
             decay_half_life: policy.half_life_secs,
             agent_id: strategy_scoped_agent_id(agent_id, &finding.strategy_id),
             agent_identity: String::new(),
@@ -907,7 +921,7 @@ policy:
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
             event_id: "evt-1".to_string(),
-            timestamp: 1_700_000_000,
+            timestamp: 1_700_000_000_000,
             host_id: Some("host-1".to_string()),
             payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
                 parent_process: "winword".to_string(),
@@ -1209,6 +1223,7 @@ policy:
             format!("{}:dns_exfiltration", base_agent_id)
         );
         for deposit in &outcome.deposits {
+            assert_eq!(deposit.timestamp, 1_700_000_000);
             validate_deposit_signature(deposit).unwrap();
         }
     }

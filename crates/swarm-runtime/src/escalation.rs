@@ -572,10 +572,12 @@ mod tests {
         let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
 
         for key in [&signing_key_a(), &signing_key_b()] {
-            substrate
-                .deposit(make_deposit(key, 1.1, 1_700_000_000))
-                .await
-                .unwrap();
+            for _ in 0..2 {
+                substrate
+                    .deposit(make_deposit(key, 0.6, 1_700_000_000))
+                    .await
+                    .unwrap();
+            }
         }
         let alert = monitor.evaluate_all(1_700_000_000).await.unwrap();
         assert_eq!(alert.current_mode, SwarmMode::Alert);
@@ -604,10 +606,12 @@ mod tests {
         );
 
         for key in [&signing_key_a(), &signing_key_b()] {
-            substrate
-                .deposit(make_deposit(key, 1.1, 1_700_000_100))
-                .await
-                .unwrap();
+            for _ in 0..2 {
+                substrate
+                    .deposit(make_deposit(key, 0.6, 1_700_000_100))
+                    .await
+                    .unwrap();
+            }
         }
         let outcome = monitor.evaluate_all(1_700_000_100).await.unwrap();
         assert_eq!(outcome.current_mode, SwarmMode::Incident);

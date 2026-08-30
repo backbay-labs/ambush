@@ -399,16 +399,8 @@ impl EvidenceRegistry {
                 source_key,
                 predecessor,
                 successor,
-                replaced_conflict,
                 size,
-            } => self.apply_insert(
-                envelope,
-                source_key,
-                predecessor,
-                successor,
-                replaced_conflict,
-                size,
-            ),
+            } => self.apply_insert(envelope, source_key, predecessor, successor, size),
         }
     }
 
@@ -424,12 +416,6 @@ impl EvidenceRegistry {
     ) -> Result<EvidenceAdmissionOutcome, EvidenceAdmissionError> {
         // Perform all registry/resource checks before cloning either store.
         let plan = self.preflight(&envelope)?;
-        let replaced_conflict = match &plan {
-            AdmissionPlan::Insert {
-                replaced_conflict, ..
-            } => replaced_conflict.as_ref(),
-            AdmissionPlan::Idempotent => None,
-        };
         let evidence_id = envelope.evidence_id.clone();
         let mut candidate_registry = self.clone();
         let outcome = candidate_registry.admit(envelope.clone())?;
@@ -460,9 +446,6 @@ impl EvidenceRegistry {
         };
         let mut candidate_graph = graph.clone();
         candidate_graph.admit_evidence(envelope)?;
-        if let Some(conflict_id) = replaced_conflict {
-            candidate_graph.remove_conflict(conflict_id)?;
-        }
         for conflict_id in new_conflict_ids {
             let conflict = candidate_registry
                 .conflicts
@@ -671,21 +654,8 @@ impl EvidenceRegistry {
                 ids.range(envelope.evidence_id.clone()..).next().cloned(),
             )
         });
-        let removed = usize::from(predecessor.is_some() && successor.is_some());
         let added = usize::from(predecessor.is_some()) + usize::from(successor.is_some());
-        let replaced_conflict = match (&predecessor, &successor) {
-            (Some(predecessor), Some(successor)) => {
-                Some(self.conflict_for_ids(predecessor, successor)?.conflict_id)
-            }
-            _ => None,
-        };
-        if self
-            .conflicts
-            .len()
-            .saturating_sub(removed)
-            .saturating_add(added)
-            > self.limits.max_contradictions
-        {
+        if self.conflicts.len().saturating_add(added) > self.limits.max_contradictions {
             return Err(EvidenceAdmissionError::Graph(
                 GraphAdmissionError::ResourceLimitExceeded {
                     resource: "conflicts".to_string(),
@@ -697,7 +667,6 @@ impl EvidenceRegistry {
             source_key,
             predecessor,
             successor,
-            replaced_conflict,
             size,
         })
     }
@@ -708,12 +677,8 @@ impl EvidenceRegistry {
         source_key: SourceRecordKey,
         predecessor: Option<EvidenceId>,
         successor: Option<EvidenceId>,
-        replaced_conflict: Option<ContradictionId>,
         size: usize,
     ) -> Result<EvidenceAdmissionOutcome, EvidenceAdmissionError> {
-        if let Some(conflict_id) = replaced_conflict {
-            self.conflicts.remove(&conflict_id);
-        }
         let evidence_id = envelope.evidence_id.clone();
         self.evidence.insert(evidence_id.clone(), envelope);
         self.evidence_bytes = self.evidence_bytes.saturating_add(size);
@@ -786,7 +751,6 @@ enum AdmissionPlan {
         source_key: SourceRecordKey,
         predecessor: Option<EvidenceId>,
         successor: Option<EvidenceId>,
-        replaced_conflict: Option<ContradictionId>,
         size: usize,
     },
 }

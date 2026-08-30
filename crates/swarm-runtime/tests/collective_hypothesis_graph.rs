@@ -7,6 +7,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
@@ -29,6 +31,7 @@ use swarm_runtime::hypothesis_graph::{
     MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, WitnessAdmission, normalize_source_timestamp,
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
 };
+use swarm_spine::{FileHypothesisGraphStore, GraphCasEnvelope, HypothesisGraphStore};
 
 fn key(seed: u8) -> Keypair {
     Keypair::from_seed(&[seed; 32])
@@ -1805,6 +1808,84 @@ fn registry_limits_and_graph_transaction_cover_aggregate_bytes_witnesses_and_con
     assert_eq!(bounded_registry.conflicts(), before_registry.conflicts());
     assert_eq!(bounded_graph.evidence, before_graph.evidence);
     assert_eq!(bounded_graph.conflicts, before_graph.conflicts);
+}
+
+#[test]
+fn middle_evidence_append_preserves_durable_historical_conflict() {
+    let evidence_signer = key(69);
+    let authority = key(70);
+    let mut envelopes = [
+        "curl https://one.example",
+        "curl https://two.example",
+        "curl https://three.example",
+    ]
+    .into_iter()
+    .map(|command_line| {
+        normalize_telemetry_event(
+            &process_event("process:durable-middle", command_line),
+            &clock(),
+            &evidence_signer,
+            GraphProducerRole::Normalizer,
+            "normalizer-durable-middle",
+        )
+        .unwrap()
+    })
+    .collect::<Vec<_>>();
+    envelopes.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
+    let low = envelopes[0].clone();
+    let middle = envelopes[1].clone();
+    let high = envelopes[2].clone();
+
+    let mut registry = EvidenceRegistry::with_key(&evidence_signer);
+    let mut graph = HypothesisGraph::new(
+        GraphId::new("graph:durable-middle"),
+        GraphResourceLimits::default(),
+    )
+    .unwrap();
+    registry.admit_into_graph(&mut graph, low).unwrap();
+    registry.admit_into_graph(&mut graph, high).unwrap();
+    let historical_conflict_id = graph
+        .conflicts
+        .keys()
+        .next()
+        .cloned()
+        .expect("two conflicting envelopes must create one durable conflict");
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "swarm-hypothesis-middle-cas-{}-{unique}",
+        std::process::id()
+    ));
+    let store = FileHypothesisGraphStore::new(&path, graph.clone(), authority.clone()).unwrap();
+    let baseline = store.snapshot().unwrap();
+
+    registry.admit_into_graph(&mut graph, middle).unwrap();
+    registry.validate().unwrap();
+    assert_eq!(graph.conflicts.len(), 3);
+    assert!(graph.conflicts.contains_key(&historical_conflict_id));
+    assert_eq!(graph.conflicts, registry.conflicts().clone());
+
+    let mut candidate = baseline.state;
+    candidate.graph = graph;
+    store
+        .compare_and_swap(
+            GraphCasEnvelope::new(baseline.revision, candidate)
+                .unwrap()
+                .authorized_by(&authority, "planner-durable-middle")
+                .unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = FileHypothesisGraphStore::open_with_signer(&path, authority).unwrap();
+    let persisted = reopened.snapshot().unwrap().state.graph;
+    assert_eq!(persisted.conflicts.len(), 3);
+    assert!(persisted.conflicts.contains_key(&historical_conflict_id));
+    drop(reopened);
+    let _ = fs::remove_dir_all(path);
 }
 
 #[test]

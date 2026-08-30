@@ -35,6 +35,13 @@ const COMPACTED_DEPOSIT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_LOCAL_DEPOSIT_JOURNAL_BYTES: u64 =
     (MAX_ACTIVE_DEPOSIT_BYTES + MAX_ACTIVE_DEPOSITS) as u64;
 
+// Zero-strength deposits are used for typed control records (for example,
+// Sphinx memory queries/answers and Providence feedback), not concentration
+// evidence. They must remain durable long enough for consumers to observe
+// them, while still expiring under the configured decay policy so delayed
+// control-record floods cannot consume the bounded retention window.
+const CONTROL_RECORD_RETENTION_STRENGTH: f64 = 1.0;
+
 #[cfg(all(test, unix))]
 static REWRITE_PARENT_SYNC_FAILURE_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
@@ -345,6 +352,7 @@ pub(crate) struct VerifiedDeposit {
 
 impl VerifiedDeposit {
     pub(crate) fn admit(deposit: PheromoneDeposit) -> Result<Self, SubstrateError> {
+        validate_deposit_numeric_fields(&deposit)?;
         let encoded_len = serde_json::to_vec(&deposit)
             .map_err(|source| SubstrateError::Encode {
                 context: "verified pheromone deposit".to_string(),
@@ -366,6 +374,34 @@ impl VerifiedDeposit {
     }
 }
 
+fn validate_deposit_numeric_fields(deposit: &PheromoneDeposit) -> Result<(), SubstrateError> {
+    if !deposit.confidence.is_finite() || !(0.0..=1.0).contains(&deposit.confidence) {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "confidence must be finite and between 0.0 and 1.0, got {}",
+                deposit.confidence
+            ),
+        });
+    }
+    if !deposit.decay_half_life.is_finite() || deposit.decay_half_life <= 0.0 {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "decay_half_life must be finite and greater than 0.0, got {}",
+                deposit.decay_half_life
+            ),
+        });
+    }
+    if deposit.timestamp < 0 {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "timestamp must be a nonnegative Unix timestamp in seconds, got {}",
+                deposit.timestamp
+            ),
+        });
+    }
+    Ok(())
+}
+
 impl Deref for VerifiedDeposit {
     type Target = PheromoneDeposit;
 
@@ -378,7 +414,7 @@ impl Deref for VerifiedDeposit {
 struct RetainedDeposits {
     entries: Vec<VerifiedDeposit>,
     encoded_bytes: usize,
-    timestamp_high_water: Option<i64>,
+    timestamp_high_water: BTreeMap<ThreatClass, i64>,
 }
 
 impl RetainedDeposits {
@@ -388,16 +424,21 @@ impl RetainedDeposits {
         limits: DepositRetentionLimits,
         evaporation_threshold: f64,
     ) -> Result<usize, SubstrateError> {
+        let threat_class = deposit.threat_class.clone();
         let timestamp_high_water = self
             .timestamp_high_water
-            .map_or(deposit.timestamp, |current| current.max(deposit.timestamp));
-        if deposit.is_evaporated(timestamp_high_water, evaporation_threshold) {
+            .get(&threat_class)
+            .map_or(deposit.timestamp, |current| {
+                (*current).max(deposit.timestamp)
+            });
+        if is_retention_expired(&deposit, timestamp_high_water, evaporation_threshold) {
             return Err(SubstrateError::ExpiredDeposit {
                 timestamp: deposit.timestamp,
                 timestamp_high_water,
             });
         }
-        self.timestamp_high_water = Some(timestamp_high_water);
+        self.timestamp_high_water
+            .insert(threat_class, timestamp_high_water);
         self.encoded_bytes = self.encoded_bytes.saturating_add(deposit.encoded_len);
         self.entries.push(deposit);
         Ok(self.compact_if_needed(limits))
@@ -452,6 +493,29 @@ impl RetainedDeposits {
     fn len(&self) -> usize {
         self.entries.len()
     }
+}
+
+pub(crate) fn retention_initial_strength(deposit: &PheromoneDeposit) -> f64 {
+    if deposit.confidence == 0.0 {
+        CONTROL_RECORD_RETENTION_STRENGTH
+    } else {
+        deposit.confidence
+    }
+}
+
+pub(crate) fn is_retention_expired(
+    deposit: &PheromoneDeposit,
+    now: i64,
+    evaporation_threshold: f64,
+) -> bool {
+    let initial_strength = retention_initial_strength(deposit);
+    let retained_strength = if now <= deposit.timestamp {
+        initial_strength
+    } else {
+        let elapsed = (now - deposit.timestamp) as f64;
+        initial_strength * (0.5_f64).powf(elapsed / deposit.decay_half_life)
+    };
+    retained_strength < evaporation_threshold
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1077,7 +1141,7 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .map_err(|_| SubstrateError::PoisonedLock)?;
         let removed = guard.retain(|deposit| {
             let policy = resolved_policy(&self.config, &config_guard, &deposit.threat_class);
-            !deposit.is_evaporated(now, policy.evaporation_threshold)
+            !is_retention_expired(deposit, now, policy.evaporation_threshold)
         });
         Ok(removed)
     }
@@ -1444,7 +1508,7 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
         let mut candidate = guard.clone();
         let removed = candidate.retain(|deposit| {
             let policy = resolved_policy(&self.config, &config_guard, &deposit.threat_class);
-            !deposit.is_evaporated(now, policy.evaporation_threshold)
+            !is_retention_expired(deposit, now, policy.evaporation_threshold)
         });
         match rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries) {
             Ok(()) => {}
@@ -2924,6 +2988,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn zero_strength_control_records_have_a_bounded_retention_lifetime() {
+        let substrate = in_memory();
+        substrate
+            .deposit(sample_deposit("memory-query", 100, 0.0))
+            .await
+            .unwrap();
+
+        assert_eq!(substrate.recent_deposits(10).await.unwrap().len(), 1);
+        let concentration = substrate
+            .query_concentration(&ThreatClass::Execution, 100)
+            .await
+            .unwrap();
+        assert_eq!(concentration.total_strength, 0.0);
+        assert_eq!(substrate.gc_evaporated(100).await.unwrap(), 0);
+
+        assert_eq!(substrate.gc_evaporated(100_000).await.unwrap(), 1);
+        assert!(substrate.recent_deposits(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn timestamp_high_water_is_isolated_by_threat_class() {
+        let substrate = in_memory();
+        substrate
+            .deposit(sample_deposit("future-execution", 100_000, 0.9))
+            .await
+            .unwrap();
+
+        let mut defense_evasion = sample_deposit("older-defense-evasion", 0, 0.9);
+        defense_evasion.threat_class = ThreatClass::DefenseEvasion;
+        sign_deposit(
+            &mut defense_evasion,
+            &signing_key_for_label("older-defense-evasion"),
+        );
+        substrate.deposit(defense_evasion).await.unwrap();
+
+        let deposits = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(deposits.len(), 2);
+        assert!(
+            deposits
+                .iter()
+                .any(|deposit| deposit.threat_class == ThreatClass::DefenseEvasion)
+        );
+    }
+
+    #[tokio::test]
     async fn query_threat_intel_entry_respects_normalization_and_expiration() {
         let substrate = in_memory();
         substrate
@@ -3114,6 +3223,22 @@ mod tests {
                 })
             ));
         }
+
+        let expired_control = sample_deposit("expired-control", 0, 0.0);
+        assert!(matches!(
+            memory.deposit(expired_control.clone()).await,
+            Err(super::SubstrateError::ExpiredDeposit {
+                timestamp_high_water: 100_000,
+                ..
+            })
+        ));
+        assert!(matches!(
+            local.deposit(expired_control).await,
+            Err(super::SubstrateError::ExpiredDeposit {
+                timestamp_high_water: 100_000,
+                ..
+            })
+        ));
 
         for deposits in [
             memory.recent_deposits(10).await.unwrap(),
@@ -3788,6 +3913,43 @@ mod tests {
 
         let deposits = substrate.recent_deposits(10).await.unwrap();
         assert_eq!(deposits.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deposit_rejects_signed_invalid_numeric_fields() {
+        let substrate = in_memory();
+        let key = signing_key_for_label("invalid-numeric");
+
+        for confidence in [-0.1, 1.1] {
+            let mut deposit = sample_deposit("invalid-numeric", 100, 0.9);
+            deposit.confidence = confidence;
+            sign_deposit(&mut deposit, &key);
+            assert!(matches!(
+                substrate.deposit(deposit).await,
+                Err(super::SubstrateError::InvalidDeposit { reason })
+                    if reason.contains("confidence must be finite")
+            ));
+        }
+
+        for decay_half_life in [0.0, -1.0] {
+            let mut deposit = sample_deposit("invalid-numeric", 100, 0.9);
+            deposit.decay_half_life = decay_half_life;
+            sign_deposit(&mut deposit, &key);
+            assert!(matches!(
+                substrate.deposit(deposit).await,
+                Err(super::SubstrateError::InvalidDeposit { reason })
+                    if reason.contains("decay_half_life must be finite")
+            ));
+        }
+
+        let mut deposit = sample_deposit("invalid-numeric", 100, 0.9);
+        deposit.timestamp = -1;
+        sign_deposit(&mut deposit, &key);
+        assert!(matches!(
+            substrate.deposit(deposit).await,
+            Err(super::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("timestamp must be a nonnegative Unix timestamp")
+        ));
     }
 
     #[tokio::test]

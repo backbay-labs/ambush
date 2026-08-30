@@ -2,7 +2,7 @@ use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, V
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use swarm_core::agent::AgentRole;
 use swarm_core::config::IdentityConfig;
@@ -315,8 +315,9 @@ impl FileAgentKeyStore {
         slot: &str,
     ) -> Result<(PersistedAgentIdentity, AgentKeyLoadStatus), AgentIdentityError> {
         let path = self.key_path(role, slot);
-        match fs::read(&path) {
-            Ok(bytes) => Self::decode_key(&path, &bytes)
+        match fs::File::open(&path) {
+            Ok(file) => self
+                .load_durable_existing_key(&path, file)
                 .map(|identity| (identity, AgentKeyLoadStatus::Loaded)),
             Err(source) if source.kind() == ErrorKind::NotFound => {
                 let signing_key = SigningKey::generate(&mut OsRng);
@@ -326,11 +327,12 @@ impl FileAgentKeyStore {
                         AgentKeyLoadStatus::Created,
                     ))
                 } else {
-                    let bytes = fs::read(&path).map_err(|source| AgentIdentityError::Read {
-                        path: path.clone(),
-                        source,
-                    })?;
-                    Self::decode_key(&path, &bytes)
+                    let file =
+                        fs::File::open(&path).map_err(|source| AgentIdentityError::Read {
+                            path: path.clone(),
+                            source,
+                        })?;
+                    self.load_durable_existing_key(&path, file)
                         .map(|identity| (identity, AgentKeyLoadStatus::Loaded))
                 }
             }
@@ -374,6 +376,47 @@ impl FileAgentKeyStore {
         Ok(PersistedAgentIdentity::from_signing_key(
             SigningKey::from_bytes(&seed),
         ))
+    }
+
+    fn load_durable_existing_key(
+        &self,
+        path: &Path,
+        file: fs::File,
+    ) -> Result<PersistedAgentIdentity, AgentIdentityError> {
+        self.load_durable_existing_key_with_sync(path, file, fs::File::sync_all, |parent| {
+            fs::File::open(parent).and_then(|directory| directory.sync_all())
+        })
+    }
+
+    fn load_durable_existing_key_with_sync<FileSync, ParentSync>(
+        &self,
+        path: &Path,
+        mut file: fs::File,
+        sync_file: FileSync,
+        sync_parent: ParentSync,
+    ) -> Result<PersistedAgentIdentity, AgentIdentityError>
+    where
+        FileSync: FnOnce(&fs::File) -> std::io::Result<()>,
+        ParentSync: FnOnce(&Path) -> std::io::Result<()>,
+    {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|source| AgentIdentityError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        let identity = Self::decode_key(path, &bytes)?;
+        sync_file(&file).map_err(|source| AgentIdentityError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if let Some(parent) = path.parent() {
+            sync_parent(parent).map_err(|source| AgentIdentityError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(identity)
     }
 
     fn write_new_key(
@@ -1181,6 +1224,31 @@ mod tests {
                 Err(super::AgentIdentityError::Write { .. })
             ));
             assert_eq!(fs::read(&path).unwrap(), signing_key.to_bytes());
+
+            let file = fs::File::open(&path).unwrap();
+            let retry = store.load_durable_existing_key_with_sync(
+                &path,
+                file,
+                |file| {
+                    if fail_file_sync {
+                        Err(std::io::Error::other("injected retry file sync failure"))
+                    } else {
+                        file.sync_all()
+                    }
+                },
+                |parent| {
+                    if fail_file_sync {
+                        fs::File::open(parent).and_then(|directory| directory.sync_all())
+                    } else {
+                        Err(std::io::Error::other("injected retry parent sync failure"))
+                    }
+                },
+            );
+            assert!(matches!(
+                retry,
+                Err(super::AgentIdentityError::Write { .. })
+            ));
+
             let (loaded, status) = store
                 .load_or_create_with_status(AgentRole::Tom, slot)
                 .unwrap();

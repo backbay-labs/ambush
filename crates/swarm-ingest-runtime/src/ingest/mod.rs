@@ -119,6 +119,9 @@ type IngestBuiltRuntime = (
     Arc<CompositeDetector>,
 );
 
+const MAX_INGEST_FUTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
+const TIMESTAMP_MILLISECONDS_CUTOFF: i64 = 100_000_000_000;
+
 type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send + Sync>;
 
 struct IngestRuntimeRequestResponseRouter {
@@ -1143,6 +1146,20 @@ async fn process_runtime_event(
     correlation_id: &str,
     event: TelemetryEvent,
 ) -> Result<(), IngestProcessingError> {
+    let observed_now_ms = now_ms();
+    if let Err(error) = validate_live_event_timestamp(event.timestamp, observed_now_ms) {
+        let reason = error.to_string();
+        state.publish_runtime_event(RuntimeEvent::Ingest {
+            emitted_at_ms: observed_now_ms,
+            correlation_id: correlation_id.to_string(),
+            event_id: event.event_id.clone(),
+            source: event.source.clone(),
+            host_id: event.host_id.clone(),
+            accepted: false,
+            reason: Some(reason),
+        });
+        return Err(error);
+    }
     let trace_id = correlation_id.to_string();
     let span = tracing::info_span!(
         "ingest.process_runtime_event",
@@ -1161,7 +1178,7 @@ async fn process_runtime_event(
                 live_mode,
                 receipt_chain: Vec::new(),
                 correlation_id: Some(correlation_id.to_string()),
-                now_ms: now_ms(),
+                now_ms: observed_now_ms,
             };
             let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
             let stack = state.stack.load_full();
@@ -1496,11 +1513,61 @@ fn canonical_approval_voter_id(operator_id: &str) -> Option<String> {
 
 #[derive(Debug, thiserror::Error)]
 enum IngestProcessingError {
+    #[error("event timestamp {timestamp} must be a nonnegative Unix timestamp")]
+    InvalidEventTimestamp { timestamp: i64 },
+
+    #[error(
+        "event timestamp {timestamp} normalizes to {normalized_timestamp_ms}ms, beyond the trusted ingest ceiling {maximum_timestamp_ms}ms"
+    )]
+    FutureEventTimestamp {
+        timestamp: i64,
+        normalized_timestamp_ms: i64,
+        maximum_timestamp_ms: i64,
+    },
+
     #[error(transparent)]
     Service(#[from] ServiceError),
 
     #[error(transparent)]
     DemoApproval(#[from] DemoApprovalError),
+}
+
+impl IngestProcessingError {
+    fn is_event_rejection(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidEventTimestamp { .. } | Self::FutureEventTimestamp { .. }
+        )
+    }
+}
+
+fn normalized_ingest_timestamp_ms(timestamp: i64) -> Result<i64, IngestProcessingError> {
+    if timestamp < 0 {
+        return Err(IngestProcessingError::InvalidEventTimestamp { timestamp });
+    }
+    if timestamp < TIMESTAMP_MILLISECONDS_CUTOFF {
+        timestamp
+            .checked_mul(1_000)
+            .ok_or(IngestProcessingError::InvalidEventTimestamp { timestamp })
+    } else {
+        Ok(timestamp)
+    }
+}
+
+fn validate_live_event_timestamp(
+    timestamp: i64,
+    observed_now_ms: i64,
+) -> Result<(), IngestProcessingError> {
+    let normalized_timestamp_ms = normalized_ingest_timestamp_ms(timestamp)?;
+    let maximum_timestamp_ms = observed_now_ms.saturating_add(MAX_INGEST_FUTURE_SKEW_MS);
+    if normalized_timestamp_ms > maximum_timestamp_ms {
+        return Err(IngestProcessingError::FutureEventTimestamp {
+            timestamp,
+            normalized_timestamp_ms,
+            maximum_timestamp_ms,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -2673,7 +2740,11 @@ pub async fn ingest_events_handler(
                             );
                             rejected.push(IngestEventResult {
                                 event_id,
-                                status: IngestEventStatus::ProcessingError,
+                                status: if error.is_event_rejection() {
+                                    IngestEventStatus::Rejected
+                                } else {
+                                    IngestEventStatus::ProcessingError
+                                },
                                 reason: Some(error.to_string()),
                             });
                         }

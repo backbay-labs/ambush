@@ -1,14 +1,15 @@
 use crate::substrate::{
     AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, MAX_ACTIVE_DEPOSITS,
     PheromoneSubstrate, SubstrateError, SubstrateHealth, VerifiedDeposit, concentration_for,
-    decode_deposit_payload, filter_deposits, filter_escalations, normalize_threat_intel_value,
+    decode_deposit_payload, filter_deposits, filter_escalations, is_retention_expired,
+    normalize_threat_intel_value, retention_initial_strength,
 };
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
 #[cfg(feature = "nats")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "nats")]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 #[cfg(feature = "nats")]
 use std::sync::{Arc, Mutex};
@@ -92,16 +93,13 @@ impl VerifiedDepositCache {
 }
 
 #[cfg(feature = "nats")]
-fn note_deposit_scan(scanned: &mut usize) -> Result<(), SubstrateError> {
-    *scanned = scanned.saturating_add(1);
-    if *scanned > MAX_ACTIVE_DEPOSITS {
-        return Err(SubstrateError::InvalidDeposit {
-            reason: format!(
-                "JetStream scan exceeds the active deposit limit of {MAX_ACTIVE_DEPOSITS}"
-            ),
-        });
+fn retain_newest_deposit_key(window: &mut BTreeSet<(i64, String)>, key: String, limit: usize) {
+    window.insert((deposit_key_timestamp(&key).unwrap_or(i64::MIN), key));
+    if window.len() > limit
+        && let Some(oldest) = window.first().cloned()
+    {
+        window.remove(&oldest);
     }
-    Ok(())
 }
 
 /// JetStream-backed durable pheromone substrate.
@@ -257,8 +255,7 @@ impl JetStreamPheromoneSubstrate {
             .keys()
             .await
             .map_err(|error| nats_error("list keys", error))?;
-        let mut deposits = Vec::new();
-        let mut scanned = 0usize;
+        let mut key_window = BTreeSet::new();
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
@@ -274,8 +271,11 @@ impl JetStreamPheromoneSubstrate {
             {
                 continue;
             }
-            note_deposit_scan(&mut scanned)?;
+            retain_newest_deposit_key(&mut key_window, key, MAX_ACTIVE_DEPOSITS);
+        }
 
+        let mut deposits = Vec::with_capacity(key_window.len());
+        for (_, key) in key_window {
             let Some(entry) = connection
                 .store
                 .entry(&key)
@@ -577,7 +577,7 @@ impl JetStreamPheromoneSubstrate {
 
             let location = format!("jetstream://{}/{}", self.bucket, key);
             let deposit = decode_deposit_payload(&payload, location)?;
-            if deposit.is_evaporated(now, self.config.evaporation_threshold) {
+            if is_retention_expired(&deposit, now, self.config.evaporation_threshold) {
                 connection
                     .store
                     .delete(&key)
@@ -783,7 +783,7 @@ impl JetStreamPheromoneSubstrate {
             let policy = self
                 .config
                 .resolve_threat_class_policy(threat_class_configs.get(&deposit.threat_class));
-            if !deposit.is_evaporated(now, policy.evaporation_threshold) {
+            if !is_retention_expired(&deposit, now, policy.evaporation_threshold) {
                 continue;
             }
 
@@ -1349,6 +1349,15 @@ fn key_matches_threat_class(key: &str, threat_class: &ThreatClass) -> bool {
 }
 
 #[cfg(feature = "nats")]
+fn deposit_key_timestamp(key: &str) -> Option<i64> {
+    if let Some(stripped) = key.strip_prefix(&format!("{GC_KEY_PREFIX}.")) {
+        return stripped.split('.').nth(2)?.parse().ok();
+    }
+
+    key.split('.').nth(1)?.parse().ok()
+}
+
+#[cfg(feature = "nats")]
 fn is_escalation_key(key: &str) -> bool {
     key.starts_with(&format!("{ESCALATION_KEY_PREFIX}."))
 }
@@ -1420,12 +1429,13 @@ fn expiration_gc_page(deposit: &PheromoneDeposit, evaporation_threshold: f64) ->
 
 #[cfg(feature = "nats")]
 fn evaporation_deadline(deposit: &PheromoneDeposit, evaporation_threshold: f64) -> i64 {
-    if deposit.confidence <= evaporation_threshold || deposit.decay_half_life <= 0.0 {
+    let initial_strength = retention_initial_strength(deposit);
+    if initial_strength <= evaporation_threshold || deposit.decay_half_life <= 0.0 {
         return deposit.timestamp;
     }
 
     let elapsed_until_evaporation =
-        deposit.decay_half_life * (deposit.confidence / evaporation_threshold).log2();
+        deposit.decay_half_life * (initial_strength / evaporation_threshold).log2();
     deposit
         .timestamp
         .saturating_add(elapsed_until_evaporation.ceil() as i64)
@@ -1480,10 +1490,12 @@ mod tests {
     use super::{
         DEFAULT_JETSTREAM_GC_PAGE_SIZE, DEFAULT_NATS_CONNECT_TIMEOUT_MS,
         JetStreamPheromoneSubstrate, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, VerifiedDepositCache,
-        note_deposit_scan,
+        deposit_key_timestamp, evaporation_deadline, expiration_gc_page, gc_sweep_page,
+        retain_newest_deposit_key,
     };
     use crate::{PheromoneSubstrate, substrate::VerifiedDeposit};
     use ed25519_dalek::{Signer, SigningKey};
+    use std::collections::BTreeSet;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
@@ -1559,16 +1571,69 @@ mod tests {
     }
 
     #[test]
-    fn jetstream_deposit_scan_fails_closed_at_the_cache_working_set_bound() {
-        let mut scanned = 0;
-        for _ in 0..MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES {
-            note_deposit_scan(&mut scanned).unwrap();
+    fn deposit_key_timestamp_supports_current_and_legacy_layouts() {
+        assert_eq!(
+            deposit_key_timestamp("exp.00000000000000000042.execution.00000000000000000123.agent"),
+            Some(123)
+        );
+        assert_eq!(
+            deposit_key_timestamp("execution.00000000000000000456.agent"),
+            Some(456)
+        );
+        assert_eq!(deposit_key_timestamp("exp.invalid.execution.agent"), None);
+        assert_eq!(deposit_key_timestamp("execution.invalid.agent"), None);
+    }
+
+    #[test]
+    fn jetstream_deposit_scan_retains_a_deterministic_newest_window() {
+        let mut window = BTreeSet::new();
+        let oldest = "exp.00000000000000000001.execution.00000000000000000100.oldest";
+        let newest = "exp.00000000000000000003.execution.00000000000000000300.newest";
+        let middle = "exp.00000000000000000002.execution.00000000000000000200.middle";
+
+        retain_newest_deposit_key(&mut window, newest.to_string(), 2);
+        retain_newest_deposit_key(&mut window, oldest.to_string(), 2);
+        retain_newest_deposit_key(&mut window, middle.to_string(), 2);
+
+        assert_eq!(
+            window.into_iter().collect::<Vec<_>>(),
+            vec![(200, middle.to_string()), (300, newest.to_string())]
+        );
+
+        let mut malformed_window = BTreeSet::new();
+        retain_newest_deposit_key(&mut malformed_window, "malformed".to_string(), 1);
+        retain_newest_deposit_key(&mut malformed_window, newest.to_string(), 1);
+        assert_eq!(
+            malformed_window.into_iter().collect::<Vec<_>>(),
+            vec![(300, newest.to_string())]
+        );
+
+        let mut full_window = BTreeSet::new();
+        for timestamp in 0..=MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES {
+            retain_newest_deposit_key(
+                &mut full_window,
+                format!("execution.{timestamp:020}.agent"),
+                MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES,
+            );
         }
-        assert!(matches!(
-            note_deposit_scan(&mut scanned),
-            Err(crate::SubstrateError::InvalidDeposit { reason })
-                if reason.contains("active deposit limit")
-        ));
+        assert_eq!(full_window.len(), MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES);
+        assert_eq!(
+            full_window.first().map(|(timestamp, _)| *timestamp),
+            Some(1)
+        );
+        assert_eq!(
+            full_window.last().map(|(timestamp, _)| *timestamp),
+            Some(i64::try_from(MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES).unwrap())
+        );
+    }
+
+    #[test]
+    fn zero_strength_control_records_are_not_assigned_to_an_immediate_gc_page() {
+        let deposit = sample_deposit("control", 100, 0.0);
+        let deadline = evaporation_deadline(&deposit, 0.01);
+
+        assert!(deadline > deposit.timestamp);
+        assert!(expiration_gc_page(&deposit, 0.01) > gc_sweep_page(deposit.timestamp));
     }
 
     fn sample_escalation(mode: SwarmMode, timestamp: i64) -> EscalationRecord {
