@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,7 +27,7 @@ type BehavioralBaselineEnvelope = SignedStateEnvelope<BehavioralBaselineSnapshot
 
 const MAX_ACTIVE_DEPOSITS: usize = 10_000;
 const MAX_ACTIVE_DEPOSIT_BYTES: usize = 32 * 1024 * 1024;
-const MAX_SINGLE_DEPOSIT_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_SINGLE_DEPOSIT_BYTES: usize = 256 * 1024;
 const COMPACTED_DEPOSIT_COUNT: usize = 7_500;
 const COMPACTED_DEPOSIT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_LOCAL_DEPOSIT_JOURNAL_BYTES: u64 =
@@ -141,7 +141,7 @@ struct LegacyDepositSigningPayload<'a> {
     pub agent_role: Option<AgentRole>,
 }
 
-fn signing_payload_bytes_for_deposit(
+pub(crate) fn signing_payload_bytes_for_deposit(
     deposit: &PheromoneDeposit,
 ) -> Result<Vec<u8>, serde_json::Error> {
     if deposit.schema_version == PheromoneDeposit::previous_schema_version() {
@@ -317,7 +317,7 @@ pub(crate) struct VerifiedDeposit {
 }
 
 impl VerifiedDeposit {
-    fn admit(deposit: PheromoneDeposit) -> Result<Self, SubstrateError> {
+    pub(crate) fn admit(deposit: PheromoneDeposit) -> Result<Self, SubstrateError> {
         let encoded_len = serde_json::to_vec(&deposit)
             .map_err(|source| SubstrateError::Encode {
                 context: "verified pheromone deposit".to_string(),
@@ -354,14 +354,6 @@ struct RetainedDeposits {
 }
 
 impl RetainedDeposits {
-    fn from_entries(entries: Vec<VerifiedDeposit>) -> Self {
-        let encoded_bytes = entries.iter().map(|entry| entry.encoded_len).sum();
-        Self {
-            entries,
-            encoded_bytes,
-        }
-    }
-
     fn push(&mut self, deposit: VerifiedDeposit, limits: DepositRetentionLimits) -> usize {
         self.encoded_bytes = self.encoded_bytes.saturating_add(deposit.encoded_len);
         self.entries.push(deposit);
@@ -1085,11 +1077,11 @@ impl LocalJournalPheromoneSubstrate {
         let behavioral_baseline_journal_path = behavioral_baseline_journal_path(&journal_path);
         let behavioral_baseline_sequence_path = behavioral_baseline_sequence_path(&journal_path);
         ensure_parent_dir(&journal_path)?;
-        enforce_journal_file_limit(&journal_path, retention_limits.max_journal_bytes)?;
-        let mut deposits = RetainedDeposits::from_entries(load_deposit_jsonl(&journal_path)?);
-        let pruned = deposits.compact_if_needed(retention_limits);
-        if pruned > 0 {
+        let (deposits, rewrite_required) =
+            load_retained_deposit_jsonl(&journal_path, retention_limits)?;
+        if rewrite_required {
             rewrite_verified_deposit_jsonl(&journal_path, &deposits.entries)?;
+            enforce_journal_file_limit(&journal_path, retention_limits.max_journal_bytes)?;
         }
         let escalations = load_jsonl(&escalation_journal_path)?;
         let threat_class_configs = load_threat_class_configs(&threat_class_config_journal_path)?;
@@ -1696,32 +1688,76 @@ fn enforce_journal_file_limit(path: &Path, max_bytes: u64) -> Result<(), Substra
     Ok(())
 }
 
-fn load_deposit_jsonl(path: &Path) -> Result<Vec<VerifiedDeposit>, SubstrateError> {
-    if !path.exists() {
-        return Ok(Vec::new());
+fn load_retained_deposit_jsonl(
+    path: &Path,
+    limits: DepositRetentionLimits,
+) -> Result<(RetainedDeposits, bool), SubstrateError> {
+    let observed_bytes = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((RetainedDeposits::default(), false));
+        }
+        Err(source) => {
+            return Err(SubstrateError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if observed_bytes == 0 {
+        return Ok((RetainedDeposits::default(), false));
     }
 
     let file = fs::File::open(path).map_err(|source| SubstrateError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let reader = BufReader::new(file);
-    let mut entries = Vec::new();
+    let mut reader = BufReader::new(file);
+    let mut retained = RetainedDeposits::default();
+    let mut pruned = 0usize;
+    let mut line_number = 0usize;
+    let read_limit = u64::try_from(MAX_SINGLE_DEPOSIT_BYTES)
+        .unwrap_or(u64::MAX)
+        .saturating_add(2);
 
-    for (index, line) in reader.lines().enumerate() {
-        let line = line.map_err(|source| SubstrateError::Read {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        if line.trim().is_empty() {
+    loop {
+        let mut line = Vec::new();
+        let bytes_read = Read::by_ref(&mut reader)
+            .take(read_limit)
+            .read_until(b'\n', &mut line)
+            .map_err(|source| SubstrateError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if bytes_read == 0 {
+            break;
+        }
+        line_number = line_number.saturating_add(1);
+        if line.last() == Some(&b'\n') {
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+        }
+        if line.len() > MAX_SINGLE_DEPOSIT_BYTES {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "journal line {line_number} is larger than the {MAX_SINGLE_DEPOSIT_BYTES}-byte deposit limit"
+                ),
+            });
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let location = format!("{} line {}", path.display(), index + 1);
-        let entry = decode_deposit_payload(line.as_bytes(), location)?;
-        entries.push(entry);
+        let location = format!("{} line {line_number}", path.display());
+        let entry = decode_deposit_payload(&line, location)?;
+        pruned = pruned.saturating_add(retained.push(entry, limits));
     }
 
-    Ok(entries)
+    Ok((
+        retained,
+        pruned > 0 || observed_bytes > limits.max_journal_bytes,
+    ))
 }
 
 fn rewrite_verified_deposit_jsonl(
@@ -2890,7 +2926,7 @@ mod tests {
     }
 
     #[test]
-    fn local_journal_verifies_signatures_once_at_load_and_bounds_preexisting_files() {
+    fn local_journal_verifies_signatures_once_at_load_and_bounds_each_line() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -2925,13 +2961,70 @@ mod tests {
         };
         assert!(matches!(
             LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits),
-            Err(super::SubstrateError::JournalLimitExceeded {
-                observed_bytes: 33,
-                max_bytes: 32,
-                ..
-            })
+            Err(super::SubstrateError::Decode { .. })
+        ));
+
+        std::fs::write(&path, vec![b'x'; super::MAX_SINGLE_DEPOSIT_BYTES + 1]).unwrap();
+        assert!(matches!(
+            LocalJournalPheromoneSubstrate::open(substrate_config(), &path),
+            Err(super::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("journal line") && reason.contains("deposit limit")
         ));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn local_journal_stream_compacts_valid_legacy_file_above_steady_state_limit() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("swarm-pheromone-legacy-large-{unique}.jsonl"));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let deposits = (100..105)
+            .map(|timestamp| sample_deposit("legacy-large", timestamp, 0.9))
+            .collect::<Vec<_>>();
+        let full_journal = deposits
+            .iter()
+            .map(|deposit| serde_json::to_string(deposit).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let compacted_journal_bytes = deposits[3..]
+            .iter()
+            .map(|deposit| serde_json::to_string(deposit).unwrap().len() + 1)
+            .sum::<usize>();
+        let limits = super::DepositRetentionLimits {
+            max_count: 4,
+            max_bytes: 1024 * 1024,
+            compacted_count: 2,
+            compacted_bytes: 1024 * 1024,
+            max_journal_bytes: u64::try_from(compacted_journal_bytes).unwrap(),
+        };
+        std::fs::write(&path, full_journal.as_bytes()).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > limits.max_journal_bytes);
+
+        let substrate =
+            LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits)
+                .unwrap();
+        let retained = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(
+            retained
+                .iter()
+                .map(|deposit| deposit.timestamp)
+                .collect::<Vec<_>>(),
+            vec![104, 103]
+        );
+        assert!(std::fs::metadata(&path).unwrap().len() <= limits.max_journal_bytes);
+        drop(substrate);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
     }
 
     #[tokio::test]

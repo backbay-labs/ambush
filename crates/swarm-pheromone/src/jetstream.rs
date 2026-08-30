@@ -1,7 +1,7 @@
 use crate::substrate::{
     AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, PheromoneSubstrate,
     SubstrateError, SubstrateHealth, VerifiedDeposit, concentration_for, decode_deposit_payload,
-    filter_deposits, filter_escalations, normalize_threat_intel_value, validate_deposit_signature,
+    filter_deposits, filter_escalations, normalize_threat_intel_value,
 };
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
@@ -706,11 +706,14 @@ impl JetStreamPheromoneSubstrate {
 #[async_trait]
 impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
-        validate_deposit_signature(&deposit)?;
+        // Apply the same signature and hard encoded-size admission used by
+        // every read path before a value can become durable. Otherwise an
+        // oversized but validly signed value poisons all later scans.
+        let deposit = VerifiedDeposit::admit(deposit)?;
         self.admission_control
             .validate_deposit_admission(&deposit)?;
         let connection = self.ensure_connected().await?;
-        let payload = serde_json::to_vec(&deposit).map_err(|source| SubstrateError::Encode {
+        let payload = serde_json::to_vec(&*deposit).map_err(|source| SubstrateError::Encode {
             context: "jetstream pheromone deposit".to_string(),
             source,
         })?;
@@ -1374,6 +1377,7 @@ mod tests {
         JetStreamPheromoneSubstrate,
     };
     use crate::PheromoneSubstrate;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
@@ -1495,6 +1499,31 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn jetstream_rejects_valid_oversized_deposit_before_connecting() {
+        let substrate = JetStreamPheromoneSubstrate::with_bucket(
+            substrate_config(),
+            "nats://127.0.0.1:1",
+            unique_bucket("oversized-prewrite"),
+        );
+        let key = SigningKey::from_bytes(&[91_u8; 32]);
+        let mut deposit = sample_deposit("placeholder", 100, 0.9);
+        deposit.agent_id = AgentId::from_verifying_key(&key.verifying_key());
+        deposit.agent_identity = deposit.agent_id.0.clone();
+        deposit.indicator["oversized"] =
+            serde_json::Value::String("x".repeat(crate::substrate::MAX_SINGLE_DEPOSIT_BYTES));
+        let signing_bytes = crate::substrate::signing_payload_bytes_for_deposit(&deposit).unwrap();
+        deposit.signature = key.sign(&signing_bytes).to_bytes().to_vec();
+        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+        crate::substrate::validate_deposit_signature(&deposit).unwrap();
+
+        assert!(matches!(
+            substrate.deposit(deposit).await,
+            Err(crate::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("hard limit")
+        ));
     }
 
     #[tokio::test]
