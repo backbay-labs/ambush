@@ -574,6 +574,15 @@ struct GovernancePersistence {
     test_pre_write_barrier: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
 }
 
+impl Drop for GovernancePersistence {
+    fn drop(&mut self) {
+        // Release explicitly before the descriptor is closed. Relying only on
+        // close-on-drop made an immediate same-process reopen observably race on
+        // Linux after the cross-process exclusivity probe.
+        let _ = self.lock_file.unlock();
+    }
+}
+
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GovernanceLockIdentity {
@@ -1594,7 +1603,7 @@ impl GovernancePersistence {
             use std::os::unix::fs::OpenOptionsExt;
             existing_options
                 .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
         }
         let (mut lock_file, created) = if may_create_lock {
             let mut create_options = OpenOptions::new();
@@ -1608,7 +1617,7 @@ impl GovernancePersistence {
                 use std::os::unix::fs::OpenOptionsExt;
                 create_options
                     .mode(0o600)
-                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
             }
             match create_options.open(&lock_path) {
                 Ok(file) => (file, true),

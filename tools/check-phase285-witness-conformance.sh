@@ -6444,7 +6444,7 @@ expected = [
     ("private_store_crosses_deadline", {**zero,"queue_dequeues":1,"preflights":1,"store_calls":1,"ordered_trace":[dequeued("private"),preflight("private"),begin("private","read_entry")]}),
     ("private_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"store_calls":1,"ordered_trace":[dequeued("private"),preflight("private"),begin("private","read_entry"),end("private","read_entry",True),deadline("private",False)]}),
     ("public_queue_expired", {**zero,"queue_dequeues":1,"ordered_trace":[dequeued("public")]}),
-    ("public_private_exchange_crosses_deadline", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",False)]}),
+    ("public_private_exchange_crosses_deadline", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"outcome_unknown":True,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",False),{"event":"outcome_unknown"}]}),
     ("public_response_enqueue_expired", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":1,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",True),deadline("public",False)]}),
     ("post_cas_timeout_outcome_unknown", {**zero,"queue_dequeues":1,"preflights":1,"private_proxy_calls":3,"cas_attempted":1,"cas_applied":1,"outcome_unknown":True,"ordered_trace":[dequeued("public"),preflight("public"),begin("public","read_entry"),end("public","read_entry",True),begin("public","compare_and_swap",True),{"event":"cas_applied_observation","worker":"private"},end("public","compare_and_swap",False),begin("public","read_entry"),end("public","read_entry",False),{"event":"outcome_unknown"}]}),
 ]
@@ -7275,7 +7275,7 @@ mutation_specs = [
     ("relative_timeout", "config", "timeout_at(self.at, future)", "tokio::time::timeout(Duration::from_millis(STORE_HANDLER_DEADLINE_MILLIS), future)", 1, 1, "deadline_r20_post_cas_exact_store_trace"),
     ("late_response_enqueue", "config", "    if transition.response_deadline_check().is_err() {\n        return;\n    }\n    transition.publish(publisher, reply, bytes).await;", "    let _ = transition.response_deadline_check();\n    transition.publish(publisher, reply, bytes).await;", 1, 1, "deadline_r20_private_response_enqueue_expired"),
     ("retry", "public", retry_old, retry_new, 1, 1, "deadline_r20_post_cas_exact_store_trace"),
-    ("cas_ambiguity_downgrade", "public", "                transition.outcome_unknown();\n", "", 3, 1, "deadline_r20_post_cas_timeout_outcome_unknown"),
+    ("cas_ambiguity_downgrade", "public", "                transition.outcome_unknown();\n", "", 3, 1, "deadline_r20_public_private_exchange_crosses_deadline_behavior"),
     ("fabricated_counter", "library", "WorkerTransitionEventV1::CasAppliedObservation { .. } => cas_applied += 1,", "WorkerTransitionEventV1::CasAppliedObservation { .. } => cas_applied += 0,", 1, 1, "CAS-applied event diverged from recording WitnessAtomicStore"),
     ("helper_bypass", "private", "__CUSTOM_HELPER_BYPASS__", "", 0, 0, "deadline_r20_private_queue_expired"),
     ("worker_budget_substitution", "config", "Self::from_now(STORE_HANDLER_DEADLINE_MILLIS)", "Self::from_now(STORE_HANDLER_DEADLINE_MILLIS + 1)", 1, 1, "deadline_r20_worker_budget_substitution"),
@@ -7345,8 +7345,8 @@ callsite_mutations = [
     ("drop_before_enqueue", "private", "if ingress.try_send(ingress_message).is_err() {", "if { let _ = ingress_message; true } {", 1, 1, "private request one did not enter store: Elapsed(())"),
     ("fabricated_receipt", "private", "if ingress.try_send(ingress_message).is_err() {\n        return Some(Err((reply, payload)));\n    }\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", "let _ = (ingress, ingress_message);\n    admission_observer.accepted(receipt);\n    Some(Ok(()))", 1, 1, "private request one did not enter store: Elapsed(())"),
     ("post_accept_refreshed_capture", "private", "        receipt_deadline,\n    };\n    if ingress.try_send", "        receipt_deadline: ReceiptDeadlineV1::from_now(STORE_HANDLER_DEADLINE_MILLIS + 2_000),\n    };\n    if ingress.try_send", 1, 1, "deadline_r24_private_late_first_response"),
-    ("public_start_delegation_bypass", "public", "        Self::start_inner(client, dispatcher).await", "        let _ = (client, dispatcher);\n        Ok(Self { tasks: Vec::new(), _proxy: PhantomData })", 1, 1, "public receipt one absent"),
-    ("private_start_delegation_bypass", "private", "        Self::start_inner(connection, service).await", "        let _ = (connection, service);\n        Ok(Self { tasks: Vec::new(), _service: std::marker::PhantomData })", 1, 1, "private request one did not enter store: Elapsed(())"),
+    ("public_start_delegation_bypass", "public", "        Self::start_inner(client, dispatcher).await", "        let _ = dispatcher;\n        Ok(Self { tasks: Vec::new(), client: Some(client), ready: Arc::new(AtomicBool::new(true)), stop_result: None, _proxy: PhantomData })", 1, 1, "public receipt one absent"),
+    ("private_start_delegation_bypass", "private", "        Self::start_inner(connection, service).await", "        let client = connection.client;\n        let _ = service;\n        Ok(Self { tasks: Vec::new(), client: Some(client), ready: Arc::new(AtomicBool::new(true)), stop_result: None, _service: std::marker::PhantomData })", 1, 1, "private request one did not enter store: Elapsed(())"),
 ]
 if len(callsite_mutations) != 7:
     raise SystemExit("deadline callsite mutation inventory differs")
@@ -7428,11 +7428,16 @@ def mutate_callsite_source(label, name, old, new, expected_count, replace_count)
                         message,
                         &sender,
                         admission_observer.as_ref(),
+                        max_request_bytes,
                     ) && let Some(bytes) = service.overload_response(subject, &payload)
 """
         replacement = """                    let _unreachable_admission_helper = admit_private_subscription_message;
                     let inline_result = match message.reply {
-                        Some(reply) if bounded_inbox(&reply) => {
+                        Some(reply)
+                            if message.subject.as_str() == subject
+                                && message.payload.len() <= max_request_bytes
+                                && bounded_inbox(&reply) =>
+                        {
                             let payload = message.payload.to_vec();
             let receipt_deadline = ReceiptDeadlineV1::from_now(
                 STORE_HANDLER_DEADLINE_MILLIS + 1_000,
@@ -7473,6 +7478,7 @@ def mutate_callsite_source(label, name, old, new, expected_count, replace_count)
                 message,
                 &ingress,
                 admission_observer.as_ref(),
+                max_request_bytes,
             ) {
                 // The bounded queue refusal happens synchronously here,
                 // before a worker task, dispatcher, or store call can begin.
@@ -7480,6 +7486,11 @@ def mutate_callsite_source(label, name, old, new, expected_count, replace_count)
             }
 """
         replacement = """            let _unreachable_admission_helper = admit_public_subscription_message;
+            if message.subject.as_str() != expected_subject
+                || message.payload.len() > max_request_bytes
+            {
+                continue;
+            }
             let Some(reply) = message.reply else {
                 continue;
             };
@@ -7547,7 +7558,7 @@ for label, name, old, new, expected_count, replace_count, expected_failure in ca
     output = result.stdout
     running = re.findall(r"^running (\d+) test$", output, re.M)
     summaries = re.findall(
-        r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in .+$",
+        r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in .+$",
         output,
         re.M,
     )
