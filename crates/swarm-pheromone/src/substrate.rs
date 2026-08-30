@@ -6,13 +6,15 @@ use ed25519_dalek::{Signature as DalekSignature, SigningKey, Verifier, Verifying
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 use swarm_core::agent::AgentRole;
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::pheromone::{
@@ -33,6 +35,14 @@ const COMPACTED_DEPOSIT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_LOCAL_DEPOSIT_JOURNAL_BYTES: u64 =
     (MAX_ACTIVE_DEPOSIT_BYTES + MAX_ACTIVE_DEPOSITS) as u64;
 
+#[cfg(all(test, unix))]
+static REWRITE_PARENT_SYNC_FAILURE_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+#[cfg(all(test, unix))]
+fn rewrite_parent_sync_failure_path() -> &'static Mutex<Option<PathBuf>> {
+    REWRITE_PARENT_SYNC_FAILURE_PATH.get_or_init(|| Mutex::new(None))
+}
+
 /// Errors raised by the pheromone substrate.
 #[derive(Debug, thiserror::Error)]
 pub enum SubstrateError {
@@ -48,6 +58,15 @@ pub enum SubstrateError {
 
     #[error("failed to write substrate journal `{path}`: {source}")]
     Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "substrate journal replacement `{path}` is visible but its directory entry could not be made crash-durable: {source}"
+    )]
+    DurabilityOutcomeUnknown {
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -374,8 +393,29 @@ impl RetainedDeposits {
                 .saturating_sub(self.entries[remove_count].encoded_len);
             remove_count = remove_count.saturating_add(1);
         }
+        let mut orphaned_feedback_keys = self.entries[..remove_count]
+            .iter()
+            .filter_map(feedback_suppression_marker)
+            .map(|(key, _)| key)
+            .collect::<BTreeSet<_>>();
+        if !orphaned_feedback_keys.is_empty() {
+            for entry in &self.entries[remove_count..] {
+                if let Some((key, _)) = feedback_suppression_marker(entry) {
+                    orphaned_feedback_keys.remove(&key);
+                }
+            }
+        }
+
+        let before = self.entries.len();
         self.entries.drain(..remove_count);
-        remove_count
+        if !orphaned_feedback_keys.is_empty() {
+            self.entries.retain(|entry| {
+                deposit_suppression_key(entry)
+                    .is_none_or(|key| !orphaned_feedback_keys.contains(&key))
+            });
+        }
+        self.encoded_bytes = self.entries.iter().map(|entry| entry.encoded_len).sum();
+        before.saturating_sub(self.entries.len())
     }
 
     fn retain(&mut self, mut keep: impl FnMut(&PheromoneDeposit) -> bool) -> usize {
@@ -1146,7 +1186,16 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
                     })?;
             append_jsonl_line(&self.journal_path, &persisted.deposit)?;
         } else {
-            rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries)?;
+            match rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries) {
+                Ok(()) => {}
+                Err(error @ SubstrateError::DurabilityOutcomeUnknown { .. }) => {
+                    // rename(2) completed, so the candidate is the process-visible journal even
+                    // though crash durability is unknown. Reconcile memory before failing closed.
+                    *guard = candidate;
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
         }
         *guard = candidate;
         Ok(())
@@ -1350,7 +1399,14 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             let policy = resolved_policy(&self.config, &config_guard, &deposit.threat_class);
             !deposit.is_evaporated(now, policy.evaporation_threshold)
         });
-        rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries)?;
+        match rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries) {
+            Ok(()) => {}
+            Err(error @ SubstrateError::DurabilityOutcomeUnknown { .. }) => {
+                *guard = candidate;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
         *guard = candidate;
         Ok(removed)
     }
@@ -1860,14 +1916,39 @@ where
         return Err(error);
     }
     #[cfg(unix)]
-    if let Err(source) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
-        tracing::warn!(
-            path = %parent.display(),
-            error = %source,
-            "pheromone journal replacement committed but parent directory sync failed"
-        );
-    }
+    sync_rewrite_parent(path, parent)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn sync_rewrite_parent(path: &Path, parent: &Path) -> Result<(), SubstrateError> {
+    #[cfg(test)]
+    {
+        let mut guard = rewrite_parent_sync_failure_path()
+            .lock()
+            .expect("directory sync injection lock");
+        if guard.as_deref() == Some(path) {
+            *guard = None;
+            return Err(SubstrateError::DurabilityOutcomeUnknown {
+                path: path.to_path_buf(),
+                source: std::io::Error::other("injected parent directory sync failure"),
+            });
+        }
+    }
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| SubstrateError::DurabilityOutcomeUnknown {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+#[cfg(all(test, unix))]
+fn inject_rewrite_parent_sync_failure(path: &Path) {
+    rewrite_parent_sync_failure_path()
+        .lock()
+        .expect("directory sync injection lock")
+        .replace(path.to_path_buf());
 }
 
 fn load_threat_class_configs(
@@ -2094,7 +2175,7 @@ mod tests {
         PheromoneDeposit, ThreatClass, ThreatClassConfig, ThreatIntelEntry,
         ThreatIntelIndicatorType,
     };
-    use swarm_core::types::{AgentId, Severity};
+    use swarm_core::types::{AgentId, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity};
 
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[42u8; 32])
@@ -2151,6 +2232,31 @@ mod tests {
 
     fn sample_deposit(agent_id: &str, timestamp: i64, confidence: f64) -> PheromoneDeposit {
         sample_deposit_with_host(agent_id, timestamp, confidence, "host-1")
+    }
+
+    fn sample_event_deposit(agent_id: &str, event_id: &str, timestamp: i64) -> PheromoneDeposit {
+        let key = signing_key_for_label(agent_id);
+        let mut deposit = sample_deposit(agent_id, timestamp, 0.9);
+        deposit.indicator["event_id"] = serde_json::Value::String(event_id.to_string());
+        sign_deposit(&mut deposit, &key);
+        deposit
+    }
+
+    fn sample_feedback_deposit(
+        agent_id: &str,
+        event_id: &str,
+        action: &str,
+        timestamp: i64,
+    ) -> PheromoneDeposit {
+        let key = signing_key_for_label(agent_id);
+        let mut deposit = sample_deposit(agent_id, timestamp, 0.9);
+        deposit.indicator = serde_json::json!({
+            "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+            "event_id": event_id,
+            "action": action,
+        });
+        sign_deposit(&mut deposit, &key);
+        deposit
     }
 
     fn sample_deposit_with_host(
@@ -2923,6 +3029,96 @@ mod tests {
             Err(super::SubstrateError::InvalidDeposit { reason })
                 if reason.contains("hard limit")
         ));
+    }
+
+    #[test]
+    fn deposit_retention_never_orphans_feedback_tombstones_from_related_replays() {
+        let limits = super::DepositRetentionLimits {
+            max_count: 3,
+            max_bytes: 1024 * 1024,
+            compacted_count: 2,
+            compacted_bytes: 1024 * 1024,
+            max_journal_bytes: 1024 * 1024,
+        };
+        let mut retained = super::RetainedDeposits::default();
+        let entries = [
+            sample_feedback_deposit("reviewer", "event-dismissed", "dismiss", 200),
+            sample_deposit("unrelated-before", 210, 0.9),
+            sample_event_deposit("delayed-replay", "event-dismissed", 100),
+            sample_deposit("unrelated-after", 220, 0.9),
+        ];
+        for entry in entries {
+            retained.push(super::VerifiedDeposit::admit(entry).unwrap(), limits);
+        }
+
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained.entries[0].timestamp, 220);
+        assert!(retained.entries.iter().all(|entry| {
+            super::deposit_suppression_key(entry)
+                .is_none_or(|key| key.event_id != "event-dismissed")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_journal_fails_closed_and_reconciles_after_parent_sync_failure() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-pheromone-parent-sync-failure-{unique}.jsonl"
+        ));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let limits = super::DepositRetentionLimits {
+            max_count: 2,
+            max_bytes: 1024 * 1024,
+            compacted_count: 1,
+            compacted_bytes: 1024 * 1024,
+            max_journal_bytes: 1024 * 1024,
+        };
+        let local = LocalJournalPheromoneSubstrate::open_with_retention_limits(
+            config.clone(),
+            &path,
+            limits,
+        )
+        .unwrap();
+        local
+            .deposit(sample_deposit("sync-first", 100, 0.9))
+            .await
+            .unwrap();
+        local
+            .deposit(sample_deposit("sync-second", 200, 0.9))
+            .await
+            .unwrap();
+        super::inject_rewrite_parent_sync_failure(&path);
+        assert!(matches!(
+            local
+                .deposit(sample_deposit("sync-visible", 300, 0.9))
+                .await,
+            Err(super::SubstrateError::DurabilityOutcomeUnknown { .. })
+        ));
+
+        let visible = local.recent_deposits(10).await.unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].timestamp, 300);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+        drop(local);
+
+        let reopened =
+            LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits)
+                .unwrap();
+        assert_eq!(
+            reopened.recent_deposits(10).await.unwrap()[0].timestamp,
+            300
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
     }
 
     #[test]
