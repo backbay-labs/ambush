@@ -2744,6 +2744,7 @@ fn claim_task_op(
 fn renew_task_op(
     state: &mut GraphStoreState,
     envelope: TaskRenewalEnvelope,
+    authority: &AgentId,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
     let current = state
@@ -2754,7 +2755,7 @@ fn renew_task_op(
         })?
         .clone();
     ensure_task_generation(&current, envelope.expected_generation)?;
-    envelope.validate_for_task(&current.task, limits)?;
+    envelope.validate_for_task(&current.task, authority, limits)?;
     observe_logical_time(state, envelope.renewed_at)?;
     let entry = task_entry_mut(state, envelope.task_id.as_str())?;
     let old_lease = ensure_lease(entry, &envelope.lease_id, envelope.fencing_token)?;
@@ -3324,10 +3325,25 @@ struct TaskRenewalMaterial<'a> {
     renewal_scope: &'a str,
 }
 
-/// Claimant-signed authority to extend one exact active lease. The durable
-/// task generation, idempotency key, lease, fence, timestamp, and duration are
-/// all covered by the signature so a shared store handle cannot renew another
-/// worker's claim from a read-only snapshot.
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskRenewalAuthorityMaterial<'a> {
+    task_id: &'a TaskId,
+    idempotency_key: &'a IdempotencyKey,
+    expected_generation: u64,
+    lease_id: &'a LeaseId,
+    fencing_token: FencingToken,
+    renewed_at: GraphLogicalTime,
+    duration_ms: u64,
+    capability: &'a TaskCapabilityProof,
+    renewal_witness: &'a EvidenceWitness,
+    authority_scope: &'a str,
+}
+
+/// Dual-authority request to extend one exact active lease. The claimant owns
+/// the task capability; the configured scheduler/store authority owns the
+/// authoritative renewal clock and duration. Both signatures cover the exact
+/// durable generation, idempotency key, lease, and fencing token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRenewalEnvelope {
@@ -3341,6 +3357,8 @@ pub struct TaskRenewalEnvelope {
     pub capability: TaskCapabilityProof,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renewal_witness: Option<EvidenceWitness>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_witness: Option<EvidenceWitness>,
 }
 
 impl TaskRenewalEnvelope {
@@ -3365,6 +3383,7 @@ impl TaskRenewalEnvelope {
             duration_ms,
             capability,
             renewal_witness: None,
+            authority_witness: None,
         };
         envelope.validate()?;
         Ok(envelope)
@@ -3398,6 +3417,33 @@ impl TaskRenewalEnvelope {
         Ok(self)
     }
 
+    pub fn authorized_by(
+        mut self,
+        authority: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let renewal_witness = self.renewal_witness.as_ref().ok_or_else(|| {
+            GraphStoreError::Admission(GraphAdmissionError::InvalidWitness {
+                reason: "scheduler cannot authorize a renewal without claimant authority"
+                    .to_string(),
+            })
+        })?;
+        let scoped_agent_id = scoped_agent_id.into();
+        validate_authority_scope("task renewal", &scoped_agent_id)?;
+        let bytes = self.canonical_authority_bytes_for_scope(renewal_witness, &scoped_agent_id)?;
+        self.authority_witness = Some(
+            EvidenceWitness::new(
+                authority,
+                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
+                scoped_agent_id,
+                &bytes,
+            )
+            .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
     fn canonical_bytes_for_scope(&self, renewal_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
         canonical_json_bytes(&TaskRenewalMaterial {
             task_id: &self.task_id,
@@ -3421,6 +3467,41 @@ impl TaskRenewalEnvelope {
             .as_ref()
             .map_or("", |witness| witness.scoped_agent_id.as_str());
         self.canonical_bytes_for_scope(renewal_scope)
+    }
+
+    fn canonical_authority_bytes_for_scope(
+        &self,
+        renewal_witness: &EvidenceWitness,
+        authority_scope: &str,
+    ) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskRenewalAuthorityMaterial {
+            task_id: &self.task_id,
+            idempotency_key: &self.idempotency_key,
+            expected_generation: self.expected_generation,
+            lease_id: &self.lease_id,
+            fencing_token: self.fencing_token,
+            renewed_at: self.renewed_at,
+            duration_ms: self.duration_ms,
+            capability: &self.capability,
+            renewal_witness,
+            authority_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_authority_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let renewal_witness = self.renewal_witness.as_ref().ok_or_else(|| {
+            GraphStoreError::Admission(GraphAdmissionError::InvalidWitness {
+                reason: "renewal scheduler authority requires claimant authority".to_string(),
+            })
+        })?;
+        let authority_scope = self
+            .authority_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_authority_bytes_for_scope(renewal_witness, authority_scope)
     }
 
     fn validate(&self) -> Result<(), GraphStoreError> {
@@ -3452,12 +3533,19 @@ impl TaskRenewalEnvelope {
                 .validate(&self.canonical_bytes_without_witness()?)
                 .map_err(GraphStoreError::Admission)?;
         }
+        if self.authority_witness.is_some() {
+            validate_optional_scheduler_witness(
+                self.authority_witness.as_ref(),
+                &self.canonical_authority_bytes_without_witness()?,
+            )?;
+        }
         Ok(())
     }
 
     fn validate_for_task(
         &self,
         task: &TaskRecord,
+        authority: &AgentId,
         limits: &GraphResourceLimits,
     ) -> Result<(), GraphStoreError> {
         self.validate()?;
@@ -3497,6 +3585,12 @@ impl TaskRenewalEnvelope {
                 task_id: task.request.task_id.clone(),
             });
         }
+        require_configured_scheduler_witness(
+            self.authority_witness.as_ref(),
+            authority,
+            &self.canonical_authority_bytes_without_witness()?,
+            "durable task renewal requires scheduler authority",
+        )?;
         if self.duration_ms > limits.max_task_lease_ms {
             return Err(GraphStoreError::InvalidLease {
                 reason: "renewal duration exceeds the graph lease limit".to_string(),
@@ -4494,8 +4588,9 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
         &self,
         envelope: TaskRenewalEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) =
-            self.mutate(None, |state| renew_task_op(state, envelope, &self.limits))?;
+        let (snapshot, marker) = self.mutate(None, |state| {
+            renew_task_op(state, envelope, &self.signer_id, &self.limits)
+        })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
@@ -7306,8 +7401,9 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
         &self,
         envelope: TaskRenewalEnvelope,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) =
-            self.mutate(None, |state| renew_task_op(state, envelope, &self.limits))?;
+        let (snapshot, marker) = self.mutate(None, |state| {
+            renew_task_op(state, envelope, &self.signer_id, &self.limits)
+        })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
@@ -7673,6 +7769,7 @@ mod tests {
         renewed_at: GraphLogicalTime,
         duration_ms: u64,
         signer_byte: u8,
+        authority_byte: u8,
     ) -> TaskRenewalEnvelope {
         let claimant = signer(signer_byte);
         let capability = TaskCapabilityProof::signed_with(
@@ -7697,6 +7794,11 @@ mod tests {
         )
         .unwrap()
         .signed_with(&claimant, format!("task-renewal:{}", request.task_id))
+        .unwrap()
+        .authorized_by(
+            &signer(authority_byte),
+            format!("task-renewal-authority:{}", request.task_id),
+        )
         .unwrap()
     }
 
@@ -8544,6 +8646,7 @@ mod tests {
                 GraphLogicalTime::new(99),
                 20,
                 1,
+                19,
             )),
             Err(GraphStoreError::InvalidTransition { .. })
         ));
@@ -8551,7 +8654,7 @@ mod tests {
     }
 
     #[test]
-    fn durable_renewal_requires_claimant_signature_and_binds_duration() {
+    fn durable_renewal_requires_claimant_and_scheduler_authority_and_binds_clock() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(30)).unwrap();
         let claim = store
             .claim_task(signed_claim_envelope(
@@ -8570,13 +8673,45 @@ mod tests {
             GraphLogicalTime::new(105),
             20,
             31,
+            30,
         );
         let before = store.snapshot().unwrap();
+
+        let mut claimant_only = signed.clone();
+        claimant_only.authority_witness = None;
+        assert!(matches!(
+            store.renew_task(claimant_only.clone()),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let foreign_authority = claimant_only
+            .authorized_by(&signer(32), "task-renewal-authority:signed-renewal")
+            .unwrap();
+        assert!(matches!(
+            store.renew_task(foreign_authority),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
 
         let mut unsigned = signed.clone();
         unsigned.renewal_witness = None;
         assert!(matches!(
             store.renew_task(unsigned),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let mut poisoned_clock = signed.clone();
+        poisoned_clock.renewed_at = GraphLogicalTime::new(119);
+        assert!(matches!(
+            store.renew_task(poisoned_clock),
             Err(GraphStoreError::Admission(
                 swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
             ))
@@ -8905,6 +9040,7 @@ mod tests {
             GraphLogicalTime::new(105),
             20,
             1,
+            11,
         );
         let renewed_memory = memory.renew_task(renewal.clone()).unwrap();
         let renewed_file = file
