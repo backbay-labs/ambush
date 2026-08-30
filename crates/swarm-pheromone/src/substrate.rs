@@ -1924,9 +1924,10 @@ where
 fn sync_rewrite_parent(path: &Path, parent: &Path) -> Result<(), SubstrateError> {
     #[cfg(test)]
     {
-        let mut guard = rewrite_parent_sync_failure_path()
-            .lock()
-            .expect("directory sync injection lock");
+        let mut guard = match rewrite_parent_sync_failure_path().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         if guard.as_deref() == Some(path) {
             *guard = None;
             return Err(SubstrateError::DurabilityOutcomeUnknown {
@@ -1945,10 +1946,11 @@ fn sync_rewrite_parent(path: &Path, parent: &Path) -> Result<(), SubstrateError>
 
 #[cfg(all(test, unix))]
 fn inject_rewrite_parent_sync_failure(path: &Path) {
-    rewrite_parent_sync_failure_path()
-        .lock()
-        .expect("directory sync injection lock")
-        .replace(path.to_path_buf());
+    let mut guard = match rewrite_parent_sync_failure_path().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.replace(path.to_path_buf());
 }
 
 fn load_threat_class_configs(
