@@ -110,6 +110,14 @@ pub enum SubstrateError {
     InvalidDeposit { reason: String },
 
     #[error(
+        "deposit timestamp {timestamp} is already evaporated at logical timestamp high-water {timestamp_high_water}"
+    )]
+    ExpiredDeposit {
+        timestamp: i64,
+        timestamp_high_water: i64,
+    },
+
+    #[error(
         "substrate journal `{path}` is {observed_bytes} bytes; hard limit is {max_bytes} bytes"
     )]
     JournalLimitExceeded {
@@ -370,13 +378,29 @@ impl Deref for VerifiedDeposit {
 struct RetainedDeposits {
     entries: Vec<VerifiedDeposit>,
     encoded_bytes: usize,
+    timestamp_high_water: Option<i64>,
 }
 
 impl RetainedDeposits {
-    fn push(&mut self, deposit: VerifiedDeposit, limits: DepositRetentionLimits) -> usize {
+    fn push(
+        &mut self,
+        deposit: VerifiedDeposit,
+        limits: DepositRetentionLimits,
+        evaporation_threshold: f64,
+    ) -> Result<usize, SubstrateError> {
+        let timestamp_high_water = self
+            .timestamp_high_water
+            .map_or(deposit.timestamp, |current| current.max(deposit.timestamp));
+        if deposit.is_evaporated(timestamp_high_water, evaporation_threshold) {
+            return Err(SubstrateError::ExpiredDeposit {
+                timestamp: deposit.timestamp,
+                timestamp_high_water,
+            });
+        }
+        self.timestamp_high_water = Some(timestamp_high_water);
         self.encoded_bytes = self.encoded_bytes.saturating_add(deposit.encoded_len);
         self.entries.push(deposit);
-        self.compact_if_needed(limits)
+        Ok(self.compact_if_needed(limits))
     }
 
     fn compact_if_needed(&mut self, limits: DepositRetentionLimits) -> usize {
@@ -865,11 +889,20 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
         let deposit = VerifiedDeposit::admit(deposit)?;
         self.admission_control
             .validate_deposit_admission(&deposit)?;
+        let threat_class_config = self
+            .threat_class_configs
+            .read()
+            .map_err(|_| SubstrateError::PoisonedLock)?
+            .get(&deposit.threat_class)
+            .cloned();
+        let policy = self
+            .config
+            .resolve_threat_class_policy(threat_class_config.as_ref());
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        guard.push(deposit, self.retention_limits);
+        guard.push(deposit, self.retention_limits, policy.evaporation_threshold)?;
         Ok(())
     }
 
@@ -1117,14 +1150,18 @@ impl LocalJournalPheromoneSubstrate {
         let behavioral_baseline_journal_path = behavioral_baseline_journal_path(&journal_path);
         let behavioral_baseline_sequence_path = behavioral_baseline_sequence_path(&journal_path);
         ensure_parent_dir(&journal_path)?;
-        let (deposits, rewrite_required) =
-            load_retained_deposit_jsonl(&journal_path, retention_limits)?;
+        let threat_class_configs = load_threat_class_configs(&threat_class_config_journal_path)?;
+        let (deposits, rewrite_required) = load_retained_deposit_jsonl(
+            &journal_path,
+            retention_limits,
+            &config,
+            &threat_class_configs,
+        )?;
         if rewrite_required {
             rewrite_verified_deposit_jsonl(&journal_path, &deposits.entries)?;
             enforce_journal_file_limit(&journal_path, retention_limits.max_journal_bytes)?;
         }
         let escalations = load_jsonl(&escalation_journal_path)?;
-        let threat_class_configs = load_threat_class_configs(&threat_class_config_journal_path)?;
         let threat_intel_entries = load_threat_intel_entries(&threat_intel_journal_path)?;
         let mut behavioral_baseline_sequences =
             load_behavioral_baseline_sequences(&behavioral_baseline_sequence_path)?;
@@ -1170,12 +1207,22 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
         let deposit = VerifiedDeposit::admit(deposit)?;
         self.admission_control
             .validate_deposit_admission(&deposit)?;
+        let threat_class_config = self
+            .threat_class_configs
+            .read()
+            .map_err(|_| SubstrateError::PoisonedLock)?
+            .get(&deposit.threat_class)
+            .cloned();
+        let policy = self
+            .config
+            .resolve_threat_class_policy(threat_class_config.as_ref());
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
         let mut candidate = guard.clone();
-        let pruned = candidate.push(deposit, self.retention_limits);
+        let pruned =
+            candidate.push(deposit, self.retention_limits, policy.evaporation_threshold)?;
         if pruned == 0 {
             let persisted =
                 candidate
@@ -1747,6 +1794,8 @@ fn enforce_journal_file_limit(path: &Path, max_bytes: u64) -> Result<(), Substra
 fn load_retained_deposit_jsonl(
     path: &Path,
     limits: DepositRetentionLimits,
+    config: &PheromoneConfig,
+    threat_class_configs: &BTreeMap<ThreatClass, ThreatClassConfig>,
 ) -> Result<(RetainedDeposits, bool), SubstrateError> {
     let observed_bytes = match fs::metadata(path) {
         Ok(metadata) => metadata.len(),
@@ -1807,7 +1856,14 @@ fn load_retained_deposit_jsonl(
         }
         let location = format!("{} line {line_number}", path.display());
         let entry = decode_deposit_payload(&line, location)?;
-        pruned = pruned.saturating_add(retained.push(entry, limits));
+        let policy = resolved_policy(config, threat_class_configs, &entry.threat_class);
+        match retained.push(entry, limits, policy.evaporation_threshold) {
+            Ok(removed) => pruned = pruned.saturating_add(removed),
+            Err(SubstrateError::ExpiredDeposit { .. }) => {
+                pruned = pruned.saturating_add(1);
+            }
+            Err(error) => return Err(error),
+        }
     }
 
     Ok((
@@ -2837,7 +2893,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn threat_class_override_affects_concentration_and_gc() {
+    async fn threat_class_override_rejects_already_evaporated_deposit() {
         let substrate = in_memory();
         substrate
             .store_threat_class_config(sample_threat_class_config(
@@ -2848,10 +2904,15 @@ mod tests {
             ))
             .await
             .unwrap();
-        substrate
-            .deposit(sample_deposit("whisker-a", 0, 0.03))
-            .await
-            .unwrap();
+        assert!(matches!(
+            substrate
+                .deposit(sample_deposit("whisker-a", 0, 0.03))
+                .await,
+            Err(super::SubstrateError::ExpiredDeposit {
+                timestamp: 0,
+                timestamp_high_water: 0,
+            })
+        ));
 
         let concentration = substrate
             .query_concentration(&ThreatClass::Execution, 0)
@@ -2859,8 +2920,7 @@ mod tests {
             .unwrap();
         assert_eq!(concentration.total_strength, 0.0);
 
-        let removed = substrate.gc_evaporated(0).await.unwrap();
-        assert_eq!(removed, 1);
+        assert_eq!(substrate.gc_evaporated(0).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -3004,6 +3064,90 @@ mod tests {
         let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
     }
 
+    #[tokio::test]
+    async fn expired_flood_cannot_consume_retention_or_evict_live_evidence() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("swarm-pheromone-expired-flood-{unique}.jsonl"));
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let limits = super::DepositRetentionLimits {
+            max_count: 2,
+            max_bytes: 1024 * 1024,
+            compacted_count: 1,
+            compacted_bytes: 768 * 1024,
+            max_journal_bytes: 1024 * 1024,
+        };
+        let memory = InMemoryPheromoneSubstrate::with_retention_limits(config.clone(), limits);
+        let local = LocalJournalPheromoneSubstrate::open_with_retention_limits(
+            config.clone(),
+            &path,
+            limits,
+        )
+        .unwrap();
+
+        let live = sample_deposit("live-evidence", 100_000, 0.9);
+        memory.deposit(live.clone()).await.unwrap();
+        local.deposit(live).await.unwrap();
+
+        for index in 0..4 {
+            let expired = sample_deposit(&format!("expired-flood-{index}"), index, 0.9);
+            assert!(matches!(
+                memory.deposit(expired.clone()).await,
+                Err(super::SubstrateError::ExpiredDeposit {
+                    timestamp_high_water: 100_000,
+                    ..
+                })
+            ));
+            assert!(matches!(
+                local.deposit(expired).await,
+                Err(super::SubstrateError::ExpiredDeposit {
+                    timestamp_high_water: 100_000,
+                    ..
+                })
+            ));
+        }
+
+        for deposits in [
+            memory.recent_deposits(10).await.unwrap(),
+            local.recent_deposits(10).await.unwrap(),
+        ] {
+            assert_eq!(deposits.len(), 1);
+            assert_eq!(deposits[0].timestamp, 100_000);
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+        drop(local);
+
+        // Upgrade/recovery remains available if an older writer appended a
+        // valid but already-evaporated delayed record before this admission
+        // rule existed: startup drops it and rewrites the bounded journal.
+        let persisted_expired = sample_deposit("legacy-expired-flood", 5, 0.9);
+        super::append_jsonl_line(&path, &persisted_expired).unwrap();
+
+        let reopened =
+            LocalJournalPheromoneSubstrate::open_with_retention_limits(config, &path, limits)
+                .unwrap();
+        let reopened_deposits = reopened.recent_deposits(10).await.unwrap();
+        assert_eq!(reopened_deposits.len(), 1);
+        assert_eq!(reopened_deposits[0].timestamp, 100_000);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+        drop(reopened);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::escalation_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_class_config_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_journal_path(&path));
+        let _ = std::fs::remove_file(super::behavioral_baseline_sequence_path(&path));
+    }
+
     #[test]
     fn deposit_retention_enforces_total_and_per_deposit_byte_limits() {
         let deposit =
@@ -3017,7 +3161,7 @@ mod tests {
         };
         let mut retained = super::RetainedDeposits::default();
         for _ in 0..4 {
-            retained.push(deposit.clone(), limits);
+            retained.push(deposit.clone(), limits, 0.01).unwrap();
         }
         assert_eq!(retained.len(), 2);
         assert!(retained.encoded_bytes <= limits.compacted_bytes);
@@ -3050,7 +3194,9 @@ mod tests {
             sample_deposit("unrelated-after", 220, 0.9),
         ];
         for entry in entries {
-            retained.push(super::VerifiedDeposit::admit(entry).unwrap(), limits);
+            retained
+                .push(super::VerifiedDeposit::admit(entry).unwrap(), limits, 0.01)
+                .unwrap();
         }
 
         assert_eq!(retained.len(), 1);
@@ -3982,7 +4128,7 @@ mod tests {
     async fn gc_evaporated_preserves_fresh_deposits() {
         let substrate = in_memory();
         substrate
-            .deposit(sample_deposit("old-agent", 0, 0.001))
+            .deposit(sample_deposit("old-agent", 0, 0.9))
             .await
             .unwrap();
         substrate
