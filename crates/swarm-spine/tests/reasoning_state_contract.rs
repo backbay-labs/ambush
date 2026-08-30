@@ -173,24 +173,13 @@ fn terminal_validator_uses_core_exact_task_boundary_without_seed_fiction() {
     .unwrap()
     .signed_with(&key, "terminal-proof")
     .unwrap();
-    validate_task_terminal_envelope(
-        &claimed,
-        &envelope,
-        &capability,
-        &GraphResourceLimits::default(),
-    )
-    .unwrap();
+    validate_task_terminal_envelope(&claimed, &envelope, &GraphResourceLimits::default()).unwrap();
 
     let mut forged = envelope;
     forged.fencing_token = FencingToken::new(99);
     assert!(
-        validate_task_terminal_envelope(
-            &claimed,
-            &forged,
-            &capability,
-            &GraphResourceLimits::default(),
-        )
-        .is_err()
+        validate_task_terminal_envelope(&claimed, &forged, &GraphResourceLimits::default(),)
+            .is_err()
     );
 }
 

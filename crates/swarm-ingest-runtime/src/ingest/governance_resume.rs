@@ -88,19 +88,16 @@ async fn governed_approval_resume_handler(
             "approval set is not a governed human authorization",
         ));
     }
-    let governance = state.governance_authority.as_ref().ok_or_else(|| {
+    let resume_dispatcher = state.human_approval_resume_dispatcher().ok_or_else(|| {
         PlatformApiError::service_unavailable("governance authority is not configured")
     })?;
-    let action_kind = governance
-        .pending_human_authorization(&approval_set_id)
-        .map_err(PlatformApiError::conflict)?
+    let action_kind = resume_dispatcher
+        .reconcile_persisted_human_approval(&receipt_pack.report)
+        .map_err(|error| PlatformApiError::conflict(error.to_string()))?
         .request
         .action
         .kind()
         .to_string();
-    let resume_dispatcher = state.human_approval_resume_dispatcher().ok_or_else(|| {
-        PlatformApiError::service_unavailable("governance authority is not configured")
-    })?;
     let audit = resume_dispatcher
         .resume(receipt_pack.report.clone())
         .await

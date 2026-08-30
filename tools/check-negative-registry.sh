@@ -1178,7 +1178,7 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "b48f3984e40fe979a0e4b61637bc5e8f983edb34fb1d443d75b311d25e5c8471",
+    "tools/check-single-governor-key.sh": "101e3d187f9231a3316b63162aaeb63bc9451dee9752fca9fbfde5a4f34a0d5b",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -1188,13 +1188,13 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "crates/swarm-runtime-workbench/Cargo.toml": "eab3a2b0578a2366e26604a69ca649ba03ce032d3fc45696876ae222573d24ce",
     "crates/swarm-cli/Cargo.toml": "0593667747de0b4cd7792170f2c6bfa8fb0a5051767dca97ede20fad44a23dfe",
     "crates/swarm-cli/src/core.inc": "fcf7396863c83532664b0a00395b8a7862b0036c5f512e2771eeac8765129e76",
-    "crates/swarm-governance/src/lib.rs": "6a453d7d0cadc046609d5f58f01b8c93da315d98024a304db87c53dd6a9cb2f9",
+    "crates/swarm-governance/src/lib.rs": "7c467d658e671d2cfd6fefd22c3310b9619bdd4927179fba60f3ba43046c2c14",
     "crates/swarm-runtime/src/containment.rs": "813b259d69867ca71649f0f4a20fae30868a3405a5be1a217f467d8de53577ad",
-    "crates/swarm-runtime/src/dispatcher.rs": "de7ad808ff477c7d1432b47360f4139e9ddaa5d5449a4fa5d21e28b5e86c8c8e",
-    "crates/swarm-ingest-runtime/src/ingest/mod.rs": "6abc1813c6c20a861aa42bf992ea6a92b5fd2133ebe80b7133263bea0cd8b1f0",
+    "crates/swarm-runtime/src/dispatcher.rs": "67abcc83cade8935c9c351175c0e443845195192c09149b104eecada129be44f",
+    "crates/swarm-ingest-runtime/src/ingest/mod.rs": "ac3982edd29d58287f493ec538b63a97e2ee9c04cc53db01f0030f8c52609061",
     "crates/swarm-runtime-http/src/bin/swarm_detect.rs": "e3ffb354d20f96d47f5a8e283d04e24dfe8da94ac9985c5c117bea938a8fbb83",
     "crates/swarm-ingest-runtime/src/ingest/demo.rs": "18ed6e3ee9ea5d49a237de45067cf555f6e620264d9fd46c812180d10e110b0b",
-    "crates/swarm-ingest-runtime/src/ingest/governance_resume.rs": "492614aa84da4f8da399408bf99a64009d1d686c8f79b70b06579a39e19a9645",
+    "crates/swarm-ingest-runtime/src/ingest/governance_resume.rs": "9d461932afcf477d489c74f68612341b4400fd45de03c4f068c934ef7c39c16d",
     "crates/swarm-ingest-runtime/src/ingest/health.rs": "3b875c6701baec37cf71692c9937d2e1a08bd477391c7529b05fb5a4c8325acd",
     "crates/swarm-ingest-runtime/src/ingest/platform_api.rs": "6a47977b16fd895e5bea265ce18335f6f8b291db28b9ab758591cfd4d8e7bc14",
     "crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs": "ec8fb17c3226fadbe6120a381714f88eccdf5225aa62a471923fc21df92d7adc",
@@ -1202,13 +1202,13 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
 }
 GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
-        (14, "aea9bc3f8eefe405350f9adab474d9ee963e975458fb4d18f344b6f92cf444ce"),
+        (14, "6f949c0cffbec7e59227db917a819b101873676678bcb3d8bf6e93f6a280f042"),
     "swarm-runtime":
-        (133, "b31da0ccd4342927347b379e1da3313ab79128cbdbd60f54157c2e9d61260202"),
+        (133, "7b86cd3dee05bf0e24892896ca2bb22550ef012d54c5d47ca390f1648dd9df10"),
     "swarm-ingest-runtime":
-        (14, "aa68bbbe869250092bbb2833a6fcb0e5fe011bb0128b5d874d53731eee540c89"),
+        (14, "1e2b257f782cb68d2afd6a4e5cbf4db1684d6b88c0505042513956b1f07bf3be"),
     "swarm-runtime-http":
-        (22, "9dff7c2260f6152065d91295973534602be249f56a6659dd27d8aed4cad25869"),
+        (22, "3f59296e611fba4a737ad600340d132bffca24b257267bf1126f47518ae0b89b"),
     "swarm-agents":
         (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
     "swarm-evolution":

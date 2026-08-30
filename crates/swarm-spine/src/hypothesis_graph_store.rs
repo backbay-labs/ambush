@@ -27,9 +27,8 @@ use std::sync::{
 use std::time::Duration;
 use swarm_core::hypothesis_graph::{
     FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime, GraphResourceLimits,
-    HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, LeaseId, TaskCapabilityProof,
-    TaskClaimRequest, TaskCompletion, TaskId, TaskLease, TaskRecord, TaskState,
-    TaskTerminalEnvelope, TaskTerminalProof, derive_logical_task_id,
+    HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, LeaseId, TaskClaimRequest, TaskId, TaskLease,
+    TaskRecord, TaskState, TaskTerminalEnvelope, TaskTerminalProof, derive_logical_task_id,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::{
@@ -517,7 +516,6 @@ pub struct GraphStoreSnapshot {
 pub fn validate_task_terminal_envelope(
     task: &TaskRecord,
     envelope: &TaskTerminalEnvelope,
-    capability: &TaskCapabilityProof,
     limits: &GraphResourceLimits,
 ) -> Result<(), GraphStoreError> {
     // Core owns structural, signature, exact-task, lease, fence, completion,
@@ -526,11 +524,6 @@ pub fn validate_task_terminal_envelope(
     envelope
         .validate_for_task(task, limits.max_task_lease_ms, limits.max_task_retries)
         .map_err(GraphStoreError::Admission)?;
-    if envelope.capability != *capability {
-        return Err(GraphStoreError::InvalidTransition {
-            reason: "terminal envelope capability differs from supplied capability".to_string(),
-        });
-    }
     if let Some(link) = &envelope.decision_link
         && link.target != task.request.target
     {
@@ -2599,18 +2592,15 @@ fn renew_task_op(
 #[allow(clippy::too_many_arguments)]
 fn complete_task_op(
     state: &mut GraphStoreState,
-    task_id: &str,
     expected_generation: u64,
-    lease_id: &LeaseId,
-    fence: FencingToken,
     now: GraphLogicalTime,
-    completion: TaskCompletion,
+    envelope: TaskTerminalEnvelope,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
     observe_logical_time(state, now)?;
-    let entry = task_entry_mut(state, task_id)?;
+    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
     ensure_task_generation(entry, expected_generation)?;
-    let lease = ensure_lease(entry, lease_id, fence)?;
+    let lease = ensure_lease(entry, &envelope.lease_id, envelope.fencing_token)?;
     if now < lease.issued_at {
         return Err(GraphStoreError::InvalidTransition {
             reason: "completion clock precedes lease issuance".to_string(),
@@ -2621,15 +2611,20 @@ fn complete_task_op(
             task_id: entry.task.request.task_id.clone(),
         });
     }
-    if completion.completed_at > now {
+    if envelope.completion.completed_at > now {
         return Err(GraphStoreError::InvalidTransition {
             reason: "completion time is ahead of the injected logical clock".to_string(),
         });
     }
+    validate_task_terminal_envelope(&entry.task, &envelope, limits)?;
     let task = entry
         .task
         .clone()
-        .complete(completion, fence, limits.max_task_lease_ms)
+        .complete(
+            envelope.completion,
+            envelope.fencing_token,
+            limits.max_task_lease_ms,
+        )
         .map_err(GraphStoreError::Admission)?;
     entry.task = task;
     entry.generation =
@@ -3092,12 +3087,9 @@ pub trait HypothesisGraphStore: Send + Sync {
     ) -> Result<TaskMutationResult, GraphStoreError>;
     fn complete_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        completion: TaskCompletion,
+        envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn fail_task(
         &self,
@@ -3351,24 +3343,12 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn complete_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        completion: TaskCompletion,
+        envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            complete_task_op(
-                state,
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                completion,
-                &self.limits,
-            )
+            complete_task_op(state, expected_generation, now, envelope, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6252,24 +6232,12 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn complete_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        completion: TaskCompletion,
+        envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            complete_task_op(
-                state,
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                completion,
-                &self.limits,
-            )
+            complete_task_op(state, expected_generation, now, envelope, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -6456,30 +6424,13 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn complete_task(
         &self,
-        task_id: &str,
         expected_generation: u64,
-        lease_id: &LeaseId,
-        fence: FencingToken,
         now: GraphLogicalTime,
-        completion: TaskCompletion,
+        envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.complete_task(
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                completion,
-            ),
-            Self::LocalFiles(store) => store.complete_task(
-                task_id,
-                expected_generation,
-                lease_id,
-                fence,
-                now,
-                completion,
-            ),
+            Self::Memory(store) => store.complete_task(expected_generation, now, envelope),
+            Self::LocalFiles(store) => store.complete_task(expected_generation, now, envelope),
         }
     }
 
@@ -6535,8 +6486,8 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use swarm_core::hypothesis_graph::{
-        EvidenceId, EvidenceScope, EvidenceSourceFamily, GraphProducerRole, TaskCompletionKind,
-        TaskId, TaskKind, TaskTarget,
+        EvidenceId, EvidenceScope, EvidenceSourceFamily, GraphProducerRole, TaskCapabilityProof,
+        TaskCompletion, TaskCompletionKind, TaskId, TaskKind, TaskTarget,
     };
 
     fn signer(byte: u8) -> Keypair {
@@ -6570,6 +6521,38 @@ mod tests {
 
     fn request(byte: u8, task_suffix: &str) -> TaskClaimRequest {
         request_at(byte, task_suffix, GraphLogicalTime::new(100))
+    }
+
+    fn signed_terminal_envelope(
+        request: &TaskClaimRequest,
+        lease: &TaskLease,
+        completion: TaskCompletion,
+        signer_byte: u8,
+    ) -> TaskTerminalEnvelope {
+        let claimant = signer(signer_byte);
+        let capability = TaskCapabilityProof::signed_with(
+            request.task_id.clone(),
+            request.claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &claimant,
+            format!("task-capability:{}", request.task_id),
+        )
+        .unwrap();
+        TaskTerminalEnvelope::new(
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            completion,
+            None,
+            request.claimant.clone(),
+            capability,
+        )
+        .unwrap()
+        .signed_with(&claimant, format!("task-terminal:{}", request.task_id))
+        .unwrap()
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -6607,12 +6590,9 @@ mod tests {
             )
             .unwrap();
         assert!(reclaimed.lease.as_ref().unwrap().fencing_token > old.fencing_token);
-        let stale = store.complete_task(
-            "task:one",
-            2,
-            &old.lease_id,
-            old.fencing_token,
-            GraphLogicalTime::new(112),
+        let stale_envelope = signed_terminal_envelope(
+            &first.task.request,
+            &old,
             TaskCompletion::new(
                 TaskCompletionKind::EvidenceAdded,
                 old.holder.clone(),
@@ -6621,29 +6601,34 @@ mod tests {
                 "summary:old",
             )
             .unwrap(),
+            1,
         );
+        let stale = store.complete_task(2, GraphLogicalTime::new(112), stale_envelope);
         assert!(matches!(
             stale,
             Err(GraphStoreError::StaleTaskGeneration { .. })
                 | Err(GraphStoreError::StaleLease { .. })
                 | Err(GraphStoreError::StaleFence { .. })
         ));
-        let current = reclaimed.lease.unwrap();
+        let current = reclaimed.lease.clone().unwrap();
+        let current_envelope = signed_terminal_envelope(
+            &reclaimed.task.request,
+            &current,
+            TaskCompletion::new(
+                TaskCompletionKind::EvidenceAdded,
+                current.holder.clone(),
+                GraphLogicalTime::new(112),
+                [EvidenceId::new("evidence:one")],
+                "summary:new",
+            )
+            .unwrap(),
+            2,
+        );
         let done = store
             .complete_task(
-                "task:one",
                 reclaimed.revision.generation,
-                &current.lease_id,
-                current.fencing_token,
                 GraphLogicalTime::new(112),
-                TaskCompletion::new(
-                    TaskCompletionKind::EvidenceAdded,
-                    current.holder,
-                    GraphLogicalTime::new(112),
-                    [EvidenceId::new("evidence:one")],
-                    "summary:new",
-                )
-                .unwrap(),
+                current_envelope,
             )
             .unwrap();
         assert_eq!(done.task.state, TaskState::Completed);
@@ -6682,22 +6667,25 @@ mod tests {
             .claim_task(request(45, "resurrection"), GraphLogicalTime::new(100), 20)
             .unwrap();
         let stale = store.snapshot().unwrap();
-        let lease = claimed.lease.unwrap();
+        let lease = claimed.lease.clone().unwrap();
+        let envelope = signed_terminal_envelope(
+            &claimed.task.request,
+            &lease,
+            TaskCompletion::new(
+                TaskCompletionKind::EvidenceAdded,
+                lease.holder.clone(),
+                GraphLogicalTime::new(110),
+                [EvidenceId::new("evidence:resurrection")],
+                "summary:resurrection",
+            )
+            .unwrap(),
+            45,
+        );
         store
             .complete_task(
-                "task:resurrection",
                 claimed.task_generation,
-                &lease.lease_id,
-                lease.fencing_token,
                 GraphLogicalTime::new(110),
-                TaskCompletion::new(
-                    TaskCompletionKind::EvidenceAdded,
-                    lease.holder,
-                    GraphLogicalTime::new(110),
-                    [EvidenceId::new("evidence:resurrection")],
-                    "summary:resurrection",
-                )
-                .unwrap(),
+                envelope,
             )
             .unwrap();
         let current = store.snapshot().unwrap();
@@ -6731,14 +6719,13 @@ mod tests {
             "summary:completion-barrier",
         )
         .unwrap();
+        let completion_envelope =
+            signed_terminal_envelope(&claim.task.request, &lease, completion, 1);
         assert!(matches!(
             store.complete_task(
-                "task:completion-barrier",
                 claim.task_generation,
-                &lease.lease_id,
-                lease.fencing_token,
                 GraphLogicalTime::new(110),
-                completion,
+                completion_envelope,
             ),
             Err(GraphStoreError::LeaseExpired { .. })
         ));
@@ -6768,6 +6755,108 @@ mod tests {
             Err(GraphStoreError::LeaseExpired { .. })
         ));
         assert_eq!(store.snapshot().unwrap(), before_failure);
+    }
+
+    #[test]
+    fn durable_completion_requires_claimant_signature_and_compatible_kind() {
+        let path = temp_dir("signed-terminal-completion");
+        let store = FileHypothesisGraphStore::new(&path, graph(), signer(20)).unwrap();
+        let claim = store
+            .claim_task(
+                request(21, "signed-terminal"),
+                GraphLogicalTime::new(100),
+                20,
+            )
+            .unwrap();
+        let lease = claim.lease.clone().unwrap();
+        let claimant = signer(21);
+        let capability = TaskCapabilityProof::signed_with(
+            claim.task.request.task_id.clone(),
+            claim.task.request.claimant.clone(),
+            claim.task.request.role,
+            claim.task.request.kind,
+            claim.task.request.canonical_digest().unwrap(),
+            &claimant,
+            "task-capability:signed-terminal",
+        )
+        .unwrap();
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::EvidenceAdded,
+            lease.holder.clone(),
+            GraphLogicalTime::new(110),
+            [EvidenceId::new("evidence:signed-terminal")],
+            "summary:signed-terminal",
+        )
+        .unwrap();
+        let unsigned = TaskTerminalEnvelope::new(
+            claim.task.request.task_id.clone(),
+            claim.task.request.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            completion,
+            None,
+            lease.holder.clone(),
+            capability,
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        assert!(matches!(
+            store.complete_task(claim.task_generation, GraphLogicalTime::new(110), unsigned),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let mut wrong_kind = signed_terminal_envelope(
+            &claim.task.request,
+            &lease,
+            TaskCompletion::new(
+                TaskCompletionKind::EvidenceAdded,
+                lease.holder.clone(),
+                GraphLogicalTime::new(110),
+                [EvidenceId::new("evidence:signed-terminal")],
+                "summary:signed-terminal",
+            )
+            .unwrap(),
+            21,
+        );
+        wrong_kind.completion.kind = TaskCompletionKind::EdgeChallenged;
+        assert!(matches!(
+            store.complete_task(
+                claim.task_generation,
+                GraphLogicalTime::new(110),
+                wrong_kind
+            ),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidTransition { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let valid = signed_terminal_envelope(
+            &claim.task.request,
+            &lease,
+            TaskCompletion::new(
+                TaskCompletionKind::EvidenceAdded,
+                lease.holder.clone(),
+                GraphLogicalTime::new(110),
+                [EvidenceId::new("evidence:signed-terminal")],
+                "summary:signed-terminal",
+            )
+            .unwrap(),
+            21,
+        );
+        assert_eq!(
+            store
+                .complete_task(claim.task_generation, GraphLogicalTime::new(110), valid)
+                .unwrap()
+                .task
+                .state,
+            TaskState::Completed
+        );
+        drop(store);
+        let _ = fs::remove_dir_all(path);
     }
 
     #[test]
@@ -6965,24 +7054,20 @@ mod tests {
         )
         .unwrap();
         let renewed_lease = renewed_memory.lease.clone().unwrap();
+        let envelope =
+            signed_terminal_envelope(&renewed_memory.task.request, &renewed_lease, completion, 1);
         let done_memory = memory
             .complete_task(
-                "task:vector",
                 renewed_memory.task_generation,
-                &renewed_lease.lease_id,
-                renewed_lease.fencing_token,
                 GraphLogicalTime::new(110),
-                completion.clone(),
+                envelope.clone(),
             )
             .unwrap();
         let done_file = file
             .complete_task(
-                "task:vector",
                 renewed_file.task_generation,
-                &renewed_lease.lease_id,
-                renewed_lease.fencing_token,
                 GraphLogicalTime::new(110),
-                completion,
+                envelope,
             )
             .unwrap();
         assert_eq!(done_memory.task, done_file.task);

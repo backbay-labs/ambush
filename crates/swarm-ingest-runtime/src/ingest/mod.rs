@@ -181,7 +181,7 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         let eligible_voters = configured_approval_voters(&self.stack.load_full().service.config)
             .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
         let record = harness
-            .create_approval_set(
+            .create_or_load_approval_set(
                 eligible_voters,
                 ThresholdRule::AtLeast { required: 1 },
                 &route.hold().approval_evidence_ref(),

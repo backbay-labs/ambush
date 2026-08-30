@@ -3,9 +3,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::Reverse;
-use std::collections::HashSet;
-use std::fs;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_crypto::{
     CryptoError, DetachedSignature, Ed25519Signer, Keypair, canonical_json_bytes, sha256,
@@ -468,6 +471,24 @@ pub enum ApprovalError {
 
     #[error("invalid approval receipt pack: {reason}")]
     InvalidReceiptPack { reason: String },
+
+    #[error("approval store lock `{path}` failed: {source}")]
+    StoreLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("approval evidence `{evidence_ref}` has {count} persisted sets; expected at most one")]
+    AmbiguousApprovalEvidence { evidence_ref: String, count: usize },
+
+    #[error(
+        "persisted approval evidence `{evidence_ref}` conflicts with the requested voters or threshold"
+    )]
+    ApprovalEvidenceConflict { evidence_ref: String },
+
+    #[error("approval set `{set_id}` cannot recover its ledger: {reason}")]
+    LedgerRecoveryConflict { set_id: String, reason: String },
 
     #[error("approval verdict stores are not configured")]
     VerdictStoreNotConfigured,
@@ -954,6 +975,78 @@ pub struct DefaultApprovalHarness {
     ledger_store: FileApprovalLedgerStore,
     verdict_store: Option<FileApprovalVerdictStore>,
     receipt_pack_store: Option<FileApprovalReceiptPackStore>,
+    store_lock: ApprovalStoreLock,
+}
+
+#[derive(Debug, Clone)]
+struct ApprovalStoreLock {
+    path: PathBuf,
+    process_lock: Arc<Mutex<()>>,
+}
+
+struct ApprovalStoreGuard<'a> {
+    _process_guard: MutexGuard<'a, ()>,
+    file: fs::File,
+}
+
+impl Drop for ApprovalStoreGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+fn approval_process_locks() -> &'static Mutex<HashMap<PathBuf, Weak<Mutex<()>>>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+impl ApprovalStoreLock {
+    fn for_ledger_root(root: &Path) -> Result<Self, ApprovalError> {
+        let canonical_root = fs::canonicalize(root).map_err(|source| ApprovalError::StoreLock {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        let path = canonical_root.join(".approval-store.lock");
+        let process_lock = {
+            let mut locks = approval_process_locks()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(existing) = locks.get(&path).and_then(Weak::upgrade) {
+                existing
+            } else {
+                let created = Arc::new(Mutex::new(()));
+                locks.insert(path.clone(), Arc::downgrade(&created));
+                created
+            }
+        };
+        Ok(Self { path, process_lock })
+    }
+
+    fn acquire(&self) -> Result<ApprovalStoreGuard<'_>, ApprovalError> {
+        let process_guard = self
+            .process_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&self.path)
+            .map_err(|source| ApprovalError::StoreLock {
+                path: self.path.clone(),
+                source,
+            })?;
+        file.lock().map_err(|source| ApprovalError::StoreLock {
+            path: self.path.clone(),
+            source,
+        })?;
+        Ok(ApprovalStoreGuard {
+            _process_guard: process_guard,
+            file,
+        })
+    }
 }
 
 impl DefaultApprovalHarness {
@@ -961,11 +1054,15 @@ impl DefaultApprovalHarness {
         approval_set_results_dir: impl AsRef<Path>,
         approval_ledger_results_dir: impl AsRef<Path>,
     ) -> Result<Self, ApprovalError> {
+        let set_store = FileApprovalSetStore::open(approval_set_results_dir)?;
+        let ledger_store = FileApprovalLedgerStore::open(approval_ledger_results_dir)?;
+        let store_lock = ApprovalStoreLock::for_ledger_root(&ledger_store.root)?;
         Ok(Self {
-            set_store: FileApprovalSetStore::open(approval_set_results_dir)?,
-            ledger_store: FileApprovalLedgerStore::open(approval_ledger_results_dir)?,
+            set_store,
+            ledger_store,
             verdict_store: None,
             receipt_pack_store: None,
+            store_lock,
         })
     }
 
@@ -976,19 +1073,80 @@ impl DefaultApprovalHarness {
         approval_set_results_dir: impl AsRef<Path>,
         approval_ledger_results_dir: impl AsRef<Path>,
     ) -> Result<Self, ApprovalError> {
+        let set_store = FileApprovalSetStore::open(approval_set_results_dir)?;
+        let ledger_store = FileApprovalLedgerStore::open(approval_ledger_results_dir)?;
+        let store_lock = ApprovalStoreLock::for_ledger_root(&ledger_store.root)?;
         Ok(Self {
-            set_store: FileApprovalSetStore::open(approval_set_results_dir)?,
-            ledger_store: FileApprovalLedgerStore::open(approval_ledger_results_dir)?,
+            set_store,
+            ledger_store,
             verdict_store: Some(FileApprovalVerdictStore::open(
                 approval_verdict_results_dir,
             )?),
             receipt_pack_store: Some(FileApprovalReceiptPackStore::open(
                 approval_receipt_pack_results_dir,
             )?),
+            store_lock,
         })
     }
 
     pub fn create_approval_set(
+        &self,
+        eligible_voters: Vec<String>,
+        threshold: ThresholdRule,
+        promotion_evidence_ref: &str,
+    ) -> Result<ApprovalSetRecord, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
+        self.create_approval_set_unlocked(eligible_voters, threshold, promotion_evidence_ref)
+    }
+
+    /// Return the existing set for this exact governance evidence reference or
+    /// create it once. The store lock spans lookup plus both set/ledger writes,
+    /// so concurrent route retries cannot manufacture sibling approval sets.
+    pub fn create_or_load_approval_set(
+        &self,
+        eligible_voters: Vec<String>,
+        threshold: ThresholdRule,
+        promotion_evidence_ref: &str,
+    ) -> Result<ApprovalSetRecord, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
+        let eligible_voters = normalize_voter_ids(eligible_voters);
+        let existing = self
+            .set_store
+            .list()?
+            .sets
+            .into_iter()
+            .filter(|record| record.promotion_evidence_ref == promotion_evidence_ref)
+            .collect::<Vec<_>>();
+        match existing.as_slice() {
+            [] => self.create_approval_set_unlocked(
+                eligible_voters,
+                threshold,
+                promotion_evidence_ref,
+            ),
+            [record] => {
+                let report = self.set_store.load(&record.set_id)?.ok_or_else(|| {
+                    ApprovalError::ApprovalSetNotFound {
+                        set_id: record.set_id.clone(),
+                    }
+                })?;
+                if report.report.eligible_voters != eligible_voters
+                    || report.report.threshold != threshold
+                {
+                    return Err(ApprovalError::ApprovalEvidenceConflict {
+                        evidence_ref: promotion_evidence_ref.to_string(),
+                    });
+                }
+                self.load_or_repair_stored_ledger_for_set(&report.report)?;
+                Ok(record.clone())
+            }
+            records => Err(ApprovalError::AmbiguousApprovalEvidence {
+                evidence_ref: promotion_evidence_ref.to_string(),
+                count: records.len(),
+            }),
+        }
+    }
+
+    fn create_approval_set_unlocked(
         &self,
         eligible_voters: Vec<String>,
         threshold: ThresholdRule,
@@ -1051,8 +1209,10 @@ impl DefaultApprovalHarness {
         voter_id: &str,
         signer: &Ed25519Signer,
     ) -> Result<ApprovalLedgerQuorumState, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         let set =
-            self.load_approval_set(set_id)?
+            self.set_store
+                .load(set_id)?
                 .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
                     set_id: set_id.to_string(),
                 })?;
@@ -1092,13 +1252,15 @@ impl DefaultApprovalHarness {
         voter_id: &str,
         signature: &DetachedSignature,
     ) -> Result<ApprovalLedgerQuorumState, ApprovalError> {
-        let mut ledger =
-            self.load_ledger(ledger_id)?
-                .ok_or_else(|| ApprovalError::ApprovalLedgerNotFound {
-                    ledger_id: ledger_id.to_string(),
-                })?;
+        let _store_guard = self.store_lock.acquire()?;
+        let mut ledger = self.ledger_store.load_stored(ledger_id)?.ok_or_else(|| {
+            ApprovalError::ApprovalLedgerNotFound {
+                ledger_id: ledger_id.to_string(),
+            }
+        })?;
         let set = self
-            .load_approval_set(&ledger.report.approval_set_id)?
+            .set_store
+            .load(&ledger.report.approval_set_id)?
             .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
                 set_id: ledger.report.approval_set_id.clone(),
             })?;
@@ -1125,6 +1287,7 @@ impl DefaultApprovalHarness {
         &self,
         set_id: &str,
     ) -> Result<Option<ApprovalSetLookup>, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         self.set_store.load(set_id).map_err(Into::into)
     }
 
@@ -1132,6 +1295,7 @@ impl DefaultApprovalHarness {
         &self,
         ledger_id: &str,
     ) -> Result<Option<ApprovalLedgerLookup>, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         let Some(ledger) = self.ledger_store.load_stored(ledger_id)? else {
             return Ok(None);
         };
@@ -1151,6 +1315,7 @@ impl DefaultApprovalHarness {
     }
 
     pub fn list_approval_sets(&self) -> Result<ApprovalSetList, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         self.set_store.list().map_err(Into::into)
     }
 
@@ -1158,6 +1323,7 @@ impl DefaultApprovalHarness {
         &self,
         approval_set_id: Option<&str>,
     ) -> Result<ApprovalLedgerList, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         self.ledger_store.list(approval_set_id).map_err(Into::into)
     }
 
@@ -1166,17 +1332,18 @@ impl DefaultApprovalHarness {
         approval_set_id: &str,
         ledger_id: &str,
     ) -> Result<ApprovalVerdictLookup, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         let verdict_store = self.verdict_store()?;
-        let set = self.load_approval_set(approval_set_id)?.ok_or_else(|| {
+        let set = self.set_store.load(approval_set_id)?.ok_or_else(|| {
             ApprovalError::ApprovalSetNotFound {
                 set_id: approval_set_id.to_string(),
             }
         })?;
-        let ledger =
-            self.load_ledger(ledger_id)?
-                .ok_or_else(|| ApprovalError::ApprovalLedgerNotFound {
-                    ledger_id: ledger_id.to_string(),
-                })?;
+        let ledger = self.ledger_store.load_stored(ledger_id)?.ok_or_else(|| {
+            ApprovalError::ApprovalLedgerNotFound {
+                ledger_id: ledger_id.to_string(),
+            }
+        })?;
         let report = evaluate_verdict(&set.report, &ledger.report, now_ms())?;
         let record = verdict_store.persist(&report)?;
         Ok(ApprovalVerdictLookup { record, report })
@@ -1186,10 +1353,12 @@ impl DefaultApprovalHarness {
         &self,
         verdict_id: &str,
     ) -> Result<Option<ApprovalVerdictLookup>, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         self.verdict_store()?.load(verdict_id).map_err(Into::into)
     }
 
     pub fn list_verdicts(&self) -> Result<ApprovalVerdictList, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         self.verdict_store()?.list().map_err(Into::into)
     }
 
@@ -1199,19 +1368,22 @@ impl DefaultApprovalHarness {
         signer_id: &str,
         signing_key_env: &str,
     ) -> Result<ApprovalReceiptPackLookup, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         let receipt_pack_store = self.receipt_pack_store()?;
-        let verdict = self.load_verdict(verdict_id)?.ok_or_else(|| {
+        let verdict = self.verdict_store()?.load(verdict_id)?.ok_or_else(|| {
             ApprovalError::ApprovalVerdictNotFound {
                 verdict_id: verdict_id.to_string(),
             }
         })?;
         let set = self
-            .load_approval_set(&verdict.report.approval_set_id)?
+            .set_store
+            .load(&verdict.report.approval_set_id)?
             .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
                 set_id: verdict.report.approval_set_id.clone(),
             })?;
         let ledger = self
-            .load_ledger(&verdict.report.ledger_id)?
+            .ledger_store
+            .load_stored(&verdict.report.ledger_id)?
             .ok_or_else(|| ApprovalError::ApprovalLedgerNotFound {
                 ledger_id: verdict.report.ledger_id.clone(),
             })?;
@@ -1240,15 +1412,18 @@ impl DefaultApprovalHarness {
         &self,
         pack_id: &str,
     ) -> Result<Option<ApprovalReceiptPackLookup>, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         self.receipt_pack_store()?.load(pack_id).map_err(Into::into)
     }
 
     pub fn list_receipt_packs(&self) -> Result<ApprovalReceiptPackList, ApprovalError> {
+        let _store_guard = self.store_lock.acquire()?;
         self.receipt_pack_store()?.list().map_err(Into::into)
     }
 
     pub fn verify_receipt_pack(&self, pack_id: &str) -> Result<bool, ApprovalError> {
-        let pack = self.load_receipt_pack(pack_id)?.ok_or_else(|| {
+        let _store_guard = self.store_lock.acquire()?;
+        let pack = self.receipt_pack_store()?.load(pack_id)?.ok_or_else(|| {
             ApprovalError::ApprovalReceiptPackNotFound {
                 pack_id: pack_id.to_string(),
             }
@@ -1279,6 +1454,49 @@ impl DefaultApprovalHarness {
                 count,
             }),
         }
+    }
+
+    fn load_or_repair_stored_ledger_for_set(
+        &self,
+        set: &ApprovalSetReport,
+    ) -> Result<StoredApprovalLedger, ApprovalError> {
+        match self.load_stored_ledger_for_set(&set.set_id) {
+            Ok(ledger) => return Ok(ledger),
+            Err(ApprovalError::MissingLedgerForSet { .. }) => {}
+            Err(error) => return Err(error),
+        }
+
+        // A set report/index is committed before its initial ledger report/index.
+        // Recover a process exit at either ledger write without inventing a new
+        // set or discarding a report that already contains votes.
+        let ledger_id = approval_ledger_id(&set.set_id, set.created_at_ms);
+        let report_path = self.ledger_store.report_path(&ledger_id);
+        let ledger = if report_path.exists() {
+            read_json::<ApprovalLedgerReport, ApprovalLedgerStoreError>(
+                &report_path,
+                |path, source| ApprovalLedgerStoreError::Read { path, source },
+                |path, source| ApprovalLedgerStoreError::Parse { path, source },
+            )?
+        } else {
+            ApprovalLedgerReport {
+                ledger_id: ledger_id.clone(),
+                approval_set_id: set.set_id.clone(),
+                entries: Vec::new(),
+                created_at_ms: set.created_at_ms,
+            }
+        };
+        if ledger.ledger_id != ledger_id
+            || ledger.approval_set_id != set.set_id
+            || ledger.created_at_ms != set.created_at_ms
+        {
+            return Err(ApprovalError::LedgerRecoveryConflict {
+                set_id: set.set_id.clone(),
+                reason: "the durable ledger report does not match the deterministic initial ledger identity"
+                    .to_string(),
+            });
+        }
+        self.ledger_store.persist(&ledger)?;
+        self.load_stored_ledger_for_set(&set.set_id)
     }
 
     fn verdict_store(&self) -> Result<&FileApprovalVerdictStore, ApprovalError> {
@@ -2059,7 +2277,38 @@ where
 {
     let json = serde_json::to_vec_pretty(value)
         .map_err(|source| parse_error(path.to_path_buf(), source))?;
-    fs::write(path, json).map_err(|source| write_error(path.to_path_buf(), source))
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("approval.json");
+    static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
+    let (temp_path, mut temp_file) = loop {
+        let nonce = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&candidate)
+        {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => return Err(write_error(candidate, source)),
+        }
+    };
+    let write_result = (|| -> Result<(), std::io::Error> {
+        temp_file.write_all(&json)?;
+        temp_file.sync_all()?;
+        fs::rename(&temp_path, path)?;
+        #[cfg(unix)]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if let Err(source) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(write_error(path.to_path_buf(), source));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2647,5 +2896,223 @@ mod tests {
         assert_eq!(verdict.report.status, ApprovalVerdictStatus::Approved);
         let list = harness.list_verdicts().unwrap();
         assert_eq!(list.total_count, 1);
+    }
+
+    #[test]
+    fn separate_harness_instances_serialize_sets_ledgers_and_votes() {
+        let dir = TestDir::new("approval-harness-shared-lock");
+        let set_path = dir.child("approval-sets");
+        let ledger_path = dir.child("approval-ledgers");
+        let first = DefaultApprovalHarness::from_paths(&set_path, &ledger_path).unwrap();
+        let second = DefaultApprovalHarness::from_paths(&set_path, &ledger_path).unwrap();
+        let signer = Ed25519Signer::from_secret_material("shared-lock-voter");
+        let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+
+        let barrier = Arc::new(std::sync::Barrier::new(33));
+        let handles = (0..32)
+            .map(|index| {
+                let harness = if index % 2 == 0 {
+                    first.clone()
+                } else {
+                    second.clone()
+                };
+                let barrier = Arc::clone(&barrier);
+                let voter_id = voter_id.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    harness
+                        .create_or_load_approval_set(
+                            vec![voter_id],
+                            ThresholdRule::AtLeast { required: 1 },
+                            &format!("governed-hold:{index}"),
+                        )
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let records = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(first.list_approval_sets().unwrap().total_count, 32);
+        assert_eq!(second.list_ledgers(None).unwrap().total_count, 32);
+
+        let barrier = Arc::new(std::sync::Barrier::new(33));
+        let handles = records
+            .into_iter()
+            .enumerate()
+            .map(|(index, record)| {
+                let harness = if index % 2 == 0 {
+                    first.clone()
+                } else {
+                    second.clone()
+                };
+                let barrier = Arc::clone(&barrier);
+                let signer = signer.clone();
+                let voter_id = voter_id.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    harness
+                        .append_vote(&record.set_id, &voter_id, &signer)
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        for handle in handles {
+            assert!(handle.join().unwrap().quorum_met);
+        }
+        for ledger in first.list_ledgers(None).unwrap().ledgers {
+            assert_eq!(
+                second
+                    .load_ledger(&ledger.ledger_id)
+                    .unwrap()
+                    .unwrap()
+                    .report
+                    .entries
+                    .len(),
+                1
+            );
+        }
+
+        let reused = first
+            .create_or_load_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                "governed-hold:0",
+            )
+            .unwrap();
+        let original = second
+            .list_approval_sets()
+            .unwrap()
+            .sets
+            .into_iter()
+            .find(|record| record.promotion_evidence_ref == "governed-hold:0")
+            .unwrap();
+        assert_eq!(reused.set_id, original.set_id);
+        assert!(matches!(
+            second.create_or_load_approval_set(
+                vec![voter_id],
+                ThresholdRule::Unanimous,
+                "governed-hold:0",
+            ),
+            Err(ApprovalError::ApprovalEvidenceConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn create_or_load_repairs_interrupted_set_ledger_commit_without_losing_votes() {
+        let dir = TestDir::new("approval-harness-ledger-recovery");
+        let harness = DefaultApprovalHarness::from_paths(
+            dir.child("approval-sets"),
+            dir.child("approval-ledgers"),
+        )
+        .unwrap();
+        let signer = Ed25519Signer::from_secret_material("ledger-recovery-voter");
+        let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+        let set = ApprovalSetReport {
+            set_id: "approval-set:interrupted".to_string(),
+            eligible_voters: vec![voter_id.clone()],
+            threshold: ThresholdRule::AtLeast { required: 1 },
+            promotion_evidence_ref: "governed-hold:interrupted".to_string(),
+            created_at_ms: 1_700_000_000_000,
+        };
+
+        // Simulate an exit after the set report/index commit but before either
+        // initial ledger write. The retry must complete the same transaction.
+        harness.set_store.persist(&set).unwrap();
+        let recovered = harness
+            .create_or_load_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                &set.promotion_evidence_ref,
+            )
+            .unwrap();
+        assert_eq!(recovered.set_id, set.set_id);
+        let ledger_id = approval_ledger_id(&set.set_id, set.created_at_ms);
+        assert_eq!(
+            harness
+                .load_ledger(&ledger_id)
+                .unwrap()
+                .unwrap()
+                .report
+                .entries
+                .len(),
+            0
+        );
+
+        harness
+            .append_vote(&set.set_id, &voter_id, &signer)
+            .unwrap();
+        fs::remove_file(harness.ledger_store.index_path()).unwrap();
+
+        // Simulate an exit after the voted report replacement but before its
+        // index replacement. Re-index the exact report; never reset its votes.
+        harness
+            .create_or_load_approval_set(
+                vec![voter_id],
+                ThresholdRule::AtLeast { required: 1 },
+                &set.promotion_evidence_ref,
+            )
+            .unwrap();
+        assert_eq!(
+            harness
+                .load_ledger(&ledger_id)
+                .unwrap()
+                .unwrap()
+                .report
+                .entries
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn approval_harness_file_lock_serializes_separate_processes() {
+        const ROOT_ENV: &str = "SWARM_APPROVAL_PROCESS_LOCK_ROOT";
+        const PREFIX_ENV: &str = "SWARM_APPROVAL_PROCESS_LOCK_PREFIX";
+        if let (Some(root), Ok(prefix)) = (std::env::var_os(ROOT_ENV), std::env::var(PREFIX_ENV)) {
+            let root = PathBuf::from(root);
+            let harness = DefaultApprovalHarness::from_paths(
+                root.join("approval-sets"),
+                root.join("approval-ledgers"),
+            )
+            .unwrap();
+            for index in 0..24 {
+                harness
+                    .create_approval_set(
+                        vec![format!("voter:{prefix}")],
+                        ThresholdRule::AtLeast { required: 1 },
+                        &format!("process:{prefix}:{index}"),
+                    )
+                    .unwrap();
+            }
+            return;
+        }
+
+        let dir = TestDir::new("approval-harness-process-lock");
+        let executable = std::env::current_exe().unwrap();
+        let mut children = ["left", "right"].map(|prefix| {
+            std::process::Command::new(&executable)
+                .arg("--exact")
+                .arg("approval::tests::approval_harness_file_lock_serializes_separate_processes")
+                .arg("--nocapture")
+                .env(ROOT_ENV, &dir.path)
+                .env(PREFIX_ENV, prefix)
+                .spawn()
+                .unwrap()
+        });
+        for child in &mut children {
+            assert!(child.wait().unwrap().success());
+        }
+        let harness = DefaultApprovalHarness::from_paths(
+            dir.child("approval-sets"),
+            dir.child("approval-ledgers"),
+        )
+        .unwrap();
+        assert_eq!(harness.list_approval_sets().unwrap().total_count, 48);
+        assert_eq!(harness.list_ledgers(None).unwrap().total_count, 48);
     }
 }

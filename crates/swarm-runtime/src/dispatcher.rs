@@ -1,6 +1,6 @@
 use crate::approval::{
     ApprovalReceiptPackReport, ApprovalSetReport, approval_set_digest,
-    verify_governed_human_receipt_pack,
+    verify_governed_human_receipt_pack, verify_receipt_pack,
 };
 use crate::detection::metrics::CriticalPathMetrics;
 use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster, now_ms};
@@ -486,6 +486,28 @@ impl HumanApprovalResumeDispatcher {
         self.governance.identity()
     }
 
+    /// Reconcile an approval set that was durably written immediately before
+    /// the process exited or governance persistence failed. The receipt pack is
+    /// cryptographically and internally verified before it can repair signed
+    /// governance state, and the governance layer requires one exact unbound
+    /// hold-derived evidence reference.
+    pub fn reconcile_persisted_human_approval(
+        &self,
+        receipt_pack: &ApprovalReceiptPackReport,
+    ) -> Result<GovernedHumanAuthorizationHold, RuntimeError> {
+        verify_receipt_pack(receipt_pack)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
+        let approval_set_digest = approval_set_digest(&receipt_pack.approval_set)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
+        self.governance
+            .reconcile_human_approval_set(
+                &receipt_pack.approval_set.set_id,
+                &approval_set_digest,
+                &receipt_pack.approval_set.promotion_evidence_ref,
+            )
+            .map_err(RuntimeError::GovernanceAuthorization)
+    }
+
     #[cfg(test)]
     fn with_clock(
         governance: GovernanceAuthority,
@@ -521,10 +543,7 @@ impl HumanApprovalResumeDispatcher {
                 "human approval pack does not match the persisted artifact".into(),
             ));
         }
-        let hold = self
-            .governance
-            .pending_human_authorization(&receipt_pack.approval_set.set_id)
-            .map_err(RuntimeError::GovernanceAuthorization)?;
+        let hold = self.reconcile_persisted_human_approval(&receipt_pack)?;
         let approval_set_id = hold.approval_set_id.as_deref().ok_or_else(|| {
             RuntimeError::GovernanceAuthorization(
                 "pending human authorization is not bound to an approval set".into(),
@@ -2285,6 +2304,7 @@ mod tests {
 
     fn human_resume_clock_fixture(
         advance_past_freshness: bool,
+        bind_before_resume: bool,
     ) -> (
         TestGovernance,
         Arc<DelayedHumanResumeRouter>,
@@ -2346,13 +2366,15 @@ mod tests {
             .unwrap()
             .unwrap()
             .report;
-        governance
-            .bind_human_approval_set(
-                &hold.hold_id,
-                &set.set_id,
-                &approval_set_digest(&set).unwrap(),
-            )
-            .unwrap();
+        if bind_before_resume {
+            governance
+                .bind_human_approval_set(
+                    &hold.hold_id,
+                    &set.set_id,
+                    &approval_set_digest(&set).unwrap(),
+                )
+                .unwrap();
+        }
         harness.append_vote(&set.set_id, &voter_id, &voter).unwrap();
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
@@ -2387,8 +2409,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn human_resume_reconciles_an_unbound_persisted_approval_once() {
+        let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(false, false);
+        assert!(
+            governance.pending_human_authorization(&set_id).is_err(),
+            "precondition: the simulated crash left the hold unbound"
+        );
+        HumanApprovalResumeDispatcher::with_clock(governance.authority(), router.clone(), clock)
+            .resume(pack)
+            .await
+            .expect("a verified persisted pack must repair and consume the unbound hold");
+        assert!(governance.pending_human_authorization(&set_id).is_err());
+        assert_eq!(router.lease_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(router.executor_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(router.effect_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn human_resume_rechecks_freshness_after_awaited_preflight_restore() {
-        let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(true);
+        let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(true, true);
         let resume = HumanApprovalResumeDispatcher::with_clock(
             governance.authority(),
             router.clone(),
@@ -2406,7 +2445,7 @@ mod tests {
         assert!(governance.pending_human_authorization(&set_id).is_ok());
 
         let (fresh_governance, fresh_router, fresh_clock, fresh_pack, _) =
-            human_resume_clock_fixture(false);
+            human_resume_clock_fixture(false, true);
         let expected_execution_now_ms = fresh_clock.now_ms();
         HumanApprovalResumeDispatcher::with_clock(
             fresh_governance.authority(),

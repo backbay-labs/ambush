@@ -3531,6 +3531,98 @@ impl GovernancePolicy {
         Ok(bound)
     }
 
+    /// Repair the only cross-store crash window in governed human approval.
+    ///
+    /// The approval set and ledger are persisted by the runtime before this
+    /// signed governance state is updated. If the process exits between those
+    /// commits, a later authenticated resume supplies the exact persisted set
+    /// identity, digest, and hold-derived evidence reference. This method binds
+    /// that set to one and only one unbound hold, persists the repair, and is
+    /// idempotent for an already-reconciled binding.
+    pub fn reconcile_human_approval_set(
+        &self,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+        approval_evidence_ref: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        if approval_set_id.is_empty()
+            || approval_set_digest.is_empty()
+            || approval_evidence_ref.is_empty()
+        {
+            return Err("human approval reconciliation fields must not be empty".into());
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if let Some(existing) = state
+            .pending_human_authorizations
+            .iter()
+            .find(|hold| hold.approval_set_id.as_deref() == Some(approval_set_id))
+        {
+            if existing.approval_set_digest.as_deref() != Some(approval_set_digest)
+                || existing.approval_evidence_ref() != approval_evidence_ref
+            {
+                return Err(format!(
+                    "pending human authorization for approval set `{approval_set_id}` conflicts with the persisted approval artifact"
+                ));
+            }
+            return Ok(existing.clone());
+        }
+
+        let matching_indexes = state
+            .pending_human_authorizations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hold)| {
+                (hold.approval_set_id.is_none()
+                    && hold.approval_set_digest.is_none()
+                    && hold.approval_evidence_ref() == approval_evidence_ref)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let hold_index = match matching_indexes.as_slice() {
+            [] => {
+                return Err(format!(
+                    "pending human authorization for approval evidence `{approval_evidence_ref}` was not found"
+                ));
+            }
+            [hold_index] => *hold_index,
+            indexes => {
+                return Err(format!(
+                    "approval evidence `{approval_evidence_ref}` matched {} unbound human authorization holds; expected exactly one",
+                    indexes.len()
+                ));
+            }
+        };
+
+        let previous = state.pending_human_authorizations.clone();
+        let hold = &mut state.pending_human_authorizations[hold_index];
+        hold.approval_set_id = Some(approval_set_id.to_string());
+        hold.approval_set_digest = Some(approval_set_digest.to_string());
+        let reconciled = hold.clone();
+        match self.persist_locked(&mut state) {
+            Err(error) => {
+                state.pending_human_authorizations = previous;
+                return Err(format!(
+                    "human approval set reconciliation failed before commit: {error}"
+                ));
+            }
+            Ok(GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason,
+            }) => tracing::warn!(
+                sequence,
+                reason = %reason,
+                module = module_path!(),
+                "human approval reconciliation committed while its checkpoint remains lagging"
+            ),
+            Ok(GovernancePersistenceOutcome::Committed) => {}
+        }
+        Ok(reconciled)
+    }
+
     pub fn pending_human_authorization(
         &self,
         approval_set_id: &str,
@@ -4646,6 +4738,20 @@ impl GovernanceAuthority {
         )
     }
 
+    pub fn reconcile_human_approval_set(
+        &self,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+        approval_evidence_ref: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        GovernancePolicy::reconcile_human_approval_set(
+            &self.policy,
+            approval_set_id,
+            approval_set_digest,
+            approval_evidence_ref,
+        )
+    }
+
     pub fn pending_human_authorization(
         &self,
         approval_set_id: &str,
@@ -5372,6 +5478,69 @@ mod tests {
                 .any(|consumed| { consumed.receipt_id == preconsumed_receipt.payload.receipt_id })
         );
         drop(state);
+        drop(replay);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn unbound_human_hold_reconciles_idempotently_after_restart() {
+        let path = persistence_path("human-approval-reconciliation");
+        let key = SigningKey::from_bytes(&[166; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.166".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: production governance issued an action receipt");
+        };
+        let hold = policy
+            .begin_human_authorization_hold(
+                &governed_request,
+                &serde_json::to_value(&receipt).unwrap(),
+                &swarm_policy::PolicyDecision::require_human_with_rule(
+                    "reconcile-human-review",
+                    "human review required",
+                ),
+                receipt.payload.issued_at_ms + 1,
+            )
+            .unwrap();
+        assert!(hold.approval_set_id.is_none());
+        drop(policy);
+
+        let restarted = load_signed_policy(&path, &key).unwrap();
+        let set_id = "approval-set:reconciled";
+        let set_digest = swarm_crypto::sha256_hex(b"approval-set:reconciled");
+        let evidence_ref = hold.approval_evidence_ref();
+        let reconciled = restarted
+            .reconcile_human_approval_set(set_id, &set_digest, &evidence_ref)
+            .expect("an exact unbound hold must reconcile after restart");
+        assert_eq!(reconciled.approval_set_id.as_deref(), Some(set_id));
+        assert_eq!(
+            reconciled.approval_set_digest.as_deref(),
+            Some(set_digest.as_str())
+        );
+        assert_eq!(
+            restarted
+                .reconcile_human_approval_set(set_id, &set_digest, &evidence_ref)
+                .unwrap(),
+            reconciled,
+            "an exact reconciliation retry must be idempotent"
+        );
+        assert!(
+            restarted
+                .reconcile_human_approval_set(set_id, "different-digest", &evidence_ref)
+                .unwrap_err()
+                .contains("conflicts")
+        );
+        drop(restarted);
+
+        let replay = load_signed_policy(&path, &key).unwrap();
+        assert_eq!(
+            replay.pending_human_authorization(set_id).unwrap(),
+            reconciled,
+            "the repaired binding must survive another restart"
+        );
         drop(replay);
         cleanup_persistence(&path);
     }
