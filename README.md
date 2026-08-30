@@ -60,9 +60,10 @@ the threat assembles itself out of what accumulates. There is no central
 correlator, no saved search, and no orchestrator handing out work. Detection is
 what the substrate does.
 
-The court half is literal. Every destructive action routes through a gate that will
-not open without a signed authorization the dispatcher revalidates, and every
-decision seals into a receipt that verifies offline.
+A swarm that can isolate your production fleet has to be governable. Every
+destructive action routes through a gate that will not open without a signed
+authorization the dispatcher revalidates, and every decision seals into a receipt
+that verifies offline.
 
 Detect-only is the default. Live response is one config line, and the runtime
 will refuse to enable it on a substrate that cannot survive a restart.
