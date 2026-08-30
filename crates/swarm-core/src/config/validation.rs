@@ -818,6 +818,12 @@ fn is_secure_operator_runtime_url(value: &str) -> bool {
     let Ok(url) = Url::parse(value) else {
         return false;
     };
+    // Callback routes are appended to this configured base. A query or
+    // fragment would make that string concatenation target the wrong URL
+    // component (and can strand a governed approval after quorum).
+    if url.query().is_some() || url.fragment().is_some() {
+        return false;
+    }
     let Some((_, after_scheme)) = value.split_once("://") else {
         return false;
     };

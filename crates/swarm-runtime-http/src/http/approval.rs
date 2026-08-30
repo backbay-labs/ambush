@@ -43,6 +43,7 @@ pub(super) async fn approval_set_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(set_id): RoutePath<String>,
 ) -> Result<Json<ApprovalSetReport>, OperatorApiError> {
+    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let lookup = harness
         .load_approval_set(&set_id)
@@ -57,6 +58,7 @@ pub(super) async fn approval_set_list_handler(
     State(state): State<OperatorHttpState>,
     Query(query): Query<ApprovalSetListQuery>,
 ) -> Result<Json<ApprovalSetList>, OperatorApiError> {
+    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let list = harness.list_approval_sets().map_err(map_approval_error)?;
     Ok(Json(limit_approval_set_list(
@@ -81,6 +83,7 @@ pub(super) async fn approval_set_create_handler(
             "eligible voter `{ineligible_voter}` is not configured with `approve` scope"
         )));
     }
+    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let record = harness
         .create_approval_set(
@@ -104,6 +107,7 @@ pub(super) async fn approval_ledger_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(ledger_id): RoutePath<String>,
 ) -> Result<Json<ApprovalLedgerLookup>, OperatorApiError> {
+    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let lookup = harness
         .load_ledger(&ledger_id)
@@ -118,6 +122,7 @@ pub(super) async fn approval_ledger_list_handler(
     State(state): State<OperatorHttpState>,
     Query(query): Query<ApprovalLedgerListQuery>,
 ) -> Result<Json<ApprovalLedgerList>, OperatorApiError> {
+    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let list = harness
         .list_ledgers(query.approval_set_id.as_deref())
@@ -143,6 +148,11 @@ pub(super) async fn approval_vote_append_handler(
             principal.operator_id, request.voter_id
         )));
     }
+    // The ledger, its global index, the quorum-derived verdict, and the
+    // receipt-pack index are separate files. Keep their read/modify/write
+    // transition atomic with respect to every other surface operation. The
+    // callback is intentionally performed after releasing the lock.
+    let store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let existing = harness
         .load_ledger(&ledger_id)
@@ -176,14 +186,19 @@ pub(super) async fn approval_vote_append_handler(
         .ok_or_else(|| {
             OperatorApiError::internal("approval ledger was updated but could not be reloaded")
         })?;
-    if updated.quorum_state.quorum_met {
-        let receipt_pack = load_or_create_single_receipt_pack(
+    let receipt_pack = if updated.quorum_state.quorum_met {
+        Some(load_or_create_single_receipt_pack(
             harness,
             &updated.report.approval_set_id,
             &updated.report.ledger_id,
             &state.approval_receipt_signer_id,
             &state.approval_receipt_signing_key_env,
-        )?;
+        )?)
+    } else {
+        None
+    };
+    drop(store_guard);
+    if let Some(receipt_pack) = receipt_pack {
         if governed {
             let authorization = headers
                 .get(header::AUTHORIZATION)

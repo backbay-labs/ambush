@@ -69,7 +69,7 @@ use swarm_spine::{
     PolicyRecord, ReplayBundle, ReplayBundleStore,
 };
 use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
-use tokio::sync::{Mutex as AsyncMutex, oneshot, watch};
+use tokio::sync::{Barrier, Mutex as AsyncMutex, oneshot, watch};
 use tower::ServiceExt;
 
 use swarm_evolution::governance_prep::{
@@ -312,6 +312,8 @@ async fn public_operator_surface_constructors_reject_unvalidated_callback_urls()
         ("malformed", "://missing-scheme.example"),
         ("no-host", "https://"),
         ("unsupported-scheme", "ws://127.0.0.1:9090"),
+        ("query", "https://detect.example?mode=preview"),
+        ("fragment", "https://detect.example#callback-route"),
     ] {
         let mut config = operator_config();
         config.operator.runtime_base_url = runtime_base_url.to_string();
@@ -3699,6 +3701,179 @@ async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
         std::env::remove_var(TOKEN_ENV);
         std::env::remove_var(EVIDENCE_KEY_ENV);
     }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_approval_mutations_preserve_indexes_votes_and_quorum_artifacts() {
+    const TOKEN_ENV: &str = "SWARM_CONCURRENT_APPROVAL_TOKEN";
+    const SECOND_TOKEN_ENV: &str = "SWARM_CONCURRENT_APPROVAL_SECOND_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_CONCURRENT_APPROVAL_EVIDENCE_KEY";
+    const TOKEN: &str = "concurrent-approval-token";
+    const SECOND_TOKEN: &str = "concurrent-approval-second-token";
+    let _token = ScopedTestEnv::set(TOKEN_ENV, TOKEN);
+    let _second_token = ScopedTestEnv::set(SECOND_TOKEN_ENV, SECOND_TOKEN);
+    let _evidence_key = ScopedTestEnv::set(EVIDENCE_KEY_ENV, "concurrent-approval-evidence-key");
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_approval_resume_capture_server().await;
+
+    let signer = Ed25519Signer::from_secret_material("concurrent-approval-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let second_signer = Ed25519Signer::from_secret_material("concurrent-approval-second-voter");
+    let second_voter_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
+    let mut config = operator_config();
+    config.operator.runtime_base_url = runtime_base_url;
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: voter_id.clone(),
+            token_env: TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: second_voter_id.clone(),
+            token_env: SECOND_TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+    ];
+    let root = unique_temp_dir("concurrent-approval-votes");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let harness = surface.state.approval.as_ref().unwrap().clone();
+
+    // Concurrent creates exercise both shared set and ledger indexes. The
+    // synchronous file operations can run at the same time on separate Tokio
+    // workers even though each individual handler contains no internal await.
+    let create_barrier = Arc::new(Barrier::new(9));
+    let mut create_tasks = Vec::new();
+    for index in 0..8 {
+        let app = surface.router();
+        let barrier = create_barrier.clone();
+        let voter_id = voter_id.clone();
+        let second_voter_id = second_voter_id.clone();
+        create_tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/approval-sets")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "eligible_voters": [voter_id, second_voter_id],
+                            "threshold_required": 2,
+                            "promotion_evidence_ref": format!(
+                                "promotion_evidence:concurrent-create-{index}"
+                            ),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        }));
+    }
+    create_barrier.wait().await;
+    for task in create_tasks {
+        assert_eq!(task.await.unwrap(), StatusCode::CREATED);
+    }
+    assert_eq!(harness.list_approval_sets().unwrap().sets.len(), 8);
+    assert_eq!(harness.list_ledgers(None).unwrap().ledgers.len(), 8);
+
+    // Multiple voted ledgers exercise the per-report writes and every shared
+    // artifact index. Without one store lock, concurrent read/modify/write
+    // cycles can lose votes, ledgers, verdicts, or packs independently.
+    let mut votes = Vec::new();
+    let mut ledger_ids = Vec::new();
+    for index in 0..8 {
+        let set = harness
+            .create_approval_set(
+                vec![voter_id.clone(), second_voter_id.clone()],
+                ThresholdRule::AtLeast { required: 2 },
+                &format!("promotion_evidence:concurrent-{index}"),
+            )
+            .unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let signature = signer.sign(
+            &canonical_json_bytes(&json!({
+                "approval_set_id": set.set_id.clone(),
+                "ledger_id": ledger_id.clone(),
+                "voter_id": voter_id.clone(),
+            }))
+            .unwrap(),
+        );
+        let second_signature = second_signer.sign(
+            &canonical_json_bytes(&json!({
+                "approval_set_id": set.set_id,
+                "ledger_id": ledger_id.clone(),
+                "voter_id": second_voter_id.clone(),
+            }))
+            .unwrap(),
+        );
+        votes.push((
+            TOKEN.to_string(),
+            voter_id.clone(),
+            ledger_id.clone(),
+            signature,
+        ));
+        votes.push((
+            SECOND_TOKEN.to_string(),
+            second_voter_id.clone(),
+            ledger_id.clone(),
+            second_signature,
+        ));
+        ledger_ids.push(ledger_id);
+    }
+
+    let barrier = Arc::new(Barrier::new(votes.len() + 1));
+    let mut tasks = Vec::new();
+    for (token, submitted_voter, ledger_id, signature) in votes {
+        let app = surface.router();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"voter_id": submitted_voter, "signature": signature}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        }));
+    }
+    barrier.wait().await;
+    for task in tasks {
+        assert_eq!(task.await.unwrap(), StatusCode::OK);
+    }
+
+    for ledger_id in &ledger_ids {
+        let ledger = harness.load_ledger(ledger_id).unwrap().unwrap();
+        assert_eq!(ledger.report.entries.len(), 2);
+        assert!(ledger.quorum_state.quorum_met);
+    }
+    assert_eq!(harness.list_receipt_packs().unwrap().packs.len(), 8);
+    assert_eq!(harness.list_verdicts().unwrap().verdicts.len(), 8);
+    assert_eq!(capture.requests.lock().await.len(), 8);
+
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
     let _ = fs::remove_dir_all(root);
 }
 

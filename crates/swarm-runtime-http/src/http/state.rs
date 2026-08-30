@@ -127,6 +127,10 @@ pub(super) struct OperatorHttpState {
     pub(super) prometheus: Option<CriticalPathMetrics>,
     pub(super) callback_client: reqwest::Client,
     pub(super) runtime_base_url: String,
+    /// Serializes access to the file-backed approval stores. Their report and
+    /// index files are updated separately, so readers and every mutation share
+    /// one bounded surface-wide lock. Network callbacks happen after release.
+    pub(super) approval_store_lock: Arc<tokio::sync::Mutex<()>>,
     pub(super) max_list_results: usize,
     pub(super) approval_receipt_signer_id: String,
     pub(super) approval_receipt_signing_key_env: String,
@@ -280,6 +284,7 @@ impl LocalOperatorSurface {
                 prometheus,
                 callback_client,
                 runtime_base_url: config.operator.runtime_base_url.clone(),
+                approval_store_lock: Arc::new(tokio::sync::Mutex::new(())),
                 max_list_results: config.operator.max_list_results,
                 approval_receipt_signer_id,
                 approval_receipt_signing_key_env,

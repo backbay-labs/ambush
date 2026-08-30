@@ -811,19 +811,35 @@ impl MemoryStrategyMemoryStore {
             &self.limits,
             self.max_memory_ttl_ticks,
         )?;
+        let expiry_envelope = expiry
+            .map(|(created_at, ttl_ticks)| {
+                StrategyMemoryExpiryEnvelope::new_with_limit(
+                    &memory,
+                    created_at,
+                    ttl_ticks,
+                    self.max_memory_ttl_ticks,
+                    &self.signer,
+                )
+                .map_err(StrategyMemoryStoreError::Admission)
+            })
+            .transpose()?;
         if let Some(existing) = guard.state.memories.get(memory.memory_id.as_str()) {
             if existing.memory == memory {
-                if expiry.is_some()
-                    && !guard
-                        .state
-                        .expiry_envelopes
-                        .contains_key(memory.memory_id.as_str())
-                {
-                    return Err(StrategyMemoryStoreError::InvalidState {
-                        reason:
-                            "legacy memory has no expiry sidecar; explicit append_at is quarantined"
+                let persisted = guard.state.expiry_envelopes.get(memory.memory_id.as_str());
+                match (expiry_envelope.as_ref(), persisted) {
+                    (Some(requested), Some(persisted)) if requested == persisted => {}
+                    (None, None) => {}
+                    (Some(_), None) => {
+                        return Err(StrategyMemoryStoreError::InvalidState {
+                            reason: "legacy memory has no expiry sidecar; explicit append_at is quarantined"
                                 .to_string(),
-                    });
+                        });
+                    }
+                    _ => {
+                        return Err(StrategyMemoryStoreError::DuplicateConflict {
+                            memory_id: memory.memory_id.clone(),
+                        });
+                    }
                 }
                 return Ok(StrategyMemoryAppendResult {
                     generation: existing.generation,
@@ -854,18 +870,6 @@ impl MemoryStrategyMemoryStore {
                 .map(|record| record.digest.clone())
         });
         let state_predecessor_digest = guard.state.digest()?;
-        let expiry_envelope = expiry
-            .map(|(created_at, ttl_ticks)| {
-                StrategyMemoryExpiryEnvelope::new_with_limit(
-                    &memory,
-                    created_at,
-                    ttl_ticks,
-                    self.max_memory_ttl_ticks,
-                    &self.signer,
-                )
-                .map_err(StrategyMemoryStoreError::Admission)
-            })
-            .transpose()?;
         let record =
             StrategyMemoryRecord::new(memory, generation, predecessor_digest, &self.signer)?;
         // Build and sign an independent candidate before publishing it.  A
@@ -1542,19 +1546,38 @@ impl FileStrategyMemoryStore {
             .lock()
             .map_err(|_| StrategyMemoryStoreError::PoisonedLock)?;
         let current = self.read_state()?;
+        let expiry_envelope = expiry
+            .map(|(created_at, ttl_ticks)| {
+                StrategyMemoryExpiryEnvelope::new_with_limit(
+                    &memory,
+                    created_at,
+                    ttl_ticks,
+                    self.max_memory_ttl_ticks,
+                    &self.signer,
+                )
+                .map_err(StrategyMemoryStoreError::Admission)
+            })
+            .transpose()?;
         if let Some(existing) = current.state.memories.get(memory.memory_id.as_str()) {
             if existing.memory == memory {
-                if expiry.is_some()
-                    && !current
-                        .state
-                        .expiry_envelopes
-                        .contains_key(memory.memory_id.as_str())
-                {
-                    return Err(StrategyMemoryStoreError::InvalidState {
-                        reason:
-                            "legacy memory has no expiry sidecar; explicit append_at is quarantined"
+                let persisted = current
+                    .state
+                    .expiry_envelopes
+                    .get(memory.memory_id.as_str());
+                match (expiry_envelope.as_ref(), persisted) {
+                    (Some(requested), Some(persisted)) if requested == persisted => {}
+                    (None, None) => {}
+                    (Some(_), None) => {
+                        return Err(StrategyMemoryStoreError::InvalidState {
+                            reason: "legacy memory has no expiry sidecar; explicit append_at is quarantined"
                                 .to_string(),
-                    });
+                        });
+                    }
+                    _ => {
+                        return Err(StrategyMemoryStoreError::DuplicateConflict {
+                            memory_id: memory.memory_id.clone(),
+                        });
+                    }
                 }
                 return Ok(StrategyMemoryAppendResult {
                     generation: existing.generation,
@@ -1585,18 +1608,6 @@ impl FileStrategyMemoryStore {
                 .map(|record| record.digest.clone())
         });
         let state_predecessor_digest = current.state.digest()?;
-        let expiry_envelope = expiry
-            .map(|(created_at, ttl_ticks)| {
-                StrategyMemoryExpiryEnvelope::new_with_limit(
-                    &memory,
-                    created_at,
-                    ttl_ticks,
-                    self.max_memory_ttl_ticks,
-                    &self.signer,
-                )
-                .map_err(StrategyMemoryStoreError::Admission)
-            })
-            .transpose()?;
         let record =
             StrategyMemoryRecord::new(memory, generation, record_predecessor_digest, &self.signer)?;
         let base_state = current.clone();

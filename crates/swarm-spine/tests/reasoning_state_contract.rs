@@ -392,3 +392,93 @@ fn configured_memory_ttl_ceiling_rejects_lower_append_and_restart_mutation() {
     drop(reopened);
     let _ = fs::remove_dir_all(path);
 }
+
+#[test]
+fn append_at_idempotency_is_bound_to_the_exact_expiry_envelope() {
+    let key = signer(32);
+    let candidate = memory(33, "expiry-idempotency");
+    let graph_id = candidate.graph_id.clone();
+    let hypothesis_id = candidate.selected_hypothesis_id.clone();
+
+    let memory_store = MemoryStrategyMemoryStore::with_defaults(key.clone()).unwrap();
+    memory_store
+        .append_at(candidate.clone(), GraphLogicalTime::new(100), 10)
+        .unwrap();
+    let memory_digest = memory_store.state_digest().unwrap();
+    assert!(
+        memory_store
+            .append_at(candidate.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap()
+            .idempotent
+    );
+    assert!(
+        memory_store
+            .append_at(candidate.clone(), GraphLogicalTime::new(101), 10)
+            .is_err(),
+        "altered creation time must not be accepted as an idempotent retry"
+    );
+    assert!(
+        memory_store
+            .append_at(candidate.clone(), GraphLogicalTime::new(100), 11)
+            .is_err(),
+        "altered TTL must not be accepted as an idempotent retry"
+    );
+    assert!(
+        memory_store.append(candidate.clone()).is_err(),
+        "removing expiry must not be accepted as an idempotent retry"
+    );
+    assert_eq!(memory_store.state_digest().unwrap(), memory_digest);
+    assert!(
+        memory_store
+            .retrieve_at(
+                &graph_id,
+                &hypothesis_id,
+                &BTreeSet::new(),
+                GraphLogicalTime::new(110),
+                8,
+            )
+            .unwrap()
+            .is_empty(),
+        "rejected retries must not extend the original expiry"
+    );
+
+    let path = temp_dir("expiry-idempotency-file");
+    let file_store =
+        FileStrategyMemoryStore::new(&path, key, GraphResourceLimits::default()).unwrap();
+    file_store
+        .append_at(candidate.clone(), GraphLogicalTime::new(100), 10)
+        .unwrap();
+    let file_digest = file_store.state_digest().unwrap();
+    assert!(
+        file_store
+            .append_at(candidate.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap()
+            .idempotent
+    );
+    assert!(
+        file_store
+            .append_at(candidate.clone(), GraphLogicalTime::new(101), 10)
+            .is_err()
+    );
+    assert!(file_store.append(candidate.clone()).is_err());
+    assert!(
+        file_store
+            .append_at(candidate, GraphLogicalTime::new(100), 11)
+            .is_err()
+    );
+    assert_eq!(file_store.state_digest().unwrap(), file_digest);
+    assert!(
+        file_store
+            .retrieve_at(
+                &graph_id,
+                &hypothesis_id,
+                &BTreeSet::new(),
+                GraphLogicalTime::new(110),
+                8,
+            )
+            .unwrap()
+            .is_empty()
+    );
+    drop(file_store);
+    let _ = fs::remove_dir_all(path);
+}

@@ -505,6 +505,10 @@ fn operator_runtime_base_url_rejects_plaintext_non_loopback_and_spoofed_authorit
         "http://operator:secret@localhost:9090",
         "http://localhost@detect.example:9090",
         "https://operator@detect.example",
+        "https://detect.example?redirect=http://attacker.example",
+        "https://detect.example#ignored-callback-route",
+        "http://localhost:9090?mode=preview",
+        "http://127.0.0.1:9090#fragment",
     ] {
         let mut config = valid_config(PheromoneBackendConfig::InMemory);
         config.runtime.require_durable_live_response = false;

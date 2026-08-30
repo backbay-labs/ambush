@@ -1178,7 +1178,7 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "f993c0601c9208a0ab11025f7671519b35227a46ea552472393239f2613e43d0",
+    "tools/check-single-governor-key.sh": "b48f3984e40fe979a0e4b61637bc5e8f983edb34fb1d443d75b311d25e5c8471",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -1208,7 +1208,7 @@ GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-ingest-runtime":
         (14, "aa68bbbe869250092bbb2833a6fcb0e5fe011bb0128b5d874d53731eee540c89"),
     "swarm-runtime-http":
-        (22, "e2e60b8e142f3615470d4134fb5d66d17e98a21612ffe4e3b5b10ca13ae8ae01"),
+        (22, "9dff7c2260f6152065d91295973534602be249f56a6659dd27d8aed4cad25869"),
     "swarm-agents":
         (9, "3745e6436813b7f76b6cb5388db11064ddcab1bee77fd371cf5197a37e9789ec"),
     "swarm-evolution":

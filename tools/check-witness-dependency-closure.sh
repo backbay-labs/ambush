@@ -63,6 +63,7 @@ CURRENT_BIN_PATHS = {
     if name != "swarm-governance-witness-init"
 }
 CASES = (
+    "workspace-feature-isolation",
     "missing-library-target",
     "forbidden-declared-normal",
     "forbidden-declared-dev",
@@ -472,7 +473,7 @@ def strict_partial_cargo_tree_output(root, data, root_id, target):
     return partial_output
 
 
-def package_scoped_metadata(root, subject_data, package_id):
+def package_scoped_metadata(root, subject_data, package_id, tree_root_ids=()):
     subject_packages = {package["id"]: package for package in subject_data["packages"]}
     subject = subject_packages.get(package_id)
     if subject is None:
@@ -537,7 +538,24 @@ def package_scoped_metadata(root, subject_data, package_id):
                     )
         if package_id not in {package["id"] for package in scoped["packages"]}:
             fail(f"package-scoped metadata omitted subject package {package_id}")
-        return scoped
+        scoped_tree_ids = {}
+        for identifier in sorted(tree_root_ids):
+            package = subject_packages.get(identifier)
+            if package is None:
+                fail(
+                    "package-scoped cargo tree references unknown package ID "
+                    f"{identifier}"
+                )
+            package_spec = f"{package['name']}@{package['version']}"
+            scoped_tree_ids[identifier] = cargo_tree_package_ids(
+                harness,
+                subject_data,
+                package_spec,
+                "normal",
+                host,
+                all_features=False,
+            )
+        return scoped, scoped_tree_ids
     finally:
         temporary.cleanup()
         if harness.exists():
@@ -746,7 +764,22 @@ def evaluate(root, target_mode="library-only", tree_output_overrides=None):
         "dev": cargo_tree_package_ids(root, data, PACKAGE, "normal,dev", "all"),
         "build": cargo_tree_package_ids(root, data, PACKAGE, "normal,build", "all"),
     }
-    scoped_witness = package_scoped_metadata(root, data, allowed_ids[PACKAGE])
+    direct_normal_ids = direct_dependency_ids(data, allowed_ids[PACKAGE], "normal")
+    direct_dev_ids = direct_dependency_ids(data, allowed_ids[PACKAGE], "dev")
+    expected_dev_ids = {
+        identifier
+        for identifier in direct_normal_ids
+        if package_by_id[identifier]["name"] in DEV
+    }
+    for identifier in sorted(expected_dev_ids):
+        if identifier not in package_by_id:
+            fail(f"direct dev dependency references unknown package ID {identifier}")
+    scoped_witness, scoped_dev_trees = package_scoped_metadata(
+        root,
+        data,
+        allowed_ids[PACKAGE],
+        expected_dev_ids,
+    )
     closures = {
         "normal": resolved_closure(
             scoped_witness,
@@ -761,13 +794,6 @@ def evaluate(root, target_mode="library-only", tree_output_overrides=None):
             {"normal", "build"},
         ),
     }
-    direct_normal_ids = direct_dependency_ids(data, allowed_ids[PACKAGE], "normal")
-    direct_dev_ids = direct_dependency_ids(data, allowed_ids[PACKAGE], "dev")
-    expected_dev_ids = {
-        identifier
-        for identifier in direct_normal_ids
-        if package_by_id[identifier]["name"] in DEV
-    }
     if direct_dev_ids != expected_dev_ids:
         record_violation(
             "declared-dev",
@@ -777,18 +803,10 @@ def evaluate(root, target_mode="library-only", tree_output_overrides=None):
     metadata_dev_root_ids = {allowed_ids[PACKAGE]}
     tree_dev_root_ids = {allowed_ids[PACKAGE]}
     for identifier in sorted(expected_dev_ids):
-        package = package_by_id.get(identifier)
-        if package is None:
-            fail(f"direct dev dependency references unknown package ID {identifier}")
         metadata_dev_root_ids.update(
             resolved_closure(scoped_witness, identifier, {"normal"}, {"normal"})
         )
-        package_spec = f"{package['name']}@{package['version']}"
-        tree_dev_root_ids.update(
-            cargo_tree_package_ids(
-                root, data, package_spec, "normal", host, all_features=False
-            )
-        )
+        tree_dev_root_ids.update(scoped_dev_trees[identifier])
     closures["dev-root"] = metadata_dev_root_ids
     closures["dev"] = closures["normal"] | metadata_dev_root_ids
     tree_closures["dev-root"] = tree_dev_root_ids
@@ -1291,6 +1309,77 @@ def run_self_test_parent_control():
     )
 
 
+def run_workspace_feature_isolation_control():
+    temporary_parent = validated_temp_parent("self-test scratch", ROOT)
+    subject_data = evaluate(ROOT, False)
+    temporary = tempfile.TemporaryDirectory(
+        prefix="phase285-witness-feature-isolation.", dir=temporary_parent
+    )
+    container = pathlib.Path(temporary.name).resolve()
+    root_extra_ids = set()
+    try:
+        scratch, identities = build_projection(subject_data, container)
+        assert_byte_identities(identities)
+        runtime_manifest = scratch / "crates/swarm-runtime-http/Cargo.toml"
+        replace_once(
+            runtime_manifest,
+            "[dev-dependencies]",
+            'mio = { version = "1", features = ["log"] }\n\n[dev-dependencies]',
+        )
+        refresh_lock(scratch)
+        data = metadata(scratch)
+        package_by_id, _, allowed_ids = validate_internal_identities(scratch, data)
+        witness_id = allowed_ids[PACKAGE]
+        direct_normal_ids = direct_dependency_ids(data, witness_id, "normal")
+        expected_dev_ids = {
+            identifier
+            for identifier in direct_normal_ids
+            if package_by_id[identifier]["name"] in DEV
+        }
+        if len(expected_dev_ids) != 1:
+            fail(
+                "workspace feature isolation control expected one governed dev root: "
+                f"observed={sorted(expected_dev_ids)}"
+            )
+        identifier = next(iter(expected_dev_ids))
+        package = package_by_id[identifier]
+        package_spec = f"{package['name']}@{package['version']}"
+        root_tree_ids = cargo_tree_package_ids(
+            scratch,
+            data,
+            package_spec,
+            "normal",
+            rustc_host(scratch),
+            all_features=False,
+        )
+        _, scoped_dev_trees = package_scoped_metadata(
+            scratch,
+            data,
+            witness_id,
+            expected_dev_ids,
+        )
+        scoped_tree_ids = scoped_dev_trees[identifier]
+        root_extra_ids = root_tree_ids - scoped_tree_ids
+        root_extra_names = {
+            package_by_id[extra]["name"] for extra in root_extra_ids
+        }
+        if "log" not in root_extra_names:
+            fail(
+                "workspace feature isolation control did not activate the expected "
+                "unrelated root-only log edge: "
+                f"root_extra={sorted(root_extra_ids)}"
+            )
+        evaluate(scratch, False)
+    finally:
+        temporary.cleanup()
+        if container.exists():
+            fail(f"scratch cleanup failed: {container}")
+    print(
+        "self_test_green case=workspace-feature-isolation "
+        f"root_only_ids={len(root_extra_ids)} scoped_comparison=1 scratch_removed=1"
+    )
+
+
 def run_self_test(case):
     temporary_parent = validated_temp_parent("self-test scratch", ROOT)
     subject_data = evaluate(ROOT, False)
@@ -1423,7 +1512,9 @@ try:
         if unknown:
             fail(f"unknown self-test case: {sorted(unknown)}")
         for name in selected:
-            if name == "self-test-parent-boundary":
+            if name == "workspace-feature-isolation":
+                run_workspace_feature_isolation_control()
+            elif name == "self-test-parent-boundary":
                 run_self_test_parent_control()
             else:
                 run_self_test(name)
