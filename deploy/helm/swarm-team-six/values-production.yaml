@@ -39,7 +39,7 @@ persistence:
   # local_journal pheromone state when NATS is disabled.
   mountPath: /var/lib/swarm
   accessModes:
-    - ReadWriteOncePod
+    - ReadWriteOnce
   size: 50Gi
 
 secrets:

@@ -58,7 +58,10 @@ persistence:
   enabled: true
   mountPath: /var/lib/swarm
   accessModes:
-    - ReadWriteOncePod
+    # Keep the upgrade-compatible access mode used by existing releases.
+    # replicaCount=1 plus the persistent Deployment's Recreate strategy owns
+    # the single-writer invariant without mutating an already-bound PVC.
+    - ReadWriteOnce
   size: 10Gi
   storageClassName: ""
 

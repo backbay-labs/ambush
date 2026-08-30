@@ -9,8 +9,12 @@ metadata:
     {{- include "swarm-team-six.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if .Values.persistence.enabled }}
+  # The persistent runtime owns one stateful governance authority stream, so
+  # upgrades must never overlap old and new pods against the same claim.
   strategy:
     type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "swarm-team-six.selectorLabels" . | nindent 6 }}
