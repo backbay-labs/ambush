@@ -232,6 +232,12 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
             reason: "must be non-negative milliseconds".to_string(),
         });
     }
+    if entry.expires_at <= observed_at.as_millis() {
+        return Err(GraphAdmissionError::InvalidField {
+            field: "threat_intel.expires_at".to_string(),
+            reason: "must be strictly later than the observation time".to_string(),
+        });
+    }
     let source_id = bounded_text("threat_intel.source", &entry.source, 256)?;
     let indicator_value = bounded_text("threat_intel.value", &entry.value, 4 * 1024)?;
     if !entry.confidence.is_finite() || !(0.0..=1.0).contains(&entry.confidence) {
@@ -1400,5 +1406,35 @@ mod tests {
             }
         ));
         envelope.validate().unwrap();
+    }
+
+    #[test]
+    fn threat_intel_normalization_rejects_expired_and_boundary_entries() {
+        let observed_at = GraphLogicalTime::new(1_700_000_000_000);
+        for expires_at in [observed_at.as_millis() - 1, observed_at.as_millis()] {
+            let entry = ThreatIntelEntry {
+                indicator_type: ThreatIntelIndicatorType::Domain,
+                value: "expired.example".to_string(),
+                source: "taxii-feed".to_string(),
+                indicator_id: Some("indicator--expired".to_string()),
+                confidence: 0.875,
+                expires_at,
+            };
+            let error = normalize_threat_intel_entry(
+                &entry,
+                "indicator--expired",
+                observed_at,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-threat",
+            )
+            .expect_err("expired threat intelligence must fail closed");
+            assert!(matches!(
+                error,
+                GraphAdmissionError::InvalidField { ref field, .. }
+                    if field == "threat_intel.expires_at"
+            ));
+        }
     }
 }

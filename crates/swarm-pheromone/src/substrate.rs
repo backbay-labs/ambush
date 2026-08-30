@@ -27,7 +27,7 @@ use swarm_core::types::{AgentId, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity};
 pub(crate) const BEHAVIORAL_BASELINE_STATE_KIND: &str = "behavioral_baseline_snapshot";
 type BehavioralBaselineEnvelope = SignedStateEnvelope<BehavioralBaselineSnapshot>;
 
-const MAX_ACTIVE_DEPOSITS: usize = 10_000;
+pub(crate) const MAX_ACTIVE_DEPOSITS: usize = 10_000;
 const MAX_ACTIVE_DEPOSIT_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_SINGLE_DEPOSIT_BYTES: usize = 256 * 1024;
 const COMPACTED_DEPOSIT_COUNT: usize = 7_500;

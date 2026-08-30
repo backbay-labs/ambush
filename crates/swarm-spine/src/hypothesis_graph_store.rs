@@ -2800,10 +2800,29 @@ fn renew_task_op(
 fn complete_task_op(
     state: &mut GraphStoreState,
     expected_generation: u64,
-    now: GraphLogicalTime,
+    clock: TaskTerminalClockEnvelope,
     envelope: TaskTerminalEnvelope,
+    authority: &AgentId,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    {
+        let entry =
+            state
+                .tasks
+                .get(&envelope.task_id)
+                .ok_or_else(|| GraphStoreError::TaskNotFound {
+                    task_id: envelope.task_id.to_string(),
+                })?;
+        ensure_task_generation(entry, expected_generation)?;
+        clock.validate_for_operation(
+            &entry.task,
+            expected_generation,
+            TaskTerminalOperationKind::Complete,
+            &envelope,
+            authority,
+        )?;
+    }
+    let now = clock.observed_at;
     observe_logical_time(state, now)?;
     let entry = task_entry_mut(state, envelope.task_id.as_str())?;
     ensure_task_generation(entry, expected_generation)?;
@@ -2854,10 +2873,29 @@ fn complete_task_op(
 fn fail_task_op(
     state: &mut GraphStoreState,
     expected_generation: u64,
-    now: GraphLogicalTime,
+    clock: TaskTerminalClockEnvelope,
     envelope: TaskFailureEnvelope,
+    authority: &AgentId,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    {
+        let entry =
+            state
+                .tasks
+                .get(&envelope.task_id)
+                .ok_or_else(|| GraphStoreError::TaskNotFound {
+                    task_id: envelope.task_id.to_string(),
+                })?;
+        ensure_task_generation(entry, expected_generation)?;
+        clock.validate_for_operation(
+            &entry.task,
+            expected_generation,
+            TaskTerminalOperationKind::Fail,
+            &envelope,
+            authority,
+        )?;
+    }
+    let now = clock.observed_at;
     observe_logical_time(state, now)?;
     let entry = task_entry_mut(state, envelope.task_id.as_str())?;
     ensure_task_generation(entry, expected_generation)?;
@@ -4174,6 +4212,226 @@ impl TaskFailureEnvelope {
     }
 }
 
+/// Terminal transition selected by the claimant and explicitly admitted by
+/// the scheduler authority. The discriminant is signed so one clock grant
+/// cannot be replayed across completion and failure paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskTerminalOperationKind {
+    Complete,
+    Fail,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskTerminalClockMaterial<'a> {
+    task_id: &'a TaskId,
+    idempotency_key: &'a IdempotencyKey,
+    expected_generation: u64,
+    lease_id: &'a LeaseId,
+    fencing_token: FencingToken,
+    observed_at: GraphLogicalTime,
+    operation_kind: TaskTerminalOperationKind,
+    operation_digest: &'a str,
+    authority_scope: &'a str,
+}
+
+/// Scheduler-signed clock grant for one exact terminal operation. This keeps
+/// the durable logical high-water mark under coordinator authority while the
+/// claimant's terminal envelope independently proves the completion/failure
+/// payload. Binding the canonical terminal-envelope digest prevents a valid
+/// clock grant from being reused for a different terminal publication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTerminalClockEnvelope {
+    pub task_id: TaskId,
+    pub idempotency_key: IdempotencyKey,
+    pub expected_generation: u64,
+    pub lease_id: LeaseId,
+    pub fencing_token: FencingToken,
+    pub observed_at: GraphLogicalTime,
+    pub operation_kind: TaskTerminalOperationKind,
+    pub operation_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_witness: Option<EvidenceWitness>,
+}
+
+impl TaskTerminalClockEnvelope {
+    pub fn for_completion(
+        expected_generation: u64,
+        observed_at: GraphLogicalTime,
+        envelope: &TaskTerminalEnvelope,
+    ) -> Result<Self, GraphStoreError> {
+        Self::new(
+            envelope.task_id.clone(),
+            envelope.idempotency_key.clone(),
+            expected_generation,
+            envelope.lease_id.clone(),
+            envelope.fencing_token,
+            observed_at,
+            TaskTerminalOperationKind::Complete,
+            terminal_operation_digest(envelope)?,
+        )
+    }
+
+    pub fn for_failure(
+        expected_generation: u64,
+        observed_at: GraphLogicalTime,
+        envelope: &TaskFailureEnvelope,
+    ) -> Result<Self, GraphStoreError> {
+        Self::new(
+            envelope.task_id.clone(),
+            envelope.idempotency_key.clone(),
+            expected_generation,
+            envelope.lease_id.clone(),
+            envelope.fencing_token,
+            observed_at,
+            TaskTerminalOperationKind::Fail,
+            terminal_operation_digest(envelope)?,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        task_id: TaskId,
+        idempotency_key: IdempotencyKey,
+        expected_generation: u64,
+        lease_id: LeaseId,
+        fencing_token: FencingToken,
+        observed_at: GraphLogicalTime,
+        operation_kind: TaskTerminalOperationKind,
+        operation_digest: String,
+    ) -> Result<Self, GraphStoreError> {
+        let envelope = Self {
+            task_id,
+            idempotency_key,
+            expected_generation,
+            lease_id,
+            fencing_token,
+            observed_at,
+            operation_kind,
+            operation_digest,
+            authority_witness: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn authorized_by(
+        mut self,
+        authority: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let scoped_agent_id = scoped_agent_id.into();
+        validate_authority_scope("terminal clock", &scoped_agent_id)?;
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.authority_witness = Some(
+            EvidenceWitness::new(
+                authority,
+                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
+                scoped_agent_id,
+                &bytes,
+            )
+            .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskTerminalClockMaterial {
+            task_id: &self.task_id,
+            idempotency_key: &self.idempotency_key,
+            expected_generation: self.expected_generation,
+            lease_id: &self.lease_id,
+            fencing_token: self.fencing_token,
+            observed_at: self.observed_at,
+            operation_kind: self.operation_kind,
+            operation_digest: &self.operation_digest,
+            authority_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let authority_scope = self
+            .authority_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(authority_scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphStoreError> {
+        self.observed_at
+            .validate()
+            .map_err(GraphStoreError::Admission)?;
+        if self.expected_generation == 0 {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "terminal clock generation must be positive".to_string(),
+            });
+        }
+        if self.operation_digest.len() != 64
+            || !self
+                .operation_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "terminal operation digest must be lowercase SHA-256 hex".to_string(),
+            });
+        }
+        validate_optional_scheduler_witness(
+            self.authority_witness.as_ref(),
+            &self.canonical_bytes_without_witness()?,
+        )
+    }
+
+    fn validate_for_operation<T: Serialize>(
+        &self,
+        task: &TaskRecord,
+        expected_generation: u64,
+        operation_kind: TaskTerminalOperationKind,
+        operation: &T,
+        authority: &AgentId,
+    ) -> Result<(), GraphStoreError> {
+        self.validate()?;
+        let lease = task
+            .lease
+            .as_ref()
+            .ok_or_else(|| GraphStoreError::InvalidTransition {
+                reason: "terminal clock requires the task's active lease".to_string(),
+            })?;
+        if self.task_id != task.request.task_id
+            || self.idempotency_key != task.request.idempotency_key
+            || self.expected_generation != expected_generation
+            || self.lease_id != lease.lease_id
+            || self.fencing_token != lease.fencing_token
+            || self.operation_kind != operation_kind
+            || self.operation_digest != terminal_operation_digest(operation)?
+        {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "terminal clock does not bind the exact task operation".to_string(),
+            });
+        }
+        require_configured_scheduler_witness(
+            self.authority_witness.as_ref(),
+            authority,
+            &self.canonical_bytes_without_witness()?,
+            "durable terminal operation requires scheduler clock authority",
+        )
+    }
+}
+
+fn terminal_operation_digest<T: Serialize>(operation: &T) -> Result<String, GraphStoreError> {
+    let bytes =
+        canonical_json_bytes(operation).map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })?;
+    Ok(sha256_hex(&bytes))
+}
+
 /// Validate a signed failure publication at the durable task-store boundary.
 pub fn validate_task_failure_envelope(
     task: &TaskRecord,
@@ -4401,13 +4659,13 @@ pub trait HypothesisGraphStore: Send + Sync {
     fn complete_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn fail_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn expire_task(
@@ -4597,11 +4855,18 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
     fn complete_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            complete_task_op(state, expected_generation, now, envelope, &self.limits)
+            complete_task_op(
+                state,
+                expected_generation,
+                clock,
+                envelope,
+                &self.signer_id,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -4609,11 +4874,18 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
     fn fail_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            fail_task_op(state, expected_generation, now, envelope, &self.limits)
+            fail_task_op(
+                state,
+                expected_generation,
+                clock,
+                envelope,
+                &self.signer_id,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -7410,11 +7682,18 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
     fn complete_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            complete_task_op(state, expected_generation, now, envelope, &self.limits)
+            complete_task_op(
+                state,
+                expected_generation,
+                clock,
+                envelope,
+                &self.signer_id,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -7422,11 +7701,18 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
     fn fail_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            fail_task_op(state, expected_generation, now, envelope, &self.limits)
+            fail_task_op(
+                state,
+                expected_generation,
+                clock,
+                envelope,
+                &self.signer_id,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -7549,24 +7835,24 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
     fn complete_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskTerminalEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.complete_task(expected_generation, now, envelope),
-            Self::LocalFiles(store) => store.complete_task(expected_generation, now, envelope),
+            Self::Memory(store) => store.complete_task(expected_generation, clock, envelope),
+            Self::LocalFiles(store) => store.complete_task(expected_generation, clock, envelope),
         }
     }
 
     fn fail_task(
         &self,
         expected_generation: u64,
-        now: GraphLogicalTime,
+        clock: TaskTerminalClockEnvelope,
         envelope: TaskFailureEnvelope,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.fail_task(expected_generation, now, envelope),
-            Self::LocalFiles(store) => store.fail_task(expected_generation, now, envelope),
+            Self::Memory(store) => store.fail_task(expected_generation, clock, envelope),
+            Self::LocalFiles(store) => store.fail_task(expected_generation, clock, envelope),
         }
     }
 
@@ -7762,6 +8048,36 @@ mod tests {
         .unwrap()
     }
 
+    fn signed_completion_clock(
+        expected_generation: u64,
+        observed_at: GraphLogicalTime,
+        envelope: &TaskTerminalEnvelope,
+        authority_byte: u8,
+    ) -> TaskTerminalClockEnvelope {
+        TaskTerminalClockEnvelope::for_completion(expected_generation, observed_at, envelope)
+            .unwrap()
+            .authorized_by(
+                &signer(authority_byte),
+                format!("task-terminal-clock:{}", envelope.task_id),
+            )
+            .unwrap()
+    }
+
+    fn signed_failure_clock(
+        expected_generation: u64,
+        observed_at: GraphLogicalTime,
+        envelope: &TaskFailureEnvelope,
+        authority_byte: u8,
+    ) -> TaskTerminalClockEnvelope {
+        TaskTerminalClockEnvelope::for_failure(expected_generation, observed_at, envelope)
+            .unwrap()
+            .authorized_by(
+                &signer(authority_byte),
+                format!("task-failure-clock:{}", envelope.task_id),
+            )
+            .unwrap()
+    }
+
     fn signed_renewal_envelope(
         request: &TaskClaimRequest,
         lease: &TaskLease,
@@ -7946,7 +8262,9 @@ mod tests {
             .unwrap(),
             1,
         );
-        let stale = store.complete_task(2, GraphLogicalTime::new(112), stale_envelope);
+        let stale_clock =
+            signed_completion_clock(2, GraphLogicalTime::new(112), &stale_envelope, 7);
+        let stale = store.complete_task(2, stale_clock, stale_envelope);
         assert!(matches!(
             stale,
             Err(GraphStoreError::StaleTaskGeneration { .. })
@@ -7970,7 +8288,12 @@ mod tests {
         let done = store
             .complete_task(
                 reclaimed.revision.generation,
-                GraphLogicalTime::new(112),
+                signed_completion_clock(
+                    reclaimed.revision.generation,
+                    GraphLogicalTime::new(112),
+                    &current_envelope,
+                    7,
+                ),
                 current_envelope,
             )
             .unwrap();
@@ -8121,7 +8444,12 @@ mod tests {
         store
             .complete_task(
                 claimed.task_generation,
-                GraphLogicalTime::new(110),
+                signed_completion_clock(
+                    claimed.task_generation,
+                    GraphLogicalTime::new(110),
+                    &envelope,
+                    44,
+                ),
                 envelope,
             )
             .unwrap();
@@ -8167,7 +8495,12 @@ mod tests {
         assert!(matches!(
             store.complete_task(
                 claim.task_generation,
-                GraphLogicalTime::new(110),
+                signed_completion_clock(
+                    claim.task_generation,
+                    GraphLogicalTime::new(110),
+                    &completion_envelope,
+                    14,
+                ),
                 completion_envelope,
             ),
             Err(GraphStoreError::LeaseExpired { .. })
@@ -8196,12 +8529,138 @@ mod tests {
         assert!(matches!(
             store.fail_task(
                 failure_claim.task_generation,
-                GraphLogicalTime::new(110),
+                signed_failure_clock(
+                    failure_claim.task_generation,
+                    GraphLogicalTime::new(110),
+                    &failure,
+                    14,
+                ),
                 failure,
             ),
             Err(GraphStoreError::LeaseExpired { .. })
         ));
         assert_eq!(store.snapshot().unwrap(), before_failure);
+    }
+
+    #[test]
+    fn terminal_clock_requires_exact_scheduler_authority_and_payload_binding() {
+        let store = MemoryHypothesisGraphStore::new(graph(), signer(31)).unwrap();
+        let claim = store
+            .claim_task(signed_claim_envelope(
+                request(32, "terminal-clock-authority"),
+                GraphLogicalTime::new(100),
+                20,
+                32,
+                31,
+            ))
+            .unwrap();
+        let lease = claim.lease.clone().unwrap();
+        let terminal = signed_terminal_envelope(
+            &claim.task.request,
+            &lease,
+            TaskCompletion::new(
+                TaskCompletionKind::EvidenceAdded,
+                lease.holder.clone(),
+                GraphLogicalTime::new(110),
+                [EvidenceId::new("evidence:terminal-clock-authority")],
+                "summary:terminal-clock-authority",
+            )
+            .unwrap(),
+            32,
+        );
+        let before = store.snapshot().unwrap();
+
+        let unsigned = TaskTerminalClockEnvelope::for_completion(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &terminal,
+        )
+        .unwrap();
+        assert!(matches!(
+            store.complete_task(claim.task_generation, unsigned, terminal.clone()),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let foreign = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &terminal,
+            33,
+        );
+        assert!(matches!(
+            store.complete_task(claim.task_generation, foreign, terminal.clone()),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let mut tampered_clock = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &terminal,
+            31,
+        );
+        tampered_clock.observed_at = GraphLogicalTime::new(119);
+        assert!(matches!(
+            store.complete_task(claim.task_generation, tampered_clock, terminal.clone()),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let mut wrong_operation = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &terminal,
+            31,
+        );
+        wrong_operation.operation_kind = TaskTerminalOperationKind::Fail;
+        assert!(matches!(
+            store.complete_task(claim.task_generation, wrong_operation, terminal.clone()),
+            Err(GraphStoreError::Admission(
+                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+            ))
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let failure = signed_failure_envelope(
+            &claim.task.request,
+            &lease,
+            GraphLogicalTime::new(110),
+            "summary:terminal-clock-authority",
+            32,
+        );
+        let completion_only = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &terminal,
+            31,
+        );
+        assert!(matches!(
+            store.fail_task(claim.task_generation, completion_only, failure),
+            Err(GraphStoreError::InvalidTransition { .. })
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        let valid = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &terminal,
+            31,
+        );
+        let completed = store
+            .complete_task(claim.task_generation, valid, terminal)
+            .unwrap();
+        assert_eq!(completed.task.state, TaskState::Completed);
+        assert_eq!(
+            store.snapshot().unwrap().state.logical_time_high_water,
+            GraphLogicalTime::new(110)
+        );
     }
 
     #[test]
@@ -8249,8 +8708,14 @@ mod tests {
         )
         .unwrap();
         let before = store.snapshot().unwrap();
+        let unsigned_clock = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &unsigned,
+            20,
+        );
         assert!(matches!(
-            store.complete_task(claim.task_generation, GraphLogicalTime::new(110), unsigned),
+            store.complete_task(claim.task_generation, unsigned_clock, unsigned),
             Err(GraphStoreError::Admission(
                 swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
             ))
@@ -8271,12 +8736,14 @@ mod tests {
             21,
         );
         wrong_kind.completion.kind = TaskCompletionKind::EdgeChallenged;
+        let wrong_kind_clock = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &wrong_kind,
+            20,
+        );
         assert!(matches!(
-            store.complete_task(
-                claim.task_generation,
-                GraphLogicalTime::new(110),
-                wrong_kind
-            ),
+            store.complete_task(claim.task_generation, wrong_kind_clock, wrong_kind),
             Err(GraphStoreError::Admission(
                 swarm_core::hypothesis_graph::GraphAdmissionError::InvalidTransition { .. }
             ))
@@ -8296,9 +8763,15 @@ mod tests {
             .unwrap(),
             21,
         );
+        let valid_clock = signed_completion_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &valid,
+            20,
+        );
         assert_eq!(
             store
-                .complete_task(claim.task_generation, GraphLogicalTime::new(110), valid)
+                .complete_task(claim.task_generation, valid_clock, valid)
                 .unwrap()
                 .task
                 .state,
@@ -8349,12 +8822,14 @@ mod tests {
         )
         .unwrap();
         let before = store.snapshot().unwrap();
+        let unsigned_clock = signed_failure_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &unsigned,
+            22,
+        );
         assert!(matches!(
-            store.fail_task(
-                claim.task_generation,
-                GraphLogicalTime::new(110),
-                unsigned.clone(),
-            ),
+            store.fail_task(claim.task_generation, unsigned_clock, unsigned.clone(),),
             Err(GraphStoreError::Admission(
                 swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
             ))
@@ -8375,8 +8850,14 @@ mod tests {
             23,
         );
         tampered.failure.summary_digest = "summary:attacker-selected".to_string();
+        let tampered_clock = signed_failure_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &tampered,
+            22,
+        );
         assert!(matches!(
-            store.fail_task(claim.task_generation, GraphLogicalTime::new(110), tampered,),
+            store.fail_task(claim.task_generation, tampered_clock, tampered,),
             Err(GraphStoreError::Admission(
                 swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
             ))
@@ -8390,8 +8871,14 @@ mod tests {
             "summary:signed-failure",
             23,
         );
+        let valid_clock = signed_failure_clock(
+            claim.task_generation,
+            GraphLogicalTime::new(110),
+            &valid,
+            22,
+        );
         let failed = store
-            .fail_task(claim.task_generation, GraphLogicalTime::new(110), valid)
+            .fail_task(claim.task_generation, valid_clock, valid)
             .unwrap();
         assert_eq!(failed.task.state, TaskState::Failed);
         assert_eq!(
@@ -9061,19 +9548,27 @@ mod tests {
         let renewed_lease = renewed_memory.lease.clone().unwrap();
         let envelope =
             signed_terminal_envelope(&renewed_memory.task.request, &renewed_lease, completion, 1);
+        let memory_clock = signed_completion_clock(
+            renewed_memory.task_generation,
+            GraphLogicalTime::new(110),
+            &envelope,
+            11,
+        );
+        let file_clock = signed_completion_clock(
+            renewed_file.task_generation,
+            GraphLogicalTime::new(110),
+            &envelope,
+            11,
+        );
         let done_memory = memory
             .complete_task(
                 renewed_memory.task_generation,
-                GraphLogicalTime::new(110),
+                memory_clock,
                 envelope.clone(),
             )
             .unwrap();
         let done_file = file
-            .complete_task(
-                renewed_file.task_generation,
-                GraphLogicalTime::new(110),
-                envelope,
-            )
+            .complete_task(renewed_file.task_generation, file_clock, envelope)
             .unwrap();
         assert_eq!(done_memory.task, done_file.task);
         assert_eq!(

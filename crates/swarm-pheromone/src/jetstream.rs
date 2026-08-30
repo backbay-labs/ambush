@@ -1,7 +1,7 @@
 use crate::substrate::{
-    AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, PheromoneSubstrate,
-    SubstrateError, SubstrateHealth, VerifiedDeposit, concentration_for, decode_deposit_payload,
-    filter_deposits, filter_escalations, normalize_threat_intel_value,
+    AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, MAX_ACTIVE_DEPOSITS,
+    PheromoneSubstrate, SubstrateError, SubstrateHealth, VerifiedDeposit, concentration_for,
+    decode_deposit_payload, filter_deposits, filter_escalations, normalize_threat_intel_value,
 };
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
@@ -45,6 +45,64 @@ const THREAT_INTEL_KEY_PREFIX: &str = "intel";
 const BEHAVIORAL_BASELINE_KEY_PREFIX: &str = "baseline";
 #[cfg(feature = "nats")]
 const GC_PAGE_SPAN_SECS: i64 = 300;
+#[cfg(feature = "nats")]
+const MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES: usize = MAX_ACTIVE_DEPOSITS;
+
+#[cfg(feature = "nats")]
+#[derive(Debug, Clone)]
+struct CachedVerifiedDeposit {
+    revision: u64,
+    deposit: VerifiedDeposit,
+}
+
+/// Bounded, revision-aware cache for deposits that have already crossed the
+/// full signature and structural admission boundary. JetStream revisions are
+/// immutable, so an exact `(key, revision)` hit can safely avoid repeating
+/// Ed25519 verification on every concentration scan. A revision change always
+/// misses and therefore re-runs admission before the cache is updated.
+#[cfg(feature = "nats")]
+#[derive(Debug, Default)]
+struct VerifiedDepositCache {
+    entries: BTreeMap<String, CachedVerifiedDeposit>,
+}
+
+#[cfg(feature = "nats")]
+impl VerifiedDepositCache {
+    fn get(&self, key: &str, revision: u64) -> Option<VerifiedDeposit> {
+        self.entries
+            .get(key)
+            .filter(|entry| entry.revision == revision)
+            .map(|entry| entry.deposit.clone())
+    }
+
+    fn insert(&mut self, key: String, revision: u64, deposit: VerifiedDeposit) {
+        if !self.entries.contains_key(&key)
+            && self.entries.len() >= MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES
+            && let Some(evicted) = self.entries.keys().next().cloned()
+        {
+            self.entries.remove(&evicted);
+        }
+        self.entries
+            .insert(key, CachedVerifiedDeposit { revision, deposit });
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.entries.remove(key);
+    }
+}
+
+#[cfg(feature = "nats")]
+fn note_deposit_scan(scanned: &mut usize) -> Result<(), SubstrateError> {
+    *scanned = scanned.saturating_add(1);
+    if *scanned > MAX_ACTIVE_DEPOSITS {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "JetStream scan exceeds the active deposit limit of {MAX_ACTIVE_DEPOSITS}"
+            ),
+        });
+    }
+    Ok(())
+}
 
 /// JetStream-backed durable pheromone substrate.
 #[derive(Clone)]
@@ -63,6 +121,8 @@ pub struct JetStreamPheromoneSubstrate {
     gc_page_cursor: Arc<Mutex<Option<i64>>>,
     #[cfg(feature = "nats")]
     legacy_gc_complete: Arc<Mutex<bool>>,
+    #[cfg(feature = "nats")]
+    verified_deposit_cache: Arc<Mutex<VerifiedDepositCache>>,
 }
 
 #[cfg(feature = "nats")]
@@ -118,6 +178,8 @@ impl JetStreamPheromoneSubstrate {
             gc_page_cursor: Arc::new(Mutex::new(None)),
             #[cfg(feature = "nats")]
             legacy_gc_complete: Arc::new(Mutex::new(false)),
+            #[cfg(feature = "nats")]
+            verified_deposit_cache: Arc::new(Mutex::new(VerifiedDepositCache::default())),
         }
     }
 
@@ -196,6 +258,7 @@ impl JetStreamPheromoneSubstrate {
             .await
             .map_err(|error| nats_error("list keys", error))?;
         let mut deposits = Vec::new();
+        let mut scanned = 0usize;
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
@@ -211,18 +274,44 @@ impl JetStreamPheromoneSubstrate {
             {
                 continue;
             }
+            note_deposit_scan(&mut scanned)?;
 
-            let Some(payload) = connection
+            let Some(entry) = connection
                 .store
-                .get(&key)
+                .entry(&key)
                 .await
-                .map_err(|error| nats_error("get value", error))?
+                .map_err(|error| nats_error("get entry", error))?
             else {
                 continue;
             };
+            if matches!(
+                entry.operation,
+                async_nats::jetstream::kv::Operation::Delete
+                    | async_nats::jetstream::kv::Operation::Purge
+            ) {
+                self.verified_deposit_cache
+                    .lock()
+                    .map_err(|_| SubstrateError::PoisonedLock)?
+                    .remove(&key);
+                continue;
+            }
 
-            let location = format!("jetstream://{}/{}", self.bucket, key);
-            let deposit = decode_deposit_payload(&payload, location)?;
+            let cached = self
+                .verified_deposit_cache
+                .lock()
+                .map_err(|_| SubstrateError::PoisonedLock)?
+                .get(&key, entry.revision);
+            let deposit = if let Some(deposit) = cached {
+                deposit
+            } else {
+                let location = format!("jetstream://{}/{}", self.bucket, key);
+                let deposit = decode_deposit_payload(&entry.value, location)?;
+                self.verified_deposit_cache
+                    .lock()
+                    .map_err(|_| SubstrateError::PoisonedLock)?
+                    .insert(key.clone(), entry.revision, deposit.clone());
+                deposit
+            };
 
             if let Some(threat_class) = threat_class
                 && &deposit.threat_class != threat_class
@@ -494,6 +583,10 @@ impl JetStreamPheromoneSubstrate {
                     .delete(&key)
                     .await
                     .map_err(|error| nats_error("delete value", error))?;
+                self.verified_deposit_cache
+                    .lock()
+                    .map_err(|_| SubstrateError::PoisonedLock)?
+                    .remove(&key);
                 removed = removed.saturating_add(1);
             }
         }
@@ -625,6 +718,10 @@ impl JetStreamPheromoneSubstrate {
                     .delete(&key)
                     .await
                     .map_err(|error| nats_error("delete value", error))?;
+                self.verified_deposit_cache
+                    .lock()
+                    .map_err(|_| SubstrateError::PoisonedLock)?
+                    .remove(&key);
                 removed = removed.saturating_add(1);
             }
         }
@@ -695,6 +792,10 @@ impl JetStreamPheromoneSubstrate {
                 .delete(&key)
                 .await
                 .map_err(|error| nats_error("delete value", error))?;
+            self.verified_deposit_cache
+                .lock()
+                .map_err(|_| SubstrateError::PoisonedLock)?
+                .remove(&key);
             removed = removed.saturating_add(1);
         }
 
@@ -720,11 +821,15 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
         let gc_page = expiration_gc_page(&deposit, self.config.evaporation_threshold);
         let key = deposit_key(&deposit, &payload, self.config.evaporation_threshold);
 
-        connection
+        let revision = connection
             .store
-            .put(key, payload.into())
+            .put(key.clone(), payload.into())
             .await
             .map_err(|error| nats_error("put value", error))?;
+        self.verified_deposit_cache
+            .lock()
+            .map_err(|_| SubstrateError::PoisonedLock)?
+            .insert(key, revision, deposit);
         self.note_gc_page(gc_page);
         Ok(())
     }
@@ -1374,9 +1479,10 @@ fn nats_error(operation: &'static str, error: impl fmt::Display) -> SubstrateErr
 mod tests {
     use super::{
         DEFAULT_JETSTREAM_GC_PAGE_SIZE, DEFAULT_NATS_CONNECT_TIMEOUT_MS,
-        JetStreamPheromoneSubstrate,
+        JetStreamPheromoneSubstrate, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, VerifiedDepositCache,
+        note_deposit_scan,
     };
-    use crate::PheromoneSubstrate;
+    use crate::{PheromoneSubstrate, substrate::VerifiedDeposit};
     use ed25519_dalek::{Signer, SigningKey};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
@@ -1419,6 +1525,50 @@ mod tests {
             signature: Vec::new(),
             agent_key: Vec::new(),
         }
+    }
+
+    fn verified_sample_deposit() -> VerifiedDeposit {
+        let key = SigningKey::from_bytes(&[92_u8; 32]);
+        let mut deposit = sample_deposit("placeholder", 100, 0.9);
+        deposit.agent_id = AgentId::from_verifying_key(&key.verifying_key());
+        deposit.agent_identity = deposit.agent_id.0.clone();
+        let signing_bytes = crate::substrate::signing_payload_bytes_for_deposit(&deposit).unwrap();
+        deposit.signature = key.sign(&signing_bytes).to_bytes().to_vec();
+        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+        VerifiedDeposit::admit(deposit).unwrap()
+    }
+
+    #[test]
+    fn verified_deposit_cache_requires_an_exact_revision_and_stays_bounded() {
+        let deposit = verified_sample_deposit();
+        let mut cache = VerifiedDepositCache::default();
+
+        assert!(cache.get("deposit-a", 41).is_none());
+        cache.insert("deposit-a".to_string(), 41, deposit.clone());
+        assert!(cache.get("deposit-a", 41).is_some());
+        assert!(cache.get("deposit-a", 42).is_none());
+
+        cache.insert("deposit-a".to_string(), 42, deposit.clone());
+        assert!(cache.get("deposit-a", 41).is_none());
+        assert!(cache.get("deposit-a", 42).is_some());
+
+        for index in 0..=MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES {
+            cache.insert(format!("deposit-{index:05}"), index as u64, deposit.clone());
+        }
+        assert_eq!(cache.entries.len(), MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES);
+    }
+
+    #[test]
+    fn jetstream_deposit_scan_fails_closed_at_the_cache_working_set_bound() {
+        let mut scanned = 0;
+        for _ in 0..MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES {
+            note_deposit_scan(&mut scanned).unwrap();
+        }
+        assert!(matches!(
+            note_deposit_scan(&mut scanned),
+            Err(crate::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("active deposit limit")
+        ));
     }
 
     fn sample_escalation(mode: SwarmMode, timestamp: i64) -> EscalationRecord {
