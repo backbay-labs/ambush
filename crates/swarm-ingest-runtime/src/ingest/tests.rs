@@ -4215,6 +4215,19 @@ mod providence_feedback {
         );
     }
 
+    #[test]
+    fn feedback_clock_is_strictly_monotonic_across_state_clones() {
+        let state = IngestState::from_config(
+            super::temp_path("feedback-monotonic-clock"),
+            super::test_config("suspicious_process_tree"),
+        )
+        .unwrap();
+        let clone = state.clone();
+        let first = state.next_providence_feedback_timestamp_ms();
+        let second = clone.next_providence_feedback_timestamp_ms();
+        assert!(second > first);
+    }
+
     fn feedback_signature(payload: &SwarmProvidenceFeedbackRequest) -> String {
         let payload = serde_json::to_value(payload).unwrap();
         format!(

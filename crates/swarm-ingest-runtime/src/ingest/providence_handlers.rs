@@ -140,7 +140,7 @@ pub(crate) async fn providence_feedback_handler(
     let target = resolve_feedback_target(&lookup, request.finding_id.as_deref())
         .map_err(ProvidenceFeedbackError::not_found)?;
     let target = enrich_feedback_target(&state, &lookup, &target)?;
-    let received_at_ms = now_ms();
+    let received_at_ms = state.next_providence_feedback_timestamp_ms();
     let feedback_id = format!(
         "providence-feedback:{}:{}",
         super::sanitize_id(&request.incident_id),

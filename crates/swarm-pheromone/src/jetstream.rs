@@ -1,10 +1,11 @@
 use crate::substrate::{
     AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, FeedbackSuppressionKey,
-    MAX_ACTIVE_DEPOSIT_BYTES, MAX_ACTIVE_DEPOSITS, PheromoneSubstrate, SubstrateError,
-    SubstrateHealth, VerifiedDeposit, concentration_for, decode_deposit_payload,
-    deposit_suppression_key, feedback_suppression_marker, filter_deposits, filter_escalations,
-    is_retention_expired, normalize_threat_intel_value, retention_initial_strength,
-    trusted_system_unix_seconds, validate_deposit_policy, validate_deposit_retention,
+    FeedbackSuppressionOrder, FeedbackSuppressionState, MAX_ACTIVE_DEPOSIT_BYTES,
+    MAX_ACTIVE_DEPOSITS, PheromoneSubstrate, SubstrateError, SubstrateHealth, VerifiedDeposit,
+    concentration_for, decode_deposit_payload, deposit_suppression_key,
+    feedback_suppression_marker, filter_deposits, filter_escalations, is_retention_expired,
+    normalize_threat_intel_value, retention_initial_strength, trusted_system_unix_seconds,
+    validate_deposit_policy, validate_deposit_retention,
 };
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
@@ -167,7 +168,15 @@ struct IndexedDepositKey {
     key: String,
     encoded_len: usize,
     suppression_key: Option<FeedbackSuppressionKey>,
-    feedback_marker_key: Option<FeedbackSuppressionKey>,
+    feedback_marker: Option<IndexedFeedbackMarker>,
+}
+
+#[cfg(feature = "nats")]
+#[derive(Debug, Clone)]
+struct IndexedFeedbackMarker {
+    key: FeedbackSuppressionKey,
+    state: FeedbackSuppressionState,
+    order: FeedbackSuppressionOrder,
 }
 
 #[cfg(feature = "nats")]
@@ -363,20 +372,25 @@ impl DepositKeyPartitionIndex {
         &mut self,
         removed: &IndexedDepositKey,
     ) -> Vec<IndexedDepositKey> {
-        let Some(feedback_key) = removed.feedback_marker_key.as_ref() else {
+        let Some(removed_marker) = removed.feedback_marker.as_ref() else {
             return Vec::new();
         };
-        if self
-            .controls
-            .iter()
-            .any(|entry| entry.feedback_marker_key.as_ref() == Some(feedback_key))
-        {
+        if self.controls.iter().chain(&self.evidence).any(|entry| {
+            entry.feedback_marker.as_ref().is_some_and(|candidate| {
+                candidate.key == removed_marker.key
+                    && (candidate.order > removed_marker.order
+                        || (candidate.order == removed_marker.order && entry.key > removed.key))
+            })
+        }) {
+            return Vec::new();
+        }
+        if removed_marker.state == FeedbackSuppressionState::Confirm {
             return Vec::new();
         }
         let related = self
             .evidence
             .iter()
-            .filter(|entry| entry.suppression_key.as_ref() == Some(feedback_key))
+            .filter(|entry| entry.suppression_key.as_ref() == Some(&removed_marker.key))
             .cloned()
             .collect::<Vec<_>>();
         for entry in &related {
@@ -1332,8 +1346,8 @@ impl JetStreamPheromoneSubstrate {
                         key,
                         encoded_len: deposit.encoded_len(),
                         suppression_key: deposit_suppression_key(&deposit),
-                        feedback_marker_key: feedback_suppression_marker(&deposit)
-                            .map(|(key, _)| key),
+                        feedback_marker: feedback_suppression_marker(&deposit)
+                            .map(|(key, state, order)| IndexedFeedbackMarker { key, state, order }),
                     };
                     let replacement_orphans = partition
                         .remove_key(&indexed.key)
@@ -3060,12 +3074,13 @@ fn nats_error(operation: &'static str, error: impl fmt::Display) -> SubstrateErr
 mod tests {
     use super::{
         DEFAULT_JETSTREAM_GC_PAGE_SIZE, DEFAULT_NATS_CONNECT_TIMEOUT_MS, DepositKeyIndexes,
-        DepositKeyKind, DepositKeyPartitionIndex, IndexedDepositKey, JetStreamPheromoneSubstrate,
-        MAX_DEPOSIT_KEY_INDEX_PARTITIONS, MAX_RECENT_DEPOSIT_INDEX_SLOTS,
-        MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication, VerifiedDepositCache,
-        deposit_key_kind, deposit_key_timestamp, evaporation_deadline, expiration_gc_page,
-        gc_sweep_page, legacy_threat_class_segment, parse_nats_endpoint, recent_deposit_index_key,
-        retain_newest_deposit_key, retain_newest_partitioned_deposit_key_as, threat_class_segment,
+        DepositKeyKind, DepositKeyPartitionIndex, IndexedDepositKey, IndexedFeedbackMarker,
+        JetStreamPheromoneSubstrate, MAX_DEPOSIT_KEY_INDEX_PARTITIONS,
+        MAX_RECENT_DEPOSIT_INDEX_SLOTS, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication,
+        VerifiedDepositCache, deposit_key_kind, deposit_key_timestamp, evaporation_deadline,
+        expiration_gc_page, gc_sweep_page, legacy_threat_class_segment, parse_nats_endpoint,
+        recent_deposit_index_key, retain_newest_deposit_key,
+        retain_newest_partitioned_deposit_key_as, threat_class_segment,
     };
     use crate::{
         PheromoneSubstrate,
@@ -3184,7 +3199,8 @@ mod tests {
             key: key.to_string(),
             encoded_len: deposit.encoded_len(),
             suppression_key: deposit_suppression_key(&deposit),
-            feedback_marker_key: feedback_suppression_marker(&deposit).map(|(key, _)| key),
+            feedback_marker: feedback_suppression_marker(&deposit)
+                .map(|(key, state, order)| IndexedFeedbackMarker { key, state, order }),
         }
     }
 
@@ -3309,6 +3325,109 @@ mod tests {
         assert_eq!(orphaned[0].key, "evidence");
         assert!(index.evidence.is_empty());
         assert_eq!(index.controls.len(), 1);
+    }
+
+    #[test]
+    fn bounded_feedback_eviction_preserves_confirmed_evidence() {
+        let evidence = resign_sample_deposit(
+            "confirmed-evidence",
+            sample_deposit("confirmed-evidence", 100, 0.9),
+            serde_json::json!({"event_id": "event-confirmed"}),
+        );
+        let confirmation = resign_sample_deposit(
+            "reviewer-confirm",
+            sample_deposit("reviewer-confirm", 200, 1.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "event_id": "event-confirmed",
+                "action": "confirm",
+                "observed_at_ms": 200_100,
+                "feedback_id": "confirm-200100"
+            }),
+        );
+        let mut index = DepositKeyPartitionIndex::default();
+        assert!(
+            index
+                .insert_bounded(
+                    indexed_deposit("confirmed-evidence", evidence),
+                    DepositKeyKind::Evidence,
+                    10,
+                )
+                .is_empty()
+        );
+        assert!(
+            index
+                .insert_bounded(
+                    indexed_deposit("confirmation", confirmation),
+                    DepositKeyKind::Evidence,
+                    10,
+                )
+                .is_empty()
+        );
+
+        let removed = index.remove_key("confirmation").unwrap();
+        assert!(
+            index
+                .remove_evidence_orphaned_by_feedback(&removed)
+                .is_empty()
+        );
+        assert!(
+            index
+                .evidence
+                .iter()
+                .any(|entry| entry.key == "confirmed-evidence")
+        );
+    }
+
+    #[test]
+    fn evicting_an_older_dismissal_cannot_override_a_newer_confirmation() {
+        let evidence = resign_sample_deposit(
+            "reviewed-evidence",
+            sample_deposit("reviewed-evidence", 100, 0.9),
+            serde_json::json!({"event_id": "event-reviewed"}),
+        );
+        let dismissal = resign_sample_deposit(
+            "reviewer-dismiss",
+            sample_deposit("reviewer-dismiss", 200, 0.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "event_id": "event-reviewed",
+                "action": "dismiss",
+                "observed_at_ms": 200_100,
+                "feedback_id": "dismiss-200100"
+            }),
+        );
+        let confirmation = resign_sample_deposit(
+            "reviewer-confirm-later",
+            sample_deposit("reviewer-confirm-later", 200, 1.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "event_id": "event-reviewed",
+                "action": "confirm",
+                "observed_at_ms": 200_900,
+                "feedback_id": "confirm-200900"
+            }),
+        );
+        let mut index = DepositKeyPartitionIndex::default();
+        for (key, deposit, kind) in [
+            ("reviewed-evidence", evidence, DepositKeyKind::Evidence),
+            ("dismissal", dismissal, DepositKeyKind::Control),
+            ("confirmation", confirmation, DepositKeyKind::Evidence),
+        ] {
+            assert!(
+                index
+                    .insert_bounded(indexed_deposit(key, deposit), kind, 10)
+                    .is_empty()
+            );
+        }
+
+        let removed = index.remove_key("dismissal").unwrap();
+        assert!(
+            index
+                .remove_evidence_orphaned_by_feedback(&removed)
+                .is_empty()
+        );
+        assert_eq!(index.evidence.len(), 2);
     }
 
     #[test]

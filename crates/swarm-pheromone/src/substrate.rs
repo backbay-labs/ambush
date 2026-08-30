@@ -582,24 +582,8 @@ impl RetainedDeposits {
             remaining_count = remaining_count.saturating_sub(1);
         }
 
-        let mut orphaned_feedback_keys = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| removed[*index])
-            .filter_map(|(_, entry)| feedback_suppression_marker(entry))
-            .map(|(key, _)| key)
-            .collect::<BTreeSet<_>>();
-        if !orphaned_feedback_keys.is_empty() {
-            for (index, entry) in self.entries.iter().enumerate() {
-                if removed[index] {
-                    continue;
-                }
-                if let Some((key, _)) = feedback_suppression_marker(entry) {
-                    orphaned_feedback_keys.remove(&key);
-                }
-            }
-        }
+        let orphaned_feedback_keys =
+            feedback_keys_requiring_evidence_purge_after_compaction(&self.entries, &removed);
 
         let before = self.entries.len();
         self.entries = self
@@ -791,6 +775,18 @@ pub(crate) struct FeedbackSuppressionKey {
 pub(crate) enum FeedbackSuppressionState {
     Confirm,
     Dismiss,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct FeedbackSuppressionOrder {
+    observed_at_ms: i64,
+    feedback_id: String,
+}
+
+impl FeedbackSuppressionOrder {
+    fn observed_at_ms(&self) -> i64 {
+        self.observed_at_ms
+    }
 }
 
 /// Async contract for pheromone substrates.
@@ -1991,25 +1987,61 @@ fn deposit_host_id(deposit: &PheromoneDeposit) -> Option<&str> {
 
 fn latest_feedback_suppression_states(
     deposits: &[VerifiedDeposit],
-) -> BTreeMap<FeedbackSuppressionKey, (FeedbackSuppressionState, i64)> {
+) -> BTreeMap<FeedbackSuppressionKey, (FeedbackSuppressionState, FeedbackSuppressionOrder)> {
     let mut states = BTreeMap::new();
     for deposit in deposits {
-        let Some((key, state)) = feedback_suppression_marker(deposit) else {
+        let Some((key, state, order)) = feedback_suppression_marker(deposit) else {
             continue;
         };
         let replace = states
             .get(&key)
-            .is_none_or(|(_, timestamp)| *timestamp <= deposit.timestamp);
+            .is_none_or(|(_, current_order)| current_order <= &order);
         if replace {
-            states.insert(key, (state, deposit.timestamp));
+            states.insert(key, (state, order));
         }
     }
     states
 }
 
+fn feedback_keys_requiring_evidence_purge_after_compaction(
+    deposits: &[VerifiedDeposit],
+    removed: &[bool],
+) -> BTreeSet<FeedbackSuppressionKey> {
+    debug_assert_eq!(deposits.len(), removed.len());
+    let mut retained_states = BTreeMap::new();
+    for (index, deposit) in deposits.iter().enumerate() {
+        if removed.get(index).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some((key, state, order)) = feedback_suppression_marker(deposit) else {
+            continue;
+        };
+        let replace = retained_states
+            .get(&key)
+            .is_none_or(|(_, current_order)| current_order <= &order);
+        if replace {
+            retained_states.insert(key, (state, order));
+        }
+    }
+
+    latest_feedback_suppression_states(deposits)
+        .into_iter()
+        .filter_map(|(key, (state, order))| {
+            (state == FeedbackSuppressionState::Dismiss
+                && retained_states
+                    .get(&key)
+                    .is_none_or(|retained| retained.0 != state || retained.1 != order))
+            .then_some(key)
+        })
+        .collect()
+}
+
 fn is_suppressed_by_feedback(
     deposit: &VerifiedDeposit,
-    suppression: &BTreeMap<FeedbackSuppressionKey, (FeedbackSuppressionState, i64)>,
+    suppression: &BTreeMap<
+        FeedbackSuppressionKey,
+        (FeedbackSuppressionState, FeedbackSuppressionOrder),
+    >,
 ) -> bool {
     if is_providence_feedback_deposit(deposit) {
         return false;
@@ -2017,14 +2049,19 @@ fn is_suppressed_by_feedback(
     let Some(key) = deposit_suppression_key(deposit) else {
         return false;
     };
-    suppression.get(&key).is_some_and(|(state, timestamp)| {
-        *state == FeedbackSuppressionState::Dismiss && *timestamp >= deposit.timestamp
+    suppression.get(&key).is_some_and(|(state, order)| {
+        *state == FeedbackSuppressionState::Dismiss
+            && order.observed_at_ms() >= deposit.timestamp.saturating_mul(1_000)
     })
 }
 
 pub(crate) fn feedback_suppression_marker(
     deposit: &VerifiedDeposit,
-) -> Option<(FeedbackSuppressionKey, FeedbackSuppressionState)> {
+) -> Option<(
+    FeedbackSuppressionKey,
+    FeedbackSuppressionState,
+    FeedbackSuppressionOrder,
+)> {
     let indicator = deposit.indicator.as_object()?;
     if indicator.get("schema").and_then(serde_json::Value::as_str)
         != Some(SWARM_PROVIDENCE_FEEDBACK_SCHEMA)
@@ -2043,12 +2080,27 @@ pub(crate) fn feedback_suppression_marker(
         "dismiss" => FeedbackSuppressionState::Dismiss,
         _ => return None,
     };
+    let timestamp_ms = deposit.timestamp.saturating_mul(1_000);
+    let observed_at_ms = indicator
+        .get("observed_at_ms")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|observed_at_ms| observed_at_ms.div_euclid(1_000) == deposit.timestamp)
+        .unwrap_or(timestamp_ms);
+    let feedback_id = indicator
+        .get("feedback_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     Some((
         FeedbackSuppressionKey {
             threat_class: deposit.threat_class.clone(),
             event_id: event_id.to_string(),
         },
         state,
+        FeedbackSuppressionOrder {
+            observed_at_ms,
+            feedback_id,
+        },
     ))
 }
 
@@ -2675,8 +2727,10 @@ mod tests {
         let mut deposit = sample_deposit(agent_id, timestamp, 0.9);
         deposit.indicator = serde_json::json!({
             "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+            "feedback_id": format!("feedback-{event_id}-{timestamp}"),
             "event_id": event_id,
             "action": action,
+            "observed_at_ms": timestamp.saturating_mul(1_000),
         });
         sign_deposit(&mut deposit, &key);
         deposit
@@ -3926,6 +3980,125 @@ mod tests {
             super::deposit_suppression_key(entry)
                 .is_none_or(|key| key.event_id != "event-dismissed")
         }));
+    }
+
+    #[test]
+    fn deposit_retention_preserves_evidence_when_final_confirmation_is_evicted() {
+        let limits = super::DepositRetentionLimits {
+            max_count: 3,
+            max_bytes: 1024 * 1024,
+            compacted_count: 2,
+            compacted_bytes: 1024 * 1024,
+            max_journal_bytes: 1024 * 1024,
+        };
+        let mut retained = super::RetainedDeposits::default();
+        let entries = [
+            sample_feedback_deposit("reviewer", "event-confirmed", "confirm", 200),
+            sample_deposit("unrelated-before", 210, 0.9),
+            sample_event_deposit("delayed-replay", "event-confirmed", 100),
+            sample_deposit("unrelated-after", 220, 0.9),
+        ];
+        for entry in entries {
+            retained
+                .push(
+                    super::VerifiedDeposit::admit(entry).unwrap(),
+                    limits,
+                    3_600.0,
+                    0.01,
+                    None,
+                )
+                .unwrap();
+        }
+
+        assert!(retained.entries.iter().any(|entry| {
+            super::deposit_suppression_key(entry)
+                .is_some_and(|key| key.event_id == "event-confirmed")
+                && entry.indicator.get("schema").is_none()
+        }));
+    }
+
+    #[test]
+    fn feedback_suppression_uses_signed_millisecond_order_within_one_second() {
+        fn feedback(action: &str, observed_at_ms: i64, confidence: f64) -> super::VerifiedDeposit {
+            let mut deposit = sample_feedback_deposit(
+                &format!("reviewer-{action}"),
+                "event-same-second",
+                action,
+                200,
+            );
+            deposit.confidence = confidence;
+            deposit.indicator["observed_at_ms"] = serde_json::json!(observed_at_ms);
+            deposit.indicator["feedback_id"] =
+                serde_json::json!(format!("feedback-{observed_at_ms}"));
+            sign_deposit(
+                &mut deposit,
+                &signing_key_for_label(&format!("reviewer-{action}")),
+            );
+            super::VerifiedDeposit::admit(deposit).unwrap()
+        }
+
+        let evidence = super::VerifiedDeposit::admit(sample_event_deposit(
+            "same-second-evidence",
+            "event-same-second",
+            199,
+        ))
+        .unwrap();
+        let later_dismissal = feedback("dismiss", 200_900, 0.0);
+        let earlier_confirmation = feedback("confirm", 200_100, 1.0);
+        let deposits = vec![evidence.clone(), later_dismissal, earlier_confirmation];
+        let visible = super::filter_deposits(&deposits, super::DepositQuery::recent(10));
+        assert!(visible.iter().all(|deposit| {
+            deposit
+                .indicator
+                .get("event_id")
+                .and_then(serde_json::Value::as_str)
+                != Some("event-same-second")
+                || deposit.indicator.get("schema").is_some()
+        }));
+
+        let earlier_dismissal = feedback("dismiss", 200_100, 0.0);
+        let later_confirmation = feedback("confirm", 200_900, 1.0);
+        let deposits = vec![evidence, later_confirmation, earlier_dismissal];
+        let visible = super::filter_deposits(&deposits, super::DepositQuery::recent(10));
+        assert!(visible.iter().any(|deposit| {
+            deposit
+                .indicator
+                .get("event_id")
+                .and_then(serde_json::Value::as_str)
+                == Some("event-same-second")
+                && deposit.indicator.get("schema").is_none()
+        }));
+    }
+
+    #[test]
+    fn compaction_uses_the_final_feedback_state_not_any_retained_marker() {
+        let older_confirmation = super::VerifiedDeposit::admit(sample_feedback_deposit(
+            "reviewer-confirm",
+            "event-final-state",
+            "confirm",
+            200,
+        ))
+        .unwrap();
+        let newer_dismissal = super::VerifiedDeposit::admit(sample_feedback_deposit(
+            "reviewer-dismiss",
+            "event-final-state",
+            "dismiss",
+            201,
+        ))
+        .unwrap();
+        let deposits = vec![older_confirmation, newer_dismissal];
+        let purge = super::feedback_keys_requiring_evidence_purge_after_compaction(
+            &deposits,
+            &[false, true],
+        );
+        assert_eq!(purge.len(), 1);
+        assert_eq!(purge.iter().next().unwrap().event_id, "event-final-state");
+
+        let purge = super::feedback_keys_requiring_evidence_purge_after_compaction(
+            &deposits,
+            &[true, false],
+        );
+        assert!(purge.is_empty());
     }
 
     #[cfg(unix)]

@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use swarm_core::ThreatClass;
 use swarm_core::agent::{AgentHealthEntry, SwarmModeState};
@@ -1595,6 +1595,7 @@ pub struct IngestState {
     demo_runs: Arc<Mutex<DemoRunRegistry>>,
     providence_adapter: Arc<ArcSwap<Option<Arc<ProvidenceIncidentAdapter>>>>,
     providence_task_started: Arc<AtomicBool>,
+    providence_feedback_clock_ms: Arc<AtomicI64>,
     governance_authority: Option<GovernanceAuthority>,
     startup_attestation: Option<Arc<StartupAttestationReport>>,
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
@@ -1681,6 +1682,7 @@ impl IngestState {
             demo_runs: Arc::new(Mutex::new(DemoRunRegistry::default())),
             providence_adapter: Arc::new(ArcSwap::from_pointee(providence_adapter)),
             providence_task_started: Arc::new(AtomicBool::new(false)),
+            providence_feedback_clock_ms: Arc::new(AtomicI64::new(0)),
             governance_authority: None,
             startup_attestation: None,
             anti_tamper_report: Arc::new(ArcSwap::from_pointee(AntiTamperReport::disabled())),
@@ -2012,6 +2014,17 @@ impl IngestState {
 
     pub fn current_pheromone_config(&self) -> swarm_core::config::PheromoneConfig {
         self.stack.load_full().service.config.pheromone.clone()
+    }
+
+    fn next_providence_feedback_timestamp_ms(&self) -> i64 {
+        let observed = now_ms();
+        let previous = self
+            .providence_feedback_clock_ms
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                Some(observed.max(current.saturating_add(1)))
+            })
+            .unwrap_or_else(|current| current);
+        observed.max(previous.saturating_add(1))
     }
 
     /// The lease store the CURRENT runtime writes containment leases to.
