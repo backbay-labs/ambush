@@ -526,7 +526,11 @@ async fn threat_class_override_affects_concentration_and_gc() {
     assert_eq!(concentration.total_strength, 0.0);
 
     let removed = substrate.gc_evaporated(timestamp + 61).await.unwrap();
-    assert_eq!(removed, 1);
+    assert_eq!(
+        removed, 0,
+        "the scoped query already purges payloads expired under the current override"
+    );
+    assert!(substrate.recent_deposits(1).await.unwrap().is_empty());
 }
 
 #[tokio::test]

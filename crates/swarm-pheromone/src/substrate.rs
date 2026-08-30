@@ -29,7 +29,7 @@ pub(crate) const BEHAVIORAL_BASELINE_STATE_KIND: &str = "behavioral_baseline_sna
 type BehavioralBaselineEnvelope = SignedStateEnvelope<BehavioralBaselineSnapshot>;
 
 pub(crate) const MAX_ACTIVE_DEPOSITS: usize = 10_000;
-const MAX_ACTIVE_DEPOSIT_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_ACTIVE_DEPOSIT_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_SINGLE_DEPOSIT_BYTES: usize = 256 * 1024;
 const COMPACTED_DEPOSIT_COUNT: usize = 7_500;
 const COMPACTED_DEPOSIT_BYTES: usize = 24 * 1024 * 1024;
@@ -421,6 +421,10 @@ impl VerifiedDeposit {
             encoded_len,
         })
     }
+
+    pub(crate) fn encoded_len(&self) -> usize {
+        self.encoded_len
+    }
 }
 
 fn validate_deposit_numeric_fields(deposit: &PheromoneDeposit) -> Result<(), SubstrateError> {
@@ -778,13 +782,13 @@ pub struct SubstrateHealth {
 type ThreatIntelKey = (ThreatIntelIndicatorType, String);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct FeedbackSuppressionKey {
+pub(crate) struct FeedbackSuppressionKey {
     threat_class: ThreatClass,
     event_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FeedbackSuppressionState {
+pub(crate) enum FeedbackSuppressionState {
     Confirm,
     Dismiss,
 }
@@ -2018,7 +2022,7 @@ fn is_suppressed_by_feedback(
     })
 }
 
-fn feedback_suppression_marker(
+pub(crate) fn feedback_suppression_marker(
     deposit: &VerifiedDeposit,
 ) -> Option<(FeedbackSuppressionKey, FeedbackSuppressionState)> {
     let indicator = deposit.indicator.as_object()?;
@@ -2048,7 +2052,7 @@ fn feedback_suppression_marker(
     ))
 }
 
-fn deposit_suppression_key(deposit: &VerifiedDeposit) -> Option<FeedbackSuppressionKey> {
+pub(crate) fn deposit_suppression_key(deposit: &VerifiedDeposit) -> Option<FeedbackSuppressionKey> {
     Some(FeedbackSuppressionKey {
         threat_class: deposit.threat_class.clone(),
         event_id: deposit
