@@ -52,9 +52,23 @@ const GC_PAGE_SPAN_SECS: i64 = 300;
 const MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES: usize = MAX_ACTIVE_DEPOSITS * 2;
 #[cfg(feature = "nats")]
 const MAX_DEPOSIT_KEY_INDEX_PARTITIONS: usize = 128;
+#[cfg(feature = "nats")]
+const RECENT_DEPOSIT_INDEX_KEY_PREFIX: &str = "idx_recent";
+#[cfg(feature = "nats")]
+const RECENT_DEPOSIT_INDEX_STATE_KEY_PREFIX: &str = "idx_recent_state";
+#[cfg(feature = "nats")]
+const MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS: usize = 256;
+// The runtime's largest periodic request is 100 records. The additional 27
+// slots absorb recently suppressed or expired records without making the hot
+// path proportional to the bucket's lifetime subject count. Evidence and
+// zero-strength control records have independent rings so one class cannot
+// evict the other before feedback suppression is applied.
+#[cfg(feature = "nats")]
+const MAX_RECENT_DEPOSIT_INDEX_SLOTS: u64 = 127;
 
 #[cfg(feature = "nats")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum DepositKeyKind {
     Evidence,
     Control,
@@ -65,6 +79,30 @@ enum DepositKeyKind {
 struct CachedVerifiedDeposit {
     revision: u64,
     deposit: VerifiedDeposit,
+}
+
+#[cfg(feature = "nats")]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecentDepositPointer {
+    ordinal: u64,
+    kind: DepositKeyKind,
+    deposit_key: String,
+    deposit_revision: u64,
+}
+
+#[cfg(feature = "nats")]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecentDepositIndexState {
+    last_ordinal: u64,
+}
+
+#[cfg(feature = "nats")]
+#[derive(Debug)]
+struct SelectedDepositKey {
+    key: String,
+    expected_revision: Option<u64>,
 }
 
 /// Bounded, revision-aware cache for deposits that have already crossed the
@@ -206,6 +244,15 @@ struct DepositKeyScanCursor {
 enum DepositKeyLayout {
     Current,
     Legacy,
+    LegacyCustomCurrent,
+    LegacyCustomLegacy,
+}
+
+#[cfg(feature = "nats")]
+impl DepositKeyLayout {
+    fn allows_colliding_legacy_custom_class(self) -> bool {
+        matches!(self, Self::LegacyCustomCurrent | Self::LegacyCustomLegacy)
+    }
 }
 
 #[cfg(feature = "nats")]
@@ -227,6 +274,8 @@ struct DepositKeyPartitionIndex {
     control_bytes: usize,
     current_layout: DepositKeyScanCursor,
     legacy_layout: DepositKeyScanCursor,
+    legacy_custom_current_layout: DepositKeyScanCursor,
+    legacy_custom_legacy_layout: DepositKeyScanCursor,
 }
 
 #[cfg(feature = "nats")]
@@ -645,6 +694,478 @@ impl JetStreamPheromoneSubstrate {
     }
 
     #[cfg(feature = "nats")]
+    async fn ensure_recent_deposit_index_initialized(
+        &self,
+        connection: &JetStreamConnection,
+    ) -> Result<(), SubstrateError> {
+        use async_nats::jetstream::kv::Operation;
+
+        let mut missing = Vec::new();
+        for kind in [DepositKeyKind::Evidence, DepositKeyKind::Control] {
+            let state_key = recent_deposit_index_state_key(kind);
+            match connection
+                .store
+                .entry(&state_key)
+                .await
+                .map_err(|error| nats_error("read recent-deposit index state", error))?
+            {
+                None
+                | Some(async_nats::jetstream::kv::Entry {
+                    operation: Operation::Delete | Operation::Purge,
+                    ..
+                }) => missing.push(kind),
+                Some(entry) => {
+                    let location = format!("jetstream://{}/{}", self.bucket, state_key);
+                    serde_json::from_slice::<RecentDepositIndexState>(&entry.value)
+                        .map_err(|source| SubstrateError::Decode { location, source })?;
+                }
+            }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let migration_high_water = connection
+            .store
+            .stream
+            .get_info()
+            .await
+            .map_err(|error| nats_error("read recent-index migration high-water", error))?
+            .state
+            .last_sequence;
+
+        // One compatibility scan upgrades buckets created before the bounded
+        // recent index existed. The state marker is published only after all
+        // retained pointers are durable, so readers never accept a partial
+        // migration. Concurrent initializers converge through monotonic slot
+        // CAS and create-only state publication.
+        let mut evidence_window = BTreeSet::new();
+        let mut control_window = BTreeSet::new();
+        let mut keys = connection
+            .store
+            .keys()
+            .await
+            .map_err(|error| nats_error("list deposits for recent-index migration", error))?;
+        while let Some(entry) = keys.next().await {
+            let key = entry
+                .map_err(|error| nats_error("stream deposits for recent-index migration", error))?;
+            if is_non_deposit_key(&key) || deposit_key_timestamp(&key).is_none() {
+                continue;
+            }
+            let Some(kind) = self.classify_deposit_key(connection, &key).await? else {
+                continue;
+            };
+            if !missing.contains(&kind) {
+                continue;
+            }
+            let window = match kind {
+                DepositKeyKind::Evidence => &mut evidence_window,
+                DepositKeyKind::Control => &mut control_window,
+            };
+            retain_newest_deposit_key(window, key, MAX_RECENT_DEPOSIT_INDEX_SLOTS as usize);
+        }
+
+        for (kind, window) in [
+            (DepositKeyKind::Evidence, evidence_window),
+            (DepositKeyKind::Control, control_window),
+        ] {
+            if !missing.contains(&kind) {
+                continue;
+            }
+            let mut pointers = Vec::with_capacity(window.len());
+            for (_, key) in window {
+                let Some(entry) =
+                    connection.store.entry(&key).await.map_err(|error| {
+                        nats_error("load recent-index migration deposit", error)
+                    })?
+                else {
+                    continue;
+                };
+                if matches!(entry.operation, Operation::Delete | Operation::Purge) {
+                    continue;
+                }
+                let location = format!("jetstream://{}/{}", self.bucket, key);
+                let deposit = decode_deposit_payload(&entry.value, location)?;
+                self.admission_control
+                    .validate_deposit_admission(&deposit)?;
+                if deposit_kind(&deposit) != kind
+                    || deposit_key_kind(&key).is_some_and(|key_kind| key_kind != kind)
+                {
+                    return Err(SubstrateError::InvalidDeposit {
+                        reason: format!(
+                            "JetStream migration key `{key}` class does not match its signed payload"
+                        ),
+                    });
+                }
+                pointers.push((key, entry.revision));
+            }
+            for (deposit_key, deposit_revision) in &pointers {
+                if *deposit_revision > migration_high_water {
+                    continue;
+                }
+                self.write_recent_deposit_pointer(
+                    connection,
+                    &RecentDepositPointer {
+                        // Historical revisions are globally unique and stable,
+                        // so concurrent migrations produce identical slot
+                        // candidates. Monotonic slot CAS retains the newest
+                        // historical revision on any collision.
+                        ordinal: *deposit_revision,
+                        kind,
+                        deposit_key: deposit_key.clone(),
+                        deposit_revision: *deposit_revision,
+                    },
+                )
+                .await?;
+            }
+            self.publish_recent_deposit_index_state_at_least(
+                connection,
+                kind,
+                migration_high_water,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "nats")]
+    async fn publish_recent_deposit_index_state_at_least(
+        &self,
+        connection: &JetStreamConnection,
+        kind: DepositKeyKind,
+        minimum_ordinal: u64,
+    ) -> Result<(), SubstrateError> {
+        use async_nats::jetstream::kv::{CreateErrorKind, Operation, UpdateErrorKind};
+
+        let state_key = recent_deposit_index_state_key(kind);
+        let payload = serde_json::to_vec(&RecentDepositIndexState {
+            last_ordinal: minimum_ordinal,
+        })
+        .map_err(|source| SubstrateError::Encode {
+            context: "JetStream recent-deposit index state".to_string(),
+            source,
+        })?;
+        for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
+            let entry = connection
+                .store
+                .entry(&state_key)
+                .await
+                .map_err(|error| nats_error("read recent-deposit index state", error))?;
+            match entry {
+                None
+                | Some(async_nats::jetstream::kv::Entry {
+                    operation: Operation::Delete | Operation::Purge,
+                    ..
+                }) => match connection
+                    .store
+                    .create(&state_key, payload.clone().into())
+                    .await
+                {
+                    Ok(_) => return Ok(()),
+                    Err(error) if error.kind() == CreateErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        return Err(nats_error("publish recent-deposit index state", error));
+                    }
+                },
+                Some(entry) => {
+                    let location = format!("jetstream://{}/{}", self.bucket, state_key);
+                    let current = serde_json::from_slice::<RecentDepositIndexState>(&entry.value)
+                        .map_err(|source| SubstrateError::Decode { location, source })?;
+                    if current.last_ordinal >= minimum_ordinal {
+                        return Ok(());
+                    }
+                    match connection
+                        .store
+                        .update(&state_key, payload.clone().into(), entry.revision)
+                        .await
+                    {
+                        Ok(_) => return Ok(()),
+                        Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => {
+                            continue;
+                        }
+                        Err(error) => {
+                            return Err(nats_error("publish recent-deposit index state", error));
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(SubstrateError::Nats {
+            operation: "publish recent-deposit index state",
+            reason: format!(
+                "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
+            ),
+        })
+    }
+
+    #[cfg(feature = "nats")]
+    async fn allocate_recent_deposit_ordinal(
+        &self,
+        connection: &JetStreamConnection,
+        kind: DepositKeyKind,
+    ) -> Result<u64, SubstrateError> {
+        use async_nats::jetstream::kv::{CreateErrorKind, Operation, UpdateErrorKind};
+
+        let state_key = recent_deposit_index_state_key(kind);
+        for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
+            let entry = connection
+                .store
+                .entry(&state_key)
+                .await
+                .map_err(|error| nats_error("read recent-deposit index state", error))?;
+            match entry {
+                None
+                | Some(async_nats::jetstream::kv::Entry {
+                    operation: Operation::Delete | Operation::Purge,
+                    ..
+                }) => {
+                    let payload = serde_json::to_vec(&RecentDepositIndexState { last_ordinal: 1 })
+                        .map_err(|source| SubstrateError::Encode {
+                            context: "JetStream recent-deposit index state".to_string(),
+                            source,
+                        })?;
+                    match connection.store.create(&state_key, payload.into()).await {
+                        Ok(_) => return Ok(1),
+                        Err(error) if error.kind() == CreateErrorKind::AlreadyExists => continue,
+                        Err(error) => {
+                            return Err(nats_error("create recent-deposit index state", error));
+                        }
+                    }
+                }
+                Some(entry) => {
+                    let location = format!("jetstream://{}/{}", self.bucket, state_key);
+                    let state = serde_json::from_slice::<RecentDepositIndexState>(&entry.value)
+                        .map_err(|source| SubstrateError::Decode { location, source })?;
+                    let next_ordinal = state.last_ordinal.checked_add(1).ok_or_else(|| {
+                        SubstrateError::InvalidDeposit {
+                            reason: "JetStream recent-deposit index ordinal is exhausted"
+                                .to_string(),
+                        }
+                    })?;
+                    let payload = serde_json::to_vec(&RecentDepositIndexState {
+                        last_ordinal: next_ordinal,
+                    })
+                    .map_err(|source| SubstrateError::Encode {
+                        context: "JetStream recent-deposit index state".to_string(),
+                        source,
+                    })?;
+                    match connection
+                        .store
+                        .update(&state_key, payload.into(), entry.revision)
+                        .await
+                    {
+                        Ok(_) => return Ok(next_ordinal),
+                        Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => {
+                            continue;
+                        }
+                        Err(error) => {
+                            return Err(nats_error("advance recent-deposit index state", error));
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(SubstrateError::Nats {
+            operation: "advance recent-deposit index state",
+            reason: format!(
+                "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
+            ),
+        })
+    }
+
+    #[cfg(feature = "nats")]
+    async fn write_recent_deposit_pointer(
+        &self,
+        connection: &JetStreamConnection,
+        pointer: &RecentDepositPointer,
+    ) -> Result<(), SubstrateError> {
+        use async_nats::jetstream::kv::{CreateErrorKind, Operation, UpdateErrorKind};
+
+        if deposit_key_kind(&pointer.deposit_key).is_some_and(|kind| kind != pointer.kind) {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: "recent-deposit pointer class does not match its deposit key".to_string(),
+            });
+        }
+        let key = recent_deposit_index_key(pointer.kind, pointer.ordinal);
+        let payload = serde_json::to_vec(pointer).map_err(|source| SubstrateError::Encode {
+            context: "JetStream recent-deposit pointer".to_string(),
+            source,
+        })?;
+        for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
+            let entry = connection
+                .store
+                .entry(&key)
+                .await
+                .map_err(|error| nats_error("read recent-deposit pointer", error))?;
+            match entry {
+                None
+                | Some(async_nats::jetstream::kv::Entry {
+                    operation: Operation::Delete | Operation::Purge,
+                    ..
+                }) => match connection.store.create(&key, payload.clone().into()).await {
+                    Ok(_) => return Ok(()),
+                    Err(error) if error.kind() == CreateErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        return Err(nats_error("create recent-deposit pointer", error));
+                    }
+                },
+                Some(entry) => {
+                    let location = format!("jetstream://{}/{}", self.bucket, key);
+                    let current = serde_json::from_slice::<RecentDepositPointer>(&entry.value)
+                        .map_err(|source| SubstrateError::Decode { location, source })?;
+                    if current.ordinal == 0
+                        || current.deposit_revision == 0
+                        || deposit_key_timestamp(&current.deposit_key).is_none()
+                        || deposit_key_kind(&current.deposit_key)
+                            .is_some_and(|kind| kind != current.kind)
+                        || recent_deposit_index_key(current.kind, current.ordinal) != key
+                    {
+                        return Err(SubstrateError::InvalidDeposit {
+                            reason: "JetStream recent index contains an invalid existing pointer"
+                                .to_string(),
+                        });
+                    }
+                    if current.ordinal == pointer.ordinal {
+                        if &current == pointer {
+                            return Ok(());
+                        }
+                        return Err(SubstrateError::InvalidDeposit {
+                            reason: format!(
+                                "JetStream recent index ordinal {} identifies conflicting deposits",
+                                pointer.ordinal
+                            ),
+                        });
+                    }
+                    if current.ordinal > pointer.ordinal {
+                        // A delayed writer may arrive after the ring has
+                        // already wrapped. It must never overwrite a newer
+                        // occupant of the same slot.
+                        return Ok(());
+                    }
+                    match connection
+                        .store
+                        .update(&key, payload.clone().into(), entry.revision)
+                        .await
+                    {
+                        Ok(_) => return Ok(()),
+                        Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => {
+                            continue;
+                        }
+                        Err(error) => {
+                            return Err(nats_error("update recent-deposit pointer", error));
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(SubstrateError::Nats {
+            operation: "write recent-deposit pointer",
+            reason: format!(
+                "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
+            ),
+        })
+    }
+
+    #[cfg(feature = "nats")]
+    async fn indexed_recent_deposit_keys(
+        &self,
+        connection: &JetStreamConnection,
+    ) -> Result<Vec<SelectedDepositKey>, SubstrateError> {
+        self.ensure_recent_deposit_index_initialized(connection)
+            .await?;
+        let high_water = connection
+            .store
+            .stream
+            .get_info()
+            .await
+            .map_err(|error| nats_error("read recent-index high-water", error))?
+            .state
+            .last_sequence;
+        let consumer = connection
+            .store
+            .stream
+            .create_consumer(async_nats::jetstream::consumer::push::OrderedConfig {
+                deliver_subject: connection.client.new_inbox(),
+                description: Some("bounded global recent-deposit index".to_string()),
+                filter_subject: format!(
+                    "{}{RECENT_DEPOSIT_INDEX_KEY_PREFIX}.>",
+                    connection.store.prefix
+                ),
+                replay_policy: async_nats::jetstream::consumer::ReplayPolicy::Instant,
+                deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::LastPerSubject,
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| nats_error("create recent-deposit index consumer", error))?;
+
+        if consumer.cached_info().num_pending == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut pointers = BTreeMap::<String, u64>::new();
+        let mut messages = consumer
+            .messages()
+            .await
+            .map_err(|error| nats_error("subscribe recent-deposit index", error))?;
+        while let Some(message) = messages.next().await {
+            let message =
+                message.map_err(|error| nats_error("stream recent-deposit index", error))?;
+            let info = message
+                .info()
+                .map_err(|error| nats_error("parse recent-deposit index metadata", error))?;
+            if info.stream_sequence > high_water {
+                break;
+            }
+            let removed = message
+                .message
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("KV-Operation"))
+                .is_some_and(|operation| matches!(operation.as_str(), "DEL" | "PURGE"));
+            if !removed {
+                let pointer =
+                    serde_json::from_slice::<RecentDepositPointer>(&message.message.payload)
+                        .map_err(|source| SubstrateError::Decode {
+                            location: format!("jetstream://{}/{}", self.bucket, message.subject),
+                            source,
+                        })?;
+                let explicit_kind = deposit_key_kind(&pointer.deposit_key);
+                let expected_subject = format!(
+                    "{}{}",
+                    connection.store.prefix,
+                    recent_deposit_index_key(pointer.kind, pointer.ordinal)
+                );
+                if pointer.ordinal == 0
+                    || pointer.deposit_revision == 0
+                    || deposit_key_timestamp(&pointer.deposit_key).is_none()
+                    || explicit_kind.is_some_and(|kind| kind != pointer.kind)
+                    || expected_subject != message.subject.as_str()
+                {
+                    return Err(SubstrateError::InvalidDeposit {
+                        reason: "JetStream recent index contains an invalid deposit pointer"
+                            .to_string(),
+                    });
+                }
+                pointers.insert(pointer.deposit_key, pointer.deposit_revision);
+            }
+            if info.stream_sequence == high_water || info.pending == 0 {
+                break;
+            }
+        }
+
+        Ok(pointers
+            .into_iter()
+            .map(|(key, revision)| SelectedDepositKey {
+                key,
+                expected_revision: Some(revision),
+            })
+            .collect())
+    }
+
+    #[cfg(feature = "nats")]
     async fn refresh_deposit_key_filter(
         &self,
         connection: &JetStreamConnection,
@@ -662,6 +1183,14 @@ impl JetStreamPheromoneSubstrate {
             DepositKeyLayout::Legacy => (
                 partition.legacy_layout.initialized,
                 partition.legacy_layout.last_sequence,
+            ),
+            DepositKeyLayout::LegacyCustomCurrent => (
+                partition.legacy_custom_current_layout.initialized,
+                partition.legacy_custom_current_layout.last_sequence,
+            ),
+            DepositKeyLayout::LegacyCustomLegacy => (
+                partition.legacy_custom_legacy_layout.initialized,
+                partition.legacy_custom_legacy_layout.last_sequence,
             ),
         };
         if cursor_initialized && bounds.high_water <= cursor_last_sequence {
@@ -692,6 +1221,10 @@ impl JetStreamPheromoneSubstrate {
             let cursor = match layout {
                 DepositKeyLayout::Current => &mut partition.current_layout,
                 DepositKeyLayout::Legacy => &mut partition.legacy_layout,
+                DepositKeyLayout::LegacyCustomCurrent => {
+                    &mut partition.legacy_custom_current_layout
+                }
+                DepositKeyLayout::LegacyCustomLegacy => &mut partition.legacy_custom_legacy_layout,
             };
             cursor.initialized = true;
             cursor.last_sequence = cursor.last_sequence.max(bounds.high_water);
@@ -709,6 +1242,13 @@ impl JetStreamPheromoneSubstrate {
             let info = message
                 .info()
                 .map_err(|error| nats_error("parse bounded deposit metadata", error))?;
+            // The ordered consumer is live. Under sustained matching writes,
+            // `pending` can remain non-zero forever. Never process beyond the
+            // stream boundary captured before consumer creation; a later
+            // refresh starts at high_water + 1 and observes those writes.
+            if info.stream_sequence > bounds.high_water {
+                break;
+            }
             observed_sequence = observed_sequence.max(info.stream_sequence);
             let key = message
                 .subject
@@ -738,6 +1278,14 @@ impl JetStreamPheromoneSubstrate {
                 let deposit = decode_deposit_payload(&message.message.payload, location)?;
                 self.admission_control
                     .validate_deposit_admission(&deposit)?;
+                if &deposit.threat_class != threat_class
+                    && layout.allows_colliding_legacy_custom_class()
+                {
+                    if info.stream_sequence == bounds.high_water || info.pending == 0 {
+                        break;
+                    }
+                    continue;
+                }
                 if &deposit.threat_class != threat_class {
                     return Err(SubstrateError::InvalidDeposit {
                         reason: format!(
@@ -805,13 +1353,15 @@ impl JetStreamPheromoneSubstrate {
                 }
             }
 
-            if info.pending == 0 {
+            if info.stream_sequence == bounds.high_water || info.pending == 0 {
                 break;
             }
         }
         let cursor = match layout {
             DepositKeyLayout::Current => &mut partition.current_layout,
             DepositKeyLayout::Legacy => &mut partition.legacy_layout,
+            DepositKeyLayout::LegacyCustomCurrent => &mut partition.legacy_custom_current_layout,
+            DepositKeyLayout::LegacyCustomLegacy => &mut partition.legacy_custom_legacy_layout,
         };
         cursor.initialized = true;
         cursor.last_sequence = cursor
@@ -831,6 +1381,7 @@ impl JetStreamPheromoneSubstrate {
         partition_limit: usize,
     ) -> Result<Vec<String>, SubstrateError> {
         let segment = threat_class_segment(threat_class);
+        let legacy_segment = legacy_threat_class_segment(threat_class);
         // One high-water read covers both the current and migration layouts.
         // Advancing an empty filter only to this pre-consumer boundary is
         // race-safe: a matching write after the snapshot is necessarily read
@@ -872,6 +1423,30 @@ impl JetStreamPheromoneSubstrate {
                 bounds,
             )
             .await?;
+            if legacy_segment != segment {
+                // Releases before collision-resistant custom segments used a
+                // lossy sanitized namespace. Replay both old layouts into the
+                // new class-specific partition, but skip signed payloads for a
+                // different custom class that shared that legacy namespace.
+                self.refresh_deposit_key_filter(
+                    connection,
+                    &format!("{GC_KEY_PREFIX}.*.{legacy_segment}.>"),
+                    threat_class,
+                    partition,
+                    DepositKeyLayout::LegacyCustomCurrent,
+                    bounds,
+                )
+                .await?;
+                self.refresh_deposit_key_filter(
+                    connection,
+                    &format!("{legacy_segment}.>"),
+                    threat_class,
+                    partition,
+                    DepositKeyLayout::LegacyCustomLegacy,
+                    bounds,
+                )
+                .await?;
+            }
         }
         indexes.enforce_global_byte_bound(&segment);
         let Some(partition) = indexes.partitions.get(&segment) else {
@@ -907,6 +1482,7 @@ impl JetStreamPheromoneSubstrate {
             since_timestamp,
             retention_now,
             MAX_ACTIVE_DEPOSITS,
+            false,
         )
         .await
     }
@@ -918,6 +1494,7 @@ impl JetStreamPheromoneSubstrate {
         since_timestamp: Option<i64>,
         retention_now: Option<i64>,
         partition_limit: usize,
+        use_recent_index: bool,
     ) -> Result<Vec<VerifiedDeposit>, SubstrateError> {
         let connection = self.ensure_connected().await?;
         let retention_policy = if let (Some(threat_class), Some(_)) = (threat_class, retention_now)
@@ -939,11 +1516,21 @@ impl JetStreamPheromoneSubstrate {
                 partition_limit,
             )
             .await?
+            .into_iter()
+            .map(|key| SelectedDepositKey {
+                key,
+                expected_revision: None,
+            })
+            .collect()
+        } else if use_recent_index {
+            // The dispatcher calls this branch every tick. Read only the
+            // fixed-size server-side ring populated during deposit admission;
+            // never enumerate the lifetime KV subject set on this hot path.
+            self.indexed_recent_deposit_keys(connection).await?
         } else {
-            // Unscoped operator queries are not on the 100 ms concentration
-            // monitor path. They retain the compatibility scan so pre-GC-page
-            // custom-class keys remain discoverable, while every scoped live
-            // lookup uses the server-filtered incremental index above.
+            // Operator/API queries retain full compatibility with deposits
+            // created before the bounded recent index existed. This path is
+            // not used by the runtime's periodic dispatcher.
             let mut keys = connection
                 .store
                 .keys()
@@ -954,11 +1541,7 @@ impl JetStreamPheromoneSubstrate {
             while let Some(entry) = keys.next().await {
                 let key =
                     entry.map_err(|error| nats_error("stream unscoped deposit keys", error))?;
-                if is_escalation_key(&key)
-                    || is_policy_key(&key)
-                    || is_threat_intel_key(&key)
-                    || is_behavioral_baseline_key(&key)
-                {
+                if is_non_deposit_key(&key) {
                     continue;
                 }
                 if retention_now.is_some_and(|now| {
@@ -980,21 +1563,35 @@ impl JetStreamPheromoneSubstrate {
             evidence_key_window
                 .into_iter()
                 .chain(control_key_window)
-                .map(|(_, key)| key)
+                .map(|(_, key)| SelectedDepositKey {
+                    key,
+                    expected_revision: None,
+                })
                 .collect()
         };
 
         let mut deposits = Vec::with_capacity(selected_keys.len());
         let mut deposit_bytes = 0usize;
-        for key in selected_keys {
-            let Some(entry) = connection
-                .store
-                .entry(&key)
-                .await
-                .map_err(|error| nats_error("get entry", error))?
-            else {
+        for selected in selected_keys {
+            let key = selected.key;
+            let entry = match selected.expected_revision {
+                Some(revision) => connection.store.entry_for_revision(&key, revision).await,
+                None => connection.store.entry(&key).await,
+            }
+            .map_err(|error| nats_error("get entry", error))?;
+            let Some(entry) = entry else {
                 continue;
             };
+            if let Some(expected_revision) = selected.expected_revision
+                && expected_revision != entry.revision
+            {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "JetStream recent index revision {expected_revision} does not match revision {} for deposit key `{key}`",
+                        entry.revision
+                    ),
+                });
+            }
             if matches!(
                 entry.operation,
                 async_nats::jetstream::kv::Operation::Delete
@@ -1141,11 +1738,7 @@ impl JetStreamPheromoneSubstrate {
         let mut count = 0usize;
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            if is_escalation_key(&key)
-                || is_policy_key(&key)
-                || is_threat_intel_key(&key)
-                || is_behavioral_baseline_key(&key)
-            {
+            if is_non_deposit_key(&key) {
                 continue;
             }
             count = count.saturating_add(1);
@@ -1159,20 +1752,25 @@ impl JetStreamPheromoneSubstrate {
         threat_class: &ThreatClass,
     ) -> Result<Option<ThreatClassConfig>, SubstrateError> {
         let connection = self.ensure_connected().await?;
-        let key = threat_class_config_key(threat_class);
-        let Some(payload) = connection
-            .store
-            .get(&key)
-            .await
-            .map_err(|error| nats_error("get value", error))?
-        else {
-            return Ok(None);
-        };
-
-        let location = format!("jetstream://{}/{}", self.bucket, key);
-        let record = serde_json::from_slice::<ThreatClassConfig>(&payload)
-            .map_err(|source| SubstrateError::Decode { location, source })?;
-        Ok(Some(record))
+        let current_key = threat_class_config_key(threat_class);
+        let legacy_key = legacy_threat_class_config_key(threat_class);
+        for key in [current_key, legacy_key] {
+            let Some(payload) = connection
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| nats_error("get value", error))?
+            else {
+                continue;
+            };
+            let location = format!("jetstream://{}/{}", self.bucket, key);
+            let record = serde_json::from_slice::<ThreatClassConfig>(&payload)
+                .map_err(|source| SubstrateError::Decode { location, source })?;
+            if &record.threat_class == threat_class {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
     }
 
     #[cfg(feature = "nats")]
@@ -1183,7 +1781,7 @@ impl JetStreamPheromoneSubstrate {
             .keys()
             .await
             .map_err(|error| nats_error("list keys", error))?;
-        let mut configs = Vec::new();
+        let mut configs = BTreeMap::<ThreatClass, (bool, ThreatClassConfig)>::new();
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
@@ -1203,11 +1801,20 @@ impl JetStreamPheromoneSubstrate {
             let location = format!("jetstream://{}/{}", self.bucket, key);
             let record = serde_json::from_slice::<ThreatClassConfig>(&payload)
                 .map_err(|source| SubstrateError::Decode { location, source })?;
-            configs.push(record);
+            let is_current = key == threat_class_config_key(&record.threat_class);
+            match configs.entry(record.threat_class.clone()) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((is_current, record));
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry)
+                    if is_current && !entry.get().0 =>
+                {
+                    entry.insert((true, record));
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {}
+            }
         }
-
-        configs.sort_by(|left, right| left.threat_class.cmp(&right.threat_class));
-        Ok(configs)
+        Ok(configs.into_values().map(|(_, config)| config).collect())
     }
 
     #[cfg(feature = "nats")]
@@ -1354,11 +1961,7 @@ impl JetStreamPheromoneSubstrate {
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            if is_escalation_key(&key)
-                || is_policy_key(&key)
-                || is_threat_intel_key(&key)
-                || is_behavioral_baseline_key(&key)
-            {
+            if is_non_deposit_key(&key) {
                 continue;
             }
             if key_gc_page(&key).is_some() {
@@ -1566,11 +2169,7 @@ impl JetStreamPheromoneSubstrate {
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            if is_escalation_key(&key)
-                || is_policy_key(&key)
-                || is_threat_intel_key(&key)
-                || is_behavioral_baseline_key(&key)
-            {
+            if is_non_deposit_key(&key) {
                 continue;
             }
 
@@ -1637,6 +2236,8 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
             Some(trusted_now),
         )?;
         let connection = self.ensure_connected().await?;
+        self.ensure_recent_deposit_index_initialized(connection)
+            .await?;
         let payload = serde_json::to_vec(&*deposit).map_err(|source| SubstrateError::Encode {
             context: "jetstream pheromone deposit".to_string(),
             source,
@@ -1658,6 +2259,31 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
             .put(key.clone(), payload.into())
             .await
             .map_err(|error| nats_error("put value", error))?;
+        let kind = deposit_kind(&deposit);
+        let ordinal = match self.allocate_recent_deposit_ordinal(connection, kind).await {
+            Ok(ordinal) => ordinal,
+            Err(error) => {
+                self.purge_deposit_key(connection, &key).await?;
+                return Err(error);
+            }
+        };
+        let pointer = RecentDepositPointer {
+            ordinal,
+            kind,
+            deposit_key: key.clone(),
+            deposit_revision: revision,
+        };
+        if let Err(error) = self
+            .write_recent_deposit_pointer(connection, &pointer)
+            .await
+        {
+            // Admission is not successful unless both the durable value and
+            // its bounded global replay pointer are visible. Remove the exact
+            // unique deposit subject before returning the indexing failure so
+            // a caller retry cannot leave an unindexed durable orphan.
+            self.purge_deposit_key(connection, &key).await?;
+            return Err(nats_error("put recent-deposit pointer", error));
+        }
         self.verified_deposit_cache
             .lock()
             .map_err(|_| SubstrateError::PoisonedLock)?
@@ -1801,6 +2427,19 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
             .load_deposits(query.threat_class.as_ref(), query.since_timestamp, None)
             .await?;
         Ok(filter_deposits(&deposits, query))
+    }
+
+    async fn recent_deposits(&self, limit: usize) -> Result<Vec<PheromoneDeposit>, SubstrateError> {
+        let deposits = self
+            .load_deposits_bounded(
+                None,
+                None,
+                None,
+                MAX_RECENT_DEPOSIT_INDEX_SLOTS as usize,
+                true,
+            )
+            .await?;
+        Ok(filter_deposits(&deposits, DepositQuery::recent(limit)))
     }
 
     async fn query_escalations(
@@ -2127,6 +2766,27 @@ fn deposit_kind(deposit: &PheromoneDeposit) -> DepositKeyKind {
 }
 
 #[cfg(feature = "nats")]
+fn recent_deposit_index_key(kind: DepositKeyKind, ordinal: u64) -> String {
+    let kind = match kind {
+        DepositKeyKind::Evidence => "evidence",
+        DepositKeyKind::Control => "control",
+    };
+    format!(
+        "{RECENT_DEPOSIT_INDEX_KEY_PREFIX}.{kind}.{:03}",
+        ordinal % MAX_RECENT_DEPOSIT_INDEX_SLOTS
+    )
+}
+
+#[cfg(feature = "nats")]
+fn recent_deposit_index_state_key(kind: DepositKeyKind) -> String {
+    let kind = match kind {
+        DepositKeyKind::Evidence => "evidence",
+        DepositKeyKind::Control => "control",
+    };
+    format!("{RECENT_DEPOSIT_INDEX_STATE_KEY_PREFIX}.{kind}")
+}
+
+#[cfg(feature = "nats")]
 fn escalation_key(record: &EscalationRecord, payload: &[u8]) -> String {
     let threat_class = threat_class_segment(&record.threat_class);
     let record_hash = hash_prefix(payload, 12);
@@ -2157,7 +2817,19 @@ fn threat_class_segment(threat_class: &ThreatClass) -> String {
         ThreatClass::Discovery => "discovery".to_string(),
         ThreatClass::Execution => "execution".to_string(),
         ThreatClass::Impact => "impact".to_string(),
+        ThreatClass::Custom(name) => format!(
+            "custom_{}_{}",
+            sanitize_segment(name).chars().take(64).collect::<String>(),
+            hash_prefix(name.as_bytes(), 32)
+        ),
+    }
+}
+
+#[cfg(feature = "nats")]
+fn legacy_threat_class_segment(threat_class: &ThreatClass) -> String {
+    match threat_class {
         ThreatClass::Custom(name) => format!("custom_{}", sanitize_segment(name)),
+        _ => threat_class_segment(threat_class),
     }
 }
 
@@ -2246,10 +2918,33 @@ fn is_behavioral_baseline_key(key: &str) -> bool {
 }
 
 #[cfg(feature = "nats")]
+fn is_recent_deposit_index_key(key: &str) -> bool {
+    key.starts_with(&format!("{RECENT_DEPOSIT_INDEX_STATE_KEY_PREFIX}."))
+        || key.starts_with(&format!("{RECENT_DEPOSIT_INDEX_KEY_PREFIX}."))
+}
+
+#[cfg(feature = "nats")]
+fn is_non_deposit_key(key: &str) -> bool {
+    is_escalation_key(key)
+        || is_policy_key(key)
+        || is_threat_intel_key(key)
+        || is_behavioral_baseline_key(key)
+        || is_recent_deposit_index_key(key)
+}
+
+#[cfg(feature = "nats")]
 fn threat_class_config_key(threat_class: &ThreatClass) -> String {
     format!(
         "{THREAT_CLASS_CONFIG_KEY_PREFIX}.{}",
         threat_class_segment(threat_class)
+    )
+}
+
+#[cfg(feature = "nats")]
+fn legacy_threat_class_config_key(threat_class: &ThreatClass) -> String {
+    format!(
+        "{THREAT_CLASS_CONFIG_KEY_PREFIX}.{}",
+        legacy_threat_class_segment(threat_class)
     )
 }
 
@@ -2366,10 +3061,11 @@ mod tests {
     use super::{
         DEFAULT_JETSTREAM_GC_PAGE_SIZE, DEFAULT_NATS_CONNECT_TIMEOUT_MS, DepositKeyIndexes,
         DepositKeyKind, DepositKeyPartitionIndex, IndexedDepositKey, JetStreamPheromoneSubstrate,
-        MAX_DEPOSIT_KEY_INDEX_PARTITIONS, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication,
-        VerifiedDepositCache, deposit_key_kind, deposit_key_timestamp, evaporation_deadline,
-        expiration_gc_page, gc_sweep_page, parse_nats_endpoint, retain_newest_deposit_key,
-        retain_newest_partitioned_deposit_key_as,
+        MAX_DEPOSIT_KEY_INDEX_PARTITIONS, MAX_RECENT_DEPOSIT_INDEX_SLOTS,
+        MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication, VerifiedDepositCache,
+        deposit_key_kind, deposit_key_timestamp, evaporation_deadline, expiration_gc_page,
+        gc_sweep_page, legacy_threat_class_segment, parse_nats_endpoint, recent_deposit_index_key,
+        retain_newest_deposit_key, retain_newest_partitioned_deposit_key_as, threat_class_segment,
     };
     use crate::{
         PheromoneSubstrate,
@@ -2381,6 +3077,10 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
@@ -2389,6 +3089,7 @@ mod tests {
         ThreatIntelIndicatorType,
     };
     use swarm_core::types::{AgentId, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity};
+    use tokio_stream::StreamExt as _;
 
     fn substrate_config() -> PheromoneConfig {
         PheromoneConfig {
@@ -2485,6 +3186,35 @@ mod tests {
             suppression_key: deposit_suppression_key(&deposit),
             feedback_marker_key: feedback_suppression_marker(&deposit).map(|(key, _)| key),
         }
+    }
+
+    #[test]
+    fn custom_threat_class_segments_bind_the_unsanitized_name() {
+        let slash = ThreatClass::Custom("Foo/Bar".to_string());
+        let question = ThreatClass::Custom("foo?bar".to_string());
+
+        assert_eq!(
+            legacy_threat_class_segment(&slash),
+            legacy_threat_class_segment(&question),
+            "the compatibility fixture must reproduce the historical collision"
+        );
+        assert_ne!(
+            threat_class_segment(&slash),
+            threat_class_segment(&question)
+        );
+        assert!(threat_class_segment(&slash).starts_with("custom_foo_bar_"));
+        assert!(
+            threat_class_segment(&ThreatClass::Custom("x".repeat(10_000))).len()
+                <= "custom_".len() + 64 + 1 + 32
+        );
+    }
+
+    #[test]
+    fn recent_deposit_ring_uses_every_fixed_slot_for_consecutive_ordinals() {
+        let slots = (1..=MAX_RECENT_DEPOSIT_INDEX_SLOTS)
+            .map(|ordinal| recent_deposit_index_key(DepositKeyKind::Evidence, ordinal))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(slots.len() as u64, MAX_RECENT_DEPOSIT_INDEX_SLOTS);
     }
 
     #[test]
@@ -2967,6 +3697,260 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
+    async fn jetstream_recent_reads_use_only_the_fixed_server_side_ring() {
+        let Some((_bucket, substrate)) = connect_for_test("recent-ring").await else {
+            return;
+        };
+        let now = now_timestamp();
+        let connection = substrate.ensure_connected().await.unwrap();
+        for index in 0..2_i64 {
+            let deposit = sample_deposit(&format!("pre-index-{index}"), now - 200 + index, 0.9);
+            let payload = serde_json::to_vec(&deposit).unwrap();
+            connection
+                .store
+                .put(
+                    format!(
+                        "exp.{:020}.execution.evidence.{:020}.pre-index-{index}",
+                        expiration_gc_page(&deposit, 3_600.0, 0.01),
+                        deposit.timestamp
+                    ),
+                    payload.into(),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            substrate.recent_deposits(10).await.unwrap().len(),
+            2,
+            "the first bounded read must migrate a pre-index bucket"
+        );
+
+        for index in 0..130_i64 {
+            // Bucket-wide stream revisions are deliberately perturbed. Ring
+            // placement must depend only on the CAS-allocated deposit ordinal.
+            connection
+                .store
+                .put(
+                    format!("unrelated.noise.{index}"),
+                    b"not-json".as_slice().into(),
+                )
+                .await
+                .unwrap();
+            substrate
+                .deposit(sample_deposit(
+                    &format!("recent-ring-{index}"),
+                    now - 129 + index,
+                    0.9,
+                ))
+                .await
+                .unwrap();
+        }
+        connection
+            .store
+            .put("unrelated.noise.final", b"not-json".as_slice().into())
+            .await
+            .unwrap();
+
+        let recent = substrate.recent_deposits(100).await.unwrap();
+        assert_eq!(recent.len(), 100);
+        assert_eq!(recent[0].timestamp, now);
+        assert_eq!(recent[99].timestamp, now - 99);
+
+        let writers = (0..64)
+            .map(|index| {
+                let substrate = substrate.clone();
+                tokio::spawn(async move {
+                    substrate
+                        .deposit(sample_deposit(
+                            &format!("concurrent-recent-ring-{index}"),
+                            now,
+                            0.9,
+                        ))
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.await.unwrap().unwrap();
+        }
+        assert_eq!(substrate.recent_deposits(100).await.unwrap().len(), 100);
+
+        let mut keys = connection.store.keys().await.unwrap();
+        let mut recent_index_keys = 0_u64;
+        while let Some(key) = keys.next().await {
+            if key
+                .unwrap()
+                .starts_with(&format!("{}.", super::RECENT_DEPOSIT_INDEX_KEY_PREFIX))
+            {
+                recent_index_keys = recent_index_keys.saturating_add(1);
+            }
+        }
+        assert_eq!(recent_index_keys, MAX_RECENT_DEPOSIT_INDEX_SLOTS);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
+    async fn jetstream_custom_class_collisions_are_isolated_and_legacy_readable() {
+        let Some((_bucket, substrate)) = connect_for_test("custom-collision").await else {
+            return;
+        };
+        let now = now_timestamp();
+        let slash_class = ThreatClass::Custom("Foo/Bar".to_string());
+        let question_class = ThreatClass::Custom("foo?bar".to_string());
+
+        let mut slash = sample_deposit("custom-slash", now - 3, 0.9);
+        slash.threat_class = slash_class.clone();
+        let slash = resign_sample_deposit(
+            "custom-slash",
+            slash,
+            serde_json::json!({"signal": "slash"}),
+        );
+        let mut question = sample_deposit("custom-question", now - 2, 0.8);
+        question.threat_class = question_class.clone();
+        let question = resign_sample_deposit(
+            "custom-question",
+            question,
+            serde_json::json!({"signal": "question"}),
+        );
+        substrate.deposit(slash).await.unwrap();
+        substrate.deposit(question).await.unwrap();
+
+        let connection = substrate.ensure_connected().await.unwrap();
+        let mut legacy_slash = sample_deposit("legacy-custom-slash", now - 1, 0.7);
+        legacy_slash.threat_class = slash_class.clone();
+        let legacy_slash = resign_sample_deposit(
+            "legacy-custom-slash",
+            legacy_slash,
+            serde_json::json!({"signal": "legacy-slash"}),
+        );
+        let mut legacy_question = sample_deposit("legacy-custom-question", now, 0.6);
+        legacy_question.threat_class = question_class.clone();
+        let legacy_question = resign_sample_deposit(
+            "legacy-custom-question",
+            legacy_question,
+            serde_json::json!({"signal": "legacy-question"}),
+        );
+        let legacy_segment = legacy_threat_class_segment(&slash_class);
+        assert_eq!(legacy_segment, legacy_threat_class_segment(&question_class));
+        for (suffix, deposit) in [("slash", legacy_slash), ("question", legacy_question)] {
+            let payload = serde_json::to_vec(&deposit).unwrap();
+            connection
+                .store
+                .put(
+                    format!(
+                        "exp.{:020}.{legacy_segment}.evidence.{:020}.legacy-{suffix}",
+                        expiration_gc_page(&deposit, 3_600.0, 0.01),
+                        deposit.timestamp
+                    ),
+                    payload.into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let slash = substrate
+            .query_deposits(crate::DepositQuery {
+                threat_class: Some(slash_class.clone()),
+                since_timestamp: None,
+                host_id: None,
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        let question = substrate
+            .query_deposits(crate::DepositQuery {
+                threat_class: Some(question_class.clone()),
+                since_timestamp: None,
+                host_id: None,
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        assert_eq!(slash.len(), 2);
+        assert!(
+            slash
+                .iter()
+                .all(|deposit| deposit.threat_class == slash_class)
+        );
+        assert_eq!(question.len(), 2);
+        assert!(
+            question
+                .iter()
+                .all(|deposit| deposit.threat_class == question_class)
+        );
+        assert_ne!(
+            threat_class_segment(&slash_class),
+            threat_class_segment(&question_class)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
+    async fn jetstream_index_refresh_stops_at_its_captured_high_water() {
+        let Some((_bucket, substrate)) = connect_for_test("captured-high-water").await else {
+            return;
+        };
+        let now = now_timestamp();
+        let deposit = sample_deposit("continuous-writer", now, 0.9);
+        let payload = serde_json::to_vec(&deposit).unwrap();
+        let page = expiration_gc_page(&deposit, 3_600.0, 0.01);
+        let connection = substrate.ensure_connected().await.unwrap();
+        for index in 0..256_u64 {
+            connection
+                .store
+                .put(
+                    format!("exp.{page:020}.execution.evidence.{now:020}.backlog-{index:020}"),
+                    payload.clone().into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer_stop = Arc::clone(&stop);
+        let writer_store = connection.store.clone();
+        let writer_payload = payload.clone();
+        let writer = tokio::spawn(async move {
+            let mut index = 0_u64;
+            while !writer_stop.load(Ordering::Relaxed) {
+                writer_store
+                    .put(
+                        format!("exp.{page:020}.execution.evidence.{now:020}.live-{index:020}"),
+                        writer_payload.clone().into(),
+                    )
+                    .await
+                    .unwrap();
+                index = index.saturating_add(1);
+            }
+            index
+        });
+
+        let refresh = tokio::time::timeout(
+            Duration::from_secs(5),
+            substrate.load_deposits_bounded(
+                Some(&ThreatClass::Execution),
+                None,
+                Some(now),
+                8,
+                false,
+            ),
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+        let writes_while_refreshing = writer.await.unwrap();
+        assert!(
+            writes_while_refreshing > 0,
+            "the producer must overlap the refresh"
+        );
+        let deposits = refresh
+            .expect("refresh chased writes beyond its captured high-water")
+            .unwrap();
+        assert!(!deposits.is_empty());
+        assert!(deposits.len() <= 8);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
     async fn jetstream_bounded_scan_filters_expired_keys_and_partitions_control_records() {
         let Some((_bucket, substrate)) = connect_for_test("partitioned-scan").await else {
             return;
@@ -3040,7 +4024,7 @@ mod tests {
             .unwrap();
 
         let deposits = substrate
-            .load_deposits_bounded(Some(&ThreatClass::Execution), None, Some(now + 4), 3)
+            .load_deposits_bounded(Some(&ThreatClass::Execution), None, Some(now + 4), 3, false)
             .await
             .unwrap();
         assert_eq!(deposits.len(), 6);
@@ -3105,7 +4089,13 @@ mod tests {
         // is recreated and no whole-bucket enumeration occurs.
         assert_eq!(
             substrate
-                .load_deposits_bounded(Some(&ThreatClass::Execution), None, Some(now + 4), 3,)
+                .load_deposits_bounded(
+                    Some(&ThreatClass::Execution),
+                    None,
+                    Some(now + 4),
+                    3,
+                    false,
+                )
                 .await
                 .unwrap()
                 .len(),
@@ -3131,6 +4121,7 @@ mod tests {
                     None,
                     Some(now + 4),
                     10,
+                    false,
                 )
                 .await,
             Err(crate::SubstrateError::InvalidDeposit { reason })
@@ -3169,7 +4160,7 @@ mod tests {
         substrate.deposit(unrelated_control).await.unwrap();
 
         let retained = substrate
-            .load_deposits_bounded(Some(&ThreatClass::Execution), None, Some(now), 1)
+            .load_deposits_bounded(Some(&ThreatClass::Execution), None, Some(now), 1, false)
             .await
             .unwrap();
         assert_eq!(retained.len(), 1);
