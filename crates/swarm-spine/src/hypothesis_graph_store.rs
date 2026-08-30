@@ -499,6 +499,100 @@ impl GraphStoreState {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GraphCasMaterial<'a> {
+    expected: &'a GraphStoreRevision,
+    state: &'a GraphStoreState,
+    authority_scope: &'a str,
+}
+
+/// Scheduler-authorized append-only graph replacement bound to one exact
+/// predecessor. Generic state CAS may add already validated graph records but
+/// may not delete or rewrite durable graph contents, inject a version, or
+/// mutate store-owned task and clock state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphCasEnvelope {
+    pub expected: GraphStoreRevision,
+    pub state: GraphStoreState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_witness: Option<EvidenceWitness>,
+}
+
+impl GraphCasEnvelope {
+    pub fn new(
+        expected: GraphStoreRevision,
+        state: GraphStoreState,
+    ) -> Result<Self, GraphStoreError> {
+        let envelope = Self {
+            expected,
+            state,
+            authority_witness: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn authorized_by(
+        mut self,
+        authority: &Keypair,
+        scoped_agent_id: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let scoped_agent_id = scoped_agent_id.into();
+        validate_authority_scope("graph CAS", &scoped_agent_id)?;
+        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
+        self.authority_witness = Some(
+            EvidenceWitness::new(
+                authority,
+                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
+                scoped_agent_id,
+                &bytes,
+            )
+            .map_err(GraphStoreError::Admission)?,
+        );
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&GraphCasMaterial {
+            expected: &self.expected,
+            state: &self.state,
+            authority_scope,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let authority_scope = self
+            .authority_witness
+            .as_ref()
+            .map_or("", |witness| witness.scoped_agent_id.as_str());
+        self.canonical_bytes_for_scope(authority_scope)
+    }
+
+    fn validate(&self) -> Result<(), GraphStoreError> {
+        self.expected.validate()?;
+        validate_optional_scheduler_witness(
+            self.authority_witness.as_ref(),
+            &self.canonical_bytes_without_witness()?,
+        )
+    }
+
+    fn validate_for_store(&self, authority: &AgentId) -> Result<(), GraphStoreError> {
+        self.validate()?;
+        require_configured_scheduler_witness(
+            self.authority_witness.as_ref(),
+            authority,
+            &self.canonical_bytes_without_witness()?,
+            "durable graph CAS requires scheduler authority",
+        )
+    }
+}
+
 /// Public read result used by runtime coordinators and parity tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphStoreSnapshot {
@@ -2347,6 +2441,125 @@ fn ensure_lease(
     Ok(lease.clone())
 }
 
+fn graph_map_extension_count<K, V>(
+    label: &str,
+    current: &BTreeMap<K, V>,
+    candidate: &BTreeMap<K, V>,
+) -> Result<usize, GraphStoreError>
+where
+    K: Ord,
+    V: PartialEq,
+{
+    if current
+        .iter()
+        .any(|(key, value)| candidate.get(key) != Some(value))
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: format!("graph CAS cannot delete or rewrite existing {label}"),
+        });
+    }
+    candidate
+        .len()
+        .checked_sub(current.len())
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: format!("graph CAS {label} count regressed"),
+        })
+}
+
+fn validate_graph_cas_successor(
+    current: &HypothesisGraph,
+    candidate: &HypothesisGraph,
+) -> Result<bool, GraphStoreError> {
+    if candidate.schema_version != current.schema_version
+        || candidate.graph_id != current.graph_id
+        || candidate.limits != current.limits
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "graph CAS cannot replace graph identity, schema, or limits".to_string(),
+        });
+    }
+    let additions = [
+        graph_map_extension_count("nodes", &current.nodes, &candidate.nodes)?,
+        graph_map_extension_count("evidence", &current.evidence, &candidate.evidence)?,
+        graph_map_extension_count("edges", &current.edges, &candidate.edges)?,
+        graph_map_extension_count(
+            "contradictions",
+            &current.contradictions,
+            &candidate.contradictions,
+        )?,
+        graph_map_extension_count("conflicts", &current.conflicts, &candidate.conflicts)?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, |total, count| total.checked_add(count))
+    .ok_or_else(|| GraphStoreError::InvalidState {
+        reason: "graph CAS addition count overflow".to_string(),
+    })?;
+    let addition_delta = u64::try_from(additions).map_err(|_| GraphStoreError::InvalidState {
+        reason: "graph CAS addition count does not fit the version counter".to_string(),
+    })?;
+    let expected_version = current.version.checked_add(addition_delta).ok_or_else(|| {
+        GraphStoreError::InvalidState {
+            reason: "graph CAS version would overflow".to_string(),
+        }
+    })?;
+    if candidate.version != expected_version {
+        return Err(GraphStoreError::InvalidState {
+            reason: format!(
+                "graph CAS version must advance exactly once per appended record: expected {expected_version}, observed {}",
+                candidate.version
+            ),
+        });
+    }
+    Ok(additions > 0)
+}
+
+fn graph_cas_op(
+    current: &mut GraphStoreState,
+    envelope: GraphCasEnvelope,
+    graph_id: &GraphId,
+    authority: &AgentId,
+    limits: &GraphResourceLimits,
+) -> Result<StateMutation<()>, GraphStoreError> {
+    envelope.validate_for_store(authority)?;
+    let state = envelope.state;
+    if &state.graph_id != graph_id {
+        return Err(GraphStoreError::InvalidState {
+            reason: "replacement graph ID differs from store stream".to_string(),
+        });
+    }
+    if state.generation != current.generation
+        || state.predecessor_digest != current.predecessor_digest
+    {
+        return Err(GraphStoreError::StalePredecessor {
+            expected_generation: current.generation,
+            expected_digest: current.digest()?,
+            observed_generation: state.generation,
+            observed_digest: state.digest()?,
+        });
+    }
+    if state.fencing_counter != current.fencing_counter {
+        return Err(GraphStoreError::InvalidState {
+            reason: "graph CAS cannot replace the store-owned fencing counter".to_string(),
+        });
+    }
+    if state.logical_time_high_water != current.logical_time_high_water {
+        return Err(GraphStoreError::InvalidState {
+            reason: "graph CAS cannot replace the store-owned logical time high-water".to_string(),
+        });
+    }
+    if state.tasks != current.tasks || state.task_tombstones != current.task_tombstones {
+        return Err(GraphStoreError::InvalidState {
+            reason: "graph CAS cannot replace task records or tombstones".to_string(),
+        });
+    }
+    state.validate_with_limits(limits)?;
+    let changed = validate_graph_cas_successor(&current.graph, &state.graph)?;
+    if changed {
+        current.graph = state.graph;
+    }
+    Ok(StateMutation { value: (), changed })
+}
+
 fn create_task_op(
     state: &mut GraphStoreState,
     envelope: TaskCreationEnvelope,
@@ -4070,8 +4283,7 @@ pub trait HypothesisGraphStore: Send + Sync {
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError>;
     fn compare_and_swap(
         &self,
-        expected: &GraphStoreRevision,
-        state: GraphStoreState,
+        envelope: GraphCasEnvelope,
     ) -> Result<GraphStoreSnapshot, GraphStoreError>;
     fn create_task(
         &self,
@@ -4224,48 +4436,17 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn compare_and_swap(
         &self,
-        expected: &GraphStoreRevision,
-        state: GraphStoreState,
+        envelope: GraphCasEnvelope,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
-        let (snapshot, _) = self.mutate(Some(expected), |current| {
-            if state.graph_id != self.graph_id {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "replacement graph ID differs from store stream".to_string(),
-                });
-            }
-            if state.generation != current.generation
-                || state.predecessor_digest != current.predecessor_digest
-            {
-                return Err(GraphStoreError::StalePredecessor {
-                    expected_generation: current.generation,
-                    expected_digest: current.digest()?,
-                    observed_generation: state.generation,
-                    observed_digest: state.digest()?,
-                });
-            }
-            if state.fencing_counter != current.fencing_counter {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "generic CAS cannot replace the store-owned fencing counter"
-                        .to_string(),
-                });
-            }
-            if state.logical_time_high_water != current.logical_time_high_water {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "generic CAS cannot replace the store-owned logical time high-water"
-                        .to_string(),
-                });
-            }
-            if state.tasks != current.tasks || state.task_tombstones != current.task_tombstones {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "generic CAS cannot replace task records or tombstones".to_string(),
-                });
-            }
-            state.validate_with_limits(&self.limits)?;
-            current.graph = state.graph;
-            Ok(StateMutation {
-                value: (),
-                changed: true,
-            })
+        let expected = envelope.expected.clone();
+        let (snapshot, _) = self.mutate(Some(&expected), |current| {
+            graph_cas_op(
+                current,
+                envelope,
+                &self.graph_id,
+                &self.signer_id,
+                &self.limits,
+            )
         })?;
         Ok(snapshot)
     }
@@ -7067,48 +7248,17 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn compare_and_swap(
         &self,
-        expected: &GraphStoreRevision,
-        state: GraphStoreState,
+        envelope: GraphCasEnvelope,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
-        let (snapshot, _) = self.mutate(Some(expected), |current| {
-            if state.graph_id != self.graph_id {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "replacement graph ID differs from store stream".to_string(),
-                });
-            }
-            if state.generation != current.generation
-                || state.predecessor_digest != current.predecessor_digest
-            {
-                return Err(GraphStoreError::StalePredecessor {
-                    expected_generation: current.generation,
-                    expected_digest: current.digest()?,
-                    observed_generation: state.generation,
-                    observed_digest: state.digest()?,
-                });
-            }
-            if state.fencing_counter != current.fencing_counter {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "generic CAS cannot replace the store-owned fencing counter"
-                        .to_string(),
-                });
-            }
-            if state.logical_time_high_water != current.logical_time_high_water {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "generic CAS cannot replace the store-owned logical time high-water"
-                        .to_string(),
-                });
-            }
-            if state.tasks != current.tasks || state.task_tombstones != current.task_tombstones {
-                return Err(GraphStoreError::InvalidState {
-                    reason: "generic CAS cannot replace task records or tombstones".to_string(),
-                });
-            }
-            state.validate_with_limits(&self.limits)?;
-            current.graph = state.graph.clone();
-            Ok(StateMutation {
-                value: (),
-                changed: true,
-            })
+        let expected = envelope.expected.clone();
+        let (snapshot, _) = self.mutate(Some(&expected), |current| {
+            graph_cas_op(
+                current,
+                envelope,
+                &self.graph_id,
+                &self.signer_id,
+                &self.limits,
+            )
         })?;
         Ok(snapshot)
     }
@@ -7243,12 +7393,11 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn compare_and_swap(
         &self,
-        expected: &GraphStoreRevision,
-        state: GraphStoreState,
+        envelope: GraphCasEnvelope,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.compare_and_swap(expected, state),
-            Self::LocalFiles(store) => store.compare_and_swap(expected, state),
+            Self::Memory(store) => store.compare_and_swap(envelope),
+            Self::LocalFiles(store) => store.compare_and_swap(envelope),
         }
     }
 
@@ -7353,8 +7502,8 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use swarm_core::hypothesis_graph::{
-        EvidenceId, EvidenceScope, EvidenceSourceFamily, GraphProducerRole, TaskCapabilityProof,
-        TaskCompletion, TaskCompletionKind, TaskId, TaskKind, TaskTarget,
+        ActorNode, EvidenceId, EvidenceScope, EvidenceSourceFamily, GraphNode, GraphProducerRole,
+        TaskCapabilityProof, TaskCompletion, TaskCompletionKind, TaskId, TaskKind, TaskTarget,
     };
 
     fn signer(byte: u8) -> Keypair {
@@ -7417,6 +7566,17 @@ mod tests {
         TaskCreationEnvelope::new(request, capability)
             .unwrap()
             .authorized_by(&signer(authority_byte), format!("task-create:{task_id}"))
+            .unwrap()
+    }
+
+    fn signed_graph_cas_envelope(
+        expected: GraphStoreRevision,
+        state: GraphStoreState,
+        authority_byte: u8,
+    ) -> GraphCasEnvelope {
+        GraphCasEnvelope::new(expected, state)
+            .unwrap()
+            .authorized_by(&signer(authority_byte), "graph-cas:test")
             .unwrap()
     }
 
@@ -7868,7 +8028,11 @@ mod tests {
         candidate.generation = current.state.generation;
         candidate.predecessor_digest = current.state.predecessor_digest.clone();
         let error = store
-            .compare_and_swap(&current.revision, candidate)
+            .compare_and_swap(signed_graph_cas_envelope(
+                current.revision.clone(),
+                candidate,
+                44,
+            ))
             .unwrap_err();
         assert!(matches!(error, GraphStoreError::InvalidState { .. }));
         assert_eq!(store.snapshot().unwrap().state.tasks, current.state.tasks);
@@ -8157,9 +8321,24 @@ mod tests {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(8)).unwrap();
         let before = store.snapshot().unwrap();
         let mut changed = before.state.clone();
-        changed.graph.version = changed.graph.version.saturating_add(1);
-        let committed = store.compare_and_swap(&before.revision, changed).unwrap();
-        let stale = store.compare_and_swap(&before.revision, before.state);
+        changed
+            .graph
+            .admit_node(GraphNode::Actor(
+                ActorNode::new("actor:cas", "CAS actor").unwrap(),
+            ))
+            .unwrap();
+        let committed = store
+            .compare_and_swap(signed_graph_cas_envelope(
+                before.revision.clone(),
+                changed,
+                8,
+            ))
+            .unwrap();
+        let stale = store.compare_and_swap(signed_graph_cas_envelope(
+            before.revision.clone(),
+            before.state,
+            8,
+        ));
         assert!(matches!(
             stale,
             Err(GraphStoreError::StalePredecessor { .. })
@@ -8186,7 +8365,11 @@ mod tests {
                 candidate.graph.version = candidate.graph.version.saturating_add(1);
                 candidate.fencing_counter = fencing_counter;
                 assert!(matches!(
-                    store.compare_and_swap(&before.revision, candidate),
+                    store.compare_and_swap(signed_graph_cas_envelope(
+                        before.revision.clone(),
+                        candidate,
+                        authority_byte,
+                    )),
                     Err(GraphStoreError::InvalidState { reason })
                         if reason.contains("store-owned fencing counter")
                 ));
@@ -8197,7 +8380,11 @@ mod tests {
             future_clock.graph.version = future_clock.graph.version.saturating_add(1);
             future_clock.logical_time_high_water = GraphLogicalTime::new(1_000_000);
             assert!(matches!(
-                store.compare_and_swap(&before.revision, future_clock),
+                store.compare_and_swap(signed_graph_cas_envelope(
+                    before.revision.clone(),
+                    future_clock,
+                    authority_byte,
+                )),
                 Err(GraphStoreError::InvalidState { reason })
                     if reason.contains("store-owned logical time high-water")
             ));
@@ -8228,8 +8415,19 @@ mod tests {
             .unwrap();
         let before = store.snapshot().unwrap();
         let mut candidate = before.state.clone();
-        candidate.graph.version = candidate.graph.version.saturating_add(1);
-        let committed = store.compare_and_swap(&before.revision, candidate).unwrap();
+        candidate
+            .graph
+            .admit_node(GraphNode::Actor(
+                ActorNode::new("actor:graph-only", "Graph only actor").unwrap(),
+            ))
+            .unwrap();
+        let committed = store
+            .compare_and_swap(signed_graph_cas_envelope(
+                before.revision.clone(),
+                candidate,
+                20,
+            ))
+            .unwrap();
         assert_eq!(
             committed.state.fencing_counter,
             before.state.fencing_counter
@@ -8242,6 +8440,86 @@ mod tests {
             committed.state.graph.version,
             before.state.graph.version.saturating_add(1)
         );
+    }
+
+    #[test]
+    fn graph_cas_requires_authority_and_rejects_deletion_and_version_injection() {
+        fn assert_rejected(store: &dyn HypothesisGraphStore, authority_byte: u8) {
+            let baseline = store.snapshot().unwrap();
+            let mut addition = baseline.state.clone();
+            addition
+                .graph
+                .admit_node(GraphNode::Actor(
+                    ActorNode::new("actor:cas-guard", "CAS guard actor").unwrap(),
+                ))
+                .unwrap();
+
+            let unsigned =
+                GraphCasEnvelope::new(baseline.revision.clone(), addition.clone()).unwrap();
+            assert!(matches!(
+                store.compare_and_swap(unsigned),
+                Err(GraphStoreError::Admission(
+                    swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+                ))
+            ));
+            assert_eq!(store.snapshot().unwrap(), baseline);
+
+            assert!(matches!(
+                store.compare_and_swap(signed_graph_cas_envelope(
+                    baseline.revision.clone(),
+                    addition.clone(),
+                    authority_byte.saturating_add(1),
+                )),
+                Err(GraphStoreError::Admission(
+                    swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
+                ))
+            ));
+            assert_eq!(store.snapshot().unwrap(), baseline);
+
+            let appended = store
+                .compare_and_swap(signed_graph_cas_envelope(
+                    baseline.revision,
+                    addition,
+                    authority_byte,
+                ))
+                .unwrap();
+            assert_eq!(appended.state.graph.nodes.len(), 1);
+
+            let mut deletion = appended.state.clone();
+            deletion.graph = graph();
+            assert!(matches!(
+                store.compare_and_swap(signed_graph_cas_envelope(
+                    appended.revision.clone(),
+                    deletion,
+                    authority_byte,
+                )),
+                Err(GraphStoreError::InvalidState { reason })
+                    if reason.contains("cannot delete or rewrite existing nodes")
+            ));
+            assert_eq!(store.snapshot().unwrap(), appended);
+
+            let mut exhausted = appended.state.clone();
+            exhausted.graph.version = u64::MAX;
+            assert!(matches!(
+                store.compare_and_swap(signed_graph_cas_envelope(
+                    appended.revision.clone(),
+                    exhausted,
+                    authority_byte,
+                )),
+                Err(GraphStoreError::InvalidState { reason })
+                    if reason.contains("version must advance exactly once")
+            ));
+            assert_eq!(store.snapshot().unwrap(), appended);
+        }
+
+        let memory = MemoryHypothesisGraphStore::new(graph(), signer(45)).unwrap();
+        assert_rejected(&memory, 45);
+
+        let path = temp_dir("graph-cas-guard");
+        let file = FileHypothesisGraphStore::new(&path, graph(), signer(46)).unwrap();
+        assert_rejected(&file, 46);
+        drop(file);
+        let _ = fs::remove_dir_all(path);
     }
 
     #[test]
@@ -8920,7 +9198,12 @@ mod tests {
             let file_store = FileHypothesisGraphStore::new(&path, graph(), key).unwrap();
             let baseline = memory_store.snapshot().unwrap();
             let mut candidate_input = baseline.state.clone();
-            candidate_input.graph.version = candidate_input.graph.version.saturating_add(1);
+            candidate_input
+                .graph
+                .admit_node(GraphNode::Actor(
+                    ActorNode::new("actor:oversized", "Oversized envelope actor").unwrap(),
+                ))
+                .unwrap();
             let mut candidate_state = candidate_input.clone();
             candidate_state.generation = baseline.state.generation.checked_add(1).unwrap();
             candidate_state.predecessor_digest = Some(baseline.revision.digest.clone());
@@ -8947,9 +9230,16 @@ mod tests {
                 .collect::<BTreeMap<_, _>>();
             let limit = candidate_bytes.len().checked_sub(1).unwrap() + offset;
             let limit_guard = install_test_persisted_json_limit(limit);
-            let memory_result =
-                memory_store.compare_and_swap(&baseline.revision, candidate_input.clone());
-            let file_result = file_store.compare_and_swap(&baseline.revision, candidate_input);
+            let memory_result = memory_store.compare_and_swap(signed_graph_cas_envelope(
+                baseline.revision.clone(),
+                candidate_input.clone(),
+                54,
+            ));
+            let file_result = file_store.compare_and_swap(signed_graph_cas_envelope(
+                baseline.revision.clone(),
+                candidate_input,
+                54,
+            ));
             if should_reject {
                 let memory_error = match memory_result {
                     Err(GraphStoreError::ResourceLimit { resource, limit }) => (resource, limit),

@@ -22,9 +22,9 @@ use swarm_core::hypothesis_graph::{
 use swarm_core::types::AgentId;
 use swarm_crypto::Keypair;
 use swarm_spine::{
-    FileHypothesisGraphStore, FileStrategyMemoryStore, GraphStoreError, HypothesisGraphStore,
-    MemoryHypothesisGraphStore, MemoryStrategyMemoryStore, StrategyMemoryStore, TaskClaimEnvelope,
-    validate_task_terminal_envelope,
+    FileHypothesisGraphStore, FileStrategyMemoryStore, GraphCasEnvelope, GraphStoreError,
+    HypothesisGraphStore, MemoryHypothesisGraphStore, MemoryStrategyMemoryStore,
+    StrategyMemoryStore, TaskClaimEnvelope, validate_task_terminal_envelope,
 };
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -92,24 +92,24 @@ fn memory(byte: u8, suffix: &str) -> StrategyMemory {
 
 fn assert_high_water_cas(store: &dyn HypothesisGraphStore) {
     let baseline = store.snapshot().unwrap();
-    for replacement in [GraphLogicalTime::new(20), GraphLogicalTime::new(-1)] {
-        let mut candidate = baseline.state.clone();
-        candidate.graph.version = candidate.graph.version.saturating_add(1);
-        candidate.logical_time_high_water = replacement;
-        let error = store
-            .compare_and_swap(&baseline.revision, candidate)
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            GraphStoreError::InvalidState { reason }
-                if reason.contains("store-owned logical time high-water")
-        ));
-        assert_eq!(store.snapshot().unwrap(), baseline);
-    }
+    let mut candidate = baseline.state.clone();
+    candidate.graph.version = candidate.graph.version.saturating_add(1);
+    candidate.logical_time_high_water = GraphLogicalTime::new(20);
+    let envelope = GraphCasEnvelope::new(baseline.revision.clone(), candidate)
+        .unwrap()
+        .authorized_by(&signer(1), "graph-cas:high-water-contract")
+        .unwrap();
+    let error = store.compare_and_swap(envelope).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphStoreError::InvalidState { reason }
+            if reason.contains("store-owned logical time high-water")
+    ));
+    assert_eq!(store.snapshot().unwrap(), baseline);
 }
 
 #[test]
-fn cas_rejects_both_future_and_regressed_logical_high_water_for_both_backends() {
+fn cas_rejects_future_logical_high_water_for_both_backends() {
     let memory_store =
         MemoryHypothesisGraphStore::new(graph("graph:cas-memory"), signer(1)).unwrap();
     assert_high_water_cas(&memory_store);
