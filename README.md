@@ -117,7 +117,7 @@ live. Posture changes when it crosses the threshold *and* enough distinct source
 | **Correlation without a correlation engine** | No windowed join, no saved search, no rule that says *if A and B within five minutes*. Accumulation is the correlation, and it works on pairings nobody wrote down in advance. |
 | **Weak signals stop being wasted** | The medium-confidence hit you would never page on, and would never write a rule for, still deposits. The next detector to land on that host finds it already there. |
 | **Evasion is priced against the whole swarm** | Beating one detector leaves the escalation intact. An adversary has to stay under the aggregate across every family at once, while the traces they already left are still decaying rather than gone. |
-| **A noisy detector cannot page you** | One source never satisfies the distinct-source requirement, however loud it gets. Suppressing it is a threshold change, not a rule rewrite. |
+| **A noisy detector cannot page you** | One source never satisfies the distinct-source requirement, however loud it gets. Suppressing it means moving a threshold. |
 | **It degrades instead of failing** | Lose a detector, a node, or a bridge and the substrate still holds what everything else deposited. |
 | **No central brain to compromise** | Nothing pushes content or commands to your fleet. Each runtime activates locally on evidence it can verify. |
 
@@ -156,8 +156,8 @@ destructive action, and only against a signed receipt.
 
 ## Bring your own agent
 
-The eight roles ship in Rust, but nothing about the substrate requires that. An agent is
-a small contract in [`swarm-core`](crates/swarm-core/src/agent.rs):
+The eight roles ship in Rust. The substrate accepts anything that satisfies the agent
+contract in [`swarm-core`](crates/swarm-core/src/agent.rs):
 
 ```rust
 #[async_trait]
@@ -170,30 +170,30 @@ pub trait SwarmAgent: Send + Sync {
 }
 ```
 
-Nothing there says *detector*, *fast*, or *deterministic*. And because agents never call
-each other, a new one does not have to speak anyone else's protocol: it reads the
-substrate and returns signed observations. That is the entire integration surface.
+Anything that holds a key and returns actions on a tick satisfies it. Coordination runs
+through the substrate, so an agent integrates by reading trails and returning signed
+observations. That is the entire surface.
 
-Which is what makes a model-backed agent — Claude, Codex, Hermes, or your own — a
-tractable thing to admit into a runtime that can isolate production hosts:
+Which is what makes a model-backed agent — Claude, Codex, Hermes, or your own — tractable
+to admit into a runtime that can isolate production hosts:
 
-- **It deposits evidence, not alerts.** `DepositPheromone` is one signed source among many.
-- **It cannot escalate alone.** The distinct-source rule that stops a noisy detector from
-  paging you is the same rule that stops a confident hallucination.
+- **It deposits a signed observation.** `DepositPheromone` lands as one source among many,
+  weighted and decaying like every other.
+- **It cannot escalate alone.** The distinct-source rule that holds back a noisy detector
+  holds back a confident hallucination.
 - **It cannot authorize.** The strongest action available to any agent is
-  `RequestResponse`. Only Tom issues receipts, in deterministic Rust.
+  `RequestResponse`. Tom issues the receipts, in deterministic Rust.
 - **It cannot widen the hot path.** Whisker is the only role on the critical lane, so a
-  four-second model call runs on an async lane or not at all.
+  four-second model call runs on an async lane.
 - **It cannot take the runtime down.** A tick that panics is caught at the agent boundary
   and attributed to a role.
 
-The pattern holds because the swarm never trusts any single agent. That property was built
-to keep one detector from paging you at 3am. It turns out to be the containment a
-probabilistic agent needs.
+This works because the swarm never trusts any single agent. The same property that keeps
+one detector from paging you at 3am is what makes a probabilistic agent safe to admit.
 
-> **Not shipped yet.** Agents are compiled in. There is no out-of-process host, no wire
-> protocol, and `AgentRole` is a closed enum, so a third-party agent claims one of the
-> eight roles today. The contract is the design; the loader is the work. Tracked below.
+> **In flight.** The out-of-process host and its wire contract are what we are building
+> now. Until they land, agents compile in and `AgentRole` is closed, so a third-party
+> agent claims one of the eight roles. Tracked in the roadmap below.
 
 ## The swarm evolves too
 
@@ -212,7 +212,7 @@ pressure that produced it. See [docs/EVOLUTION.md](docs/EVOLUTION.md).
 ## Why you can let it act
 
 A swarm that can isolate your production fleet has to be governable. Both properties
-below are enforced in code, not promised in documentation.
+below are enforced in code.
 
 **Destructive action requires a signed receipt.** Fifteen typed response actions are
 available to the playbook. Three are destructive — `BlockEgress`, `IsolateHost`,
