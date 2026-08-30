@@ -1,11 +1,11 @@
 use crate::substrate::{
     AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, FeedbackSuppressionKey,
     FeedbackSuppressionOrder, FeedbackSuppressionState, MAX_ACTIVE_DEPOSIT_BYTES,
-    MAX_ACTIVE_DEPOSITS, PheromoneSubstrate, SubstrateError, SubstrateHealth, VerifiedDeposit,
-    concentration_for, decode_deposit_payload, deposit_suppression_key,
-    feedback_suppression_marker, filter_deposits, filter_escalations, is_retention_expired,
-    normalize_threat_intel_value, retention_initial_strength, trusted_system_unix_seconds,
-    validate_deposit_policy, validate_deposit_retention,
+    MAX_ACTIVE_DEPOSITS, MAX_SINGLE_DEPOSIT_BYTES, PheromoneSubstrate, SubstrateError,
+    SubstrateHealth, VerifiedDeposit, concentration_for, decode_deposit_payload,
+    deposit_suppression_key, feedback_suppression_marker, filter_deposits, filter_escalations,
+    is_retention_expired, normalize_threat_intel_value, retention_initial_strength,
+    trusted_system_unix_seconds, validate_deposit_policy, validate_deposit_retention,
 };
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
@@ -58,6 +58,8 @@ const RECENT_DEPOSIT_INDEX_KEY_PREFIX: &str = "idx_recent";
 #[cfg(feature = "nats")]
 const RECENT_DEPOSIT_INDEX_STATE_KEY_PREFIX: &str = "idx_recent_state";
 #[cfg(feature = "nats")]
+const RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY: &str = "idx_recent_compatibility";
+#[cfg(feature = "nats")]
 const MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS: usize = 256;
 // The runtime's largest periodic request is 100 records. The additional 27
 // slots absorb recently suppressed or expired records without making the hot
@@ -93,10 +95,23 @@ struct RecentDepositPointer {
 }
 
 #[cfg(feature = "nats")]
-#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecentDepositIndexState {
     last_ordinal: u64,
+    #[serde(default)]
+    last_compatibility_revision: u64,
+    #[serde(default)]
+    last_compatibility_key: Option<String>,
+    #[serde(default)]
+    last_compatibility_ordinal: u64,
+}
+
+#[cfg(feature = "nats")]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecentDepositCompatibilityState {
+    last_stream_sequence: u64,
 }
 
 #[cfg(feature = "nats")]
@@ -104,6 +119,7 @@ struct RecentDepositIndexState {
 struct SelectedDepositKey {
     key: String,
     expected_revision: Option<u64>,
+    expected_encoded_len: Option<usize>,
 }
 
 /// Bounded, revision-aware cache for deposits that have already crossed the
@@ -224,6 +240,36 @@ fn insert_newest_deposit_key(
         return Some(oldest.1);
     }
     None
+}
+
+#[cfg(feature = "nats")]
+fn select_recent_deposit_keys_within_byte_limit(
+    mut selected: Vec<SelectedDepositKey>,
+) -> Vec<SelectedDepositKey> {
+    selected.sort_by(|left, right| {
+        deposit_key_timestamp(&right.key)
+            .cmp(&deposit_key_timestamp(&left.key))
+            .then_with(|| right.key.cmp(&left.key))
+    });
+    let mut selected_bytes = 0usize;
+    selected.retain(|candidate| {
+        // Prior-layout keys carry no encoded length. Charge them the hard
+        // single-deposit maximum so the pre-load selection remains safe and
+        // bounded during rolling upgrades.
+        let encoded_len = candidate
+            .expected_encoded_len
+            .unwrap_or(MAX_SINGLE_DEPOSIT_BYTES);
+        let next_bytes = selected_bytes.saturating_add(encoded_len);
+        if encoded_len == 0
+            || encoded_len > MAX_SINGLE_DEPOSIT_BYTES
+            || next_bytes > MAX_ACTIVE_DEPOSIT_BYTES
+        {
+            return false;
+        }
+        selected_bytes = next_bytes;
+        true
+    });
+    selected
 }
 
 #[cfg(feature = "nats")]
@@ -384,10 +430,28 @@ impl DepositKeyPartitionIndex {
         }) {
             return Vec::new();
         }
-        if removed_marker.state == FeedbackSuppressionState::Confirm {
-            return Vec::new();
+        let superseded_markers = self
+            .controls
+            .iter()
+            .chain(&self.evidence)
+            .filter(|entry| {
+                entry.feedback_marker.as_ref().is_some_and(|candidate| {
+                    candidate.key == removed_marker.key && candidate.order <= removed_marker.order
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for entry in &superseded_markers {
+            let _ = self.remove_key(&entry.key);
         }
-        let related = self
+        if removed_marker.state == FeedbackSuppressionState::Confirm {
+            // A terminal confirmation cannot be represented once its marker
+            // is evicted. Remove every superseded marker for the same event so
+            // an older dismissal cannot become current again; ordinary
+            // positive evidence remains active.
+            return superseded_markers;
+        }
+        let mut related = self
             .evidence
             .iter()
             .filter(|entry| entry.suppression_key.as_ref() == Some(&removed_marker.key))
@@ -396,6 +460,7 @@ impl DepositKeyPartitionIndex {
         for entry in &related {
             let _ = self.remove_key(&entry.key);
         }
+        related.extend(superseded_markers);
         related
     }
 
@@ -735,9 +800,31 @@ impl JetStreamPheromoneSubstrate {
                 }
             }
         }
-        if missing.is_empty() {
+        let compatibility_initialized = match connection
+            .store
+            .entry(RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY)
+            .await
+            .map_err(|error| nats_error("read recent-deposit compatibility state", error))?
+        {
+            None
+            | Some(async_nats::jetstream::kv::Entry {
+                operation: Operation::Delete | Operation::Purge,
+                ..
+            }) => false,
+            Some(entry) => {
+                let location = format!(
+                    "jetstream://{}/{}",
+                    self.bucket, RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY
+                );
+                serde_json::from_slice::<RecentDepositCompatibilityState>(&entry.value)
+                    .map_err(|source| SubstrateError::Decode { location, source })?;
+                true
+            }
+        };
+        if missing.is_empty() && compatibility_initialized {
             return Ok(());
         }
+        let scans_kind = |kind| !compatibility_initialized || missing.contains(&kind);
         let migration_high_water = connection
             .store
             .stream
@@ -768,7 +855,7 @@ impl JetStreamPheromoneSubstrate {
             let Some(kind) = self.classify_deposit_key(connection, &key).await? else {
                 continue;
             };
-            if !missing.contains(&kind) {
+            if !scans_kind(kind) {
                 continue;
             }
             let window = match kind {
@@ -782,7 +869,7 @@ impl JetStreamPheromoneSubstrate {
             (DepositKeyKind::Evidence, evidence_window),
             (DepositKeyKind::Control, control_window),
         ] {
-            if !missing.contains(&kind) {
+            if !scans_kind(kind) {
                 continue;
             }
             let mut pointers = Vec::with_capacity(window.len());
@@ -795,6 +882,9 @@ impl JetStreamPheromoneSubstrate {
                     continue;
                 };
                 if matches!(entry.operation, Operation::Delete | Operation::Purge) {
+                    continue;
+                }
+                if entry.revision > migration_high_water {
                     continue;
                 }
                 let location = format!("jetstream://{}/{}", self.bucket, key);
@@ -812,18 +902,28 @@ impl JetStreamPheromoneSubstrate {
                 }
                 pointers.push((key, entry.revision));
             }
-            for (deposit_key, deposit_revision) in &pointers {
-                if *deposit_revision > migration_high_water {
-                    continue;
-                }
+            let pointer_count =
+                u64::try_from(pointers.len()).map_err(|_| SubstrateError::InvalidDeposit {
+                    reason: "JetStream migration window exceeds the supported ordinal range"
+                        .to_string(),
+                })?;
+            let first_ordinal = migration_high_water
+                .saturating_sub(pointer_count)
+                .saturating_add(1);
+            for (index, (deposit_key, deposit_revision)) in pointers.iter().enumerate() {
+                let index = u64::try_from(index).map_err(|_| SubstrateError::InvalidDeposit {
+                    reason: "JetStream migration window exceeds the supported ordinal range"
+                        .to_string(),
+                })?;
                 self.write_recent_deposit_pointer(
                     connection,
                     &RecentDepositPointer {
-                        // Historical revisions are globally unique and stable,
-                        // so concurrent migrations produce identical slot
-                        // candidates. Monotonic slot CAS retains the newest
-                        // historical revision on any collision.
-                        ordinal: *deposit_revision,
+                        // The selected window is already deterministically
+                        // ordered oldest-to-newest. Dense ordinals ending at
+                        // the captured high-water fill distinct ring slots
+                        // even when unrelated KV writes made the historical
+                        // stream revisions sparse.
+                        ordinal: first_ordinal.saturating_add(index),
                         kind,
                         deposit_key: deposit_key.clone(),
                         deposit_revision: *deposit_revision,
@@ -838,6 +938,8 @@ impl JetStreamPheromoneSubstrate {
             )
             .await?;
         }
+        self.publish_recent_deposit_compatibility_state_at_least(connection, migration_high_water)
+            .await?;
 
         Ok(())
     }
@@ -852,13 +954,6 @@ impl JetStreamPheromoneSubstrate {
         use async_nats::jetstream::kv::{CreateErrorKind, Operation, UpdateErrorKind};
 
         let state_key = recent_deposit_index_state_key(kind);
-        let payload = serde_json::to_vec(&RecentDepositIndexState {
-            last_ordinal: minimum_ordinal,
-        })
-        .map_err(|source| SubstrateError::Encode {
-            context: "JetStream recent-deposit index state".to_string(),
-            source,
-        })?;
         for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
             let entry = connection
                 .store
@@ -870,17 +965,25 @@ impl JetStreamPheromoneSubstrate {
                 | Some(async_nats::jetstream::kv::Entry {
                     operation: Operation::Delete | Operation::Purge,
                     ..
-                }) => match connection
-                    .store
-                    .create(&state_key, payload.clone().into())
-                    .await
-                {
-                    Ok(_) => return Ok(()),
-                    Err(error) if error.kind() == CreateErrorKind::AlreadyExists => continue,
-                    Err(error) => {
-                        return Err(nats_error("publish recent-deposit index state", error));
+                }) => {
+                    let payload = serde_json::to_vec(&RecentDepositIndexState {
+                        last_ordinal: minimum_ordinal,
+                        last_compatibility_revision: 0,
+                        last_compatibility_key: None,
+                        last_compatibility_ordinal: 0,
+                    })
+                    .map_err(|source| SubstrateError::Encode {
+                        context: "JetStream recent-deposit index state".to_string(),
+                        source,
+                    })?;
+                    match connection.store.create(&state_key, payload.into()).await {
+                        Ok(_) => return Ok(()),
+                        Err(error) if error.kind() == CreateErrorKind::AlreadyExists => continue,
+                        Err(error) => {
+                            return Err(nats_error("publish recent-deposit index state", error));
+                        }
                     }
-                },
+                }
                 Some(entry) => {
                     let location = format!("jetstream://{}/{}", self.bucket, state_key);
                     let current = serde_json::from_slice::<RecentDepositIndexState>(&entry.value)
@@ -888,9 +991,17 @@ impl JetStreamPheromoneSubstrate {
                     if current.last_ordinal >= minimum_ordinal {
                         return Ok(());
                     }
+                    let payload = serde_json::to_vec(&RecentDepositIndexState {
+                        last_ordinal: minimum_ordinal,
+                        ..current
+                    })
+                    .map_err(|source| SubstrateError::Encode {
+                        context: "JetStream recent-deposit index state".to_string(),
+                        source,
+                    })?;
                     match connection
                         .store
-                        .update(&state_key, payload.clone().into(), entry.revision)
+                        .update(&state_key, payload.into(), entry.revision)
                         .await
                     {
                         Ok(_) => return Ok(()),
@@ -914,6 +1025,244 @@ impl JetStreamPheromoneSubstrate {
     }
 
     #[cfg(feature = "nats")]
+    async fn publish_recent_deposit_compatibility_state_at_least(
+        &self,
+        connection: &JetStreamConnection,
+        minimum_sequence: u64,
+    ) -> Result<(), SubstrateError> {
+        use async_nats::jetstream::kv::{CreateErrorKind, Operation, UpdateErrorKind};
+
+        let payload = serde_json::to_vec(&RecentDepositCompatibilityState {
+            last_stream_sequence: minimum_sequence,
+        })
+        .map_err(|source| SubstrateError::Encode {
+            context: "JetStream recent-deposit compatibility state".to_string(),
+            source,
+        })?;
+        for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
+            let entry = connection
+                .store
+                .entry(RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY)
+                .await
+                .map_err(|error| nats_error("read recent-deposit compatibility state", error))?;
+            match entry {
+                None
+                | Some(async_nats::jetstream::kv::Entry {
+                    operation: Operation::Delete | Operation::Purge,
+                    ..
+                }) => match connection
+                    .store
+                    .create(
+                        RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY,
+                        payload.clone().into(),
+                    )
+                    .await
+                {
+                    Ok(_) => return Ok(()),
+                    Err(error) if error.kind() == CreateErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        return Err(nats_error(
+                            "publish recent-deposit compatibility state",
+                            error,
+                        ));
+                    }
+                },
+                Some(entry) => {
+                    let location = format!(
+                        "jetstream://{}/{}",
+                        self.bucket, RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY
+                    );
+                    let current =
+                        serde_json::from_slice::<RecentDepositCompatibilityState>(&entry.value)
+                            .map_err(|source| SubstrateError::Decode { location, source })?;
+                    if current.last_stream_sequence >= minimum_sequence {
+                        return Ok(());
+                    }
+                    match connection
+                        .store
+                        .update(
+                            RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY,
+                            payload.clone().into(),
+                            entry.revision,
+                        )
+                        .await
+                    {
+                        Ok(_) => return Ok(()),
+                        Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => {
+                            continue;
+                        }
+                        Err(error) => {
+                            return Err(nats_error(
+                                "publish recent-deposit compatibility state",
+                                error,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(SubstrateError::Nats {
+            operation: "publish recent-deposit compatibility state",
+            reason: format!(
+                "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
+            ),
+        })
+    }
+
+    #[cfg(feature = "nats")]
+    async fn refresh_recent_deposit_compatibility(
+        &self,
+        connection: &JetStreamConnection,
+    ) -> Result<(), SubstrateError> {
+        use async_nats::jetstream::kv::Operation;
+
+        let high_water = connection
+            .store
+            .stream
+            .get_info()
+            .await
+            .map_err(|error| nats_error("read compatibility refresh high-water", error))?
+            .state
+            .last_sequence;
+        let state_entry = connection
+            .store
+            .entry(RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY)
+            .await
+            .map_err(|error| nats_error("read recent-deposit compatibility state", error))?
+            .ok_or_else(|| SubstrateError::InvalidDeposit {
+                reason:
+                    "JetStream recent-deposit compatibility state is missing after initialization"
+                        .to_string(),
+            })?;
+        if matches!(state_entry.operation, Operation::Delete | Operation::Purge) {
+            return Err(SubstrateError::InvalidDeposit {
+                reason:
+                    "JetStream recent-deposit compatibility state is deleted after initialization"
+                        .to_string(),
+            });
+        }
+        let location = format!(
+            "jetstream://{}/{}",
+            self.bucket, RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY
+        );
+        let state = serde_json::from_slice::<RecentDepositCompatibilityState>(&state_entry.value)
+            .map_err(|source| SubstrateError::Decode { location, source })?;
+        if high_water <= state.last_stream_sequence {
+            return Ok(());
+        }
+
+        let consumer = connection
+            .store
+            .stream
+            .create_consumer(async_nats::jetstream::consumer::push::OrderedConfig {
+                deliver_subject: connection.client.new_inbox(),
+                description: Some("mixed-version pheromone deposit compatibility".to_string()),
+                filter_subject: format!("{}{GC_KEY_PREFIX}.>", connection.store.prefix),
+                replay_policy: async_nats::jetstream::consumer::ReplayPolicy::Instant,
+                deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::ByStartSequence {
+                    start_sequence: state.last_stream_sequence.saturating_add(1),
+                },
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| nats_error("create deposit compatibility consumer", error))?;
+
+        let mut processed_through_boundary = false;
+        if consumer.cached_info().num_pending != 0 {
+            let mut messages = consumer
+                .messages()
+                .await
+                .map_err(|error| nats_error("subscribe deposit compatibility consumer", error))?;
+            while let Some(message) = messages.next().await {
+                let message = message
+                    .map_err(|error| nats_error("stream deposit compatibility writes", error))?;
+                let info = message
+                    .info()
+                    .map_err(|error| nats_error("parse deposit compatibility metadata", error))?;
+                if info.stream_sequence > high_water {
+                    break;
+                }
+                processed_through_boundary = true;
+                let removed = message
+                    .message
+                    .headers
+                    .as_ref()
+                    .and_then(|headers| headers.get("KV-Operation"))
+                    .is_some_and(|operation| matches!(operation.as_str(), "DEL" | "PURGE"));
+                if !removed {
+                    let key = message
+                        .subject
+                        .strip_prefix(&connection.store.prefix)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| message.subject.to_string());
+                    if deposit_key_timestamp(&key).is_none() {
+                        return Err(SubstrateError::InvalidDeposit {
+                            reason: format!(
+                                "JetStream compatibility key `{key}` is not a valid deposit key"
+                            ),
+                        });
+                    }
+                    let location = format!("jetstream://{}/{}", self.bucket, key);
+                    let deposit = decode_deposit_payload(&message.message.payload, location)?;
+                    self.admission_control
+                        .validate_deposit_admission(&deposit)?;
+                    let kind = deposit_kind(&deposit);
+                    if deposit_key_kind(&key).is_some_and(|key_kind| key_kind != kind) {
+                        return Err(SubstrateError::InvalidDeposit {
+                            reason: format!(
+                                "JetStream compatibility key `{key}` class does not match its signed payload"
+                            ),
+                        });
+                    }
+                    let embedded_ordinal = deposit_key_ordinal(&key);
+                    let ordinal = match embedded_ordinal {
+                        Some(ordinal) => Some(ordinal),
+                        None => {
+                            self.allocate_compatibility_deposit_ordinal(
+                                connection,
+                                kind,
+                                &key,
+                                info.stream_sequence,
+                            )
+                            .await?
+                        }
+                    };
+                    if let Some(ordinal) = ordinal {
+                        self.write_recent_deposit_pointer(
+                            connection,
+                            &RecentDepositPointer {
+                                ordinal,
+                                kind,
+                                deposit_key: key,
+                                deposit_revision: info.stream_sequence,
+                            },
+                        )
+                        .await?;
+                    }
+                }
+                if info.stream_sequence == high_water || info.pending == 0 {
+                    break;
+                }
+            }
+        }
+
+        // The compatibility-state write itself advances the shared KV stream.
+        // If no deposit subject matched this interval, publishing that global
+        // high-water would create another apparent interval on every read.
+        if !processed_through_boundary {
+            return Ok(());
+        }
+
+        // Advancing the persistent cursor is the commit record: it happens
+        // only after every matching deposit through the captured boundary has
+        // a durable ring pointer. A crash before this CAS safely replays the
+        // same deterministic pointers.
+        self.publish_recent_deposit_compatibility_state_at_least(connection, high_water)
+            .await
+    }
+
+    #[cfg(feature = "nats")]
     async fn allocate_recent_deposit_ordinal(
         &self,
         connection: &JetStreamConnection,
@@ -934,11 +1283,16 @@ impl JetStreamPheromoneSubstrate {
                     operation: Operation::Delete | Operation::Purge,
                     ..
                 }) => {
-                    let payload = serde_json::to_vec(&RecentDepositIndexState { last_ordinal: 1 })
-                        .map_err(|source| SubstrateError::Encode {
-                            context: "JetStream recent-deposit index state".to_string(),
-                            source,
-                        })?;
+                    let payload = serde_json::to_vec(&RecentDepositIndexState {
+                        last_ordinal: 1,
+                        last_compatibility_revision: 0,
+                        last_compatibility_key: None,
+                        last_compatibility_ordinal: 0,
+                    })
+                    .map_err(|source| SubstrateError::Encode {
+                        context: "JetStream recent-deposit index state".to_string(),
+                        source,
+                    })?;
                     match connection.store.create(&state_key, payload.into()).await {
                         Ok(_) => return Ok(1),
                         Err(error) if error.kind() == CreateErrorKind::AlreadyExists => continue,
@@ -959,6 +1313,7 @@ impl JetStreamPheromoneSubstrate {
                     })?;
                     let payload = serde_json::to_vec(&RecentDepositIndexState {
                         last_ordinal: next_ordinal,
+                        ..state
                     })
                     .map_err(|source| SubstrateError::Encode {
                         context: "JetStream recent-deposit index state".to_string(),
@@ -990,6 +1345,93 @@ impl JetStreamPheromoneSubstrate {
     }
 
     #[cfg(feature = "nats")]
+    async fn allocate_compatibility_deposit_ordinal(
+        &self,
+        connection: &JetStreamConnection,
+        kind: DepositKeyKind,
+        deposit_key: &str,
+        deposit_revision: u64,
+    ) -> Result<Option<u64>, SubstrateError> {
+        use async_nats::jetstream::kv::{Operation, UpdateErrorKind};
+
+        let state_key = recent_deposit_index_state_key(kind);
+        for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
+            let entry = connection
+                .store
+                .entry(&state_key)
+                .await
+                .map_err(|error| nats_error("read compatibility ordinal state", error))?
+                .ok_or_else(|| SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "JetStream recent-deposit index state `{state_key}` is missing after initialization"
+                    ),
+                })?;
+            if matches!(entry.operation, Operation::Delete | Operation::Purge) {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "JetStream recent-deposit index state `{state_key}` is deleted after initialization"
+                    ),
+                });
+            }
+            let location = format!("jetstream://{}/{}", self.bucket, state_key);
+            let state = serde_json::from_slice::<RecentDepositIndexState>(&entry.value)
+                .map_err(|source| SubstrateError::Decode { location, source })?;
+            if deposit_revision < state.last_compatibility_revision {
+                // Another refresher has already committed a later stream
+                // record, which is only possible after this ordered record's
+                // pointer became durable. Reusing the current ordinal would
+                // incorrectly alias two deposits.
+                return Ok(None);
+            }
+            if deposit_revision == state.last_compatibility_revision {
+                if state.last_compatibility_key.as_deref() != Some(deposit_key)
+                    || state.last_compatibility_ordinal == 0
+                {
+                    return Err(SubstrateError::InvalidDeposit {
+                        reason: format!(
+                            "JetStream compatibility revision {deposit_revision} identifies conflicting deposits"
+                        ),
+                    });
+                }
+                return Ok(Some(state.last_compatibility_ordinal));
+            }
+            let next_ordinal = state.last_ordinal.checked_add(1).ok_or_else(|| {
+                SubstrateError::InvalidDeposit {
+                    reason: "JetStream recent-deposit index ordinal is exhausted".to_string(),
+                }
+            })?;
+            let payload = serde_json::to_vec(&RecentDepositIndexState {
+                last_ordinal: next_ordinal,
+                last_compatibility_revision: deposit_revision,
+                last_compatibility_key: Some(deposit_key.to_string()),
+                last_compatibility_ordinal: next_ordinal,
+            })
+            .map_err(|source| SubstrateError::Encode {
+                context: "JetStream compatibility ordinal state".to_string(),
+                source,
+            })?;
+            match connection
+                .store
+                .update(&state_key, payload.into(), entry.revision)
+                .await
+            {
+                Ok(_) => return Ok(Some(next_ordinal)),
+                Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => continue,
+                Err(error) => {
+                    return Err(nats_error("advance compatibility ordinal state", error));
+                }
+            }
+        }
+
+        Err(SubstrateError::Nats {
+            operation: "advance compatibility ordinal state",
+            reason: format!(
+                "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
+            ),
+        })
+    }
+
+    #[cfg(feature = "nats")]
     async fn write_recent_deposit_pointer(
         &self,
         connection: &JetStreamConnection,
@@ -997,9 +1439,16 @@ impl JetStreamPheromoneSubstrate {
     ) -> Result<(), SubstrateError> {
         use async_nats::jetstream::kv::{CreateErrorKind, Operation, UpdateErrorKind};
 
-        if deposit_key_kind(&pointer.deposit_key).is_some_and(|kind| kind != pointer.kind) {
+        if pointer.ordinal == 0
+            || pointer.deposit_revision == 0
+            || deposit_key_timestamp(&pointer.deposit_key).is_none()
+            || deposit_key_ordinal(&pointer.deposit_key)
+                .is_some_and(|ordinal| ordinal != pointer.ordinal)
+            || deposit_key_kind(&pointer.deposit_key).is_some_and(|kind| kind != pointer.kind)
+        {
             return Err(SubstrateError::InvalidDeposit {
-                reason: "recent-deposit pointer class does not match its deposit key".to_string(),
+                reason: "recent-deposit pointer metadata does not match its deposit key"
+                    .to_string(),
             });
         }
         let key = recent_deposit_index_key(pointer.kind, pointer.ordinal);
@@ -1032,6 +1481,8 @@ impl JetStreamPheromoneSubstrate {
                     if current.ordinal == 0
                         || current.deposit_revision == 0
                         || deposit_key_timestamp(&current.deposit_key).is_none()
+                        || deposit_key_ordinal(&current.deposit_key)
+                            .is_some_and(|ordinal| ordinal != current.ordinal)
                         || deposit_key_kind(&current.deposit_key)
                             .is_some_and(|kind| kind != current.kind)
                         || recent_deposit_index_key(current.kind, current.ordinal) != key
@@ -1090,14 +1541,8 @@ impl JetStreamPheromoneSubstrate {
     ) -> Result<Vec<SelectedDepositKey>, SubstrateError> {
         self.ensure_recent_deposit_index_initialized(connection)
             .await?;
-        let high_water = connection
-            .store
-            .stream
-            .get_info()
-            .await
-            .map_err(|error| nats_error("read recent-index high-water", error))?
-            .state
-            .last_sequence;
+        self.refresh_recent_deposit_compatibility(connection)
+            .await?;
         let consumer = connection
             .store
             .stream
@@ -1115,7 +1560,13 @@ impl JetStreamPheromoneSubstrate {
             .await
             .map_err(|error| nats_error("create recent-deposit index consumer", error))?;
 
-        if consumer.cached_info().num_pending == 0 {
+        // `LastPerSubject` establishes its snapshot when the consumer is
+        // created. Read exactly that initial pending cardinality. A separate
+        // stream high-water captured before creation is not a valid boundary:
+        // a concurrent slot overwrite can replace the old value in the
+        // LastPerSubject snapshot before the consumer exists.
+        let snapshot_pending = consumer.cached_info().num_pending;
+        if snapshot_pending == 0 {
             return Ok(Vec::new());
         }
 
@@ -1124,15 +1575,15 @@ impl JetStreamPheromoneSubstrate {
             .messages()
             .await
             .map_err(|error| nats_error("subscribe recent-deposit index", error))?;
-        while let Some(message) = messages.next().await {
-            let message =
-                message.map_err(|error| nats_error("stream recent-deposit index", error))?;
-            let info = message
-                .info()
-                .map_err(|error| nats_error("parse recent-deposit index metadata", error))?;
-            if info.stream_sequence > high_water {
-                break;
-            }
+        for _ in 0..snapshot_pending {
+            let message = messages
+                .next()
+                .await
+                .ok_or_else(|| SubstrateError::Nats {
+                    operation: "stream recent-deposit index",
+                    reason: "consumer ended before its creation snapshot was delivered".to_string(),
+                })?
+                .map_err(|error| nats_error("stream recent-deposit index", error))?;
             let removed = message
                 .message
                 .headers
@@ -1147,6 +1598,7 @@ impl JetStreamPheromoneSubstrate {
                             source,
                         })?;
                 let explicit_kind = deposit_key_kind(&pointer.deposit_key);
+                let encoded_len = deposit_key_encoded_len(&pointer.deposit_key);
                 let expected_subject = format!(
                     "{}{}",
                     connection.store.prefix,
@@ -1155,6 +1607,9 @@ impl JetStreamPheromoneSubstrate {
                 if pointer.ordinal == 0
                     || pointer.deposit_revision == 0
                     || deposit_key_timestamp(&pointer.deposit_key).is_none()
+                    || deposit_key_ordinal(&pointer.deposit_key)
+                        .is_some_and(|ordinal| ordinal != pointer.ordinal)
+                    || encoded_len.is_some_and(|len| len == 0 || len > MAX_SINGLE_DEPOSIT_BYTES)
                     || explicit_kind.is_some_and(|kind| kind != pointer.kind)
                     || expected_subject != message.subject.as_str()
                 {
@@ -1165,18 +1620,17 @@ impl JetStreamPheromoneSubstrate {
                 }
                 pointers.insert(pointer.deposit_key, pointer.deposit_revision);
             }
-            if info.stream_sequence == high_water || info.pending == 0 {
-                break;
-            }
         }
 
-        Ok(pointers
+        let selected = pointers
             .into_iter()
             .map(|(key, revision)| SelectedDepositKey {
+                expected_encoded_len: deposit_key_encoded_len(&key),
                 key,
                 expected_revision: Some(revision),
             })
-            .collect())
+            .collect::<Vec<_>>();
+        Ok(select_recent_deposit_keys_within_byte_limit(selected))
     }
 
     #[cfg(feature = "nats")]
@@ -1357,8 +1811,25 @@ impl JetStreamPheromoneSubstrate {
                     for related in replacement_orphans {
                         self.purge_deposit_key(connection, &related.key).await?;
                     }
-                    for entry in evicted {
-                        let orphaned = partition.remove_evidence_orphaned_by_feedback(&entry);
+                    for entry in &evicted {
+                        let shadowed_by_newer_eviction =
+                            entry.feedback_marker.as_ref().is_some_and(|marker| {
+                                evicted.iter().any(|candidate| {
+                                    candidate.feedback_marker.as_ref().is_some_and(
+                                        |candidate_marker| {
+                                            candidate_marker.key == marker.key
+                                                && (candidate_marker.order > marker.order
+                                                    || (candidate_marker.order == marker.order
+                                                        && candidate.key > entry.key))
+                                        },
+                                    )
+                                })
+                            });
+                        let orphaned = if shadowed_by_newer_eviction {
+                            Vec::new()
+                        } else {
+                            partition.remove_evidence_orphaned_by_feedback(entry)
+                        };
                         self.purge_deposit_key(connection, &entry.key).await?;
                         for related in orphaned {
                             self.purge_deposit_key(connection, &related.key).await?;
@@ -1534,6 +2005,7 @@ impl JetStreamPheromoneSubstrate {
             .map(|key| SelectedDepositKey {
                 key,
                 expected_revision: None,
+                expected_encoded_len: None,
             })
             .collect()
         } else if use_recent_index {
@@ -1580,6 +2052,7 @@ impl JetStreamPheromoneSubstrate {
                 .map(|(_, key)| SelectedDepositKey {
                     key,
                     expected_revision: None,
+                    expected_encoded_len: None,
                 })
                 .collect()
         };
@@ -1603,6 +2076,16 @@ impl JetStreamPheromoneSubstrate {
                     reason: format!(
                         "JetStream recent index revision {expected_revision} does not match revision {} for deposit key `{key}`",
                         entry.revision
+                    ),
+                });
+            }
+            if let Some(expected_encoded_len) = selected.expected_encoded_len
+                && expected_encoded_len != entry.value.len()
+            {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "JetStream recent index encoded length {expected_encoded_len} does not match {} bytes for deposit key `{key}`",
+                        entry.value.len()
                     ),
                 });
             }
@@ -2261,11 +2744,16 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
             policy.half_life_secs,
             policy.evaporation_threshold,
         );
+        let kind = deposit_kind(&deposit);
+        let ordinal = self
+            .allocate_recent_deposit_ordinal(connection, kind)
+            .await?;
         let key = deposit_key(
             &deposit,
             &payload,
             policy.half_life_secs,
             policy.evaporation_threshold,
+            ordinal,
         );
 
         let revision = connection
@@ -2273,14 +2761,6 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
             .put(key.clone(), payload.into())
             .await
             .map_err(|error| nats_error("put value", error))?;
-        let kind = deposit_kind(&deposit);
-        let ordinal = match self.allocate_recent_deposit_ordinal(connection, kind).await {
-            Ok(ordinal) => ordinal,
-            Err(error) => {
-                self.purge_deposit_key(connection, &key).await?;
-                return Err(error);
-            }
-        };
         let pointer = RecentDepositPointer {
             ordinal,
             kind,
@@ -2750,6 +3230,7 @@ fn deposit_key(
     payload: &[u8],
     policy_half_life_secs: f64,
     evaporation_threshold: f64,
+    ordinal: u64,
 ) -> String {
     let gc_page = expiration_gc_page(deposit, policy_half_life_secs, evaporation_threshold);
     let threat_class = threat_class_segment(&deposit.threat_class);
@@ -2764,8 +3245,9 @@ fn deposit_key(
         .unwrap_or_default()
         .as_nanos();
     format!(
-        "{GC_KEY_PREFIX}.{gc_page:020}.{threat_class}.{kind}.{:020}.{}-{deposit_hash}-{nonce}",
+        "{GC_KEY_PREFIX}.{gc_page:020}.{threat_class}.{kind}.{:020}.o{ordinal:020}-l{:020}-{}-{deposit_hash}-{nonce}",
         deposit.timestamp.max(0),
+        payload.len(),
         agent_hash
     )
 }
@@ -2902,6 +3384,46 @@ fn deposit_key_timestamp(key: &str) -> Option<i64> {
 }
 
 #[cfg(feature = "nats")]
+fn deposit_key_ordinal(key: &str) -> Option<u64> {
+    let stripped = key.strip_prefix(&format!("{GC_KEY_PREFIX}."))?;
+    let mut parts = stripped.split('.');
+    let _page = parts.next()?;
+    let _threat_class = parts.next()?;
+    let kind = parts.next()?;
+    if !matches!(kind, "evidence" | "control") {
+        return None;
+    }
+    let _timestamp = parts.next()?;
+    parts
+        .next()?
+        .split('-')
+        .next()?
+        .strip_prefix('o')?
+        .parse()
+        .ok()
+}
+
+#[cfg(feature = "nats")]
+fn deposit_key_encoded_len(key: &str) -> Option<usize> {
+    let stripped = key.strip_prefix(&format!("{GC_KEY_PREFIX}."))?;
+    let mut parts = stripped.split('.');
+    let _page = parts.next()?;
+    let _threat_class = parts.next()?;
+    let kind = parts.next()?;
+    if !matches!(kind, "evidence" | "control") {
+        return None;
+    }
+    let _timestamp = parts.next()?;
+    parts
+        .next()?
+        .split('-')
+        .nth(1)?
+        .strip_prefix('l')?
+        .parse()
+        .ok()
+}
+
+#[cfg(feature = "nats")]
 fn deposit_key_kind(key: &str) -> Option<DepositKeyKind> {
     let stripped = key.strip_prefix(&format!("{GC_KEY_PREFIX}."))?;
     match stripped.split('.').nth(2)? {
@@ -2933,7 +3455,8 @@ fn is_behavioral_baseline_key(key: &str) -> bool {
 
 #[cfg(feature = "nats")]
 fn is_recent_deposit_index_key(key: &str) -> bool {
-    key.starts_with(&format!("{RECENT_DEPOSIT_INDEX_STATE_KEY_PREFIX}."))
+    key == RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY
+        || key.starts_with(&format!("{RECENT_DEPOSIT_INDEX_STATE_KEY_PREFIX}."))
         || key.starts_with(&format!("{RECENT_DEPOSIT_INDEX_KEY_PREFIX}."))
 }
 
@@ -3077,16 +3600,17 @@ mod tests {
         DepositKeyKind, DepositKeyPartitionIndex, IndexedDepositKey, IndexedFeedbackMarker,
         JetStreamPheromoneSubstrate, MAX_DEPOSIT_KEY_INDEX_PARTITIONS,
         MAX_RECENT_DEPOSIT_INDEX_SLOTS, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication,
-        VerifiedDepositCache, deposit_key_kind, deposit_key_timestamp, evaporation_deadline,
-        expiration_gc_page, gc_sweep_page, legacy_threat_class_segment, parse_nats_endpoint,
-        recent_deposit_index_key, retain_newest_deposit_key,
-        retain_newest_partitioned_deposit_key_as, threat_class_segment,
+        SelectedDepositKey, VerifiedDepositCache, deposit_key_encoded_len, deposit_key_kind,
+        deposit_key_ordinal, deposit_key_timestamp, evaporation_deadline, expiration_gc_page,
+        gc_sweep_page, legacy_threat_class_segment, parse_nats_endpoint, recent_deposit_index_key,
+        retain_newest_deposit_key, retain_newest_partitioned_deposit_key_as,
+        select_recent_deposit_keys_within_byte_limit, threat_class_segment,
     };
     use crate::{
         PheromoneSubstrate,
         substrate::{
-            MAX_ACTIVE_DEPOSIT_BYTES, VerifiedDeposit, deposit_suppression_key,
-            feedback_suppression_marker,
+            MAX_ACTIVE_DEPOSIT_BYTES, MAX_SINGLE_DEPOSIT_BYTES, VerifiedDeposit,
+            deposit_suppression_key, feedback_suppression_marker,
         },
     };
     use ed25519_dalek::{Signer, SigningKey};
@@ -3094,7 +3618,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
@@ -3431,6 +3955,68 @@ mod tests {
     }
 
     #[test]
+    fn evicting_a_terminal_confirmation_removes_the_superseded_dismissal() {
+        let evidence = resign_sample_deposit(
+            "reviewed-evidence",
+            sample_deposit("reviewed-evidence", 100, 0.9),
+            serde_json::json!({"event_id": "event-reviewed"}),
+        );
+        let dismissal = resign_sample_deposit(
+            "reviewer-dismiss",
+            sample_deposit("reviewer-dismiss", 200, 0.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "event_id": "event-reviewed",
+                "action": "dismiss",
+                "observed_at_ms": 200_100,
+                "feedback_id": "dismiss-200100"
+            }),
+        );
+        let confirmation = resign_sample_deposit(
+            "reviewer-confirm-later",
+            sample_deposit("reviewer-confirm-later", 200, 1.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "event_id": "event-reviewed",
+                "action": "confirm",
+                "observed_at_ms": 200_900,
+                "feedback_id": "confirm-200900"
+            }),
+        );
+        let mut index = DepositKeyPartitionIndex::default();
+        for (key, deposit, kind) in [
+            ("reviewed-evidence", evidence, DepositKeyKind::Evidence),
+            ("dismissal", dismissal, DepositKeyKind::Control),
+            ("confirmation", confirmation, DepositKeyKind::Evidence),
+        ] {
+            assert!(
+                index
+                    .insert_bounded(indexed_deposit(key, deposit), kind, 10)
+                    .is_empty()
+            );
+        }
+
+        let removed = index.remove_key("confirmation").unwrap();
+        let superseded = index.remove_evidence_orphaned_by_feedback(&removed);
+        assert_eq!(
+            superseded
+                .iter()
+                .map(|entry| entry.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dismissal"]
+        );
+        assert!(index.controls.is_empty());
+        assert_eq!(
+            index
+                .evidence
+                .iter()
+                .map(|entry| entry.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["reviewed-evidence"]
+        );
+    }
+
+    #[test]
     fn bounded_index_enforces_the_aggregate_encoded_byte_limit() {
         let large = resign_sample_deposit(
             "large-index-entry",
@@ -3543,6 +4129,12 @@ mod tests {
     fn deposit_key_timestamp_supports_current_and_legacy_layouts() {
         assert_eq!(
             deposit_key_timestamp(
+                "exp.00000000000000000042.execution.evidence.00000000000000000123.o00000000000000000077-l00000000000000000456-agent"
+            ),
+            Some(123)
+        );
+        assert_eq!(
+            deposit_key_timestamp(
                 "exp.00000000000000000042.execution.evidence.00000000000000000123.agent"
             ),
             Some(123)
@@ -3557,6 +4149,102 @@ mod tests {
         );
         assert_eq!(deposit_key_timestamp("exp.invalid.execution.agent"), None);
         assert_eq!(deposit_key_timestamp("execution.invalid.agent"), None);
+    }
+
+    #[test]
+    fn deposit_key_ordinal_is_explicit_only_for_ordinal_layout() {
+        assert_eq!(
+            deposit_key_ordinal(
+                "exp.00000000000000000042.execution.evidence.00000000000000000123.o00000000000000000077-l00000000000000000456-agent"
+            ),
+            Some(77)
+        );
+        assert_eq!(
+            deposit_key_ordinal(
+                "exp.00000000000000000042.execution.evidence.00000000000000000123.agent"
+            ),
+            None
+        );
+        assert_eq!(
+            deposit_key_ordinal("exp.00000000000000000042.execution.00000000000000000123.agent"),
+            None
+        );
+        assert_eq!(
+            deposit_key_ordinal("execution.00000000000000000456.agent"),
+            None
+        );
+    }
+
+    #[test]
+    fn recent_index_state_defaults_compatibility_fields_from_prior_schema() {
+        let state =
+            serde_json::from_str::<super::RecentDepositIndexState>(r#"{"last_ordinal":42}"#)
+                .unwrap();
+        assert_eq!(state.last_ordinal, 42);
+        assert_eq!(state.last_compatibility_revision, 0);
+        assert_eq!(state.last_compatibility_key, None);
+        assert_eq!(state.last_compatibility_ordinal, 0);
+    }
+
+    #[test]
+    fn deposit_key_encoded_len_is_bound_only_by_the_compatible_suffix() {
+        assert_eq!(
+            deposit_key_encoded_len(
+                "exp.00000000000000000042.execution.evidence.00000000000000000123.o00000000000000000077-l00000000000000000456-agent"
+            ),
+            Some(456)
+        );
+        assert_eq!(
+            deposit_key_encoded_len(
+                "exp.00000000000000000042.execution.evidence.00000000000000000123.agent"
+            ),
+            None
+        );
+        assert_eq!(
+            deposit_key_encoded_len("execution.00000000000000000456.agent"),
+            None
+        );
+    }
+
+    #[test]
+    fn recent_ring_preselects_keys_under_the_aggregate_byte_ceiling() {
+        let selected = (0..200_i64)
+            .map(|timestamp| SelectedDepositKey {
+                key: format!("exp.00000000000000000042.execution.evidence.{timestamp:020}.current"),
+                expected_revision: Some(u64::try_from(timestamp + 1).unwrap()),
+                expected_encoded_len: Some(MAX_SINGLE_DEPOSIT_BYTES),
+            })
+            .collect::<Vec<_>>();
+        let selected = select_recent_deposit_keys_within_byte_limit(selected);
+        assert_eq!(
+            selected.len(),
+            MAX_ACTIVE_DEPOSIT_BYTES / MAX_SINGLE_DEPOSIT_BYTES
+        );
+        assert_eq!(
+            deposit_key_timestamp(&selected[0].key),
+            Some(199),
+            "the newest bounded candidate must be loaded first"
+        );
+        assert!(
+            selected
+                .iter()
+                .map(|candidate| candidate.expected_encoded_len.unwrap())
+                .sum::<usize>()
+                <= MAX_ACTIVE_DEPOSIT_BYTES
+        );
+
+        let legacy = (0..200_i64)
+            .map(|timestamp| SelectedDepositKey {
+                key: format!("execution.{timestamp:020}.legacy"),
+                expected_revision: None,
+                expected_encoded_len: None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            select_recent_deposit_keys_within_byte_limit(legacy).len(),
+            MAX_ACTIVE_DEPOSIT_BYTES / MAX_SINGLE_DEPOSIT_BYTES,
+            "unknown prior-layout lengths must be charged at the hard maximum"
+        );
     }
 
     #[test]
@@ -3822,8 +4510,16 @@ mod tests {
         };
         let now = now_timestamp();
         let connection = substrate.ensure_connected().await.unwrap();
-        for index in 0..2_i64 {
-            let deposit = sample_deposit(&format!("pre-index-{index}"), now - 200 + index, 0.9);
+        for index in 0..127_i64 {
+            connection
+                .store
+                .put(
+                    format!("unrelated.pre-index-noise.{index}"),
+                    b"not-json".as_slice().into(),
+                )
+                .await
+                .unwrap();
+            let deposit = sample_deposit(&format!("pre-index-{index}"), now - 500 + index, 0.9);
             let payload = serde_json::to_vec(&deposit).unwrap();
             connection
                 .store
@@ -3839,9 +4535,142 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            substrate.recent_deposits(10).await.unwrap().len(),
-            2,
-            "the first bounded read must migrate a pre-index bucket"
+            substrate.recent_deposits(100).await.unwrap().len(),
+            100,
+            "sparse historical revisions must migrate into distinct dense ring slots"
+        );
+
+        let mixed_version = sample_deposit("mixed-version-a", now - 150, 0.9);
+        connection
+            .store
+            .put(
+                format!(
+                    "exp.{:020}.execution.evidence.{:020}.mixed-version-a",
+                    expiration_gc_page(&mixed_version, 3_600.0, 0.01),
+                    mixed_version.timestamp
+                ),
+                serde_json::to_vec(&mixed_version).unwrap().into(),
+            )
+            .await
+            .unwrap();
+        let mixed_recent = substrate.recent_deposits(10).await.unwrap();
+        assert!(
+            mixed_recent
+                .iter()
+                .any(|deposit| deposit.agent_id == mixed_version.agent_id),
+            "a prior-layout writer must remain visible after index initialization"
+        );
+
+        let reopened = JetStreamPheromoneSubstrate::connect_with_bucket(
+            substrate_config(),
+            nats_url(),
+            substrate.bucket.clone(),
+        )
+        .await
+        .unwrap();
+        let mixed_version_after_reopen = sample_deposit("mixed-version-b", now - 149, 0.9);
+        connection
+            .store
+            .put(
+                format!(
+                    "exp.{:020}.execution.evidence.{:020}.mixed-version-b",
+                    expiration_gc_page(&mixed_version_after_reopen, 3_600.0, 0.01),
+                    mixed_version_after_reopen.timestamp
+                ),
+                serde_json::to_vec(&mixed_version_after_reopen)
+                    .unwrap()
+                    .into(),
+            )
+            .await
+            .unwrap();
+        let reopened_recent = reopened.recent_deposits(10).await.unwrap();
+        assert!(
+            reopened_recent
+                .iter()
+                .any(|deposit| deposit.agent_id == mixed_version_after_reopen.agent_id),
+            "the persisted compatibility cursor must resume across substrate instances"
+        );
+        assert!(
+            connection
+                .store
+                .entry(super::RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let mixed_version_concurrent = sample_deposit("mixed-version-concurrent", now - 148, 0.9);
+        connection
+            .store
+            .put(
+                format!(
+                    "exp.{:020}.execution.evidence.{:020}.mixed-version-concurrent",
+                    expiration_gc_page(&mixed_version_concurrent, 3_600.0, 0.01),
+                    mixed_version_concurrent.timestamp
+                ),
+                serde_json::to_vec(&mixed_version_concurrent)
+                    .unwrap()
+                    .into(),
+            )
+            .await
+            .unwrap();
+        let evidence_state_key = super::recent_deposit_index_state_key(DepositKeyKind::Evidence);
+        let state_before = connection
+            .store
+            .entry(&evidence_state_key)
+            .await
+            .unwrap()
+            .unwrap();
+        let state_before =
+            serde_json::from_slice::<super::RecentDepositIndexState>(&state_before.value).unwrap();
+        let concurrent_a = substrate.clone();
+        let concurrent_b = reopened.clone();
+        let (recent_a, recent_b) = tokio::join!(
+            concurrent_a.recent_deposits(10),
+            concurrent_b.recent_deposits(10)
+        );
+        assert!(
+            recent_a
+                .unwrap()
+                .iter()
+                .any(|deposit| { deposit.agent_id == mixed_version_concurrent.agent_id })
+        );
+        assert!(
+            recent_b
+                .unwrap()
+                .iter()
+                .any(|deposit| { deposit.agent_id == mixed_version_concurrent.agent_id })
+        );
+        let state_after = connection
+            .store
+            .entry(&evidence_state_key)
+            .await
+            .unwrap()
+            .unwrap();
+        let state_after =
+            serde_json::from_slice::<super::RecentDepositIndexState>(&state_after.value).unwrap();
+        assert_eq!(
+            state_after.last_ordinal,
+            state_before.last_ordinal + 1,
+            "concurrent refreshers must assign one dense ordinal to one prior-layout deposit"
+        );
+
+        let compatibility_before = connection
+            .store
+            .entry(super::RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        substrate.recent_deposits(10).await.unwrap();
+        let compatibility_after = connection
+            .store
+            .entry(super::RECENT_DEPOSIT_COMPATIBILITY_STATE_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            compatibility_after.revision, compatibility_before.revision,
+            "a read-only refresh must not chase its own compatibility-state write"
         );
 
         for index in 0..130_i64 {
@@ -3893,6 +4722,41 @@ mod tests {
             writer.await.unwrap().unwrap();
         }
         assert_eq!(substrate.recent_deposits(100).await.unwrap().len(), 100);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let live_substrate = substrate.clone();
+        let live_stop = Arc::clone(&stop);
+        let live_writes = Arc::clone(&writes);
+        let live_writer = tokio::spawn(async move {
+            let mut index = 0_u64;
+            while !live_stop.load(Ordering::Relaxed) {
+                live_substrate
+                    .deposit(sample_deposit(
+                        &format!("snapshot-overwrite-{index}"),
+                        now,
+                        0.9,
+                    ))
+                    .await
+                    .unwrap();
+                index = index.saturating_add(1);
+                live_writes.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        wait_until(|| {
+            let writes = Arc::clone(&writes);
+            async move { writes.load(Ordering::Relaxed) >= 4 }
+        })
+        .await;
+        let concurrent_snapshot =
+            tokio::time::timeout(Duration::from_secs(5), substrate.recent_deposits(100))
+                .await
+                .expect("recent ring snapshot chased live slot overwrites")
+                .unwrap();
+        stop.store(true, Ordering::Relaxed);
+        live_writer.await.unwrap();
+        assert!(!concurrent_snapshot.is_empty());
+        assert!(concurrent_snapshot.len() <= 100);
 
         let mut keys = connection.store.keys().await.unwrap();
         let mut recent_index_keys = 0_u64;

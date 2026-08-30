@@ -583,7 +583,7 @@ impl RetainedDeposits {
         }
 
         let orphaned_feedback_keys =
-            feedback_keys_requiring_evidence_purge_after_compaction(&self.entries, &removed);
+            feedback_keys_requiring_evidence_purge_after_compaction(&self.entries, &mut removed);
 
         let before = self.entries.len();
         self.entries = self
@@ -2005,35 +2005,49 @@ fn latest_feedback_suppression_states(
 
 fn feedback_keys_requiring_evidence_purge_after_compaction(
     deposits: &[VerifiedDeposit],
-    removed: &[bool],
+    removed: &mut [bool],
 ) -> BTreeSet<FeedbackSuppressionKey> {
     debug_assert_eq!(deposits.len(), removed.len());
-    let mut retained_states = BTreeMap::new();
+    let mut final_states = BTreeMap::<
+        FeedbackSuppressionKey,
+        (FeedbackSuppressionState, FeedbackSuppressionOrder, usize),
+    >::new();
     for (index, deposit) in deposits.iter().enumerate() {
-        if removed.get(index).copied().unwrap_or(true) {
-            continue;
-        }
         let Some((key, state, order)) = feedback_suppression_marker(deposit) else {
             continue;
         };
-        let replace = retained_states
+        let replace = final_states
             .get(&key)
-            .is_none_or(|(_, current_order)| current_order <= &order);
+            .is_none_or(|(_, current_order, _)| current_order <= &order);
         if replace {
-            retained_states.insert(key, (state, order));
+            final_states.insert(key, (state, order, index));
         }
     }
 
-    latest_feedback_suppression_states(deposits)
-        .into_iter()
-        .filter_map(|(key, (state, order))| {
-            (state == FeedbackSuppressionState::Dismiss
-                && retained_states
-                    .get(&key)
-                    .is_none_or(|retained| retained.0 != state || retained.1 != order))
-            .then_some(key)
-        })
-        .collect()
+    let mut evidence_purge = BTreeSet::new();
+    for (key, (state, final_order, final_index)) in final_states {
+        if !removed.get(final_index).copied().unwrap_or(true) {
+            continue;
+        }
+        // Once the terminal marker is evicted, no older marker may survive
+        // and impersonate the final analyst decision. A lost dismissal also
+        // purges the evidence it suppressed; a lost confirmation preserves
+        // ordinary evidence after removing its superseded markers.
+        for (index, deposit) in deposits.iter().enumerate() {
+            if feedback_suppression_marker(deposit).is_some_and(
+                |(candidate_key, _, candidate_order)| {
+                    candidate_key == key && candidate_order <= final_order
+                },
+            ) && let Some(slot) = removed.get_mut(index)
+            {
+                *slot = true;
+            }
+        }
+        if state == FeedbackSuppressionState::Dismiss {
+            evidence_purge.insert(key);
+        }
+    }
+    evidence_purge
 }
 
 fn is_suppressed_by_feedback(
@@ -4087,18 +4101,43 @@ mod tests {
         ))
         .unwrap();
         let deposits = vec![older_confirmation, newer_dismissal];
-        let purge = super::feedback_keys_requiring_evidence_purge_after_compaction(
-            &deposits,
-            &[false, true],
-        );
+        let mut removed = [false, true];
+        let purge =
+            super::feedback_keys_requiring_evidence_purge_after_compaction(&deposits, &mut removed);
         assert_eq!(purge.len(), 1);
         assert_eq!(purge.iter().next().unwrap().event_id, "event-final-state");
+        assert_eq!(removed, [true, true]);
 
-        let purge = super::feedback_keys_requiring_evidence_purge_after_compaction(
-            &deposits,
-            &[true, false],
-        );
+        let mut removed = [true, false];
+        let purge =
+            super::feedback_keys_requiring_evidence_purge_after_compaction(&deposits, &mut removed);
         assert!(purge.is_empty());
+        assert_eq!(removed, [true, false]);
+
+        let older_dismissal = super::VerifiedDeposit::admit(sample_feedback_deposit(
+            "reviewer-dismiss-older",
+            "event-confirm-final",
+            "dismiss",
+            200,
+        ))
+        .unwrap();
+        let newer_confirmation = super::VerifiedDeposit::admit(sample_feedback_deposit(
+            "reviewer-confirm-newer",
+            "event-confirm-final",
+            "confirm",
+            201,
+        ))
+        .unwrap();
+        let deposits = vec![older_dismissal, newer_confirmation];
+        let mut removed = [false, true];
+        let purge =
+            super::feedback_keys_requiring_evidence_purge_after_compaction(&deposits, &mut removed);
+        assert!(purge.is_empty());
+        assert_eq!(
+            removed,
+            [true, true],
+            "evicting the terminal confirmation must also remove the superseded dismissal"
+        );
     }
 
     #[cfg(unix)]
