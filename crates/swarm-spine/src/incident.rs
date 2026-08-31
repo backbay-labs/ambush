@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
@@ -11,6 +12,8 @@ use swarm_core::types::{
     ProvidenceCallbackAuditEntry, ProvidenceFeedbackAction, ProvidenceFeedbackEvidence,
     ProvidenceIncidentReconciliation, Severity, SoarVerdictLineage,
 };
+
+static INCIDENT_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Generic outbound-system reference linked to a correlated incident.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +43,17 @@ pub struct AnalystFeedbackAuditEntry {
     pub soar_lineage: Option<SoarVerdictLineage>,
     pub payload: Value,
     pub outcome: Value,
+}
+
+/// Result of atomically claiming one externally identified SOAR verdict.
+/// Exact retries observe the winner's durable entry and never repeat effects;
+/// a different request reusing the source identity is a conflict.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SoarVerdictClaimResult {
+    Claimed(AnalystFeedbackAuditEntry),
+    PendingExact(AnalystFeedbackAuditEntry),
+    CompletedExact(AnalystFeedbackAuditEntry),
+    Conflict,
 }
 
 /// Normalized latest analyst disposition for one reviewed finding.
@@ -320,6 +334,9 @@ pub enum IncidentStoreError {
 
     #[error("Providence feedback timestamp high-water is exhausted")]
     FeedbackTimestampExhausted,
+
+    #[error("feedback outcome conflicts with its durable claim: {reason}")]
+    FeedbackOutcomeConflict { reason: String },
 }
 
 /// Store contract for durable incident artifacts.
@@ -335,6 +352,11 @@ pub trait IncidentStore: Send + Sync {
         incident_id: &str,
         entry: AnalystFeedbackAuditEntry,
     ) -> Result<Option<IncidentRecord>, IncidentStoreError>;
+    fn claim_soar_verdict(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<SoarVerdictClaimResult>, IncidentStoreError>;
     fn record_feedback_outcome(
         &self,
         incident_id: &str,
@@ -399,6 +421,17 @@ impl IncidentStore for ConfiguredIncidentStore {
         match self {
             Self::Memory(store) => store.append_feedback_audit(incident_id, entry),
             Self::LocalFiles(store) => store.append_feedback_audit(incident_id, entry),
+        }
+    }
+
+    fn claim_soar_verdict(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<SoarVerdictClaimResult>, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.claim_soar_verdict(incident_id, entry),
+            Self::LocalFiles(store) => store.claim_soar_verdict(incident_id, entry),
         }
     }
 
@@ -538,6 +571,42 @@ impl IncidentStore for MemoryIncidentStore {
         )))
     }
 
+    fn claim_soar_verdict(
+        &self,
+        incident_id: &str,
+        mut entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<SoarVerdictClaimResult>, IncidentStoreError> {
+        if entry.soar_lineage.is_none() {
+            return Ok(Some(SoarVerdictClaimResult::Conflict));
+        }
+        let mut guard = self
+            .incidents
+            .write()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        if let Some((existing_incident_id, existing)) = guard.iter().find_map(|incident| {
+            find_soar_verdict_entry(incident, &entry)
+                .map(|existing| (incident.incident_id.as_str(), existing))
+        }) {
+            return Ok(Some(if existing_incident_id == incident_id {
+                classify_soar_verdict_claim(existing, &entry)
+            } else {
+                SoarVerdictClaimResult::Conflict
+            }));
+        }
+        let Some(incident) = guard
+            .iter_mut()
+            .find(|incident| incident.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        entry.received_at_ms = reserve_atomic_feedback_timestamp(
+            &self.feedback_timestamp_high_water_ms,
+            entry.received_at_ms,
+        )?;
+        incident.feedback_audit_entries.push(entry.clone());
+        Ok(Some(SoarVerdictClaimResult::Claimed(entry)))
+    }
+
     fn record_feedback_outcome(
         &self,
         incident_id: &str,
@@ -558,8 +627,7 @@ impl IncidentStore for MemoryIncidentStore {
             &self.feedback_timestamp_high_water_ms,
             entry.received_at_ms,
         );
-        incident.feedback_audit_entries.push(entry);
-        incident.upsert_false_positive_measurement(measurement);
+        commit_feedback_outcome(incident, entry, measurement)?;
         Ok(Some(IncidentRecord::from_incident(
             incident,
             "memory".to_string(),
@@ -719,7 +787,7 @@ impl FileIncidentStore {
                 path: path.clone(),
                 source,
             })?;
-        fs::write(&path, raw).map_err(|source| IncidentStoreError::Write { path, source })
+        write_file_atomically(&path, raw.as_bytes())
     }
 
     fn incident_path(&self, incident_id: &str) -> PathBuf {
@@ -734,10 +802,7 @@ impl FileIncidentStore {
                 path: path.clone(),
                 source,
             })?;
-        fs::write(&path, raw).map_err(|source| IncidentStoreError::Write {
-            path: path.clone(),
-            source,
-        })?;
+        write_file_atomically(&path, raw.as_bytes())?;
         Ok(path
             .strip_prefix(&self.root)
             .unwrap_or(&path)
@@ -755,6 +820,56 @@ impl FileIncidentStore {
             .map_err(|source| IncidentStoreError::Parse { path, source })?;
         Ok(IncidentLookup { record, incident })
     }
+}
+
+/// Replace one incident-store document durably without ever exposing partial
+/// JSON. The caller holds the cross-process store lock, so a unique sibling
+/// temporary plus file and directory fsync establishes the commit boundary.
+fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), IncidentStoreError> {
+    let parent = path.parent().ok_or_else(|| IncidentStoreError::Write {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "incident store path has no parent",
+        ),
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("incident-store");
+    let suffix = INCIDENT_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(
+        ".{file_name}.tmp.{}.{}",
+        std::process::id(),
+        suffix
+    ));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|source| IncidentStoreError::Write {
+            path: temporary.clone(),
+            source,
+        })?;
+    let result = (|| -> std::io::Result<()> {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        File::open(parent)?.sync_all()
+    })();
+    if let Err(source) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(IncidentStoreError::Write {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
 }
 
 impl IncidentStore for FileIncidentStore {
@@ -845,6 +960,64 @@ impl IncidentStore for FileIncidentStore {
         Ok(Some(updated))
     }
 
+    fn claim_soar_verdict(
+        &self,
+        incident_id: &str,
+        mut entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<SoarVerdictClaimResult>, IncidentStoreError> {
+        if entry.soar_lineage.is_none() {
+            return Ok(Some(SoarVerdictClaimResult::Conflict));
+        }
+        let _guard = self.lock_mutation()?;
+        let mut index = self.read_index()?;
+        let Some(entry_index) = index
+            .entries
+            .iter()
+            .position(|candidate| candidate.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        for record in &index.entries {
+            let candidate = self.read_incident(record.clone())?;
+            if let Some(existing) = find_soar_verdict_entry(&candidate.incident, &entry) {
+                return Ok(Some(if record.incident_id == incident_id {
+                    classify_soar_verdict_claim(existing, &entry)
+                } else {
+                    SoarVerdictClaimResult::Conflict
+                }));
+            }
+        }
+        let record = index.entries[entry_index].clone();
+        let mut lookup = self.read_incident(record)?;
+
+        let current = index.feedback_timestamp_high_water_ms.unwrap_or_else(|| {
+            index
+                .entries
+                .iter()
+                .flat_map(|record| &record.feedback_audit_entries)
+                .map(|audit| audit.received_at_ms)
+                .max()
+                .unwrap_or(0)
+        });
+        let reserved = current
+            .checked_add(1)
+            .map(|next| entry.received_at_ms.max(next))
+            .ok_or(IncidentStoreError::FeedbackTimestampExhausted)?;
+        entry.received_at_ms = reserved;
+
+        // Commit the clock reservation before the claim becomes observable.
+        // A failure after this write can leave only a harmless timestamp gap;
+        // it can never permit reuse after a side effect.
+        index.feedback_timestamp_high_water_ms = Some(reserved);
+        self.write_index(&index)?;
+
+        lookup.incident.feedback_audit_entries.push(entry.clone());
+        let bundle_path = self.write_incident(&lookup.incident)?;
+        index.entries[entry_index] = IncidentRecord::from_incident(&lookup.incident, bundle_path);
+        self.write_index(&index)?;
+        Ok(Some(SoarVerdictClaimResult::Claimed(entry)))
+    }
+
     fn record_feedback_outcome(
         &self,
         incident_id: &str,
@@ -863,10 +1036,7 @@ impl IncidentStore for FileIncidentStore {
         let record = index.entries[entry_index].clone();
         let mut lookup = self.read_incident(record)?;
         let received_at_ms = entry.received_at_ms;
-        lookup.incident.feedback_audit_entries.push(entry);
-        lookup
-            .incident
-            .upsert_false_positive_measurement(measurement);
+        commit_feedback_outcome(&mut lookup.incident, entry, measurement)?;
         let bundle_path = self.write_incident(&lookup.incident)?;
         let updated = IncidentRecord::from_incident(&lookup.incident, bundle_path);
         index.entries[entry_index] = updated.clone();
@@ -968,6 +1138,95 @@ struct IncidentIndex {
     entries: Vec<IncidentRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     feedback_timestamp_high_water_ms: Option<i64>,
+}
+
+fn find_soar_verdict_entry<'a>(
+    incident: &'a CorrelatedIncident,
+    proposed: &AnalystFeedbackAuditEntry,
+) -> Option<&'a AnalystFeedbackAuditEntry> {
+    let proposed_lineage = proposed.soar_lineage.as_ref()?;
+    incident.feedback_audit_entries.iter().find(|existing| {
+        existing.soar_lineage.as_ref().is_some_and(|lineage| {
+            lineage.source_system == proposed_lineage.source_system
+                && lineage.source_verdict_id == proposed_lineage.source_verdict_id
+        })
+    })
+}
+
+fn classify_soar_verdict_claim(
+    existing: &AnalystFeedbackAuditEntry,
+    proposed: &AnalystFeedbackAuditEntry,
+) -> SoarVerdictClaimResult {
+    if !same_soar_verdict_request(existing, proposed) {
+        return SoarVerdictClaimResult::Conflict;
+    }
+    if existing.evidence.is_some() {
+        SoarVerdictClaimResult::CompletedExact(existing.clone())
+    } else {
+        SoarVerdictClaimResult::PendingExact(existing.clone())
+    }
+}
+
+fn same_soar_verdict_request(
+    left: &AnalystFeedbackAuditEntry,
+    right: &AnalystFeedbackAuditEntry,
+) -> bool {
+    left.feedback_id == right.feedback_id
+        && left.action == right.action
+        && left.analyst_id == right.analyst_id
+        && left.incident_id == right.incident_id
+        && left.finding_id == right.finding_id
+        && left.reason == right.reason
+        && left.request_signature == right.request_signature
+        && left.soar_lineage == right.soar_lineage
+        && left.payload == right.payload
+}
+
+fn commit_feedback_outcome(
+    incident: &mut CorrelatedIncident,
+    entry: AnalystFeedbackAuditEntry,
+    measurement: FalsePositiveMeasurement,
+) -> Result<(), IncidentStoreError> {
+    if entry.soar_lineage.is_some() {
+        let existing_index = incident
+            .feedback_audit_entries
+            .iter()
+            .position(|existing| {
+                let Some(existing_lineage) = existing.soar_lineage.as_ref() else {
+                    return false;
+                };
+                let Some(proposed_lineage) = entry.soar_lineage.as_ref() else {
+                    return false;
+                };
+                existing_lineage.source_system == proposed_lineage.source_system
+                    && existing_lineage.source_verdict_id == proposed_lineage.source_verdict_id
+            })
+            .ok_or_else(|| IncidentStoreError::FeedbackOutcomeConflict {
+                reason: "SOAR outcome has no prior source-verdict claim".to_string(),
+            })?;
+        let existing = &incident.feedback_audit_entries[existing_index];
+        if !same_soar_verdict_request(existing, &entry)
+            || existing.received_at_ms != entry.received_at_ms
+        {
+            return Err(IncidentStoreError::FeedbackOutcomeConflict {
+                reason: "SOAR outcome does not match the claimed request and timestamp".to_string(),
+            });
+        }
+        if existing.evidence.is_some() {
+            if existing != &entry {
+                return Err(IncidentStoreError::FeedbackOutcomeConflict {
+                    reason: "SOAR source verdict already completed with a different outcome"
+                        .to_string(),
+                });
+            }
+        } else {
+            incident.feedback_audit_entries[existing_index] = entry;
+        }
+    } else {
+        incident.feedback_audit_entries.push(entry);
+    }
+    incident.upsert_false_positive_measurement(measurement);
+    Ok(())
 }
 
 /// Preserve append-only operator state when a caller persists a correlation
@@ -1233,10 +1492,14 @@ mod tests {
         AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
         FalsePositiveMeasurement, FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension,
         IncidentMemberDecision, IncidentStore, IncidentStoreHealth, MemoryIncidentStore,
+        SoarVerdictClaimResult,
     };
     use swarm_core::config::BundleStoreConfig;
     use swarm_core::pheromone::ThreatClass;
-    use swarm_core::types::{ProvidenceFeedbackAction, Severity};
+    use swarm_core::types::{
+        ProvidenceFeedbackAction, ProvidenceFeedbackEvidence, Severity, SoarSourceSystem,
+        SoarVerdictLineage,
+    };
 
     fn sample_incident() -> CorrelatedIncident {
         CorrelatedIncident {
@@ -1601,6 +1864,143 @@ mod tests {
             store.reserve_feedback_timestamp_ms(1).unwrap(),
             1_700_000_001_016
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_store_atomically_claims_exact_soar_retries_across_instances() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-soar-claims-{}-{}",
+            std::process::id(),
+            super::INCIDENT_TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        let incident = sample_incident();
+        store.persist(&incident).unwrap();
+        let proposed = AnalystFeedbackAuditEntry {
+            feedback_id: "soar-verdict:splunk_soar:verdict-1".to_string(),
+            received_at_ms: 1_700_000_003_000,
+            action: ProvidenceFeedbackAction::Dismiss,
+            analyst_id: "soar:reviewer-1".to_string(),
+            incident_id: incident.incident_id.clone(),
+            finding_id: Some("finding-1".to_string()),
+            reason: Some("benign administration".to_string()),
+            request_signature: "ed25519=deterministic".to_string(),
+            evidence: None,
+            soar_lineage: Some(SoarVerdictLineage {
+                source_system: SoarSourceSystem::SplunkSoar,
+                source_verdict_id: "verdict-1".to_string(),
+                verdict_at_ms: 1_700_000_002_900,
+                source_case_id: Some("case-1".to_string()),
+                source_case_url: None,
+            }),
+            payload: serde_json::json!({"source_verdict_id": "verdict-1"}),
+            outcome: serde_json::json!({"status": "applying"}),
+        };
+
+        let claims = (0..16)
+            .map(|_| {
+                let root = root.clone();
+                let incident_id = incident.incident_id.clone();
+                let proposed = proposed.clone();
+                std::thread::spawn(move || {
+                    FileIncidentStore::open(root)
+                        .unwrap()
+                        .claim_soar_verdict(&incident_id, proposed)
+                        .unwrap()
+                        .unwrap()
+                })
+            })
+            .map(|claim| claim.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            claims
+                .iter()
+                .filter(|claim| matches!(claim, SoarVerdictClaimResult::Claimed(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            claims
+                .iter()
+                .filter(|claim| matches!(claim, SoarVerdictClaimResult::PendingExact(_)))
+                .count(),
+            15
+        );
+        let claimed = claims
+            .into_iter()
+            .find_map(|claim| match claim {
+                SoarVerdictClaimResult::Claimed(entry) => Some(entry),
+                _ => None,
+            })
+            .unwrap();
+        let reloaded = FileIncidentStore::open(&root)
+            .unwrap()
+            .load_by_incident_id(&incident.incident_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reloaded.incident.feedback_audit_entries,
+            vec![claimed.clone()]
+        );
+
+        let mut completed = claimed.clone();
+        completed.evidence = Some(ProvidenceFeedbackEvidence {
+            schema: "swarm.providence.feedback.v1".to_string(),
+            schema_version: 1,
+            threat_class: ThreatClass::Execution,
+            agent_id: "agent:feedback".to_string(),
+            signed_at_ms: claimed.received_at_ms,
+            signature_hex: "00".repeat(64),
+        });
+        completed.outcome = serde_json::json!({"status": "recorded"});
+        store
+            .record_feedback_outcome(
+                &incident.incident_id,
+                completed.clone(),
+                FalsePositiveMeasurement {
+                    finding_id: "finding-1".to_string(),
+                    hunt_id: "hunt-1".to_string(),
+                    strategy_id: "strategy-1".to_string(),
+                    host_id: Some("host-1".to_string()),
+                    feedback_id: completed.feedback_id.clone(),
+                    reviewed_at_ms: completed.received_at_ms,
+                    analyst_id: completed.analyst_id.clone(),
+                    action: completed.action,
+                    reason: completed.reason.clone(),
+                    soar_lineage: completed.soar_lineage.clone(),
+                    false_positive: true,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            FileIncidentStore::open(&root)
+                .unwrap()
+                .claim_soar_verdict(&incident.incident_id, proposed.clone())
+                .unwrap()
+                .unwrap(),
+            SoarVerdictClaimResult::CompletedExact(completed)
+        );
+        let mut conflict = proposed;
+        conflict.reason = Some("different immutable request".to_string());
+        assert_eq!(
+            store
+                .claim_soar_verdict(&incident.incident_id, conflict)
+                .unwrap()
+                .unwrap(),
+            SoarVerdictClaimResult::Conflict
+        );
+        for directory in [&root, &root.join("incidents")] {
+            assert!(std::fs::read_dir(directory).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".tmp.")
+            }));
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 }

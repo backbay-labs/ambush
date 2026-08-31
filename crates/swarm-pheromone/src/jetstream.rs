@@ -87,7 +87,7 @@ struct CachedVerifiedDeposit {
 }
 
 #[cfg(feature = "nats")]
-#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecentDepositPointer {
     ordinal: u64,
@@ -257,24 +257,21 @@ fn select_recent_deposit_keys_within_byte_limit(
     mut selected: Vec<SelectedDepositKey>,
 ) -> Vec<SelectedDepositKey> {
     selected.sort_by(|left, right| {
-        deposit_key_timestamp(&right.key)
-            .cmp(&deposit_key_timestamp(&left.key))
-            // Dismissals are zero-strength control records. When evidence and
-            // its terminal dismissal share a second-resolution timestamp,
-            // admit the control record first so the byte ceiling can never
-            // retain the evidence while dropping the decision that governs it.
-            .then_with(|| {
-                right
+        // Control records include terminal dismissals. Admit the bounded
+        // control ring before evidence regardless of event-time skew so a
+        // future-dated finding cannot consume the byte budget ahead of the
+        // signed disposition that governs it.
+        right
+            .kind
+            .or_else(|| deposit_key_kind(&right.key))
+            .map(deposit_kind_selection_priority)
+            .cmp(
+                &left
                     .kind
-                    .or_else(|| deposit_key_kind(&right.key))
-                    .map(deposit_kind_selection_priority)
-                    .cmp(
-                        &left
-                            .kind
-                            .or_else(|| deposit_key_kind(&left.key))
-                            .map(deposit_kind_selection_priority),
-                    )
-            })
+                    .or_else(|| deposit_key_kind(&left.key))
+                    .map(deposit_kind_selection_priority),
+            )
+            .then_with(|| deposit_key_timestamp(&right.key).cmp(&deposit_key_timestamp(&left.key)))
             .then_with(|| right.key.cmp(&left.key))
     });
     let mut selected_bytes = 0usize;
@@ -892,6 +889,7 @@ impl JetStreamPheromoneSubstrate {
             retain_newest_deposit_key(window, key, MAX_RECENT_DEPOSIT_INDEX_SLOTS as usize);
         }
 
+        let mut compatibility_high_water = migration_high_water;
         for (kind, window) in [
             (DepositKeyKind::Evidence, evidence_window),
             (DepositKeyKind::Control, control_window),
@@ -929,20 +927,28 @@ impl JetStreamPheromoneSubstrate {
                 }
                 pointers.push((key, entry.revision));
             }
-            for pointer in migration_recent_deposit_pointers(kind, pointers, migration_high_water)?
-            {
+            let existing = self
+                .existing_recent_deposit_pointers(connection, kind)
+                .await?;
+            let (migration_pointers, effective_high_water) =
+                migration_recent_deposit_pointers(kind, pointers, migration_high_water, &existing)?;
+            for pointer in migration_pointers {
                 self.write_recent_deposit_pointer(connection, &pointer)
                     .await?;
             }
             self.publish_recent_deposit_index_state_at_least(
                 connection,
                 kind,
-                migration_high_water,
+                effective_high_water,
             )
             .await?;
+            compatibility_high_water = compatibility_high_water.max(effective_high_water);
         }
-        self.publish_recent_deposit_compatibility_state_at_least(connection, migration_high_water)
-            .await?;
+        self.publish_recent_deposit_compatibility_state_at_least(
+            connection,
+            compatibility_high_water,
+        )
+        .await?;
 
         Ok(())
     }
@@ -1607,6 +1613,52 @@ impl JetStreamPheromoneSubstrate {
                 "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
             ),
         })
+    }
+
+    #[cfg(feature = "nats")]
+    async fn existing_recent_deposit_pointers(
+        &self,
+        connection: &JetStreamConnection,
+        kind: DepositKeyKind,
+    ) -> Result<Vec<RecentDepositPointer>, SubstrateError> {
+        use async_nats::jetstream::kv::Operation;
+
+        let mut pointers = Vec::new();
+        for slot in 0..MAX_RECENT_DEPOSIT_INDEX_SLOTS {
+            let key = recent_deposit_index_key(kind, slot);
+            let Some(entry) = connection
+                .store
+                .entry(&key)
+                .await
+                .map_err(|error| nats_error("read existing recent-deposit pointer", error))?
+            else {
+                continue;
+            };
+            if matches!(entry.operation, Operation::Delete | Operation::Purge) {
+                continue;
+            }
+            let location = format!("jetstream://{}/{}", self.bucket, key);
+            let pointer = serde_json::from_slice::<RecentDepositPointer>(&entry.value)
+                .map_err(|source| SubstrateError::Decode { location, source })?;
+            if pointer.ordinal == 0
+                || pointer.deposit_revision == 0
+                || pointer.kind != kind
+                || pointer.ordinal % MAX_RECENT_DEPOSIT_INDEX_SLOTS != slot
+                || deposit_key_timestamp(&pointer.deposit_key).is_none()
+                || deposit_key_ordinal(&pointer.deposit_key)
+                    .is_some_and(|ordinal| ordinal != pointer.ordinal)
+                || deposit_key_kind(&pointer.deposit_key)
+                    .is_some_and(|key_kind| key_kind != pointer.kind)
+            {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "JetStream recent index key `{key}` contains an invalid existing pointer"
+                    ),
+                });
+            }
+            pointers.push(pointer);
+        }
+        Ok(pointers)
     }
 
     #[cfg(feature = "nats")]
@@ -3386,7 +3438,9 @@ fn migration_recent_deposit_pointers(
     kind: DepositKeyKind,
     pointers: Vec<(String, u64)>,
     boundary_stream_sequence: u64,
-) -> Result<Vec<RecentDepositPointer>, SubstrateError> {
+    existing: &[RecentDepositPointer],
+) -> Result<(Vec<RecentDepositPointer>, u64), SubstrateError> {
+    let selected_pointers = pointers.clone();
     let mut current_by_slot = BTreeMap::<u64, RecentDepositPointer>::new();
     let mut legacy = Vec::new();
 
@@ -3455,7 +3509,211 @@ fn migration_recent_deposit_pointers(
         },
     ));
     output.sort_by_key(|pointer| pointer.ordinal);
-    Ok(output)
+
+    let selected_count =
+        u64::try_from(selected_pointers.len()).map_err(|_| SubstrateError::InvalidDeposit {
+            reason: "JetStream migration window exceeds the supported ordinal range".to_string(),
+        })?;
+    let mut prior_boundary = None;
+    for existing_pointer in existing {
+        let Some((index, _)) = selected_pointers
+            .iter()
+            .enumerate()
+            .find(|(_, (key, revision))| {
+                key == &existing_pointer.deposit_key
+                    && revision == &existing_pointer.deposit_revision
+            })
+        else {
+            continue;
+        };
+        if output.iter().any(|candidate| candidate == existing_pointer) {
+            continue;
+        }
+        let index = u64::try_from(index).map_err(|_| SubstrateError::InvalidDeposit {
+            reason: "JetStream migration window exceeds the supported ordinal range".to_string(),
+        })?;
+        let remaining = selected_count.saturating_sub(index.saturating_add(1));
+        let inferred = existing_pointer.ordinal.checked_add(remaining).ok_or_else(|| {
+            SubstrateError::InvalidDeposit {
+                reason: "JetStream previous-version migration boundary overflows the supported ordinal range"
+                    .to_string(),
+            }
+        })?;
+        match prior_boundary {
+            Some(boundary) if boundary != inferred => {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason:
+                        "JetStream migration found inconsistent previous-version partial mappings"
+                            .to_string(),
+                });
+            }
+            _ => prior_boundary = Some(inferred),
+        }
+    }
+
+    let Some(prior_boundary) = prior_boundary else {
+        return Ok((output, boundary_stream_sequence));
+    };
+    let first_ordinal = prior_boundary
+        .saturating_sub(selected_count)
+        .saturating_add(1);
+    let prior_mapping = selected_pointers
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, (deposit_key, deposit_revision))| {
+            let index = u64::try_from(index).map_err(|_| SubstrateError::InvalidDeposit {
+                reason: "JetStream migration window exceeds the supported ordinal range"
+                    .to_string(),
+            })?;
+            Ok(RecentDepositPointer {
+                ordinal: first_ordinal.saturating_add(index),
+                kind,
+                deposit_key,
+                deposit_revision,
+            })
+        })
+        .collect::<Result<Vec<_>, SubstrateError>>()?;
+    let previous_version_stop = prior_mapping
+        .iter()
+        .position(|pointer| {
+            deposit_key_ordinal(&pointer.deposit_key)
+                .is_some_and(|embedded| embedded != pointer.ordinal)
+        })
+        .unwrap_or(prior_mapping.len());
+    for existing_pointer in existing {
+        if output.iter().any(|candidate| candidate == existing_pointer) {
+            continue;
+        }
+        let prior_index = prior_mapping.iter().position(|candidate| {
+            candidate.deposit_key == existing_pointer.deposit_key
+                && candidate.deposit_revision == existing_pointer.deposit_revision
+        });
+        if prior_index.is_some_and(|index| {
+            index >= previous_version_stop || &prior_mapping[index] != existing_pointer
+        }) {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: "JetStream migration found a partial mapping that cannot converge with the previous-version boundary"
+                    .to_string(),
+            });
+        }
+    }
+
+    // The previous implementation stops before writing a current-layout key
+    // whose embedded ordinal differs from its independently captured dense
+    // mapping. Preserve the prefix it could have written, preserve all
+    // immutable current-layout ordinals, and deterministically fill only the
+    // remaining legacy slots. This converges even when old and new binaries
+    // overlap during a rolling deployment.
+    let mut fixed_by_slot = BTreeMap::<u64, RecentDepositPointer>::new();
+    let insert_fixed = |fixed: &mut BTreeMap<u64, RecentDepositPointer>,
+                        pointer: RecentDepositPointer| {
+        let slot = pointer.ordinal % MAX_RECENT_DEPOSIT_INDEX_SLOTS;
+        match fixed.get(&slot) {
+            Some(current) if current.ordinal == pointer.ordinal && current != &pointer => {
+                Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "JetStream migration ordinal {} identifies conflicting fixed deposits",
+                        pointer.ordinal
+                    ),
+                })
+            }
+            Some(current) if current.ordinal >= pointer.ordinal => Ok(()),
+            _ => {
+                fixed.insert(slot, pointer);
+                Ok(())
+            }
+        }
+    };
+    for pointer in prior_mapping.iter().take(previous_version_stop).cloned() {
+        insert_fixed(&mut fixed_by_slot, pointer)?;
+    }
+    for ((deposit_key, deposit_revision), current_pointer) in
+        selected_pointers.iter().zip(&prior_mapping)
+    {
+        if let Some(ordinal) = deposit_key_ordinal(deposit_key) {
+            insert_fixed(
+                &mut fixed_by_slot,
+                RecentDepositPointer {
+                    ordinal,
+                    kind,
+                    deposit_key: deposit_key.clone(),
+                    deposit_revision: *deposit_revision,
+                },
+            )?;
+        } else if existing.iter().any(|pointer| {
+            pointer.deposit_key == current_pointer.deposit_key
+                && pointer.deposit_revision == current_pointer.deposit_revision
+                && output.iter().any(|candidate| candidate == pointer)
+        }) {
+            let existing_pointer = existing
+                .iter()
+                .find(|pointer| {
+                    pointer.deposit_key == current_pointer.deposit_key
+                        && pointer.deposit_revision == current_pointer.deposit_revision
+                        && output.iter().any(|candidate| candidate == *pointer)
+                })
+                .cloned()
+                .ok_or_else(|| SubstrateError::InvalidDeposit {
+                    reason: "JetStream migration lost an existing fixed pointer during planning"
+                        .to_string(),
+                })?;
+            insert_fixed(&mut fixed_by_slot, existing_pointer)?;
+        }
+    }
+
+    let mut remaining_legacy = selected_pointers
+        .iter()
+        .enumerate()
+        .filter(|(index, (key, revision))| {
+            *index >= previous_version_stop
+                && deposit_key_ordinal(key).is_none()
+                && !fixed_by_slot.values().any(|pointer| {
+                    pointer.deposit_key == *key && pointer.deposit_revision == *revision
+                })
+        })
+        .map(|(_, pointer)| pointer.clone())
+        .collect::<Vec<_>>();
+    let effective_boundary = fixed_by_slot
+        .values()
+        .map(|pointer| pointer.ordinal)
+        .max()
+        .unwrap_or(0)
+        .max(boundary_stream_sequence)
+        .max(prior_boundary);
+    let first_candidate = effective_boundary
+        .saturating_sub(MAX_RECENT_DEPOSIT_INDEX_SLOTS.saturating_sub(1))
+        .max(1);
+    let mut available_ordinals = (first_candidate..=effective_boundary)
+        .filter(|ordinal| !fixed_by_slot.contains_key(&(ordinal % MAX_RECENT_DEPOSIT_INDEX_SLOTS)))
+        .collect::<Vec<_>>();
+    if remaining_legacy.len() > available_ordinals.len() {
+        return Err(SubstrateError::InvalidDeposit {
+            reason:
+                "JetStream mixed-version migration has more legacy deposits than free ring slots"
+                    .to_string(),
+        });
+    }
+    let retained_start = available_ordinals
+        .len()
+        .saturating_sub(remaining_legacy.len());
+    available_ordinals.drain(..retained_start);
+    for ((deposit_key, deposit_revision), ordinal) in
+        remaining_legacy.drain(..).zip(available_ordinals)
+    {
+        insert_fixed(
+            &mut fixed_by_slot,
+            RecentDepositPointer {
+                ordinal,
+                kind,
+                deposit_key,
+                deposit_revision,
+            },
+        )?;
+    }
+    let mut converged = fixed_by_slot.into_values().collect::<Vec<_>>();
+    converged.sort_by_key(|pointer| pointer.ordinal);
+    Ok((converged, effective_boundary))
 }
 
 #[cfg(feature = "nats")]
@@ -3777,12 +4035,12 @@ mod tests {
         DepositKeyKind, DepositKeyPartitionIndex, IndexedDepositKey, IndexedFeedbackMarker,
         JetStreamPheromoneSubstrate, MAX_DEPOSIT_KEY_INDEX_PARTITIONS,
         MAX_RECENT_DEPOSIT_INDEX_SLOTS, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication,
-        SelectedDepositKey, VerifiedDepositCache, deposit_key_encoded_len, deposit_key_kind,
-        deposit_key_ordinal, deposit_key_timestamp, evaporation_deadline, expiration_gc_page,
-        gc_sweep_page, legacy_threat_class_segment, migration_recent_deposit_pointers,
-        parse_nats_endpoint, recent_deposit_index_key, retain_newest_deposit_key,
-        retain_newest_partitioned_deposit_key_as, select_recent_deposit_keys_within_byte_limit,
-        threat_class_segment,
+        RecentDepositPointer, SelectedDepositKey, VerifiedDepositCache, deposit_key_encoded_len,
+        deposit_key_kind, deposit_key_ordinal, deposit_key_timestamp, evaporation_deadline,
+        expiration_gc_page, gc_sweep_page, legacy_threat_class_segment,
+        migration_recent_deposit_pointers, parse_nats_endpoint, recent_deposit_index_key,
+        retain_newest_deposit_key, retain_newest_partitioned_deposit_key_as,
+        select_recent_deposit_keys_within_byte_limit, threat_class_segment,
     };
     use crate::{
         PheromoneSubstrate,
@@ -4430,10 +4688,11 @@ mod tests {
     #[test]
     fn recent_ring_prioritizes_dismissal_controls_at_the_byte_boundary() {
         let timestamp = 1_700_000_000_i64;
+        let future_evidence_timestamp = timestamp + 300;
         let mut selected = (0..(MAX_ACTIVE_DEPOSIT_BYTES / MAX_SINGLE_DEPOSIT_BYTES))
             .map(|index| SelectedDepositKey {
                 key: format!(
-                    "exp.00000000000000000042.execution.evidence.{timestamp:020}.o{index:020}-l{MAX_SINGLE_DEPOSIT_BYTES:020}-evidence-{index}"
+                    "exp.00000000000000000042.execution.evidence.{future_evidence_timestamp:020}.o{index:020}-l{MAX_SINGLE_DEPOSIT_BYTES:020}-evidence-{index}"
                 ),
                 kind: Some(DepositKeyKind::Evidence),
                 expected_revision: Some(u64::try_from(index + 1).unwrap()),
@@ -4478,12 +4737,14 @@ mod tests {
             ),
         ];
 
-        let first =
-            migration_recent_deposit_pointers(DepositKeyKind::Evidence, inputs.clone(), 200)
+        let (first, first_boundary) =
+            migration_recent_deposit_pointers(DepositKeyKind::Evidence, inputs.clone(), 200, &[])
                 .unwrap();
-        let second =
-            migration_recent_deposit_pointers(DepositKeyKind::Evidence, inputs, 200).unwrap();
+        let (second, second_boundary) =
+            migration_recent_deposit_pointers(DepositKeyKind::Evidence, inputs, 200, &[]).unwrap();
         assert_eq!(first, second);
+        assert_eq!(first_boundary, 200);
+        assert_eq!(second_boundary, 200);
         assert_eq!(
             first
                 .iter()
@@ -4497,6 +4758,77 @@ mod tests {
             .map(|pointer| pointer.ordinal % MAX_RECENT_DEPOSIT_INDEX_SLOTS)
             .collect::<BTreeSet<_>>();
         assert_eq!(slots.len(), first.len());
+    }
+
+    #[test]
+    fn migration_resumes_previous_version_partial_mapping_at_its_boundary() {
+        let first_key =
+            "exp.00000000000000000042.execution.00000000000000000121.legacy-a".to_string();
+        let second_key =
+            "exp.00000000000000000042.execution.00000000000000000122.legacy-b".to_string();
+        let inputs = vec![(first_key.clone(), 120), (second_key.clone(), 121)];
+        let existing = vec![RecentDepositPointer {
+            ordinal: 200,
+            kind: DepositKeyKind::Evidence,
+            deposit_key: first_key,
+            deposit_revision: 120,
+        }];
+
+        let (pointers, effective_boundary) =
+            migration_recent_deposit_pointers(DepositKeyKind::Evidence, inputs, 200, &existing)
+                .unwrap();
+
+        assert_eq!(effective_boundary, 201);
+        assert_eq!(pointers.len(), 2);
+        assert_eq!(pointers[0], existing[0]);
+        assert_eq!(pointers[1].ordinal, 201);
+        assert_eq!(pointers[1].deposit_key, second_key);
+    }
+
+    #[test]
+    fn migration_converges_a_previous_version_prefix_before_a_current_layout_stop() {
+        let legacy_a =
+            "exp.00000000000000000042.execution.00000000000000000121.legacy-a".to_string();
+        let current = "exp.00000000000000000042.execution.evidence.00000000000000000122.o00000000000000000077-l00000000000000000456-current".to_string();
+        let legacy_b =
+            "exp.00000000000000000042.execution.00000000000000000123.legacy-b".to_string();
+        let inputs = vec![
+            (legacy_a.clone(), 120),
+            (current.clone(), 121),
+            (legacy_b.clone(), 122),
+        ];
+        let previous_prefix = RecentDepositPointer {
+            ordinal: 200,
+            kind: DepositKeyKind::Evidence,
+            deposit_key: legacy_a.clone(),
+            deposit_revision: 120,
+        };
+
+        let (pointers, effective_boundary) = migration_recent_deposit_pointers(
+            DepositKeyKind::Evidence,
+            inputs,
+            200,
+            std::slice::from_ref(&previous_prefix),
+        )
+        .unwrap();
+
+        assert_eq!(effective_boundary, 202);
+        assert!(pointers.contains(&previous_prefix));
+        assert!(
+            pointers
+                .iter()
+                .any(|pointer| { pointer.deposit_key == current && pointer.ordinal == 77 })
+        );
+        assert!(
+            pointers
+                .iter()
+                .any(|pointer| { pointer.deposit_key == legacy_b && pointer.ordinal == 202 })
+        );
+        let slots = pointers
+            .iter()
+            .map(|pointer| pointer.ordinal % MAX_RECENT_DEPOSIT_INDEX_SLOTS)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(slots.len(), pointers.len());
     }
 
     #[test]
@@ -4825,6 +5157,103 @@ mod tests {
             serde_json::from_slice::<super::RecentDepositPointer>(&pointer_entry.value).unwrap();
         assert_eq!(pointer.ordinal, 77);
         assert_eq!(pointer.deposit_key, current_key);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
+    async fn jetstream_migration_completes_a_previous_version_partial_mapping() {
+        let Some((_bucket, substrate)) = connect_for_test("migration-previous-partial").await
+        else {
+            return;
+        };
+        let connection = substrate.ensure_connected().await.unwrap();
+        let now = now_timestamp();
+        let first = sample_deposit("migration-previous-a", now - 2, 0.9);
+        let first_key = format!(
+            "exp.{:020}.execution.{:020}.migration-previous-a",
+            expiration_gc_page(&first, 3_600.0, 0.01),
+            first.timestamp
+        );
+        let first_revision = connection
+            .store
+            .put(
+                first_key.clone(),
+                serde_json::to_vec(&first).unwrap().into(),
+            )
+            .await
+            .unwrap();
+        let second = sample_deposit("migration-previous-b", now - 1, 0.8);
+        let second_key = format!(
+            "exp.{:020}.execution.{:020}.migration-previous-b",
+            expiration_gc_page(&second, 3_600.0, 0.01),
+            second.timestamp
+        );
+        let second_revision = connection
+            .store
+            .put(
+                second_key.clone(),
+                serde_json::to_vec(&second).unwrap().into(),
+            )
+            .await
+            .unwrap();
+
+        let shared_boundary = substrate
+            .recent_deposit_migration_boundary(connection)
+            .await
+            .unwrap();
+        assert_eq!(shared_boundary, second_revision);
+        let previous_version_boundary = connection
+            .store
+            .stream
+            .get_info()
+            .await
+            .unwrap()
+            .state
+            .last_sequence;
+        assert!(previous_version_boundary > shared_boundary);
+        let previous_first_ordinal = previous_version_boundary - 1;
+        substrate
+            .write_recent_deposit_pointer(
+                connection,
+                &RecentDepositPointer {
+                    ordinal: previous_first_ordinal,
+                    kind: DepositKeyKind::Evidence,
+                    deposit_key: first_key.clone(),
+                    deposit_revision: first_revision,
+                },
+            )
+            .await
+            .unwrap();
+
+        let recent = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(recent.len(), 2);
+        let first_pointer = connection
+            .store
+            .entry(&recent_deposit_index_key(
+                DepositKeyKind::Evidence,
+                previous_first_ordinal,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let first_pointer =
+            serde_json::from_slice::<RecentDepositPointer>(&first_pointer.value).unwrap();
+        assert_eq!(first_pointer.deposit_key, first_key);
+        assert_eq!(first_pointer.ordinal, previous_first_ordinal);
+        let second_pointer = connection
+            .store
+            .entry(&recent_deposit_index_key(
+                DepositKeyKind::Evidence,
+                previous_version_boundary,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let second_pointer =
+            serde_json::from_slice::<RecentDepositPointer>(&second_pointer.value).unwrap();
+        assert_eq!(second_pointer.deposit_key, second_key);
+        assert_eq!(second_pointer.ordinal, previous_version_boundary);
+        assert_eq!(second_pointer.deposit_revision, second_revision);
     }
 
     #[tokio::test]

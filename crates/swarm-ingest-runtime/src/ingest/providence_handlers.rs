@@ -471,8 +471,19 @@ pub(crate) fn enrich_feedback_target(
     {
         enriched.host_id = replay.bundle.event.host_id.clone().or(enriched.host_id);
         enriched.strategy_id = Some(replay.bundle.audit.detection.strategy_id.clone());
+        enriched.evidence_timestamp = Some(normalize_feedback_evidence_timestamp(
+            replay.bundle.event.timestamp,
+        ));
     }
     Ok(enriched)
+}
+
+fn normalize_feedback_evidence_timestamp(timestamp: i64) -> i64 {
+    if timestamp.unsigned_abs() < 100_000_000_000 {
+        timestamp
+    } else {
+        timestamp.div_euclid(1_000)
+    }
 }
 
 pub(crate) fn false_positive_measurement(
@@ -532,6 +543,7 @@ async fn signed_providence_feedback_deposit(
             "analyst_id": request.analyst_id,
             "reason": request.reason,
             "observed_at_ms": recorded_at_ms,
+            "governed_evidence_timestamp": target.evidence_timestamp,
         }),
         threat_class: target.threat_class.clone(),
         severity: target.severity,

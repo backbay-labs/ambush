@@ -84,7 +84,7 @@ pub use incident::{
     FalsePositiveDetectorSummary, FalsePositiveHostSummary, FalsePositiveMeasurement,
     FalsePositiveMeasurementReport, FileIncidentStore, IncidentEvidenceLink,
     IncidentGraphDimension, IncidentLookup, IncidentMemberDecision, IncidentRecord, IncidentStore,
-    IncidentStoreError, IncidentStoreHealth, MemoryIncidentStore,
+    IncidentStoreError, IncidentStoreHealth, MemoryIncidentStore, SoarVerdictClaimResult,
     summarize_false_positive_measurements,
 };
 pub use investigation::{

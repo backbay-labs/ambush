@@ -781,6 +781,7 @@ pub(crate) enum FeedbackSuppressionState {
 pub(crate) struct FeedbackSuppressionOrder {
     observed_at_ms: i64,
     feedback_id: String,
+    governed_evidence_timestamp: Option<i64>,
 }
 
 impl FeedbackSuppressionOrder {
@@ -2065,7 +2066,10 @@ fn is_suppressed_by_feedback(
     };
     suppression.get(&key).is_some_and(|(state, order)| {
         *state == FeedbackSuppressionState::Dismiss
-            && order.observed_at_ms() >= deposit.timestamp.saturating_mul(1_000)
+            && order.governed_evidence_timestamp.map_or_else(
+                || order.observed_at_ms() >= deposit.timestamp.saturating_mul(1_000),
+                |governed_timestamp| governed_timestamp == deposit.timestamp,
+            )
     })
 }
 
@@ -2105,6 +2109,9 @@ pub(crate) fn feedback_suppression_marker(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let governed_evidence_timestamp = indicator
+        .get("governed_evidence_timestamp")
+        .and_then(serde_json::Value::as_i64);
     Some((
         FeedbackSuppressionKey {
             threat_class: deposit.threat_class.clone(),
@@ -2114,6 +2121,7 @@ pub(crate) fn feedback_suppression_marker(
         FeedbackSuppressionOrder {
             observed_at_ms,
             feedback_id,
+            governed_evidence_timestamp,
         },
     ))
 }
@@ -4081,6 +4089,39 @@ mod tests {
                 .and_then(serde_json::Value::as_str)
                 == Some("event-same-second")
                 && deposit.indicator.get("schema").is_none()
+        }));
+    }
+
+    #[test]
+    fn feedback_suppression_binds_a_dismissal_to_future_skewed_evidence() {
+        let evidence = super::VerifiedDeposit::admit(sample_event_deposit(
+            "future-skewed-evidence",
+            "event-future-skewed",
+            500,
+        ))
+        .unwrap();
+        let mut dismissal = sample_feedback_deposit(
+            "reviewer-future-skewed",
+            "event-future-skewed",
+            "dismiss",
+            200,
+        );
+        dismissal.indicator["governed_evidence_timestamp"] = serde_json::json!(500);
+        sign_deposit(
+            &mut dismissal,
+            &signing_key_for_label("reviewer-future-skewed"),
+        );
+        let dismissal = super::VerifiedDeposit::admit(dismissal).unwrap();
+
+        let visible =
+            super::filter_deposits(&[evidence, dismissal], super::DepositQuery::recent(10));
+        assert!(visible.iter().all(|deposit| {
+            deposit
+                .indicator
+                .get("event_id")
+                .and_then(serde_json::Value::as_str)
+                != Some("event-future-skewed")
+                || deposit.indicator.get("schema").is_some()
         }));
     }
 

@@ -4362,6 +4362,7 @@ mod providence_feedback {
                 finding_id: "finding-event-durable-clock".to_string(),
                 hunt_id: "event-durable-clock".to_string(),
                 event_id: "event-durable-clock".to_string(),
+                evidence_timestamp: None,
                 host_id: Some("host-durable-clock".to_string()),
                 strategy_id: Some("suspicious_process_tree".to_string()),
                 threat_class: ThreatClass::Execution,
@@ -4558,6 +4559,21 @@ mod providence_feedback {
         assert_eq!(entry.outcome["substrate"]["status"], "suppressed");
         assert_eq!(entry.outcome["memory"]["disposition"], "audit_only");
         assert_eq!(entry.outcome["kitten"]["disposition"], "pending");
+        let feedback_deposit = state
+            .current_substrate()
+            .recent_deposits(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|deposit| {
+                deposit.indicator["feedback_id"]
+                    == serde_json::Value::String(entry.feedback_id.clone())
+            })
+            .unwrap();
+        assert_eq!(
+            feedback_deposit.indicator["governed_evidence_timestamp"],
+            serde_json::json!(1_700_100_000)
+        );
     }
 
     #[tokio::test]
@@ -5211,7 +5227,7 @@ mod soar_verdict_sync {
     }
 
     #[tokio::test]
-    async fn duplicate_soar_verdicts_fail_closed_and_persist_rejection_audit() {
+    async fn concurrent_exact_soar_retries_apply_once_and_conflicting_reuse_fails_closed() {
         let mut config = super::test_config("suspicious_process_tree");
         configure_soar_channel(&mut config);
         let state =
@@ -5245,15 +5261,26 @@ mod soar_verdict_sync {
         };
 
         let app = detect_http_router(state.clone());
-        let first = app
-            .clone()
-            .oneshot(signed_soar_request(&payload))
+        let (first, second) = tokio::join!(
+            app.clone().oneshot(signed_soar_request(&payload)),
+            app.clone().oneshot(signed_soar_request(&payload))
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        let first: Value = super::parse_json(first).await;
+        let second: Value = super::parse_json(second).await;
+        assert_eq!(first["feedback_id"], second["feedback_id"]);
+        assert_eq!(first["outcome"], second["outcome"]);
+
+        let mut conflicting = payload.clone();
+        conflicting.reason = Some("different verdict payload".to_string());
+        let conflict = app
+            .oneshot(signed_soar_request(&conflicting))
             .await
             .unwrap();
-        assert_eq!(first.status(), StatusCode::OK);
-
-        let second = app.oneshot(signed_soar_request(&payload)).await.unwrap();
-        assert_eq!(second.status(), StatusCode::CONFLICT);
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
 
         let lookup = state
             .current_incident_store()
@@ -5261,14 +5288,8 @@ mod soar_verdict_sync {
             .unwrap()
             .unwrap();
         assert_eq!(lookup.incident.false_positive_measurements.len(), 1);
-        assert_eq!(lookup.incident.feedback_audit_entries.len(), 2);
-        let rejected = &lookup.incident.feedback_audit_entries[1];
-        assert_eq!(rejected.outcome["status"], "rejected");
-        assert_eq!(rejected.outcome["reason"], "duplicate source verdict");
-        assert_eq!(
-            rejected.soar_lineage.as_ref().unwrap().source_verdict_id,
-            "splunk-duplicate-1"
-        );
+        assert_eq!(lookup.incident.feedback_audit_entries.len(), 1);
+        assert!(lookup.incident.feedback_audit_entries[0].evidence.is_some());
     }
 
     #[tokio::test]
