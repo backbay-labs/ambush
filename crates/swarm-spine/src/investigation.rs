@@ -1,12 +1,18 @@
 use crate::ReplayBundle;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::Severity;
 use swarm_whisker::TelemetryPayload;
+
+static INVESTIGATION_CLAIM_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Persisted status of one investigation job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,6 +314,17 @@ pub enum InvestigationStoreError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("investigation execution claim conflicts for `{investigation_id}`")]
+    ExecutionClaimConflict { investigation_id: String },
+}
+
+/// Result of the non-reclaimable durable fence acquired immediately before an
+/// investigation strategy executes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvestigationExecutionClaim {
+    Acquired,
+    AlreadyAcquired,
 }
 
 /// Store contract for durable investigation bundles.
@@ -333,6 +350,10 @@ pub trait InvestigationBundleStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<InvestigationBundleRecord>, InvestigationStoreError>;
     fn health(&self) -> Result<InvestigationStoreHealth, InvestigationStoreError>;
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError>;
 }
 
 /// Configured investigation store backend.
@@ -412,12 +433,23 @@ impl InvestigationBundleStore for ConfiguredInvestigationBundleStore {
             Self::LocalFiles(store) => store.health(),
         }
     }
+
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError> {
+        match self {
+            Self::Memory(store) => store.claim_execution(bundle),
+            Self::LocalFiles(store) => store.claim_execution(bundle),
+        }
+    }
 }
 
 /// In-memory investigation bundle store for tests and detect-only runs.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryInvestigationBundleStore {
     bundles: Arc<RwLock<Vec<InvestigationBundle>>>,
+    execution_claims: Arc<RwLock<BTreeMap<String, String>>>,
 }
 
 impl InvestigationBundleStore for MemoryInvestigationBundleStore {
@@ -523,6 +555,29 @@ impl InvestigationBundleStore for MemoryInvestigationBundleStore {
             details: "ephemeral in-process investigation store".to_string(),
         })
     }
+
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError> {
+        let digest = investigation_execution_digest(bundle)?;
+        let mut claims = self
+            .execution_claims
+            .write()
+            .map_err(|_| InvestigationStoreError::PoisonedLock)?;
+        match claims.get(&bundle.investigation_id) {
+            Some(existing) if existing == &digest => {
+                Ok(InvestigationExecutionClaim::AlreadyAcquired)
+            }
+            Some(_) => Err(InvestigationStoreError::ExecutionClaimConflict {
+                investigation_id: bundle.investigation_id.clone(),
+            }),
+            None => {
+                claims.insert(bundle.investigation_id.clone(), digest);
+                Ok(InvestigationExecutionClaim::Acquired)
+            }
+        }
+    }
 }
 
 /// File-backed investigation bundle store for restart-safe enrichment state.
@@ -540,6 +595,12 @@ impl FileInvestigationBundleStore {
                 source,
             }
         })?;
+        fs::create_dir_all(root.join("execution-claims")).map_err(|source| {
+            InvestigationStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
         Ok(Self { root })
     }
 
@@ -549,6 +610,13 @@ impl FileInvestigationBundleStore {
 
     fn index_path(&self) -> PathBuf {
         self.root.join("index.json")
+    }
+
+    fn execution_claim_path(&self, investigation_id: &str) -> PathBuf {
+        self.root.join("execution-claims").join(format!(
+            "{}.json",
+            swarm_crypto::sha256_hex(investigation_id.as_bytes())
+        ))
     }
 
     fn read_index(&self) -> Result<InvestigationIndex, InvestigationStoreError> {
@@ -702,11 +770,142 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
             details: format!("bundle directory at {}", self.root.display()),
         })
     }
+
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError> {
+        let claim = InvestigationExecutionClaimRecord {
+            investigation_id: bundle.investigation_id.clone(),
+            submission_digest: investigation_execution_digest(bundle)?,
+        };
+        let path = self.execution_claim_path(&bundle.investigation_id);
+        let raw =
+            serde_json::to_vec_pretty(&claim).map_err(|source| InvestigationStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        let temporary_path = self.root.join("execution-claims").join(format!(
+            ".claim.{}.{}.tmp",
+            std::process::id(),
+            INVESTIGATION_CLAIM_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut temporary = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+            .map_err(|source| InvestigationStoreError::Write {
+                path: temporary_path.clone(),
+                source,
+            })?;
+        if let Err(source) = temporary
+            .write_all(&raw)
+            .and_then(|()| temporary.sync_all())
+        {
+            drop(temporary);
+            let _ = fs::remove_file(&temporary_path);
+            return Err(InvestigationStoreError::Write {
+                path: temporary_path,
+                source,
+            });
+        }
+        drop(temporary);
+
+        match fs::hard_link(&temporary_path, &path) {
+            Ok(()) => {
+                fs::remove_file(&temporary_path).map_err(|source| {
+                    InvestigationStoreError::Write {
+                        path: temporary_path,
+                        source,
+                    }
+                })?;
+                let directory = OpenOptions::new()
+                    .read(true)
+                    .open(self.root.join("execution-claims"))
+                    .map_err(|source| InvestigationStoreError::Write {
+                        path: self.root.join("execution-claims"),
+                        source,
+                    })?;
+                directory
+                    .sync_all()
+                    .map_err(|source| InvestigationStoreError::Write {
+                        path: self.root.join("execution-claims"),
+                        source,
+                    })?;
+                Ok(InvestigationExecutionClaim::Acquired)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                fs::remove_file(&temporary_path).map_err(|source| {
+                    InvestigationStoreError::Write {
+                        path: temporary_path,
+                        source,
+                    }
+                })?;
+                let existing_raw =
+                    fs::read_to_string(&path).map_err(|source| InvestigationStoreError::Read {
+                        path: path.clone(),
+                        source,
+                    })?;
+                let existing =
+                    serde_json::from_str::<InvestigationExecutionClaimRecord>(&existing_raw)
+                        .map_err(|source| InvestigationStoreError::Parse {
+                            path: path.clone(),
+                            source,
+                        })?;
+                if existing == claim {
+                    Ok(InvestigationExecutionClaim::AlreadyAcquired)
+                } else {
+                    Err(InvestigationStoreError::ExecutionClaimConflict {
+                        investigation_id: bundle.investigation_id.clone(),
+                    })
+                }
+            }
+            Err(source) => {
+                let _ = fs::remove_file(&temporary_path);
+                Err(InvestigationStoreError::Write { path, source })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct InvestigationIndex {
     entries: Vec<InvestigationBundleRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvestigationExecutionClaimRecord {
+    investigation_id: String,
+    submission_digest: String,
+}
+
+fn investigation_execution_digest(
+    bundle: &InvestigationBundle,
+) -> Result<String, InvestigationStoreError> {
+    let identity = serde_json::to_vec(&(
+        "swarm-investigation-execution-v1",
+        &bundle.investigation_id,
+        &bundle.source_bundle_id,
+        &bundle.hunt_id,
+        &bundle.trail_id,
+        &bundle.event_id,
+        &bundle.finding_id,
+        &bundle.threat_class,
+        bundle.severity,
+        &bundle.strategy_id,
+        &bundle.response_kind,
+        &bundle.related_receipt_ids,
+        &bundle.host_id,
+        &bundle.user,
+        &bundle.process_name,
+        bundle.queued_at_ms,
+    ))
+    .map_err(|source| InvestigationStoreError::Parse {
+        path: PathBuf::from("<investigation-execution-identity>"),
+        source,
+    })?;
+    Ok(swarm_crypto::sha256_hex(&identity))
 }
 
 fn sorted_recent_bundles(bundles: &[InvestigationBundle]) -> Vec<InvestigationBundle> {
@@ -811,9 +1010,9 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
 mod tests {
     use super::{
         ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
-        InvestigationBundleStore, InvestigationDecision, InvestigationInterpretation,
-        InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
-        InvestigationStoreHealth, InvestigationVote,
+        InvestigationBundleStore, InvestigationDecision, InvestigationExecutionClaim,
+        InvestigationInterpretation, InvestigationPriority, InvestigationPriorityClass,
+        InvestigationStatus, InvestigationStoreHealth, InvestigationVote,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
     use swarm_core::config::BundleStoreConfig;
@@ -1023,6 +1222,61 @@ mod tests {
             })
             .unwrap();
         assert_eq!(local.health().unwrap().backend, "local_files");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_execution_claim_has_one_cross_process_winner_and_fails_closed_on_conflict() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-claim-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store_a = FileInvestigationBundleStore::open(&root).unwrap();
+        let store_b = FileInvestigationBundleStore::open(&root).unwrap();
+        let bundle = sample_investigation_bundle();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let a_barrier = std::sync::Arc::clone(&barrier);
+        let b_barrier = std::sync::Arc::clone(&barrier);
+        let a_bundle = bundle.clone();
+        let b_bundle = bundle.clone();
+        let a = std::thread::spawn(move || {
+            a_barrier.wait();
+            store_a.claim_execution(&a_bundle).unwrap()
+        });
+        let b = std::thread::spawn(move || {
+            b_barrier.wait();
+            store_b.claim_execution(&b_bundle).unwrap()
+        });
+        let mut outcomes = [a.join().unwrap(), b.join().unwrap()];
+        outcomes.sort_by_key(|outcome| match outcome {
+            InvestigationExecutionClaim::Acquired => 0,
+            InvestigationExecutionClaim::AlreadyAcquired => 1,
+        });
+        assert_eq!(
+            outcomes,
+            [
+                InvestigationExecutionClaim::Acquired,
+                InvestigationExecutionClaim::AlreadyAcquired
+            ]
+        );
+
+        let mut conflict = bundle;
+        conflict.finding_id = "different-finding".to_string();
+        let reopened = FileInvestigationBundleStore::open(&root).unwrap();
+        assert!(matches!(
+            reopened.claim_execution(&conflict),
+            Err(super::InvestigationStoreError::ExecutionClaimConflict { .. })
+        ));
+        assert!(
+            std::fs::read_dir(root.join("execution-claims"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

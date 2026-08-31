@@ -84,7 +84,6 @@ pub(crate) async fn soar_verdict_handler(
         return Err(error);
     }
 
-    let feedback_id = soar_feedback_id(request.source_system, &request.source_verdict_id)?;
     let normalized = SwarmProvidenceFeedbackRequest {
         action: request.action,
         incident_id: request.incident_id.clone(),
@@ -96,6 +95,19 @@ pub(crate) async fn soar_verdict_handler(
         .current_incident_store()
         .load_soar_verdict_claim(request.source_system, &request.source_verdict_id)
         .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+    // A rolling upgrade must retain the identifier already bound to this
+    // external verdict. Older releases used a sanitized source identifier;
+    // changing it during an exact retry would turn the same request into an
+    // idempotency conflict and could repeat downstream work.
+    let feedback_id = match prior_claim.as_ref() {
+        Some(entry) if !entry.feedback_id.trim().is_empty() => entry.feedback_id.clone(),
+        Some(_) => {
+            return Err(ProvidenceFeedbackError::internal(
+                "durable SOAR claim has an empty feedback identifier",
+            ));
+        }
+        None => soar_feedback_id(request.source_system, &request.source_verdict_id)?,
+    };
     let prior_target = prior_claim
         .as_ref()
         .and_then(|entry| claimed_feedback_target(entry).ok());
@@ -134,6 +146,7 @@ pub(crate) async fn soar_verdict_handler(
         outcome: claim_outcome,
         soar_claim_lease: Some(SoarVerdictClaimLease {
             token: Uuid::new_v4().to_string(),
+            issued_at_ms: Some(claim_observed_at_ms),
             expires_at_ms: claim_observed_at_ms
                 .checked_add(SOAR_VERDICT_CLAIM_LEASE_MS)
                 .ok_or_else(|| {

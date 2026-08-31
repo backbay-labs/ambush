@@ -4656,18 +4656,56 @@ mod deadline_state_machine_tests {
     async fn observation_commit_with_exact_retry(
         client: &RuntimeWitnessClient,
         request: WitnessServiceRequestV1,
-    ) -> Result<WitnessOutcomeAttestationV1, RuntimeWitnessClientErrorV1> {
+        reconciliation_request: WitnessServiceRequestV1,
+        expected_txid: &str,
+    ) -> Result<Option<WitnessOutcomeAttestationV1>, RuntimeWitnessClientErrorV1> {
         for attempt in 0..3 {
             match client.commit_prepared(request.clone()).await {
-                Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) if attempt < 2 => {
-                    // Commit has the same exact-retry resolution: a lost
-                    // response is reconciled against the committed winner.
-                    tokio::task::yield_now().await;
+                Ok(attestation) => return Ok(Some(attestation)),
+                Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) => {
+                    // A commit timeout is ambiguous: retrying the exact signed
+                    // bytes is safe, but the committed winner may already be
+                    // durable while every outcome response misses its grant.
+                    // Reconcile through an independently signed ReadHead before
+                    // another mutation attempt. Only the authenticated exact
+                    // candidate head resolves the ambiguity as success.
+                    match client.read_head(reconciliation_request.clone()).await {
+                        Ok(read) => {
+                            read.validate()
+                                .map_err(|_| RuntimeWitnessClientErrorV1::InvalidResponse)?;
+                            if read.request_digest != reconciliation_request.request_digest
+                                || read.target_txid != expected_txid
+                            {
+                                return Err(RuntimeWitnessClientErrorV1::InvalidResponse);
+                            }
+                            match &read.response {
+                                WitnessReadResponseV1::Head(head)
+                                    if head
+                                        .as_ref()
+                                        .as_ref()
+                                        .is_some_and(|head| head.txid == expected_txid) =>
+                                {
+                                    return Ok(None);
+                                }
+                                WitnessReadResponseV1::Head(head)
+                                    if head.as_ref().as_ref().is_none() && attempt < 2 => {}
+                                WitnessReadResponseV1::Head(_) => {
+                                    return Err(RuntimeWitnessClientErrorV1::InvalidResponse);
+                                }
+                                _ => return Err(RuntimeWitnessClientErrorV1::InvalidResponse),
+                            }
+                        }
+                        Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) if attempt < 2 => {}
+                        Err(error) => return Err(error),
+                    }
+                    if attempt < 2 {
+                        tokio::task::yield_now().await;
+                    }
                 }
-                result => return result,
+                Err(error) => return Err(error),
             }
         }
-        unreachable!("bounded observation Commit retry loop must return")
+        Err(RuntimeWitnessClientErrorV1::OutcomeUnknown)
     }
 
     async fn run_worker_observation_test_async() -> Vec<u8> {
@@ -4812,11 +4850,28 @@ mod deadline_state_machine_tests {
             ),
             "observation Commit request",
         );
+        let commit_reconciliation_request = must(
+            AuthenticatedDeadlineFixtureV1::read_head_request(
+                &ephemeral_signer,
+                &admission,
+                session.clone(),
+                candidate.txid.clone(),
+            ),
+            "observation Commit reconciliation request",
+        );
         let committed = must(
-            observation_commit_with_exact_retry(&runtime_client, commit_request).await,
+            observation_commit_with_exact_retry(
+                &runtime_client,
+                commit_request,
+                commit_reconciliation_request,
+                &candidate.txid,
+            )
+            .await,
             "observation Commit response",
         );
-        must(committed.validate(), "observation Commit attestation");
+        if let Some(committed) = committed {
+            must(committed.validate(), "observation Commit attestation");
+        }
 
         observer.clear();
         facts.reads.store(0, Ordering::SeqCst);

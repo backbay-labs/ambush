@@ -5130,38 +5130,54 @@ mod soar_verdict_sync {
     ) {
         state
             .current_incident_store()
-            .persist(&CorrelatedIncident {
-                incident_id: incident_id.to_string(),
-                summary: format!("soar incident for {event_id}"),
+            .persist(&soar_incident(
+                incident_id,
+                event_id,
+                host_id,
+                strategy_id,
                 created_at_ms,
-                window_start_ms: created_at_ms,
-                window_end_ms: created_at_ms + 1,
-                correlation_keys: vec![format!("host:{host_id}")],
-                related_receipt_ids: vec![format!("receipt-{event_id}")],
-                included_members: vec![swarm_spine::IncidentMemberDecision {
-                    investigation_id: format!("investigation-{event_id}"),
-                    hunt_id: event_id.to_string(),
-                    finding_id: format!("finding-{event_id}"),
-                    reason: "soar fixture".to_string(),
-                    shared_keys: vec![format!("host:{host_id}")],
-                    evidence_links: Vec::new(),
-                    confidence_score: 1.0,
-                }],
-                rejected_members: Vec::new(),
-                graph_dimensions: Vec::new(),
-                confidence_score: 1.0,
-                trigger_event_id: Some(event_id.to_string()),
-                trigger_finding_id: Some(format!("finding-{event_id}")),
-                trigger_strategy_id: Some(strategy_id.to_string()),
-                threat_class: Some(ThreatClass::Execution),
-                severity: Some(Severity::High),
-                external_references: Vec::new(),
-                providence_reconciliation: None,
-                providence_callback_audit_entries: Vec::new(),
-                feedback_audit_entries: Vec::new(),
-                false_positive_measurements: Vec::new(),
-            })
+            ))
             .unwrap();
+    }
+
+    fn soar_incident(
+        incident_id: &str,
+        event_id: &str,
+        host_id: &str,
+        strategy_id: &str,
+        created_at_ms: i64,
+    ) -> CorrelatedIncident {
+        CorrelatedIncident {
+            incident_id: incident_id.to_string(),
+            summary: format!("soar incident for {event_id}"),
+            created_at_ms,
+            window_start_ms: created_at_ms,
+            window_end_ms: created_at_ms + 1,
+            correlation_keys: vec![format!("host:{host_id}")],
+            related_receipt_ids: vec![format!("receipt-{event_id}")],
+            included_members: vec![swarm_spine::IncidentMemberDecision {
+                investigation_id: format!("investigation-{event_id}"),
+                hunt_id: event_id.to_string(),
+                finding_id: format!("finding-{event_id}"),
+                reason: "soar fixture".to_string(),
+                shared_keys: vec![format!("host:{host_id}")],
+                evidence_links: Vec::new(),
+                confidence_score: 1.0,
+            }],
+            rejected_members: Vec::new(),
+            graph_dimensions: Vec::new(),
+            confidence_score: 1.0,
+            trigger_event_id: Some(event_id.to_string()),
+            trigger_finding_id: Some(format!("finding-{event_id}")),
+            trigger_strategy_id: Some(strategy_id.to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            severity: Some(Severity::High),
+            external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
+            feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
+        }
     }
 
     #[tokio::test]
@@ -5404,6 +5420,100 @@ mod soar_verdict_sync {
         assert_eq!(lookup.incident.false_positive_measurements.len(), 1);
         assert_eq!(lookup.incident.feedback_audit_entries.len(), 1);
         assert!(lookup.incident.feedback_audit_entries[0].evidence.is_some());
+    }
+
+    #[tokio::test]
+    async fn rolling_upgrade_retry_preserves_the_durable_legacy_feedback_id() {
+        let mut config = super::test_config("suspicious_process_tree");
+        configure_soar_channel(&mut config);
+        let state =
+            IngestState::from_config(super::temp_path("soar-verdict-legacy-id"), config).unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-soar-legacy-id",
+            "host-legacy-id",
+            1_700_130_150_000,
+        );
+        let payload = SwarmSoarVerdictRequest {
+            source_system: SoarSourceSystem::SplunkSoar,
+            source_verdict_id: "legacy/case?42".to_string(),
+            verdict_at_ms: 1_700_130_151_000,
+            action: ProvidenceFeedbackAction::Dismiss,
+            incident_id: "incident-soar-legacy-id".to_string(),
+            finding_id: Some("finding-evt-soar-legacy-id".to_string()),
+            analyst_id: "legacy-analyst".to_string(),
+            reason: Some("rolling upgrade retry".to_string()),
+            source_case_id: Some("legacy-case-42".to_string()),
+            source_case_url: None,
+        };
+        let legacy_feedback_id = "soar-verdict:splunk_soar:legacy_case_42";
+        let mut incident = soar_incident(
+            "incident-soar-legacy-id",
+            "evt-soar-legacy-id",
+            "host-legacy-id",
+            "suspicious_process_tree",
+            1_700_130_150_000,
+        );
+        incident
+            .feedback_audit_entries
+            .push(swarm_spine::AnalystFeedbackAuditEntry {
+                feedback_id: legacy_feedback_id.to_string(),
+                received_at_ms: 1_700_130_151_100,
+                action: payload.action,
+                analyst_id: payload.analyst_id.clone(),
+                incident_id: payload.incident_id.clone(),
+                finding_id: payload.finding_id.clone(),
+                reason: payload.reason.clone(),
+                request_signature: soar_signature(&payload),
+                evidence: None,
+                soar_lineage: Some(swarm_core::types::SoarVerdictLineage {
+                    source_system: payload.source_system,
+                    source_verdict_id: payload.source_verdict_id.clone(),
+                    verdict_at_ms: payload.verdict_at_ms,
+                    source_case_id: payload.source_case_id.clone(),
+                    source_case_url: payload.source_case_url.clone(),
+                }),
+                payload: serde_json::to_value(&payload).unwrap(),
+                outcome: serde_json::json!({
+                    "status": "recorded",
+                    "target": {
+                        "incident_id": "incident-soar-legacy-id",
+                        "finding_id": "finding-evt-soar-legacy-id",
+                        "hunt_id": "evt-soar-legacy-id",
+                        "event_id": "evt-soar-legacy-id",
+                        "evidence_timestamp": 1_700_130_150,
+                        "host_id": "host-legacy-id",
+                        "strategy_id": "suspicious_process_tree",
+                        "threat_class": "execution",
+                        "severity": "HIGH"
+                    }
+                }),
+                soar_claim_lease: Some(swarm_spine::SoarVerdictClaimLease {
+                    token: "pre-upgrade-expired-lease".to_string(),
+                    issued_at_ms: None,
+                    expires_at_ms: 1_700_130_151_101,
+                }),
+            });
+        state.current_incident_store().persist(&incident).unwrap();
+
+        let app = detect_http_router(state.clone());
+        let retry = app.oneshot(signed_soar_request(&payload)).await.unwrap();
+        let retry_status = retry.status();
+        let retry: Value = super::parse_json(retry).await;
+        assert_eq!(retry_status, StatusCode::OK, "retry response: {retry}");
+        assert_eq!(retry["feedback_id"], legacy_feedback_id);
+        let retained = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-legacy-id")
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.incident.feedback_audit_entries.len(), 1);
+        assert!(
+            retained.incident.feedback_audit_entries[0]
+                .evidence
+                .is_some()
+        );
+        assert_eq!(retained.incident.false_positive_measurements.len(), 1);
     }
 
     #[tokio::test]

@@ -54,6 +54,11 @@ pub struct AnalystFeedbackAuditEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoarVerdictClaimLease {
     pub token: String,
+    /// Wall-clock observation that established this deadline. Persisting the
+    /// interval lets a retry detect a clock rollback instead of treating a
+    /// pre-rollback deadline as active indefinitely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at_ms: Option<i64>,
     pub expires_at_ms: i64,
 }
 
@@ -644,12 +649,10 @@ impl IncidentStore for MemoryIncidentStore {
         else {
             return Ok(None);
         };
-        let proposed_received_at_ms = entry.received_at_ms;
         entry.received_at_ms = reserve_atomic_feedback_timestamp(
             &self.feedback_timestamp_high_water_ms,
             entry.received_at_ms,
         )?;
-        align_new_claim_lease(&mut entry, proposed_received_at_ms)?;
         incident.feedback_audit_entries.push(entry.clone());
         Ok(Some(SoarVerdictClaimResult::Claimed(entry)))
     }
@@ -1207,9 +1210,7 @@ impl IncidentStore for FileIncidentStore {
             .checked_add(1)
             .map(|next| entry.received_at_ms.max(next))
             .ok_or(IncidentStoreError::FeedbackTimestampExhausted)?;
-        let proposed_received_at_ms = entry.received_at_ms;
         entry.received_at_ms = reserved;
-        align_new_claim_lease(&mut entry, proposed_received_at_ms)?;
 
         // Commit the clock reservation before the claim becomes observable.
         // The lineage index is also an intent record. A failure after this
@@ -1544,10 +1545,9 @@ fn claim_or_classify_soar_verdict(
     if existing.evidence.is_some() {
         SoarVerdictClaimResult::CompletedExact(existing.clone())
     } else if proposed.soar_claim_lease.is_none()
-        || existing
-            .soar_claim_lease
-            .as_ref()
-            .is_some_and(|lease| lease.expires_at_ms > proposed.received_at_ms)
+        || existing.soar_claim_lease.as_ref().is_some_and(|lease| {
+            soar_claim_lease_is_active(lease, existing.received_at_ms, proposed.received_at_ms)
+        })
     {
         SoarVerdictClaimResult::PendingExact(existing.clone())
     } else {
@@ -1567,9 +1567,13 @@ fn validate_proposed_soar_claim(
     let Some(lease) = entry.soar_claim_lease.as_ref() else {
         return Ok(());
     };
-    if lease.token.trim().is_empty() || lease.expires_at_ms <= entry.received_at_ms {
+    if lease.token.trim().is_empty()
+        || lease
+            .issued_at_ms
+            .is_none_or(|issued_at_ms| issued_at_ms <= 0 || lease.expires_at_ms <= issued_at_ms)
+    {
         return Err(IncidentStoreError::FeedbackOutcomeConflict {
-            reason: "SOAR claim lease must have a non-empty token and expire after the proposed claim timestamp"
+            reason: "SOAR claim lease must have a non-empty token and a positive persisted clock interval"
                 .to_string(),
         });
     }
@@ -1590,22 +1594,26 @@ fn same_soar_verdict_request(
         && left.payload == right.payload
 }
 
-fn align_new_claim_lease(
-    entry: &mut AnalystFeedbackAuditEntry,
-    proposed_received_at_ms: i64,
-) -> Result<(), IncidentStoreError> {
-    let Some(lease) = entry.soar_claim_lease.as_mut() else {
-        return Ok(());
-    };
-    let duration_ms = lease
-        .expires_at_ms
-        .saturating_sub(proposed_received_at_ms)
-        .max(1);
-    lease.expires_at_ms = entry
-        .received_at_ms
-        .checked_add(duration_ms)
-        .ok_or(IncidentStoreError::FeedbackTimestampExhausted)?;
-    Ok(())
+fn soar_claim_lease_is_active(
+    lease: &SoarVerdictClaimLease,
+    existing_received_at_ms: i64,
+    observed_at_ms: i64,
+) -> bool {
+    match lease.issued_at_ms {
+        Some(issued_at_ms) => {
+            // A backwards clock discontinuity invalidates the old deadline.
+            // Downstream operations are independently idempotent and the
+            // replacement token fences a stale completion.
+            observed_at_ms >= issued_at_ms && observed_at_ms < lease.expires_at_ms
+        }
+        None => {
+            // Rolling-upgrade compatibility for leases written before
+            // `issued_at_ms` existed. Those leases were incorrectly shifted
+            // into the durable audit-timestamp domain, so an observation below
+            // that timestamp proves the deadline cannot be trusted.
+            observed_at_ms >= existing_received_at_ms && observed_at_ms < lease.expires_at_ms
+        }
+    }
 }
 
 fn commit_feedback_outcome(
@@ -2473,6 +2481,7 @@ mod tests {
         let mut first = sample_soar_claim(&incident.incident_id, "recoverable-verdict");
         first.soar_claim_lease = Some(SoarVerdictClaimLease {
             token: "lease-a".to_string(),
+            issued_at_ms: Some(first.received_at_ms),
             expires_at_ms: first.received_at_ms + 10,
         });
         let first = match store
@@ -2492,6 +2501,7 @@ mod tests {
         });
         reordered.soar_claim_lease = Some(SoarVerdictClaimLease {
             token: "lease-concurrent".to_string(),
+            issued_at_ms: Some(reordered.received_at_ms),
             expires_at_ms: first.received_at_ms + 20,
         });
         let pending = store
@@ -2510,6 +2520,7 @@ mod tests {
         retry.received_at_ms = first.soar_claim_lease.as_ref().unwrap().expires_at_ms;
         retry.soar_claim_lease = Some(SoarVerdictClaimLease {
             token: "lease-b".to_string(),
+            issued_at_ms: Some(retry.received_at_ms),
             expires_at_ms: retry.received_at_ms + 10,
         });
         let recovered = match store
@@ -2554,6 +2565,51 @@ mod tests {
                 },
             ),
             Err(super::IncidentStoreError::FeedbackOutcomeConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn soar_lease_expiry_stays_in_its_persisted_clock_domain() {
+        let store = MemoryIncidentStore::default();
+        let mut incident = sample_incident();
+        let mut future_audit = sample_soar_claim(&incident.incident_id, "rejected-future-audit");
+        future_audit.received_at_ms = 9_000_000_000_000;
+        future_audit.outcome = serde_json::json!({"status": "rejected"});
+        incident.feedback_audit_entries.push(future_audit);
+        store.persist(&incident).unwrap();
+
+        let mut first = sample_soar_claim(&incident.incident_id, "durable-clock-verdict");
+        first.received_at_ms = 1_700_000_003_000;
+        first.soar_claim_lease = Some(SoarVerdictClaimLease {
+            token: "wall-lease-a".to_string(),
+            issued_at_ms: Some(first.received_at_ms),
+            expires_at_ms: first.received_at_ms + 10,
+        });
+        let first = match store
+            .claim_soar_verdict(&incident.incident_id, first)
+            .unwrap()
+            .unwrap()
+        {
+            SoarVerdictClaimResult::Claimed(entry) => entry,
+            other => panic!("unexpected initial claim: {other:?}"),
+        };
+        assert!(first.received_at_ms > first.soar_claim_lease.as_ref().unwrap().expires_at_ms);
+
+        let mut retry = sample_soar_claim(&incident.incident_id, "durable-clock-verdict");
+        retry.received_at_ms = 1_700_000_003_010;
+        retry.soar_claim_lease = Some(SoarVerdictClaimLease {
+            token: "wall-lease-b".to_string(),
+            issued_at_ms: Some(retry.received_at_ms),
+            expires_at_ms: retry.received_at_ms + 10,
+        });
+        let recovered = store
+            .claim_soar_verdict(&incident.incident_id, retry)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            recovered,
+            SoarVerdictClaimResult::Claimed(entry)
+                if entry.soar_claim_lease.as_ref().unwrap().token == "wall-lease-b"
         ));
     }
 

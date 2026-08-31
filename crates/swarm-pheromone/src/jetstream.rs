@@ -66,6 +66,14 @@ const RECENT_DEPOSIT_MIGRATION_STATE_KEY: &str = "idx_recent_migration";
 const RECENT_DEPOSIT_INTENT_KEY_PREFIX: &str = "idx_recent_intent";
 #[cfg(feature = "nats")]
 const MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS: usize = 256;
+// Four-choice fixed-slot placement keeps the immutable operation ledger
+// strictly bounded while retaining exact retries indefinitely. A collision is
+// rejected before any deposit is written; it can reduce availability but can
+// never alias two signed operations or exhaust the whole KV stream.
+#[cfg(feature = "nats")]
+const MAX_IDEMPOTENT_DEPOSIT_INTENT_SLOTS: u64 = 262_139;
+#[cfg(feature = "nats")]
+const IDEMPOTENT_DEPOSIT_INTENT_SLOT_CHOICES: usize = 4;
 // The runtime's largest periodic request is 100 records. The additional 27
 // slots absorb recently suppressed or expired records without making the hot
 // path proportional to the bucket's lifetime subject count. Evidence and
@@ -110,6 +118,11 @@ struct RecentDepositIndexState {
     last_compatibility_key: Option<String>,
     #[serde(default)]
     last_compatibility_ordinal: u64,
+    /// Two-phase compatibility pointer intent. The committed compatibility
+    /// revision never advances until this exact pointer has been written (or
+    /// has been legitimately superseded by a complete ring rotation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_compatibility_pointer: Option<RecentDepositPointer>,
 }
 
 #[cfg(feature = "nats")]
@@ -884,24 +897,44 @@ impl JetStreamPheromoneSubstrate {
     ) -> Result<StoredIdempotentDepositIntent, SubstrateError> {
         use async_nats::jetstream::kv::{CreateErrorKind, Operation};
 
-        let intent_key = format!(
-            "{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.{}",
-            hash_prefix(operation_id.as_bytes(), 64)
-        );
         let payload_digest = hash_prefix(payload, 64);
         for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
-            if let Some(existing) = connection
-                .store
-                .entry(&intent_key)
-                .await
-                .map_err(|error| nats_error("read idempotent deposit intent", error))?
-                .filter(|entry| !matches!(entry.operation, Operation::Delete | Operation::Purge))
+            let legacy_key = legacy_idempotent_deposit_intent_key(operation_id);
+            let mut available_slot = None;
+            for (candidate_index, intent_key) in std::iter::once(legacy_key)
+                .chain(idempotent_deposit_intent_slot_keys(operation_id))
+                .enumerate()
             {
+                let existing = connection
+                    .store
+                    .entry(&intent_key)
+                    .await
+                    .map_err(|error| nats_error("read idempotent deposit intent", error))?
+                    .filter(|entry| {
+                        !matches!(entry.operation, Operation::Delete | Operation::Purge)
+                    });
+                let Some(existing) = existing else {
+                    // Index zero is the rolling-upgrade lookup key. New
+                    // writes use only the finite slot namespace.
+                    if candidate_index > 0 && available_slot.is_none() {
+                        available_slot = Some(intent_key);
+                    }
+                    continue;
+                };
                 let location = format!("jetstream://{}/{}", self.bucket, intent_key);
                 let intent = serde_json::from_slice::<IdempotentDepositIntent>(&existing.value)
                     .map_err(|source| SubstrateError::Decode { location, source })?;
-                if intent.operation_id != operation_id
-                    || intent.payload_digest != payload_digest
+                if intent.operation_id != operation_id {
+                    if candidate_index == 0 {
+                        return Err(SubstrateError::InvalidDeposit {
+                            reason:
+                                "legacy Providence intent hash identifies a different operation"
+                                    .to_string(),
+                        });
+                    }
+                    continue;
+                }
+                if intent.payload_digest != payload_digest
                     || intent.kind != kind
                     || intent.ordinal == 0
                     || deposit_key_ordinal(&intent.deposit_key)
@@ -923,6 +956,13 @@ impl JetStreamPheromoneSubstrate {
                     intent,
                 });
             }
+
+            let Some(intent_key) = available_slot else {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: "bounded Providence intent ledger has no collision-free slot for this operation"
+                        .to_string(),
+                });
+            };
 
             let ordinal = self
                 .allocate_recent_deposit_ordinal(connection, kind)
@@ -1289,6 +1329,7 @@ impl JetStreamPheromoneSubstrate {
                         last_compatibility_revision: 0,
                         last_compatibility_key: None,
                         last_compatibility_ordinal: 0,
+                        pending_compatibility_pointer: None,
                     })
                     .map_err(|source| SubstrateError::Encode {
                         context: "JetStream recent-deposit index state".to_string(),
@@ -1534,19 +1575,7 @@ impl JetStreamPheromoneSubstrate {
                         });
                     }
                     let embedded_ordinal = deposit_key_ordinal(&key);
-                    let ordinal = match embedded_ordinal {
-                        Some(ordinal) => Some(ordinal),
-                        None => {
-                            self.allocate_compatibility_deposit_ordinal(
-                                connection,
-                                kind,
-                                &key,
-                                info.stream_sequence,
-                            )
-                            .await?
-                        }
-                    };
-                    if let Some(ordinal) = ordinal {
+                    if let Some(ordinal) = embedded_ordinal {
                         self.write_recent_deposit_pointer(
                             connection,
                             &RecentDepositPointer {
@@ -1555,6 +1584,14 @@ impl JetStreamPheromoneSubstrate {
                                 deposit_key: key,
                                 deposit_revision: info.stream_sequence,
                             },
+                        )
+                        .await?;
+                    } else {
+                        self.ensure_compatibility_deposit_pointer(
+                            connection,
+                            kind,
+                            &key,
+                            info.stream_sequence,
                         )
                         .await?;
                     }
@@ -1606,6 +1643,7 @@ impl JetStreamPheromoneSubstrate {
                         last_compatibility_revision: 0,
                         last_compatibility_key: None,
                         last_compatibility_ordinal: 0,
+                        pending_compatibility_pointer: None,
                     })
                     .map_err(|source| SubstrateError::Encode {
                         context: "JetStream recent-deposit index state".to_string(),
@@ -1663,13 +1701,13 @@ impl JetStreamPheromoneSubstrate {
     }
 
     #[cfg(feature = "nats")]
-    async fn allocate_compatibility_deposit_ordinal(
+    async fn ensure_compatibility_deposit_pointer(
         &self,
         connection: &JetStreamConnection,
         kind: DepositKeyKind,
         deposit_key: &str,
         deposit_revision: u64,
-    ) -> Result<Option<u64>, SubstrateError> {
+    ) -> Result<(), SubstrateError> {
         use async_nats::jetstream::kv::{Operation, UpdateErrorKind};
 
         let state_key = recent_deposit_index_state_key(kind);
@@ -1692,14 +1730,49 @@ impl JetStreamPheromoneSubstrate {
                 });
             }
             let location = format!("jetstream://{}/{}", self.bucket, state_key);
-            let state = serde_json::from_slice::<RecentDepositIndexState>(&entry.value)
+            let mut state = serde_json::from_slice::<RecentDepositIndexState>(&entry.value)
                 .map_err(|source| SubstrateError::Decode { location, source })?;
+            if let Some(pending) = state.pending_compatibility_pointer.clone() {
+                self.write_recent_deposit_pointer(connection, &pending)
+                    .await?;
+                if pending.deposit_revision >= state.last_compatibility_revision {
+                    state.last_compatibility_revision = pending.deposit_revision;
+                    state.last_compatibility_key = Some(pending.deposit_key.clone());
+                    state.last_compatibility_ordinal = pending.ordinal;
+                }
+                state.pending_compatibility_pointer = None;
+                let payload =
+                    serde_json::to_vec(&state).map_err(|source| SubstrateError::Encode {
+                        context: "JetStream committed compatibility pointer state".to_string(),
+                        source,
+                    })?;
+                match connection
+                    .store
+                    .update(&state_key, payload.into(), entry.revision)
+                    .await
+                {
+                    Ok(_) => continue,
+                    Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => continue,
+                    Err(error) => {
+                        return Err(nats_error("commit compatibility pointer state", error));
+                    }
+                }
+            }
             if deposit_revision < state.last_compatibility_revision {
-                // Another refresher has already committed a later stream
-                // record, which is only possible after this ordered record's
-                // pointer became durable. Reusing the current ordinal would
-                // incorrectly alias two deposits.
-                return Ok(None);
+                // A pre-two-phase process could have advanced the revision and
+                // crashed before writing this pointer. Only an exact pointer
+                // proves the older record is safe to skip.
+                if self
+                    .existing_recent_deposit_pointers(connection, kind)
+                    .await?
+                    .iter()
+                    .any(|pointer| {
+                        pointer.deposit_revision == deposit_revision
+                            && pointer.deposit_key == deposit_key
+                    })
+                {
+                    return Ok(());
+                }
             }
             if deposit_revision == state.last_compatibility_revision {
                 if state.last_compatibility_key.as_deref() != Some(deposit_key)
@@ -1711,7 +1784,17 @@ impl JetStreamPheromoneSubstrate {
                         ),
                     });
                 }
-                return Ok(Some(state.last_compatibility_ordinal));
+                self.write_recent_deposit_pointer(
+                    connection,
+                    &RecentDepositPointer {
+                        ordinal: state.last_compatibility_ordinal,
+                        kind,
+                        deposit_key: deposit_key.to_string(),
+                        deposit_revision,
+                    },
+                )
+                .await?;
+                return Ok(());
             }
             let next_ordinal = state.last_ordinal.checked_add(1).ok_or_else(|| {
                 SubstrateError::InvalidDeposit {
@@ -1720,9 +1803,13 @@ impl JetStreamPheromoneSubstrate {
             })?;
             let payload = serde_json::to_vec(&RecentDepositIndexState {
                 last_ordinal: next_ordinal,
-                last_compatibility_revision: deposit_revision,
-                last_compatibility_key: Some(deposit_key.to_string()),
-                last_compatibility_ordinal: next_ordinal,
+                pending_compatibility_pointer: Some(RecentDepositPointer {
+                    ordinal: next_ordinal,
+                    kind,
+                    deposit_key: deposit_key.to_string(),
+                    deposit_revision,
+                }),
+                ..state
             })
             .map_err(|source| SubstrateError::Encode {
                 context: "JetStream compatibility ordinal state".to_string(),
@@ -1733,7 +1820,10 @@ impl JetStreamPheromoneSubstrate {
                 .update(&state_key, payload.into(), entry.revision)
                 .await
             {
-                Ok(_) => return Ok(Some(next_ordinal)),
+                // The next iteration writes the pointer before committing the
+                // compatibility revision. Any concurrent refresher helps the
+                // same durable intent to completion.
+                Ok(_) => continue,
                 Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => continue,
                 Err(error) => {
                     return Err(nats_error("advance compatibility ordinal state", error));
@@ -1742,7 +1832,7 @@ impl JetStreamPheromoneSubstrate {
         }
 
         Err(SubstrateError::Nats {
-            operation: "advance compatibility ordinal state",
+            operation: "commit compatibility pointer state",
             reason: format!(
                 "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
             ),
@@ -4165,6 +4255,27 @@ fn hash_prefix(bytes: &[u8], prefix_len: usize) -> String {
 }
 
 #[cfg(feature = "nats")]
+fn legacy_idempotent_deposit_intent_key(operation_id: &str) -> String {
+    format!(
+        "{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.{}",
+        hash_prefix(operation_id.as_bytes(), 64)
+    )
+}
+
+#[cfg(feature = "nats")]
+fn idempotent_deposit_intent_slot_keys(operation_id: &str) -> impl Iterator<Item = String> {
+    let digest = Sha256::digest(operation_id.as_bytes());
+    (0..IDEMPOTENT_DEPOSIT_INTENT_SLOT_CHOICES).map(move |choice| {
+        let offset = choice * 8;
+        let hash_word = digest[offset..offset + 8]
+            .iter()
+            .fold(0_u64, |word, byte| (word << 8) | u64::from(*byte));
+        let slot = hash_word % MAX_IDEMPOTENT_DEPOSIT_INTENT_SLOTS;
+        format!("{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.s{slot:06}")
+    })
+}
+
+#[cfg(feature = "nats")]
 fn deposit_key_timestamp(key: &str) -> Option<i64> {
     if let Some(stripped) = key.strip_prefix(&format!("{GC_KEY_PREFIX}.")) {
         let mut parts = stripped.split('.');
@@ -5033,6 +5144,25 @@ mod tests {
         assert_eq!(state.last_compatibility_revision, 0);
         assert_eq!(state.last_compatibility_key, None);
         assert_eq!(state.last_compatibility_ordinal, 0);
+        assert_eq!(state.pending_compatibility_pointer, None);
+    }
+
+    #[test]
+    fn idempotent_intent_keys_are_confined_to_the_fixed_slot_namespace() {
+        for operation in 0..10_000_u64 {
+            let keys =
+                super::idempotent_deposit_intent_slot_keys(&format!("operation-{operation}"))
+                    .collect::<Vec<_>>();
+            assert_eq!(keys.len(), super::IDEMPOTENT_DEPOSIT_INTENT_SLOT_CHOICES);
+            for key in keys {
+                let slot = key
+                    .strip_prefix(&format!("{}.s", super::RECENT_DEPOSIT_INTENT_KEY_PREFIX))
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+                assert!(slot < super::MAX_IDEMPOTENT_DEPOSIT_INTENT_SLOTS);
+            }
+        }
     }
 
     #[test]
@@ -6003,6 +6133,166 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
+    async fn jetstream_compatibility_state_repairs_a_pointer_write_crash() {
+        let Some((_bucket, substrate)) = connect_for_test("compatibility-pointer-crash").await
+        else {
+            return;
+        };
+        let connection = substrate.ensure_connected().await.unwrap();
+        substrate
+            .ensure_recent_deposit_index_initialized(connection)
+            .await
+            .unwrap();
+        let now = now_timestamp();
+        let first = sample_deposit("compatibility-crash-first", now - 2, 0.9);
+        let first_key = format!(
+            "exp.{:020}.execution.evidence.{:020}.compatibility-crash-first",
+            expiration_gc_page(&first, 3_600.0, 0.01),
+            first.timestamp
+        );
+        let first_revision = connection
+            .store
+            .put(
+                first_key.clone(),
+                serde_json::to_vec(&first).unwrap().into(),
+            )
+            .await
+            .unwrap();
+        let second = sample_deposit("compatibility-crash-second", now - 1, 0.9);
+        let second_key = format!(
+            "exp.{:020}.execution.evidence.{:020}.compatibility-crash-second",
+            expiration_gc_page(&second, 3_600.0, 0.01),
+            second.timestamp
+        );
+        let second_revision = connection
+            .store
+            .put(
+                second_key.clone(),
+                serde_json::to_vec(&second).unwrap().into(),
+            )
+            .await
+            .unwrap();
+
+        let state_key = super::recent_deposit_index_state_key(DepositKeyKind::Evidence);
+        let state_entry = connection.store.entry(&state_key).await.unwrap().unwrap();
+        let mut state =
+            serde_json::from_slice::<super::RecentDepositIndexState>(&state_entry.value).unwrap();
+        let second_ordinal = state.last_ordinal + 2;
+        state.last_ordinal = second_ordinal;
+        state.last_compatibility_revision = second_revision;
+        state.last_compatibility_key = Some(second_key.clone());
+        state.last_compatibility_ordinal = second_ordinal;
+        state.pending_compatibility_pointer = None;
+        connection
+            .store
+            .update(
+                &state_key,
+                serde_json::to_vec(&state).unwrap().into(),
+                state_entry.revision,
+            )
+            .await
+            .unwrap();
+
+        // This is the exact old crash state: the revision cursor advanced,
+        // then the process stopped before either ring pointer was durable.
+        substrate
+            .ensure_compatibility_deposit_pointer(
+                connection,
+                DepositKeyKind::Evidence,
+                &first_key,
+                first_revision,
+            )
+            .await
+            .unwrap();
+        substrate
+            .ensure_compatibility_deposit_pointer(
+                connection,
+                DepositKeyKind::Evidence,
+                &second_key,
+                second_revision,
+            )
+            .await
+            .unwrap();
+        let pointers = substrate
+            .existing_recent_deposit_pointers(connection, DepositKeyKind::Evidence)
+            .await
+            .unwrap();
+        assert!(pointers.iter().any(|pointer| {
+            pointer.deposit_revision == first_revision && pointer.deposit_key == first_key
+        }));
+        assert!(pointers.iter().any(|pointer| {
+            pointer.deposit_revision == second_revision && pointer.deposit_key == second_key
+        }));
+        let committed = connection.store.entry(&state_key).await.unwrap().unwrap();
+        let committed =
+            serde_json::from_slice::<super::RecentDepositIndexState>(&committed.value).unwrap();
+        assert_eq!(committed.last_compatibility_revision, second_revision);
+        assert_eq!(committed.pending_compatibility_pointer, None);
+
+        let third = sample_deposit("compatibility-crash-third", now, 0.9);
+        let third_key = format!(
+            "exp.{:020}.execution.evidence.{:020}.compatibility-crash-third",
+            expiration_gc_page(&third, 3_600.0, 0.01),
+            third.timestamp
+        );
+        let third_revision = connection
+            .store
+            .put(
+                third_key.clone(),
+                serde_json::to_vec(&third).unwrap().into(),
+            )
+            .await
+            .unwrap();
+        let state_entry = connection.store.entry(&state_key).await.unwrap().unwrap();
+        let mut pending_state =
+            serde_json::from_slice::<super::RecentDepositIndexState>(&state_entry.value).unwrap();
+        let third_ordinal = pending_state.last_ordinal + 1;
+        pending_state.last_ordinal = third_ordinal;
+        pending_state.pending_compatibility_pointer = Some(super::RecentDepositPointer {
+            ordinal: third_ordinal,
+            kind: DepositKeyKind::Evidence,
+            deposit_key: third_key.clone(),
+            deposit_revision: third_revision,
+        });
+        connection
+            .store
+            .update(
+                &state_key,
+                serde_json::to_vec(&pending_state).unwrap().into(),
+                state_entry.revision,
+            )
+            .await
+            .unwrap();
+
+        // This is the new two-phase crash state: the durable reservation exists
+        // but neither the pointer nor its committed revision does. Any helper
+        // must finish that exact intent before processing later records.
+        substrate
+            .ensure_compatibility_deposit_pointer(
+                connection,
+                DepositKeyKind::Evidence,
+                &third_key,
+                third_revision,
+            )
+            .await
+            .unwrap();
+        let pointers = substrate
+            .existing_recent_deposit_pointers(connection, DepositKeyKind::Evidence)
+            .await
+            .unwrap();
+        assert!(pointers.iter().any(|pointer| {
+            pointer.deposit_revision == third_revision && pointer.deposit_key == third_key
+        }));
+        let committed = connection.store.entry(&state_key).await.unwrap().unwrap();
+        let committed =
+            serde_json::from_slice::<super::RecentDepositIndexState>(&committed.value).unwrap();
+        assert_eq!(committed.last_compatibility_revision, third_revision);
+        assert_eq!(committed.last_compatibility_ordinal, third_ordinal);
+        assert_eq!(committed.pending_compatibility_pointer, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
     async fn jetstream_providence_feedback_deposit_is_idempotent_across_retries() {
         let Some((_bucket, substrate)) = connect_for_test("feedback-idempotency").await else {
             return;
@@ -6019,8 +6309,26 @@ mod tests {
                 "observed_at_ms": timestamp.saturating_mul(1_000),
             }),
         );
+        let operation_id = crate::substrate::deposit_operation_id(&deposit)
+            .unwrap()
+            .unwrap();
         substrate.deposit(deposit.clone()).await.unwrap();
         substrate.deposit(deposit).await.unwrap();
+        let connection = substrate.ensure_connected().await.unwrap();
+        assert!(
+            connection
+                .store
+                .entry(&super::legacy_idempotent_deposit_intent_key(&operation_id))
+                .await
+                .unwrap()
+                .is_none(),
+            "new intents must never grow the legacy per-operation subject namespace"
+        );
+        let mut bounded_intent_found = false;
+        for key in super::idempotent_deposit_intent_slot_keys(&operation_id) {
+            bounded_intent_found |= connection.store.entry(&key).await.unwrap().is_some();
+        }
+        assert!(bounded_intent_found);
         let matches = substrate
             .recent_deposits(10)
             .await
@@ -6047,7 +6355,6 @@ mod tests {
                 "observed_at_ms": timestamp.saturating_mul(1_000),
             }),
         );
-        let connection = substrate.ensure_connected().await.unwrap();
         let crash_payload = serde_json::to_vec(&crash_window).unwrap();
         let crash_operation_id = crate::substrate::deposit_operation_id(&crash_window)
             .unwrap()

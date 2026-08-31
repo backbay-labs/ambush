@@ -2667,9 +2667,10 @@ fn latency_delta_observations(report: &super::StrategyExperimentReport) -> Vec<i
 /// The verdict an experiment report reaches must be a function of the fixture
 /// content, not of how busy the machine was while the candidate suite ran. So:
 ///   (1) the digest of the verdict-bearing fields must be byte-identical, and
-///   (2) the measured latency delta must differ, proving the differential
-///       really landed. Without (2) this test could pass by measuring nothing
-///       at all. (2) says nothing about WHERE the delta is recorded; that is
+///   (2) a deterministic test receipt must prove the candidate-only stall was
+///       consumed. The measured delta cannot provide that proof: requiring it
+///       to cross a fixed threshold would recreate the machine-load gate this
+///       regression protects against. Recording is pinned separately by
 ///       `experiment_records_detect_latency_delta_as_a_non_gating_observation`.
 #[tokio::test]
 async fn experiment_verdict_is_invariant_under_candidate_detect_stage_load() {
@@ -2696,26 +2697,31 @@ async fn experiment_verdict_is_invariant_under_candidate_detect_stage_load() {
     );
 
     // Pass 2: identical inputs, one CANDIDATE detect-stage evaluation stalled by
-    // 20ms. The baseline suite runs first and untouched, so the candidate-minus-
-    // baseline delta blows through the manifest's 10_000us budget while staying
-    // under the scenarios' own 50_000us expectations, which keeps the
-    // differential confined to the experiment-level latency comparison.
-    let stalled = {
-        let _stall = super::detect_stall::DetectStallGuard::arm_for_strategy(
+    // 20ms. The baseline suite runs first and untouched. Host scheduling can
+    // still make the measured candidate-minus-baseline delta any value; the
+    // guard receipt below, rather than that noisy delta, proves injection.
+    let (stalled, applied_stalls) = {
+        let stall = super::detect_stall::DetectStallGuard::arm_for_strategy(
             "office_baseline_control",
             1,
             std::time::Duration::from_millis(20),
         );
-        harness
+        let report = harness
             .evaluate_experiment_path(office_control_experiment(), &stalled_dir)
             .await
             .unwrap()
-            .report
+            .report;
+        (report, stall.applied_count())
     };
 
-    // (2) Vacuity check first: prove the load differential actually landed as a
-    // measurable difference. Deliberately NOT a claim that the observation
-    // survives -- see the helper's note.
+    // (2) Vacuity checks first: prove the candidate-only load differential was
+    // consumed exactly once and both reports still carry the wall-clock signal.
+    // The signal's numeric value is deliberately not a gate: on a loaded host,
+    // the baseline side can be slower by enough to erase a fixed delta.
+    assert_eq!(
+        applied_stalls, 1,
+        "the candidate detect-stage stall must be consumed exactly once"
+    );
     let nominal_deltas = latency_delta_observations(&nominal);
     let stalled_deltas = latency_delta_observations(&stalled);
     assert!(
@@ -2723,17 +2729,6 @@ async fn experiment_verdict_is_invariant_under_candidate_detect_stage_load() {
         "both runs must measure a detect-latency delta, otherwise the differential \
          cannot be shown to have landed; nominal={nominal_deltas:?} stalled={stalled_deltas:?}"
     );
-    assert!(
-        stalled_deltas.iter().copied().max().unwrap_or(0) > 10_000,
-        "stalled run must measure a delta past the manifest's 10_000us budget, \
-         got {stalled_deltas:?}"
-    );
-    assert_ne!(
-        nominal_deltas, stalled_deltas,
-        "the two runs must differ in the measured latency delta, otherwise this \
-         test proves nothing about the verdict"
-    );
-
     // (1) The verdict must be identical across the two runs.
     let (nominal_digest, nominal_canonical) = experiment_verdict_digest(&nominal);
     let (stalled_digest, stalled_canonical) = experiment_verdict_digest(&stalled);

@@ -90,9 +90,10 @@ pub use incident::{
 pub use investigation::{
     ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
     InvestigationBundleLookup, InvestigationBundleRecord, InvestigationBundleStore,
-    InvestigationDecision, InvestigationInterpretation, InvestigationPriority,
-    InvestigationPriorityClass, InvestigationStatus, InvestigationStoreError,
-    InvestigationStoreHealth, InvestigationVote, MemoryInvestigationBundleStore,
+    InvestigationDecision, InvestigationExecutionClaim, InvestigationInterpretation,
+    InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
+    InvestigationStoreError, InvestigationStoreHealth, InvestigationVote,
+    MemoryInvestigationBundleStore,
 };
 pub use spine_error::{SpineError, SpineResult};
 pub use store::{

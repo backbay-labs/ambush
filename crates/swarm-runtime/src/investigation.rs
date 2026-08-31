@@ -11,9 +11,9 @@ use swarm_core::types::{ResponseAction, Severity};
 use swarm_crypto::sha256_hex;
 use swarm_spine::{
     InvestigationBundle, InvestigationBundleLookup, InvestigationBundleRecord,
-    InvestigationBundleStore, InvestigationDecision, InvestigationInterpretation,
-    InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
-    InvestigationStoreError, InvestigationVote,
+    InvestigationBundleStore, InvestigationDecision, InvestigationExecutionClaim,
+    InvestigationInterpretation, InvestigationPriority, InvestigationPriorityClass,
+    InvestigationStatus, InvestigationStoreError, InvestigationVote,
 };
 use swarm_spine::{InvestigationStoreHealth, ReplayBundle};
 
@@ -326,18 +326,6 @@ where
                         continue;
                     };
 
-                    {
-                        let mut guard = worker_state
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner());
-                        guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                        guard.running_jobs = guard.running_jobs.saturating_add(1);
-                        if starvation_applied {
-                            guard.starvation_preventions =
-                                guard.starvation_preventions.saturating_add(1);
-                        }
-                    }
-
                     let started_at_ms = now_ms();
                     let mut running_bundle = job.bundle.clone();
                     let starvation_boost = starvation_boost_basis_points(
@@ -365,6 +353,51 @@ where
                         guard.failed_jobs = guard.failed_jobs.saturating_add(1);
                         guard.last_failure_reason = Some(error.to_string());
                         continue;
+                    }
+
+                    // Persist the ambiguous/in-progress state before acquiring
+                    // the non-reclaimable execution fence. A crash on either
+                    // side of this boundary must never leave a durable `Queued`
+                    // bundle that later submissions keep scheduling against an
+                    // already-consumed fence.
+                    match worker_store.claim_execution(&job.bundle) {
+                        Ok(InvestigationExecutionClaim::Acquired) => {}
+                        Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
+                            worker_scheduler
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .finish(&job.bundle.investigation_id);
+                            let mut guard = worker_state
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
+                            guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                            continue;
+                        }
+                        Err(error) => {
+                            worker_scheduler
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .finish(&job.bundle.investigation_id);
+                            let mut guard = worker_state
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
+                            guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                            guard.failed_jobs = guard.failed_jobs.saturating_add(1);
+                            guard.last_failure_reason = Some(error.to_string());
+                            continue;
+                        }
+                    }
+
+                    {
+                        let mut guard = worker_state
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                        guard.running_jobs = guard.running_jobs.saturating_add(1);
+                        if starvation_applied {
+                            guard.starvation_preventions =
+                                guard.starvation_preventions.saturating_add(1);
+                        }
                     }
 
                     let result = timeout(
@@ -515,14 +548,12 @@ where
                 return Ok(Some(existing.record));
             }
             if existing.bundle.status == InvestigationStatus::Running {
-                let queued = existing
-                    .bundle
-                    .with_status(InvestigationStatus::Queued, None, None);
-                let record = self.store.persist(&queued)?;
-                (queued, record)
-            } else {
-                (existing.bundle, existing.record)
+                // A different process may still own the durable execution
+                // claim. Re-queueing here would permit concurrent strategy
+                // side effects after a SOAR lease takeover.
+                return Ok(Some(existing.record));
             }
+            (existing.bundle, existing.record)
         } else {
             let bundle = expected_queued_bundle;
             let record = self.store.persist(&bundle)?;
@@ -1330,7 +1361,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn idempotent_submission_recovers_a_running_bundle_after_restart() {
+    async fn idempotent_submission_does_not_reclaim_a_running_execution() {
         let store = MemoryInvestigationBundleStore::default();
         let replay = sample_replay();
         let operation_id = "feedback-operation-restart";
@@ -1368,9 +1399,9 @@ mod tests {
                 .unwrap()
                 .bundle
                 .status,
-            InvestigationStatus::Completed
+            InvestigationStatus::Running
         );
-        assert_eq!(coordinator.snapshot().completed_jobs, 1);
+        assert_eq!(coordinator.snapshot().completed_jobs, 0);
     }
 
     #[tokio::test]
