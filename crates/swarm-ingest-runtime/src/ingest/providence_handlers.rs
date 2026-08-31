@@ -167,6 +167,7 @@ pub(crate) async fn providence_feedback_handler(
         soar_lineage: None,
         payload: payload_value,
         outcome: applied.outcome.clone(),
+        soar_claim_lease: None,
     };
     state
         .current_incident_store()
@@ -355,6 +356,7 @@ pub(crate) async fn apply_providence_feedback(
                 .await
                 .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
             let signal = SwarmFeedbackSignal {
+                operation_id: Some(feedback_id.to_string()),
                 action: request.action,
                 incident_id: request.incident_id.clone(),
                 finding_id: request
@@ -433,7 +435,7 @@ pub(crate) async fn apply_providence_feedback(
                 })?;
             let submitted = state
                 .current_investigation()
-                .submit(&replay.bundle)
+                .submit_idempotent(&replay.bundle, feedback_id, recorded_at_ms)
                 .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
             Ok(ProvidenceFeedbackApplicationResult {
                 outcome: json!({
@@ -469,6 +471,7 @@ pub(crate) fn enrich_feedback_target(
         .load_by_hunt_id(&target.hunt_id)
         .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
     {
+        enriched.event_id = replay.bundle.event.event_id.clone();
         enriched.host_id = replay.bundle.event.host_id.clone().or(enriched.host_id);
         enriched.strategy_id = Some(replay.bundle.audit.detection.strategy_id.clone());
         enriched.evidence_timestamp = Some(normalize_feedback_evidence_timestamp(

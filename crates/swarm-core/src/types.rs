@@ -208,6 +208,8 @@ pub struct SwarmProvidenceCallbackRequest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SwarmFeedbackSignal {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
     pub action: ProvidenceFeedbackAction,
     pub incident_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

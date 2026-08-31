@@ -1,3 +1,4 @@
+use super::EvolutionAppliedFeedbackOperation;
 use super::test_support::*;
 use crate::evolution::assurance_summary_for_tests;
 
@@ -898,6 +899,7 @@ fn sample_population_state(now_ms: i64) -> EvolutionPopulationState {
         population_size: 2,
         pareto_tournament_size: 2,
         proposal_timestamps_ms: vec![now_ms - 1_000],
+        applied_feedback_operations: Default::default(),
         members: vec![
             EvolutionPopulationCandidate {
                 generation: 1,
@@ -1008,6 +1010,96 @@ fn population_store_rejects_tampered_signed_state_after_reopen() {
         error,
         super::EvolutionPopulationStoreError::InvalidSignature { .. }
     ));
+}
+
+#[test]
+fn population_store_merges_feedback_committed_after_a_stale_refresh_snapshot() {
+    let root = unique_temp_dir("population-feedback-merge");
+    let population_dir = root.join("population");
+    let signer_agent_id = test_signer_agent_id();
+    let store = FileEvolutionPopulationStore::open_signed(
+        &population_dir,
+        signer_agent_id.clone(),
+        test_signing_key(),
+    )
+    .unwrap();
+    let stale_refresh = sample_population_state(1_800_400_000_000);
+    store.persist(&stale_refresh).unwrap();
+
+    let operation_id = "a".repeat(64);
+    store
+        .update_trusted(&signer_agent_id, |state| {
+            let candidate = state
+                .members
+                .iter_mut()
+                .find(|candidate| candidate.strategy_id == "candidate-a")
+                .unwrap();
+            super::apply_population_feedback_penalty(candidate, 0.20);
+            state.applied_feedback_operations.insert(
+                operation_id.clone(),
+                EvolutionAppliedFeedbackOperation {
+                    operation_digest: "b".repeat(64),
+                    strategy_id: "candidate-a".to_string(),
+                    penalty: 0.20,
+                    applied_at_ms: 1_800_400_001_000,
+                },
+            );
+            Ok(true)
+        })
+        .unwrap();
+
+    let mut later_refresh_from_stale_snapshot = stale_refresh;
+    later_refresh_from_stale_snapshot.updated_at_ms = 1_800_400_002_000;
+    later_refresh_from_stale_snapshot.members[0].fitness = 0.95;
+    store.persist(&later_refresh_from_stale_snapshot).unwrap();
+
+    let merged = store.load_trusted(&signer_agent_id).unwrap().unwrap();
+    assert_eq!(merged.applied_feedback_operations.len(), 1);
+    assert_eq!(
+        merged
+            .applied_feedback_operations
+            .get(&operation_id)
+            .unwrap()
+            .strategy_id,
+        "candidate-a"
+    );
+    let penalized = merged
+        .members
+        .iter()
+        .find(|candidate| candidate.strategy_id == "candidate-a")
+        .unwrap();
+    assert!((penalized.fitness - 0.75).abs() < f64::EPSILON);
+    assert!(
+        penalized
+            .blocking_reason_names
+            .iter()
+            .any(|reason| reason == "analyst_false_positive_feedback")
+    );
+}
+
+#[test]
+fn population_store_repairs_a_missing_sequence_after_atomic_state_commit() {
+    let root = unique_temp_dir("population-sequence-repair");
+    let population_dir = root.join("population");
+    let signer_agent_id = test_signer_agent_id();
+    let store = FileEvolutionPopulationStore::open_signed(
+        &population_dir,
+        signer_agent_id.clone(),
+        test_signing_key(),
+    )
+    .unwrap();
+    store
+        .persist(&sample_population_state(1_800_400_000_000))
+        .unwrap();
+    fs::remove_file(population_dir.join("state.sequence.json")).unwrap();
+
+    let recovered = store.load_trusted(&signer_agent_id).unwrap().unwrap();
+    assert_eq!(recovered.ranking_id, "ranking:test");
+    let repaired_sequence: u64 = serde_json::from_str(
+        &fs::read_to_string(population_dir.join("state.sequence.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(repaired_sequence, 1);
 }
 
 #[test]

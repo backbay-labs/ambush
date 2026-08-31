@@ -8,10 +8,12 @@ use crate::evolution::DefaultEvolutionProofHarness;
 use crate::evolution_status::{FileKittenStatusStore, KittenExecutionState, KittenStatusRecord};
 use crate::mutation::{
     DefaultEvolutionMutationHarness, EvolutionAdversarialPressureRequest,
-    EvolutionAutonomousFitnessMeasurement, EvolutionAutonomousMutationSpecCreateRequest,
-    EvolutionBenchmarkRunLookup, EvolutionBenchmarkRunReport, EvolutionEvasionGapFocus,
-    EvolutionEvasionPressureInput, EvolutionMutationError, EvolutionPopulationCandidate,
-    FileEvolutionBenchmarkStore, FileEvolutionPopulationStore, benchmark_fitness_delta,
+    EvolutionAppliedFeedbackOperation, EvolutionAutonomousFitnessMeasurement,
+    EvolutionAutonomousMutationSpecCreateRequest, EvolutionBenchmarkRunLookup,
+    EvolutionBenchmarkRunReport, EvolutionEvasionGapFocus, EvolutionEvasionPressureInput,
+    EvolutionMutationError, EvolutionPopulationCandidate, FileEvolutionBenchmarkStore,
+    FileEvolutionPopulationStore, MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS,
+    apply_population_feedback_penalty, benchmark_fitness_delta,
     summarize_evolution_benchmark_baseline, summarize_evolution_benchmark_generation,
 };
 use crate::red_swarm::{SuiteRedSwarmAdapter, ThreatContext};
@@ -42,13 +44,15 @@ use swarm_core::types::{
     SPHINX_MEMORY_THREAT_CLASS, Severity, SphinxMemoryAnswer, SphinxMemoryPayloadKind,
     SphinxMemoryQuery, SwarmAction, SwarmFeedbackSignal,
 };
+use swarm_crypto::sha256_hex;
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate};
 use tokio::task::JoinHandle;
 
 const MEMORY_QUERY_MIN_MATCHES: usize = 2;
 const MEMORY_QUERY_MAX_WAIT_TICKS: u8 = 2;
 const MEMORY_FITNESS_BLEND_WEIGHT: f64 = 0.25;
-const DISMISS_FEEDBACK_FITNESS_PENALTY: f64 = 0.20;
+pub(crate) const DISMISS_FEEDBACK_FITNESS_PENALTY: f64 = 0.20;
+const MAX_KITTEN_FEEDBACK_AUDIT_BYTES: u64 = 32 * 1024 * 1024;
 
 pub struct KittenAgent {
     id: AgentId,
@@ -262,26 +266,250 @@ struct FileKittenFeedbackStore {
 impl FileKittenFeedbackStore {
     fn open(root: impl AsRef<Path>) -> Result<Self, String> {
         let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(&root)
-            .map_err(|error| format!("failed to create kitten feedback store root: {error}"))?;
+        create_feedback_store_root_durably(&root)?;
         Ok(Self {
             path: root.join("feedback-signals.jsonl"),
         })
     }
 
-    fn append(&self, record: &KittenFeedbackSignalRecord) -> Result<(), String> {
+    fn append_once(&self, record: &KittenFeedbackSignalRecord) -> Result<(), String> {
         use std::io::Write;
 
         let mut file = fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(&self.path)
             .map_err(|error| format!("failed to open kitten feedback store: {error}"))?;
+        file.lock()
+            .map_err(|error| format!("failed to lock kitten feedback store: {error}"))?;
+        let existing = read_feedback_audit_locked(&mut file)?;
+        let existing_len = u64::try_from(existing.len()).map_err(|error| error.to_string())?;
+        if existing_len > MAX_KITTEN_FEEDBACK_AUDIT_BYTES {
+            return Err(format!(
+                "kitten feedback store exceeds the {}-byte hard limit",
+                MAX_KITTEN_FEEDBACK_AUDIT_BYTES
+            ));
+        }
+        for (line_number, line) in existing.lines().enumerate() {
+            let candidate =
+                serde_json::from_str::<KittenFeedbackSignalRecord>(line).map_err(|error| {
+                    format!(
+                        "failed to parse kitten feedback store line {}: {error}",
+                        line_number + 1
+                    )
+                })?;
+            if candidate.signal_id != record.signal_id {
+                continue;
+            }
+            validate_same_feedback_operation(&candidate, record)?;
+            if candidate == *record {
+                return Ok(());
+            }
+        }
         let line = serde_json::to_string(record)
             .map_err(|error| format!("failed to encode kitten feedback signal: {error}"))?;
+        let next_len = existing_len
+            .checked_add(u64::try_from(line.len()).map_err(|error| error.to_string())?)
+            .and_then(|length| length.checked_add(1))
+            .ok_or_else(|| "kitten feedback store length overflow".to_string())?;
+        if next_len > MAX_KITTEN_FEEDBACK_AUDIT_BYTES {
+            return Err(format!(
+                "kitten feedback store append would exceed the {}-byte hard limit",
+                MAX_KITTEN_FEEDBACK_AUDIT_BYTES
+            ));
+        }
         writeln!(file, "{line}")
-            .map_err(|error| format!("failed to append kitten feedback signal: {error}"))
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("failed to append kitten feedback signal: {error}"))?;
+        sync_feedback_store_directory(&self.path)?;
+        Ok(())
     }
+
+    fn prior_applied(
+        &self,
+        record: &KittenFeedbackSignalRecord,
+    ) -> Result<Option<KittenFeedbackSignalRecord>, String> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.path)
+            .map_err(|error| format!("failed to open kitten feedback store: {error}"))?;
+        file.lock()
+            .map_err(|error| format!("failed to lock kitten feedback store: {error}"))?;
+        let existing = read_feedback_audit_locked(&mut file)?;
+        let existing_len = u64::try_from(existing.len()).map_err(|error| error.to_string())?;
+        if existing_len > MAX_KITTEN_FEEDBACK_AUDIT_BYTES {
+            return Err(format!(
+                "kitten feedback store exceeds the {}-byte hard limit",
+                MAX_KITTEN_FEEDBACK_AUDIT_BYTES
+            ));
+        }
+        let mut applied = None;
+        for (line_number, line) in existing.lines().enumerate() {
+            let candidate =
+                serde_json::from_str::<KittenFeedbackSignalRecord>(line).map_err(|error| {
+                    format!(
+                        "failed to parse kitten feedback store line {}: {error}",
+                        line_number + 1
+                    )
+                })?;
+            if candidate.signal_id != record.signal_id {
+                continue;
+            }
+            validate_same_feedback_operation(&candidate, record)?;
+            if candidate.disposition == FeedbackSignalDisposition::Applied {
+                if applied
+                    .as_ref()
+                    .is_some_and(|existing| existing != &candidate)
+                {
+                    return Err(format!(
+                        "kitten feedback operation `{}` has conflicting applied audit records",
+                        record.signal_id
+                    ));
+                }
+                applied = Some(candidate);
+            }
+        }
+        Ok(applied)
+    }
+}
+
+fn read_feedback_audit_locked(file: &mut fs::File) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let observed_len = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect kitten feedback store: {error}"))?
+        .len();
+    if observed_len > MAX_KITTEN_FEEDBACK_AUDIT_BYTES {
+        return Err(format!(
+            "kitten feedback store exceeds the {}-byte hard limit",
+            MAX_KITTEN_FEEDBACK_AUDIT_BYTES
+        ));
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("failed to seek kitten feedback store: {error}"))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read kitten feedback store: {error}"))?;
+    if !bytes.is_empty() && bytes.last() != Some(&b'\n') {
+        let committed_len = bytes
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        file.set_len(u64::try_from(committed_len).map_err(|error| error.to_string())?)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("failed to repair kitten feedback store tail: {error}"))?;
+        bytes.truncate(committed_len);
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| format!("kitten feedback store is not valid UTF-8: {error}"))
+}
+
+fn create_feedback_store_root_durably(root: &Path) -> Result<(), String> {
+    let mut missing = Vec::new();
+    let mut cursor = root;
+    while !cursor.exists() {
+        missing.push(cursor.to_path_buf());
+        let Some(parent) = cursor.parent() else {
+            return Err("kitten feedback store root has no existing ancestor".to_string());
+        };
+        cursor = parent;
+    }
+    fs::create_dir_all(root)
+        .map_err(|error| format!("failed to create kitten feedback store root: {error}"))?;
+    #[cfg(unix)]
+    for created in missing {
+        let Some(parent) = created.parent() else {
+            continue;
+        };
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                format!(
+                    "failed to make kitten feedback store directory `{}` durable: {error}",
+                    created.display()
+                )
+            })?;
+    }
+    Ok(())
+}
+
+fn sync_feedback_store_directory(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "kitten feedback store path has no parent".to_string())?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                format!(
+                    "failed to make kitten feedback store file `{}` durable: {error}",
+                    path.display()
+                )
+            })?;
+    }
+    Ok(())
+}
+
+fn validate_same_feedback_operation(
+    existing: &KittenFeedbackSignalRecord,
+    proposed: &KittenFeedbackSignalRecord,
+) -> Result<(), String> {
+    if existing.recorded_at_ms == proposed.recorded_at_ms
+        && existing.action == proposed.action
+        && existing.incident_id == proposed.incident_id
+        && existing.finding_id == proposed.finding_id
+        && existing.strategy_id == proposed.strategy_id
+        && existing.threat_class == proposed.threat_class
+        && existing.analyst_id == proposed.analyst_id
+        && existing.reason == proposed.reason
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "kitten feedback operation `{}` was reused with conflicting immutable content",
+        proposed.signal_id
+    ))
+}
+
+fn kitten_feedback_operation_digest(record: &KittenFeedbackSignalRecord) -> Result<String, String> {
+    let canonical = serde_json::to_vec(&(
+        "swarm-kitten-feedback-operation-v1",
+        record.recorded_at_ms,
+        record.action,
+        &record.incident_id,
+        &record.finding_id,
+        &record.strategy_id,
+        &record.threat_class,
+        &record.analyst_id,
+        &record.reason,
+    ))
+    .map_err(|error| format!("failed to encode kitten feedback operation: {error}"))?;
+    Ok(sha256_hex(&canonical))
+}
+
+fn validate_applied_feedback_operation(
+    operation_id: &str,
+    existing: &EvolutionAppliedFeedbackOperation,
+    operation_digest: &str,
+    strategy_id: &str,
+) -> Result<(), String> {
+    if existing.operation_digest == operation_digest
+        && existing.strategy_id == strategy_id
+        && existing.penalty == DISMISS_FEEDBACK_FITNESS_PENALTY
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "kitten feedback operation `{operation_id}` conflicts with its durable population record"
+    ))
 }
 
 pub fn route_feedback_signal(
@@ -293,11 +521,16 @@ pub fn route_feedback_signal(
     let paths = resolve_evolution_paths(config_path, &runtime_config.evolution.paths);
     let store = FileKittenFeedbackStore::open(&paths.evolution_population_results_dir)?;
     let mut record = KittenFeedbackSignalRecord {
-        signal_id: format!(
-            "feedback:{}:{}:{}",
-            sanitize_id(&signal.incident_id),
-            sanitize_id(signal.finding_id.as_deref().unwrap_or("unknown")),
-            signal.recorded_at_ms.max(1)
+        signal_id: signal.operation_id.as_deref().map_or_else(
+            || {
+                format!(
+                    "feedback:{}:{}:{}",
+                    sanitize_id(&signal.incident_id),
+                    sanitize_id(signal.finding_id.as_deref().unwrap_or("unknown")),
+                    signal.recorded_at_ms.max(1)
+                )
+            },
+            |operation_id| format!("feedback:op:{}", sha256_hex(operation_id.as_bytes())),
         ),
         recorded_at_ms: signal.recorded_at_ms.max(1),
         action: signal.action,
@@ -312,31 +545,17 @@ pub fn route_feedback_signal(
         details: String::new(),
     };
 
+    if let Some(applied) = store.prior_applied(&record)? {
+        return Ok(KittenFeedbackRoutingResult {
+            disposition: applied.disposition,
+            penalty_applied: applied.penalty_applied,
+            details: applied.details,
+        });
+    }
+
     if signal.action != ProvidenceFeedbackAction::Dismiss {
         record.details = "only dismiss feedback is routed into kitten fitness".to_string();
-        store.append(&record)?;
-        return Ok(KittenFeedbackRoutingResult {
-            disposition: record.disposition,
-            penalty_applied: None,
-            details: record.details,
-        });
-    }
-
-    if !runtime_config.evolution.enabled {
-        record.details =
-            "evolution is disabled; feedback persisted for later consumption".to_string();
-        store.append(&record)?;
-        return Ok(KittenFeedbackRoutingResult {
-            disposition: record.disposition,
-            penalty_applied: None,
-            details: record.details,
-        });
-    }
-
-    if !kitten_deployed {
-        record.details =
-            "kitten is not deployed; feedback persisted for later consumption".to_string();
-        store.append(&record)?;
+        store.append_once(&record)?;
         return Ok(KittenFeedbackRoutingResult {
             disposition: record.disposition,
             penalty_applied: None,
@@ -347,13 +566,35 @@ pub fn route_feedback_signal(
     let Some(strategy_id) = signal.strategy_id.as_deref() else {
         record.details =
             "dismiss feedback could not resolve a strategy_id; persisted as pending".to_string();
-        store.append(&record)?;
+        store.append_once(&record)?;
         return Ok(KittenFeedbackRoutingResult {
             disposition: record.disposition,
             penalty_applied: None,
             details: record.details,
         });
     };
+
+    let population_state_path = paths.evolution_population_results_dir.join("state.json");
+    if !population_state_path.exists() && !runtime_config.evolution.enabled {
+        record.details =
+            "evolution is disabled; feedback persisted for later consumption".to_string();
+        store.append_once(&record)?;
+        return Ok(KittenFeedbackRoutingResult {
+            disposition: record.disposition,
+            penalty_applied: None,
+            details: record.details,
+        });
+    }
+    if !population_state_path.exists() && !kitten_deployed {
+        record.details =
+            "kitten is not deployed; feedback persisted for later consumption".to_string();
+        store.append_once(&record)?;
+        return Ok(KittenFeedbackRoutingResult {
+            disposition: record.disposition,
+            penalty_applied: None,
+            details: record.details,
+        });
+    }
 
     // The Kitten population is signed by Kitten's persisted identity, not by
     // the ingest signing_key passed in here. Load Kitten's identity from the
@@ -375,71 +616,111 @@ pub fn route_feedback_signal(
         kitten_identity.signing_key.clone(),
     )
     .map_err(|error| error.to_string())?;
-    let Some(mut state) = population_store
-        .load_trusted(&signer_agent_id)
-        .map_err(|error| error.to_string())?
-    else {
+    let applied_marker = sha256_hex(record.signal_id.as_bytes());
+    let operation_digest = kitten_feedback_operation_digest(&record)?;
+    enum PopulationFeedbackUpdate {
+        Deferred,
+        CandidateMissing,
+        Applied,
+        AlreadyApplied,
+    }
+    let mut update_outcome = PopulationFeedbackUpdate::Deferred;
+    let updated_state = population_store
+        .update_trusted(&signer_agent_id, |state| {
+            if let Some(existing) = state.applied_feedback_operations.get(&applied_marker) {
+                validate_applied_feedback_operation(
+                    &record.signal_id,
+                    existing,
+                    &operation_digest,
+                    strategy_id,
+                )?;
+                update_outcome = PopulationFeedbackUpdate::AlreadyApplied;
+                return Ok(false);
+            }
+            if !runtime_config.evolution.enabled || !kitten_deployed {
+                update_outcome = PopulationFeedbackUpdate::Deferred;
+                return Ok(false);
+            }
+            if state.applied_feedback_operations.len()
+                >= MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
+            {
+                return Err(format!(
+                    "kitten population has reached the {}-operation analyst feedback idempotency limit",
+                    MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
+                ));
+            }
+            let Some(candidate) = state
+                .members
+                .iter_mut()
+                .find(|candidate| candidate.strategy_id == strategy_id)
+            else {
+                update_outcome = PopulationFeedbackUpdate::CandidateMissing;
+                return Ok(false);
+            };
+            apply_population_feedback_penalty(candidate, DISMISS_FEEDBACK_FITNESS_PENALTY);
+            state.applied_feedback_operations.insert(
+                applied_marker.clone(),
+                EvolutionAppliedFeedbackOperation {
+                    operation_digest: operation_digest.clone(),
+                    strategy_id: strategy_id.to_string(),
+                    penalty: DISMISS_FEEDBACK_FITNESS_PENALTY,
+                    applied_at_ms: record.recorded_at_ms,
+                },
+            );
+            rerank_population_members(&mut state.members);
+            state.updated_at_ms = state.updated_at_ms.max(record.recorded_at_ms);
+            update_outcome = PopulationFeedbackUpdate::Applied;
+            Ok(true)
+        })
+        .map_err(|error| error.to_string())?;
+    if updated_state.is_none() {
         record.details =
             "no durable kitten population exists yet; feedback persisted as pending".to_string();
-        store.append(&record)?;
+        store.append_once(&record)?;
         return Ok(KittenFeedbackRoutingResult {
             disposition: record.disposition,
             penalty_applied: None,
             details: record.details,
         });
-    };
+    }
 
-    let Some(candidate) = state
-        .members
-        .iter_mut()
-        .find(|candidate| candidate.strategy_id == strategy_id)
-    else {
-        record.details = format!(
-            "no durable kitten population candidate matched strategy `{strategy_id}`; feedback persisted as pending"
-        );
-        store.append(&record)?;
-        return Ok(KittenFeedbackRoutingResult {
-            disposition: record.disposition,
-            penalty_applied: None,
-            details: record.details,
-        });
-    };
-
-    penalize_candidate(candidate);
-    rerank_population_members(&mut state.members);
-    state.updated_at_ms = record.recorded_at_ms;
-    population_store
-        .persist(&state)
-        .map_err(|error| error.to_string())?;
+    match update_outcome {
+        PopulationFeedbackUpdate::Deferred => {
+            record.details = if !runtime_config.evolution.enabled {
+                "evolution is disabled; feedback persisted for later consumption".to_string()
+            } else {
+                "kitten is not deployed; feedback persisted for later consumption".to_string()
+            };
+            store.append_once(&record)?;
+            return Ok(KittenFeedbackRoutingResult {
+                disposition: record.disposition,
+                penalty_applied: None,
+                details: record.details,
+            });
+        }
+        PopulationFeedbackUpdate::CandidateMissing => {
+            record.details = format!(
+                "no durable kitten population candidate matched strategy `{strategy_id}`; feedback persisted as pending"
+            );
+            store.append_once(&record)?;
+            return Ok(KittenFeedbackRoutingResult {
+                disposition: record.disposition,
+                penalty_applied: None,
+                details: record.details,
+            });
+        }
+        PopulationFeedbackUpdate::Applied | PopulationFeedbackUpdate::AlreadyApplied => {}
+    }
 
     record.disposition = FeedbackSignalDisposition::Applied;
     record.penalty_applied = Some(DISMISS_FEEDBACK_FITNESS_PENALTY);
     record.details = format!("applied analyst false-positive penalty to strategy `{strategy_id}`");
-    store.append(&record)?;
+    store.append_once(&record)?;
     Ok(KittenFeedbackRoutingResult {
         disposition: record.disposition,
         penalty_applied: record.penalty_applied,
         details: record.details,
     })
-}
-
-fn penalize_candidate(candidate: &mut EvolutionPopulationCandidate) {
-    candidate.fitness = (candidate.fitness - DISMISS_FEEDBACK_FITNESS_PENALTY).max(0.0);
-    if !candidate
-        .blocking_reason_names
-        .iter()
-        .any(|reason| reason == "analyst_false_positive_feedback")
-    {
-        candidate
-            .blocking_reason_names
-            .push("analyst_false_positive_feedback".to_string());
-    }
-    if !candidate
-        .summary
-        .contains("analyst false-positive feedback")
-    {
-        candidate.summary = format!("{} | analyst false-positive feedback", candidate.summary);
-    }
 }
 
 fn rerank_population_members(candidates: &mut [EvolutionPopulationCandidate]) {
@@ -2564,6 +2845,57 @@ mod tests {
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn feedback_store_deduplicates_each_operation_disposition() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-kitten-feedback-idempotency-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = super::FileKittenFeedbackStore::open(&root).unwrap();
+        let mut record = super::KittenFeedbackSignalRecord {
+            signal_id: "feedback:op:stable".to_string(),
+            recorded_at_ms: 1_700_000_000_000,
+            action: swarm_core::types::ProvidenceFeedbackAction::Dismiss,
+            incident_id: "incident-1".to_string(),
+            finding_id: Some("finding-1".to_string()),
+            strategy_id: Some("strategy-1".to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            analyst_id: "analyst-1".to_string(),
+            reason: None,
+            disposition: super::FeedbackSignalDisposition::Pending,
+            penalty_applied: None,
+            details: "pending".to_string(),
+        };
+        store.append_once(&record).unwrap();
+        store.append_once(&record).unwrap();
+        record.disposition = super::FeedbackSignalDisposition::Applied;
+        record.penalty_applied = Some(super::DISMISS_FEEDBACK_FITNESS_PENALTY);
+        record.details = "applied".to_string();
+        store.append_once(&record).unwrap();
+        store.append_once(&record).unwrap();
+
+        let lines = fs::read_to_string(root.join("feedback-signals.jsonl")).unwrap();
+        assert_eq!(lines.lines().count(), 2);
+        {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(root.join("feedback-signals.jsonl"))
+                .unwrap();
+            file.write_all(b"{\"partial\"").unwrap();
+            file.sync_all().unwrap();
+        }
+        store.append_once(&record).unwrap();
+        let repaired = fs::read(root.join("feedback-signals.jsonl")).unwrap();
+        assert_eq!(repaired.iter().filter(|byte| **byte == b'\n').count(), 2);
+        assert_eq!(repaired.last(), Some(&b'\n'));
+        let _ = fs::remove_dir_all(root);
     }
 
     fn config_path() -> PathBuf {

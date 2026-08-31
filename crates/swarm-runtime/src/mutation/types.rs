@@ -790,6 +790,8 @@ pub struct EvolutionPopulationCandidate {
     pub summary: String,
 }
 
+pub const MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS: usize = 16_384;
+
 /// Durable persisted population of proposal-ready candidates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvolutionPopulationState {
@@ -799,7 +801,20 @@ pub struct EvolutionPopulationState {
     pub population_size: usize,
     pub pareto_tournament_size: usize,
     pub proposal_timestamps_ms: Vec<i64>,
+    /// Operation ledger is population-scoped so removing and later
+    /// reintroducing a candidate cannot make an applied analyst penalty
+    /// replayable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub applied_feedback_operations: BTreeMap<String, EvolutionAppliedFeedbackOperation>,
     pub members: Vec<EvolutionPopulationCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvolutionAppliedFeedbackOperation {
+    pub operation_digest: String,
+    pub strategy_id: String,
+    pub penalty: f64,
+    pub applied_at_ms: i64,
 }
 
 /// Per-threat-class coverage preserved for one red-blue evolution episode.

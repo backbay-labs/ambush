@@ -86,7 +86,7 @@ pub struct ProvidenceRuntimeContext {
     pub bridge_health: BridgeStatusReport,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvidenceFeedbackTarget {
     pub incident_id: String,
     pub finding_id: String,

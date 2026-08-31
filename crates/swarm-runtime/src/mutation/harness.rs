@@ -701,6 +701,14 @@ impl DefaultEvolutionMutationHarness {
             self.signing_key.clone(),
         )?;
         let existing = store.load_trusted(&self.signer_agent_id)?;
+        let applied_feedback_operations = existing
+            .as_ref()
+            .map(|state| state.applied_feedback_operations.clone())
+            .unwrap_or_default();
+        let proposal_timestamps_ms = existing
+            .as_ref()
+            .map(|state| state.proposal_timestamps_ms.clone())
+            .unwrap_or_default();
         let mutation_spec = self.load_mutation_spec(&ranking.mutation_spec_id)?;
         let autonomous_lineage_by_variant = mutation_spec
             .as_ref()
@@ -792,7 +800,7 @@ impl DefaultEvolutionMutationHarness {
                 })
                 .transpose()?
                 .flatten();
-            let fitness = autonomous_fitness
+            let measured_fitness = autonomous_fitness
                 .as_ref()
                 .map(|measurement| measurement.measured_fitness)
                 .or_else(|| {
@@ -802,6 +810,24 @@ impl DefaultEvolutionMutationHarness {
                     })
                 })
                 .unwrap_or(baseline_fitness);
+            let feedback_penalty = applied_feedback_operations
+                .values()
+                .filter(|operation| operation.strategy_id == candidate.strategy_id)
+                .map(|operation| operation.penalty)
+                .sum::<f64>();
+            let fitness = (measured_fitness - feedback_penalty).max(0.0);
+            let mut blocking_reason_names = candidate.blocking_reason_names.clone();
+            if feedback_penalty > 0.0
+                && !blocking_reason_names
+                    .iter()
+                    .any(|reason| reason == "analyst_false_positive_feedback")
+            {
+                blocking_reason_names.push("analyst_false_positive_feedback".to_string());
+            }
+            let mut summary = candidate.summary.clone();
+            if feedback_penalty > 0.0 && !summary.contains("analyst false-positive feedback") {
+                summary = format!("{summary} | analyst false-positive feedback");
+            }
             let proposed_at_ms = pool
                 .get(&candidate.strategy_id)
                 .and_then(|existing| existing.proposed_at_ms);
@@ -825,7 +851,7 @@ impl DefaultEvolutionMutationHarness {
                     proof_status: candidate.proof_status,
                     queue_review_state: candidate.queue_review_state,
                     advisory_recommendation: candidate.advisory_recommendation,
-                    blocking_reason_names: candidate.blocking_reason_names.clone(),
+                    blocking_reason_names,
                     ranking_score: candidate.score,
                     baseline_fitness: Some(baseline_fitness),
                     fitness,
@@ -834,7 +860,7 @@ impl DefaultEvolutionMutationHarness {
                     proposed_at_ms,
                     objectives,
                     observations: Some(observations),
-                    summary: candidate.summary.clone(),
+                    summary,
                 },
             );
         }
@@ -851,9 +877,8 @@ impl DefaultEvolutionMutationHarness {
             validation_batch_id: ranking.validation_batch_id.clone(),
             population_size,
             pareto_tournament_size,
-            proposal_timestamps_ms: existing
-                .map(|state| state.proposal_timestamps_ms)
-                .unwrap_or_default(),
+            proposal_timestamps_ms,
+            applied_feedback_operations,
             members,
         };
         trim_population_proposal_history(&mut state, created_at_ms);

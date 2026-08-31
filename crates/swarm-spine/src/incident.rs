@@ -10,8 +10,9 @@ use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{
     ProvidenceCallbackAuditEntry, ProvidenceFeedbackAction, ProvidenceFeedbackEvidence,
-    ProvidenceIncidentReconciliation, Severity, SoarVerdictLineage,
+    ProvidenceIncidentReconciliation, Severity, SoarSourceSystem, SoarVerdictLineage,
 };
+use swarm_crypto::sha256_hex;
 
 static INCIDENT_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -43,6 +44,17 @@ pub struct AnalystFeedbackAuditEntry {
     pub soar_lineage: Option<SoarVerdictLineage>,
     pub payload: Value,
     pub outcome: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soar_claim_lease: Option<SoarVerdictClaimLease>,
+}
+
+/// Fencing lease for one recoverable SOAR side-effect attempt. Exact retries
+/// may replace an expired lease; an older worker cannot commit through the
+/// replacement token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoarVerdictClaimLease {
+    pub token: String,
+    pub expires_at_ms: i64,
 }
 
 /// Result of atomically claiming one externally identified SOAR verdict.
@@ -337,6 +349,9 @@ pub enum IncidentStoreError {
 
     #[error("feedback outcome conflicts with its durable claim: {reason}")]
     FeedbackOutcomeConflict { reason: String },
+
+    #[error("SOAR lineage index is inconsistent: {reason}")]
+    SoarLineageIndexConflict { reason: String },
 }
 
 /// Store contract for durable incident artifacts.
@@ -357,6 +372,11 @@ pub trait IncidentStore: Send + Sync {
         incident_id: &str,
         entry: AnalystFeedbackAuditEntry,
     ) -> Result<Option<SoarVerdictClaimResult>, IncidentStoreError>;
+    fn load_soar_verdict_claim(
+        &self,
+        source_system: SoarSourceSystem,
+        source_verdict_id: &str,
+    ) -> Result<Option<AnalystFeedbackAuditEntry>, IncidentStoreError>;
     fn record_feedback_outcome(
         &self,
         incident_id: &str,
@@ -432,6 +452,19 @@ impl IncidentStore for ConfiguredIncidentStore {
         match self {
             Self::Memory(store) => store.claim_soar_verdict(incident_id, entry),
             Self::LocalFiles(store) => store.claim_soar_verdict(incident_id, entry),
+        }
+    }
+
+    fn load_soar_verdict_claim(
+        &self,
+        source_system: SoarSourceSystem,
+        source_verdict_id: &str,
+    ) -> Result<Option<AnalystFeedbackAuditEntry>, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.load_soar_verdict_claim(source_system, source_verdict_id),
+            Self::LocalFiles(store) => {
+                store.load_soar_verdict_claim(source_system, source_verdict_id)
+            }
         }
     }
 
@@ -550,6 +583,12 @@ impl IncidentStore for MemoryIncidentStore {
         incident_id: &str,
         entry: AnalystFeedbackAuditEntry,
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        if entry.soar_lineage.is_some() && !is_rejected_soar_audit(&entry) {
+            return Err(IncidentStoreError::FeedbackOutcomeConflict {
+                reason: "non-rejected SOAR audit entries must use the atomic claim path"
+                    .to_string(),
+            });
+        }
         let mut guard = self
             .incidents
             .write()
@@ -579,19 +618,25 @@ impl IncidentStore for MemoryIncidentStore {
         if entry.soar_lineage.is_none() {
             return Ok(Some(SoarVerdictClaimResult::Conflict));
         }
+        validate_proposed_soar_claim(&entry)?;
         let mut guard = self
             .incidents
             .write()
             .map_err(|_| IncidentStoreError::PoisonedLock)?;
-        if let Some((existing_incident_id, existing)) = guard.iter().find_map(|incident| {
-            find_soar_verdict_entry(incident, &entry)
-                .map(|existing| (incident.incident_id.as_str(), existing))
-        }) {
-            return Ok(Some(if existing_incident_id == incident_id {
-                classify_soar_verdict_claim(existing, &entry)
-            } else {
-                SoarVerdictClaimResult::Conflict
-            }));
+        for incident in guard.iter_mut() {
+            if find_soar_verdict_entry(incident, &entry).is_none() {
+                continue;
+            }
+            if incident.incident_id != incident_id {
+                return Ok(Some(SoarVerdictClaimResult::Conflict));
+            }
+            let Some(existing) = find_soar_verdict_entry_mut(incident, &entry) else {
+                return Err(IncidentStoreError::SoarLineageIndexConflict {
+                    reason: "in-memory SOAR lineage disappeared under the incident write lock"
+                        .to_string(),
+                });
+            };
+            return Ok(Some(claim_or_classify_soar_verdict(existing, &entry)));
         }
         let Some(incident) = guard
             .iter_mut()
@@ -599,12 +644,46 @@ impl IncidentStore for MemoryIncidentStore {
         else {
             return Ok(None);
         };
+        let proposed_received_at_ms = entry.received_at_ms;
         entry.received_at_ms = reserve_atomic_feedback_timestamp(
             &self.feedback_timestamp_high_water_ms,
             entry.received_at_ms,
         )?;
+        align_new_claim_lease(&mut entry, proposed_received_at_ms)?;
         incident.feedback_audit_entries.push(entry.clone());
         Ok(Some(SoarVerdictClaimResult::Claimed(entry)))
+    }
+
+    fn load_soar_verdict_claim(
+        &self,
+        source_system: SoarSourceSystem,
+        source_verdict_id: &str,
+    ) -> Result<Option<AnalystFeedbackAuditEntry>, IncidentStoreError> {
+        let guard = self
+            .incidents
+            .read()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        let mut found = None;
+        for entry in guard
+            .iter()
+            .flat_map(|incident| &incident.feedback_audit_entries)
+            .filter(|entry| !is_rejected_soar_audit(entry))
+            .filter(|entry| {
+                entry.soar_lineage.as_ref().is_some_and(|lineage| {
+                    lineage.source_system == source_system
+                        && lineage.source_verdict_id == source_verdict_id
+                })
+            })
+        {
+            if found.as_ref().is_some_and(|existing| existing != entry) {
+                return Err(IncidentStoreError::SoarLineageIndexConflict {
+                    reason: "in-memory SOAR lineage maps to conflicting retained claims"
+                        .to_string(),
+                });
+            }
+            found = Some(entry.clone());
+        }
+        Ok(found)
     }
 
     fn record_feedback_outcome(
@@ -721,10 +800,8 @@ struct IncidentMutationGuard<'a> {
 impl FileIncidentStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, IncidentStoreError> {
         let root = path.as_ref().to_path_buf();
-        fs::create_dir_all(root.join("incidents")).map_err(|source| IncidentStoreError::Write {
-            path: root.clone(),
-            source,
-        })?;
+        create_dir_all_durably(&root)?;
+        create_dir_all_durably(&root.join("incidents"))?;
         Ok(Self {
             root,
             mutation_lock: Arc::new(Mutex::new(())),
@@ -837,25 +914,46 @@ fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), IncidentStoreE
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("incident-store");
-    let suffix = INCIDENT_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary = parent.join(format!(
-        ".{file_name}.tmp.{}.{}",
-        std::process::id(),
-        suffix
-    ));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+    let mut allocation = None;
+    for _ in 0..32 {
+        let suffix = INCIDENT_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let candidate = parent.join(format!(
+            ".{file_name}.tmp.{}.{}.{nonce}",
+            std::process::id(),
+            suffix
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&candidate) {
+            Ok(file) => {
+                allocation = Some((candidate, file));
+                break;
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(IncidentStoreError::Write {
+                    path: candidate,
+                    source,
+                });
+            }
+        }
     }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|source| IncidentStoreError::Write {
-            path: temporary.clone(),
-            source,
-        })?;
+    let (temporary, mut file) = allocation.ok_or_else(|| IncidentStoreError::Write {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate a unique incident-store temporary file",
+        ),
+    })?;
     let result = (|| -> std::io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -872,10 +970,56 @@ fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), IncidentStoreE
     Ok(())
 }
 
+/// Create each missing component and fsync the parent directory that names it.
+/// `create_dir_all` does not make a newly created store root crash-durable.
+fn create_dir_all_durably(path: &Path) -> Result<(), IncidentStoreError> {
+    let mut missing = Vec::new();
+    let mut cursor = path;
+    while !cursor.exists() {
+        missing.push(cursor.to_path_buf());
+        cursor = cursor.parent().ok_or_else(|| IncidentStoreError::Write {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "incident store path has no existing ancestor",
+            ),
+        })?;
+    }
+    for directory in missing.into_iter().rev() {
+        match fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(source) => {
+                return Err(IncidentStoreError::Write {
+                    path: directory,
+                    source,
+                });
+            }
+        }
+        let parent = directory
+            .parent()
+            .ok_or_else(|| IncidentStoreError::Write {
+                path: directory.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "created incident store directory has no parent",
+                ),
+            })?;
+        File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(|source| IncidentStoreError::Write {
+                path: directory.clone(),
+                source,
+            })?;
+    }
+    Ok(())
+}
+
 impl IncidentStore for FileIncidentStore {
     fn persist(&self, incident: &CorrelatedIncident) -> Result<IncidentRecord, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
+        let _ = ensure_soar_lineage_index_initialized(&mut index)?;
         let mut incident = incident.clone();
         if let Some(record) = index
             .entries
@@ -886,19 +1030,27 @@ impl IncidentStore for FileIncidentStore {
             let existing = self.read_incident(record)?;
             merge_incident_operational_state(&mut incident, &existing.incident);
         }
-        let bundle_path = self.write_incident(&incident)?;
-        index
+        let incident_path = self.incident_path(&incident.incident_id);
+        let bundle_path = incident_path
+            .strip_prefix(&self.root)
+            .unwrap_or(&incident_path)
+            .display()
+            .to_string();
+        let record = IncidentRecord::from_incident(&incident, bundle_path);
+        let mut candidate_index = index.clone();
+        candidate_index
             .entries
             .retain(|entry| entry.incident_id != incident.incident_id);
-        let record = IncidentRecord::from_incident(&incident, bundle_path);
-        index.entries.push(record.clone());
-        index.feedback_timestamp_high_water_ms = Some(
-            index
+        candidate_index.entries.push(record.clone());
+        refresh_incident_lineage_index(&mut candidate_index, &record)?;
+        candidate_index.feedback_timestamp_high_water_ms = Some(
+            candidate_index
                 .feedback_timestamp_high_water_ms
                 .unwrap_or(0)
                 .max(incident_feedback_timestamp_high_water(&incident)),
         );
-        self.write_index(&index)?;
+        self.write_incident(&incident)?;
+        self.write_index(&candidate_index)?;
         Ok(record)
     }
 
@@ -909,6 +1061,7 @@ impl IncidentStore for FileIncidentStore {
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
+        let _ = ensure_soar_lineage_index_initialized(&mut index)?;
         let Some(entry_index) = index
             .entries
             .iter()
@@ -934,6 +1087,12 @@ impl IncidentStore for FileIncidentStore {
         incident_id: &str,
         entry: AnalystFeedbackAuditEntry,
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        if entry.soar_lineage.is_some() && !is_rejected_soar_audit(&entry) {
+            return Err(IncidentStoreError::FeedbackOutcomeConflict {
+                reason: "non-rejected SOAR audit entries must use the atomic claim path"
+                    .to_string(),
+            });
+        }
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
         let Some(entry_index) = index
@@ -965,11 +1124,15 @@ impl IncidentStore for FileIncidentStore {
         incident_id: &str,
         mut entry: AnalystFeedbackAuditEntry,
     ) -> Result<Option<SoarVerdictClaimResult>, IncidentStoreError> {
-        if entry.soar_lineage.is_none() {
+        let Some(lineage_key) = soar_lineage_index_key(&entry) else {
             return Ok(Some(SoarVerdictClaimResult::Conflict));
-        }
+        };
+        validate_proposed_soar_claim(&entry)?;
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
+        if ensure_soar_lineage_index_initialized(&mut index)? {
+            self.write_index(&index)?;
+        }
         let Some(entry_index) = index
             .entries
             .iter()
@@ -977,16 +1140,57 @@ impl IncidentStore for FileIncidentStore {
         else {
             return Ok(None);
         };
-        for record in &index.entries {
-            let candidate = self.read_incident(record.clone())?;
-            if let Some(existing) = find_soar_verdict_entry(&candidate.incident, &entry) {
-                return Ok(Some(if record.incident_id == incident_id {
-                    classify_soar_verdict_claim(existing, &entry)
-                } else {
-                    SoarVerdictClaimResult::Conflict
-                }));
+
+        if let Some(indexed_claim) = index.soar_lineage_claims.get(&lineage_key).cloned() {
+            if !indexed_claim.matches_entry(&entry) || indexed_claim.incident_id != incident_id {
+                return Ok(Some(SoarVerdictClaimResult::Conflict));
             }
+            let Some(claimed_record_index) = index
+                .entries
+                .iter()
+                .position(|record| record.incident_id == indexed_claim.incident_id)
+            else {
+                return Err(IncidentStoreError::SoarLineageIndexConflict {
+                    reason: format!(
+                        "lineage `{lineage_key}` references missing incident `{}`",
+                        indexed_claim.incident_id
+                    ),
+                });
+            };
+            let record = index.entries[claimed_record_index].clone();
+            let mut lookup = self.read_incident(record)?;
+            if find_soar_verdict_entry(&lookup.incident, &entry).is_none() {
+                // Recover an index-first claim whose process stopped before
+                // the singular incident document was replaced.
+                lookup
+                    .incident
+                    .feedback_audit_entries
+                    .push(indexed_claim.entry.clone());
+            }
+            let existing = find_soar_verdict_entry_mut(&mut lookup.incident, &entry).ok_or_else(
+                || IncidentStoreError::SoarLineageIndexConflict {
+                    reason: format!(
+                        "lineage `{lineage_key}` could not be reconciled into incident `{incident_id}`"
+                    ),
+                },
+            )?;
+            let result = claim_or_classify_soar_verdict(existing, &entry);
+            if matches!(result, SoarVerdictClaimResult::Claimed(_))
+                || indexed_claim.entry != *existing
+            {
+                let durable_entry = existing.clone();
+                let bundle_path = self.write_incident(&lookup.incident)?;
+                index.entries[claimed_record_index] =
+                    IncidentRecord::from_incident(&lookup.incident, bundle_path);
+                index.soar_lineage_claims.insert(
+                    lineage_key,
+                    SoarLineageIndexEntry::from_entry(incident_id, durable_entry)?,
+                );
+                self.write_index(&index)?;
+            }
+            return Ok(Some(result));
         }
+
         let record = index.entries[entry_index].clone();
         let mut lookup = self.read_incident(record)?;
 
@@ -1003,12 +1207,18 @@ impl IncidentStore for FileIncidentStore {
             .checked_add(1)
             .map(|next| entry.received_at_ms.max(next))
             .ok_or(IncidentStoreError::FeedbackTimestampExhausted)?;
+        let proposed_received_at_ms = entry.received_at_ms;
         entry.received_at_ms = reserved;
+        align_new_claim_lease(&mut entry, proposed_received_at_ms)?;
 
         // Commit the clock reservation before the claim becomes observable.
-        // A failure after this write can leave only a harmless timestamp gap;
-        // it can never permit reuse after a side effect.
+        // The lineage index is also an intent record. A failure after this
+        // write is repaired from that exact entry without scanning incidents.
         index.feedback_timestamp_high_water_ms = Some(reserved);
+        index.soar_lineage_claims.insert(
+            lineage_key,
+            SoarLineageIndexEntry::from_entry(incident_id, entry.clone())?,
+        );
         self.write_index(&index)?;
 
         lookup.incident.feedback_audit_entries.push(entry.clone());
@@ -1016,6 +1226,33 @@ impl IncidentStore for FileIncidentStore {
         index.entries[entry_index] = IncidentRecord::from_incident(&lookup.incident, bundle_path);
         self.write_index(&index)?;
         Ok(Some(SoarVerdictClaimResult::Claimed(entry)))
+    }
+
+    fn load_soar_verdict_claim(
+        &self,
+        source_system: SoarSourceSystem,
+        source_verdict_id: &str,
+    ) -> Result<Option<AnalystFeedbackAuditEntry>, IncidentStoreError> {
+        let lineage_key =
+            soar_lineage_index_key_for(source_system, source_verdict_id).ok_or_else(|| {
+                IncidentStoreError::SoarLineageIndexConflict {
+                    reason: "could not derive a key for the requested SOAR lineage".to_string(),
+                }
+            })?;
+        let _guard = self.lock_mutation()?;
+        let mut index = self.read_index()?;
+        if ensure_soar_lineage_index_initialized(&mut index)? {
+            self.write_index(&index)?;
+        }
+        let Some(claim) = index.soar_lineage_claims.get(&lineage_key) else {
+            return Ok(None);
+        };
+        if claim.source_system != source_system || claim.source_verdict_id != source_verdict_id {
+            return Err(IncidentStoreError::SoarLineageIndexConflict {
+                reason: format!("lineage key `{lineage_key}` maps to a different source verdict"),
+            });
+        }
+        Ok(Some(claim.entry.clone()))
     }
 
     fn record_feedback_outcome(
@@ -1026,6 +1263,7 @@ impl IncidentStore for FileIncidentStore {
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
+        let _ = ensure_soar_lineage_index_initialized(&mut index)?;
         let Some(entry_index) = index
             .entries
             .iter()
@@ -1036,6 +1274,7 @@ impl IncidentStore for FileIncidentStore {
         let record = index.entries[entry_index].clone();
         let mut lookup = self.read_incident(record)?;
         let received_at_ms = entry.received_at_ms;
+        let completed_entry = entry.clone();
         commit_feedback_outcome(&mut lookup.incident, entry, measurement)?;
         let bundle_path = self.write_incident(&lookup.incident)?;
         let updated = IncidentRecord::from_incident(&lookup.incident, bundle_path);
@@ -1046,6 +1285,12 @@ impl IncidentStore for FileIncidentStore {
                 .unwrap_or(0)
                 .max(received_at_ms),
         );
+        if let Some(lineage_key) = soar_lineage_index_key(&completed_entry) {
+            index.soar_lineage_claims.insert(
+                lineage_key,
+                SoarLineageIndexEntry::from_entry(incident_id, completed_entry)?,
+            );
+        }
         self.write_index(&index)?;
         Ok(Some(updated))
     }
@@ -1091,10 +1336,8 @@ impl IncidentStore for FileIncidentStore {
 
     fn health(&self) -> Result<IncidentStoreHealth, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
-        fs::create_dir_all(self.incidents_dir()).map_err(|source| IncidentStoreError::Write {
-            path: self.root.clone(),
-            source,
-        })?;
+        create_dir_all_durably(&self.root)?;
+        create_dir_all_durably(&self.incidents_dir())?;
         let stored_incidents = self.read_index()?.entries.len();
         Ok(IncidentStoreHealth {
             backend: "local_files".to_string(),
@@ -1138,6 +1381,129 @@ struct IncidentIndex {
     entries: Vec<IncidentRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     feedback_timestamp_high_water_ms: Option<i64>,
+    #[serde(default)]
+    soar_lineage_index_initialized: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    soar_lineage_claims: BTreeMap<String, SoarLineageIndexEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct SoarLineageIndexEntry {
+    incident_id: String,
+    source_system: SoarSourceSystem,
+    source_verdict_id: String,
+    entry: AnalystFeedbackAuditEntry,
+}
+
+impl SoarLineageIndexEntry {
+    fn from_entry(
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Self, IncidentStoreError> {
+        let lineage = entry.soar_lineage.as_ref().ok_or_else(|| {
+            IncidentStoreError::SoarLineageIndexConflict {
+                reason: "indexed claim is missing SOAR lineage".to_string(),
+            }
+        })?;
+        Ok(Self {
+            incident_id: incident_id.to_string(),
+            source_system: lineage.source_system,
+            source_verdict_id: lineage.source_verdict_id.clone(),
+            entry,
+        })
+    }
+
+    fn matches_entry(&self, entry: &AnalystFeedbackAuditEntry) -> bool {
+        entry.soar_lineage.as_ref().is_some_and(|lineage| {
+            lineage.source_system == self.source_system
+                && lineage.source_verdict_id == self.source_verdict_id
+        })
+    }
+}
+
+fn soar_lineage_index_key(entry: &AnalystFeedbackAuditEntry) -> Option<String> {
+    let lineage = entry.soar_lineage.as_ref()?;
+    soar_lineage_index_key_for(lineage.source_system, &lineage.source_verdict_id)
+}
+
+fn soar_lineage_index_key_for(
+    source_system: SoarSourceSystem,
+    source_verdict_id: &str,
+) -> Option<String> {
+    let encoded =
+        serde_json::to_vec(&("swarm-soar-lineage-v1", source_system, source_verdict_id)).ok()?;
+    Some(sha256_hex(&encoded))
+}
+
+fn is_rejected_soar_audit(entry: &AnalystFeedbackAuditEntry) -> bool {
+    entry.outcome.get("status").and_then(Value::as_str) == Some("rejected")
+}
+
+fn ensure_soar_lineage_index_initialized(
+    index: &mut IncidentIndex,
+) -> Result<bool, IncidentStoreError> {
+    if index.soar_lineage_index_initialized {
+        return Ok(false);
+    }
+    let mut claims = BTreeMap::new();
+    for record in &index.entries {
+        for entry in &record.feedback_audit_entries {
+            if entry.soar_lineage.is_none() || is_rejected_soar_audit(entry) {
+                continue;
+            }
+            let key = soar_lineage_index_key(entry).ok_or_else(|| {
+                IncidentStoreError::SoarLineageIndexConflict {
+                    reason: "could not derive an index key from retained SOAR lineage".to_string(),
+                }
+            })?;
+            let candidate = SoarLineageIndexEntry::from_entry(&record.incident_id, entry.clone())?;
+            if let Some(existing) = claims.insert(key.clone(), candidate.clone())
+                && existing != candidate
+            {
+                return Err(IncidentStoreError::SoarLineageIndexConflict {
+                    reason: format!("lineage `{key}` maps to conflicting retained audit entries"),
+                });
+            }
+        }
+    }
+    index.soar_lineage_claims = claims;
+    index.soar_lineage_index_initialized = true;
+    Ok(true)
+}
+
+fn refresh_incident_lineage_index(
+    index: &mut IncidentIndex,
+    record: &IncidentRecord,
+) -> Result<(), IncidentStoreError> {
+    if !index.soar_lineage_index_initialized {
+        return Ok(());
+    }
+    index
+        .soar_lineage_claims
+        .retain(|_, claim| claim.incident_id != record.incident_id);
+    for entry in &record.feedback_audit_entries {
+        if entry.soar_lineage.is_none() || is_rejected_soar_audit(entry) {
+            continue;
+        }
+        let key = soar_lineage_index_key(entry).ok_or_else(|| {
+            IncidentStoreError::SoarLineageIndexConflict {
+                reason: "could not derive an index key from a refreshed SOAR lineage".to_string(),
+            }
+        })?;
+        let candidate = SoarLineageIndexEntry::from_entry(&record.incident_id, entry.clone())?;
+        if let Some(existing) = index.soar_lineage_claims.get(&key)
+            && existing.incident_id != record.incident_id
+        {
+            return Err(IncidentStoreError::SoarLineageIndexConflict {
+                reason: format!(
+                    "lineage `{key}` is already owned by incident `{}`",
+                    existing.incident_id
+                ),
+            });
+        }
+        index.soar_lineage_claims.insert(key, candidate);
+    }
+    Ok(())
 }
 
 fn find_soar_verdict_entry<'a>(
@@ -1146,15 +1512,30 @@ fn find_soar_verdict_entry<'a>(
 ) -> Option<&'a AnalystFeedbackAuditEntry> {
     let proposed_lineage = proposed.soar_lineage.as_ref()?;
     incident.feedback_audit_entries.iter().find(|existing| {
-        existing.soar_lineage.as_ref().is_some_and(|lineage| {
-            lineage.source_system == proposed_lineage.source_system
-                && lineage.source_verdict_id == proposed_lineage.source_verdict_id
-        })
+        !is_rejected_soar_audit(existing)
+            && existing.soar_lineage.as_ref().is_some_and(|lineage| {
+                lineage.source_system == proposed_lineage.source_system
+                    && lineage.source_verdict_id == proposed_lineage.source_verdict_id
+            })
     })
 }
 
-fn classify_soar_verdict_claim(
-    existing: &AnalystFeedbackAuditEntry,
+fn find_soar_verdict_entry_mut<'a>(
+    incident: &'a mut CorrelatedIncident,
+    proposed: &AnalystFeedbackAuditEntry,
+) -> Option<&'a mut AnalystFeedbackAuditEntry> {
+    let proposed_lineage = proposed.soar_lineage.as_ref()?;
+    incident.feedback_audit_entries.iter_mut().find(|existing| {
+        !is_rejected_soar_audit(existing)
+            && existing.soar_lineage.as_ref().is_some_and(|lineage| {
+                lineage.source_system == proposed_lineage.source_system
+                    && lineage.source_verdict_id == proposed_lineage.source_verdict_id
+            })
+    })
+}
+
+fn claim_or_classify_soar_verdict(
+    existing: &mut AnalystFeedbackAuditEntry,
     proposed: &AnalystFeedbackAuditEntry,
 ) -> SoarVerdictClaimResult {
     if !same_soar_verdict_request(existing, proposed) {
@@ -1162,9 +1543,37 @@ fn classify_soar_verdict_claim(
     }
     if existing.evidence.is_some() {
         SoarVerdictClaimResult::CompletedExact(existing.clone())
-    } else {
+    } else if proposed.soar_claim_lease.is_none()
+        || existing
+            .soar_claim_lease
+            .as_ref()
+            .is_some_and(|lease| lease.expires_at_ms > proposed.received_at_ms)
+    {
         SoarVerdictClaimResult::PendingExact(existing.clone())
+    } else {
+        if existing.outcome.get("target").is_none()
+            && let Some(target) = proposed.outcome.get("target")
+        {
+            existing.outcome["target"] = target.clone();
+        }
+        existing.soar_claim_lease = proposed.soar_claim_lease.clone();
+        SoarVerdictClaimResult::Claimed(existing.clone())
     }
+}
+
+fn validate_proposed_soar_claim(
+    entry: &AnalystFeedbackAuditEntry,
+) -> Result<(), IncidentStoreError> {
+    let Some(lease) = entry.soar_claim_lease.as_ref() else {
+        return Ok(());
+    };
+    if lease.token.trim().is_empty() || lease.expires_at_ms <= entry.received_at_ms {
+        return Err(IncidentStoreError::FeedbackOutcomeConflict {
+            reason: "SOAR claim lease must have a non-empty token and expire after the proposed claim timestamp"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn same_soar_verdict_request(
@@ -1175,11 +1584,28 @@ fn same_soar_verdict_request(
         && left.action == right.action
         && left.analyst_id == right.analyst_id
         && left.incident_id == right.incident_id
-        && left.finding_id == right.finding_id
         && left.reason == right.reason
         && left.request_signature == right.request_signature
         && left.soar_lineage == right.soar_lineage
         && left.payload == right.payload
+}
+
+fn align_new_claim_lease(
+    entry: &mut AnalystFeedbackAuditEntry,
+    proposed_received_at_ms: i64,
+) -> Result<(), IncidentStoreError> {
+    let Some(lease) = entry.soar_claim_lease.as_mut() else {
+        return Ok(());
+    };
+    let duration_ms = lease
+        .expires_at_ms
+        .saturating_sub(proposed_received_at_ms)
+        .max(1);
+    lease.expires_at_ms = entry
+        .received_at_ms
+        .checked_add(duration_ms)
+        .ok_or(IncidentStoreError::FeedbackTimestampExhausted)?;
+    Ok(())
 }
 
 fn commit_feedback_outcome(
@@ -1192,6 +1618,9 @@ fn commit_feedback_outcome(
             .feedback_audit_entries
             .iter()
             .position(|existing| {
+                if is_rejected_soar_audit(existing) {
+                    return false;
+                }
                 let Some(existing_lineage) = existing.soar_lineage.as_ref() else {
                     return false;
                 };
@@ -1207,9 +1636,12 @@ fn commit_feedback_outcome(
         let existing = &incident.feedback_audit_entries[existing_index];
         if !same_soar_verdict_request(existing, &entry)
             || existing.received_at_ms != entry.received_at_ms
+            || existing.soar_claim_lease != entry.soar_claim_lease
         {
             return Err(IncidentStoreError::FeedbackOutcomeConflict {
-                reason: "SOAR outcome does not match the claimed request and timestamp".to_string(),
+                reason:
+                    "SOAR outcome does not match the claimed request, timestamp, and fencing lease"
+                        .to_string(),
             });
         }
         if existing.evidence.is_some() {
@@ -1492,7 +1924,7 @@ mod tests {
         AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
         FalsePositiveMeasurement, FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension,
         IncidentMemberDecision, IncidentStore, IncidentStoreHealth, MemoryIncidentStore,
-        SoarVerdictClaimResult,
+        SoarVerdictClaimLease, SoarVerdictClaimResult,
     };
     use swarm_core::config::BundleStoreConfig;
     use swarm_core::pheromone::ThreatClass;
@@ -1568,6 +2000,30 @@ mod tests {
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
             false_positive_measurements: Vec::new(),
+        }
+    }
+
+    fn sample_soar_claim(incident_id: &str, source_verdict_id: &str) -> AnalystFeedbackAuditEntry {
+        AnalystFeedbackAuditEntry {
+            feedback_id: format!("soar-verdict:{source_verdict_id}"),
+            received_at_ms: 1_700_000_003_000,
+            action: ProvidenceFeedbackAction::Dismiss,
+            analyst_id: "soar:reviewer-1".to_string(),
+            incident_id: incident_id.to_string(),
+            finding_id: None,
+            reason: Some("benign administration".to_string()),
+            request_signature: "ed25519=deterministic".to_string(),
+            evidence: None,
+            soar_lineage: Some(SoarVerdictLineage {
+                source_system: SoarSourceSystem::SplunkSoar,
+                source_verdict_id: source_verdict_id.to_string(),
+                verdict_at_ms: 1_700_000_002_900,
+                source_case_id: Some("case-1".to_string()),
+                source_case_url: None,
+            }),
+            payload: serde_json::json!({"source_verdict_id": source_verdict_id}),
+            outcome: serde_json::json!({"status": "applying", "target": {"finding_id": "finding-1"}}),
+            soar_claim_lease: None,
         }
     }
 
@@ -1677,6 +2133,7 @@ mod tests {
                     outcome: serde_json::json!({
                         "status": "pending_feedback"
                     }),
+                    soar_claim_lease: None,
                 },
             )
             .unwrap()
@@ -1749,6 +2206,7 @@ mod tests {
                     soar_lineage: None,
                     payload: serde_json::json!({"source": "durable"}),
                     outcome: serde_json::json!({"status": "recorded"}),
+                    soar_claim_lease: None,
                 },
                 FalsePositiveMeasurement {
                     finding_id: "finding:durable".to_string(),
@@ -1830,6 +2288,7 @@ mod tests {
                                 soar_lineage: None,
                                 payload: serde_json::json!({"index": index}),
                                 outcome: serde_json::json!({"status": "recorded"}),
+                                soar_claim_lease: None,
                             },
                             FalsePositiveMeasurement {
                                 finding_id,
@@ -1897,6 +2356,7 @@ mod tests {
             }),
             payload: serde_json::json!({"source_verdict_id": "verdict-1"}),
             outcome: serde_json::json!({"status": "applying"}),
+            soar_claim_lease: None,
         };
 
         let claims = (0..16)
@@ -2001,6 +2461,152 @@ mod tests {
                     .contains(".tmp.")
             }));
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expired_soar_claim_is_recovered_and_fences_the_stale_worker() {
+        let store = MemoryIncidentStore::default();
+        let incident = sample_incident();
+        store.persist(&incident).unwrap();
+
+        let mut first = sample_soar_claim(&incident.incident_id, "recoverable-verdict");
+        first.soar_claim_lease = Some(SoarVerdictClaimLease {
+            token: "lease-a".to_string(),
+            expires_at_ms: first.received_at_ms + 10,
+        });
+        let first = match store
+            .claim_soar_verdict(&incident.incident_id, first)
+            .unwrap()
+            .unwrap()
+        {
+            SoarVerdictClaimResult::Claimed(entry) => entry,
+            other => panic!("unexpected first claim: {other:?}"),
+        };
+
+        let mut reordered = sample_soar_claim(&incident.incident_id, "recoverable-verdict");
+        reordered.finding_id = Some("finding-selected-after-reorder".to_string());
+        reordered.outcome = serde_json::json!({
+            "status": "applying",
+            "target": {"finding_id": "finding-selected-after-reorder"}
+        });
+        reordered.soar_claim_lease = Some(SoarVerdictClaimLease {
+            token: "lease-concurrent".to_string(),
+            expires_at_ms: first.received_at_ms + 20,
+        });
+        let pending = store
+            .claim_soar_verdict(&incident.incident_id, reordered)
+            .unwrap()
+            .unwrap();
+        let SoarVerdictClaimResult::PendingExact(pending) = pending else {
+            panic!("active exact retry did not observe the durable claim");
+        };
+        assert_eq!(
+            pending.outcome["target"]["finding_id"], "finding-1",
+            "incident reordering must not replace the originally claimed target"
+        );
+
+        let mut retry = sample_soar_claim(&incident.incident_id, "recoverable-verdict");
+        retry.received_at_ms = first.soar_claim_lease.as_ref().unwrap().expires_at_ms;
+        retry.soar_claim_lease = Some(SoarVerdictClaimLease {
+            token: "lease-b".to_string(),
+            expires_at_ms: retry.received_at_ms + 10,
+        });
+        let recovered = match store
+            .claim_soar_verdict(&incident.incident_id, retry)
+            .unwrap()
+            .unwrap()
+        {
+            SoarVerdictClaimResult::Claimed(entry) => entry,
+            other => panic!("expired claim was not recovered: {other:?}"),
+        };
+        assert_eq!(
+            recovered.soar_claim_lease.as_ref().unwrap().token,
+            "lease-b"
+        );
+
+        let mut stale_completion = first;
+        stale_completion.evidence = Some(ProvidenceFeedbackEvidence {
+            schema: "swarm.providence.feedback.v1".to_string(),
+            schema_version: 1,
+            threat_class: ThreatClass::Execution,
+            agent_id: "agent:feedback".to_string(),
+            signed_at_ms: stale_completion.received_at_ms,
+            signature_hex: "00".repeat(64),
+        });
+        stale_completion.outcome = serde_json::json!({"status": "recorded"});
+        assert!(matches!(
+            store.record_feedback_outcome(
+                &incident.incident_id,
+                stale_completion.clone(),
+                FalsePositiveMeasurement {
+                    finding_id: "finding-1".to_string(),
+                    hunt_id: "hunt-1".to_string(),
+                    strategy_id: "strategy-1".to_string(),
+                    host_id: None,
+                    feedback_id: stale_completion.feedback_id,
+                    reviewed_at_ms: stale_completion.received_at_ms,
+                    analyst_id: stale_completion.analyst_id,
+                    action: stale_completion.action,
+                    reason: stale_completion.reason,
+                    soar_lineage: stale_completion.soar_lineage,
+                    false_positive: true,
+                },
+            ),
+            Err(super::IncidentStoreError::FeedbackOutcomeConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn rejected_soar_audit_does_not_reserve_lineage_for_corrected_redelivery() {
+        let store = MemoryIncidentStore::default();
+        let mut incident = sample_incident();
+        let mut rejected = sample_soar_claim(&incident.incident_id, "corrected-verdict");
+        rejected.outcome = serde_json::json!({"status": "rejected", "reason": "invalid action"});
+        incident.feedback_audit_entries.push(rejected);
+        store.persist(&incident).unwrap();
+
+        let corrected = sample_soar_claim(&incident.incident_id, "corrected-verdict");
+        assert!(matches!(
+            store
+                .claim_soar_verdict(&incident.incident_id, corrected)
+                .unwrap()
+                .unwrap(),
+            SoarVerdictClaimResult::Claimed(_)
+        ));
+    }
+
+    #[test]
+    fn file_soar_lineage_index_does_not_parse_unrelated_incident_documents() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-bounded-soar-index-{}-{}",
+            std::process::id(),
+            super::INCIDENT_TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        let first = sample_incident();
+        let mut unrelated = sample_incident();
+        unrelated.incident_id = "incident:unrelated".to_string();
+        store.persist(&first).unwrap();
+        store.persist(&unrelated).unwrap();
+
+        let proposed = sample_soar_claim(&first.incident_id, "bounded-verdict");
+        assert!(matches!(
+            store
+                .claim_soar_verdict(&first.incident_id, proposed.clone())
+                .unwrap()
+                .unwrap(),
+            SoarVerdictClaimResult::Claimed(_)
+        ));
+        std::fs::write(store.incident_path(&unrelated.incident_id), b"not-json").unwrap();
+        assert!(matches!(
+            store
+                .claim_soar_verdict(&first.incident_id, proposed)
+                .unwrap()
+                .unwrap(),
+            SoarVerdictClaimResult::PendingExact(_)
+        ));
         let _ = std::fs::remove_dir_all(root);
     }
 }

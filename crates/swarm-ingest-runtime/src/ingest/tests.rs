@@ -4147,12 +4147,14 @@ mod providence_callback {
 
 mod providence_feedback {
     use super::*;
-    use swarm_core::types::{AgentId, ProvidenceFeedbackAction, SwarmProvidenceFeedbackRequest};
+    use swarm_core::types::{
+        AgentId, ProvidenceFeedbackAction, SwarmFeedbackSignal, SwarmProvidenceFeedbackRequest,
+    };
     use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
     use swarm_pheromone::DepositSigningPayload;
     use swarm_runtime::drafting::EvolutionValidationBundleStatus;
     use swarm_runtime::evolution::{EvolutionProposalProofStatus, EvolutionProposalReviewState};
-    use swarm_runtime::kitten_agent::KittenFeedbackSignalRecord;
+    use swarm_runtime::kitten_agent::{KittenFeedbackSignalRecord, route_feedback_signal};
     use swarm_runtime::mutation::{
         EvolutionPopulationCandidate, EvolutionPopulationFitnessObjectives,
         EvolutionPopulationState, FileEvolutionPopulationStore,
@@ -4344,6 +4346,7 @@ mod providence_feedback {
                 soar_lineage: None,
                 payload: json!({"source": "durable-clock-test"}),
                 outcome: json!({"status": "recorded"}),
+                soar_claim_lease: None,
             });
         state.current_incident_store().persist(&incident).unwrap();
         let reserved_high_water = state.next_providence_feedback_timestamp_ms().await.unwrap();
@@ -4456,6 +4459,7 @@ mod providence_feedback {
                 population_size: 4,
                 pareto_tournament_size: 2,
                 proposal_timestamps_ms: Vec::new(),
+                applied_feedback_operations: Default::default(),
                 members: vec![EvolutionPopulationCandidate {
                     generation: 1,
                     generation_created_at_ms: 1_800_900_000_000,
@@ -4574,6 +4578,50 @@ mod providence_feedback {
             feedback_deposit.indicator["governed_evidence_timestamp"],
             serde_json::json!(1_700_100_000)
         );
+    }
+
+    #[tokio::test]
+    async fn feedback_target_event_id_is_bound_to_the_selected_replay_bundle() {
+        let state = IngestState::from_config(
+            super::temp_path("feedback-selected-replay-event"),
+            super::test_config("suspicious_process_tree"),
+        )
+        .unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-selected-replay",
+            "host-selected-replay",
+            1_700_105_000_000,
+        );
+        seed_feedback_incident(
+            &state,
+            "incident-selected-replay",
+            "evt-trigger",
+            "host-trigger",
+            "trigger-strategy",
+            1_700_105_000_000,
+        );
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-selected-replay")
+            .unwrap()
+            .unwrap();
+        let target = swarm_runtime::providence::ProvidenceFeedbackTarget {
+            incident_id: lookup.incident.incident_id.clone(),
+            finding_id: "finding-evt-selected-replay".to_string(),
+            hunt_id: "evt-selected-replay".to_string(),
+            event_id: "evt-trigger".to_string(),
+            evidence_timestamp: None,
+            host_id: None,
+            strategy_id: None,
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+        };
+        let enriched =
+            crate::ingest::providence_handlers::enrich_feedback_target(&state, &lookup, &target)
+                .unwrap();
+        assert_eq!(enriched.event_id, "evt-selected-replay");
+        assert_eq!(enriched.host_id.as_deref(), Some("host-selected-replay"));
     }
 
     #[tokio::test]
@@ -4916,18 +4964,64 @@ mod providence_feedback {
         assert_eq!(applied_response.status(), StatusCode::OK);
         let applied_json: Value = super::parse_json(applied_response).await;
         assert_eq!(applied_json["outcome"]["kitten"]["disposition"], "applied");
+        let feedback_id = applied_json["feedback_id"].as_str().unwrap().to_string();
 
-        let population = FileEvolutionPopulationStore::open(applied_root.join("population"))
-            .unwrap()
-            .load()
-            .unwrap()
-            .unwrap();
-        assert!(population.members[0].fitness < 0.80);
+        let population_store =
+            FileEvolutionPopulationStore::open(applied_root.join("population")).unwrap();
+        let population = population_store.load().unwrap().unwrap();
+        let penalized_fitness = population.members[0].fitness;
+        assert!(penalized_fitness < 0.80);
         assert!(
             population.members[0]
                 .blocking_reason_names
                 .iter()
                 .any(|reason| reason == "analyst_false_positive_feedback")
+        );
+        assert_eq!(population.applied_feedback_operations.len(), 1);
+
+        // Simulate a crash after the signed population transaction committed but
+        // before the append-only audit record became durable. The operation
+        // ledger must make the retry repair the audit without applying a second
+        // fitness penalty.
+        let applied_record = load_feedback_signal_records(applied_root.join("population"))
+            .unwrap()
+            .into_iter()
+            .find(|record| {
+                record.disposition
+                    == swarm_runtime::kitten_agent::FeedbackSignalDisposition::Applied
+            })
+            .unwrap();
+        fs::remove_file(applied_root.join("population").join(FEEDBACK_SIGNALS_FILE)).unwrap();
+        let stack = applied_state.stack.load_full();
+        let retried = route_feedback_signal(
+            applied_state.config_path(),
+            &stack.service.config,
+            true,
+            &SwarmFeedbackSignal {
+                operation_id: Some(feedback_id),
+                action: applied_record.action,
+                incident_id: applied_record.incident_id.clone(),
+                finding_id: applied_record.finding_id.clone(),
+                strategy_id: applied_record.strategy_id.clone(),
+                threat_class: applied_record.threat_class.clone(),
+                analyst_id: applied_record.analyst_id.clone(),
+                reason: applied_record.reason.clone(),
+                recorded_at_ms: applied_record.recorded_at_ms,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            retried.disposition,
+            swarm_runtime::kitten_agent::FeedbackSignalDisposition::Applied
+        );
+        let retried_population = population_store.load().unwrap().unwrap();
+        assert_eq!(retried_population.applied_feedback_operations.len(), 1);
+        assert!((retried_population.members[0].fitness - penalized_fitness).abs() < f64::EPSILON);
+        assert_eq!(
+            load_feedback_signal_records(applied_root.join("population"))
+                .unwrap()
+                .len(),
+            1
         );
 
         let pending_root = temp_dir("feedback-pending");
@@ -5274,6 +5368,26 @@ mod soar_verdict_sync {
         assert_eq!(first["feedback_id"], second["feedback_id"]);
         assert_eq!(first["outcome"], second["outcome"]);
 
+        let mut completed_incident = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-duplicate")
+            .unwrap()
+            .unwrap()
+            .incident;
+        completed_incident.included_members.clear();
+        completed_incident.trigger_finding_id = None;
+        completed_incident.trigger_event_id = None;
+        state
+            .current_incident_store()
+            .persist(&completed_incident)
+            .unwrap();
+        let retry_after_target_removal = app
+            .clone()
+            .oneshot(signed_soar_request(&payload))
+            .await
+            .unwrap();
+        assert_eq!(retry_after_target_removal.status(), StatusCode::OK);
+
         let mut conflicting = payload.clone();
         conflicting.reason = Some("different verdict payload".to_string());
         let conflict = app
@@ -5327,7 +5441,11 @@ mod soar_verdict_sync {
         };
 
         let app = detect_http_router(state.clone());
-        let response = app.oneshot(signed_soar_request(&payload)).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(signed_soar_request(&payload))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let lookup = state
@@ -5347,6 +5465,40 @@ mod soar_verdict_sync {
             rejected.soar_lineage.as_ref().unwrap().source_system,
             SoarSourceSystem::SentinelSoar
         );
+
+        let mut corrected = payload;
+        corrected.source_verdict_id = "sentinel-corrected-redelivery".to_string();
+        corrected.analyst_id.clear();
+        let rejected = app
+            .clone()
+            .oneshot(signed_soar_request(&corrected))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        corrected.analyst_id = "corrected-analyst".to_string();
+        let accepted = app.oneshot(signed_soar_request(&corrected)).await.unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-incomplete")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lookup
+                .incident
+                .feedback_audit_entries
+                .iter()
+                .filter(|entry| {
+                    entry.soar_lineage.as_ref().is_some_and(|lineage| {
+                        lineage.source_verdict_id == "sentinel-corrected-redelivery"
+                    })
+                })
+                .count(),
+            2,
+            "the rejected audit is retained while corrected redelivery completes"
+        );
+        assert_eq!(lookup.incident.false_positive_measurements.len(), 1);
     }
 }
 

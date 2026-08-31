@@ -833,6 +833,7 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,
@@ -1179,6 +1180,7 @@ async fn autonomous_mutation_spec_generates_behavioral_anomaly_variants() {
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,
@@ -1468,6 +1470,7 @@ async fn autonomous_mutation_spec_generates_fileless_execution_variants() {
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,
@@ -1754,6 +1757,7 @@ async fn autonomous_mutation_spec_generates_dns_exfiltration_variants() {
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,

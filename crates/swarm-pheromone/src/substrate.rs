@@ -24,6 +24,7 @@ use swarm_core::pheromone::{
 };
 use swarm_core::signed_state::{SignedStateEnvelope, SignedStateError, SignedStateExpectation};
 use swarm_core::types::{AgentId, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity};
+use swarm_crypto::sha256_hex;
 
 pub(crate) const BEHAVIORAL_BASELINE_STATE_KIND: &str = "behavioral_baseline_snapshot";
 type BehavioralBaselineEnvelope = SignedStateEnvelope<BehavioralBaselineSnapshot>;
@@ -35,6 +36,9 @@ const COMPACTED_DEPOSIT_COUNT: usize = 7_500;
 const COMPACTED_DEPOSIT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_LOCAL_DEPOSIT_JOURNAL_BYTES: u64 =
     (MAX_ACTIVE_DEPOSIT_BYTES + MAX_ACTIVE_DEPOSITS) as u64;
+const MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES: usize = 131_072;
+const MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_DEPOSIT_OPERATION_ID_BYTES: usize = 1_024;
 
 // Zero-strength deposits are used for typed control records (for example,
 // Sphinx memory queries/answers and Providence feedback), not concentration
@@ -416,6 +420,7 @@ impl VerifiedDeposit {
             });
         }
         validate_deposit_signature(&deposit)?;
+        let _ = deposit_operation_id(&deposit)?;
         Ok(Self {
             deposit,
             encoded_len,
@@ -424,6 +429,138 @@ impl VerifiedDeposit {
 
     pub(crate) fn encoded_len(&self) -> usize {
         self.encoded_len
+    }
+}
+
+pub(crate) fn deposit_operation_id(
+    deposit: &PheromoneDeposit,
+) -> Result<Option<String>, SubstrateError> {
+    let Some(indicator) = deposit.indicator.as_object() else {
+        return Ok(None);
+    };
+    if indicator.get("schema").and_then(JsonValue::as_str) != Some(SWARM_PROVIDENCE_FEEDBACK_SCHEMA)
+    {
+        return Ok(None);
+    }
+    let Some(feedback_id) = indicator
+        .get("feedback_id")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let operation_id = format!(
+        "swarm-providence-feedback-deposit-v1\0{}\0{feedback_id}",
+        deposit.agent_identity
+    );
+    if operation_id.len() > MAX_DEPOSIT_OPERATION_ID_BYTES {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "Providence feedback operation id exceeds the {MAX_DEPOSIT_OPERATION_ID_BYTES}-byte hard limit"
+            ),
+        });
+    }
+    Ok(Some(operation_id))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DepositOperationRecord {
+    operation_id: String,
+    deposit_digest: String,
+}
+
+fn deposit_operation_record(
+    deposit: &VerifiedDeposit,
+) -> Result<Option<DepositOperationRecord>, SubstrateError> {
+    let Some(operation_id) = deposit_operation_id(deposit)? else {
+        return Ok(None);
+    };
+    let canonical =
+        serde_json::to_vec(&deposit.deposit).map_err(|source| SubstrateError::Encode {
+            context: "idempotent pheromone deposit".to_string(),
+            source,
+        })?;
+    Ok(Some(DepositOperationRecord {
+        operation_id,
+        deposit_digest: sha256_hex(&canonical),
+    }))
+}
+
+fn deposit_operation_already_recorded(
+    operations: &BTreeMap<String, String>,
+    candidate: &DepositOperationRecord,
+) -> Result<bool, SubstrateError> {
+    let Some(existing_digest) = operations.get(&candidate.operation_id) else {
+        return Ok(false);
+    };
+    if existing_digest == &candidate.deposit_digest {
+        Ok(true)
+    } else {
+        Err(SubstrateError::InvalidDeposit {
+            reason: "Providence feedback operation id was reused with a different signed deposit"
+                .to_string(),
+        })
+    }
+}
+
+fn insert_deposit_operation(
+    operations: &mut BTreeMap<String, String>,
+    operation: &DepositOperationRecord,
+) -> Result<(), SubstrateError> {
+    if operations.len() >= MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES
+        && !operations.contains_key(&operation.operation_id)
+    {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "Providence feedback operation ledger reached its {MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES}-entry hard limit"
+            ),
+        });
+    }
+    if deposit_operation_already_recorded(operations, operation)? {
+        return Ok(());
+    }
+    operations.insert(
+        operation.operation_id.clone(),
+        operation.deposit_digest.clone(),
+    );
+    Ok(())
+}
+
+fn exact_deposit_operation_already_retained(
+    entries: &[VerifiedDeposit],
+    candidate: &VerifiedDeposit,
+) -> Result<bool, SubstrateError> {
+    let Some(operation_id) = deposit_operation_id(candidate)? else {
+        return Ok(false);
+    };
+    let mut existing = None;
+    for entry in entries {
+        if deposit_operation_id(entry)?.as_deref() == Some(operation_id.as_str()) {
+            existing = Some(entry);
+            break;
+        }
+    }
+    let Some(existing) = existing else {
+        return Ok(false);
+    };
+    let existing_bytes =
+        serde_json::to_vec(&existing.deposit).map_err(|source| SubstrateError::Encode {
+            context: "retained idempotent pheromone deposit".to_string(),
+            source,
+        })?;
+    let candidate_bytes =
+        serde_json::to_vec(&candidate.deposit).map_err(|source| SubstrateError::Encode {
+            context: "candidate idempotent pheromone deposit".to_string(),
+            source,
+        })?;
+    if existing_bytes == candidate_bytes {
+        Ok(true)
+    } else {
+        Err(SubstrateError::InvalidDeposit {
+            reason: "Providence feedback operation id was reused with a different signed deposit"
+                .to_string(),
+        })
     }
 }
 
@@ -582,7 +719,7 @@ impl RetainedDeposits {
             remaining_count = remaining_count.saturating_sub(1);
         }
 
-        let orphaned_feedback_keys =
+        let orphaned_feedback_scopes =
             feedback_keys_requiring_evidence_purge_after_compaction(&self.entries, &mut removed);
 
         let before = self.entries.len();
@@ -592,10 +729,11 @@ impl RetainedDeposits {
             .enumerate()
             .filter_map(|(index, entry)| (!removed[index]).then_some(entry))
             .collect();
-        if !orphaned_feedback_keys.is_empty() {
+        if !orphaned_feedback_scopes.is_empty() {
             self.entries.retain(|entry| {
-                deposit_suppression_key(entry)
-                    .is_none_or(|key| !orphaned_feedback_keys.contains(&key))
+                !orphaned_feedback_scopes
+                    .iter()
+                    .any(|scope| scope.governs(entry))
             });
         }
         self.encoded_bytes = self.entries.iter().map(|entry| entry.encoded_len).sum();
@@ -787,6 +925,26 @@ pub(crate) struct FeedbackSuppressionOrder {
 impl FeedbackSuppressionOrder {
     fn observed_at_ms(&self) -> i64 {
         self.observed_at_ms
+    }
+
+    pub(crate) fn governs_evidence_timestamp(&self, timestamp: i64) -> bool {
+        self.governed_evidence_timestamp.map_or_else(
+            || self.observed_at_ms() >= timestamp.saturating_mul(1_000),
+            |governed_timestamp| governed_timestamp == timestamp,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct FeedbackEvidencePurgeScope {
+    key: FeedbackSuppressionKey,
+    order: FeedbackSuppressionOrder,
+}
+
+impl FeedbackEvidencePurgeScope {
+    fn governs(&self, deposit: &VerifiedDeposit) -> bool {
+        deposit_suppression_key(deposit).as_ref() == Some(&self.key)
+            && self.order.governs_evidence_timestamp(deposit.timestamp)
     }
 }
 
@@ -1097,6 +1255,7 @@ pub struct InMemoryPheromoneSubstrate {
     admission_clock: DepositAdmissionClock,
     retention_limits: DepositRetentionLimits,
     deposits: Arc<RwLock<RetainedDeposits>>,
+    deposit_operations: Arc<RwLock<BTreeMap<String, String>>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
@@ -1126,6 +1285,7 @@ impl InMemoryPheromoneSubstrate {
             admission_clock,
             retention_limits: DepositRetentionLimits::default(),
             deposits: Arc::new(RwLock::new(RetainedDeposits::default())),
+            deposit_operations: Arc::new(RwLock::new(BTreeMap::new())),
             escalations: Arc::new(RwLock::new(Vec::new())),
             threat_class_configs: Arc::new(RwLock::new(BTreeMap::new())),
             threat_intel_entries: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1179,10 +1339,33 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .config
             .resolve_threat_class_policy(threat_class_config.as_ref());
         validate_deposit_policy(&deposit, policy.half_life_secs)?;
+        let operation = deposit_operation_record(&deposit)?;
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
+        let mut operations = self
+            .deposit_operations
+            .write()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        if let Some(operation) = operation.as_ref() {
+            if deposit_operation_already_recorded(&operations, operation)? {
+                return Ok(());
+            }
+            if operations.len() >= MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "Providence feedback operation ledger reached its {MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES}-entry hard limit"
+                    ),
+                });
+            }
+        }
+        if exact_deposit_operation_already_retained(&guard.entries, &deposit)? {
+            if let Some(operation) = operation.as_ref() {
+                insert_deposit_operation(&mut operations, operation)?;
+            }
+            return Ok(());
+        }
         guard.push(
             deposit,
             self.retention_limits,
@@ -1190,6 +1373,9 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             policy.evaporation_threshold,
             self.admission_clock.trusted_now()?,
         )?;
+        if let Some(operation) = operation.as_ref() {
+            insert_deposit_operation(&mut operations, operation)?;
+        }
         Ok(())
     }
 
@@ -1413,12 +1599,14 @@ pub struct LocalJournalPheromoneSubstrate {
     admission_clock: DepositAdmissionClock,
     retention_limits: DepositRetentionLimits,
     journal_path: PathBuf,
+    deposit_operation_journal_path: PathBuf,
     escalation_journal_path: PathBuf,
     threat_class_config_journal_path: PathBuf,
     threat_intel_journal_path: PathBuf,
     behavioral_baseline_journal_path: PathBuf,
     behavioral_baseline_sequence_path: PathBuf,
     deposits: Arc<RwLock<RetainedDeposits>>,
+    deposit_operations: Arc<RwLock<BTreeMap<String, String>>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
@@ -1486,6 +1674,7 @@ impl LocalJournalPheromoneSubstrate {
         admission_clock: DepositAdmissionClock,
     ) -> Result<Self, SubstrateError> {
         let journal_path = path.as_ref().to_path_buf();
+        let deposit_operation_journal_path = deposit_operation_journal_path(&journal_path);
         let escalation_journal_path = escalation_journal_path(&journal_path);
         let threat_class_config_journal_path = threat_class_config_journal_path(&journal_path);
         let threat_intel_journal_path = threat_intel_journal_path(&journal_path);
@@ -1504,6 +1693,7 @@ impl LocalJournalPheromoneSubstrate {
             rewrite_verified_deposit_jsonl(&journal_path, &deposits.entries)?;
             enforce_journal_file_limit(&journal_path, retention_limits.max_journal_bytes)?;
         }
+        let deposit_operations = load_deposit_operations(&deposit_operation_journal_path)?;
         let escalations = load_jsonl(&escalation_journal_path)?;
         let threat_intel_entries = load_threat_intel_entries(&threat_intel_journal_path)?;
         let mut behavioral_baseline_sequences =
@@ -1523,12 +1713,14 @@ impl LocalJournalPheromoneSubstrate {
             admission_clock,
             retention_limits,
             journal_path,
+            deposit_operation_journal_path,
             escalation_journal_path,
             threat_class_config_journal_path,
             threat_intel_journal_path,
             behavioral_baseline_journal_path,
             behavioral_baseline_sequence_path,
             deposits: Arc::new(RwLock::new(deposits)),
+            deposit_operations: Arc::new(RwLock::new(deposit_operations)),
             escalations: Arc::new(RwLock::new(escalations)),
             threat_class_configs: Arc::new(RwLock::new(threat_class_configs)),
             threat_intel_entries: Arc::new(RwLock::new(threat_intel_entries)),
@@ -1561,10 +1753,38 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .config
             .resolve_threat_class_policy(threat_class_config.as_ref());
         validate_deposit_policy(&deposit, policy.half_life_secs)?;
+        let operation = deposit_operation_record(&deposit)?;
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
+        let mut operations = self
+            .deposit_operations
+            .write()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        if let Some(operation) = operation.as_ref() {
+            if deposit_operation_already_recorded(&operations, operation)? {
+                return Ok(());
+            }
+            if operations.len() >= MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "Providence feedback operation ledger reached its {MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES}-entry hard limit"
+                    ),
+                });
+            }
+        }
+        if exact_deposit_operation_already_retained(&guard.entries, &deposit)? {
+            if let Some(operation) = operation.as_ref() {
+                // The deposit may have become process-visible immediately before
+                // a crash or directory-sync failure. Rewrite the retained set to
+                // establish its durability before committing the operation marker.
+                rewrite_verified_deposit_jsonl(&self.journal_path, &guard.entries)?;
+                append_deposit_operation_record(&self.deposit_operation_journal_path, operation)?;
+                insert_deposit_operation(&mut operations, operation)?;
+            }
+            return Ok(());
+        }
         let mut candidate = guard.clone();
         let pruned = candidate.push(
             deposit,
@@ -1573,7 +1793,9 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             policy.evaporation_threshold,
             self.admission_clock.trusted_now()?,
         )?;
-        if pruned == 0 {
+        let persistence_result = if operation.is_some() || pruned > 0 {
+            rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries)
+        } else {
             let persisted =
                 candidate
                     .entries
@@ -1581,20 +1803,23 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
                     .ok_or_else(|| SubstrateError::InvalidDeposit {
                         reason: "retention removed the newly admitted deposit".to_string(),
                     })?;
-            append_jsonl_line(&self.journal_path, &persisted.deposit)?;
-        } else {
-            match rewrite_verified_deposit_jsonl(&self.journal_path, &candidate.entries) {
-                Ok(()) => {}
-                Err(error @ SubstrateError::DurabilityOutcomeUnknown { .. }) => {
-                    // rename(2) completed, so the candidate is the process-visible journal even
-                    // though crash durability is unknown. Reconcile memory before failing closed.
-                    *guard = candidate;
-                    return Err(error);
-                }
-                Err(error) => return Err(error),
+            append_jsonl_line(&self.journal_path, &persisted.deposit)
+        };
+        match persistence_result {
+            Ok(()) => {}
+            Err(error @ SubstrateError::DurabilityOutcomeUnknown { .. }) => {
+                // rename(2) completed, so the candidate is the process-visible journal even
+                // though crash durability is unknown. Reconcile memory before failing closed.
+                *guard = candidate;
+                return Err(error);
             }
+            Err(error) => return Err(error),
         }
         *guard = candidate;
+        if let Some(operation) = operation.as_ref() {
+            append_deposit_operation_record(&self.deposit_operation_journal_path, operation)?;
+            insert_deposit_operation(&mut operations, operation)?;
+        }
         Ok(())
     }
 
@@ -2007,7 +2232,7 @@ fn latest_feedback_suppression_states(
 fn feedback_keys_requiring_evidence_purge_after_compaction(
     deposits: &[VerifiedDeposit],
     removed: &mut [bool],
-) -> BTreeSet<FeedbackSuppressionKey> {
+) -> BTreeSet<FeedbackEvidencePurgeScope> {
     debug_assert_eq!(deposits.len(), removed.len());
     let mut final_states = BTreeMap::<
         FeedbackSuppressionKey,
@@ -2045,7 +2270,10 @@ fn feedback_keys_requiring_evidence_purge_after_compaction(
             }
         }
         if state == FeedbackSuppressionState::Dismiss {
-            evidence_purge.insert(key);
+            evidence_purge.insert(FeedbackEvidencePurgeScope {
+                key,
+                order: final_order,
+            });
         }
     }
     evidence_purge
@@ -2066,10 +2294,7 @@ fn is_suppressed_by_feedback(
     };
     suppression.get(&key).is_some_and(|(state, order)| {
         *state == FeedbackSuppressionState::Dismiss
-            && order.governed_evidence_timestamp.map_or_else(
-                || order.observed_at_ms() >= deposit.timestamp.saturating_mul(1_000),
-                |governed_timestamp| governed_timestamp == deposit.timestamp,
-            )
+            && order.governs_evidence_timestamp(deposit.timestamp)
     })
 }
 
@@ -2160,10 +2385,31 @@ pub(crate) fn filter_escalations(
 
 fn ensure_parent_dir(path: &Path) -> Result<(), SubstrateError> {
     if let Some(parent) = path.parent() {
+        let mut missing = Vec::new();
+        let mut cursor = parent;
+        while !cursor.exists() {
+            missing.push(cursor.to_path_buf());
+            let Some(ancestor) = cursor.parent() else {
+                break;
+            };
+            cursor = ancestor;
+        }
         fs::create_dir_all(parent).map_err(|source| SubstrateError::Write {
             path: parent.to_path_buf(),
             source,
         })?;
+        #[cfg(unix)]
+        for created in missing {
+            let Some(ancestor) = created.parent() else {
+                continue;
+            };
+            fs::File::open(ancestor)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|source| SubstrateError::DurabilityOutcomeUnknown {
+                    path: created,
+                    source,
+                })?;
+        }
     }
     Ok(())
 }
@@ -2219,6 +2465,86 @@ fn enforce_journal_file_limit(path: &Path, max_bytes: u64) -> Result<(), Substra
             observed_bytes,
             max_bytes,
         });
+    }
+    Ok(())
+}
+
+fn load_deposit_operations(path: &Path) -> Result<BTreeMap<String, String>, SubstrateError> {
+    enforce_journal_file_limit(path, MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES)?;
+    let records = load_jsonl::<DepositOperationRecord>(path)?;
+    let mut operations = BTreeMap::new();
+    for record in records {
+        if record.operation_id.is_empty()
+            || record.operation_id.len() > MAX_DEPOSIT_OPERATION_ID_BYTES
+            || record.deposit_digest.len() != 64
+            || !record
+                .deposit_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: "local Providence feedback operation ledger contains an invalid record"
+                    .to_string(),
+            });
+        }
+        insert_deposit_operation(&mut operations, &record)?;
+    }
+    Ok(operations)
+}
+
+fn append_deposit_operation_record(
+    path: &Path,
+    operation: &DepositOperationRecord,
+) -> Result<(), SubstrateError> {
+    let serialized = serde_json::to_string(operation).map_err(|source| SubstrateError::Parse {
+        path: path.to_path_buf(),
+        line: 0,
+        source,
+    })?;
+    let observed_bytes = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(source) => {
+            return Err(SubstrateError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let next_bytes = observed_bytes
+        .checked_add(u64::try_from(serialized.len()).unwrap_or(u64::MAX))
+        .and_then(|bytes| bytes.checked_add(1))
+        .ok_or_else(|| SubstrateError::JournalLimitExceeded {
+            path: path.to_path_buf(),
+            observed_bytes: u64::MAX,
+            max_bytes: MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES,
+        })?;
+    if next_bytes > MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES {
+        return Err(SubstrateError::JournalLimitExceeded {
+            path: path.to_path_buf(),
+            observed_bytes: next_bytes,
+            max_bytes: MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES,
+        });
+    }
+    ensure_parent_dir(path)?;
+    let existed = path.exists();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|source| SubstrateError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    writeln!(file, "{serialized}")
+        .and_then(|()| file.sync_data())
+        .map_err(|source| SubstrateError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !existed {
+        #[cfg(unix)]
+        sync_rewrite_parent(path, path.parent().unwrap_or_else(|| Path::new(".")))?;
     }
     Ok(())
 }
@@ -2493,6 +2819,10 @@ fn load_behavioral_baseline_snapshots(
 
 fn escalation_journal_path(journal_path: &Path) -> PathBuf {
     journal_path.with_extension("escalations.jsonl")
+}
+
+fn deposit_operation_journal_path(journal_path: &Path) -> PathBuf {
+    journal_path.with_extension("deposit-operations.jsonl")
 }
 
 fn threat_class_config_journal_path(journal_path: &Path) -> PathBuf {
@@ -3006,6 +3336,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn providence_feedback_deposit_operation_is_idempotent_and_conflict_safe() {
+        let substrate = in_memory();
+        let deposit =
+            sample_feedback_deposit("reviewer-idempotent", "event-idempotent", "dismiss", 200);
+        substrate.deposit(deposit.clone()).await.unwrap();
+        substrate.deposit(deposit.clone()).await.unwrap();
+        assert_eq!(substrate.recent_deposits(10).await.unwrap().len(), 1);
+
+        assert_eq!(substrate.gc_evaporated(1_000_000).await.unwrap(), 1);
+        substrate.deposit(deposit.clone()).await.unwrap();
+        assert!(substrate.recent_deposits(10).await.unwrap().is_empty());
+
+        let mut conflict = deposit;
+        conflict.indicator["reason"] = serde_json::json!("different signed payload");
+        sign_deposit(&mut conflict, &signing_key_for_label("reviewer-idempotent"));
+        assert!(matches!(
+            substrate.deposit(conflict).await,
+            Err(super::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("operation id was reused")
+        ));
+    }
+
+    #[tokio::test]
     async fn query_respects_source_diversity() {
         let substrate = in_memory();
         substrate
@@ -3485,6 +3838,50 @@ mod tests {
         let _ = std::fs::remove_file(escalation_path);
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_file(threat_intel_path);
+    }
+
+    #[tokio::test]
+    async fn local_journal_remembers_feedback_operations_after_eviction_and_restart() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-pheromone-feedback-operation-ledger-{unique}.jsonl"
+        ));
+        let operation_path = super::deposit_operation_journal_path(&path);
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let deposit = sample_feedback_deposit("reviewer-durable", "event-durable", "dismiss", 200);
+        {
+            let substrate =
+                LocalJournalPheromoneSubstrate::open_for_replay(config.clone(), &path).unwrap();
+            substrate.deposit(deposit.clone()).await.unwrap();
+            assert_eq!(substrate.gc_evaporated(1_000_000).await.unwrap(), 1);
+            assert!(substrate.recent_deposits(10).await.unwrap().is_empty());
+        }
+
+        let reopened =
+            LocalJournalPheromoneSubstrate::open_for_replay(config.clone(), &path).unwrap();
+        reopened.deposit(deposit.clone()).await.unwrap();
+        assert!(reopened.recent_deposits(10).await.unwrap().is_empty());
+
+        let mut conflict = deposit;
+        conflict.indicator["reason"] = serde_json::json!("conflicting retry");
+        sign_deposit(&mut conflict, &signing_key_for_label("reviewer-durable"));
+        assert!(matches!(
+            reopened.deposit(conflict).await,
+            Err(super::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("operation id was reused")
+        ));
+
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(operation_path);
     }
 
     #[tokio::test]
@@ -4093,6 +4490,43 @@ mod tests {
     }
 
     #[test]
+    fn evicted_timestamp_scoped_dismissal_purges_only_its_governed_evidence() {
+        let governed = super::VerifiedDeposit::admit(sample_event_deposit(
+            "governed-evidence",
+            "event-scoped-eviction",
+            100,
+        ))
+        .unwrap();
+        let other = super::VerifiedDeposit::admit(sample_event_deposit(
+            "other-evidence",
+            "event-scoped-eviction",
+            101,
+        ))
+        .unwrap();
+        let mut dismissal = sample_feedback_deposit(
+            "reviewer-scoped-eviction",
+            "event-scoped-eviction",
+            "dismiss",
+            200,
+        );
+        dismissal.indicator["governed_evidence_timestamp"] = serde_json::json!(100);
+        sign_deposit(
+            &mut dismissal,
+            &signing_key_for_label("reviewer-scoped-eviction"),
+        );
+        let dismissal = super::VerifiedDeposit::admit(dismissal).unwrap();
+        let deposits = vec![governed.clone(), other.clone(), dismissal];
+        let mut removed = [false, false, true];
+
+        let scopes =
+            super::feedback_keys_requiring_evidence_purge_after_compaction(&deposits, &mut removed);
+        assert_eq!(scopes.len(), 1);
+        let scope = scopes.iter().next().unwrap();
+        assert!(scope.governs(&governed));
+        assert!(!scope.governs(&other));
+    }
+
+    #[test]
     fn feedback_suppression_binds_a_dismissal_to_future_skewed_evidence() {
         let evidence = super::VerifiedDeposit::admit(sample_event_deposit(
             "future-skewed-evidence",
@@ -4146,7 +4580,10 @@ mod tests {
         let purge =
             super::feedback_keys_requiring_evidence_purge_after_compaction(&deposits, &mut removed);
         assert_eq!(purge.len(), 1);
-        assert_eq!(purge.iter().next().unwrap().event_id, "event-final-state");
+        assert_eq!(
+            purge.iter().next().unwrap().key.event_id,
+            "event-final-state"
+        );
         assert_eq!(removed, [true, true]);
 
         let mut removed = [true, false];
