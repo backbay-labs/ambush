@@ -3010,13 +3010,10 @@ fn atomic_replace_if_identity(
                 }
             };
             if restore != 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!(
-                        "conditional publication lost its rollback exchange: {}",
-                        std::io::Error::last_os_error()
-                    ),
-                ));
+                return Err(std::io::Error::other(format!(
+                    "conditional publication lost its rollback exchange: {}",
+                    std::io::Error::last_os_error()
+                )));
             }
         }
         Err(std::io::Error::other(
@@ -6546,10 +6543,10 @@ where
     };
     #[cfg(test)]
     pause_after_authority_cleanup_identity_read(path);
-    if !authority_cleanup_parent_is_current(path, &parent_handle) || !verify_initial() {
+    if !authority_cleanup_parent_is_current(path, parent_handle) || !verify_initial() {
         return QuarantineOutcome::NotVerified;
     }
-    let mut slot = match acquire_cleanup_pool_slot(path, &parent_handle) {
+    let mut slot = match acquire_cleanup_pool_slot(path, parent_handle) {
         Ok(slot) => slot,
         Err(error) => return quarantine_outcome_from_error(&error),
     };
@@ -6584,7 +6581,7 @@ where
     {
         return QuarantineOutcome::Uncertain;
     }
-    if !authority_cleanup_parent_is_current(path, &parent_handle)
+    if !authority_cleanup_parent_is_current(path, parent_handle)
         || !verify_initial()
         // This callback is intentionally evaluated only against the original
         // path.  Pool state is verified from `slot.file` below.
@@ -6664,7 +6661,7 @@ where
         if restore_cleanup_pool_entry_from_trusted_link(
             &slot,
             &source_snapshot,
-            &parent_handle,
+            parent_handle,
             original_name,
         )
         .is_err()
@@ -6692,7 +6689,7 @@ where
         if restore_cleanup_pool_entry_from_trusted_link(
             &slot,
             &source_snapshot,
-            &parent_handle,
+            parent_handle,
             original_name,
         )
         .is_err()
@@ -6726,7 +6723,7 @@ where
     }
     #[cfg(test)]
     pause_after_authority_cleanup_final_absence_read(path);
-    if !cleanup_canonical_name_absent(&parent_handle, original_name).unwrap_or(false) {
+    if !cleanup_canonical_name_absent(parent_handle, original_name).unwrap_or(false) {
         let foreign_snapshot = open_regular_entry_at(&parent_handle.file, original_name)
             .ok()
             .and_then(|file| snapshot_cleanup_file(file).ok())
@@ -6756,7 +6753,7 @@ where
         if restore_cleanup_pool_entry_from_trusted_link(
             &slot,
             &source_snapshot,
-            &parent_handle,
+            parent_handle,
             original_name,
         )
         .is_err()
@@ -6766,7 +6763,7 @@ where
         return QuarantineOutcome::ForeignPreserved;
     }
     if verify_cleanup_slot_name_binding(&slot).is_err()
-        || !cleanup_canonical_name_absent(&parent_handle, original_name).unwrap_or(false)
+        || !cleanup_canonical_name_absent(parent_handle, original_name).unwrap_or(false)
     {
         return QuarantineOutcome::Uncertain;
     }
@@ -6783,7 +6780,7 @@ where
         return QuarantineOutcome::Uncertain;
     }
     if verify_cleanup_slot_name_binding(&slot).is_err()
-        || !cleanup_canonical_name_absent(&parent_handle, original_name).unwrap_or(false)
+        || !cleanup_canonical_name_absent(parent_handle, original_name).unwrap_or(false)
     {
         return QuarantineOutcome::Uncertain;
     }
@@ -21011,8 +21008,7 @@ mod tests {
         );
         let error = policy
             .authority()
-            .err()
-            .expect("pending health must refuse authority minting");
+            .expect_err("pending health must refuse authority minting");
         assert!(
             matches!(
                 error,
@@ -21026,8 +21022,7 @@ mod tests {
         let reopened = Arc::new(load_signed_policy(&path, &key).unwrap());
         let error = reopened
             .authority()
-            .err()
-            .expect("restarted pending health must refuse authority minting");
+            .expect_err("restarted pending health must refuse authority minting");
         assert!(
             matches!(
                 error,
