@@ -144,7 +144,7 @@ if case == "phase285-raw-kv-subject":
         "bin/swarm-governance-witness.rs": "93182d13a5550fe2ac0db8b4fb4fd126c5173e614676133ab3d735026d0d1a91",
         "initializer.rs": "fbfdbd2fd2cdb1add3a5363aed79c3659c98adebeac8a7169807872040e5af85",
         "jetstream_store.rs": "965e779fb672545496e8d8571ae909c34ed1f1123aa0cc57123824bea4c0d279",
-        "lib.rs": "67d18aeb10db492d969344636bf609bfff4ca606fde5504e12acf3ae5b704495",
+        "lib.rs": "c347c01a7f5d7fce33c403d731558b55afe8ac94742b41e1d82dfd9f649a0ceb",
         "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
         "public_dispatcher.rs": "c2f7796a9856600515232d807688663eb9c01949fd587d65a51f010b17db0e86",
         "raw_config.rs": "dbb8132a899b988ed02451e00d2524f81cc31b22c8118f5ae2b2f966db43c24e",
@@ -1143,6 +1143,7 @@ import importlib.util
 import json
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1216,11 +1217,11 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "cb2cc5df86f6bab0f60cfe7dd239f58b44997926365512ca4214c738f24b6392",
     "Cargo.lock": "3e60b9058f1d97f703686f5a68739df0c4045a5e0900681a47f92c66ef032510",
-    ".github/workflows/ci.yml": "ada96352f8f6cb9208be141d38c5dbcf3ffaf20de1e624655f32e7d45b983334",
+    ".github/workflows/ci.yml": "5aaf71aaa8ac517be0bfbeeb6fbf2856906d7b699f93d0bb6050de9c2cb840da",
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "733e237b142e517dd4928c442c257bb7fd943f3919b6d2ab57447419e2b9d7a3",
+    "tools/check-single-governor-key.sh": "24cfcc5f2c9a766e0425bbb624a28cb6dd54c6a32a6cf4254f54f6cc0f2e61ca",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -4679,7 +4680,16 @@ def transitive_build_script_self_test(base):
         target_dir=REPO_ROOT / "target/assurance-transitive-build-script",
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    original_program = RUSTC_AUDIT_PROGRAM.read_bytes()
+    original_artifacts = {
+        path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+        for path in (RUSTC_AUDIT_PROGRAM, RUSTC_AUDIT_WRAPPER)
+    }
+
+    def restore_audit_artifacts():
+        for path, (content, mode) in original_artifacts.items():
+            path.write_bytes(content)
+            path.chmod(mode)
+
     raw_environment = sanitized_cargo_environment(
         target_dir=REPO_ROOT / "target/assurance-transitive-build-script-red",
     )
@@ -4690,7 +4700,7 @@ def transitive_build_script_self_test(base):
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         ) if lock.returncode == 0 else lock
     finally:
-        RUSTC_AUDIT_PROGRAM.write_bytes(original_program)
+        restore_audit_artifacts()
     if unprotected.returncode:
         ok = False
         print(
@@ -4706,11 +4716,19 @@ def transitive_build_script_self_test(base):
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         ) if lock.returncode == 0 else lock
     finally:
-        RUSTC_AUDIT_PROGRAM.write_bytes(original_program)
+        restore_audit_artifacts()
     if attack.returncode != 125 or "compiler-audit artifacts changed during Cargo" not in attack.stderr:
         ok = False
         print(
             f"transitive build-script audit overwrite was not rejected:\n{(attack.stdout + attack.stderr)[-4000:]}",
+            file=sys.stderr,
+        )
+
+    residual_changes = audit_artifact_changes()
+    if residual_changes:
+        ok = False
+        print(
+            f"transitive build-script fixture did not restore compiler-audit artifacts: {residual_changes}",
             file=sys.stderr,
         )
 
