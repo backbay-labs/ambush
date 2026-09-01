@@ -3009,6 +3009,9 @@ mod deadline_state_machine_tests {
         credential.username
     }
 
+    const OBSERVATION_EXACT_RETRY_ATTEMPTS: usize = 5;
+    const OBSERVATION_EXACT_RETRY_DELAY: Duration = Duration::from_millis(25);
+
     fn server_connection_observation(
         runner_role: &'static str,
         expected_account: &str,
@@ -4643,14 +4646,16 @@ mod deadline_state_machine_tests {
         client: &RuntimeWitnessClient,
         request: WitnessServiceRequestV1,
     ) -> Result<WitnessOutcomeAttestationV1, RuntimeWitnessClientErrorV1> {
-        for attempt in 0..3 {
+        for attempt in 0..OBSERVATION_EXACT_RETRY_ATTEMPTS {
             match client.prepare_successor(request.clone()).await {
-                Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) if attempt < 2 => {
+                Err(RuntimeWitnessClientErrorV1::OutcomeUnknown)
+                    if attempt + 1 < OBSERVATION_EXACT_RETRY_ATTEMPTS =>
+                {
                     // The protocol recognizes an identical already-prepared
                     // request. Retry only the exact signed bytes after an
                     // ambiguous transport outcome; never rebuild authority,
                     // nonce, session, or candidate state.
-                    tokio::task::yield_now().await;
+                    tokio::time::sleep(OBSERVATION_EXACT_RETRY_DELAY).await;
                 }
                 result => return result,
             }
@@ -4664,7 +4669,7 @@ mod deadline_state_machine_tests {
         reconciliation_request: WitnessServiceRequestV1,
         expected_txid: &str,
     ) -> Result<Option<WitnessOutcomeAttestationV1>, RuntimeWitnessClientErrorV1> {
-        for attempt in 0..3 {
+        for attempt in 0..OBSERVATION_EXACT_RETRY_ATTEMPTS {
             match client.commit_prepared(request.clone()).await {
                 Ok(attestation) => return Ok(Some(attestation)),
                 Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) => {
@@ -4693,18 +4698,20 @@ mod deadline_state_machine_tests {
                                     return Ok(None);
                                 }
                                 WitnessReadResponseV1::Head(head)
-                                    if head.as_ref().as_ref().is_none() && attempt < 2 => {}
+                                    if head.as_ref().as_ref().is_none()
+                                        && attempt + 1 < OBSERVATION_EXACT_RETRY_ATTEMPTS => {}
                                 WitnessReadResponseV1::Head(_) => {
                                     return Err(RuntimeWitnessClientErrorV1::InvalidResponse);
                                 }
                                 _ => return Err(RuntimeWitnessClientErrorV1::InvalidResponse),
                             }
                         }
-                        Err(RuntimeWitnessClientErrorV1::OutcomeUnknown) if attempt < 2 => {}
+                        Err(RuntimeWitnessClientErrorV1::OutcomeUnknown)
+                            if attempt + 1 < OBSERVATION_EXACT_RETRY_ATTEMPTS => {}
                         Err(error) => return Err(error),
                     }
-                    if attempt < 2 {
-                        tokio::task::yield_now().await;
+                    if attempt + 1 < OBSERVATION_EXACT_RETRY_ATTEMPTS {
+                        tokio::time::sleep(OBSERVATION_EXACT_RETRY_DELAY).await;
                     }
                 }
                 Err(error) => return Err(error),

@@ -5923,6 +5923,11 @@ anchors = [
     ("store_records", "library", "records: Mutex<Vec<StoreObservationV1>>"),
     ("server_identity", "library", "server_client_id_for_test()"),
     ("server_authority", "library", "fn server_connection_observation("),
+    ("observation_retry_attempts", "library", "const OBSERVATION_EXACT_RETRY_ATTEMPTS: usize = 5;"),
+    ("observation_retry_delay", "library", "const OBSERVATION_EXACT_RETRY_DELAY: Duration = Duration::from_millis(25);"),
+    ("observation_prepare_retry", "library", "observation_prepare_with_exact_retry(&runtime_client, prepare_request).await"),
+    ("observation_commit_exact_bytes", "library", ".commit_prepared(request.clone()).await"),
+    ("observation_reconciliation_exact_bytes", "library", ".read_head(reconciliation_request.clone()).await"),
     ("public_store_head", "library", '"observation public head differs from authenticated store head"'),
     ("proxy_store_envelope", "library", '"observation proxy/store envelope"'),
     ("observation_ignore_boundary", "library", '#[ignore = "requires the authenticated Phase 285 NATS topology and observation artifacts"]'),
@@ -6397,7 +6402,7 @@ PY
     "$ROOT_DIR" "$scratch" "$list_output" \
     "$(shasum -a 256 "$ROOT_DIR/tools/check-phase285-witness-integrity.sh" | awk '{print $1}')" \
     "$(shasum -a 256 "$ROOT_DIR/tools/fixtures/phase285-witness-integrity.json" | awk '{print $1}')" <<'PY'
-import copy, hashlib, json, os, pathlib, re, selectors, shutil, signal, stat, subprocess, sys, time
+import copy, hashlib, json, os, pathlib, re, selectors, shutil, signal, stat, subprocess, sys, time, tomllib
 ledger, budget_receipt, callsite_receipt, constructor_receipt, tree, token, config_path, private_path, public_path, library_path, fixture_path, root_path, scratch_path, list_path, launcher_pin, manifest_pin = sys.argv[1:]
 ledger = pathlib.Path(ledger)
 budget_receipt = pathlib.Path(budget_receipt)
@@ -7204,13 +7209,57 @@ def run_seed_bound_checks(seed, seed_descriptor):
         "use swarm_governance_witness::{PublicWitnessServiceConfigV1,store_proxy_subjects};\n"
         "fn main(){let _=store_proxy_subjects();let _:Option<PublicWitnessServiceConfigV1>=None;}\n"
     )
-    lock = cargo(["generate-lockfile", "--offline", "--manifest-path", str(downstream / "Cargo.toml")], downstream)
-    if lock.returncode != 0:
-        raise SystemExit(f"deadline downstream lock generation failed:\n{lock.stdout}")
+    def lock_identities(path):
+        packages = tomllib.loads(path.read_text()).get("package", [])
+        identities = [
+            (package["name"], package["version"], package.get("source"), package.get("checksum"))
+            for package in packages
+        ]
+        if len(identities) != len(set(identities)):
+            raise SystemExit(f"deadline lock contains duplicate package identities: {path}")
+        return set(identities)
+    accepted_lock = exact_root / "Cargo.lock"
+    accepted_lock_identities = lock_identities(accepted_lock)
+    synthetic_root_identity = ("phase285-a1-boundary", "0.0.0", None, None)
+    if synthetic_root_identity in accepted_lock_identities:
+        raise SystemExit("deadline synthetic root collides with accepted lock")
+    frozen_downstream_lock = exact_root / "tools/fixtures/phase285-deadline-downstream.Cargo.lock"
+    if (
+        frozen_downstream_lock.is_symlink()
+        or not frozen_downstream_lock.is_file()
+        or hashlib.sha256(frozen_downstream_lock.read_bytes()).hexdigest()
+        != "13d789c6b1318cf2e6fe50a3f46f8ec86b31cb26a31cc45981624bf7daa50144"
+    ):
+        raise SystemExit("deadline frozen downstream lock differs")
+    frozen_downstream_identities = lock_identities(frozen_downstream_lock)
+    if synthetic_root_identity not in frozen_downstream_identities:
+        raise SystemExit("deadline frozen downstream synthetic root is absent")
+    frozen_accepted_identities = frozen_downstream_identities - {synthetic_root_identity}
+    if (
+        not frozen_accepted_identities
+        or not frozen_accepted_identities.issubset(accepted_lock_identities)
+        or not any(identity[0] == "swarm-governance-witness" for identity in frozen_accepted_identities)
+    ):
+        raise SystemExit("deadline frozen downstream lock escaped accepted lock")
+    # The checked-in fixture is Cargo's exact normalized non-development lock
+    # graph for this downstream manifest. Its digest is rooted in this checker,
+    # every non-synthetic identity must remain in the accepted candidate lock,
+    # and `cargo check --locked` below remains the final semantic authority.
+    # This avoids consulting a runner's mutable registry index and never lets a
+    # generated lock expand CARGO_HOME after the candidate inventory freeze.
+    downstream_lock = downstream / "Cargo.lock"
+    shutil.copy2(frozen_downstream_lock, downstream_lock)
+    downstream_lock_identities = lock_identities(downstream_lock)
+    if downstream_lock_identities != frozen_downstream_identities:
+        raise SystemExit("deadline copied downstream lock identity set differs")
     positive = cargo(["check", "--manifest-path", str(downstream / "Cargo.toml"), "--locked", "--offline"], downstream)
     if positive.returncode != 0:
         raise SystemExit(f"deadline downstream positive failed:\n{positive.stdout}")
-    print(f"deadline_boundary receipt=downstream_public_api_positive tree={tree} token={token} status=passed")
+    print(
+        f"deadline_boundary receipt=downstream_public_api_positive tree={tree} token={token} "
+        f"accepted_lock_subset=1 frozen_normalized_graph=1 "
+        f"packages={len(downstream_lock_identities)} status=passed"
+    )
 
     negative_probes = [
         ("downstream_public_start_inner_private", "use swarm_governance_witness::{NatsPublicWitnessStoreProxyClient,PublicWitnessServiceRunner};fn main(){let _=PublicWitnessServiceRunner::<NatsPublicWitnessStoreProxyClient>::start_inner;}", "E0624", "start_inner"),

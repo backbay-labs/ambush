@@ -436,7 +436,7 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (14, "fa359ba1da72ec1543ac52678c2cc7cae86870843656e8dec3a35506facdbe76"),
     "swarm-governance-witness":
-        (17, "a7ad3be08b6f7301c98de05e24a937f56bce344d03459931c4a26fce675afe74"),
+        (17, "0c8249e8971f46d4e00fe3104d7d63114e15fe5e07a8fc7e6affb3563a788069"),
     "swarm-runtime":
         (133, "3b05182a613151922511a5177204d2b4a361d8bc9cb0c854ad581bc0a04abca6"),
     "swarm-ingest-runtime":

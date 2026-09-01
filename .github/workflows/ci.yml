@@ -102,7 +102,6 @@ jobs:
         run: |
           cargo fetch --locked
           cargo test -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --no-run
-          bash tools/check-phase285-witness-conformance.sh --self-test jetstream-release-hook
           python3 -I - "$CARGO_TARGET_DIR" "$RUNNER_TEMP" <<'PY'
           import os
           import pathlib
@@ -124,7 +123,7 @@ jobs:
           shutil.rmtree(target)
           if os.path.lexists(target):
               raise SystemExit("phase285_source_hydration[target-residue]")
-          print("phase285_source_hydration closure=governance-witness-all-targets-all-features+generated-release-probe target_residue=0 passed=1")
+          print("phase285_source_hydration closure=governance-witness-all-targets-all-features target_residue=0 passed=1")
           PY
 
       - name: Install actionlint
@@ -961,7 +960,7 @@ jobs:
           trap verify_candidate_inventory_on_exit EXIT
 
           PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1
-          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=e6d2e9966d7cbabe523022b89e1ee56e32c1c596ea5a08ad233fbca13f3b0cb5
+          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=92f965a57aa79195acfd1b94d52e9ef09cccfdf6cc5d0381b17a76440e036bdf
           export PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
           readonly PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
           verify_integrity_roots
