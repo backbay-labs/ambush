@@ -255,7 +255,7 @@ Existing commands that remain mandatory:
 
 ```text
 cargo test -p swarm-governance --lib --locked --offline
-cargo test -p swarm-runtime-http --bin swarm-detect --locked --offline
+cargo test -p swarm-runtime-http --bin swarm_detect --locked --offline
 cargo test --workspace --exclude swarm-runtime --exclude swarm-ingest-runtime --locked --offline
 cargo test -p swarm-runtime -p swarm-ingest-runtime --locked --offline -- --test-threads=1
 cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
