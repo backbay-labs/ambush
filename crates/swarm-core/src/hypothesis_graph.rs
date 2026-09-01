@@ -3144,14 +3144,30 @@ impl Hypothesis {
         mut decision: DecisionRecord,
     ) -> Result<Self, GraphAdmissionError> {
         decision.validate()?;
-        if decision.sequence != 0 {
-            return Err(GraphAdmissionError::InvalidTransition {
-                reason: "new decisions must not reuse a sequence".to_string(),
-            });
-        }
         if decision.hypothesis_id != self.hypothesis_id {
             return Err(GraphAdmissionError::InvalidTransition {
                 reason: "decision targets a different hypothesis".to_string(),
+            });
+        }
+        if let Some(existing) = self
+            .decision_history
+            .iter()
+            .find(|existing| existing.decision_id == decision.decision_id)
+        {
+            let mut normalized = existing.clone();
+            normalized.sequence = 0;
+            let mut normalized_incoming = decision.clone();
+            normalized_incoming.sequence = 0;
+            if normalized == normalized_incoming {
+                return Ok(self);
+            }
+            return Err(GraphAdmissionError::IdCollision {
+                id: decision.decision_id.0.clone(),
+            });
+        }
+        if decision.sequence != 0 {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "new decisions must not reuse a sequence".to_string(),
             });
         }
         let next_status = next_hypothesis_status(self.status, &decision)?;
@@ -3180,8 +3196,14 @@ impl Hypothesis {
         }
         let mut expected = 1_u64;
         let mut replayed_status = HypothesisStatus::Live;
+        let mut decision_ids = BTreeSet::new();
         for decision in &self.decision_history {
             decision.validate()?;
+            if !decision_ids.insert(&decision.decision_id) {
+                return Err(GraphAdmissionError::IdCollision {
+                    id: decision.decision_id.0.clone(),
+                });
+            }
             if decision.sequence != expected || decision.hypothesis_id != self.hypothesis_id {
                 return Err(GraphAdmissionError::InvalidTransition {
                     reason: "decision history is not append-only".to_string(),
@@ -7819,6 +7841,45 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&updated).expect("serialize hypothesis"))
                 .expect("reload appended hypothesis");
         assert_eq!(reloaded, updated);
+    }
+
+    #[test]
+    fn exact_decision_retry_is_idempotent_without_consuming_history_capacity() {
+        let hypothesis = Hypothesis::new(
+            HypothesisId::new("hypothesis:idempotent-decision"),
+            ConfidenceDistribution::uniform_two(),
+            [],
+            [],
+        )
+        .unwrap();
+        let decision = DecisionRecord::new(
+            DecisionKind::Support,
+            hypothesis.hypothesis_id.clone(),
+            [EvidenceId::new("evidence:idempotent")],
+            GraphProducerRole::Hunter,
+            AgentId::new("hunter", "idempotent"),
+            GraphLogicalTime::new(101),
+            "stable support decision",
+        )
+        .unwrap()
+        .signed_with(&signer(), "hunter-idempotent")
+        .unwrap();
+
+        let once = hypothesis.append_decision(decision.clone()).unwrap();
+        let retried = once.clone().append_decision(decision).unwrap();
+        assert_eq!(retried, once);
+        assert_eq!(retried.decision_history.len(), 1);
+        let persisted_retry = once
+            .clone()
+            .append_decision(once.decision_history[0].clone())
+            .unwrap();
+        assert_eq!(persisted_retry, once);
+
+        let one_decision_limit = GraphResourceLimits {
+            max_decisions_per_hypothesis: 1,
+            ..GraphResourceLimits::default()
+        };
+        retried.validate(&one_decision_limit).unwrap();
     }
 
     #[test]

@@ -88,9 +88,10 @@ fn validate_expiry_for(
 pub type StrategyMemoryExpiryRecord = StrategyMemoryExpiryEnvelope;
 
 fn strategy_memory_stream_id(path: &Path) -> String {
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     format!(
         "strategy-memory:{}",
-        sha256_hex(path.to_string_lossy().as_bytes())
+        sha256_hex(normalized.to_string_lossy().as_bytes())
     )
 }
 
@@ -129,6 +130,10 @@ struct StrategyMemoryState {
     generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     predecessor_digest: Option<String>,
+    /// Digest of the last record removed by expiry-prefix compaction.  This
+    /// preserves the signed append chain without retaining expired payloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    record_chain_prefix_digest: Option<String>,
     memories: BTreeMap<String, StrategyMemoryRecord>,
     order: Vec<String>,
     /// Versioned logical-time sidecars keyed by the unchanged memory ID.
@@ -177,6 +182,7 @@ impl StrategyMemoryState {
             limits,
             generation: 0,
             predecessor_digest: None,
+            record_chain_prefix_digest: None,
             memories: BTreeMap::new(),
             order: Vec::new(),
             expiry_envelopes: BTreeMap::new(),
@@ -205,6 +211,38 @@ impl StrategyMemoryState {
 
     fn revision(&self) -> Result<GraphStoreRevision, StrategyMemoryStoreError> {
         Ok(GraphStoreRevision::new(self.generation, self.digest()?))
+    }
+
+    fn prune_expired_prefix(&mut self, now: GraphLogicalTime, max_memory_ttl_ticks: u64) {
+        let expired_prefix_len = self
+            .order
+            .iter()
+            .take_while(|memory_id| {
+                self.expiry_envelopes
+                    .get(memory_id.as_str())
+                    .is_some_and(|envelope| {
+                        !envelope.is_applicable_at_with_limit(now, max_memory_ttl_ticks)
+                    })
+            })
+            .count();
+        if expired_prefix_len == 0 {
+            return;
+        }
+
+        let expired_ids = self.order.drain(..expired_prefix_len).collect::<Vec<_>>();
+        for memory_id in expired_ids {
+            if let Some(record) = self.memories.remove(&memory_id) {
+                self.record_chain_prefix_digest = Some(record.digest);
+            }
+            self.expiry_envelopes.remove(&memory_id);
+        }
+    }
+
+    fn record_tail_digest(&self) -> Option<String> {
+        self.order
+            .last()
+            .and_then(|id| self.memories.get(id).map(|record| record.digest.clone()))
+            .or_else(|| self.record_chain_prefix_digest.clone())
     }
 
     fn validate(
@@ -240,7 +278,10 @@ impl StrategyMemoryState {
             }
         }
         if self.generation == 0 {
-            if self.predecessor_digest.is_some() || !self.order.is_empty() {
+            if self.predecessor_digest.is_some()
+                || self.record_chain_prefix_digest.is_some()
+                || !self.order.is_empty()
+            {
                 return Err(StrategyMemoryStoreError::InvalidState {
                     reason: "empty memory state has predecessor or order entries".to_string(),
                 });
@@ -268,9 +309,25 @@ impl StrategyMemoryState {
                 reason: "memory expiry sidecar has more entries than memory records".to_string(),
             });
         }
-        let mut previous_digest = None;
+        if self
+            .record_chain_prefix_digest
+            .as_deref()
+            .is_some_and(str::is_empty)
+        {
+            return Err(StrategyMemoryStoreError::InvalidState {
+                reason: "compacted record-chain prefix digest is empty".to_string(),
+            });
+        }
+        if self.generation > 0 && self.order.is_empty() && self.record_chain_prefix_digest.is_none()
+        {
+            return Err(StrategyMemoryStoreError::InvalidState {
+                reason: "compacted memory state is missing its record-chain prefix".to_string(),
+            });
+        }
+        let mut previous_digest = self.record_chain_prefix_digest.clone();
+        let mut previous_generation: Option<u64> = None;
         let mut seen_ids = BTreeSet::new();
-        for (index, memory_id) in self.order.iter().enumerate() {
+        for memory_id in &self.order {
             if !seen_ids.insert(memory_id) {
                 return Err(StrategyMemoryStoreError::InvalidState {
                     reason: "append order contains a duplicate memory ID".to_string(),
@@ -287,15 +344,17 @@ impl StrategyMemoryState {
                 });
             }
             record.validate(expected_signer, previous_digest.as_deref())?;
-            if record.generation
-                != u64::try_from(index + 1).map_err(|_| StrategyMemoryStoreError::InvalidState {
-                    reason: "memory generation overflow".to_string(),
-                })?
-            {
+            let generation_is_contiguous = match previous_generation {
+                Some(previous) => previous.checked_add(1) == Some(record.generation),
+                None if self.record_chain_prefix_digest.is_some() => record.generation > 1,
+                None => record.generation == 1,
+            };
+            if !generation_is_contiguous {
                 return Err(StrategyMemoryStoreError::InvalidState {
                     reason: "memory generations are not contiguous append order".to_string(),
                 });
             }
+            previous_generation = Some(record.generation);
             previous_digest = Some(record.digest.clone());
         }
         for (memory_id, envelope) in &self.expiry_envelopes {
@@ -311,15 +370,9 @@ impl StrategyMemoryState {
             }
             validate_expiry_for(&memory.memory, envelope, max_memory_ttl_ticks)?;
         }
-        if self.generation
-            != u64::try_from(self.order.len()).map_err(|_| {
-                StrategyMemoryStoreError::InvalidState {
-                    reason: "memory generation overflow".to_string(),
-                }
-            })?
-        {
+        if previous_generation.is_some_and(|generation| generation != self.generation) {
             return Err(StrategyMemoryStoreError::InvalidState {
-                reason: "state generation does not match memory count".to_string(),
+                reason: "state generation does not match the retained record tail".to_string(),
             });
         }
         Ok(())
@@ -811,6 +864,7 @@ impl MemoryStrategyMemoryStore {
             &self.limits,
             self.max_memory_ttl_ticks,
         )?;
+        let compact_at = expiry.map(|(created_at, _)| created_at);
         let expiry_envelope = expiry
             .map(|(created_at, ttl_ticks)| {
                 StrategyMemoryExpiryEnvelope::new_with_limit(
@@ -851,7 +905,14 @@ impl MemoryStrategyMemoryStore {
                 memory_id: memory.memory_id.clone(),
             });
         }
-        if guard.state.memories.len() >= self.limits.max_memory_records {
+        let state_predecessor_digest = guard.state.digest()?;
+        let mut next_state = guard.state.clone();
+        if next_state.memories.len() >= self.limits.max_memory_records
+            && let Some(now) = compact_at
+        {
+            next_state.prune_expired_prefix(now, self.max_memory_ttl_ticks);
+        }
+        if next_state.memories.len() >= self.limits.max_memory_records {
             return Err(StrategyMemoryStoreError::ResourceLimit {
                 resource: "strategy_memory.records".to_string(),
                 limit: self.limits.max_memory_records,
@@ -862,20 +923,12 @@ impl MemoryStrategyMemoryStore {
                 reason: "memory generation overflow".to_string(),
             }
         })?;
-        let predecessor_digest = guard.state.order.last().and_then(|id| {
-            guard
-                .state
-                .memories
-                .get(id)
-                .map(|record| record.digest.clone())
-        });
-        let state_predecessor_digest = guard.state.digest()?;
+        let predecessor_digest = next_state.record_tail_digest();
         let record =
             StrategyMemoryRecord::new(memory, generation, predecessor_digest, &self.signer)?;
         // Build and sign an independent candidate before publishing it.  A
         // size/signing failure must leave the locked state byte-for-byte
         // unchanged, matching the file backend's fail-closed admission.
-        let mut next_state = guard.state.clone();
         next_state.max_memory_ttl_ticks = Some(self.max_memory_ttl_ticks);
         next_state.generation = generation;
         next_state.predecessor_digest = Some(state_predecessor_digest);
@@ -1074,6 +1127,16 @@ impl FileStrategyMemoryStore {
     ) -> Result<Self, StrategyMemoryStoreError> {
         validate_max_memory_ttl_ticks(max_memory_ttl_ticks)?;
         prepare_private_store_root(path).map_err(StrategyMemoryStoreError::GraphPersistence)?;
+        let root = std::fs::canonicalize(path).map_err(|source| {
+            StrategyMemoryStoreError::GraphPersistence(GraphStoreError::Read {
+                path: path.to_path_buf(),
+                source,
+            })
+        })?;
+        // Every signed stream identifier and every persistence path must be
+        // derived from one normalized root.  Equivalent relative and absolute
+        // spellings must reopen the same external monotonic journal.
+        let path = root.as_path();
         let lock_path = path.join(STRATEGY_MEMORY_LOCK_FILE);
         let lock_existed = std::fs::symlink_metadata(&lock_path).is_ok();
         let lock = DurableFileLock::acquire(&lock_path)
@@ -1546,6 +1609,7 @@ impl FileStrategyMemoryStore {
             .lock()
             .map_err(|_| StrategyMemoryStoreError::PoisonedLock)?;
         let current = self.read_state()?;
+        let compact_at = expiry.map(|(created_at, _)| created_at);
         let expiry_envelope = expiry
             .map(|(created_at, ttl_ticks)| {
                 StrategyMemoryExpiryEnvelope::new_with_limit(
@@ -1589,29 +1653,28 @@ impl FileStrategyMemoryStore {
                 memory_id: memory.memory_id.clone(),
             });
         }
-        if current.state.memories.len() >= self.limits.max_memory_records {
+        let state_predecessor_digest = current.state.digest()?;
+        let base_state = current.clone();
+        let mut next_state = current.state;
+        if next_state.memories.len() >= self.limits.max_memory_records
+            && let Some(now) = compact_at
+        {
+            next_state.prune_expired_prefix(now, self.max_memory_ttl_ticks);
+        }
+        if next_state.memories.len() >= self.limits.max_memory_records {
             return Err(StrategyMemoryStoreError::ResourceLimit {
                 resource: "strategy_memory.records".to_string(),
                 limit: self.limits.max_memory_records,
             });
         }
-        let generation = current.state.generation.checked_add(1).ok_or_else(|| {
+        let generation = next_state.generation.checked_add(1).ok_or_else(|| {
             StrategyMemoryStoreError::InvalidState {
                 reason: "memory generation overflow".to_string(),
             }
         })?;
-        let record_predecessor_digest = current.state.order.last().and_then(|id| {
-            current
-                .state
-                .memories
-                .get(id)
-                .map(|record| record.digest.clone())
-        });
-        let state_predecessor_digest = current.state.digest()?;
+        let record_predecessor_digest = next_state.record_tail_digest();
         let record =
             StrategyMemoryRecord::new(memory, generation, record_predecessor_digest, &self.signer)?;
-        let base_state = current.clone();
-        let mut next_state = current.state;
         next_state.max_memory_ttl_ticks = Some(self.max_memory_ttl_ticks);
         next_state.generation = generation;
         next_state.predecessor_digest = Some(state_predecessor_digest);
@@ -1965,10 +2028,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "swarm-memory-{name}-{}-{stamp}",
-            std::process::id()
-        ))
+        fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "swarm-memory-{name}-{}-{stamp}",
+                std::process::id()
+            ))
     }
 
     fn signed_strategy_candidate_bytes(
@@ -2067,6 +2132,60 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn expired_prefix_is_compacted_before_memory_capacity_is_enforced() {
+        let limits = GraphResourceLimits {
+            max_memory_records: 1,
+            ..GraphResourceLimits::default()
+        };
+        let first = memory(61, "expired-capacity-first");
+        let second = memory(62, "expired-capacity-second");
+
+        let memory_store =
+            MemoryStrategyMemoryStore::new_with_max_memory_ttl(signer(60), limits.clone(), 100)
+                .unwrap();
+        memory_store
+            .append_at(first.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        let appended = memory_store
+            .append_at(second.clone(), GraphLogicalTime::new(111), 10)
+            .unwrap();
+        assert_eq!(appended.generation, 2);
+        assert!(memory_store.load(&first.memory_id).unwrap().is_none());
+        assert!(memory_store.load(&second.memory_id).unwrap().is_some());
+
+        let path = temp_dir("expired-capacity-file");
+        let key = signer(63);
+        let file_store = FileStrategyMemoryStore::new_with_max_memory_ttl(
+            &path,
+            key.clone(),
+            limits.clone(),
+            100,
+        )
+        .unwrap();
+        file_store
+            .append_at(first.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        let appended = file_store
+            .append_at(second.clone(), GraphLogicalTime::new(111), 10)
+            .unwrap();
+        assert_eq!(appended.generation, 2);
+        assert!(file_store.load(&first.memory_id).unwrap().is_none());
+        drop(file_store);
+
+        let reopened = FileStrategyMemoryStore::open_with_signer_and_max_memory_ttl(
+            path.join("."),
+            key,
+            limits,
+            100,
+        )
+        .unwrap();
+        assert_eq!(reopened.root(), std::fs::canonicalize(&path).unwrap());
+        assert!(reopened.load(&second.memory_id).unwrap().is_some());
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

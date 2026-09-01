@@ -37,8 +37,8 @@ PACKAGE = "swarm-governance-witness"
 LIBRARY = "swarm_governance_witness"
 NORMAL = {
     "async-nats", "async-trait", "futures-util", "hex", "serde", "serde_json",
-    "rustix", "sha2", "swarm-crypto", "swarm-governance", "thiserror", "tokio",
-    "tracing", "zeroize",
+    "rustix", "rustls-pemfile", "sha2", "swarm-crypto", "swarm-governance",
+    "thiserror", "tokio", "tracing", "zeroize",
 }
 DEV = {"tokio"}
 BUILD = set()

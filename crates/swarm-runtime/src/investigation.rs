@@ -168,6 +168,11 @@ impl InvestigationScheduler {
         self.queue
             .iter()
             .enumerate()
+            // A recovered durable `Running` record may still be owned by a
+            // remote worker.  Queue pressure is allowed to discard only work
+            // that has not started; otherwise the local scheduler could race
+            // the remote owner by publishing a terminal failure.
+            .filter(|(_, job)| job.bundle.status == InvestigationStatus::Queued)
             .min_by_key(|(_, job)| {
                 (
                     effective_priority(&job.bundle, now_ms, config),
@@ -341,26 +346,27 @@ where
                         Some(started_at_ms),
                         None,
                     );
-                    // The durable fence is the authority to publish `Running`.
-                    // A stale queued worker must discover that it lost before
-                    // it can overwrite a terminal result produced by the
-                    // winner on another service instance.
+                    // Publish `Running` before acquiring the non-reclaimable
+                    // execution fence.  If this write fails, an exact retry
+                    // remains eligible to execute.  If a remote owner reaches
+                    // a terminal state first, the store's monotonic transition
+                    // guard rejects this stale `Running` write before it can
+                    // contend for the fence.
+                    if let Err(error) = worker_store.persist(&running_bundle) {
+                        worker_scheduler
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .finish(&running_bundle.investigation_id);
+                        let mut guard = worker_state
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                        guard.failed_jobs = guard.failed_jobs.saturating_add(1);
+                        guard.last_failure_reason = Some(error.to_string());
+                        continue;
+                    }
                     match worker_store.claim_execution(&job.bundle) {
-                        Ok(InvestigationExecutionClaim::Acquired) => {
-                            if let Err(error) = worker_store.persist(&running_bundle) {
-                                worker_scheduler
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner())
-                                    .finish(&running_bundle.investigation_id);
-                                let mut guard = worker_state
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner());
-                                guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                                guard.failed_jobs = guard.failed_jobs.saturating_add(1);
-                                guard.last_failure_reason = Some(error.to_string());
-                                continue;
-                            }
-                        }
+                        Ok(InvestigationExecutionClaim::Acquired) => {}
                         Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
                             worker_scheduler
                                 .lock()
@@ -528,7 +534,7 @@ where
                 .unwrap_or_else(|poison| poison.into_inner())
                 .contains(&investigation_id)
         });
-        let (queued_bundle, queued_record) = if let Some(existing) =
+        let (queued_bundle, queued_record, recovered_running) = if let Some(existing) =
             self.store.load_by_investigation_id(&investigation_id)?
         {
             if !same_investigation_submission(&existing.bundle, &expected_queued_bundle) {
@@ -552,14 +558,14 @@ where
                 // races at the process-independent claim immediately before
                 // strategy execution, so an unfenced crash is recoverable and
                 // a fenced stale owner remains at-most-once.
-                (existing.bundle, existing.record)
+                (existing.bundle, existing.record, true)
             } else {
-                (existing.bundle, existing.record)
+                (existing.bundle, existing.record, false)
             }
         } else {
             let bundle = expected_queued_bundle;
             let record = self.store.persist(&bundle)?;
-            (bundle, record)
+            (bundle, record, false)
         };
 
         let Some(scheduler) = &self.scheduler else {
@@ -568,6 +574,7 @@ where
 
         let mut evicted_job = None;
         let mut rejected = false;
+        let mut deferred_running = false;
         {
             let mut guard = scheduler
                 .lock()
@@ -583,13 +590,25 @@ where
                 let incoming = effective_priority(&queued_bundle, now, &self.config);
                 if incoming > lowest {
                     evicted_job = guard.remove_lowest_priority(now, &self.config);
+                    if evicted_job.is_none() {
+                        deferred_running = recovered_running;
+                        rejected = !recovered_running;
+                    }
                 } else {
-                    rejected = true;
+                    deferred_running = recovered_running;
+                    rejected = !recovered_running;
                 }
             }
-            if !rejected {
+            if !rejected && !deferred_running {
                 guard.enqueue(replay.clone(), queued_bundle.clone());
             }
+        }
+
+        if deferred_running {
+            // The durable record is already Running.  Preserve it unchanged:
+            // a later exact submission can retry local scheduling, while a
+            // remote fence owner remains free to publish its terminal result.
+            return Ok(Some(queued_record));
         }
 
         if let Some(evicted_job) = evicted_job {
@@ -1049,16 +1068,82 @@ mod tests {
     };
     use async_trait::async_trait;
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use swarm_core::config::{BundleStoreConfig, InvestigationConfig};
     use swarm_core::types::{ResponseAction, Severity};
     use swarm_crypto::sha256_hex;
     use swarm_spine::{
-        InvestigationBundle, InvestigationBundleStore, InvestigationExecutionClaim,
-        InvestigationInterpretation, InvestigationVote, MemoryInvestigationBundleStore,
-        ReplayBundle,
+        InvestigationBundle, InvestigationBundleLookup, InvestigationBundleRecord,
+        InvestigationBundleStore, InvestigationExecutionClaim, InvestigationInterpretation,
+        InvestigationStoreError, InvestigationStoreHealth, InvestigationVote,
+        MemoryInvestigationBundleStore, ReplayBundle,
     };
+
+    #[derive(Clone, Default)]
+    struct FailRunningPersistStore {
+        inner: MemoryInvestigationBundleStore,
+        fail_running: Arc<AtomicBool>,
+        execution_claims: Arc<AtomicUsize>,
+    }
+
+    impl InvestigationBundleStore for FailRunningPersistStore {
+        fn persist(
+            &self,
+            bundle: &InvestigationBundle,
+        ) -> Result<InvestigationBundleRecord, InvestigationStoreError> {
+            if bundle.status == InvestigationStatus::Running
+                && self.fail_running.load(Ordering::SeqCst)
+            {
+                return Err(InvestigationStoreError::Write {
+                    path: "simulated-running-write".into(),
+                    source: std::io::Error::other("simulated Running persistence failure"),
+                });
+            }
+            self.inner.persist(bundle)
+        }
+
+        fn load_by_investigation_id(
+            &self,
+            investigation_id: &str,
+        ) -> Result<Option<InvestigationBundleLookup>, InvestigationStoreError> {
+            self.inner.load_by_investigation_id(investigation_id)
+        }
+
+        fn load_by_hunt_id(
+            &self,
+            hunt_id: &str,
+        ) -> Result<Option<InvestigationBundleLookup>, InvestigationStoreError> {
+            self.inner.load_by_hunt_id(hunt_id)
+        }
+
+        fn load_by_receipt_id(
+            &self,
+            receipt_id: &str,
+        ) -> Result<Option<InvestigationBundleLookup>, InvestigationStoreError> {
+            self.inner.load_by_receipt_id(receipt_id)
+        }
+
+        fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<InvestigationBundleRecord>, InvestigationStoreError> {
+            self.inner.recent(limit)
+        }
+
+        fn health(&self) -> Result<InvestigationStoreHealth, InvestigationStoreError> {
+            self.inner.health()
+        }
+
+        fn claim_execution(
+            &self,
+            bundle: &InvestigationBundle,
+        ) -> Result<InvestigationExecutionClaim, InvestigationStoreError> {
+            self.execution_claims.fetch_add(1, Ordering::SeqCst);
+            self.inner.claim_execution(bundle)
+        }
+    }
 
     fn config(enabled: bool, time_budget_ms: u64) -> InvestigationConfig {
         InvestigationConfig {
@@ -1453,6 +1538,143 @@ mod tests {
             InvestigationStatus::Completed
         );
         assert_eq!(coordinator.snapshot().completed_jobs, 1);
+    }
+
+    #[tokio::test]
+    async fn failed_running_persistence_leaves_execution_unclaimed_for_exact_retry() {
+        let store = FailRunningPersistStore::default();
+        store.fail_running.store(true, Ordering::SeqCst);
+        let replay = sample_replay();
+        let operation_id = "feedback-operation-running-write-failure";
+        let first = InvestigationCoordinator::new(
+            config(true, 500),
+            SlowInvestigator {
+                delay_ms: 10,
+                fail: false,
+            },
+            store.clone(),
+        );
+        first
+            .submit_idempotent(&replay, operation_id, 1_700_000_000_000)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(store.execution_claims.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            store
+                .load_by_hunt_id("hunt-1")
+                .unwrap()
+                .unwrap()
+                .bundle
+                .status,
+            InvestigationStatus::Queued
+        );
+
+        store.fail_running.store(false, Ordering::SeqCst);
+        let retry = InvestigationCoordinator::new(
+            config(true, 500),
+            SlowInvestigator {
+                delay_ms: 10,
+                fail: false,
+            },
+            store.clone(),
+        );
+        retry
+            .submit_idempotent(&replay, operation_id, 1_700_000_000_000)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(store.execution_claims.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            store
+                .load_by_hunt_id("hunt-1")
+                .unwrap()
+                .unwrap()
+                .bundle
+                .status,
+            InvestigationStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_pressure_preserves_remote_running_record_and_terminal_completion() {
+        let store = MemoryInvestigationBundleStore::default();
+        let coordinator = InvestigationCoordinator::new(
+            config(true, 1_000),
+            SlowInvestigator {
+                delay_ms: 300,
+                fail: false,
+            },
+            store.clone(),
+        );
+        coordinator.submit(&sample_replay()).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        coordinator
+            .submit(&sample_replay_with(
+                "hunt-local-queued",
+                Severity::Critical,
+                0.99,
+                ResponseAction::IsolateHost {
+                    host_id: "host-queued".to_string(),
+                },
+                100,
+            ))
+            .unwrap();
+
+        let remote_replay = sample_replay_with(
+            "hunt-remote-running",
+            Severity::Low,
+            0.5,
+            ResponseAction::DeployDecoy {
+                decoy_type: "canary".to_string(),
+                target_zone: "dmz".to_string(),
+            },
+            10_000,
+        );
+        let operation_id = "feedback-operation-remote-running";
+        let queued_at_ms = 1_700_000_000_000;
+        let running = InvestigationBundle::queued_from_bundle(
+            &remote_replay,
+            format!(
+                "investigation:feedback:{}",
+                sha256_hex(operation_id.as_bytes())
+            ),
+            queued_at_ms,
+            compute_priority(&remote_replay, queued_at_ms),
+        )
+        .with_status(InvestigationStatus::Running, Some(queued_at_ms + 1), None);
+        store.persist(&running).unwrap();
+
+        let observed = coordinator
+            .submit_idempotent(&remote_replay, operation_id, queued_at_ms)
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.status, InvestigationStatus::Running);
+        assert_eq!(
+            store
+                .load_by_hunt_id("hunt-remote-running")
+                .unwrap()
+                .unwrap()
+                .bundle
+                .status,
+            InvestigationStatus::Running
+        );
+
+        let completed = running.with_status(
+            InvestigationStatus::Completed,
+            Some(queued_at_ms + 1),
+            Some(queued_at_ms + 2),
+        );
+        store.persist(&completed).unwrap();
+        assert_eq!(
+            store
+                .load_by_hunt_id("hunt-remote-running")
+                .unwrap()
+                .unwrap()
+                .bundle
+                .status,
+            InvestigationStatus::Completed
+        );
     }
 
     #[tokio::test]

@@ -170,6 +170,32 @@ enum RecentDepositPointerWrite {
     Superseded,
 }
 
+#[cfg(all(test, feature = "nats"))]
+#[derive(Debug)]
+struct RecentDepositPointerCasHook {
+    armed: std::sync::atomic::AtomicBool,
+    reached: tokio::sync::Barrier,
+    release: tokio::sync::Barrier,
+}
+
+#[cfg(all(test, feature = "nats"))]
+impl RecentDepositPointerCasHook {
+    fn new() -> Self {
+        Self {
+            armed: std::sync::atomic::AtomicBool::new(true),
+            reached: tokio::sync::Barrier::new(2),
+            release: tokio::sync::Barrier::new(2),
+        }
+    }
+
+    async fn pause_once(&self) {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.reached.wait().await;
+            self.release.wait().await;
+        }
+    }
+}
+
 #[cfg(feature = "nats")]
 #[derive(Debug, Clone)]
 struct SelectedDepositKey {
@@ -2034,6 +2060,22 @@ impl JetStreamPheromoneSubstrate {
         connection: &JetStreamConnection,
         pointer: &RecentDepositPointer,
     ) -> Result<RecentDepositPointerWrite, SubstrateError> {
+        self.write_recent_deposit_pointer_with_hook(
+            connection,
+            pointer,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    #[cfg(feature = "nats")]
+    async fn write_recent_deposit_pointer_with_hook(
+        &self,
+        connection: &JetStreamConnection,
+        pointer: &RecentDepositPointer,
+        #[cfg(test)] before_update: Option<&RecentDepositPointerCasHook>,
+    ) -> Result<RecentDepositPointerWrite, SubstrateError> {
         use async_nats::jetstream::kv::{CreateErrorKind, Operation, UpdateErrorKind};
 
         if pointer.ordinal == 0
@@ -2106,26 +2148,50 @@ impl JetStreamPheromoneSubstrate {
                         // occupant of the same slot.
                         return Ok(RecentDepositPointerWrite::Superseded);
                     }
-                    if current.kind == DepositKeyKind::Control {
-                        let orphaned = self
-                            .recent_pointers_orphaned_by_control_eviction(
-                                connection, &current, pointer,
-                            )
-                            .await?;
-                        for orphaned_pointer in orphaned {
-                            self.remove_recent_pointer_and_value_if_unchanged(
-                                connection,
-                                &orphaned_pointer,
-                            )
-                            .await?;
-                        }
+                    #[cfg(test)]
+                    if let Some(hook) = before_update {
+                        hook.pause_once().await;
                     }
                     match connection
                         .store
                         .update(&key, payload.clone().into(), entry.revision)
                         .await
                     {
-                        Ok(_) => return Ok(RecentDepositPointerWrite::Indexed),
+                        Ok(_) => {
+                            if current.kind == DepositKeyKind::Control {
+                                // Cleanup is authorized only by the writer
+                                // that actually committed the slot CAS.  The
+                                // reconciliation reads the committed ring;
+                                // a losing writer must never purge evidence
+                                // preserved by a concurrent confirmation.
+                                let orphaned = self
+                                    .recent_pointers_orphaned_by_control_eviction(
+                                        connection, &current,
+                                    )
+                                    .await?;
+                                for orphaned_pointer in orphaned {
+                                    // Re-evaluate immediately before each
+                                    // destructive operation so a later
+                                    // committed control update can retain the
+                                    // governed evidence.
+                                    let still_orphaned = self
+                                        .recent_pointers_orphaned_by_control_eviction(
+                                            connection, &current,
+                                        )
+                                        .await?
+                                        .iter()
+                                        .any(|candidate| candidate == &orphaned_pointer);
+                                    if still_orphaned {
+                                        self.remove_recent_pointer_and_value_if_unchanged(
+                                            connection,
+                                            &orphaned_pointer,
+                                        )
+                                        .await?;
+                                    }
+                                }
+                            }
+                            return Ok(RecentDepositPointerWrite::Indexed);
+                        }
                         Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => {
                             continue;
                         }
@@ -2150,7 +2216,6 @@ impl JetStreamPheromoneSubstrate {
         &self,
         connection: &JetStreamConnection,
         evicted: &RecentDepositPointer,
-        incoming: &RecentDepositPointer,
     ) -> Result<Vec<RecentDepositPointer>, SubstrateError> {
         let removed = self
             .indexed_recent_pointer_entry(connection, evicted)
@@ -2167,9 +2232,6 @@ impl JetStreamPheromoneSubstrate {
                 .await?,
         );
         pointers.retain(|pointer| pointer != evicted);
-        if !pointers.iter().any(|pointer| pointer == incoming) {
-            pointers.push(incoming.clone());
-        }
 
         let mut partition = DepositKeyPartitionIndex::default();
         let mut pointers_by_key = BTreeMap::new();
@@ -5160,12 +5222,13 @@ mod tests {
         DepositKeyKind, DepositKeyPartitionIndex, IndexedDepositKey, IndexedFeedbackMarker,
         JetStreamPheromoneSubstrate, MAX_DEPOSIT_KEY_INDEX_PARTITIONS,
         MAX_RECENT_DEPOSIT_INDEX_SLOTS, MAX_VERIFIED_DEPOSIT_CACHE_ENTRIES, NatsAuthentication,
-        RecentDepositPointer, SelectedDepositKey, VerifiedDepositCache, deposit_key_encoded_len,
-        deposit_key_kind, deposit_key_ordinal, deposit_key_timestamp, evaporation_deadline,
-        expiration_gc_page, gc_sweep_page, legacy_threat_class_segment,
-        migration_recent_deposit_pointers, parse_nats_endpoint, recent_deposit_index_key,
-        retain_newest_deposit_key, retain_newest_partitioned_deposit_key_as,
-        select_recent_deposit_keys_within_byte_limit, threat_class_segment,
+        RecentDepositPointer, RecentDepositPointerCasHook, RecentDepositPointerWrite,
+        SelectedDepositKey, VerifiedDepositCache, deposit_key_encoded_len, deposit_key_kind,
+        deposit_key_ordinal, deposit_key_timestamp, evaporation_deadline, expiration_gc_page,
+        gc_sweep_page, legacy_threat_class_segment, migration_recent_deposit_pointers,
+        parse_nats_endpoint, recent_deposit_index_key, retain_newest_deposit_key,
+        retain_newest_partitioned_deposit_key_as, select_recent_deposit_keys_within_byte_limit,
+        threat_class_segment,
     };
     use crate::{
         PheromoneSubstrate,
@@ -7772,6 +7835,149 @@ mod tests {
             .unwrap();
         assert_eq!(concentration.total_strength, 0.0);
         assert_eq!(concentration.distinct_sources, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
+    async fn losing_control_pointer_cas_cannot_purge_concurrently_confirmed_evidence() {
+        let Some((_bucket, substrate)) = connect_for_test("feedback-cas-confirmation").await else {
+            return;
+        };
+        let now = now_timestamp();
+        let evidence = resign_sample_deposit(
+            "feedback-cas-evidence",
+            sample_deposit("feedback-cas-evidence", now - 10, 0.9),
+            serde_json::json!({"event_id": "event-cas-reviewed"}),
+        );
+        let dismissal = resign_sample_deposit(
+            "feedback-cas-dismissal",
+            sample_deposit("feedback-cas-dismissal", now - 5, 0.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "feedback_id": "feedback-cas-dismissal",
+                "event_id": "event-cas-reviewed",
+                "action": "dismiss",
+                "observed_at_ms": now.saturating_sub(5).saturating_mul(1_000),
+            }),
+        );
+        substrate.deposit(evidence).await.unwrap();
+        substrate.deposit(dismissal).await.unwrap();
+
+        let connection = substrate.ensure_connected().await.unwrap();
+        let evidence_pointer = substrate
+            .existing_recent_deposit_pointers(connection, DepositKeyKind::Evidence)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let dismissal_pointer = substrate
+            .existing_recent_deposit_pointers(connection, DepositKeyKind::Control)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let policy = substrate.config.resolve_threat_class_policy(None);
+
+        let losing_ordinal = dismissal_pointer
+            .ordinal
+            .saturating_add(MAX_RECENT_DEPOSIT_INDEX_SLOTS);
+        let losing_control = resign_sample_deposit(
+            "feedback-cas-loser",
+            sample_deposit("feedback-cas-loser", now, 0.0),
+            serde_json::json!({"event_id": "unrelated-control"}),
+        );
+        let losing_payload = serde_json::to_vec(&losing_control).unwrap();
+        let losing_key = super::deposit_key(
+            &losing_control,
+            &losing_payload,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+            losing_ordinal,
+        );
+        let losing_revision = connection
+            .store
+            .put(losing_key.clone(), losing_payload.into())
+            .await
+            .unwrap();
+        let losing_pointer = RecentDepositPointer {
+            ordinal: losing_ordinal,
+            kind: DepositKeyKind::Control,
+            deposit_key: losing_key,
+            deposit_revision: losing_revision,
+        };
+
+        let winning_ordinal = losing_ordinal.saturating_add(MAX_RECENT_DEPOSIT_INDEX_SLOTS);
+        let confirmation = resign_sample_deposit(
+            "feedback-cas-confirmation",
+            sample_deposit("feedback-cas-confirmation", now, 0.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "feedback_id": "feedback-cas-confirmation",
+                "event_id": "event-cas-reviewed",
+                "action": "confirm",
+                "observed_at_ms": now.saturating_mul(1_000),
+            }),
+        );
+        let confirmation_payload = serde_json::to_vec(&confirmation).unwrap();
+        let confirmation_key = super::deposit_key(
+            &confirmation,
+            &confirmation_payload,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+            winning_ordinal,
+        );
+        let confirmation_revision = connection
+            .store
+            .put(confirmation_key.clone(), confirmation_payload.into())
+            .await
+            .unwrap();
+        let confirmation_pointer = RecentDepositPointer {
+            ordinal: winning_ordinal,
+            kind: DepositKeyKind::Control,
+            deposit_key: confirmation_key,
+            deposit_revision: confirmation_revision,
+        };
+
+        let hook = RecentDepositPointerCasHook::new();
+        let losing_write = substrate.write_recent_deposit_pointer_with_hook(
+            connection,
+            &losing_pointer,
+            Some(&hook),
+        );
+        let winning_write = async {
+            hook.reached.wait().await;
+            let outcome = substrate
+                .write_recent_deposit_pointer(connection, &confirmation_pointer)
+                .await;
+            hook.release.wait().await;
+            outcome
+        };
+        let (losing_outcome, winning_outcome) = tokio::join!(losing_write, winning_write);
+        assert_eq!(winning_outcome.unwrap(), RecentDepositPointerWrite::Indexed);
+        assert_eq!(
+            losing_outcome.unwrap(),
+            RecentDepositPointerWrite::Superseded
+        );
+        assert!(
+            substrate
+                .existing_recent_deposit_pointers(connection, DepositKeyKind::Evidence)
+                .await
+                .unwrap()
+                .iter()
+                .any(|pointer| pointer == &evidence_pointer),
+            "the losing writer must not purge evidence retained by the winning confirmation"
+        );
+        assert!(
+            connection
+                .store
+                .get(&evidence_pointer.deposit_key)
+                .await
+                .unwrap()
+                .is_some(),
+            "the confirmed evidence value must remain durable"
+        );
     }
 
     #[tokio::test]
