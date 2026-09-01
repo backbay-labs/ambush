@@ -66,10 +66,9 @@ const RECENT_DEPOSIT_MIGRATION_STATE_KEY: &str = "idx_recent_migration";
 const RECENT_DEPOSIT_INTENT_KEY_PREFIX: &str = "idx_recent_intent";
 #[cfg(feature = "nats")]
 const MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS: usize = 256;
-// Four-choice fixed-slot placement keeps the immutable operation ledger
-// strictly bounded while retaining exact retries indefinitely. A collision is
-// rejected before any deposit is written; it can reduce availability but can
-// never alias two signed operations or exhaust the whole KV stream.
+// Previous releases placed intents in this finite four-choice namespace. Keep
+// it readable for rolling upgrades, but never place a new operation there:
+// occupied choices permanently rejected unrelated valid operations.
 #[cfg(feature = "nats")]
 const MAX_IDEMPOTENT_DEPOSIT_INTENT_SLOTS: u64 = 262_139;
 #[cfg(feature = "nats")]
@@ -333,12 +332,13 @@ fn select_recent_deposit_keys_within_byte_limit(
         }
     }
 
-    let reserved_bytes = MAX_ACTIVE_DEPOSIT_BYTES / 2;
     let mut admitted = Vec::new();
-    let mut deferred = Vec::new();
     let mut admitted_bytes = 0usize;
+    // Every candidate terminal control fits inside the aggregate ceiling: the
+    // control ring has fewer slots than MAX_ACTIVE / MAX_SINGLE. Admit the
+    // complete control view before evidence so a dismissal can never be
+    // omitted while the evidence it governs remains visible.
     for candidates in [controls, evidence] {
-        let mut class_bytes = 0usize;
         for candidate in candidates {
             // Prior-layout keys carry no encoded length. Charge them the hard
             // single-deposit maximum so pre-load selection remains bounded.
@@ -348,24 +348,10 @@ fn select_recent_deposit_keys_within_byte_limit(
             if encoded_len == 0 || encoded_len > MAX_SINGLE_DEPOSIT_BYTES {
                 continue;
             }
-            if class_bytes.saturating_add(encoded_len) <= reserved_bytes {
-                class_bytes = class_bytes.saturating_add(encoded_len);
+            if admitted_bytes.saturating_add(encoded_len) <= MAX_ACTIVE_DEPOSIT_BYTES {
                 admitted_bytes = admitted_bytes.saturating_add(encoded_len);
                 admitted.push(candidate);
-            } else {
-                deferred.push(candidate);
             }
-        }
-    }
-
-    deferred.sort_by(selection_order);
-    for candidate in deferred {
-        let encoded_len = candidate
-            .expected_encoded_len
-            .unwrap_or(MAX_SINGLE_DEPOSIT_BYTES);
-        if admitted_bytes.saturating_add(encoded_len) <= MAX_ACTIVE_DEPOSIT_BYTES {
-            admitted_bytes = admitted_bytes.saturating_add(encoded_len);
-            admitted.push(candidate);
         }
     }
     admitted.sort_by(selection_order);
@@ -898,11 +884,13 @@ impl JetStreamPheromoneSubstrate {
         use async_nats::jetstream::kv::{CreateErrorKind, Operation};
 
         let payload_digest = hash_prefix(payload, 64);
+        let gc_page = expiration_gc_page(deposit, retention_policy.0, retention_policy.1);
+        let current_key = idempotent_deposit_intent_key(operation_id, gc_page);
         for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
             let legacy_key = legacy_idempotent_deposit_intent_key(operation_id);
-            let mut available_slot = None;
             for (candidate_index, intent_key) in std::iter::once(legacy_key)
                 .chain(idempotent_deposit_intent_slot_keys(operation_id))
+                .chain(std::iter::once(current_key.clone()))
                 .enumerate()
             {
                 let existing = connection
@@ -914,18 +902,13 @@ impl JetStreamPheromoneSubstrate {
                         !matches!(entry.operation, Operation::Delete | Operation::Purge)
                     });
                 let Some(existing) = existing else {
-                    // Index zero is the rolling-upgrade lookup key. New
-                    // writes use only the finite slot namespace.
-                    if candidate_index > 0 && available_slot.is_none() {
-                        available_slot = Some(intent_key);
-                    }
                     continue;
                 };
                 let location = format!("jetstream://{}/{}", self.bucket, intent_key);
                 let intent = serde_json::from_slice::<IdempotentDepositIntent>(&existing.value)
                     .map_err(|source| SubstrateError::Decode { location, source })?;
                 if intent.operation_id != operation_id {
-                    if candidate_index == 0 {
+                    if candidate_index == 0 || intent_key == current_key {
                         return Err(SubstrateError::InvalidDeposit {
                             reason:
                                 "legacy Providence intent hash identifies a different operation"
@@ -957,13 +940,6 @@ impl JetStreamPheromoneSubstrate {
                 });
             }
 
-            let Some(intent_key) = available_slot else {
-                return Err(SubstrateError::InvalidDeposit {
-                    reason: "bounded Providence intent ledger has no collision-free slot for this operation"
-                        .to_string(),
-                });
-            };
-
             let ordinal = self
                 .allocate_recent_deposit_ordinal(connection, kind)
                 .await?;
@@ -985,10 +961,10 @@ impl JetStreamPheromoneSubstrate {
                 context: "JetStream idempotent deposit intent".to_string(),
                 source,
             })?;
-            match connection.store.create(&intent_key, encoded.into()).await {
+            match connection.store.create(&current_key, encoded.into()).await {
                 Ok(revision) => {
                     return Ok(StoredIdempotentDepositIntent {
-                        key: intent_key,
+                        key: current_key.clone(),
                         revision,
                         intent,
                     });
@@ -2997,7 +2973,7 @@ impl JetStreamPheromoneSubstrate {
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            let Some(page) = key_gc_page(&key) else {
+            let Some(page) = key_gc_page(&key).or_else(|| intent_key_gc_page(&key)) else {
                 continue;
             };
             oldest = Some(match oldest {
@@ -3015,54 +2991,52 @@ impl JetStreamPheromoneSubstrate {
         connection: &JetStreamConnection,
         page: i64,
     ) -> Result<Vec<String>, SubstrateError> {
-        let consumer = connection
-            .store
-            .stream
-            .create_consumer(async_nats::jetstream::consumer::push::OrderedConfig {
-                deliver_subject: connection.client.new_inbox(),
-                description: Some("kv gc page consumer".to_string()),
-                filter_subject: format!("{}{}", connection.store.prefix, gc_page_subject(page)),
-                headers_only: true,
-                replay_policy: async_nats::jetstream::consumer::ReplayPolicy::Instant,
-                deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::LastPerSubject,
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| nats_error("create gc page consumer", error))?;
-
-        if consumer.cached_info().num_pending == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut messages = consumer
-            .messages()
-            .await
-            .map_err(|error| nats_error("subscribe gc page consumer", error))?;
         let mut keys = Vec::new();
-
-        while let Some(message) = messages.next().await {
-            let message = message.map_err(|error| nats_error("stream gc page consumer", error))?;
-            let key = message
-                .subject
-                .strip_prefix(&connection.store.prefix)
-                .map(ToString::to_string)
-                .unwrap_or_else(|| message.subject.to_string());
-
-            if connection
+        for filter in [gc_page_subject(page), intent_gc_page_subject(page)] {
+            let consumer = connection
                 .store
-                .get(&key)
+                .stream
+                .create_consumer(async_nats::jetstream::consumer::push::OrderedConfig {
+                    deliver_subject: connection.client.new_inbox(),
+                    description: Some("kv gc page consumer".to_string()),
+                    filter_subject: format!("{}{}", connection.store.prefix, filter),
+                    headers_only: true,
+                    replay_policy: async_nats::jetstream::consumer::ReplayPolicy::Instant,
+                    deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::LastPerSubject,
+                    ..Default::default()
+                })
                 .await
-                .map_err(|error| nats_error("get value", error))?
-                .is_some()
-            {
-                keys.push(key);
+                .map_err(|error| nats_error("create gc page consumer", error))?;
+            if consumer.cached_info().num_pending == 0 {
+                continue;
             }
-
-            let info = message
-                .info()
-                .map_err(|error| nats_error("parse gc page metadata", error))?;
-            if info.pending == 0 {
-                break;
+            let mut messages = consumer
+                .messages()
+                .await
+                .map_err(|error| nats_error("subscribe gc page consumer", error))?;
+            while let Some(message) = messages.next().await {
+                let message =
+                    message.map_err(|error| nats_error("stream gc page consumer", error))?;
+                let key = message
+                    .subject
+                    .strip_prefix(&connection.store.prefix)
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| message.subject.to_string());
+                if connection
+                    .store
+                    .get(&key)
+                    .await
+                    .map_err(|error| nats_error("get value", error))?
+                    .is_some()
+                {
+                    keys.push(key);
+                }
+                let info = message
+                    .info()
+                    .map_err(|error| nats_error("parse gc page metadata", error))?;
+                if info.pending == 0 {
+                    break;
+                }
             }
         }
 
@@ -3144,6 +3118,15 @@ impl JetStreamPheromoneSubstrate {
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
+            if intent_key_gc_page(&key).is_some_and(|page| page <= gc_sweep_page(now)) {
+                connection
+                    .store
+                    .delete(&key)
+                    .await
+                    .map_err(|error| nats_error("delete expired idempotent intent", error))?;
+                removed = removed.saturating_add(1);
+                continue;
+            }
             if is_non_deposit_key(&key) {
                 continue;
             }
@@ -4262,6 +4245,14 @@ fn legacy_idempotent_deposit_intent_key(operation_id: &str) -> String {
 }
 
 #[cfg(feature = "nats")]
+fn idempotent_deposit_intent_key(operation_id: &str, gc_page: i64) -> String {
+    format!(
+        "{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.p{gc_page:020}.{}",
+        hash_prefix(operation_id.as_bytes(), 64)
+    )
+}
+
+#[cfg(feature = "nats")]
 fn idempotent_deposit_intent_slot_keys(operation_id: &str) -> impl Iterator<Item = String> {
     let digest = Sha256::digest(operation_id.as_bytes());
     (0..IDEMPOTENT_DEPOSIT_INTENT_SLOT_CHOICES).map(move |choice| {
@@ -4482,8 +4473,22 @@ fn key_gc_page(key: &str) -> Option<i64> {
 }
 
 #[cfg(feature = "nats")]
+fn intent_key_gc_page(key: &str) -> Option<i64> {
+    key.strip_prefix(&format!("{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.p"))?
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+#[cfg(feature = "nats")]
 fn gc_page_subject(page: i64) -> String {
     format!("{GC_KEY_PREFIX}.{page:020}.>")
+}
+
+#[cfg(feature = "nats")]
+fn intent_gc_page_subject(page: i64) -> String {
+    format!("{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.p{page:020}.>")
 }
 
 #[cfg(not(feature = "nats"))]
@@ -5147,11 +5152,11 @@ mod tests {
     }
 
     #[test]
-    fn idempotent_intent_keys_are_confined_to_the_fixed_slot_namespace() {
+    fn legacy_intent_slots_remain_bounded_and_new_keys_are_gc_scoped() {
         for operation in 0..10_000_u64 {
+            let operation_id = format!("operation-{operation}");
             let keys =
-                super::idempotent_deposit_intent_slot_keys(&format!("operation-{operation}"))
-                    .collect::<Vec<_>>();
+                super::idempotent_deposit_intent_slot_keys(&operation_id).collect::<Vec<_>>();
             assert_eq!(keys.len(), super::IDEMPOTENT_DEPOSIT_INTENT_SLOT_CHOICES);
             for key in keys {
                 let slot = key
@@ -5161,6 +5166,9 @@ mod tests {
                     .unwrap();
                 assert!(slot < super::MAX_IDEMPOTENT_DEPOSIT_INTENT_SLOTS);
             }
+            let current = super::idempotent_deposit_intent_key(&operation_id, 42);
+            assert_eq!(super::intent_key_gc_page(&current), Some(42));
+            assert!(current.ends_with(&super::hash_prefix(operation_id.as_bytes(), 64)));
         }
     }
 
@@ -5275,7 +5283,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_ring_controls_cannot_starve_evidence_at_the_byte_boundary() {
+    fn recent_ring_never_omits_a_control_to_admit_evidence() {
         let timestamp = 1_700_000_000_i64;
         let mut selected = (0..(MAX_ACTIVE_DEPOSIT_BYTES / MAX_SINGLE_DEPOSIT_BYTES))
             .map(|index| SelectedDepositKey {
@@ -5305,11 +5313,13 @@ mod tests {
         assert!(
             selected
                 .iter()
+                .all(|candidate| deposit_key_kind(&candidate.key) == Some(DepositKeyKind::Control))
+        );
+        assert!(
+            !selected
+                .iter()
                 .any(|candidate| candidate.key == evidence_key)
         );
-        assert!(selected.iter().any(|candidate| {
-            deposit_key_kind(&candidate.key) == Some(DepositKeyKind::Control)
-        }));
     }
 
     #[test]
@@ -6312,7 +6322,7 @@ mod tests {
             .unwrap()
             .unwrap();
         substrate.deposit(deposit.clone()).await.unwrap();
-        substrate.deposit(deposit).await.unwrap();
+        substrate.deposit(deposit.clone()).await.unwrap();
         let connection = substrate.ensure_connected().await.unwrap();
         assert!(
             connection
@@ -6323,11 +6333,24 @@ mod tests {
                 .is_none(),
             "new intents must never grow the legacy per-operation subject namespace"
         );
-        let mut bounded_intent_found = false;
-        for key in super::idempotent_deposit_intent_slot_keys(&operation_id) {
-            bounded_intent_found |= connection.store.entry(&key).await.unwrap().is_some();
-        }
-        assert!(bounded_intent_found);
+        let policy = substrate.config.resolve_threat_class_policy(None);
+        let intent_page = super::expiration_gc_page(
+            &deposit,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+        );
+        assert!(
+            connection
+                .store
+                .entry(&super::idempotent_deposit_intent_key(
+                    &operation_id,
+                    intent_page,
+                ))
+                .await
+                .unwrap()
+                .is_some(),
+            "new intents must use the collision-free retention-scoped namespace"
+        );
         let matches = substrate
             .recent_deposits(10)
             .await
@@ -6358,7 +6381,6 @@ mod tests {
         let crash_operation_id = crate::substrate::deposit_operation_id(&crash_window)
             .unwrap()
             .unwrap();
-        let policy = substrate.config.resolve_threat_class_policy(None);
         let uncommitted = substrate
             .resolve_idempotent_deposit_intent(
                 connection,

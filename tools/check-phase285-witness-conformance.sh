@@ -277,6 +277,7 @@ public_dispatcher_maps_typed_failure_without_string_fallback
 EOF
       ;;
     full-service-path) cat <<'EOF'
+production_initializer_creates_reopens_and_reproduces_ready
 full_service_path_rejects_runtime_private_subject_and_store_raw_api
 full_service_path_rejects_credential_account_and_mount_swaps
 full_service_path_validates_proxy_response_before_public_attestation
@@ -364,7 +365,7 @@ registry_rows() {
         IFS=$'\t' read -r target command < <(transport_tuple_for_case "$case_name")
       else
         case "$case_name" in
-          jetstream_cas_rejects_wrong_revision_header_or_ack|jetstream_cas_confirms_raw_sequence_and_bytes|jetstream_cas_rejects_del_purge_rollup_and_direct_reads|jetstream_checkpoint_*|full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion)
+          jetstream_cas_rejects_wrong_revision_header_or_ack|jetstream_cas_confirms_raw_sequence_and_bytes|jetstream_cas_rejects_del_purge_rollup_and_direct_reads|jetstream_checkpoint_*|full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion|production_initializer_creates_reopens_and_reproduces_ready)
             command="cargo test -p $package --test $target --locked --offline -- --ignored $case_name --exact"
             ;;
           *)
@@ -405,8 +406,8 @@ materialized_inventory_for_target() {
   esac
 }
 
-REGISTRY_SHA256="6b363406b866ce17a3d885877549cc8d66fced21f042a811b109161716c8874d"
-REGISTRY_ROW_COUNT=60
+REGISTRY_SHA256="92ee9b244594a569f7cb84897d230b629ab29e83918af4c58464623dda3b093f"
+REGISTRY_ROW_COUNT=61
 
 registry_validator() {
   local registry_file="$1" mode="${2:-validate}" selector="${3:-}"
@@ -2262,7 +2263,8 @@ def validate(s=source, c=config, i=integration, h=harness, d=compose):
         "credentials.role != \"witness-store\"",
         "credentials.invocation_token != config.credential_invocation_token",
         ".require_tls(true)",
-        ".add_root_certificates(PathBuf::from(&config.tls_ca_path))",
+        "let tls_client_config = read_stable_tls_client_config(&config.tls_ca_path, 1_048_576)",
+        ".tls_client_config(tls_client_config)",
         ".subscription_capacity(config.subscription_capacity)",
         ".client_capacity(config.client_capacity)",
         ".read_buffer_capacity(config.read_buffer_capacity)",
@@ -2402,7 +2404,7 @@ mutations = [
     ("bypass_store_role", "source", "credentials.role != \"witness-store\"", "false"),
     ("bypass_credential_token", "source", "credentials.invocation_token != config.credential_invocation_token", "false"),
     ("bypass_tls_requirement", "source", ".require_tls(true)", ".require_tls(false)"),
-    ("bypass_pinned_ca", "source", ".add_root_certificates(PathBuf::from(&config.tls_ca_path))", ""),
+    ("bypass_pinned_ca", "source", ".tls_client_config(tls_client_config)", ""),
     ("bypass_store_account_probe", "source", "get_stream(&service.config.stream_name)", "get_stream(\"foreign\")"),
     ("bypass_subscription_capacity", "source", ".subscription_capacity(config.subscription_capacity)", ".subscription_capacity(1024)"),
     ("bypass_client_capacity", "source", ".client_capacity(config.client_capacity)", ".client_capacity(1024)"),
@@ -2800,7 +2802,7 @@ expected = {
   "mount_swap": ("witness-store","PHASE285_WITNESS_STORE","raw-store-credentials","cross_role_mount_absent"),
   "reply_subject_injection": ("witness","PHASE285_WITNESS","swarm.governance.witness.store.v1.read_entry","invalid_reply_inbox"),
   "wildcard_import": ("topology","PHASE285_WITNESS","swarm.governance.witness.store.v1.>","wildcard_import_absent"),
-  "tls_ca_swap": ("witness-store","PHASE285_WITNESS_STORE","tls://localhost","ca_authentication_refused"),
+  "tls_ca_swap": ("witness-store","PHASE285_WITNESS_STORE","tls://localhost","ca_configuration_refused"),
   "tls_server_name_swap": ("witness-store","PHASE285_WITNESS_STORE","wrong.phase285.test","server_name_refused"),
   "store_queue_exhaustion": ("witness","PHASE285_WITNESS","swarm.governance.witness.store.v1.read_entry","overload_unavailable"),
   "public_store_bypass": ("runtime","PHASE285_RUNTIME","StoreProxyService","raw_store_api_absent"),
@@ -9059,7 +9061,7 @@ PY
     [ -n "$case_name" ] || continue
     output_file="$temp_dir/$case_name.txt"
     case "$case_name" in
-      jetstream_cas_rejects_wrong_revision_header_or_ack|jetstream_cas_confirms_raw_sequence_and_bytes|jetstream_cas_rejects_del_purge_rollup_and_direct_reads|jetstream_checkpoint_*|full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion)
+      jetstream_cas_rejects_wrong_revision_header_or_ack|jetstream_cas_confirms_raw_sequence_and_bytes|jetstream_cas_rejects_del_purge_rollup_and_direct_reads|jetstream_checkpoint_*|full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion|production_initializer_creates_reopens_and_reproduces_ready)
         case_args=(-- --ignored "$case_name" --exact)
         ;;
       *)
@@ -9144,7 +9146,7 @@ PY
       jetstream_checkpoint_*)
         ci_harness_record_passed jetstream_checkpoint "$case_name" "$output_file"
         ;;
-      full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion)
+      full_service_path_rejects_runtime_private_subject_and_store_raw_api|full_service_path_rejects_credential_account_and_mount_swaps|full_service_path_validates_proxy_response_before_public_attestation|full_service_path_fails_closed_on_store_queue_exhaustion|production_initializer_creates_reopens_and_reproduces_ready)
         ci_harness_record_passed full_service_path "$case_name" "$output_file"
         ;;
     esac
@@ -12695,6 +12697,7 @@ seam_anchors={
  "full_service_path_rejects_credential_account_and_mount_swaps":"StoreRoleConnectionV1::connect(",
  "full_service_path_validates_proxy_response_before_public_attestation":"initialize_harness_store_stream()",
  "full_service_path_fails_closed_on_store_queue_exhaustion":"Fixture::new(",
+ "production_initializer_creates_reopens_and_reproduces_ready":"initialize_store(config.clone())",
  "jetstream_cas_rejects_wrong_revision_header_or_ack":"live_fixture(",
  "jetstream_cas_confirms_raw_sequence_and_bytes":"live_fixture(",
  "jetstream_cas_rejects_del_purge_rollup_and_direct_reads":"live_fixture(",
@@ -12829,6 +12832,7 @@ jetstream_checkpoint	jetstream_checkpoint_uses_global_revision_not_store_generat
 EOF
       ;;
     full-service-path) cat <<'EOF'
+full_service_path	production_initializer_creates_reopens_and_reproduces_ready
 full_service_path	full_service_path_rejects_runtime_private_subject_and_store_raw_api
 full_service_path	full_service_path_rejects_credential_account_and_mount_swaps
 full_service_path	full_service_path_validates_proxy_response_before_public_attestation

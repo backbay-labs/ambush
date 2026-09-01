@@ -78,6 +78,7 @@ struct InvestigationJob {
     sequence: u64,
     replay: ReplayBundle,
     bundle: InvestigationBundle,
+    execution_claimed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -88,11 +89,17 @@ struct InvestigationScheduler {
 }
 
 impl InvestigationScheduler {
-    fn enqueue(&mut self, replay: ReplayBundle, bundle: InvestigationBundle) -> InvestigationJob {
+    fn enqueue(
+        &mut self,
+        replay: ReplayBundle,
+        bundle: InvestigationBundle,
+        execution_claimed: bool,
+    ) -> InvestigationJob {
         let job = InvestigationJob {
             sequence: self.next_sequence,
             replay,
             bundle,
+            execution_claimed,
         };
         self.next_sequence = self.next_sequence.saturating_add(1);
         self.queue.push(job.clone());
@@ -349,7 +356,7 @@ where
                         let mut guard = worker_state
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner());
-                        guard.running_jobs = guard.running_jobs.saturating_sub(1);
+                        guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
                         guard.failed_jobs = guard.failed_jobs.saturating_add(1);
                         guard.last_failure_reason = Some(error.to_string());
                         continue;
@@ -360,31 +367,33 @@ where
                     // side of this boundary must never leave a durable `Queued`
                     // bundle that later submissions keep scheduling against an
                     // already-consumed fence.
-                    match worker_store.claim_execution(&job.bundle) {
-                        Ok(InvestigationExecutionClaim::Acquired) => {}
-                        Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
-                            worker_scheduler
-                                .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
-                                .finish(&job.bundle.investigation_id);
-                            let mut guard = worker_state
-                                .lock()
-                                .unwrap_or_else(|poison| poison.into_inner());
-                            guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                            continue;
-                        }
-                        Err(error) => {
-                            worker_scheduler
-                                .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
-                                .finish(&job.bundle.investigation_id);
-                            let mut guard = worker_state
-                                .lock()
-                                .unwrap_or_else(|poison| poison.into_inner());
-                            guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                            guard.failed_jobs = guard.failed_jobs.saturating_add(1);
-                            guard.last_failure_reason = Some(error.to_string());
-                            continue;
+                    if !job.execution_claimed {
+                        match worker_store.claim_execution(&job.bundle) {
+                            Ok(InvestigationExecutionClaim::Acquired) => {}
+                            Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
+                                worker_scheduler
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .finish(&job.bundle.investigation_id);
+                                let mut guard = worker_state
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner());
+                                guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                                continue;
+                            }
+                            Err(error) => {
+                                worker_scheduler
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .finish(&job.bundle.investigation_id);
+                                let mut guard = worker_state
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner());
+                                guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                                guard.failed_jobs = guard.failed_jobs.saturating_add(1);
+                                guard.last_failure_reason = Some(error.to_string());
+                                continue;
+                            }
                         }
                     }
 
@@ -529,7 +538,7 @@ where
                 .unwrap_or_else(|poison| poison.into_inner())
                 .contains(&investigation_id)
         });
-        let (queued_bundle, queued_record) = if let Some(existing) =
+        let (queued_bundle, queued_record, execution_claimed) = if let Some(existing) =
             self.store.load_by_investigation_id(&investigation_id)?
         {
             if !same_investigation_submission(&existing.bundle, &expected_queued_bundle) {
@@ -548,16 +557,26 @@ where
                 return Ok(Some(existing.record));
             }
             if existing.bundle.status == InvestigationStatus::Running {
-                // A different process may still own the durable execution
-                // claim. Re-queueing here would permit concurrent strategy
-                // side effects after a SOAR lease takeover.
-                return Ok(Some(existing.record));
+                // `Running` is persisted immediately before the durable
+                // execution claim. Atomically acquiring a missing claim here
+                // distinguishes a crash in that window from an execution
+                // that may already have produced side effects. The former is
+                // safe to resume; the latter remains fail-closed.
+                match self.store.claim_execution(&existing.bundle)? {
+                    InvestigationExecutionClaim::Acquired => {
+                        (existing.bundle, existing.record, true)
+                    }
+                    InvestigationExecutionClaim::AlreadyAcquired => {
+                        return Ok(Some(existing.record));
+                    }
+                }
+            } else {
+                (existing.bundle, existing.record, false)
             }
-            (existing.bundle, existing.record)
         } else {
             let bundle = expected_queued_bundle;
             let record = self.store.persist(&bundle)?;
-            (bundle, record)
+            (bundle, record, false)
         };
 
         let Some(scheduler) = &self.scheduler else {
@@ -586,7 +605,7 @@ where
                 }
             }
             if !rejected {
-                guard.enqueue(replay.clone(), queued_bundle.clone());
+                guard.enqueue(replay.clone(), queued_bundle.clone(), execution_claimed);
             }
         }
 
@@ -1053,8 +1072,9 @@ mod tests {
     use swarm_core::types::{ResponseAction, Severity};
     use swarm_crypto::sha256_hex;
     use swarm_spine::{
-        InvestigationBundle, InvestigationBundleStore, InvestigationInterpretation,
-        InvestigationVote, MemoryInvestigationBundleStore, ReplayBundle,
+        InvestigationBundle, InvestigationBundleStore, InvestigationExecutionClaim,
+        InvestigationInterpretation, InvestigationVote, MemoryInvestigationBundleStore,
+        ReplayBundle,
     };
 
     fn config(enabled: bool, time_budget_ms: u64) -> InvestigationConfig {
@@ -1361,10 +1381,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn idempotent_submission_does_not_reclaim_a_running_execution() {
+    async fn idempotent_submission_does_not_reclaim_a_fenced_running_execution() {
         let store = MemoryInvestigationBundleStore::default();
         let replay = sample_replay();
         let operation_id = "feedback-operation-restart";
+        let investigation_id = format!(
+            "investigation:feedback:{}",
+            sha256_hex(operation_id.as_bytes())
+        );
+        let running = InvestigationBundle::queued_from_bundle(
+            &replay,
+            investigation_id,
+            1_700_000_000_000,
+            compute_priority(&replay, 1_700_000_000_000),
+        )
+        .with_status(InvestigationStatus::Running, Some(1_700_000_000_100), None);
+        store.persist(&running).unwrap();
+        assert_eq!(
+            store.claim_execution(&running).unwrap(),
+            InvestigationExecutionClaim::Acquired
+        );
+
+        let coordinator = InvestigationCoordinator::new(
+            config(true, 500),
+            SlowInvestigator {
+                delay_ms: 10,
+                fail: false,
+            },
+            store,
+        );
+        coordinator
+            .submit_idempotent(&replay, operation_id, 1_700_000_000_000)
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            coordinator
+                .load_by_hunt_id("hunt-1")
+                .unwrap()
+                .unwrap()
+                .bundle
+                .status,
+            InvestigationStatus::Running
+        );
+        assert_eq!(coordinator.snapshot().completed_jobs, 0);
+    }
+
+    #[tokio::test]
+    async fn idempotent_submission_recovers_running_state_without_execution_fence() {
+        let store = MemoryInvestigationBundleStore::default();
+        let replay = sample_replay();
+        let operation_id = "feedback-operation-crash-before-fence";
         let investigation_id = format!(
             "investigation:feedback:{}",
             sha256_hex(operation_id.as_bytes())
@@ -1399,9 +1467,9 @@ mod tests {
                 .unwrap()
                 .bundle
                 .status,
-            InvestigationStatus::Running
+            InvestigationStatus::Completed
         );
-        assert_eq!(coordinator.snapshot().completed_jobs, 0);
+        assert_eq!(coordinator.snapshot().completed_jobs, 1);
     }
 
     #[tokio::test]

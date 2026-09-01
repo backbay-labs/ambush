@@ -26,6 +26,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 rustix = { version = "1", features = ["fs", "process"] }
+rustls-pemfile.workspace = true
 swarm-crypto.workspace = true
 swarm-governance.workspace = true
 thiserror.workspace = true

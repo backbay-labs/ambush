@@ -31,6 +31,7 @@ use crate::raw_config::{
 };
 
 const NATS_OPERATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const READY_ENTRY_VALIDATION_CONCURRENCY: usize = 64;
 
 const KV_OPERATION: &str = "KV-Operation";
 const KV_PUT: &str = "PUT";
@@ -706,9 +707,15 @@ impl WitnessAtomicStore for NatsWitnessStore {
             .map(|entry| entry.stream_id.as_str())
             .collect::<Vec<_>>();
         stream_ids.sort_unstable();
-        for stream_id in stream_ids {
-            self.read_validated_entry(stream_id).await?;
-        }
+        futures_util::stream::iter(stream_ids.into_iter().map(Ok::<_, WitnessStoreErrorV1>))
+            .try_for_each_concurrent(
+                Some(READY_ENTRY_VALIDATION_CONCURRENCY),
+                |stream_id| async move {
+                    self.read_validated_entry(stream_id).await?;
+                    Ok(())
+                },
+            )
+            .await?;
         let evidence = InspectionEvidence::new(Some(initial_full), Some(final_full))?;
         *self
             .inspection_evidence

@@ -310,6 +310,14 @@ impl InspectedRawConfigurationV1 {
         &self.raw_stream_info
     }
 
+    pub(crate) fn canonical_created_at(&self) -> &str {
+        &self.canonical_created_at
+    }
+
+    pub(crate) fn raw_stream_configuration_digest(&self) -> &str {
+        &self.raw_stream_configuration_digest
+    }
+
     #[allow(dead_code)]
     pub(crate) fn typed_snapshot(&self) -> Nats21117TypedSnapshotV1 {
         Nats21117TypedSnapshotV1 {
@@ -460,7 +468,7 @@ impl Nats21117RawConfigV1 {
     }
 }
 
-fn inspect_raw_stream_info_unbound(
+pub(crate) fn inspect_raw_stream_info_unbound(
     bytes: &[u8],
     expected: &Nats21117ExpectedConfigurationV1,
 ) -> Result<InspectedRawConfigurationV1, RawConfigurationError> {

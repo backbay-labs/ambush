@@ -2,6 +2,7 @@
 
 //! Downstream transport boundary for the authenticated governance witness.
 
+mod initializer;
 mod jetstream_store;
 mod nats_config;
 mod public_dispatcher;
@@ -11,6 +12,10 @@ mod secure_file;
 mod service_config;
 mod store_proxy_service;
 
+pub use initializer::{
+    StoreInitializerErrorV1, StoreInitializerProcessConfigV1, initialize_store,
+    load_store_initializer_process_config,
+};
 pub use jetstream_store::NatsWitnessStore;
 pub use public_dispatcher::{
     PublicWitnessDispatchErrorV1, PublicWitnessDispatchMappingV1, PublicWitnessDispatcher,

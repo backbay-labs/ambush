@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 #[cfg(test)]
 use std::sync::{
     OnceLock,
@@ -25,6 +25,7 @@ use std::sync::{
 };
 #[cfg(test)]
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::hypothesis_graph::{
     EvidenceWitness, FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime,
     GraphResourceLimits, HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, IdempotencyKey, LeaseId,
@@ -90,6 +91,11 @@ impl Drop for PersistedJsonLimitGuard {
 }
 
 static TEMP_FILE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static TEMP_FILE_PROCESS_NONCE: LazyLock<u128> = LazyLock::new(|| {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos())
+});
 
 /// A generation and its canonical digest.  Both fields are required for CAS;
 /// sequence equality alone is intentionally insufficient.
@@ -4992,20 +4998,57 @@ fn ensure_private_file_metadata(
 pub(crate) fn prepare_private_store_root(path: &Path) -> Result<(), GraphStoreError> {
     ensure_no_symlink_ancestors(path)?;
     ensure_path_not_symlink(path)?;
-    let existed = fs::symlink_metadata(path).is_ok();
+    let mut missing = Vec::new();
+    let mut cursor = Some(path);
+    while let Some(candidate) = cursor {
+        match fs::symlink_metadata(candidate) {
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(candidate.to_path_buf());
+                cursor = candidate
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty());
+            }
+            Err(source) => {
+                return Err(GraphStoreError::Write {
+                    path: candidate.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    }
     fs::create_dir_all(path).map_err(|source| GraphStoreError::Write {
         path: path.to_path_buf(),
         source,
     })?;
-    #[cfg(unix)]
-    if !existed {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
-            GraphStoreError::Write {
-                path: path.to_path_buf(),
+    for created in missing.iter().rev() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(created, fs::Permissions::from_mode(0o700)).map_err(|source| {
+                GraphStoreError::Write {
+                    path: created.clone(),
+                    source,
+                }
+            })?;
+        }
+        File::open(created)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| GraphStoreError::Write {
+                path: created.clone(),
                 source,
-            }
-        })?;
+            })?;
+        if let Some(parent) = created
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|source| GraphStoreError::Write {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+        }
     }
     ensure_private_store_root_mode(path)
 }
@@ -6573,33 +6616,46 @@ fn atomic_write_json_at(
         }
     }
 
-    let suffix = TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let target_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("state");
-    let temporary_name = CString::new(format!(
-        ".{target_name}.tmp.{}.{}",
-        std::process::id(),
-        suffix
-    ))
-    .map_err(|_| GraphStoreError::InvalidState {
-        reason: "temporary JSON file name contains NUL".to_string(),
-    })?;
-    let temporary_fd = unsafe {
-        libc::openat(
-            dir_fd,
-            temporary_name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if temporary_fd < 0 {
-        return Err(GraphStoreError::Write {
-            path: path.to_path_buf(),
-            source: io::Error::last_os_error(),
-        });
+    let mut allocated = None;
+    for _ in 0..64 {
+        let suffix = TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temporary_name = CString::new(format!(
+            ".{target_name}.tmp.{}.{:032x}.{suffix}",
+            std::process::id(),
+            *TEMP_FILE_PROCESS_NONCE
+        ))
+        .map_err(|_| GraphStoreError::InvalidState {
+            reason: "temporary JSON file name contains NUL".to_string(),
+        })?;
+        let temporary_fd = unsafe {
+            libc::openat(
+                dir_fd,
+                temporary_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if temporary_fd >= 0 {
+            allocated = Some((temporary_name, temporary_fd));
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::AlreadyExists {
+            return Err(GraphStoreError::Write {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
     }
+    let Some((temporary_name, temporary_fd)) = allocated else {
+        return Err(GraphStoreError::InvalidState {
+            reason: "could not allocate a restart-unique temporary JSON file".to_string(),
+        });
+    };
     let mut temporary = unsafe { File::from_raw_fd(temporary_fd) };
     let write_result: Result<(), GraphStoreError> = (|| {
         temporary
@@ -8199,6 +8255,42 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("swarm-spine-{name}-{}-{stamp}", std::process::id()))
+    }
+
+    #[test]
+    fn graph_atomic_write_ignores_stale_temps_from_a_prior_process_epoch() {
+        let path = temp_dir("stale-atomic-temps");
+        let store = FileHypothesisGraphStore::new(&path, graph(), signer(91)).unwrap();
+        let first_counter = TEMP_FILE_COUNTER.load(std::sync::atomic::Ordering::Relaxed);
+        for counter in first_counter..first_counter.saturating_add(64) {
+            let stale = path.join(format!(
+                ".{GRAPH_STORE_STATE_FILE}.tmp.{}.{counter}",
+                std::process::id()
+            ));
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(stale)
+                .unwrap();
+        }
+
+        store
+            .create_task(signed_creation_envelope(
+                request(92, "stale-temp-restart"),
+                92,
+                91,
+            ))
+            .unwrap();
+        assert!(
+            store
+                .snapshot()
+                .unwrap()
+                .state
+                .task("task:stale-temp-restart")
+                .is_some()
+        );
+        drop(store);
+        let _ = fs::remove_dir_all(path);
     }
 
     #[test]

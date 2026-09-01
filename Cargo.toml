@@ -62,6 +62,7 @@ tokio-stream = "0.1"
 async-trait = "0.1"
 futures-util = "0.3"
 async-nats = "0.47"
+rustls-pemfile = "2"
 axum = "0.8"
 http = "1"
 tower = { version = "0.5", features = ["util"] }

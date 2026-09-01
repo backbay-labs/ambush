@@ -2,7 +2,9 @@ use super::*;
 use ed25519_dalek::SigningKey;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::signed_state::{SignedStateEnvelope, SignedStateExpectation};
 use swarm_core::types::AgentId;
 
@@ -10,6 +12,11 @@ const EVOLUTION_POPULATION_STATE_KIND: &str = "evolution_population_state";
 const EVOLUTION_POPULATION_STREAM_ID: &str = "population";
 const EVOLUTION_EPISODE_STATE_KIND: &str = "evolution_episode_report";
 static NEXT_POPULATION_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(1);
+static POPULATION_TEMP_PROCESS_NONCE: LazyLock<u128> = LazyLock::new(|| {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos())
+});
 
 /// Errors raised by the persisted mutation-spec store.
 #[derive(Debug, thiserror::Error)]
@@ -798,9 +805,10 @@ impl FileEvolutionPopulationStore {
         let mut created = None;
         for _ in 0..32 {
             let unique_id = NEXT_POPULATION_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
-            let temporary_path = self
-                .root
-                .join(format!(".{file_name}.{process_id}.{unique_id}.tmp"));
+            let temporary_path = self.root.join(format!(
+                ".{file_name}.{process_id}.{:032x}.{unique_id}.tmp",
+                *POPULATION_TEMP_PROCESS_NONCE
+            ));
             match OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -1497,5 +1505,40 @@ impl FileEvolutionBenchmarkStore {
         let mut entries = self.read_index()?.entries;
         entries.truncate(limit);
         Ok(entries)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod atomic_write_tests {
+    use super::*;
+
+    #[test]
+    fn population_atomic_write_ignores_stale_temps_from_a_prior_process_epoch() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-population-stale-temp-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = FileEvolutionPopulationStore::open(&root).unwrap();
+        let first_counter = NEXT_POPULATION_TEMP_FILE_ID.load(Ordering::Relaxed);
+        for counter in first_counter..first_counter.saturating_add(32) {
+            let stale = root.join(format!(".state.json.{}.{counter}.tmp", std::process::id()));
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(stale)
+                .unwrap();
+        }
+
+        let state_path = root.join("state.json");
+        store
+            .write_atomic_synced(&state_path, b"restart-safe")
+            .unwrap();
+        assert_eq!(fs::read(&state_path).unwrap(), b"restart-safe");
+        let _ = fs::remove_dir_all(root);
     }
 }

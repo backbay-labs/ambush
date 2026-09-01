@@ -214,7 +214,6 @@ accounts {
         permissions: {
           publish: [
             "\$JS.API.STREAM.CREATE.KV_phase285_service",
-            "\$JS.API.STREAM.UPDATE.KV_phase285_service",
             "\$JS.API.STREAM.INFO.KV_phase285_service",
             "\$JS.API.STREAM.MSG.GET.KV_phase285_service",
             "\$KV.phase285_service.__witness_bucket_manifest",
@@ -415,7 +414,7 @@ source = path.read_text()
 PUBLIC=[f"swarm.governance.witness.v1.{suffix}" for suffix in ["fence","establish","discover","prepare","commit","abort","read_prepared","read_head","fetch_payload"]]
 PRIVATE=[f"swarm.governance.witness.store.v1.{suffix}" for suffix in ["inspect_ready","read_entry","compare_and_swap"]]
 WITNESS_FIXTURE_BUCKETS=["phase285_b_wrong_revision","phase285_b_confirmed","phase285_b_del","phase285_b_purge","phase285_b_unknown","phase285_b_direct","phase285_c_current","phase285_c_predecessor","phase285_c_prepared","phase285_c_abort","phase285_c_genesisabort","phase285_c_anchor","phase285_c_account","phase285_c_global"]
-INIT=["$JS.API.STREAM.CREATE.KV_phase285_service","$JS.API.STREAM.UPDATE.KV_phase285_service","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_service.__witness_bucket_manifest","$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"]
+INIT=["$JS.API.STREAM.CREATE.KV_phase285_service","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_service.__witness_bucket_manifest","$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"]
 for bucket in WITNESS_FIXTURE_BUCKETS:
     INIT.extend([f"$JS.API.STREAM.CREATE.KV_{bucket}",f"$JS.API.STREAM.INFO.KV_{bucket}",f"$JS.API.STREAM.MSG.GET.KV_{bucket}",f"$JS.API.DIRECT.GET.KV_{bucket}.>",f"$KV.{bucket}.>"])
 INIT.append("$JS.API.STREAM.DELETE.KV_phase285_c_anchor")
@@ -1443,7 +1442,7 @@ EOF
     if [[ "${!index}" == jetstream_checkpoint ]]; then
       expected_filtered=3
     elif [[ "${!index}" == full_service_path ]]; then
-      expected_filtered=7
+      expected_filtered=9
     fi
   done
   transcript="$SCRATCH/command.transcript"

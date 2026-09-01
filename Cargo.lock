@@ -3069,6 +3069,7 @@ dependencies = [
  "futures-util",
  "hex",
  "rustix",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2",

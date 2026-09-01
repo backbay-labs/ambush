@@ -140,17 +140,18 @@ if case == "phase285-raw-kv-subject":
     if not source.is_dir():
         raise SystemExit("PHASE285-NEGATIVE[missing-witness-source]")
     expected_source_sha256 = {
-        "bin/swarm-governance-witness-store.rs": "a943bf8660d9493820245a73df262f07096136833bf9b82c9d5ca4cd79327564",
+        "bin/swarm-governance-witness-store.rs": "3a5f07d138ed495407c1f9f2b2accc2a33755e07a4b5eb77c359f87763e74c7c",
         "bin/swarm-governance-witness.rs": "93182d13a5550fe2ac0db8b4fb4fd126c5173e614676133ab3d735026d0d1a91",
-        "jetstream_store.rs": "7ad46939bc08a9dbe361c1455c9d23b56ed223feb00ce28b9d81ef48fbcaf928",
-        "lib.rs": "93a850b9d10dd139b56fe98de13dbdf0fa5ac31830dbab90378b2e98776f17e3",
+        "initializer.rs": "d8398d68032e58d1408b7c04bc1ef3d6edc4aedc8bb67134596cb1b5a8727754",
+        "jetstream_store.rs": "1aedaef8c5cb610f194519fb1063f5bffb1cdb8f8b13bf16382cf5ca58059e1b",
+        "lib.rs": "67d18aeb10db492d969344636bf609bfff4ca606fde5504e12acf3ae5b704495",
         "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
         "public_dispatcher.rs": "c2f7796a9856600515232d807688663eb9c01949fd587d65a51f010b17db0e86",
-        "raw_config.rs": "4bc8a3aabaf986ca3e74008f785444acd39df034f3e562f1f13e4e6a999ec015",
-        "runtime_client.rs": "45d1b01655bbd8bb35c8ceb3f9d5f2b3898bc20ea627133aca8300ef410d0474",
-        "secure_file.rs": "2f5502d32597bd85e2780129244e977d0df733e4b3f32dab2f0321b4a59b222c",
+        "raw_config.rs": "7df9c38d32e2b6122c331c1a75d3617c2e8855712a73ef9fdbe86920d7349921",
+        "runtime_client.rs": "d74369ec47fc38ef718fdd7de493ccd3be6f1a725528dbe809862d991b5b4efc",
+        "secure_file.rs": "533f8a19eec6d05584c8aa8c33c7bd586f1659177ce540f0724814849f3a4182",
         "service_config.rs": "884914bd6bd531f7ba108be7501920fc6d2dd71d8bf73c62bace71dc6faf6e36",
-        "store_proxy_service.rs": "d81ab571f766c1f15dda8373c54ad5aac67d15804f5fd15d45d067e35f318d52",
+        "store_proxy_service.rs": "40774a0ec53790f449682b27dfb05dcdfb9138db1d87abd15ad49b15fde91ab5",
     }
     source_paths = sorted(source.rglob("*.rs"))
     observed_source_sha256 = {}
@@ -381,8 +382,9 @@ if case == "phase285-raw-kv-subject":
         return sorted(items)
 
     expected_public_api = {
+        "initializer.rs": (16, "a154051fb7f19c1106f68a03eea95fc67f5dac53d01f35bcb03b2c53b81f1436"),
         "jetstream_store.rs": (3, "480e8474d90ac2fb5e33beb7e42c3b7ac76371f7a37773d7a05d69e7317b475b"),
-        "lib.rs": (6, "183e849d606045b1ea3d741fcf6dd47fb9ef8117bf280a7b974cd0817300b82f"),
+        "lib.rs": (7, "d114f66c142c38c4f0170d4ccce96146e074a91fe6be573fe7188a34f4930c48"),
         "public_dispatcher.rs": (19, "8c841165f5dc4820e11117ac49fe92865e737949706da063dfd5e5dad263c744"),
         "raw_config.rs": (19, "a7a1b5512771304c147ae0ae7dd091aa88310b6983b8cd1b2ca2b26893087066"),
         "runtime_client.rs": (9, "386cb0e8bcd70a6e323e9542e42fab7a96933dc683dad8218f47c2c7e1a95533"),
@@ -391,6 +393,9 @@ if case == "phase285-raw-kv-subject":
         "store_proxy_service.rs": (15, "f9c8597009ffc372a99a5424e01598e3645ddc5142af56f5cd6328f499468cfa"),
     }
     approved_public_function_names = {
+        "initializer.rs": {
+            "initialize_store", "load_store_initializer_process_config",
+        },
         "jetstream_store.rs": {"open", "open_with_post_ack_barrier"},
         "public_dispatcher.rs": {
             "public_witness_ingress_overload_control", "dispatch", "new", "start",
@@ -421,6 +426,10 @@ if case == "phase285-raw-kv-subject":
     }
     approved_public_exports = {
         "lib.rs": {"mod:raw_config"},
+        "initializer.rs": {
+            "enum:StoreInitializerErrorV1",
+            "struct:StoreInitializerProcessConfigV1",
+        },
         "jetstream_store.rs": {"struct:NatsWitnessStore"},
         "public_dispatcher.rs": {
             "enum:PublicWitnessDispatchErrorV1", "enum:PublicWitnessProxyTransportErrorV1",
@@ -485,6 +494,14 @@ if case == "phase285-raw-kv-subject":
                     text,
                 )
                 if private_filter:
+                    continue
+            if relative == "initializer.rs" and stripped == 'format!("$KV.{bucket_name}.{key}")':
+                private_fixed = re.search(
+                    r'(?ms)^\s*fn\s+fixed_subject\s*\([^)]*\)\s*'
+                    r'(?:->[^\{]+)?\{.*?format!\("\$KV\.\{bucket_name\}\.\{key\}"\).*?^\s*\}',
+                    text,
+                )
+                if private_fixed:
                     continue
             if re.search(r"\bpub\s+(?:async\s+)?fn\s+derive\b", line):
                 raise SystemExit("PHASE285-NEGATIVE[public-raw-derivation]")
@@ -640,6 +657,10 @@ if case == "phase285-raw-kv-subject":
         if (fields := [item for item in items if item.startswith("field:")])
     }
     expected_public_fields = {
+        "initializer.rs": (
+            12,
+            "fd0ef83c2e009a34eb1ac699cef0b7cd2d1da9289bc7be2c7d0971ef27584ad4",
+        ),
         "public_dispatcher.rs": (
             5,
             "8b2d18a77cae48ee500e4b6d8aab35b5e27447dba3bed17092c347aaab32fdac",
@@ -665,7 +686,11 @@ if case == "phase285-raw-kv-subject":
                     if name not in approved_functions:
                         raise SystemExit("PHASE285-NEGATIVE[unapproved-public-function]")
         if observed_public_field_inventory != expected_public_fields:
-            raise SystemExit("PHASE285-NEGATIVE[public-field-inventory]")
+            raise SystemExit(
+                "PHASE285-NEGATIVE[public-field-inventory] "
+                f"expected={expected_public_fields!r} "
+                f"observed={observed_public_field_inventory!r}"
+            )
         for relative, items in observed_public_items.items():
             approved_exports = approved_public_exports.get(relative, set())
             for item in items:
@@ -674,10 +699,14 @@ if case == "phase285-raw-kv-subject":
                     and item not in approved_exports
                 ):
                     raise SystemExit("PHASE285-NEGATIVE[unapproved-public-export]")
-        raise SystemExit("PHASE285-NEGATIVE[public-api-inventory]")
+        raise SystemExit(
+            "PHASE285-NEGATIVE[public-api-inventory] "
+            f"expected={expected_public_api!r} observed={observed_public_api!r}"
+        )
     if approved_debug_open_count != 1:
         raise SystemExit("PHASE285-NEGATIVE[public-api-inventory]")
     expected_request_calls = {
+        "initializer.rs": 2,
         "jetstream_store.rs": 1,
         "lib.rs": 2,
         "runtime_client.rs": 9,
@@ -692,6 +721,18 @@ if case == "phase285-raw-kv-subject":
     }
     jetstream_source = (source / "jetstream_store.rs").read_text()
     if observed_request_calls != expected_request_calls:
+        raise SystemExit(
+            "PHASE285-NEGATIVE[generic-request] "
+            f"expected={expected_request_calls!r} observed={observed_request_calls!r}"
+        )
+    initializer_source = (source / "initializer.rs").read_text()
+    if not re.search(
+        r"(?ms)^\s*async\s+fn\s+create_stream\s*\(.*?"
+        r"\.request\(format!\(\"STREAM\.CREATE\.\{\}\".*?"
+        r"^\s*async\s+fn\s+inspect_stream\s*\(.*?"
+        r"\.request\(\s*format!\(\"STREAM\.INFO\.\{\}\"",
+        initializer_source,
+    ):
         raise SystemExit("PHASE285-NEGATIVE[generic-request]")
     if not re.search(
         r"(?ms)^\s*async\s+fn\s+closed_snapshot\s*\(&self\).*?"
@@ -1172,13 +1213,13 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-spine/Cargo.toml": "2a60351ee33409190d7343a36d8b9926a1f0dbc56bfb66faef093f799ace8932",
 }
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
-    "Cargo.toml": "7ad7f702d39e1a74dd746f802889f85acdc6618309e292e718acb6e0f0769f72",
-    "Cargo.lock": "4a899e087f951de34c86b177c3c34658e15d75d55b3ce7ba307106770eb39903",
+    "Cargo.toml": "cb2cc5df86f6bab0f60cfe7dd239f58b44997926365512ca4214c738f24b6392",
+    "Cargo.lock": "76e3dccddeab21ca75802f51a03bb6e161f6956e869137b9e976c17b9393fdc2",
     ".github/workflows/ci.yml": "3285dff1fde536cf655e2768e4cc17cd599515bdecebb77f13e368879c1f0aa7",
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "1f04573415819d5856f767d030205aaab20a730d2f29d9783726b585e15523dc",
+    "tools/check-single-governor-key.sh": "5224c83c11ae8bd9a424efa9c655e46cdefa1431eddc19d5be29d679c5e55c2e",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -1204,7 +1245,7 @@ GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (14, "fa359ba1da72ec1543ac52678c2cc7cae86870843656e8dec3a35506facdbe76"),
     "swarm-runtime":
-        (133, "674d83ec73fad1c4930b33644f5fe66596848dba724c62c1c255b107198b4b10"),
+        (133, "89ae24f300bfa1ecaeb45ad77aed9481840751850a01f37a8d7717ddf0e99dcd"),
     "swarm-ingest-runtime":
         (14, "8efe3036dab423eab24b0a08cdb8d1c6715c6628e6640de98d1d8d5e8946aa50"),
     "swarm-runtime-http":
@@ -1251,7 +1292,7 @@ SINGLE_GOVERNOR_GATE_OUTPUT = (
     "authenticated mint (crates/swarm-governance/src crates/swarm-consensus/src "
     "crates/swarm-policy/src)"
 )
-EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "d6a21defd58171d58fb8b4e6acf58a17fb033cc170c7ec94d7c9ec4b54663adf"
+EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "5b1788088fb89aa4cbe1c3a93de8f8dd9a35a365b0f9548457d24a94a394ab8a"
 ALLOWED_LOCAL_CUSTOM_BUILD = {
     "swarm-ingest-tetragon": {
         "manifest": "crates/swarm-ingest-tetragon/Cargo.toml",

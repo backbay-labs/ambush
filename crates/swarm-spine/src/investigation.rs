@@ -6,13 +6,20 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::Severity;
 use swarm_whisker::TelemetryPayload;
 
 static INVESTIGATION_CLAIM_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+static INVESTIGATION_CLAIM_PROCESS_EPOCH: LazyLock<u128> = LazyLock::new(|| {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos())
+});
+const INVESTIGATION_CLAIM_TEMP_ATTEMPTS: usize = 64;
 
 /// Persisted status of one investigation job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -785,19 +792,42 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
                 path: path.clone(),
                 source,
             })?;
-        let temporary_path = self.root.join("execution-claims").join(format!(
-            ".claim.{}.{}.tmp",
-            std::process::id(),
-            INVESTIGATION_CLAIM_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let mut temporary = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-            .map_err(|source| InvestigationStoreError::Write {
-                path: temporary_path.clone(),
-                source,
-            })?;
+        let claims_directory = self.root.join("execution-claims");
+        let mut opened_temporary = None;
+        for _ in 0..INVESTIGATION_CLAIM_TEMP_ATTEMPTS {
+            let temporary_path = claims_directory.join(format!(
+                ".claim.{}.{}.{}.tmp",
+                std::process::id(),
+                *INVESTIGATION_CLAIM_PROCESS_EPOCH,
+                INVESTIGATION_CLAIM_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary_path)
+            {
+                Ok(temporary) => {
+                    opened_temporary = Some((temporary_path, temporary));
+                    break;
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(source) => {
+                    return Err(InvestigationStoreError::Write {
+                        path: temporary_path,
+                        source,
+                    });
+                }
+            }
+        }
+        let Some((temporary_path, mut temporary)) = opened_temporary else {
+            return Err(InvestigationStoreError::Write {
+                path: claims_directory,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "exhausted unique investigation execution-claim temporary paths",
+                ),
+            });
+        };
         if let Err(source) = temporary
             .write_all(&raw)
             .and_then(|()| temporary.sync_all())
@@ -1009,10 +1039,11 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
-        InvestigationBundleStore, InvestigationDecision, InvestigationExecutionClaim,
-        InvestigationInterpretation, InvestigationPriority, InvestigationPriorityClass,
-        InvestigationStatus, InvestigationStoreHealth, InvestigationVote,
+        ConfiguredInvestigationBundleStore, FileInvestigationBundleStore,
+        INVESTIGATION_CLAIM_TEMP_COUNTER, InvestigationBundle, InvestigationBundleStore,
+        InvestigationDecision, InvestigationExecutionClaim, InvestigationInterpretation,
+        InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
+        InvestigationStoreHealth, InvestigationVote,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
     use swarm_core::config::BundleStoreConfig;
@@ -1277,6 +1308,31 @@ mod tests {
                     .to_string_lossy()
                     .ends_with(".tmp"))
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_execution_claim_ignores_stale_legacy_process_counter_temporary_files() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-stale-claim-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileInvestigationBundleStore::open(&root).unwrap();
+        let stale = root.join("execution-claims").join(format!(
+            ".claim.{}.{}.tmp",
+            std::process::id(),
+            INVESTIGATION_CLAIM_TEMP_COUNTER.load(std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&stale, b"stale legacy temporary claim").unwrap();
+
+        assert_eq!(
+            store
+                .claim_execution(&sample_investigation_bundle())
+                .unwrap(),
+            InvestigationExecutionClaim::Acquired
+        );
+        assert!(stale.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 }

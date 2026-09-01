@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use swarm_governance::persistence_protocol::{PROTOCOL_SCHEMA_VERSION, canonical_wire_bytes};
@@ -19,7 +18,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use crate::runtime_client::{
     cancel_and_join_owned_tasks, service_event_is_terminal, wait_for_owned_task_failure,
 };
-use crate::secure_file::{StableFilePolicyV1, read_stable_file, validate_stable_public_file};
+use crate::secure_file::{StableFilePolicyV1, read_stable_file, read_stable_tls_client_config};
 use crate::service_config::{
     NatsWorkerPublisherV1, NoopSubscriberAdmissionObserverV1, NoopWorkerTransitionObserverV1,
     ReceiptDeadlineV1, STORE_HANDLER_DEADLINE_MILLIS, STORE_RESPONSE_GRANT_MILLIS,
@@ -430,7 +429,7 @@ impl StoreRoleConnectionV1 {
         if authority != config.tls_server_name {
             return Err(StoreProxyRunnerErrorV1::Configuration);
         }
-        validate_stable_public_file(&config.tls_ca_path, 1_048_576)
+        let tls_client_config = read_stable_tls_client_config(&config.tls_ca_path, 1_048_576)
             .map_err(|_| StoreProxyRunnerErrorV1::Configuration)?;
         let raw = read_stable_file(
             &config.nats_credentials_path,
@@ -460,7 +459,7 @@ impl StoreRoleConnectionV1 {
             password.to_string(),
         )
         .require_tls(true)
-        .add_root_certificates(PathBuf::from(&config.tls_ca_path))
+        .tls_client_config(tls_client_config)
         .subscription_capacity(config.subscription_capacity)
         .client_capacity(config.client_capacity)
         .read_buffer_capacity(config.read_buffer_capacity)

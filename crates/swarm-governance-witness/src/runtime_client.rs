@@ -3,7 +3,6 @@ use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::path::Path;
-use std::path::PathBuf;
 use std::pin::Pin;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,7 +22,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use swarm_crypto::Ed25519Signer;
 
 use crate::raw_config::relay_topology_token_is_closed;
-use crate::secure_file::{StableFilePolicyV1, read_stable_file, validate_stable_public_file};
+use crate::secure_file::{StableFilePolicyV1, read_stable_file, read_stable_tls_client_config};
 use crate::service_config::{PUBLIC_RESPONSE_GRANT_MILLIS, STORE_RESPONSE_GRANT_MILLIS};
 use crate::{
     NatsPublicWitnessStoreProxyClient, NatsWitnessStore, PublicWitnessDispatcher,
@@ -118,7 +117,7 @@ fn map_request_error_kind(kind: async_nats::RequestErrorKind) -> RuntimeWitnessC
     }
 }
 
-fn copy_zeroizing_utf8_secret(
+pub(crate) fn copy_zeroizing_utf8_secret(
     bytes: &Zeroizing<Vec<u8>>,
 ) -> Result<Zeroizing<String>, WitnessProcessErrorV1> {
     Ok(Zeroizing::new(
@@ -486,22 +485,22 @@ impl From<async_nats::RequestErrorKind> for RuntimeRequestObservationV1 {
     }
 }
 
-struct RoleTransportConfigV1<'a> {
-    nats_url: &'a str,
-    credentials_path: &'a str,
-    invocation_token: &'a str,
-    tls_ca_path: &'a str,
-    tls_server_name: &'a str,
-    role: &'static str,
-    subscription_capacity: usize,
-    client_capacity: usize,
-    read_buffer_capacity: u16,
-    deadline_millis: u64,
+pub(crate) struct RoleTransportConfigV1<'a> {
+    pub(crate) nats_url: &'a str,
+    pub(crate) credentials_path: &'a str,
+    pub(crate) invocation_token: &'a str,
+    pub(crate) tls_ca_path: &'a str,
+    pub(crate) tls_server_name: &'a str,
+    pub(crate) role: &'static str,
+    pub(crate) subscription_capacity: usize,
+    pub(crate) client_capacity: usize,
+    pub(crate) read_buffer_capacity: u16,
+    pub(crate) deadline_millis: u64,
 }
 
-struct ConnectedRoleV1 {
-    client: async_nats::Client,
-    lifecycle_events: tokio::sync::mpsc::Receiver<async_nats::Event>,
+pub(crate) struct ConnectedRoleV1 {
+    pub(crate) client: async_nats::Client,
+    pub(crate) lifecycle_events: tokio::sync::mpsc::Receiver<async_nats::Event>,
 }
 
 fn tls_authority(url: &str) -> Option<&str> {
@@ -512,14 +511,14 @@ fn tls_authority(url: &str) -> Option<&str> {
     authority.rsplit_once(':').map(|(host, _)| host)
 }
 
-async fn connect_exact_role(
+pub(crate) async fn connect_exact_role(
     config: RoleTransportConfigV1<'_>,
 ) -> Result<ConnectedRoleV1, RuntimeWitnessClientErrorV1> {
     if config.deadline_millis == 0 || tls_authority(config.nats_url) != Some(config.tls_server_name)
     {
         return Err(RuntimeWitnessClientErrorV1::Configuration);
     }
-    validate_stable_public_file(config.tls_ca_path, MAX_CA_BYTES)
+    let tls_client_config = read_stable_tls_client_config(config.tls_ca_path, MAX_CA_BYTES)
         .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
     let raw = read_stable_file(
         config.credentials_path,
@@ -551,7 +550,7 @@ async fn connect_exact_role(
         password.to_string(),
     )
     .require_tls(true)
-    .add_root_certificates(PathBuf::from(config.tls_ca_path))
+    .tls_client_config(tls_client_config)
     .subscription_capacity(config.subscription_capacity)
     .client_capacity(config.client_capacity)
     .read_buffer_capacity(config.read_buffer_capacity)
@@ -772,7 +771,7 @@ impl RuntimeWitnessClient {
         config
             .validate()
             .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
-        validate_stable_public_file(&config.tls_ca_path, MAX_CA_BYTES)
+        let tls_client_config = read_stable_tls_client_config(&config.tls_ca_path, MAX_CA_BYTES)
             .map_err(|_| RuntimeWitnessClientErrorV1::Configuration)?;
         let raw = read_stable_file(
             &config.nats_credentials_path,
@@ -806,7 +805,7 @@ impl RuntimeWitnessClient {
             password.to_string(),
         )
         .require_tls(true)
-        .add_root_certificates(PathBuf::from(&config.tls_ca_path))
+        .tls_client_config(tls_client_config)
         .subscription_capacity(config.subscription_capacity)
         .client_capacity(config.client_capacity)
         .read_buffer_capacity(config.read_buffer_capacity)

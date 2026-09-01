@@ -334,8 +334,8 @@ cargo = pathlib.Path(sys.argv[3])
 assurance_target = pathlib.Path(sys.argv[4])
 cache_source = pathlib.Path(sys.argv[5])
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
-EXPECTED_ROOT_MANIFEST_DIGEST = "7ad7f702d39e1a74dd746f802889f85acdc6618309e292e718acb6e0f0769f72"
-EXPECTED_ROOT_LOCK_DIGEST = "4a899e087f951de34c86b177c3c34658e15d75d55b3ce7ba307106770eb39903"
+EXPECTED_ROOT_MANIFEST_DIGEST = "cb2cc5df86f6bab0f60cfe7dd239f58b44997926365512ca4214c738f24b6392"
+EXPECTED_ROOT_LOCK_DIGEST = "76e3dccddeab21ca75802f51a03bb6e161f6956e869137b9e976c17b9393fdc2"
 EXPECTED_WORKSPACE_PACKAGES = {
     "swarm-agents",
     "swarm-cli",
@@ -423,7 +423,7 @@ EXPECTED_AUTHORITY_REVERSE_CLOSURE = {
 }
 EXPECTED_CLOSURE_MANIFEST_DIGESTS = {
     "swarm-governance": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
-    "swarm-governance-witness": "03c056a47f2e50807fed692c994fa2df3e976ef1b239878ee95face93796493d",
+    "swarm-governance-witness": "3a9692f8d896eca5742db4bff725b35df087940bf6604a297264bae63b116510",
     "swarm-runtime": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "swarm-ingest-runtime": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
     "swarm-runtime-http": "890644cbb2cd57bed43de30491b60d1fef5b8e64038520d5249af531a292b88f",
@@ -436,9 +436,9 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (14, "fa359ba1da72ec1543ac52678c2cc7cae86870843656e8dec3a35506facdbe76"),
     "swarm-governance-witness":
-        (16, "f151b406070aa22bc47b21e96e4cd386c6b37b6abc0cc437f2d4cdc819701bee"),
+        (17, "00ef8ba49f58c1b32ff7b26d25f5a1505d2bc2e7671afc7ed5077cbbb6092a90"),
     "swarm-runtime":
-        (133, "674d83ec73fad1c4930b33644f5fe66596848dba724c62c1c255b107198b4b10"),
+        (133, "89ae24f300bfa1ecaeb45ad77aed9481840751850a01f37a8d7717ddf0e99dcd"),
     "swarm-ingest-runtime":
         (14, "8efe3036dab423eab24b0a08cdb8d1c6715c6628e6640de98d1d8d5e8946aa50"),
     "swarm-runtime-http":
@@ -544,7 +544,7 @@ EXPECTED_CLOSURE_TARGET_DEP_INFO = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"):
         (8, "f9ed6a705aad92bc1177359a874183d7c16fe26a24ce35d101320146cec12301"),
     pathlib.Path("crates/swarm-governance-witness/src/lib.rs"):
-        (9, "8f3bdefe46ef31f3b48dfbc2aad1fca78853dcc70101f96eac7669831ec85243"),
+        (10, "de039135593b053917232ee69ed7e4e851d919739fe171cb57728b7e00275188"),
     pathlib.Path("crates/swarm-governance-witness/src/bin/swarm-governance-witness.rs"):
         (1, "6556bcf8c511d576153dd6884819191b09b5da6ee7b638b3ca434376ce735c07"),
     pathlib.Path("crates/swarm-governance-witness/src/bin/swarm-governance-witness-store.rs"):

@@ -172,11 +172,38 @@ where
     read_stable_file_inner(path.as_ref(), maximum, policy, at_stage)
 }
 
-pub(crate) fn validate_stable_public_file(
+pub(crate) fn read_stable_tls_client_config(
     path: impl AsRef<Path>,
     maximum: usize,
-) -> Result<(), StableFileErrorV1> {
-    read_stable_file(path, maximum, StableFilePolicyV1::Public).map(drop)
+) -> Result<async_nats::rustls::ClientConfig, StableFileErrorV1> {
+    let bytes = read_stable_file(path, maximum, StableFilePolicyV1::Public)?;
+    let certificates = parse_ca_certificates(&bytes)?;
+    let mut roots = async_nats::rustls::RootCertStore::empty();
+    for certificate in certificates {
+        roots
+            .add(certificate)
+            .map_err(|_| StableFileErrorV1::Metadata)?;
+    }
+    Ok(async_nats::rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth())
+}
+
+fn parse_ca_certificates(
+    bytes: &[u8],
+) -> Result<Vec<async_nats::rustls::pki_types::CertificateDer<'static>>, StableFileErrorV1> {
+    let mut reader = bytes;
+    let mut certificates = Vec::new();
+    for item in rustls_pemfile::read_all(&mut reader) {
+        match item.map_err(|_| StableFileErrorV1::Metadata)? {
+            rustls_pemfile::Item::X509Certificate(certificate) => certificates.push(certificate),
+            _ => return Err(StableFileErrorV1::Metadata),
+        }
+    }
+    if certificates.is_empty() {
+        return Err(StableFileErrorV1::Metadata);
+    }
+    Ok(certificates)
 }
 
 #[cfg(test)]
@@ -342,5 +369,28 @@ mod tests {
         assert!(matches!(result, Err(StableFileErrorV1::Changed)));
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+
+    #[test]
+    fn tls_config_rejects_stable_non_certificate_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root("invalid-ca")?;
+        let invalid = root.join("ca.pem");
+        create_private(&invalid, b"not a certificate")?;
+        assert!(matches!(
+            read_stable_tls_client_config(&invalid, 1_024),
+            Err(StableFileErrorV1::Metadata)
+        ));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tls_ca_parser_rejects_private_key_blocks_mixed_with_certificates() {
+        let mixed = b"-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n\
+            -----BEGIN PRIVATE KEY-----\nMA==\n-----END PRIVATE KEY-----\n";
+        assert!(matches!(
+            parse_ca_certificates(mixed),
+            Err(StableFileErrorV1::Metadata)
+        ));
     }
 }

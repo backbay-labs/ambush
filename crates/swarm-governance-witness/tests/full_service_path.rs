@@ -29,8 +29,9 @@ use swarm_governance::witness_service::{
 use swarm_governance_witness::{
     NatsPublicWitnessStoreProxyClient, PublicWitnessDispatchErrorV1, PublicWitnessDispatcher,
     PublicWitnessProxyTransportErrorV1, PublicWitnessServiceConfigV1,
-    PublicWitnessStoreProxyClient, StoreProxyService, StoreProxyServiceConfigV1,
-    StoreProxyServiceErrorV1, StoreProxyServiceRunner, StoreRoleConnectionV1, dispatcher_mapping,
+    PublicWitnessStoreProxyClient, StoreInitializerProcessConfigV1, StoreProxyService,
+    StoreProxyServiceConfigV1, StoreProxyServiceErrorV1, StoreProxyServiceRunner,
+    StoreRoleConnectionV1, dispatcher_mapping, initialize_store,
     private_store_ingress_overload_control, public_witness_ingress_overload_control,
     store_proxy_subjects,
 };
@@ -5032,6 +5033,73 @@ async fn initialize_harness_store_stream() -> ProtocolResult<()> {
     }
 }
 
+#[tokio::test]
+#[ignore = "requires the authenticated Phase 285 NATS topology and role credentials"]
+async fn production_initializer_creates_reopens_and_reproduces_ready() -> ProtocolResult<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let fixture = Fixture::new(CasMode::Apply)?;
+    let (fixture_ready, _) = store_ready_fixture_entries(&fixture)?;
+    let scratch =
+        std::path::PathBuf::from(std::env::var("SWARM_NATS_HARNESS_SCRATCH").map_err(|_| {
+            ProtocolError::InvalidField {
+                field: "SWARM_NATS_HARNESS_SCRATCH".to_string(),
+                reason: "wrapped scratch is required".to_string(),
+            }
+        })?);
+    let witness_key_path = scratch.join("initializer-witness.key");
+    let mut witness_key = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&witness_key_path)
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    witness_key
+        .write_all(b"phase285-plan04-witness")
+        .and_then(|()| witness_key.sync_all())
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    drop(witness_key);
+
+    let config = StoreInitializerProcessConfigV1 {
+        nats_url: std::env::var("SWARM_NATS_STORE_TLS_URL")
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?,
+        nats_credentials_path: std::env::var("SWARM_NATS_INIT_CREDENTIAL_PATH")
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?,
+        credential_invocation_token: std::env::var("SWARM_NATS_TLS_CREDENTIAL_TOKEN")
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?,
+        tls_ca_path: std::env::var("SWARM_NATS_TLS_CA_PATH")
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?,
+        tls_server_name: std::env::var("SWARM_NATS_TLS_SERVER_NAME")
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?,
+        witness_key_path: witness_key_path.display().to_string(),
+        bucket_configuration: fixture_ready.bucket_configuration.clone(),
+        bucket_epoch: fixture_ready.bucket_epoch.clone(),
+        admission_set: fixture_ready.admission_set.clone(),
+        deployment_inputs: fixture_ready.deployment_inputs.clone(),
+        reported_server_version: "2.11.17".to_string(),
+        resolved_server_image_index_digest:
+            "sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00".to_string(),
+    };
+
+    let first = initialize_store(config.clone())
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    first.validate()?;
+    assert_eq!(
+        first.ready_manifest.phase,
+        WitnessBucketManifestPhaseV1::Ready
+    );
+    assert_eq!(first.ready_manifest.initialized_streams.len(), 1);
+
+    let reopened = initialize_store(config)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    assert_eq!(reopened, first);
+    Ok(())
+}
+
 fn signed_store_request(
     fixture: &Fixture,
     ready: &WitnessStoreReadyResultV1,
@@ -5603,14 +5671,14 @@ async fn full_service_path_rejects_credential_account_and_mount_swaps() -> Proto
         .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
     assert!(matches!(
         StoreRoleConnectionV1::connect(&ca_swap, &ready).await,
-        Err(swarm_governance_witness::StoreProxyRunnerErrorV1::Authentication)
+        Err(swarm_governance_witness::StoreProxyRunnerErrorV1::Configuration)
     ));
     write_capability_row(
         "tls_ca_swap",
         "witness-store",
         "PHASE285_WITNESS_STORE",
         "tls://localhost",
-        "ca_authentication_refused",
+        "ca_configuration_refused",
         0,
         0,
     )?;
