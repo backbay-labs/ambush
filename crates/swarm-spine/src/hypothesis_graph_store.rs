@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 #[cfg(test)]
 use std::sync::{
     OnceLock,
@@ -25,7 +25,6 @@ use std::sync::{
 };
 #[cfg(test)]
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::hypothesis_graph::{
     EvidenceWitness, FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime,
     GraphResourceLimits, HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, IdempotencyKey, LeaseId,
@@ -91,11 +90,6 @@ impl Drop for PersistedJsonLimitGuard {
 }
 
 static TEMP_FILE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-static TEMP_FILE_PROCESS_NONCE: LazyLock<u128> = LazyLock::new(|| {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
-});
 
 /// A generation and its canonical digest.  Both fields are required for CAS;
 /// sequence equality alone is intentionally insufficient.
@@ -5038,19 +5032,21 @@ pub(crate) fn prepare_private_store_root(path: &Path) -> Result<(), GraphStoreEr
                 path: created.clone(),
                 source,
             })?;
-        if let Some(parent) = created
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|source| GraphStoreError::Write {
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-        }
+        let parent = durability_parent(created);
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| GraphStoreError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
     }
     ensure_private_store_root_mode(path)
+}
+
+fn durability_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 fn ensure_no_symlink_ancestors(path: &Path) -> Result<(), GraphStoreError> {
@@ -6623,10 +6619,10 @@ fn atomic_write_json_at(
     let mut allocated = None;
     for _ in 0..64 {
         let suffix = TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let restart_nonce = uuid::Uuid::new_v4().simple();
         let temporary_name = CString::new(format!(
-            ".{target_name}.tmp.{}.{:032x}.{suffix}",
-            std::process::id(),
-            *TEMP_FILE_PROCESS_NONCE
+            ".{target_name}.tmp.{}.{restart_nonce}.{suffix}",
+            std::process::id()
         ))
         .map_err(|_| GraphStoreError::InvalidState {
             reason: "temporary JSON file name contains NUL".to_string(),
@@ -8291,6 +8287,15 @@ mod tests {
         );
         drop(store);
         let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn relative_top_level_store_root_syncs_the_working_directory() {
+        assert_eq!(durability_parent(Path::new("graph-state")), Path::new("."));
+        assert_eq!(
+            durability_parent(Path::new("state/graph")),
+            Path::new("state")
+        );
     }
 
     #[test]

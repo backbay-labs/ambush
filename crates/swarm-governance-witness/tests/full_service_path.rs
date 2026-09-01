@@ -5041,7 +5041,7 @@ async fn production_initializer_creates_reopens_and_reproduces_ready() -> Protoc
     use std::os::unix::fs::OpenOptionsExt;
 
     let fixture = Fixture::new(CasMode::Apply)?;
-    let (fixture_ready, _) = store_ready_fixture_entries(&fixture)?;
+    let (fixture_ready, entries) = store_ready_fixture_entries(&fixture)?;
     let scratch =
         std::path::PathBuf::from(std::env::var("SWARM_NATS_HARNESS_SCRATCH").map_err(|_| {
             ProtocolError::InvalidField {
@@ -5083,6 +5083,59 @@ async fn production_initializer_creates_reopens_and_reproduces_ready() -> Protoc
             "sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00".to_string(),
     };
 
+    // Materialize the exact post-create/pre-manifest crash state. The next
+    // initializer invocation must adopt this pristine stream and publish the
+    // create-only manifest instead of rejecting a resource it created before
+    // the previous process died.
+    let init_client = connect_harness_role("SWARM_NATS_INIT_CREDENTIAL_PATH", "init").await?;
+    let init_context = async_nats::jetstream::new(init_client);
+    let projected = &config.bucket_configuration;
+    let create_response: async_nats::jetstream::response::Response<serde_json::Value> =
+        init_context
+            .request(
+                format!("STREAM.CREATE.{}", projected.stream_name),
+                &serde_json::json!({
+                    "name": projected.stream_name,
+                    "description": projected.description,
+                    "subjects": projected.subjects,
+                    "retention": "limits",
+                    "max_consumers": -1,
+                    "max_msgs": -1,
+                    "max_bytes": projected.max_bytes,
+                    "max_age": 0,
+                    "max_msgs_per_subject": 1,
+                    "max_msg_size": projected.max_message_size,
+                    "discard": "new",
+                    "storage": "file",
+                    "num_replicas": projected.num_replicas,
+                    "duplicate_window": projected.duplicate_window_nanos,
+                    "compression": "none",
+                    "allow_direct": false,
+                    "mirror_direct": false,
+                    "sealed": false,
+                    "deny_delete": true,
+                    "deny_purge": true,
+                    "allow_rollup_hdrs": false,
+                    "consumer_limits": {},
+                    "allow_msg_ttl": false,
+                    "metadata": projected.server_metadata,
+                }),
+            )
+            .await
+            .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    if !matches!(
+        create_response,
+        async_nats::jetstream::response::Response::Ok(_)
+    ) {
+        return Err(ProtocolError::WitnessOutcomeMismatch);
+    }
+    let pristine = init_context
+        .get_stream(&projected.stream_name)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    assert_eq!(pristine.cached_info().state.messages, 0);
+    drop(init_context);
+
     let first = initialize_store(config.clone())
         .await
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
@@ -5092,6 +5145,47 @@ async fn production_initializer_creates_reopens_and_reproduces_ready() -> Protoc
         WitnessBucketManifestPhaseV1::Ready
     );
     assert_eq!(first.ready_manifest.initialized_streams.len(), 1);
+
+    let admission = first
+        .admission_set
+        .entries
+        .first()
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    let (_, evolved) = entries
+        .get(&admission.stream_id)
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
+    assert!(evolved.store_generation > 0);
+    let store_client =
+        connect_harness_role("SWARM_NATS_STORE_CREDENTIAL_PATH", "witness-store").await?;
+    let store_context = async_nats::jetstream::new(store_client);
+    let store_stream = store_context
+        .get_stream_no_info(&first.bucket_configuration.stream_name)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let subject = format!(
+        "$KV.phase285_service.{}",
+        witness_stream_key(&admission.stream_id)?
+    );
+    let current = store_stream
+        .get_last_raw_message_by_subject(&subject)
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert("KV-Operation", "PUT");
+    headers.insert(
+        async_nats::header::NATS_EXPECTED_STREAM,
+        async_nats::HeaderValue::from(first.bucket_configuration.stream_name.as_str()),
+    );
+    headers.insert(
+        async_nats::header::NATS_EXPECTED_LAST_SUBJECT_SEQUENCE,
+        async_nats::HeaderValue::from(current.sequence),
+    );
+    store_context
+        .publish_with_headers(subject, headers, canonical_wire_bytes(evolved)?.into())
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?
+        .await
+        .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
 
     let reopened = initialize_store(config)
         .await

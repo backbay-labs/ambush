@@ -290,6 +290,19 @@ impl Nats21117TypedSnapshotV1 {
 }
 
 impl InspectedRawConfigurationV1 {
+    pub(crate) fn is_pristine_empty_stream(&self) -> bool {
+        let state = &self.raw_stream_info.state;
+        state.messages == 0
+            && state.bytes == 0
+            && state.first_seq == 0
+            && state.last_seq == 0
+            && state.consumer_count == 0
+            && state.num_subjects.is_none_or(|count| count == 0)
+            && state.num_deleted.is_none_or(|count| count == 0)
+            && state.deleted.as_ref().is_none_or(Vec::is_empty)
+            && state.subjects.as_ref().is_none_or(BTreeMap::is_empty)
+    }
+
     pub fn raw_configuration(&self) -> &Nats21117RawConfigV1 {
         &self.raw_configuration
     }
@@ -677,6 +690,62 @@ mod tests {
             ),
             Err(RawConfigurationError::WrongRuntimeIdentity)
         );
+    }
+
+    #[test]
+    fn pristine_stream_recovery_requires_every_empty_state_invariant()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let expected = expected_dynamic()?;
+        let mut pristine = dynamic_raw_info();
+        pristine.state.messages = 0;
+        pristine.state.bytes = 0;
+        pristine.state.first_seq = 0;
+        pristine.state.last_seq = 0;
+        pristine.state.consumer_count = 0;
+        pristine.state.num_subjects = None;
+        pristine.state.num_deleted = None;
+        pristine.state.deleted = None;
+        pristine.state.subjects = None;
+        let inspect = |raw: &Nats21117RawStreamInfoV1| -> Result<_, Box<dyn std::error::Error>> {
+            Ok(inspect_raw_stream_info_unbound(
+                &serde_json::to_vec(raw)?,
+                &expected,
+            )?)
+        };
+        assert!(inspect(&pristine)?.is_pristine_empty_stream());
+
+        let mut mutated = pristine.clone();
+        mutated.state.messages = 1;
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine.clone();
+        mutated.state.bytes = 1;
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine.clone();
+        mutated.state.first_seq = 1;
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine.clone();
+        mutated.state.last_seq = 1;
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine.clone();
+        mutated.state.consumer_count = 1;
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine.clone();
+        mutated.state.num_subjects = Some(1);
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine.clone();
+        mutated.state.num_deleted = Some(1);
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine.clone();
+        mutated.state.deleted = Some(vec![1]);
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        mutated = pristine;
+        mutated
+            .state
+            .subjects
+            .get_or_insert_with(BTreeMap::new)
+            .insert("nonempty-subject-state".to_string(), 1);
+        assert!(!inspect(&mutated)?.is_pristine_empty_stream());
+        Ok(())
     }
 
     #[test]

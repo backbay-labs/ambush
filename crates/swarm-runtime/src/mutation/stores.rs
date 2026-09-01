@@ -2,9 +2,7 @@ use super::*;
 use ed25519_dalek::SigningKey;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::signed_state::{SignedStateEnvelope, SignedStateExpectation};
 use swarm_core::types::AgentId;
 
@@ -12,11 +10,6 @@ const EVOLUTION_POPULATION_STATE_KIND: &str = "evolution_population_state";
 const EVOLUTION_POPULATION_STREAM_ID: &str = "population";
 const EVOLUTION_EPISODE_STATE_KIND: &str = "evolution_episode_report";
 static NEXT_POPULATION_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(1);
-static POPULATION_TEMP_PROCESS_NONCE: LazyLock<u128> = LazyLock::new(|| {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
-});
 
 /// Errors raised by the persisted mutation-spec store.
 #[derive(Debug, thiserror::Error)]
@@ -805,9 +798,9 @@ impl FileEvolutionPopulationStore {
         let mut created = None;
         for _ in 0..32 {
             let unique_id = NEXT_POPULATION_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+            let restart_nonce = uuid::Uuid::new_v4().simple();
             let temporary_path = self.root.join(format!(
-                ".{file_name}.{process_id}.{:032x}.{unique_id}.tmp",
-                *POPULATION_TEMP_PROCESS_NONCE
+                ".{file_name}.{process_id}.{restart_nonce}.{unique_id}.tmp"
             ));
             match OpenOptions::new()
                 .create_new(true)
@@ -1512,6 +1505,7 @@ impl FileEvolutionBenchmarkStore {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod atomic_write_tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn population_atomic_write_ignores_stale_temps_from_a_prior_process_epoch() {

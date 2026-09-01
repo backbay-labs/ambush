@@ -66,6 +66,10 @@ const RECENT_DEPOSIT_MIGRATION_STATE_KEY: &str = "idx_recent_migration";
 const RECENT_DEPOSIT_INTENT_KEY_PREFIX: &str = "idx_recent_intent";
 #[cfg(feature = "nats")]
 const MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS: usize = 256;
+#[cfg(feature = "nats")]
+const MAX_JETSTREAM_BUCKET_BYTES: i64 = 128 * 1024 * 1024;
+#[cfg(feature = "nats")]
+const RECENT_DEPOSIT_SCOPE_READ_CONCURRENCY: usize = 32;
 // Previous releases placed intents in this finite four-choice namespace. Keep
 // it readable for rolling upgrades, but never place a new operation there:
 // occupied choices permanently rejected unrelated valid operations.
@@ -167,12 +171,13 @@ enum RecentDepositPointerWrite {
 }
 
 #[cfg(feature = "nats")]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SelectedDepositKey {
     key: String,
     kind: Option<DepositKeyKind>,
     expected_revision: Option<u64>,
     expected_encoded_len: Option<usize>,
+    suppression_scope_digest: Option<String>,
 }
 
 /// Bounded, revision-aware cache for deposits that have already crossed the
@@ -332,30 +337,228 @@ fn select_recent_deposit_keys_within_byte_limit(
         }
     }
 
-    let mut admitted = Vec::new();
-    let mut admitted_bytes = 0usize;
-    // Every candidate terminal control fits inside the aggregate ceiling: the
-    // control ring has fewer slots than MAX_ACTIVE / MAX_SINGLE. Admit the
-    // complete control view before evidence so a dismissal can never be
-    // omitted while the evidence it governs remains visible.
-    for candidates in [controls, evidence] {
-        for candidate in candidates {
-            // Prior-layout keys carry no encoded length. Charge them the hard
-            // single-deposit maximum so pre-load selection remains bounded.
-            let encoded_len = candidate
-                .expected_encoded_len
-                .unwrap_or(MAX_SINGLE_DEPOSIT_BYTES);
-            if encoded_len == 0 || encoded_len > MAX_SINGLE_DEPOSIT_BYTES {
-                continue;
-            }
-            if admitted_bytes.saturating_add(encoded_len) <= MAX_ACTIVE_DEPOSIT_BYTES {
-                admitted_bytes = admitted_bytes.saturating_add(encoded_len);
-                admitted.push(candidate);
-            }
+    let mut controls_by_scope = BTreeMap::<String, Vec<SelectedDepositKey>>::new();
+    for control in &controls {
+        if let Some(scope) = &control.suppression_scope_digest {
+            controls_by_scope
+                .entry(scope.clone())
+                .or_default()
+                .push(control.clone());
         }
+    }
+
+    let mut admitted = Vec::new();
+    let mut admitted_keys = BTreeSet::new();
+    let mut admitted_bytes = 0usize;
+    let evidence_reservation = MAX_ACTIVE_DEPOSIT_BYTES / 2;
+    let mut reserved_evidence_bytes = 0usize;
+
+    // Admit recent evidence first, but atomically with every terminal-control
+    // candidate for its authenticated suppression scope. The reader derives
+    // every event-bearing pointer scope before selection; a missing scope is
+    // therefore unscoped and cannot suppress evidence. A scoped pair that
+    // cannot fit is omitted together.
+    for evidence_candidate in &evidence {
+        let Some(evidence_bytes) = selected_deposit_encoded_len(evidence_candidate) else {
+            continue;
+        };
+        if reserved_evidence_bytes.saturating_add(evidence_bytes) > evidence_reservation {
+            continue;
+        }
+        let required_controls = controls_by_scope
+            .get(
+                evidence_candidate
+                    .suppression_scope_digest
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if !selected_group_fits(
+            required_controls,
+            evidence_candidate,
+            &admitted_keys,
+            admitted_bytes,
+        ) {
+            continue;
+        }
+        for control in required_controls {
+            admit_selected_deposit(
+                control.clone(),
+                &mut admitted,
+                &mut admitted_keys,
+                &mut admitted_bytes,
+            );
+        }
+        admit_selected_deposit(
+            evidence_candidate.clone(),
+            &mut admitted,
+            &mut admitted_keys,
+            &mut admitted_bytes,
+        );
+        reserved_evidence_bytes = reserved_evidence_bytes.saturating_add(evidence_bytes);
+    }
+
+    // Fill remaining aggregate capacity with additional scoped evidence, then
+    // unrelated controls. This preserves evidence availability without ever
+    // admitting governed evidence separately from its terminal-control view.
+    for evidence_candidate in &evidence {
+        if admitted_keys.contains(&evidence_candidate.key) {
+            continue;
+        }
+        let required_controls = controls_by_scope
+            .get(
+                evidence_candidate
+                    .suppression_scope_digest
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if !selected_group_fits(
+            required_controls,
+            evidence_candidate,
+            &admitted_keys,
+            admitted_bytes,
+        ) {
+            continue;
+        }
+        for control in required_controls {
+            admit_selected_deposit(
+                control.clone(),
+                &mut admitted,
+                &mut admitted_keys,
+                &mut admitted_bytes,
+            );
+        }
+        admit_selected_deposit(
+            evidence_candidate.clone(),
+            &mut admitted,
+            &mut admitted_keys,
+            &mut admitted_bytes,
+        );
+    }
+    for control in controls {
+        admit_selected_deposit(
+            control,
+            &mut admitted,
+            &mut admitted_keys,
+            &mut admitted_bytes,
+        );
     }
     admitted.sort_by(selection_order);
     admitted
+}
+
+#[cfg(feature = "nats")]
+fn selected_deposit_encoded_len(candidate: &SelectedDepositKey) -> Option<usize> {
+    let encoded_len = candidate
+        .expected_encoded_len
+        .unwrap_or(MAX_SINGLE_DEPOSIT_BYTES);
+    (encoded_len > 0 && encoded_len <= MAX_SINGLE_DEPOSIT_BYTES).then_some(encoded_len)
+}
+
+#[cfg(feature = "nats")]
+fn selected_group_fits(
+    controls: &[SelectedDepositKey],
+    evidence: &SelectedDepositKey,
+    admitted_keys: &BTreeSet<String>,
+    admitted_bytes: usize,
+) -> bool {
+    let mut additional = selected_deposit_encoded_len(evidence).unwrap_or(usize::MAX);
+    for control in controls {
+        if !admitted_keys.contains(&control.key) {
+            additional = additional
+                .saturating_add(selected_deposit_encoded_len(control).unwrap_or(usize::MAX));
+        }
+    }
+    admitted_bytes.saturating_add(additional) <= MAX_ACTIVE_DEPOSIT_BYTES
+}
+
+#[cfg(feature = "nats")]
+fn admit_selected_deposit(
+    candidate: SelectedDepositKey,
+    admitted: &mut Vec<SelectedDepositKey>,
+    admitted_keys: &mut BTreeSet<String>,
+    admitted_bytes: &mut usize,
+) {
+    if admitted_keys.contains(&candidate.key) {
+        return;
+    }
+    let Some(encoded_len) = selected_deposit_encoded_len(&candidate) else {
+        return;
+    };
+    if admitted_bytes.saturating_add(encoded_len) > MAX_ACTIVE_DEPOSIT_BYTES {
+        return;
+    }
+    *admitted_bytes = admitted_bytes.saturating_add(encoded_len);
+    admitted_keys.insert(candidate.key.clone());
+    admitted.push(candidate);
+}
+
+#[cfg(feature = "nats")]
+fn balance_recent_deposit_results(
+    mut deposits: Vec<PheromoneDeposit>,
+    limit: usize,
+) -> Vec<PheromoneDeposit> {
+    if limit == 0 || deposits.len() <= limit {
+        return deposits;
+    }
+
+    let evidence_available = deposits
+        .iter()
+        .filter(|deposit| deposit_kind(deposit) == DepositKeyKind::Evidence)
+        .count();
+    let control_available = deposits.len().saturating_sub(evidence_available);
+    if evidence_available == 0 || control_available == 0 {
+        deposits.truncate(limit);
+        return deposits;
+    }
+
+    let evidence_target = evidence_available.min(limit.div_ceil(2));
+    let control_target = control_available.min(limit / 2);
+    let mut selected = vec![false; deposits.len()];
+    let mut selected_evidence = 0usize;
+    let mut selected_controls = 0usize;
+    let mut selected_count = 0usize;
+    for (index, deposit) in deposits.iter().enumerate() {
+        let take = match deposit_kind(deposit) {
+            DepositKeyKind::Evidence if selected_evidence < evidence_target => {
+                selected_evidence = selected_evidence.saturating_add(1);
+                true
+            }
+            DepositKeyKind::Control if selected_controls < control_target => {
+                selected_controls = selected_controls.saturating_add(1);
+                true
+            }
+            _ => false,
+        };
+        if take {
+            selected[index] = true;
+            selected_count = selected_count.saturating_add(1);
+        }
+    }
+
+    // If either class could not fill its reservation, use the newest remaining
+    // records regardless of class. The vector is already newest-first after
+    // feedback suppression, so this preserves the public ordering contract.
+    if selected_count < limit {
+        for is_selected in &mut selected {
+            if !*is_selected {
+                *is_selected = true;
+                selected_count = selected_count.saturating_add(1);
+                if selected_count == limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    deposits
+        .into_iter()
+        .zip(selected)
+        .filter_map(|(deposit, selected)| selected.then_some(deposit))
+        .collect()
 }
 
 #[cfg(feature = "nats")]
@@ -884,8 +1087,10 @@ impl JetStreamPheromoneSubstrate {
         use async_nats::jetstream::kv::{CreateErrorKind, Operation};
 
         let payload_digest = hash_prefix(payload, 64);
-        let gc_page = expiration_gc_page(deposit, retention_policy.0, retention_policy.1);
-        let current_key = idempotent_deposit_intent_key(operation_id, gc_page);
+        // The operation locator is independent of mutable retention policy.
+        // The first successful intent freezes its deposit key (and therefore
+        // its GC page) in the signed-payload binding below.
+        let current_key = idempotent_deposit_intent_key(operation_id);
         for _ in 0..MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS {
             let legacy_key = legacy_idempotent_deposit_intent_key(operation_id);
             for (candidate_index, intent_key) in std::iter::once(legacy_key)
@@ -910,9 +1115,8 @@ impl JetStreamPheromoneSubstrate {
                 if intent.operation_id != operation_id {
                     if candidate_index == 0 || intent_key == current_key {
                         return Err(SubstrateError::InvalidDeposit {
-                            reason:
-                                "legacy Providence intent hash identifies a different operation"
-                                    .to_string(),
+                            reason: "Providence intent digest identifies a different operation"
+                                .to_string(),
                         });
                     }
                     continue;
@@ -1965,6 +2169,65 @@ impl JetStreamPheromoneSubstrate {
     }
 
     #[cfg(feature = "nats")]
+    async fn recent_deposit_pointer_metadata(
+        store: async_nats::jetstream::kv::Store,
+        admission_control: AdmissionControl,
+        verified_deposit_cache: Arc<Mutex<VerifiedDepositCache>>,
+        bucket: String,
+        deposit_key: &str,
+        deposit_revision: u64,
+        kind: DepositKeyKind,
+    ) -> Result<(Option<String>, Option<usize>), SubstrateError> {
+        use async_nats::jetstream::kv::Operation;
+
+        let Some(entry) = store
+            .entry_for_revision(deposit_key, deposit_revision)
+            .await
+            .map_err(|error| nats_error("load legacy recent-deposit pointer", error))?
+        else {
+            return Ok((None, deposit_key_encoded_len(deposit_key)));
+        };
+        if matches!(entry.operation, Operation::Delete | Operation::Purge) {
+            return Ok((None, deposit_key_encoded_len(deposit_key)));
+        }
+        if entry.value.is_empty() || entry.value.len() > MAX_SINGLE_DEPOSIT_BYTES {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "JetStream recent index references an invalid encoded length for deposit key `{}`",
+                    deposit_key
+                ),
+            });
+        }
+        if deposit_key_encoded_len(deposit_key)
+            .is_some_and(|expected| expected != entry.value.len())
+        {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "JetStream recent index encoded length does not match deposit key `{}`",
+                    deposit_key
+                ),
+            });
+        }
+        let location = format!("jetstream://{bucket}/{deposit_key}");
+        let deposit = decode_deposit_payload(&entry.value, location)?;
+        admission_control.validate_deposit_admission(&deposit)?;
+        if deposit_kind(&deposit) != kind {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "JetStream recent index class does not match signed deposit `{}`",
+                    deposit_key
+                ),
+            });
+        }
+        let scope = suppression_scope_digest(&deposit)?;
+        verified_deposit_cache
+            .lock()
+            .map_err(|_| SubstrateError::PoisonedLock)?
+            .insert(deposit_key.to_string(), deposit_revision, deposit);
+        Ok((scope, Some(entry.value.len())))
+    }
+
+    #[cfg(feature = "nats")]
     async fn indexed_recent_deposit_keys(
         &self,
         connection: &JetStreamConnection,
@@ -2064,15 +2327,56 @@ impl JetStreamPheromoneSubstrate {
             }
         }
 
-        let selected = pointers
-            .into_iter()
-            .map(|(key, (revision, kind))| SelectedDepositKey {
-                expected_encoded_len: deposit_key_encoded_len(&key),
-                key,
-                kind: Some(kind),
-                expected_revision: Some(revision),
-            })
-            .collect::<Vec<_>>();
+        // Scope derivation authenticates the referenced signed deposit. Drain
+        // the bounded pointer snapshot first, then perform those independent
+        // reads with fixed concurrency so moderate per-read latency does not
+        // multiply across as many as 254 evidence/control pointers.
+        let permits = Arc::new(tokio::sync::Semaphore::new(
+            RECENT_DEPOSIT_SCOPE_READ_CONCURRENCY,
+        ));
+        let mut scope_reads = tokio::task::JoinSet::new();
+        for (key, (revision, kind)) in pointers {
+            let permit_pool = Arc::clone(&permits);
+            let store = connection.store.clone();
+            let admission_control = self.admission_control.clone();
+            let verified_deposit_cache = Arc::clone(&self.verified_deposit_cache);
+            let bucket = self.bucket.clone();
+            scope_reads.spawn(async move {
+                let _permit =
+                    permit_pool
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| SubstrateError::Nats {
+                            operation: "load recent-deposit pointer metadata",
+                            reason: "recent-deposit scope semaphore closed".to_string(),
+                        })?;
+                let (suppression_scope_digest, observed_encoded_len) =
+                    Self::recent_deposit_pointer_metadata(
+                        store,
+                        admission_control,
+                        verified_deposit_cache,
+                        bucket,
+                        &key,
+                        revision,
+                        kind,
+                    )
+                    .await?;
+                Ok::<_, SubstrateError>(SelectedDepositKey {
+                    expected_encoded_len: observed_encoded_len,
+                    key,
+                    kind: Some(kind),
+                    expected_revision: Some(revision),
+                    suppression_scope_digest,
+                })
+            });
+        }
+        let mut selected = Vec::with_capacity(scope_reads.len());
+        while let Some(result) = scope_reads.join_next().await {
+            selected.push(result.map_err(|error| SubstrateError::Nats {
+                operation: "load recent-deposit pointer metadata",
+                reason: error.to_string(),
+            })??);
+        }
         Ok(select_recent_deposit_keys_within_byte_limit(selected))
     }
 
@@ -2450,6 +2754,7 @@ impl JetStreamPheromoneSubstrate {
                 key,
                 expected_revision: None,
                 expected_encoded_len: None,
+                suppression_scope_digest: None,
             })
             .collect()
         } else if use_recent_index {
@@ -2498,6 +2803,7 @@ impl JetStreamPheromoneSubstrate {
                     key,
                     expected_revision: None,
                     expected_encoded_len: None,
+                    suppression_scope_digest: None,
                 })
                 .collect()
         };
@@ -2506,6 +2812,7 @@ impl JetStreamPheromoneSubstrate {
         let mut deposit_bytes = 0usize;
         for selected in selected_keys {
             let expected_kind = selected.kind;
+            let expected_suppression_scope_digest = selected.suppression_scope_digest;
             let key = selected.key;
             let entry = match selected.expected_revision {
                 Some(revision) => connection.store.entry_for_revision(&key, revision).await,
@@ -2565,6 +2872,16 @@ impl JetStreamPheromoneSubstrate {
             };
             self.admission_control
                 .validate_deposit_admission(&deposit)?;
+
+            if let Some(expected_scope) = expected_suppression_scope_digest.as_deref()
+                && suppression_scope_digest(&deposit)?.as_deref() != Some(expected_scope)
+            {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: format!(
+                        "JetStream recent index suppression scope does not match signed deposit `{key}`"
+                    ),
+                });
+            }
 
             if expected_kind.is_some_and(|kind| kind != deposit_kind(&deposit)) {
                 return Err(SubstrateError::InvalidDeposit {
@@ -3097,6 +3414,55 @@ impl JetStreamPheromoneSubstrate {
     }
 
     #[cfg(feature = "nats")]
+    async fn gc_expired_idempotent_intents(
+        &self,
+        connection: &JetStreamConnection,
+        now: i64,
+    ) -> Result<usize, SubstrateError> {
+        let mut keys = connection
+            .store
+            .keys()
+            .await
+            .map_err(|error| nats_error("list idempotent intents", error))?;
+        let sweep_page = gc_sweep_page(now);
+        let mut removed = 0usize;
+        while let Some(entry) = keys.next().await {
+            let key = entry.map_err(|error| nats_error("stream idempotent intent keys", error))?;
+            if !is_idempotent_deposit_intent_key(&key) {
+                continue;
+            }
+            let Some(payload) = connection
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| nats_error("get idempotent intent for GC", error))?
+            else {
+                continue;
+            };
+            let intent =
+                serde_json::from_slice::<IdempotentDepositIntent>(&payload).map_err(|source| {
+                    SubstrateError::Decode {
+                        location: format!("jetstream://{}/{}", self.bucket, key),
+                        source,
+                    }
+                })?;
+            let page =
+                key_gc_page(&intent.deposit_key).ok_or_else(|| SubstrateError::InvalidDeposit {
+                    reason: format!("idempotent intent `{key}` contains an unscoped deposit key"),
+                })?;
+            if page <= sweep_page {
+                connection
+                    .store
+                    .delete(&key)
+                    .await
+                    .map_err(|error| nats_error("delete expired idempotent intent", error))?;
+                removed = removed.saturating_add(1);
+            }
+        }
+        Ok(removed)
+    }
+
+    #[cfg(feature = "nats")]
     async fn gc_evaporated_with_policy_scan(&self, now: i64) -> Result<usize, SubstrateError> {
         let threat_class_configs = self
             .load_threat_class_configs()
@@ -3118,13 +3484,7 @@ impl JetStreamPheromoneSubstrate {
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            if intent_key_gc_page(&key).is_some_and(|page| page <= gc_sweep_page(now)) {
-                connection
-                    .store
-                    .delete(&key)
-                    .await
-                    .map_err(|error| nats_error("delete expired idempotent intent", error))?;
-                removed = removed.saturating_add(1);
+            if is_idempotent_deposit_intent_key(&key) {
                 continue;
             }
             if is_non_deposit_key(&key) {
@@ -3496,7 +3856,8 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
                 true,
             )
             .await?;
-        Ok(filter_deposits(&deposits, DepositQuery::recent(limit)))
+        let visible = filter_deposits(&deposits, DepositQuery::recent(0));
+        Ok(balance_recent_deposit_results(visible, limit))
     }
 
     async fn query_escalations(
@@ -3568,15 +3929,20 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     }
 
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError> {
+        let connection = self.ensure_connected().await?;
         if self.load_threat_class_configs().await?.is_empty() {
             let mut removed = 0usize;
             removed = removed.saturating_add(self.gc_evaporated_legacy(now).await?);
             removed = removed.saturating_add(self.gc_evaporated_by_page(now).await?);
+            removed =
+                removed.saturating_add(self.gc_expired_idempotent_intents(connection, now).await?);
             return Ok(removed);
         }
 
         let mut removed = 0usize;
         removed = removed.saturating_add(self.gc_evaporated_with_policy_scan(now).await?);
+        removed =
+            removed.saturating_add(self.gc_expired_idempotent_intents(connection, now).await?);
         Ok(removed)
     }
 
@@ -3775,11 +4141,27 @@ async fn ensure_kv_bucket(
     bucket: &str,
 ) -> Result<async_nats::jetstream::kv::Store, SubstrateError> {
     match jetstream.get_key_value(bucket).await {
-        Ok(store) => Ok(store),
+        Ok(store) => {
+            let configured_max_bytes = store.stream.cached_info().config.max_bytes;
+            if configured_max_bytes > 0 && configured_max_bytes <= MAX_JETSTREAM_BUCKET_BYTES {
+                return Ok(store);
+            }
+            let mut config = store.stream.cached_info().config.clone();
+            config.max_bytes = MAX_JETSTREAM_BUCKET_BYTES;
+            jetstream
+                .update_stream(config)
+                .await
+                .map_err(|error| nats_error("bound existing kv bucket", error))?;
+            jetstream
+                .get_key_value(bucket)
+                .await
+                .map_err(|error| nats_error("reopen bounded kv bucket", error))
+        }
         Err(_) => jetstream
             .create_key_value(async_nats::jetstream::kv::Config {
                 bucket: bucket.to_string(),
                 history: 1,
+                max_bytes: MAX_JETSTREAM_BUCKET_BYTES,
                 ..Default::default()
             })
             .await
@@ -3846,6 +4228,32 @@ fn deposit_kind(deposit: &PheromoneDeposit) -> DepositKeyKind {
     } else {
         DepositKeyKind::Evidence
     }
+}
+
+#[cfg(feature = "nats")]
+fn suppression_scope_digest(deposit: &VerifiedDeposit) -> Result<Option<String>, SubstrateError> {
+    // Zero-strength deposits are replay controls, but only an authenticated
+    // Providence feedback marker can suppress evidence. Do not make ordinary
+    // zero-strength observations consume the governed evidence pair budget.
+    if deposit_kind(deposit) == DepositKeyKind::Control
+        && feedback_suppression_marker(deposit).is_none()
+    {
+        return Ok(None);
+    }
+    let Some(event_id) = deposit
+        .indicator
+        .get("event_id")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let encoded = serde_json::to_vec(&(&deposit.threat_class, event_id)).map_err(|source| {
+        SubstrateError::Encode {
+            context: "pheromone suppression scope".to_string(),
+            source,
+        }
+    })?;
+    Ok(Some(hash_prefix(&encoded, 64)))
 }
 
 #[cfg(feature = "nats")]
@@ -4245,11 +4653,16 @@ fn legacy_idempotent_deposit_intent_key(operation_id: &str) -> String {
 }
 
 #[cfg(feature = "nats")]
-fn idempotent_deposit_intent_key(operation_id: &str, gc_page: i64) -> String {
+fn idempotent_deposit_intent_key(operation_id: &str) -> String {
     format!(
-        "{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.p{gc_page:020}.{}",
+        "{RECENT_DEPOSIT_INTENT_KEY_PREFIX}.v2.{}",
         hash_prefix(operation_id.as_bytes(), 64)
     )
+}
+
+#[cfg(feature = "nats")]
+fn is_idempotent_deposit_intent_key(key: &str) -> bool {
+    key.starts_with(&format!("{RECENT_DEPOSIT_INTENT_KEY_PREFIX}."))
 }
 
 #[cfg(feature = "nats")]
@@ -5152,7 +5565,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_intent_slots_remain_bounded_and_new_keys_are_gc_scoped() {
+    fn legacy_intent_slots_remain_bounded_and_new_keys_are_policy_independent() {
         for operation in 0..10_000_u64 {
             let operation_id = format!("operation-{operation}");
             let keys =
@@ -5166,8 +5579,9 @@ mod tests {
                     .unwrap();
                 assert!(slot < super::MAX_IDEMPOTENT_DEPOSIT_INTENT_SLOTS);
             }
-            let current = super::idempotent_deposit_intent_key(&operation_id, 42);
-            assert_eq!(super::intent_key_gc_page(&current), Some(42));
+            let current = super::idempotent_deposit_intent_key(&operation_id);
+            assert_eq!(super::intent_key_gc_page(&current), None);
+            assert!(super::is_idempotent_deposit_intent_key(&current));
             assert!(current.ends_with(&super::hash_prefix(operation_id.as_bytes(), 64)));
         }
     }
@@ -5212,6 +5626,7 @@ mod tests {
                 kind: Some(DepositKeyKind::Evidence),
                 expected_revision: Some(u64::try_from(timestamp + 1).unwrap()),
                 expected_encoded_len: Some(MAX_SINGLE_DEPOSIT_BYTES),
+                suppression_scope_digest: None,
             })
             .collect::<Vec<_>>();
         let selected = select_recent_deposit_keys_within_byte_limit(selected);
@@ -5238,12 +5653,72 @@ mod tests {
                 kind: None,
                 expected_revision: None,
                 expected_encoded_len: None,
+                suppression_scope_digest: None,
             })
             .collect::<Vec<_>>();
         assert_eq!(
             select_recent_deposit_keys_within_byte_limit(legacy).len(),
             MAX_ACTIVE_DEPOSIT_BYTES / MAX_SINGLE_DEPOSIT_BYTES,
             "unknown prior-layout lengths must be charged at the hard maximum"
+        );
+    }
+
+    #[test]
+    fn recent_pointer_wire_format_remains_rolling_upgrade_compatible() {
+        let pointer = RecentDepositPointer {
+            ordinal: 7,
+            kind: DepositKeyKind::Evidence,
+            deposit_key: "exp.00000000000000000042.execution.evidence.00000000000000000123.o00000000000000000007-l00000000000000000456-current".to_string(),
+            deposit_revision: 19,
+        };
+
+        assert_eq!(
+            serde_json::to_string(&pointer).unwrap(),
+            r#"{"ordinal":7,"kind":"evidence","deposit_key":"exp.00000000000000000042.execution.evidence.00000000000000000123.o00000000000000000007-l00000000000000000456-current","deposit_revision":19}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<RecentDepositPointer>(
+                r#"{"ordinal":7,"kind":"evidence","deposit_key":"exp.00000000000000000042.execution.evidence.00000000000000000123.o00000000000000000007-l00000000000000000456-current","deposit_revision":19}"#
+            )
+            .unwrap(),
+            pointer
+        );
+    }
+
+    #[test]
+    fn suppression_scope_pairs_only_authenticated_feedback_controls() {
+        let evidence = VerifiedDeposit::admit(resign_sample_deposit(
+            "scope-evidence",
+            sample_deposit("scope-evidence", 100, 0.9),
+            serde_json::json!({"event_id": "event-paired"}),
+        ))
+        .unwrap();
+        let dismissal = VerifiedDeposit::admit(resign_sample_deposit(
+            "scope-dismissal",
+            sample_deposit("scope-dismissal", 200, 0.0),
+            serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "feedback_id": "scope-dismissal",
+                "event_id": "event-paired",
+                "action": "dismiss",
+                "observed_at_ms": 200_000,
+            }),
+        ))
+        .unwrap();
+        let ordinary_control = VerifiedDeposit::admit(resign_sample_deposit(
+            "scope-ordinary-control",
+            sample_deposit("scope-ordinary-control", 300, 0.0),
+            serde_json::json!({"event_id": "event-paired"}),
+        ))
+        .unwrap();
+
+        assert_eq!(
+            super::suppression_scope_digest(&evidence).unwrap(),
+            super::suppression_scope_digest(&dismissal).unwrap()
+        );
+        assert_eq!(
+            super::suppression_scope_digest(&ordinary_control).unwrap(),
+            None
         );
     }
 
@@ -5259,6 +5734,7 @@ mod tests {
                 kind: Some(DepositKeyKind::Evidence),
                 expected_revision: Some(u64::try_from(index + 1).unwrap()),
                 expected_encoded_len: Some(MAX_SINGLE_DEPOSIT_BYTES),
+                suppression_scope_digest: Some("scope-a".to_string()),
             })
             .collect::<Vec<_>>();
         let dismissal_key = format!(
@@ -5269,6 +5745,7 @@ mod tests {
             kind: Some(DepositKeyKind::Control),
             expected_revision: Some(100),
             expected_encoded_len: Some(MAX_SINGLE_DEPOSIT_BYTES),
+            suppression_scope_digest: Some("scope-a".to_string()),
         });
 
         let selected = select_recent_deposit_keys_within_byte_limit(selected);
@@ -5283,7 +5760,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_ring_never_omits_a_control_to_admit_evidence() {
+    fn recent_ring_does_not_let_unrelated_controls_starve_evidence() {
         let timestamp = 1_700_000_000_i64;
         let mut selected = (0..(MAX_ACTIVE_DEPOSIT_BYTES / MAX_SINGLE_DEPOSIT_BYTES))
             .map(|index| SelectedDepositKey {
@@ -5293,6 +5770,7 @@ mod tests {
                 kind: Some(DepositKeyKind::Control),
                 expected_revision: Some(u64::try_from(index + 1).unwrap()),
                 expected_encoded_len: Some(MAX_SINGLE_DEPOSIT_BYTES),
+                suppression_scope_digest: Some(format!("unrelated-{index}")),
             })
             .collect::<Vec<_>>();
         let evidence_key = format!(
@@ -5303,6 +5781,7 @@ mod tests {
             kind: Some(DepositKeyKind::Evidence),
             expected_revision: Some(100),
             expected_encoded_len: Some(MAX_SINGLE_DEPOSIT_BYTES),
+            suppression_scope_digest: Some("evidence-scope".to_string()),
         });
 
         let selected = select_recent_deposit_keys_within_byte_limit(selected);
@@ -5313,12 +5792,48 @@ mod tests {
         assert!(
             selected
                 .iter()
-                .all(|candidate| deposit_key_kind(&candidate.key) == Some(DepositKeyKind::Control))
+                .any(|candidate| candidate.key == evidence_key)
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|candidate| {
+                    deposit_key_kind(&candidate.key) == Some(DepositKeyKind::Control)
+                })
+                .count(),
+            MAX_ACTIVE_DEPOSIT_BYTES / MAX_SINGLE_DEPOSIT_BYTES - 1
+        );
+    }
+
+    #[test]
+    fn recent_result_limit_reserves_capacity_for_evidence() {
+        let mut deposits = (0..100)
+            .map(|index| sample_deposit(&format!("control-{index}"), 10_000 + index, 0.0))
+            .chain((0..100).map(|index| sample_deposit(&format!("evidence-{index}"), index, 0.9)))
+            .collect::<Vec<_>>();
+        deposits.sort_by_key(|deposit| std::cmp::Reverse(deposit.timestamp));
+
+        let selected = super::balance_recent_deposit_results(deposits, 100);
+
+        assert_eq!(selected.len(), 100);
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|deposit| deposit.confidence == 0.0)
+                .count(),
+            50
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|deposit| deposit.confidence > 0.0)
+                .count(),
+            50
         );
         assert!(
-            !selected
-                .iter()
-                .any(|candidate| candidate.key == evidence_key)
+            selected
+                .windows(2)
+                .all(|window| window[0].timestamp >= window[1].timestamp)
         );
     }
 
@@ -6324,6 +6839,11 @@ mod tests {
         substrate.deposit(deposit.clone()).await.unwrap();
         substrate.deposit(deposit.clone()).await.unwrap();
         let connection = substrate.ensure_connected().await.unwrap();
+        assert_eq!(
+            connection.store.stream.cached_info().config.max_bytes,
+            super::MAX_JETSTREAM_BUCKET_BYTES,
+            "the shared KV stream must enforce a hard storage ceiling"
+        );
         assert!(
             connection
                 .store
@@ -6334,22 +6854,14 @@ mod tests {
             "new intents must never grow the legacy per-operation subject namespace"
         );
         let policy = substrate.config.resolve_threat_class_policy(None);
-        let intent_page = super::expiration_gc_page(
-            &deposit,
-            policy.half_life_secs,
-            policy.evaporation_threshold,
-        );
         assert!(
             connection
                 .store
-                .entry(&super::idempotent_deposit_intent_key(
-                    &operation_id,
-                    intent_page,
-                ))
+                .entry(&super::idempotent_deposit_intent_key(&operation_id))
                 .await
                 .unwrap()
                 .is_some(),
-            "new intents must use the collision-free retention-scoped namespace"
+            "new intents must use the policy-independent digest namespace"
         );
         let matches = substrate
             .recent_deposits(10)
@@ -6365,6 +6877,37 @@ mod tests {
             })
             .count();
         assert_eq!(matches, 1);
+
+        let stable_intent_key = super::idempotent_deposit_intent_key(&operation_id);
+        let stable_intent_revision = connection
+            .store
+            .entry(&stable_intent_key)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision;
+        substrate
+            .store_threat_class_config(ThreatClassConfig {
+                threat_class: deposit.threat_class.clone(),
+                half_life_secs: deposit.decay_half_life,
+                evaporation_threshold: policy.evaporation_threshold * 2.0,
+                alert_threshold: 1.2,
+                incident_threshold: 3.4,
+            })
+            .await
+            .unwrap();
+        substrate.deposit(deposit.clone()).await.unwrap();
+        assert_eq!(
+            connection
+                .store
+                .entry(&stable_intent_key)
+                .await
+                .unwrap()
+                .unwrap()
+                .revision,
+            stable_intent_revision,
+            "an exact retry must resolve the original intent after a retention-policy change"
+        );
 
         let crash_window = resign_sample_deposit(
             "feedback-idempotency-crash-window",

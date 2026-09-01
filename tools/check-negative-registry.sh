@@ -142,12 +142,12 @@ if case == "phase285-raw-kv-subject":
     expected_source_sha256 = {
         "bin/swarm-governance-witness-store.rs": "3a5f07d138ed495407c1f9f2b2accc2a33755e07a4b5eb77c359f87763e74c7c",
         "bin/swarm-governance-witness.rs": "93182d13a5550fe2ac0db8b4fb4fd126c5173e614676133ab3d735026d0d1a91",
-        "initializer.rs": "d8398d68032e58d1408b7c04bc1ef3d6edc4aedc8bb67134596cb1b5a8727754",
-        "jetstream_store.rs": "1aedaef8c5cb610f194519fb1063f5bffb1cdb8f8b13bf16382cf5ca58059e1b",
+        "initializer.rs": "fbfdbd2fd2cdb1add3a5363aed79c3659c98adebeac8a7169807872040e5af85",
+        "jetstream_store.rs": "965e779fb672545496e8d8571ae909c34ed1f1123aa0cc57123824bea4c0d279",
         "lib.rs": "67d18aeb10db492d969344636bf609bfff4ca606fde5504e12acf3ae5b704495",
         "nats_config.rs": "0a8e9d30d9550c8c5864724c87667eb3bd42030018a8698d7ccc104d5d2b6586",
         "public_dispatcher.rs": "c2f7796a9856600515232d807688663eb9c01949fd587d65a51f010b17db0e86",
-        "raw_config.rs": "7df9c38d32e2b6122c331c1a75d3617c2e8855712a73ef9fdbe86920d7349921",
+        "raw_config.rs": "dbb8132a899b988ed02451e00d2524f81cc31b22c8118f5ae2b2f966db43c24e",
         "runtime_client.rs": "d74369ec47fc38ef718fdd7de493ccd3be6f1a725528dbe809862d991b5b4efc",
         "secure_file.rs": "533f8a19eec6d05584c8aa8c33c7bd586f1659177ce540f0724814849f3a4182",
         "service_config.rs": "884914bd6bd531f7ba108be7501920fc6d2dd71d8bf73c62bace71dc6faf6e36",
@@ -784,7 +784,8 @@ phase285_transport_negative_self_test() (
       output="$(phase285_transport_negative_check "$scratch" "$case" semantic-only 2>&1)" || status=$?
       if [ "$status" -eq 0 ]; then
         survivors+=("$expected")
-      elif [ "$output" = "PHASE285-NEGATIVE[$expected]" ]; then
+      elif [[ "$output" == "PHASE285-NEGATIVE[$expected]" \
+        || "$output" == "PHASE285-NEGATIVE[$expected] "* ]]; then
         killed=$((killed + 1))
       else
         echo "PHASE285-NEGATIVE[unexpected-mutant-result:$expected:$status:$output]" >&2
@@ -1210,16 +1211,16 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-policy/Cargo.toml": "29ef642b8ba57958db7b202ebedb237d8b5bab1cb17b88d9e0e7ce56f9604520",
     "crates/swarm-response/Cargo.toml": "55d970d2348d4366791f1cb2e46df04872e33892af451c3919f67c45dd736760",
     "crates/swarm-runtime/Cargo.toml": "9e71810643aef57970036390c66e2e973231cff2b0b3e10490b7fb810ca84b0a",
-    "crates/swarm-spine/Cargo.toml": "2a60351ee33409190d7343a36d8b9926a1f0dbc56bfb66faef093f799ace8932",
+    "crates/swarm-spine/Cargo.toml": "d8f68d9f35dd8164ae3f3b8c09a425046c82b3f8d297c75337d801174d2fa98d",
 }
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "cb2cc5df86f6bab0f60cfe7dd239f58b44997926365512ca4214c738f24b6392",
-    "Cargo.lock": "76e3dccddeab21ca75802f51a03bb6e161f6956e869137b9e976c17b9393fdc2",
+    "Cargo.lock": "3e60b9058f1d97f703686f5a68739df0c4045a5e0900681a47f92c66ef032510",
     ".github/workflows/ci.yml": "992edade79f9d20c9456e31dc2d51a44b150125c997af1309621af8e31218c06",
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "5224c83c11ae8bd9a424efa9c655e46cdefa1431eddc19d5be29d679c5e55c2e",
+    "tools/check-single-governor-key.sh": "1daa5ccaa8224b5244854683a0fce3ecae4fe30a619ed23074b35ee2d01cb791",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
@@ -1245,7 +1246,7 @@ GOVERNANCE_ASSURANCE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (14, "fa359ba1da72ec1543ac52678c2cc7cae86870843656e8dec3a35506facdbe76"),
     "swarm-runtime":
-        (133, "89ae24f300bfa1ecaeb45ad77aed9481840751850a01f37a8d7717ddf0e99dcd"),
+        (133, "f40f24abe858260215b498170e1c235f6695c57605f3221472c2b14fc2721de6"),
     "swarm-ingest-runtime":
         (14, "8efe3036dab423eab24b0a08cdb8d1c6715c6628e6640de98d1d8d5e8946aa50"),
     "swarm-runtime-http":

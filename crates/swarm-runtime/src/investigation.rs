@@ -78,7 +78,6 @@ struct InvestigationJob {
     sequence: u64,
     replay: ReplayBundle,
     bundle: InvestigationBundle,
-    execution_claimed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -89,17 +88,11 @@ struct InvestigationScheduler {
 }
 
 impl InvestigationScheduler {
-    fn enqueue(
-        &mut self,
-        replay: ReplayBundle,
-        bundle: InvestigationBundle,
-        execution_claimed: bool,
-    ) -> InvestigationJob {
+    fn enqueue(&mut self, replay: ReplayBundle, bundle: InvestigationBundle) -> InvestigationJob {
         let job = InvestigationJob {
             sequence: self.next_sequence,
             replay,
             bundle,
-            execution_claimed,
         };
         self.next_sequence = self.next_sequence.saturating_add(1);
         self.queue.push(job.clone());
@@ -367,33 +360,31 @@ where
                     // side of this boundary must never leave a durable `Queued`
                     // bundle that later submissions keep scheduling against an
                     // already-consumed fence.
-                    if !job.execution_claimed {
-                        match worker_store.claim_execution(&job.bundle) {
-                            Ok(InvestigationExecutionClaim::Acquired) => {}
-                            Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
-                                worker_scheduler
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner())
-                                    .finish(&job.bundle.investigation_id);
-                                let mut guard = worker_state
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner());
-                                guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                                continue;
-                            }
-                            Err(error) => {
-                                worker_scheduler
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner())
-                                    .finish(&job.bundle.investigation_id);
-                                let mut guard = worker_state
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner());
-                                guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                                guard.failed_jobs = guard.failed_jobs.saturating_add(1);
-                                guard.last_failure_reason = Some(error.to_string());
-                                continue;
-                            }
+                    match worker_store.claim_execution(&job.bundle) {
+                        Ok(InvestigationExecutionClaim::Acquired) => {}
+                        Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
+                            worker_scheduler
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .finish(&job.bundle.investigation_id);
+                            let mut guard = worker_state
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
+                            guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                            continue;
+                        }
+                        Err(error) => {
+                            worker_scheduler
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .finish(&job.bundle.investigation_id);
+                            let mut guard = worker_state
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
+                            guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                            guard.failed_jobs = guard.failed_jobs.saturating_add(1);
+                            guard.last_failure_reason = Some(error.to_string());
+                            continue;
                         }
                     }
 
@@ -538,7 +529,7 @@ where
                 .unwrap_or_else(|poison| poison.into_inner())
                 .contains(&investigation_id)
         });
-        let (queued_bundle, queued_record, execution_claimed) = if let Some(existing) =
+        let (queued_bundle, queued_record) = if let Some(existing) =
             self.store.load_by_investigation_id(&investigation_id)?
         {
             if !same_investigation_submission(&existing.bundle, &expected_queued_bundle) {
@@ -557,26 +548,19 @@ where
                 return Ok(Some(existing.record));
             }
             if existing.bundle.status == InvestigationStatus::Running {
-                // `Running` is persisted immediately before the durable
-                // execution claim. Atomically acquiring a missing claim here
-                // distinguishes a crash in that window from an execution
-                // that may already have produced side effects. The former is
-                // safe to resume; the latter remains fail-closed.
-                match self.store.claim_execution(&existing.bundle)? {
-                    InvestigationExecutionClaim::Acquired => {
-                        (existing.bundle, existing.record, true)
-                    }
-                    InvestigationExecutionClaim::AlreadyAcquired => {
-                        return Ok(Some(existing.record));
-                    }
-                }
+                // Always requeue the durable Running record without consuming
+                // the execution fence on the request thread. Every worker
+                // races at the process-independent claim immediately before
+                // strategy execution, so an unfenced crash is recoverable and
+                // a fenced stale owner remains at-most-once.
+                (existing.bundle, existing.record)
             } else {
-                (existing.bundle, existing.record, false)
+                (existing.bundle, existing.record)
             }
         } else {
             let bundle = expected_queued_bundle;
             let record = self.store.persist(&bundle)?;
-            (bundle, record, false)
+            (bundle, record)
         };
 
         let Some(scheduler) = &self.scheduler else {
@@ -605,7 +589,7 @@ where
                 }
             }
             if !rejected {
-                guard.enqueue(replay.clone(), queued_bundle.clone(), execution_claimed);
+                guard.enqueue(replay.clone(), queued_bundle.clone());
             }
         }
 

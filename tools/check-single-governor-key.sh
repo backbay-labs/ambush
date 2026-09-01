@@ -335,7 +335,7 @@ assurance_target = pathlib.Path(sys.argv[4])
 cache_source = pathlib.Path(sys.argv[5])
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
 EXPECTED_ROOT_MANIFEST_DIGEST = "cb2cc5df86f6bab0f60cfe7dd239f58b44997926365512ca4214c738f24b6392"
-EXPECTED_ROOT_LOCK_DIGEST = "76e3dccddeab21ca75802f51a03bb6e161f6956e869137b9e976c17b9393fdc2"
+EXPECTED_ROOT_LOCK_DIGEST = "3e60b9058f1d97f703686f5a68739df0c4045a5e0900681a47f92c66ef032510"
 EXPECTED_WORKSPACE_PACKAGES = {
     "swarm-agents",
     "swarm-cli",
@@ -436,9 +436,9 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance":
         (14, "fa359ba1da72ec1543ac52678c2cc7cae86870843656e8dec3a35506facdbe76"),
     "swarm-governance-witness":
-        (17, "00ef8ba49f58c1b32ff7b26d25f5a1505d2bc2e7671afc7ed5077cbbb6092a90"),
+        (17, "491409171414d183301e7717a41fed4274f91f596d3ccd64a32f094754646d3b"),
     "swarm-runtime":
-        (133, "89ae24f300bfa1ecaeb45ad77aed9481840751850a01f37a8d7717ddf0e99dcd"),
+        (133, "f40f24abe858260215b498170e1c235f6695c57605f3221472c2b14fc2721de6"),
     "swarm-ingest-runtime":
         (14, "8efe3036dab423eab24b0a08cdb8d1c6715c6628e6640de98d1d8d5e8946aa50"),
     "swarm-runtime-http":

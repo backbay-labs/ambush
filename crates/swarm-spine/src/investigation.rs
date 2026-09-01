@@ -6,19 +6,13 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, RwLock};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::Severity;
 use swarm_whisker::TelemetryPayload;
 
 static INVESTIGATION_CLAIM_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
-static INVESTIGATION_CLAIM_PROCESS_EPOCH: LazyLock<u128> = LazyLock::new(|| {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
-});
 const INVESTIGATION_CLAIM_TEMP_ATTEMPTS: usize = 64;
 
 /// Persisted status of one investigation job.
@@ -795,10 +789,10 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
         let claims_directory = self.root.join("execution-claims");
         let mut opened_temporary = None;
         for _ in 0..INVESTIGATION_CLAIM_TEMP_ATTEMPTS {
+            let restart_nonce = uuid::Uuid::new_v4().simple();
             let temporary_path = claims_directory.join(format!(
-                ".claim.{}.{}.{}.tmp",
+                ".claim.{}.{restart_nonce}.{}.tmp",
                 std::process::id(),
-                *INVESTIGATION_CLAIM_PROCESS_EPOCH,
                 INVESTIGATION_CLAIM_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
             match OpenOptions::new()

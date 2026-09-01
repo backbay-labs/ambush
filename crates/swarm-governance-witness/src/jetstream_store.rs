@@ -31,7 +31,10 @@ use crate::raw_config::{
 };
 
 const NATS_OPERATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const READY_ENTRY_VALIDATION_CONCURRENCY: usize = 64;
+// The admission protocol permits at most 1,024 streams. InspectReady is a
+// fixed-deadline operation, so validate the entire admitted set in one bounded
+// wave rather than multiplying moderate per-read latency across serial waves.
+const READY_ENTRY_VALIDATION_CONCURRENCY: usize = 1_024;
 
 const KV_OPERATION: &str = "KV-Operation";
 const KV_PUT: &str = "PUT";

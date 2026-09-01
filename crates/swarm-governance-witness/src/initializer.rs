@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use async_nats::header::{
-    NATS_EXPECTED_LAST_SUBJECT_SEQUENCE, NATS_EXPECTED_STREAM, NATS_MESSAGE_ID, NATS_MESSAGE_TTL,
+    NATS_EXPECTED_LAST_SEQUENCE, NATS_EXPECTED_LAST_SUBJECT_SEQUENCE, NATS_EXPECTED_STREAM,
+    NATS_MESSAGE_ID, NATS_MESSAGE_TTL,
 };
 use async_nats::jetstream::response::Response;
 use async_nats::jetstream::stream::{LastRawMessageErrorKind, Stream};
@@ -198,14 +199,18 @@ pub async fn initialize_store(
     let context = async_nats::jetstream::new(client.clone());
 
     let initial_inspection = inspect_stream(&context, &config, &expected).await?;
-    let (created_here, inspected) = match initial_inspection {
-        Some(inspected) => (false, inspected),
+    let inspected = match initial_inspection {
+        Some(inspected) => inspected,
         None => {
-            create_stream(&context, &config).await?;
-            let inspected = inspect_stream(&context, &config, &expected)
-                .await?
-                .ok_or(StoreInitializerErrorV1::Unavailable)?;
-            (true, inspected)
+            let create_result = create_stream(&context, &config).await;
+            match inspect_stream(&context, &config, &expected).await? {
+                Some(inspected) => inspected,
+                None => {
+                    return Err(create_result
+                        .err()
+                        .unwrap_or(StoreInitializerErrorV1::Unavailable));
+                }
+            }
         }
     };
     let stream = context
@@ -222,7 +227,10 @@ pub async fn initialize_store(
     let expected_stream_keys = expected_stream_keys(&config.admission_set)?;
 
     let existing_manifest = read_raw_entry(&stream, &manifest_subject, &config).await?;
-    if existing_manifest.is_none() && !created_here {
+    // An exact, pristine stream is the recoverable post-create/pre-manifest
+    // crash state. Anything else is foreign or partially initialized and is
+    // never adopted without an authenticated manifest.
+    if existing_manifest.is_none() && !inspected.is_pristine_empty_stream() {
         return Err(StoreInitializerErrorV1::ExistingUninitializedStore);
     }
     let (mut manifest, mut manifest_revision) = match existing_manifest {
@@ -250,6 +258,7 @@ pub async fn initialize_store(
                 &manifest_subject,
                 &config.bucket_configuration.stream_name,
                 0,
+                Some(0),
                 canonical_wire_bytes(&manifest)
                     .map_err(|_| StoreInitializerErrorV1::Configuration)?,
             )
@@ -275,8 +284,11 @@ pub async fn initialize_store(
         let current = read_raw_entry(&stream, &subject, &config).await?;
         match manifest.initialized_streams.get(&stream_key) {
             Some(existing) => {
-                if existing != &record
-                    || current.as_ref().is_none_or(|raw| {
+                if existing != &record || current.is_none() {
+                    return Err(StoreInitializerErrorV1::Corrupt);
+                }
+                if manifest.phase == WitnessBucketManifestPhaseV1::Initializing
+                    && current.as_ref().is_none_or(|raw| {
                         raw.expected_previous_revision != 0 || raw.payload != empty_bytes
                     })
                 {
@@ -297,6 +309,7 @@ pub async fn initialize_store(
                             &subject,
                             &config.bucket_configuration.stream_name,
                             0,
+                            None,
                             empty_bytes,
                         )
                         .await?;
@@ -315,6 +328,7 @@ pub async fn initialize_store(
                     &manifest_subject,
                     &config.bucket_configuration.stream_name,
                     manifest_revision,
+                    None,
                     canonical_wire_bytes(&manifest)
                         .map_err(|_| StoreInitializerErrorV1::Configuration)?,
                 )
@@ -336,6 +350,7 @@ pub async fn initialize_store(
             &manifest_subject,
             &config.bucket_configuration.stream_name,
             manifest_revision,
+            None,
             canonical_wire_bytes(&manifest).map_err(|_| StoreInitializerErrorV1::Configuration)?,
         )
         .await?;
@@ -617,7 +632,10 @@ async fn read_raw_entry(
         Err(error) if error.kind() == LastRawMessageErrorKind::NoMessageFound => return Ok(None),
         Err(_) => return Err(StoreInitializerErrorV1::Unavailable),
     };
-    if message.subject.as_ref() != subject || message.sequence == 0 || message.headers.len() != 3 {
+    if message.subject.as_ref() != subject
+        || message.sequence == 0
+        || !(3..=4).contains(&message.headers.len())
+    {
         return Err(StoreInitializerErrorV1::Corrupt);
     }
     let operation = message.headers.get(KV_OPERATION).map(HeaderValue::as_str);
@@ -631,9 +649,20 @@ async fn read_raw_entry(
         .map(HeaderValue::as_str)
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or(StoreInitializerErrorV1::Corrupt)?;
+    let expected_stream_sequence = message
+        .headers
+        .get(NATS_EXPECTED_LAST_SEQUENCE)
+        .map(HeaderValue::as_str)
+        .map(str::parse::<u64>)
+        .transpose()
+        .map_err(|_| StoreInitializerErrorV1::Corrupt)?;
     if operation != Some(KV_PUT)
         || expected_stream != Some(config.bucket_configuration.stream_name.as_str())
         || expected_previous_revision >= message.sequence
+        || expected_stream_sequence.is_some_and(|sequence| {
+            sequence != 0 || expected_previous_revision != 0 || message.headers.len() != 4
+        })
+        || (expected_stream_sequence.is_none() && message.headers.len() != 3)
         || message.headers.get(KV_ROLLUP).is_some()
         || message.headers.get(NATS_MESSAGE_TTL).is_some()
         || message.headers.get(NATS_MESSAGE_ID).is_some()
@@ -652,6 +681,7 @@ async fn publish_put(
     subject: &str,
     stream_name: &str,
     expected_previous_revision: u64,
+    expected_stream_sequence: Option<u64>,
     payload: Vec<u8>,
 ) -> Result<u64, StoreInitializerErrorV1> {
     let mut headers = HeaderMap::new();
@@ -661,6 +691,9 @@ async fn publish_put(
         NATS_EXPECTED_LAST_SUBJECT_SEQUENCE,
         HeaderValue::from(expected_previous_revision),
     );
+    if let Some(sequence) = expected_stream_sequence {
+        headers.insert(NATS_EXPECTED_LAST_SEQUENCE, HeaderValue::from(sequence));
+    }
     let acknowledgement = timeout(Duration::from_millis(INITIALIZER_DEADLINE_MILLIS), async {
         context
             .publish_with_headers(subject.to_string(), headers, payload.into())
