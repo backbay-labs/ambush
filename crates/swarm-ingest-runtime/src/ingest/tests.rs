@@ -4365,6 +4365,8 @@ mod providence_feedback {
                 finding_id: "finding-event-durable-clock".to_string(),
                 hunt_id: "event-durable-clock".to_string(),
                 event_id: "event-durable-clock".to_string(),
+                replay_bundle_id: None,
+                replay_bundle_digest: None,
                 evidence_timestamp: None,
                 host_id: Some("host-durable-clock".to_string()),
                 strategy_id: Some("suspicious_process_tree".to_string()),
@@ -4611,6 +4613,8 @@ mod providence_feedback {
             finding_id: "finding-evt-selected-replay".to_string(),
             hunt_id: "evt-selected-replay".to_string(),
             event_id: "evt-trigger".to_string(),
+            replay_bundle_id: None,
+            replay_bundle_digest: None,
             evidence_timestamp: None,
             host_id: None,
             strategy_id: None,
@@ -4622,6 +4626,99 @@ mod providence_feedback {
                 .unwrap();
         assert_eq!(enriched.event_id, "evt-selected-replay");
         assert_eq!(enriched.host_id.as_deref(), Some("host-selected-replay"));
+        assert_eq!(
+            enriched.replay_bundle_id.as_deref(),
+            Some("bundle-evt-selected-replay")
+        );
+        assert!(
+            enriched
+                .replay_bundle_digest
+                .as_ref()
+                .is_some_and(|digest| digest.len() == 64)
+        );
+    }
+
+    #[tokio::test]
+    async fn investigation_feedback_uses_the_replay_bundle_frozen_in_its_target() {
+        let mut config = super::test_config("suspicious_process_tree");
+        config.investigation.enabled = true;
+        let state =
+            IngestState::from_config(super::temp_path("feedback-frozen-replay-bundle"), config)
+                .unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-frozen-replay",
+            "host-original",
+            1_700_106_000_000,
+        );
+        seed_feedback_incident(
+            &state,
+            "incident-frozen-replay",
+            "evt-frozen-replay",
+            "host-original",
+            "suspicious_process_tree",
+            1_700_106_000_000,
+        );
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-frozen-replay")
+            .unwrap()
+            .unwrap();
+        let unresolved = swarm_runtime::providence::resolve_feedback_target(
+            &lookup,
+            Some("finding-evt-frozen-replay"),
+        )
+        .unwrap();
+        let frozen = crate::ingest::providence_handlers::enrich_feedback_target(
+            &state,
+            &lookup,
+            &unresolved,
+        )
+        .unwrap();
+        let frozen_bundle_id = frozen.replay_bundle_id.clone().unwrap();
+
+        let mut newer = state
+            .current_replay_store()
+            .load_by_bundle_id(&frozen_bundle_id)
+            .unwrap()
+            .unwrap()
+            .bundle;
+        newer.bundle_id = "bundle-newer-same-hunt".to_string();
+        newer.audit.created_at_ms += 1_000;
+        newer.event.host_id = Some("host-newer".to_string());
+        state.current_replay_store().persist(&newer).unwrap();
+        assert_eq!(
+            state
+                .current_replay_store()
+                .load_by_hunt_id("evt-frozen-replay")
+                .unwrap()
+                .unwrap()
+                .record
+                .bundle_id,
+            "bundle-newer-same-hunt"
+        );
+
+        crate::ingest::providence_handlers::apply_providence_feedback(
+            &state,
+            &SwarmProvidenceFeedbackRequest {
+                action: ProvidenceFeedbackAction::Investigate,
+                incident_id: "incident-frozen-replay".to_string(),
+                finding_id: Some("finding-evt-frozen-replay".to_string()),
+                analyst_id: "analyst-frozen-replay".to_string(),
+                reason: Some("freeze exact replay".to_string()),
+            },
+            &frozen,
+            "feedback-frozen-replay",
+            1_700_106_001_000,
+        )
+        .await
+        .unwrap();
+        let investigation = state
+            .current_investigation()
+            .load_by_hunt_id("evt-frozen-replay")
+            .unwrap()
+            .unwrap();
+        assert_eq!(investigation.bundle.source_bundle_id, frozen_bundle_id);
     }
 
     #[tokio::test]
@@ -4992,6 +5089,7 @@ mod providence_feedback {
             })
             .unwrap();
         fs::remove_file(applied_root.join("population").join(FEEDBACK_SIGNALS_FILE)).unwrap();
+        fs::remove_dir_all(applied_root.join("population").join("feedback-operations")).unwrap();
         let stack = applied_state.stack.load_full();
         let retried = route_feedback_signal(
             applied_state.config_path(),
@@ -5022,6 +5120,71 @@ mod providence_feedback {
                 .unwrap()
                 .len(),
             1
+        );
+
+        // Fill the signed population cache to its exact bound. The oldest
+        // marker has an independently durable applied audit record, so the
+        // next valid operation must roll that cache entry instead of imposing
+        // a lifetime service ceiling.
+        let signed_population_store = FileEvolutionPopulationStore::open_signed(
+            applied_root.join("population"),
+            kitten_identity.id.clone(),
+            kitten_identity.signing_key.clone(),
+        )
+        .unwrap();
+        let oldest_marker = retried_population
+            .applied_feedback_operations
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        signed_population_store
+            .update_trusted(&kitten_identity.id, |state| {
+                for index in 1..swarm_runtime::mutation::MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS {
+                    state.applied_feedback_operations.insert(
+                        format!("{index:064x}"),
+                        swarm_runtime::mutation::EvolutionAppliedFeedbackOperation {
+                            operation_digest: format!("{:064x}", index + 1),
+                            strategy_id: "suspicious_process_tree".to_string(),
+                            penalty: 0.20,
+                            applied_at_ms: applied_record.recorded_at_ms + index as i64,
+                        },
+                    );
+                }
+                Ok(true)
+            })
+            .unwrap();
+        let rolled = route_feedback_signal(
+            applied_state.config_path(),
+            &stack.service.config,
+            true,
+            &SwarmFeedbackSignal {
+                operation_id: Some("feedback-rollover-operation".to_string()),
+                action: ProvidenceFeedbackAction::Dismiss,
+                incident_id: "incident-feedback-applied".to_string(),
+                finding_id: Some("finding-evt-feedback-applied".to_string()),
+                strategy_id: Some("suspicious_process_tree".to_string()),
+                threat_class: Some(ThreatClass::Execution),
+                analyst_id: "analyst-rollover".to_string(),
+                reason: Some("exercise bounded rollover".to_string()),
+                recorded_at_ms: applied_record.recorded_at_ms
+                    + swarm_runtime::mutation::MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS as i64,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            rolled.disposition,
+            swarm_runtime::kitten_agent::FeedbackSignalDisposition::Applied
+        );
+        let rolled_population = population_store.load().unwrap().unwrap();
+        assert_eq!(
+            rolled_population.applied_feedback_operations.len(),
+            swarm_runtime::mutation::MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
+        );
+        assert!(
+            !rolled_population
+                .applied_feedback_operations
+                .contains_key(&oldest_marker)
         );
 
         let pending_root = temp_dir("feedback-pending");

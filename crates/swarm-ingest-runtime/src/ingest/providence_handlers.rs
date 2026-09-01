@@ -20,7 +20,7 @@ use swarm_core::types::{
     SwarmProvidenceRuntimeBridgeHealth, SwarmProvidenceRuntimeContext,
     SwarmProvidenceWebhookContract,
 };
-use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
+use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex, sha256_hex};
 use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate};
 use swarm_response::notification::AggregatedNotification;
 use swarm_runtime::kitten_agent::route_feedback_signal;
@@ -423,16 +423,44 @@ pub(crate) async fn apply_providence_feedback(
                 .deposit(deposit)
                 .await
                 .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
-            let replay = state
-                .current_replay_store()
-                .load_by_hunt_id(&target.hunt_id)
-                .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
-                .ok_or_else(|| {
-                    ProvidenceFeedbackError::not_found(format!(
-                        "replay bundle for hunt `{}` was not found",
-                        target.hunt_id
-                    ))
-                })?;
+            let replay_store = state.current_replay_store();
+            let replay = match (
+                target.replay_bundle_id.as_deref(),
+                target.replay_bundle_digest.as_deref(),
+            ) {
+                (Some(bundle_id), Some(expected_digest)) => {
+                    let replay = replay_store
+                        .load_by_bundle_id(bundle_id)
+                        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+                        .ok_or_else(|| {
+                            ProvidenceFeedbackError::not_found(format!(
+                                "claimed replay bundle `{bundle_id}` was not found"
+                            ))
+                        })?;
+                    let encoded = serde_json::to_vec(&replay.bundle)
+                        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+                    if sha256_hex(&encoded) != expected_digest {
+                        return Err(ProvidenceFeedbackError::internal(format!(
+                            "claimed replay bundle `{bundle_id}` no longer matches its immutable digest"
+                        )));
+                    }
+                    replay
+                }
+                (None, None) => replay_store
+                    .load_by_hunt_id(&target.hunt_id)
+                    .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+                    .ok_or_else(|| {
+                        ProvidenceFeedbackError::not_found(format!(
+                            "replay bundle for hunt `{}` was not found",
+                            target.hunt_id
+                        ))
+                    })?,
+                _ => {
+                    return Err(ProvidenceFeedbackError::internal(
+                        "feedback target has an incomplete immutable replay binding",
+                    ));
+                }
+            };
             let submitted = state
                 .current_investigation()
                 .submit_idempotent(&replay.bundle, feedback_id, recorded_at_ms)
@@ -471,6 +499,10 @@ pub(crate) fn enrich_feedback_target(
         .load_by_hunt_id(&target.hunt_id)
         .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
     {
+        let encoded = serde_json::to_vec(&replay.bundle)
+            .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+        enriched.replay_bundle_id = Some(replay.record.bundle_id.clone());
+        enriched.replay_bundle_digest = Some(sha256_hex(&encoded));
         enriched.event_id = replay.bundle.event.event_id.clone();
         enriched.host_id = replay.bundle.event.host_id.clone().or(enriched.host_id);
         enriched.strategy_id = Some(replay.bundle.audit.detection.strategy_id.clone());

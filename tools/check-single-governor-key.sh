@@ -438,9 +438,9 @@ EXPECTED_CLOSURE_PACKAGE_FILE_INVENTORY = {
     "swarm-governance-witness":
         (16, "f151b406070aa22bc47b21e96e4cd386c6b37b6abc0cc437f2d4cdc819701bee"),
     "swarm-runtime":
-        (133, "4a9a94d13be8b27719c509c1d7494ccc87bb0ce1e6246a99f7d78085321f99ea"),
+        (133, "674d83ec73fad1c4930b33644f5fe66596848dba724c62c1c255b107198b4b10"),
     "swarm-ingest-runtime":
-        (14, "61fd0ce61ad70a7774955be6513e094d02c533e5711ddcf0883ec32bca0cfb46"),
+        (14, "8efe3036dab423eab24b0a08cdb8d1c6715c6628e6640de98d1d8d5e8946aa50"),
     "swarm-runtime-http":
         (22, "9dea36f32378484d96596ab95b198d6ebbc239a8e810172d9e1e2efb800de6d6"),
     "swarm-agents":
@@ -486,7 +486,7 @@ EXPECTED_PRIVACY_SOURCE_DIGESTS = {
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/platform_api.rs"):
         "6a47977b16fd895e5bea265ce18335f6f8b291db28b9ab758591cfd4d8e7bc14",
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs"):
-        "f6dfe7bd4b4bb6355e4bb6d78fd391d3dba8c1f279ccdcca462306d1cdddf8cd",
+        "27c88ad5538c47668ddee8d65aa3e9b4dfd8da4bf977322f2c3ea093c4cdba34",
     pathlib.Path("crates/swarm-ingest-runtime/src/ingest/soar_verdict_handlers.rs"):
         "7d35ef56a4cf801d92b603584a1ba1d7eb9b3dc348b2019bf72283cae64bdfec",
 }

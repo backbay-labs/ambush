@@ -3243,7 +3243,6 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
                 }
 
                 let key = stored.intent.deposit_key.clone();
-                let mut created_deposit = false;
                 let revision = loop {
                     match connection
                         .store
@@ -3264,7 +3263,6 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
                         }
                         None => match connection.store.create(&key, payload.clone().into()).await {
                             Ok(revision) => {
-                                created_deposit = true;
                                 break revision;
                             }
                             Err(error) if error.kind() == CreateErrorKind::AlreadyExists => {
@@ -3288,12 +3286,13 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
                 {
                     Ok(outcome) => outcome,
                     Err(error) => {
-                        // The commit marker is still absent, so removing a
-                        // value created by this attempt leaves a retryable
-                        // intent rather than an unindexed durable orphan.
-                        if created_deposit {
-                            self.purge_deposit_key(connection, &key).await?;
-                        }
+                        // Keep the operation-scoped value. Another exact
+                        // retry may already have published its pointer and
+                        // committed the shared intent before this failed
+                        // writer observed the pointer error. Purging here
+                        // could therefore delete a committed deposit. The
+                        // stable intent/key pair lets every later retry
+                        // reconcile this value safely.
                         return Err(nats_error("put recent-deposit pointer", error));
                     }
                 };

@@ -805,10 +805,19 @@ impl FileIncidentStore {
         let root = path.as_ref().to_path_buf();
         create_dir_all_durably(&root)?;
         create_dir_all_durably(&root.join("incidents"))?;
-        Ok(Self {
+        create_dir_all_durably(&root.join("soar-lineage"))?;
+        let store = Self {
             root,
             mutation_lock: Arc::new(Mutex::new(())),
-        })
+        };
+        {
+            let _guard = store.lock_mutation()?;
+            let mut index = store.read_index()?;
+            if store.ensure_soar_lineage_index_initialized(&mut index)? {
+                store.write_index(&index)?;
+            }
+        }
+        Ok(store)
     }
 
     fn incidents_dir(&self) -> PathBuf {
@@ -817,6 +826,22 @@ impl FileIncidentStore {
 
     fn index_path(&self) -> PathBuf {
         self.root.join("index.json")
+    }
+
+    fn soar_lineage_root(&self) -> PathBuf {
+        self.root.join("soar-lineage")
+    }
+
+    fn soar_lineage_path(&self, lineage_key: &str) -> Result<PathBuf, IncidentStoreError> {
+        if lineage_key.len() != 64 || !lineage_key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(IncidentStoreError::SoarLineageIndexConflict {
+                reason: "SOAR lineage key is not a SHA-256 digest".to_string(),
+            });
+        }
+        Ok(self
+            .soar_lineage_root()
+            .join(&lineage_key[..2])
+            .join(format!("{lineage_key}.json")))
     }
 
     fn mutation_lock_path(&self) -> PathBuf {
@@ -862,12 +887,185 @@ impl FileIncidentStore {
 
     fn write_index(&self, index: &IncidentIndex) -> Result<(), IncidentStoreError> {
         let path = self.index_path();
+        // Full audit payloads live in the per-incident document and lineage
+        // shards. Keeping another copy in index.json made every SOAR verdict
+        // an O(lifetime traffic) read/serialize/replace operation.
+        let mut compact = index.clone();
+        for record in &mut compact.entries {
+            record.feedback_audit_entries.clear();
+        }
+        compact.legacy_soar_lineage_claims.clear();
         let raw =
-            serde_json::to_string_pretty(index).map_err(|source| IncidentStoreError::Parse {
+            serde_json::to_string_pretty(&compact).map_err(|source| IncidentStoreError::Parse {
                 path: path.clone(),
                 source,
             })?;
         write_file_atomically(&path, raw.as_bytes())
+    }
+
+    fn read_soar_lineage_claim(
+        &self,
+        lineage_key: &str,
+    ) -> Result<Option<SoarLineageIndexEntry>, IncidentStoreError> {
+        let path = self.soar_lineage_path(lineage_key)?;
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(IncidentStoreError::Read { path, source }),
+        };
+        let claim: SoarLineageIndexEntry = serde_json::from_str(&raw)
+            .map_err(|source| IncidentStoreError::Parse { path, source })?;
+        if soar_lineage_index_key(&claim.entry).as_deref() != Some(lineage_key)
+            || !claim.matches_entry(&claim.entry)
+        {
+            return Err(IncidentStoreError::SoarLineageIndexConflict {
+                reason: format!("lineage shard `{lineage_key}` is not bound to its path"),
+            });
+        }
+        Ok(Some(claim))
+    }
+
+    fn write_soar_lineage_claim(
+        &self,
+        lineage_key: &str,
+        claim: &SoarLineageIndexEntry,
+    ) -> Result<(), IncidentStoreError> {
+        if soar_lineage_index_key(&claim.entry).as_deref() != Some(lineage_key)
+            || !claim.matches_entry(&claim.entry)
+        {
+            return Err(IncidentStoreError::SoarLineageIndexConflict {
+                reason: format!("lineage claim does not match shard `{lineage_key}`"),
+            });
+        }
+        if let Some(existing) = self.read_soar_lineage_claim(lineage_key)?
+            && (existing.incident_id != claim.incident_id
+                || !same_soar_verdict_request(&existing.entry, &claim.entry))
+        {
+            return Err(IncidentStoreError::SoarLineageIndexConflict {
+                reason: format!("lineage shard `{lineage_key}` has conflicting ownership"),
+            });
+        }
+        let path = self.soar_lineage_path(lineage_key)?;
+        let parent = path.parent().ok_or_else(|| IncidentStoreError::Write {
+            path: path.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "SOAR lineage shard has no parent",
+            ),
+        })?;
+        create_dir_all_durably(parent)?;
+        let raw = serde_json::to_vec_pretty(claim).map_err(|source| IncidentStoreError::Parse {
+            path: path.clone(),
+            source,
+        })?;
+        write_file_atomically(&path, &raw)
+    }
+
+    fn reconcile_soar_lineage_claim(
+        &self,
+        index: &mut IncidentIndex,
+        lineage_key: &str,
+        claim: &SoarLineageIndexEntry,
+    ) -> Result<(), IncidentStoreError> {
+        let record_index = index
+            .entries
+            .iter()
+            .position(|record| record.incident_id == claim.incident_id)
+            .ok_or_else(|| IncidentStoreError::SoarLineageIndexConflict {
+                reason: format!(
+                    "lineage `{lineage_key}` references missing incident `{}`",
+                    claim.incident_id
+                ),
+            })?;
+        let record = index.entries[record_index].clone();
+        let mut lookup = self.read_incident(record)?;
+        let durable_entry =
+            if let Some(existing) = find_soar_verdict_entry(&lookup.incident, &claim.entry) {
+                if !same_soar_verdict_request(existing, &claim.entry) {
+                    return Err(IncidentStoreError::SoarLineageIndexConflict {
+                        reason: format!(
+                            "lineage `{lineage_key}` conflicts with incident `{}`",
+                            claim.incident_id
+                        ),
+                    });
+                }
+                existing.clone()
+            } else {
+                lookup
+                    .incident
+                    .feedback_audit_entries
+                    .push(claim.entry.clone());
+                let bundle_path = self.write_incident(&lookup.incident)?;
+                index.entries[record_index] =
+                    IncidentRecord::from_incident(&lookup.incident, bundle_path);
+                claim.entry.clone()
+            };
+        let durable_claim = SoarLineageIndexEntry::from_entry(&claim.incident_id, durable_entry)?;
+        self.write_soar_lineage_claim(lineage_key, &durable_claim)
+    }
+
+    fn ensure_soar_lineage_index_initialized(
+        &self,
+        index: &mut IncidentIndex,
+    ) -> Result<bool, IncidentStoreError> {
+        if index.soar_lineage_index_initialized
+            && index.legacy_soar_lineage_claims.is_empty()
+            && index.pending_soar_lineage_claims.is_empty()
+        {
+            return Ok(false);
+        }
+
+        let mut claims = std::mem::take(&mut index.legacy_soar_lineage_claims);
+        claims.append(&mut index.pending_soar_lineage_claims);
+        if !index.soar_lineage_index_initialized {
+            for record in index.entries.clone() {
+                let lookup = self.read_incident(record)?;
+                for entry in &lookup.incident.feedback_audit_entries {
+                    if entry.soar_lineage.is_none() || is_rejected_soar_audit(entry) {
+                        continue;
+                    }
+                    let key = soar_lineage_index_key(entry).ok_or_else(|| {
+                        IncidentStoreError::SoarLineageIndexConflict {
+                            reason: "could not derive an index key from retained SOAR lineage"
+                                .to_string(),
+                        }
+                    })?;
+                    let candidate = SoarLineageIndexEntry::from_entry(
+                        &lookup.incident.incident_id,
+                        entry.clone(),
+                    )?;
+                    if let Some(existing) = claims.insert(key.clone(), candidate.clone())
+                        && existing != candidate
+                    {
+                        return Err(IncidentStoreError::SoarLineageIndexConflict {
+                            reason: format!(
+                                "lineage `{key}` maps to conflicting retained audit entries"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        for (lineage_key, claim) in claims {
+            self.reconcile_soar_lineage_claim(index, &lineage_key, &claim)?;
+        }
+        index.soar_lineage_index_initialized = true;
+        Ok(true)
+    }
+
+    fn feedback_timestamp_high_water(
+        &self,
+        index: &IncidentIndex,
+    ) -> Result<i64, IncidentStoreError> {
+        if let Some(high_water) = index.feedback_timestamp_high_water_ms {
+            return Ok(high_water);
+        }
+        let mut high_water = 0;
+        for record in index.entries.clone() {
+            let lookup = self.read_incident(record)?;
+            high_water = high_water.max(incident_feedback_timestamp_high_water(&lookup.incident));
+        }
+        Ok(high_water)
     }
 
     fn incident_path(&self, incident_id: &str) -> PathBuf {
@@ -896,8 +1094,9 @@ impl FileIncidentStore {
             path: path.clone(),
             source,
         })?;
-        let incident = serde_json::from_str(&raw)
+        let incident: CorrelatedIncident = serde_json::from_str(&raw)
             .map_err(|source| IncidentStoreError::Parse { path, source })?;
+        let record = IncidentRecord::from_incident(&incident, record.bundle_path);
         Ok(IncidentLookup { record, incident })
     }
 }
@@ -1022,7 +1221,7 @@ impl IncidentStore for FileIncidentStore {
     fn persist(&self, incident: &CorrelatedIncident) -> Result<IncidentRecord, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
-        let _ = ensure_soar_lineage_index_initialized(&mut index)?;
+        let _ = self.ensure_soar_lineage_index_initialized(&mut index)?;
         let mut incident = incident.clone();
         if let Some(record) = index
             .entries
@@ -1045,7 +1244,6 @@ impl IncidentStore for FileIncidentStore {
             .entries
             .retain(|entry| entry.incident_id != incident.incident_id);
         candidate_index.entries.push(record.clone());
-        refresh_incident_lineage_index(&mut candidate_index, &record)?;
         candidate_index.feedback_timestamp_high_water_ms = Some(
             candidate_index
                 .feedback_timestamp_high_water_ms
@@ -1064,7 +1262,7 @@ impl IncidentStore for FileIncidentStore {
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
-        let _ = ensure_soar_lineage_index_initialized(&mut index)?;
+        let _ = self.ensure_soar_lineage_index_initialized(&mut index)?;
         let Some(entry_index) = index
             .entries
             .iter()
@@ -1098,6 +1296,7 @@ impl IncidentStore for FileIncidentStore {
         }
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
+        let _ = self.ensure_soar_lineage_index_initialized(&mut index)?;
         let Some(entry_index) = index
             .entries
             .iter()
@@ -1133,7 +1332,7 @@ impl IncidentStore for FileIncidentStore {
         validate_proposed_soar_claim(&entry)?;
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
-        if ensure_soar_lineage_index_initialized(&mut index)? {
+        if self.ensure_soar_lineage_index_initialized(&mut index)? {
             self.write_index(&index)?;
         }
         let Some(entry_index) = index
@@ -1144,7 +1343,7 @@ impl IncidentStore for FileIncidentStore {
             return Ok(None);
         };
 
-        if let Some(indexed_claim) = index.soar_lineage_claims.get(&lineage_key).cloned() {
+        if let Some(indexed_claim) = self.read_soar_lineage_claim(&lineage_key)? {
             if !indexed_claim.matches_entry(&entry) || indexed_claim.incident_id != incident_id {
                 return Ok(Some(SoarVerdictClaimResult::Conflict));
             }
@@ -1185,10 +1384,10 @@ impl IncidentStore for FileIncidentStore {
                 let bundle_path = self.write_incident(&lookup.incident)?;
                 index.entries[claimed_record_index] =
                     IncidentRecord::from_incident(&lookup.incident, bundle_path);
-                index.soar_lineage_claims.insert(
-                    lineage_key,
-                    SoarLineageIndexEntry::from_entry(incident_id, durable_entry)?,
-                );
+                self.write_soar_lineage_claim(
+                    &lineage_key,
+                    &SoarLineageIndexEntry::from_entry(incident_id, durable_entry)?,
+                )?;
                 self.write_index(&index)?;
             }
             return Ok(Some(result));
@@ -1197,34 +1396,28 @@ impl IncidentStore for FileIncidentStore {
         let record = index.entries[entry_index].clone();
         let mut lookup = self.read_incident(record)?;
 
-        let current = index.feedback_timestamp_high_water_ms.unwrap_or_else(|| {
-            index
-                .entries
-                .iter()
-                .flat_map(|record| &record.feedback_audit_entries)
-                .map(|audit| audit.received_at_ms)
-                .max()
-                .unwrap_or(0)
-        });
+        let current = self.feedback_timestamp_high_water(&index)?;
         let reserved = current
             .checked_add(1)
             .map(|next| entry.received_at_ms.max(next))
             .ok_or(IncidentStoreError::FeedbackTimestampExhausted)?;
         entry.received_at_ms = reserved;
 
-        // Commit the clock reservation before the claim becomes observable.
-        // The lineage index is also an intent record. A failure after this
-        // write is repaired from that exact entry without scanning incidents.
+        // Commit a short-lived recovery intent before the claim becomes
+        // observable. Store-open and every mutation reconcile this exact
+        // entry into its incident and digest shard before clearing the intent.
         index.feedback_timestamp_high_water_ms = Some(reserved);
-        index.soar_lineage_claims.insert(
-            lineage_key,
-            SoarLineageIndexEntry::from_entry(incident_id, entry.clone())?,
-        );
+        let indexed_claim = SoarLineageIndexEntry::from_entry(incident_id, entry.clone())?;
+        index
+            .pending_soar_lineage_claims
+            .insert(lineage_key.clone(), indexed_claim.clone());
         self.write_index(&index)?;
+        self.write_soar_lineage_claim(&lineage_key, &indexed_claim)?;
 
         lookup.incident.feedback_audit_entries.push(entry.clone());
         let bundle_path = self.write_incident(&lookup.incident)?;
         index.entries[entry_index] = IncidentRecord::from_incident(&lookup.incident, bundle_path);
+        index.pending_soar_lineage_claims.remove(&lineage_key);
         self.write_index(&index)?;
         Ok(Some(SoarVerdictClaimResult::Claimed(entry)))
     }
@@ -1242,16 +1435,34 @@ impl IncidentStore for FileIncidentStore {
             })?;
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
-        if ensure_soar_lineage_index_initialized(&mut index)? {
+        if self.ensure_soar_lineage_index_initialized(&mut index)? {
             self.write_index(&index)?;
         }
-        let Some(claim) = index.soar_lineage_claims.get(&lineage_key) else {
+        let Some(mut claim) = self.read_soar_lineage_claim(&lineage_key)? else {
             return Ok(None);
         };
         if claim.source_system != source_system || claim.source_verdict_id != source_verdict_id {
             return Err(IncidentStoreError::SoarLineageIndexConflict {
                 reason: format!("lineage key `{lineage_key}` maps to a different source verdict"),
             });
+        }
+        let record = index
+            .entries
+            .iter()
+            .find(|record| record.incident_id == claim.incident_id)
+            .cloned()
+            .ok_or_else(|| IncidentStoreError::SoarLineageIndexConflict {
+                reason: format!(
+                    "lineage key `{lineage_key}` references missing incident `{}`",
+                    claim.incident_id
+                ),
+            })?;
+        let lookup = self.read_incident(record)?;
+        if let Some(durable) = find_soar_verdict_entry(&lookup.incident, &claim.entry)
+            && durable != &claim.entry
+        {
+            claim = SoarLineageIndexEntry::from_entry(&claim.incident_id, durable.clone())?;
+            self.write_soar_lineage_claim(&lineage_key, &claim)?;
         }
         Ok(Some(claim.entry.clone()))
     }
@@ -1264,7 +1475,7 @@ impl IncidentStore for FileIncidentStore {
     ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
-        let _ = ensure_soar_lineage_index_initialized(&mut index)?;
+        let _ = self.ensure_soar_lineage_index_initialized(&mut index)?;
         let Some(entry_index) = index
             .entries
             .iter()
@@ -1287,10 +1498,10 @@ impl IncidentStore for FileIncidentStore {
                 .max(received_at_ms),
         );
         if let Some(lineage_key) = soar_lineage_index_key(&completed_entry) {
-            index.soar_lineage_claims.insert(
-                lineage_key,
-                SoarLineageIndexEntry::from_entry(incident_id, completed_entry)?,
-            );
+            self.write_soar_lineage_claim(
+                &lineage_key,
+                &SoarLineageIndexEntry::from_entry(incident_id, completed_entry)?,
+            )?;
         }
         self.write_index(&index)?;
         Ok(Some(updated))
@@ -1301,7 +1512,10 @@ impl IncidentStore for FileIncidentStore {
         incident_id: &str,
     ) -> Result<Option<IncidentLookup>, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
-        let index = self.read_index()?;
+        let mut index = self.read_index()?;
+        if self.ensure_soar_lineage_index_initialized(&mut index)? {
+            self.write_index(&index)?;
+        }
         if let Some(record) = index
             .entries
             .into_iter()
@@ -1314,7 +1528,11 @@ impl IncidentStore for FileIncidentStore {
 
     fn load_by_hunt_id(&self, hunt_id: &str) -> Result<Option<IncidentLookup>, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
-        let mut entries = self.read_index()?.entries;
+        let mut index = self.read_index()?;
+        if self.ensure_soar_lineage_index_initialized(&mut index)? {
+            self.write_index(&index)?;
+        }
+        let mut entries = index.entries;
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         if let Some(record) = entries.into_iter().find(|entry| {
             entry
@@ -1329,16 +1547,24 @@ impl IncidentStore for FileIncidentStore {
 
     fn recent(&self, limit: usize) -> Result<Vec<IncidentRecord>, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
-        let mut entries = self.read_index()?.entries;
+        let mut index = self.read_index()?;
+        if self.ensure_soar_lineage_index_initialized(&mut index)? {
+            self.write_index(&index)?;
+        }
+        let mut entries = index.entries;
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         entries.truncate(limit);
-        Ok(entries)
+        entries
+            .into_iter()
+            .map(|record| self.read_incident(record).map(|lookup| lookup.record))
+            .collect()
     }
 
     fn health(&self) -> Result<IncidentStoreHealth, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         create_dir_all_durably(&self.root)?;
         create_dir_all_durably(&self.incidents_dir())?;
+        create_dir_all_durably(&self.soar_lineage_root())?;
         let stored_incidents = self.read_index()?.entries.len();
         Ok(IncidentStoreHealth {
             backend: "local_files".to_string(),
@@ -1355,18 +1581,11 @@ impl IncidentStore for FileIncidentStore {
     ) -> Result<i64, IncidentStoreError> {
         let _guard = self.lock_mutation()?;
         let mut index = self.read_index()?;
+        let _ = self.ensure_soar_lineage_index_initialized(&mut index)?;
         // Legacy indexes predate the explicit high-water and are migrated by
-        // scanning their retained audit metadata exactly once. Every current
+        // scanning their incident documents exactly once. Every current
         // reservation is then O(1), independent of incident/deposit volume.
-        let current = index.feedback_timestamp_high_water_ms.unwrap_or_else(|| {
-            index
-                .entries
-                .iter()
-                .flat_map(|entry| &entry.feedback_audit_entries)
-                .map(|entry| entry.received_at_ms)
-                .max()
-                .unwrap_or(0)
-        });
+        let current = self.feedback_timestamp_high_water(&index)?;
         let next = current
             .checked_add(1)
             .map(|next| observed_at_ms.max(next))
@@ -1384,8 +1603,14 @@ struct IncidentIndex {
     feedback_timestamp_high_water_ms: Option<i64>,
     #[serde(default)]
     soar_lineage_index_initialized: bool,
+    /// Read-only migration input for index.json files produced before lineage
+    /// ownership moved into digest-sharded records.
+    #[serde(default, rename = "soar_lineage_claims", skip_serializing)]
+    legacy_soar_lineage_claims: BTreeMap<String, SoarLineageIndexEntry>,
+    /// Crash-recovery intents only. Successful claims are removed immediately;
+    /// lifetime lineage ownership resides in bounded individual shard files.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    soar_lineage_claims: BTreeMap<String, SoarLineageIndexEntry>,
+    pending_soar_lineage_claims: BTreeMap<String, SoarLineageIndexEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1438,73 +1663,6 @@ fn soar_lineage_index_key_for(
 
 fn is_rejected_soar_audit(entry: &AnalystFeedbackAuditEntry) -> bool {
     entry.outcome.get("status").and_then(Value::as_str) == Some("rejected")
-}
-
-fn ensure_soar_lineage_index_initialized(
-    index: &mut IncidentIndex,
-) -> Result<bool, IncidentStoreError> {
-    if index.soar_lineage_index_initialized {
-        return Ok(false);
-    }
-    let mut claims = BTreeMap::new();
-    for record in &index.entries {
-        for entry in &record.feedback_audit_entries {
-            if entry.soar_lineage.is_none() || is_rejected_soar_audit(entry) {
-                continue;
-            }
-            let key = soar_lineage_index_key(entry).ok_or_else(|| {
-                IncidentStoreError::SoarLineageIndexConflict {
-                    reason: "could not derive an index key from retained SOAR lineage".to_string(),
-                }
-            })?;
-            let candidate = SoarLineageIndexEntry::from_entry(&record.incident_id, entry.clone())?;
-            if let Some(existing) = claims.insert(key.clone(), candidate.clone())
-                && existing != candidate
-            {
-                return Err(IncidentStoreError::SoarLineageIndexConflict {
-                    reason: format!("lineage `{key}` maps to conflicting retained audit entries"),
-                });
-            }
-        }
-    }
-    index.soar_lineage_claims = claims;
-    index.soar_lineage_index_initialized = true;
-    Ok(true)
-}
-
-fn refresh_incident_lineage_index(
-    index: &mut IncidentIndex,
-    record: &IncidentRecord,
-) -> Result<(), IncidentStoreError> {
-    if !index.soar_lineage_index_initialized {
-        return Ok(());
-    }
-    index
-        .soar_lineage_claims
-        .retain(|_, claim| claim.incident_id != record.incident_id);
-    for entry in &record.feedback_audit_entries {
-        if entry.soar_lineage.is_none() || is_rejected_soar_audit(entry) {
-            continue;
-        }
-        let key = soar_lineage_index_key(entry).ok_or_else(|| {
-            IncidentStoreError::SoarLineageIndexConflict {
-                reason: "could not derive an index key from a refreshed SOAR lineage".to_string(),
-            }
-        })?;
-        let candidate = SoarLineageIndexEntry::from_entry(&record.incident_id, entry.clone())?;
-        if let Some(existing) = index.soar_lineage_claims.get(&key)
-            && existing.incident_id != record.incident_id
-        {
-            return Err(IncidentStoreError::SoarLineageIndexConflict {
-                reason: format!(
-                    "lineage `{key}` is already owned by incident `{}`",
-                    existing.incident_id
-                ),
-            });
-        }
-        index.soar_lineage_claims.insert(key, candidate);
-    }
-    Ok(())
 }
 
 fn find_soar_verdict_entry<'a>(
@@ -2469,6 +2627,93 @@ mod tests {
                     .contains(".tmp.")
             }));
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_soar_lineage_is_sharded_and_index_metadata_stays_compact() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-soar-sharded-index-{}-{}",
+            std::process::id(),
+            super::INCIDENT_TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        let incident = sample_incident();
+        store.persist(&incident).unwrap();
+        let claim = sample_soar_claim(&incident.incident_id, "sharded-verdict");
+        assert!(matches!(
+            store
+                .claim_soar_verdict(&incident.incident_id, claim.clone())
+                .unwrap()
+                .unwrap(),
+            SoarVerdictClaimResult::Claimed(_)
+        ));
+
+        let lineage_key = super::soar_lineage_index_key(&claim).unwrap();
+        let shard = store.soar_lineage_path(&lineage_key).unwrap();
+        assert!(shard.exists());
+        let index: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("index.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            index["entries"][0]["feedback_audit_entries"],
+            serde_json::json!([])
+        );
+        assert!(index.get("soar_lineage_claims").is_none());
+        assert!(index.get("pending_soar_lineage_claims").is_none());
+        assert!(
+            !std::fs::read_to_string(root.join("index.json"))
+                .unwrap()
+                .contains("sharded-verdict")
+        );
+
+        let loaded = FileIncidentStore::open(&root)
+            .unwrap()
+            .load_soar_verdict_claim(SoarSourceSystem::SplunkSoar, "sharded-verdict")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.feedback_id, claim.feedback_id);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn correlation_refresh_recovers_an_index_first_soar_claim() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-soar-index-first-refresh-{}-{}",
+            std::process::id(),
+            super::INCIDENT_TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        let incident = sample_incident();
+        store.persist(&incident).unwrap();
+        let claim = sample_soar_claim(&incident.incident_id, "index-first-verdict");
+        let lineage_key = super::soar_lineage_index_key(&claim).unwrap();
+        {
+            let _guard = store.lock_mutation().unwrap();
+            let mut index = store.read_index().unwrap();
+            index.pending_soar_lineage_claims.insert(
+                lineage_key.clone(),
+                super::SoarLineageIndexEntry::from_entry(&incident.incident_id, claim.clone())
+                    .unwrap(),
+            );
+            store.write_index(&index).unwrap();
+        }
+
+        let mut refreshed = incident.clone();
+        refreshed.summary = "new correlation snapshot".to_string();
+        store.persist(&refreshed).unwrap();
+        let loaded = store
+            .load_by_incident_id(&incident.incident_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.incident.summary, "new correlation snapshot");
+        assert_eq!(loaded.incident.feedback_audit_entries, vec![claim.clone()]);
+        assert!(store.soar_lineage_path(&lineage_key).unwrap().exists());
+        let index = store.read_index().unwrap();
+        assert!(index.pending_soar_lineage_claims.is_empty());
+
         let _ = std::fs::remove_dir_all(root);
     }
 

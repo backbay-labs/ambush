@@ -260,29 +260,126 @@ pub struct KittenFeedbackRoutingResult {
 
 #[derive(Debug, Clone)]
 struct FileKittenFeedbackStore {
+    root: PathBuf,
     path: PathBuf,
+    lock_path: PathBuf,
+    operations_root: PathBuf,
 }
 
 impl FileKittenFeedbackStore {
     fn open(root: impl AsRef<Path>) -> Result<Self, String> {
         let root = root.as_ref().to_path_buf();
         create_feedback_store_root_durably(&root)?;
+        let operations_root = root.join("feedback-operations");
+        create_feedback_store_root_durably(&operations_root)?;
         Ok(Self {
+            root: root.clone(),
             path: root.join("feedback-signals.jsonl"),
+            lock_path: root.join(".feedback-signals.lock"),
+            operations_root,
         })
+    }
+
+    fn lock(&self) -> Result<fs::File, String> {
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .map_err(|error| format!("failed to open kitten feedback store lock: {error}"))?;
+        lock.lock()
+            .map_err(|error| format!("failed to lock kitten feedback store: {error}"))?;
+        Ok(lock)
+    }
+
+    fn operation_path(&self, marker: &str) -> Result<PathBuf, String> {
+        if marker.len() != 64 || !marker.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("kitten feedback operation marker is not a SHA-256 digest".to_string());
+        }
+        Ok(self
+            .operations_root
+            .join(&marker[..2])
+            .join(format!("{marker}.json")))
+    }
+
+    fn read_operation(&self, marker: &str) -> Result<Option<KittenFeedbackSignalRecord>, String> {
+        let path = self.operation_path(marker)?;
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "failed to read kitten feedback operation `{}`: {error}",
+                    path.display()
+                ));
+            }
+        };
+        let record = serde_json::from_str::<KittenFeedbackSignalRecord>(&raw).map_err(|error| {
+            format!(
+                "failed to parse kitten feedback operation `{}`: {error}",
+                path.display()
+            )
+        })?;
+        if sha256_hex(record.signal_id.as_bytes()) != marker {
+            return Err(format!(
+                "kitten feedback operation `{}` is not bound to its shard path",
+                path.display()
+            ));
+        }
+        Ok(Some(record))
+    }
+
+    fn write_operation(&self, record: &KittenFeedbackSignalRecord) -> Result<(), String> {
+        use std::io::Write;
+
+        let marker = sha256_hex(record.signal_id.as_bytes());
+        let path = self.operation_path(&marker)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| "kitten feedback operation path has no parent".to_string())?;
+        create_feedback_store_root_durably(parent)?;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| format!("kitten feedback operation clock failed: {error}"))?
+            .as_nanos();
+        let temporary = parent.join(format!(
+            ".feedback-operation.tmp.{}.{}",
+            std::process::id(),
+            nonce
+        ));
+        let raw = serde_json::to_vec(record)
+            .map_err(|error| format!("failed to encode kitten feedback operation: {error}"))?;
+        let result = (|| -> std::io::Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)?;
+            file.write_all(&raw)?;
+            file.sync_all()?;
+            fs::rename(&temporary, &path)?;
+            fs::File::open(parent)?.sync_all()
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!(
+                "failed to persist kitten feedback operation `{}`: {error}",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     fn append_once(&self, record: &KittenFeedbackSignalRecord) -> Result<(), String> {
         use std::io::Write;
 
+        let _lock = self.lock()?;
         let mut file = fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(&self.path)
             .map_err(|error| format!("failed to open kitten feedback store: {error}"))?;
-        file.lock()
-            .map_err(|error| format!("failed to lock kitten feedback store: {error}"))?;
         let existing = read_feedback_audit_locked(&mut file)?;
         let existing_len = u64::try_from(existing.len()).map_err(|error| error.to_string())?;
         if existing_len > MAX_KITTEN_FEEDBACK_AUDIT_BYTES {
@@ -290,6 +387,19 @@ impl FileKittenFeedbackStore {
                 "kitten feedback store exceeds the {}-byte hard limit",
                 MAX_KITTEN_FEEDBACK_AUDIT_BYTES
             ));
+        }
+        let marker = sha256_hex(record.signal_id.as_bytes());
+        if let Some(existing_operation) = self.read_operation(&marker)? {
+            validate_same_feedback_operation(&existing_operation, record)?;
+            if existing_operation == *record {
+                return Ok(());
+            }
+            if existing_operation.disposition == FeedbackSignalDisposition::Applied {
+                return Err(format!(
+                    "kitten feedback operation `{}` cannot replace its durable applied outcome",
+                    record.signal_id
+                ));
+            }
         }
         for (line_number, line) in existing.lines().enumerate() {
             let candidate =
@@ -314,15 +424,27 @@ impl FileKittenFeedbackStore {
             .and_then(|length| length.checked_add(1))
             .ok_or_else(|| "kitten feedback store length overflow".to_string())?;
         if next_len > MAX_KITTEN_FEEDBACK_AUDIT_BYTES {
-            return Err(format!(
-                "kitten feedback store append would exceed the {}-byte hard limit",
-                MAX_KITTEN_FEEDBACK_AUDIT_BYTES
-            ));
+            drop(file);
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| format!("kitten feedback rotation clock failed: {error}"))?
+                .as_nanos();
+            let archive = self.root.join(format!("feedback-signals.{nonce}.jsonl"));
+            fs::rename(&self.path, &archive)
+                .map_err(|error| format!("failed to rotate kitten feedback audit: {error}"))?;
+            sync_feedback_store_directory(&self.path)?;
+            file = fs::OpenOptions::new()
+                .create_new(true)
+                .read(true)
+                .append(true)
+                .open(&self.path)
+                .map_err(|error| format!("failed to create kitten feedback audit: {error}"))?;
         }
         writeln!(file, "{line}")
             .and_then(|()| file.sync_all())
             .map_err(|error| format!("failed to append kitten feedback signal: {error}"))?;
         sync_feedback_store_directory(&self.path)?;
+        self.write_operation(record)?;
         Ok(())
     }
 
@@ -330,17 +452,22 @@ impl FileKittenFeedbackStore {
         &self,
         record: &KittenFeedbackSignalRecord,
     ) -> Result<Option<KittenFeedbackSignalRecord>, String> {
+        let _lock = self.lock()?;
+        let marker = sha256_hex(record.signal_id.as_bytes());
+        if let Some(existing) = self.read_operation(&marker)? {
+            validate_same_feedback_operation(&existing, record)?;
+            return Ok(
+                (existing.disposition == FeedbackSignalDisposition::Applied).then_some(existing)
+            );
+        }
         if !self.path.exists() {
             return Ok(None);
         }
-
         let mut file = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(&self.path)
             .map_err(|error| format!("failed to open kitten feedback store: {error}"))?;
-        file.lock()
-            .map_err(|error| format!("failed to lock kitten feedback store: {error}"))?;
         let existing = read_feedback_audit_locked(&mut file)?;
         let existing_len = u64::try_from(existing.len()).map_err(|error| error.to_string())?;
         if existing_len > MAX_KITTEN_FEEDBACK_AUDIT_BYTES {
@@ -375,7 +502,17 @@ impl FileKittenFeedbackStore {
                 applied = Some(candidate);
             }
         }
+        if let Some(applied) = applied.as_ref() {
+            self.write_operation(applied)?;
+        }
         Ok(applied)
+    }
+
+    fn has_durable_applied_marker(&self, marker: &str) -> Result<bool, String> {
+        let _lock = self.lock()?;
+        Ok(self
+            .read_operation(marker)?
+            .is_some_and(|record| record.disposition == FeedbackSignalDisposition::Applied))
     }
 }
 
@@ -644,10 +781,31 @@ pub fn route_feedback_signal(
             if state.applied_feedback_operations.len()
                 >= MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
             {
-                return Err(format!(
-                    "kitten population has reached the {}-operation analyst feedback idempotency limit",
-                    MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
-                ));
+                // Digest-sharded operation records are the durable retry
+                // ledger. The population copy is a bounded merge cache, so
+                // its oldest independently committed entry may be rolled out.
+                let mut candidates = state
+                    .applied_feedback_operations
+                    .iter()
+                    .map(|(marker, operation)| (marker.clone(), operation.applied_at_ms))
+                    .collect::<Vec<_>>();
+                candidates.sort_by(|(left_marker, left_at), (right_marker, right_at)| {
+                    (left_at, left_marker).cmp(&(right_at, right_marker))
+                });
+                let mut evict = None;
+                for (marker, _) in candidates {
+                    if store.has_durable_applied_marker(&marker)? {
+                        evict = Some(marker);
+                        break;
+                    }
+                }
+                let evict = evict.ok_or_else(|| {
+                    format!(
+                        "kitten population cannot roll its {}-operation analyst feedback cache because no entry has a durable applied operation shard",
+                        MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
+                    )
+                })?;
+                state.applied_feedback_operations.remove(&evict);
             }
             let Some(candidate) = state
                 .members

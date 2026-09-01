@@ -2470,6 +2470,7 @@ fn enforce_journal_file_limit(path: &Path, max_bytes: u64) -> Result<(), Substra
 }
 
 fn load_deposit_operations(path: &Path) -> Result<BTreeMap<String, String>, SubstrateError> {
+    repair_uncommitted_deposit_operation_tail(path)?;
     enforce_journal_file_limit(path, MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES)?;
     let records = load_jsonl::<DepositOperationRecord>(path)?;
     let mut operations = BTreeMap::new();
@@ -2490,6 +2491,43 @@ fn load_deposit_operations(path: &Path) -> Result<BTreeMap<String, String>, Subs
         insert_deposit_operation(&mut operations, &record)?;
     }
     Ok(operations)
+}
+
+fn repair_uncommitted_deposit_operation_tail(path: &Path) -> Result<(), SubstrateError> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(SubstrateError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if bytes.is_empty() || bytes.last() == Some(&b'\n') {
+        return Ok(());
+    }
+
+    // A record is committed only once its terminating newline and sync_data
+    // complete. A crash may leave an arbitrary final prefix; discard only
+    // that uncommitted tail and preserve every newline-terminated record.
+    let committed_len = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    let file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|source| SubstrateError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    file.set_len(u64::try_from(committed_len).unwrap_or(0))
+        .and_then(|()| file.sync_all())
+        .map_err(|source| SubstrateError::Write {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 fn append_deposit_operation_record(
@@ -3878,6 +3916,49 @@ mod tests {
             Err(super::SubstrateError::InvalidDeposit { reason })
                 if reason.contains("operation id was reused")
         ));
+
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(operation_path);
+    }
+
+    #[tokio::test]
+    async fn local_journal_repairs_only_an_uncommitted_operation_ledger_tail() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-pheromone-feedback-operation-torn-tail-{unique}.jsonl"
+        ));
+        let operation_path = super::deposit_operation_journal_path(&path);
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let committed = sample_feedback_deposit("reviewer-tail", "event-committed", "dismiss", 200);
+        {
+            let substrate =
+                LocalJournalPheromoneSubstrate::open_for_replay(config.clone(), &path).unwrap();
+            substrate.deposit(committed.clone()).await.unwrap();
+        }
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&operation_path)
+                .unwrap();
+            file.write_all(b"{\"operation_id\":\"torn").unwrap();
+            file.sync_all().unwrap();
+        }
+
+        let reopened = LocalJournalPheromoneSubstrate::open_for_replay(config, &path).unwrap();
+        reopened.deposit(committed).await.unwrap();
+        let repaired = std::fs::read(&operation_path).unwrap();
+        assert_eq!(repaired.last(), Some(&b'\n'));
+        assert_eq!(repaired.iter().filter(|byte| **byte == b'\n').count(), 1);
 
         drop(reopened);
         let _ = std::fs::remove_file(path);
