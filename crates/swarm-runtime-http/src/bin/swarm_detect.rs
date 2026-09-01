@@ -4742,9 +4742,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &config.identity,
         ))
         .map_err(std::io::Error::other)?;
-        let tom_identity = identity_store
-            .load_existing(AgentRole::Tom, "primary")
-            .map_err(std::io::Error::other)?;
+        let tom_identity =
+            load_persisted_agent_identity(&identity_store, AgentRole::Tom, "primary")?;
         admit_required_tom_identity(
             &identity_registry,
             &tom_identity,
@@ -5915,17 +5914,8 @@ mod tests {
         let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("rulesets/default.yaml");
-        let mut config =
+        let config =
             swarm_runtime::config::load_config(&config_path).expect("default config should load");
-        let voter = swarm_crypto::Ed25519Signer::from_secret_material(
-            "shipped-governance-composition-approver",
-        );
-        config.operator.auth.principals = vec![swarm_core::config::OperatorPrincipalConfig {
-            operator_id: format!("swarm:ed25519:{}", voter.public_key_hex()),
-            token_env: "SWARM_SHIPPED_COMPOSITION_APPROVER_TOKEN".to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![swarm_core::config::OperatorScope::Approve],
-        }];
         let raw_state =
             IngestState::from_config(config_path, config).expect("ingest state should build");
         let substrate = raw_state.current_substrate();

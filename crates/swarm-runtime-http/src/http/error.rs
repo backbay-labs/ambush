@@ -395,7 +395,6 @@ pub(super) fn map_approval_error(error: ApprovalError) -> OperatorApiError {
         | ApprovalError::LedgerStore(_)
         | ApprovalError::VerdictStore(_)
         | ApprovalError::ReceiptPackStore(_)
-        | ApprovalError::StoreLock { .. }
         | ApprovalError::LedgerRecoveryConflict { .. }
         | ApprovalError::Crypto(_)
         | ApprovalError::Spine(_)

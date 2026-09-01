@@ -5,15 +5,16 @@ use std::sync::Arc;
 
 use super::GraphRecordSigner;
 use super::hypotheses::{
-    HypothesisSeedInput, competing_hypotheses, coordination_task_targets, seed_task_digest,
+    HypothesisDisposition, HypothesisSeedInput, competing_hypotheses, coordination_task_targets,
+    seed_task_digest,
 };
 use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
-    DecisionRecord, EvidenceScope, FencingToken, GraphAdmissionError, GraphLogicalTime,
-    GraphProducerRole, GraphResourceLimits, Hypothesis, HypothesisId, LogicalTaskDescriptor,
-    SchedulerBudget, StrategyMemory, StrategyMemoryExpiryEnvelope, TaskCapabilityProof,
-    TaskClaimRequest, TaskId, TaskKind, TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope,
-    TaskTerminalOutboxEntry, validate_completion_kind,
+    DecisionKind, DecisionRecord, EvidenceScope, FencingToken, GraphAdmissionError,
+    GraphLogicalTime, GraphProducerRole, GraphResourceLimits, Hypothesis, HypothesisId,
+    LogicalTaskDescriptor, SchedulerBudget, StrategyMemory, StrategyMemoryExpiryEnvelope,
+    TaskCapabilityProof, TaskClaimRequest, TaskId, TaskKind, TaskRecord, TaskState, TaskTarget,
+    TaskTerminalEnvelope, TaskTerminalOutboxEntry, validate_completion_kind,
 };
 use swarm_core::types::AgentId;
 use swarm_spine::hypothesis_graph_store::{
@@ -713,6 +714,42 @@ struct CoordinatorContext<'a> {
     decisions: Vec<DecisionRecord>,
 }
 
+fn validate_decisive_assessment_decisions(
+    seed: &HypothesisSeedInput,
+    decisions: &[DecisionRecord],
+) -> Result<(), GraphStoreError> {
+    for assessment in &seed.assessments {
+        let accepted_kinds: &[DecisionKind] = match assessment.disposition {
+            HypothesisDisposition::Supports => &[DecisionKind::Support],
+            HypothesisDisposition::Refutes => &[DecisionKind::Challenge, DecisionKind::Falsify],
+            HypothesisDisposition::Contradicts | HypothesisDisposition::Unresolved => continue,
+        };
+        let assessment_evidence = assessment
+            .evidence_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let has_corresponding_decision = decisions.iter().any(|decision| {
+            decision.hypothesis_id == assessment.hypothesis_id
+                && accepted_kinds.contains(&decision.kind)
+                && decision.evidence_ids == assessment_evidence
+                && decision.witness.is_some()
+        });
+        if !has_corresponding_decision {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidTransition {
+                    reason: format!(
+                        "{:?} seed assessment for {} requires a corresponding signed decision over the same evidence",
+                        assessment.disposition,
+                        assessment.hypothesis_id.as_str()
+                    ),
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn coordinate_seed_once(
     context: CoordinatorContext<'_>,
 ) -> Result<HypothesisCoordinationResult, GraphStoreError> {
@@ -783,9 +820,11 @@ fn coordinate_seed_once(
     // history.  Duplicate decision IDs are idempotent; a new decision must
     // target one of the seed's candidate alternatives.
     let mut ordered_decisions = sign_coordinator_decisions(signer, decisions)?;
+    validate_decisive_assessment_decisions(seed, &ordered_decisions)?;
     ordered_decisions.sort_by(|left, right| {
-        left.hypothesis_id
-            .cmp(&right.hypothesis_id)
+        left.decided_at
+            .cmp(&right.decided_at)
+            .then_with(|| left.hypothesis_id.cmp(&right.hypothesis_id))
             .then_with(|| left.decision_id.cmp(&right.decision_id))
     });
     for decision in ordered_decisions {
@@ -817,6 +856,27 @@ fn coordinate_seed_once(
             continue;
         }
         let decision_time = decision.decided_at;
+        if decision_time < seed.logical_time {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidTransition {
+                    reason: "retrograde decision logical time precedes the hypothesis seed"
+                        .to_string(),
+                },
+            ));
+        }
+        if decision_time < next.logical_time_high_water
+            || current
+                .decision_history
+                .last()
+                .is_some_and(|prior| decision_time < prior.decided_at)
+        {
+            return Err(GraphStoreError::Admission(
+                GraphAdmissionError::InvalidTransition {
+                    reason: "decision logical time is retrograde relative to durable history"
+                        .to_string(),
+                },
+            ));
+        }
         let updated = current
             .append_decision(decision)
             .map_err(GraphStoreError::Admission)?;
@@ -1294,7 +1354,9 @@ fn updated_completion_time(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::hypothesis_graph::{KeypairGraphRecordSigner, WitnessAdmission};
+    use crate::hypothesis_graph::{
+        HypothesisDisposition, HypothesisSeedAssessment, KeypairGraphRecordSigner, WitnessAdmission,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use swarm_core::hypothesis_graph::{
         EvidenceClock, EvidenceEnvelope, EvidenceSourceFamily, EvidenceUtility, HypothesisDelta,
@@ -2975,6 +3037,223 @@ mod tests {
             result.snapshot.state().hypotheses[&HypothesisId::new("hypothesis:falsify")].status,
             swarm_core::hypothesis_graph::HypothesisStatus::Falsified
         );
+    }
+
+    #[test]
+    fn decisionless_decisive_seed_is_rejected_without_store_or_budget_mutation() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 16,
+            max_claims_per_tick: 4,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph_id = swarm_core::hypothesis_graph::GraphId::new("graph:decisive-seed");
+        let graph = swarm_core::hypothesis_graph::HypothesisGraph::new(
+            graph_id.clone(),
+            config.resource_limits(),
+        )
+        .unwrap();
+        let store = MemoryHypothesisGraphStore::new_with_config(graph, key(125), &config).unwrap();
+        let signer_key = key(126);
+        let claimant = AgentId::from_public_key_hex(&signer_key.public_key().to_hex());
+        let signer = KeypairGraphRecordSigner::with_admission(
+            signer_key.clone(),
+            &WitnessAdmission::from_key(&signer_key),
+        )
+        .unwrap();
+        let evidence = swarm_core::hypothesis_graph::EvidenceId::new("evidence:decisive-seed");
+        let first = HypothesisId::new("hypothesis:supported");
+        let second = HypothesisId::new("hypothesis:unresolved");
+        let seed = HypothesisSeedInput::new(
+            graph_id,
+            vec![first.clone(), second.clone()],
+            vec![
+                HypothesisSeedAssessment {
+                    hypothesis_id: first,
+                    evidence_ids: vec![evidence.clone()],
+                    disposition: HypothesisDisposition::Supports,
+                    provenance: evidence.clone(),
+                },
+                HypothesisSeedAssessment {
+                    hypothesis_id: second,
+                    evidence_ids: vec![evidence.clone()],
+                    disposition: HypothesisDisposition::Unresolved,
+                    provenance: evidence.clone(),
+                },
+            ],
+            GraphLogicalTime::new(10),
+        )
+        .unwrap();
+        let mut coordinator =
+            DurableHypothesisCoordinator::new(&config, GraphLogicalTime::new(10), signer).unwrap();
+        let before = store.snapshot().unwrap();
+        let before_bytes = before.canonical_bytes().unwrap();
+        let budget_before = coordinator.ledger().scheduler_budget().clone();
+
+        let error = coordinator
+            .coordinate_seed(
+                &store,
+                before.revision(),
+                &seed,
+                claimant,
+                EvidenceScope::new([], [evidence], []).unwrap(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("corresponding signed decision")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+        assert_eq!(coordinator.ledger().scheduler_budget(), &budget_before);
+    }
+
+    #[test]
+    fn coordinator_orders_decisions_by_time_and_rejects_retrograde_append() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 16,
+            max_claims_per_tick: 4,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph_id = swarm_core::hypothesis_graph::GraphId::new("graph:decision-order");
+        let graph = swarm_core::hypothesis_graph::HypothesisGraph::new(
+            graph_id.clone(),
+            config.resource_limits(),
+        )
+        .unwrap();
+        let store = MemoryHypothesisGraphStore::new_with_config(graph, key(127), &config).unwrap();
+        let signer_key = key(128);
+        let claimant = AgentId::from_public_key_hex(&signer_key.public_key().to_hex());
+        let signer = KeypairGraphRecordSigner::with_admission(
+            signer_key.clone(),
+            &WitnessAdmission::from_key(&signer_key),
+        )
+        .unwrap();
+        let evidence = swarm_core::hypothesis_graph::EvidenceId::new("evidence:decision-order");
+        let hypothesis_id = HypothesisId::new("hypothesis:decision-order");
+        let seed = HypothesisSeedInput::from_normalized_evidence(
+            graph_id,
+            vec![
+                hypothesis_id.clone(),
+                HypothesisId::new("hypothesis:decision-order-control"),
+            ],
+            vec![evidence.clone()],
+            GraphLogicalTime::new(10),
+        )
+        .unwrap();
+        let later = DecisionRecord::new(
+            DecisionKind::Support,
+            hypothesis_id.clone(),
+            [],
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            GraphLogicalTime::new(12),
+            "later support",
+        )
+        .unwrap();
+        let earlier = DecisionRecord::new(
+            DecisionKind::Support,
+            hypothesis_id.clone(),
+            [],
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            GraphLogicalTime::new(11),
+            "earlier support",
+        )
+        .unwrap();
+        let mut coordinator =
+            DurableHypothesisCoordinator::new(&config, GraphLogicalTime::new(10), signer).unwrap();
+        let initial = store.snapshot().unwrap();
+        let initial_bytes = initial.canonical_bytes().unwrap();
+        let initial_budget = coordinator.ledger().scheduler_budget().clone();
+        let pre_seed = DecisionRecord::new(
+            DecisionKind::Support,
+            hypothesis_id.clone(),
+            [],
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            GraphLogicalTime::new(9),
+            "support predating its seed",
+        )
+        .unwrap();
+        let error = coordinator
+            .coordinate_seed_with_decisions(
+                &store,
+                initial.revision(),
+                &seed,
+                claimant.clone(),
+                EvidenceScope::new([], [evidence.clone()], []).unwrap(),
+                vec![pre_seed],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("precedes the hypothesis seed")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            initial_bytes
+        );
+        assert_eq!(coordinator.ledger().scheduler_budget(), &initial_budget);
+
+        let first = coordinator
+            .coordinate_seed_with_decisions(
+                &store,
+                initial.revision(),
+                &seed,
+                claimant.clone(),
+                EvidenceScope::new([], [evidence.clone()], []).unwrap(),
+                vec![later, earlier],
+            )
+            .unwrap();
+        let history = &first.snapshot.state().hypotheses[&hypothesis_id].decision_history;
+        assert_eq!(
+            history
+                .iter()
+                .map(|decision| decision.decided_at)
+                .collect::<Vec<_>>(),
+            vec![GraphLogicalTime::new(11), GraphLogicalTime::new(12)]
+        );
+
+        let retrograde = DecisionRecord::new(
+            DecisionKind::Support,
+            hypothesis_id,
+            [],
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            GraphLogicalTime::new(11),
+            "new but retrograde support",
+        )
+        .unwrap();
+        let mut retry_seed = seed;
+        retry_seed.logical_time = GraphLogicalTime::new(12);
+        let before_bytes = first.snapshot.canonical_bytes().unwrap();
+        let budget_before = coordinator.ledger().scheduler_budget().clone();
+        let error = coordinator
+            .coordinate_seed_with_decisions(
+                &store,
+                first.snapshot.revision(),
+                &retry_seed,
+                claimant,
+                EvidenceScope::new([], [evidence], []).unwrap(),
+                vec![retrograde],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("retrograde")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+        assert_eq!(coordinator.ledger().scheduler_budget(), &budget_before);
     }
 
     #[test]

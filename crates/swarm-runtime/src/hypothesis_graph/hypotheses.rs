@@ -93,8 +93,8 @@ impl HypothesisSeedInput {
 
     pub fn new(
         graph_id: GraphId,
-        candidate_hypothesis_ids: Vec<HypothesisId>,
-        assessments: Vec<HypothesisSeedAssessment>,
+        mut candidate_hypothesis_ids: Vec<HypothesisId>,
+        mut assessments: Vec<HypothesisSeedAssessment>,
         logical_time: GraphLogicalTime,
     ) -> Result<Self, GraphAdmissionError> {
         if graph_id.as_str().trim().is_empty() {
@@ -104,6 +104,7 @@ impl HypothesisSeedInput {
             });
         }
         logical_time.validate()?;
+        candidate_hypothesis_ids.sort();
         let candidates = candidate_hypothesis_ids
             .iter()
             .cloned()
@@ -132,7 +133,9 @@ impl HypothesisSeedInput {
                 limit: 512,
             });
         }
-        for assessment in &assessments {
+        for assessment in &mut assessments {
+            assessment.evidence_ids.sort();
+            assessment.evidence_ids.dedup();
             assessment.validate()?;
             if !candidates.contains(&assessment.hypothesis_id) {
                 return Err(GraphAdmissionError::InvalidField {
@@ -141,6 +144,14 @@ impl HypothesisSeedInput {
                 });
             }
         }
+        assessments.sort_by(|left, right| {
+            left.hypothesis_id
+                .cmp(&right.hypothesis_id)
+                .then_with(|| left.disposition.cmp(&right.disposition))
+                .then_with(|| left.provenance.cmp(&right.provenance))
+                .then_with(|| left.evidence_ids.cmp(&right.evidence_ids))
+        });
+        assessments.dedup();
         Ok(Self {
             graph_id,
             candidate_hypothesis_ids,
@@ -328,6 +339,7 @@ pub(crate) fn seed_task_digest(
     let mut assessments = seed.assessments.clone();
     for assessment in &mut assessments {
         assessment.evidence_ids.sort();
+        assessment.evidence_ids.dedup();
     }
     assessments.sort_by(|left, right| {
         left.hypothesis_id
@@ -336,6 +348,7 @@ pub(crate) fn seed_task_digest(
             .then_with(|| left.provenance.cmp(&right.provenance))
             .then_with(|| left.evidence_ids.cmp(&right.evidence_ids))
     });
+    assessments.dedup();
     let bytes = canonical_json_bytes(&(
         &seed.graph_id,
         &candidate_hypothesis_ids,
@@ -404,6 +417,10 @@ mod tests {
         retried.assessments.reverse();
         retried.logical_time = GraphLogicalTime::new(11);
         retried.assessments[0].evidence_ids.reverse();
+        retried.assessments[0]
+            .evidence_ids
+            .push(EvidenceId::new("evidence:seed"));
+        retried.assessments.push(retried.assessments[0].clone());
         let target = TaskTarget::Evidence {
             evidence_id: EvidenceId::new("evidence:seed"),
         };
@@ -413,6 +430,30 @@ mod tests {
             seed_task_digest(&retried, TaskKind::AcquireEvidence, &target)
                 .expect("retry seed digest must be canonical")
         );
+    }
+
+    #[test]
+    fn seed_constructor_canonicalizes_duplicate_assessments_and_evidence() {
+        let first = HypothesisId::new("hypothesis:first");
+        let second = HypothesisId::new("hypothesis:second");
+        let evidence = EvidenceId::new("evidence:seed");
+        let assessment = HypothesisSeedAssessment {
+            hypothesis_id: first.clone(),
+            evidence_ids: vec![evidence.clone(), evidence.clone()],
+            disposition: HypothesisDisposition::Unresolved,
+            provenance: evidence.clone(),
+        };
+        let seed = HypothesisSeedInput::new(
+            GraphId::new("graph:hypothesis-unit"),
+            vec![second.clone(), first.clone()],
+            vec![assessment.clone(), assessment],
+            GraphLogicalTime::new(10),
+        )
+        .expect("set-like seed input must canonicalize");
+
+        assert_eq!(seed.candidate_hypothesis_ids, vec![first, second]);
+        assert_eq!(seed.assessments.len(), 1);
+        assert_eq!(seed.assessments[0].evidence_ids, vec![evidence]);
     }
 
     #[test]

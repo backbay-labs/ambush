@@ -5464,7 +5464,7 @@ fn open_governance_authority_lock(
                 use std::os::unix::fs::OpenOptionsExt;
                 options
                     .mode(0o600)
-                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
             }
             let file = options.open(path).map_err(|source| {
                 GovernancePersistenceError::OpenAuthorityLock {
@@ -5554,7 +5554,7 @@ fn open_governance_authority_lock(
             use std::os::unix::fs::OpenOptionsExt;
             options
                 .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
         }
         match options.open(path) {
             Ok(file) => {
@@ -7068,7 +7068,7 @@ fn remove_authority_lock_if_identity(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
     }
     let file = options.open(path).map_err(|source| {
         cleanup_pool_error(
@@ -13671,14 +13671,8 @@ impl GovernancePolicy {
         Ok(bound)
     }
 
-    /// Repair the only cross-store crash window in governed human approval.
-    ///
-    /// The approval set and ledger are persisted by the runtime before this
-    /// signed governance state is updated. If the process exits between those
-    /// commits, a later authenticated resume supplies the exact persisted set
-    /// identity, digest, and hold-derived evidence reference. This method binds
-    /// that set to one and only one unbound hold, persists the repair, and is
-    /// idempotent for an already-reconciled binding.
+    /// Repair the cross-store crash window after the runtime durably writes an
+    /// approval set but before governance persists the hold binding.
     pub fn reconcile_human_approval_set(
         &self,
         approval_set_id: &str,
@@ -13695,6 +13689,10 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_checkpoint_repaired_locked(&mut state)?;
+        if let Some(error) = Self::pending_health_observation_error(&state) {
+            return Err(error);
+        }
 
         if let Some(existing) = state
             .pending_human_authorizations
@@ -17052,6 +17050,33 @@ mod tests {
                 .into_iter()
                 .collect()
         );
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn governance_lifetime_lock_descriptors_are_close_on_exec() {
+        use std::os::fd::AsRawFd;
+
+        let path = persistence_path("lock-close-on-exec");
+        let key = SigningKey::from_bytes(&[80; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let persistence = policy.persistence.as_ref().unwrap();
+        for descriptor in [
+            persistence.lock_file.as_raw_fd(),
+            persistence.authority_lock_file.as_raw_fd(),
+        ] {
+            // SAFETY: each descriptor is owned by the live policy for the
+            // duration of this call; F_GETFD does not mutate descriptor state.
+            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+            assert!(flags >= 0, "governance lock descriptor must be inspectable");
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "governance lifetime locks must not leak into executed children"
+            );
+        }
+        drop(policy);
         cleanup_persistence(&path);
     }
 

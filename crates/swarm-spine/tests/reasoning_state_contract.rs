@@ -22,9 +22,9 @@ use swarm_core::hypothesis_graph::{
 use swarm_core::types::AgentId;
 use swarm_crypto::Keypair;
 use swarm_spine::{
-    FileHypothesisGraphStore, FileStrategyMemoryStore, GraphCasEnvelope, GraphStoreError,
-    HypothesisGraphStore, MemoryHypothesisGraphStore, MemoryStrategyMemoryStore,
-    StrategyMemoryStore, TaskClaimEnvelope, validate_task_terminal_envelope,
+    FileHypothesisGraphStore, FileStrategyMemoryStore, GraphStoreError, HypothesisGraphStore,
+    MemoryHypothesisGraphStore, MemoryStrategyMemoryStore, StrategyMemoryStore,
+    validate_task_terminal_envelope,
 };
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -110,7 +110,7 @@ fn assert_high_water_cas(store: &dyn HypothesisGraphStore) {
     assert!(matches!(
         error,
         GraphStoreError::InvalidState { reason }
-            if reason.contains("store-owned logical time high-water")
+            if reason.contains("logical time high-water regressed")
     ));
     assert_eq!(
         store.snapshot().unwrap().state().logical_time_high_water,
@@ -148,31 +148,13 @@ fn cas_rejects_lower_and_preserves_higher_logical_high_water_for_both_backends()
 #[test]
 fn terminal_validator_uses_core_exact_task_boundary_without_seed_fiction() {
     let key = signer(10);
-    let authority = signer(11);
-    let store =
-        MemoryHypothesisGraphStore::new(graph("graph:terminal"), authority.clone()).unwrap();
+    let store = MemoryHypothesisGraphStore::new(graph("graph:terminal"), signer(11)).unwrap();
     let claim = request(&key, "task:terminal", "evidence:terminal");
+    let claimed = store
+        .claim_task(claim.clone(), GraphLogicalTime::new(100), 100)
+        .unwrap()
+        .task;
     let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
-    let claim_capability = TaskCapabilityProof::signed_with(
-        claim.task_id.clone(),
-        claimant.clone(),
-        GraphProducerRole::Hunter,
-        TaskKind::AcquireEvidence,
-        claim.canonical_digest().unwrap(),
-        &key,
-        "hunter-terminal-claim",
-    )
-    .unwrap();
-    let claim_envelope = TaskClaimEnvelope::new(
-        claim.clone(),
-        GraphLogicalTime::new(100),
-        100,
-        claim_capability,
-    )
-    .unwrap()
-    .authorized_by(&authority, "planner-terminal-claim")
-    .unwrap();
-    let claimed = store.claim_task(claim_envelope).unwrap().task;
     let capability = TaskCapabilityProof::signed_with(
         claimed.request.task_id.clone(),
         claimant.clone(),
@@ -204,13 +186,24 @@ fn terminal_validator_uses_core_exact_task_boundary_without_seed_fiction() {
     .unwrap()
     .signed_with(&key, "terminal-proof")
     .unwrap();
-    validate_task_terminal_envelope(&claimed, &envelope, &GraphResourceLimits::default()).unwrap();
+    validate_task_terminal_envelope(
+        &claimed,
+        &envelope,
+        &capability,
+        &GraphResourceLimits::default(),
+    )
+    .unwrap();
 
     let mut forged = envelope;
     forged.fencing_token = FencingToken::new(99);
     assert!(
-        validate_task_terminal_envelope(&claimed, &forged, &GraphResourceLimits::default(),)
-            .is_err()
+        validate_task_terminal_envelope(
+            &claimed,
+            &forged,
+            &capability,
+            &GraphResourceLimits::default(),
+        )
+        .is_err()
     );
 }
 

@@ -125,7 +125,6 @@ const TIMESTAMP_MILLISECONDS_CUTOFF: i64 = 100_000_000_000;
 type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send + Sync>;
 
 struct IngestRuntimeRequestResponseRouter {
-    stack: Arc<ArcSwap<IngestRuntimeStack>>,
     runtime: Arc<ArcSwap<IngestRequestRuntime>>,
     stack: Arc<ArcSwap<IngestRuntimeStack>>,
     approval_harness: Option<Arc<DefaultApprovalHarness>>,
@@ -185,7 +184,7 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         let eligible_voters = configured_approval_voters(&self.stack.load_full().service.config)
             .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
         let record = harness
-            .create_approval_set(
+            .create_or_load_approval_set(
                 eligible_voters,
                 ThresholdRule::AtLeast { required: 1 },
                 &route.hold().approval_evidence_ref(),
@@ -1474,53 +1473,6 @@ enum ApprovalVoterConfigError {
     NoEligibleApprover,
 }
 
-/// Resolve the effective, signable principals that may vote on a governed hold.
-/// An explicit principal list never falls back to the legacy operator ID.
-fn configured_approval_voters(
-    config: &SwarmConfig,
-) -> Result<Vec<String>, ApprovalVoterConfigError> {
-    let voters = config
-        .operator
-        .auth
-        .effective_principals()
-        .into_iter()
-        .filter(|principal| principal.scopes.contains(&OperatorScope::Approve))
-        .filter_map(|principal| canonical_approval_voter_id(&principal.operator_id))
-        .collect::<BTreeSet<_>>();
-
-    if voters.is_empty() {
-        return Err(ApprovalVoterConfigError::NoEligibleApprover);
-    }
-    Ok(voters.into_iter().collect())
-}
-
-fn canonical_approval_voter_id(operator_id: &str) -> Option<String> {
-    const PREFIX: &str = "swarm:ed25519:";
-
-    let public_key_hex = operator_id.strip_prefix(PREFIX)?;
-    if public_key_hex.len() != 64
-        || !public_key_hex
-            .chars()
-            .all(|character| character.is_ascii_hexdigit())
-        || public_key_hex
-            .chars()
-            .any(|character| character.is_ascii_uppercase())
-    {
-        return None;
-    }
-    let public_key = swarm_crypto::PublicKey::from_hex(public_key_hex).ok()?;
-    let canonical = format!("{PREFIX}{}", public_key.to_hex());
-    (operator_id == canonical).then_some(canonical)
-}
-
-#[derive(Debug, thiserror::Error)]
-enum ApprovalVoterConfigError {
-    #[error(
-        "governed approvals require at least one eligible approve principal with a canonical swarm:ed25519 public-key identity"
-    )]
-    NoEligibleApprover,
-}
-
 /// Resolve the only identities that may be placed in a persisted approval set.
 ///
 /// A configured principal is eligible only when it explicitly grants `Approve`
@@ -2072,10 +2024,6 @@ impl IngestState {
     }
 
     async fn next_providence_feedback_timestamp_ms(&self) -> Result<i64, String> {
-        // Reserve the clock value in the incident store before writing the
-        // signed substrate deposit. A failed or interrupted request may leave
-        // a harmless gap, but a restart can never reuse its timestamp. This
-        // avoids an unbounded whole-bucket substrate scan on every callback.
         let reserved = self
             .current_incident_store()
             .reserve_feedback_timestamp_ms(now_ms())
@@ -2142,7 +2090,6 @@ impl IngestState {
 
     pub fn current_request_response_router(&self) -> Arc<dyn RequestResponseRouter> {
         Arc::new(IngestRuntimeRequestResponseRouter {
-            stack: Arc::clone(&self.stack),
             runtime: Arc::clone(&self.request_runtime),
             stack: Arc::clone(&self.stack),
             approval_harness: self.approval_harness.clone(),

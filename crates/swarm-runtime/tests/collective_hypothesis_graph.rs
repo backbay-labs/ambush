@@ -7,6 +7,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
@@ -36,8 +38,8 @@ use swarm_runtime::hypothesis_graph::{
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
 };
 use swarm_spine::{
-    GraphStoreRevision, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
-    MemoryHypothesisGraphStore, ReasoningStateUpdate,
+    FileHypothesisGraphStore, GraphStoreRevision, GraphStoreSnapshot, GraphStoreState,
+    HypothesisGraphStore, MemoryHypothesisGraphStore, ReasoningStateUpdate,
 };
 
 fn key(seed: u8) -> Keypair {
@@ -1875,20 +1877,15 @@ fn middle_evidence_append_preserves_durable_historical_conflict() {
     assert!(graph.conflicts.contains_key(&historical_conflict_id));
     assert_eq!(graph.conflicts, registry.conflicts().clone());
 
-    let mut candidate = baseline.state;
+    let mut candidate = baseline.state().clone();
     candidate.graph = graph;
     store
-        .compare_and_swap(
-            GraphCasEnvelope::new(baseline.revision, candidate)
-                .unwrap()
-                .authorized_by(&authority, "planner-durable-middle")
-                .unwrap(),
-        )
+        .compare_and_swap(baseline.revision(), candidate)
         .unwrap();
     drop(store);
 
     let reopened = FileHypothesisGraphStore::open_with_signer(&path, authority).unwrap();
-    let persisted = reopened.snapshot().unwrap().state.graph;
+    let persisted = reopened.snapshot().unwrap().state().graph.clone();
     assert_eq!(persisted.conflicts.len(), 3);
     assert!(persisted.conflicts.contains_key(&historical_conflict_id));
     drop(reopened);

@@ -3199,6 +3199,16 @@ impl Hypothesis {
                 reason: "new decisions must not reuse a sequence".to_string(),
             });
         }
+        if self
+            .decision_history
+            .last()
+            .is_some_and(|prior| decision.decided_at < prior.decided_at)
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "decision logical time is retrograde relative to hypothesis history"
+                    .to_string(),
+            });
+        }
         let next_status = next_hypothesis_status(self.status, &decision)?;
         decision.sequence = self.decision_history.len() as u64 + 1;
         self.status = next_status;
@@ -3226,6 +3236,7 @@ impl Hypothesis {
         let mut expected = 1_u64;
         let mut replayed_status = HypothesisStatus::Live;
         let mut decision_ids = BTreeSet::new();
+        let mut prior_decided_at = None;
         for decision in &self.decision_history {
             decision.validate()?;
             if !decision_ids.insert(&decision.decision_id) {
@@ -3238,7 +3249,13 @@ impl Hypothesis {
                     reason: "decision history is not append-only".to_string(),
                 });
             }
+            if prior_decided_at.is_some_and(|prior| decision.decided_at < prior) {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "decision history contains retrograde logical time".to_string(),
+                });
+            }
             replayed_status = next_hypothesis_status(replayed_status, decision)?;
+            prior_decided_at = Some(decision.decided_at);
             expected = expected.saturating_add(1);
         }
         if replayed_status != self.status {
@@ -8492,6 +8509,50 @@ mod tests {
     }
 
     #[test]
+    fn hypothesis_rejects_retrograde_decision_append_and_persisted_history() {
+        let hypothesis = Hypothesis::new(
+            HypothesisId::new("hypothesis:decision-time"),
+            ConfidenceDistribution::uniform_two(),
+            [],
+            [],
+        )
+        .unwrap();
+        let decision = |time, rationale| {
+            DecisionRecord::new(
+                DecisionKind::Support,
+                hypothesis.hypothesis_id.clone(),
+                [],
+                GraphProducerRole::Hunter,
+                AgentId::new("hunter", "decision-time"),
+                GraphLogicalTime::new(time),
+                rationale,
+            )
+            .unwrap()
+            .signed_with(&signer(), "hunter-decision-time")
+            .unwrap()
+        };
+        let later = decision(102, "later decision");
+        let earlier = decision(101, "earlier decision");
+        let once = hypothesis.append_decision(later).unwrap();
+
+        assert!(matches!(
+            once.clone().append_decision(earlier.clone()),
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("retrograde")
+        ));
+
+        let mut persisted = once;
+        let mut earlier = earlier;
+        earlier.sequence = 2;
+        persisted.decision_history.push(earlier);
+        assert!(matches!(
+            persisted.validate(&GraphResourceLimits::default()),
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("retrograde")
+        ));
+    }
+
+    #[test]
     fn hypothesis_graph_tasks_kill_chain_memory_and_metrics_are_bounded_and_typed() {
         let scope = EvidenceScope::new(
             [EvidenceSourceFamily::Process],
@@ -10080,6 +10141,7 @@ mod tests {
             prior_lease: lease,
             completer: claimant,
             completed_at: boundary.completed_at,
+            failure_summary_digest: None,
         });
         assert!(
             boundary_entry

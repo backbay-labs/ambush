@@ -105,7 +105,6 @@ pub(super) async fn approval_set_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(set_id): RoutePath<String>,
 ) -> Result<Json<ApprovalSetReport>, OperatorApiError> {
-    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let lookup = harness
         .load_approval_set(&set_id)
@@ -120,7 +119,6 @@ pub(super) async fn approval_set_list_handler(
     State(state): State<OperatorHttpState>,
     Query(query): Query<ApprovalSetListQuery>,
 ) -> Result<Json<ApprovalSetList>, OperatorApiError> {
-    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let list = harness.list_approval_sets().map_err(map_approval_error)?;
     Ok(Json(limit_approval_set_list(
@@ -145,7 +143,6 @@ pub(super) async fn approval_set_create_handler(
             "eligible voter `{ineligible_voter}` is not configured with `approve` scope"
         )));
     }
-    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let record = harness
         .create_approval_set(
@@ -169,7 +166,6 @@ pub(super) async fn approval_ledger_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(ledger_id): RoutePath<String>,
 ) -> Result<Json<ApprovalLedgerLookup>, OperatorApiError> {
-    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let lookup = harness
         .load_ledger(&ledger_id)
@@ -184,7 +180,6 @@ pub(super) async fn approval_ledger_list_handler(
     State(state): State<OperatorHttpState>,
     Query(query): Query<ApprovalLedgerListQuery>,
 ) -> Result<Json<ApprovalLedgerList>, OperatorApiError> {
-    let _store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
     let list = harness
         .list_ledgers(query.approval_set_id.as_deref())
@@ -210,13 +205,8 @@ pub(super) async fn approval_vote_append_handler(
             principal.operator_id, request.voter_id
         )));
     }
-    // The ledger, its global index, the quorum-derived verdict, and the
-    // receipt-pack index are separate files. Keep their read/modify/write
-    // transition atomic with respect to every other surface operation. The
-    // callback is intentionally performed after releasing the lock.
-    let store_guard = state.approval_store_lock.lock().await;
     let harness = approval_harness(&state)?;
-    let existing = harness
+    harness
         .load_ledger(&ledger_id)
         .map_err(map_approval_error)?
         .ok_or_else(|| {
@@ -310,78 +300,6 @@ pub(super) async fn approval_vote_append_handler(
         }));
     }
     Ok(Json(updated))
-}
-
-fn load_or_create_single_receipt_pack(
-    harness: &swarm_runtime::approval::DefaultApprovalHarness,
-    approval_set_id: &str,
-    ledger_id: &str,
-    signer_id: &str,
-    signing_key_env: &str,
-) -> Result<ApprovalReceiptPackLookup, OperatorApiError> {
-    let matching = harness
-        .list_receipt_packs()
-        .map_err(map_approval_error)?
-        .packs
-        .into_iter()
-        .filter(|record| record.ledger_id == ledger_id)
-        .collect::<Vec<_>>();
-    if let [record] = matching.as_slice() {
-        return harness
-            .load_receipt_pack(&record.pack_id)
-            .map_err(map_approval_error)?
-            .ok_or_else(|| {
-                OperatorApiError::internal(format!(
-                    "persisted receipt pack `{}` disappeared before quorum resume",
-                    record.pack_id
-                ))
-            });
-    }
-    if !matching.is_empty() {
-        return Err(OperatorApiError::internal(format!(
-            "quorum resume found multiple persisted receipt packs for ledger `{ledger_id}`: {}",
-            matching.len()
-        )));
-    }
-
-    // A process can stop after the quorum vote is durable but before the
-    // verdict or receipt pack is written. Recover that exact persisted quorum
-    // instead of leaving the one-voter workflow permanently wedged.
-    let verdicts = harness
-        .list_verdicts()
-        .map_err(map_approval_error)?
-        .verdicts
-        .into_iter()
-        .filter(|record| record.approval_set_id == approval_set_id && record.ledger_id == ledger_id)
-        .collect::<Vec<_>>();
-    let verdict = match verdicts.as_slice() {
-        [] => harness
-            .create_verdict(approval_set_id, ledger_id)
-            .map_err(map_approval_error)?,
-        [record] => harness
-            .load_verdict(&record.verdict_id)
-            .map_err(map_approval_error)?
-            .ok_or_else(|| {
-                OperatorApiError::internal(format!(
-                    "persisted verdict `{}` disappeared before quorum resume",
-                    record.verdict_id
-                ))
-            })?,
-        records => {
-            return Err(OperatorApiError::internal(format!(
-                "quorum resume found multiple persisted verdicts for ledger `{ledger_id}`: {}",
-                records.len()
-            )));
-        }
-    };
-    if !matches!(verdict.report.status, ApprovalVerdictStatus::Approved) {
-        return Err(OperatorApiError::internal(format!(
-            "persisted quorum for ledger `{ledger_id}` produced a non-approved verdict"
-        )));
-    }
-    harness
-        .export_receipt_pack(&verdict.report.verdict_id, signer_id, signing_key_env)
-        .map_err(map_approval_error)
 }
 
 pub(super) async fn resume_governed_approval(
