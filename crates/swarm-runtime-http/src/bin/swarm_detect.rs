@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde_json::json;
@@ -55,73 +57,18 @@ const GOVERNANCE_O_NOFOLLOW: i32 = 0x20000;
 const GOVERNANCE_O_CLOEXEC: i32 = 0x80000;
 #[cfg(target_os = "linux")]
 const GOVERNANCE_O_DIRECTORY: i32 = 0x10000;
-#[cfg(target_os = "linux")]
-const GOVERNANCE_O_RDWR: i32 = 0x2;
-#[cfg(target_os = "linux")]
-const GOVERNANCE_O_CREAT: i32 = 0x40;
-#[cfg(target_os = "linux")]
-const GOVERNANCE_O_EXCL: i32 = 0x80;
 #[cfg(target_os = "macos")]
 const GOVERNANCE_O_NOFOLLOW: i32 = 0x100;
 #[cfg(target_os = "macos")]
 const GOVERNANCE_O_CLOEXEC: i32 = 0x1000000;
 #[cfg(target_os = "macos")]
 const GOVERNANCE_O_DIRECTORY: i32 = 0x100000;
-#[cfg(target_os = "macos")]
-const GOVERNANCE_O_RDWR: i32 = 0x2;
-#[cfg(target_os = "macos")]
-const GOVERNANCE_O_CREAT: i32 = 0x200;
-#[cfg(target_os = "macos")]
-const GOVERNANCE_O_EXCL: i32 = 0x800;
-#[cfg(target_os = "linux")]
-const GOVERNANCE_RENAME_NOREPLACE: u32 = 1;
-#[cfg(target_os = "macos")]
-const GOVERNANCE_RENAME_EXCL: u32 = 0x0004;
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 const GOVERNANCE_O_NOFOLLOW: i32 = 0;
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 const GOVERNANCE_O_CLOEXEC: i32 = 0;
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 const GOVERNANCE_O_DIRECTORY: i32 = 0;
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-const GOVERNANCE_O_RDWR: i32 = 0;
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-const GOVERNANCE_O_CREAT: i32 = 0;
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-const GOVERNANCE_O_EXCL: i32 = 0;
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-unsafe extern "C" {
-    fn linkat(
-        source_directory_fd: std::os::raw::c_int,
-        source_name: *const std::os::raw::c_char,
-        destination_directory_fd: std::os::raw::c_int,
-        destination_name: *const std::os::raw::c_char,
-        flags: std::os::raw::c_int,
-    ) -> std::os::raw::c_int;
-    fn openat(
-        directory_fd: std::os::raw::c_int,
-        name: *const std::os::raw::c_char,
-        flags: std::os::raw::c_int,
-        ...
-    ) -> std::os::raw::c_int;
-    #[cfg(target_os = "linux")]
-    fn renameat2(
-        source_directory_fd: std::os::raw::c_int,
-        source_name: *const std::os::raw::c_char,
-        destination_directory_fd: std::os::raw::c_int,
-        destination_name: *const std::os::raw::c_char,
-        flags: std::os::raw::c_uint,
-    ) -> std::os::raw::c_int;
-    #[cfg(target_os = "macos")]
-    fn renameatx_np(
-        source_directory_fd: std::os::raw::c_int,
-        source_name: *const std::os::raw::c_char,
-        destination_directory_fd: std::os::raw::c_int,
-        destination_name: *const std::os::raw::c_char,
-        flags: std::os::raw::c_uint,
-    ) -> std::os::raw::c_int;
-}
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -2253,31 +2200,16 @@ fn governance_create_new_at(
 ) -> Result<std::fs::File, std::io::Error> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::io::{AsRawFd, FromRawFd};
-        let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "governance entry name contains an interior NUL",
-            )
-        })?;
-        let flags = GOVERNANCE_O_RDWR
-            | GOVERNANCE_O_CREAT
-            | GOVERNANCE_O_EXCL
-            | GOVERNANCE_O_NOFOLLOW
-            | GOVERNANCE_O_CLOEXEC;
-        // SAFETY: `parent.file` is a live O_DIRECTORY|O_NOFOLLOW descriptor
-        // retained by this invocation, and `name` is a validated single
-        // directory-entry name copied into a NUL-terminated string.  The
-        // returned descriptor is owned by this invocation exactly once.
-        let descriptor =
-            unsafe { openat(parent.file.as_raw_fd(), name.as_ptr(), flags, 0o600_i32) };
-        if descriptor < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `descriptor` is the newly-created file descriptor returned
-        // by openat and is transferred into File exactly once.
-        Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
+        use rustix::fs::{Mode, OFlags, openat};
+
+        let descriptor = openat(
+            &parent.file,
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(std::io::Error::from)?;
+        Ok(std::fs::File::from(descriptor))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2305,41 +2237,18 @@ fn governance_hard_link_at(
 ) -> Result<(), std::io::Error> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::io::AsRawFd;
-        let source_name = std::ffi::CString::new(source_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "governance source name contains an interior NUL",
-            )
-        })?;
-        let destination_name =
-            std::ffi::CString::new(destination_name.as_bytes()).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "governance destination name contains an interior NUL",
-                )
-            })?;
+        use rustix::fs::{AtFlags, linkat};
+
         #[cfg(test)]
         pause_before_governance_parent_mutation();
-        // SAFETY: both descriptors are live O_DIRECTORY|O_NOFOLLOW handles
-        // owned by this invocation, and both C strings are NUL-terminated
-        // copies of validated single directory-entry names. flags=0 gives
-        // linkat's atomic no-replace semantics for the destination.
-        let result = unsafe {
-            linkat(
-                source_parent.file.as_raw_fd(),
-                source_name.as_ptr(),
-                destination_parent.file.as_raw_fd(),
-                destination_name.as_ptr(),
-                0,
-            )
-        };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
+        linkat(
+            &source_parent.file,
+            source_name,
+            &destination_parent.file,
+            destination_name,
+            AtFlags::empty(),
+        )
+        .map_err(std::io::Error::from)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2366,53 +2275,18 @@ fn governance_rename_no_replace_at(
 ) -> Result<(), std::io::Error> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::io::AsRawFd;
-        let source_name = std::ffi::CString::new(source_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "governance rename source contains an interior NUL",
-            )
-        })?;
-        let destination_name =
-            std::ffi::CString::new(destination_name.as_bytes()).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "governance rename destination contains an interior NUL",
-                )
-            })?;
+        use rustix::fs::{RenameFlags, renameat_with};
+
         #[cfg(test)]
         pause_before_governance_parent_mutation();
-        #[cfg(target_os = "linux")]
-        // SAFETY: both descriptors are live O_DIRECTORY|O_NOFOLLOW handles
-        // retained by this invocation, and both names are validated single
-        // directory entries. RENAME_NOREPLACE prevents destination overwrite.
-        let result = unsafe {
-            renameat2(
-                parent.file.as_raw_fd(),
-                source_name.as_ptr(),
-                parent.file.as_raw_fd(),
-                destination_name.as_ptr(),
-                GOVERNANCE_RENAME_NOREPLACE,
-            )
-        };
-        #[cfg(target_os = "macos")]
-        // SAFETY: same descriptor/name guarantees as the Linux path;
-        // RENAME_EXCL gives renameatx_np no-replace publication.
-        let result = unsafe {
-            renameatx_np(
-                parent.file.as_raw_fd(),
-                source_name.as_ptr(),
-                parent.file.as_raw_fd(),
-                destination_name.as_ptr(),
-                GOVERNANCE_RENAME_EXCL,
-            )
-        };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
+        renameat_with(
+            &parent.file,
+            source_name,
+            &parent.file,
+            destination_name,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -5914,8 +5788,17 @@ mod tests {
         let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("rulesets/default.yaml");
-        let config =
+        let mut config =
             swarm_runtime::config::load_config(&config_path).expect("default config should load");
+        let voter = swarm_crypto::Ed25519Signer::from_secret_material(
+            "shipped-governance-composition-approver",
+        );
+        config.operator.auth.principals = vec![swarm_core::config::OperatorPrincipalConfig {
+            operator_id: format!("swarm:ed25519:{}", voter.public_key_hex()),
+            token_env: "SWARM_SHIPPED_COMPOSITION_APPROVER_TOKEN".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![swarm_core::config::OperatorScope::Approve],
+        }];
         let raw_state =
             IngestState::from_config(config_path, config).expect("ingest state should build");
         let substrate = raw_state.current_substrate();

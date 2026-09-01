@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Authenticated governance persistence, consensus authority, and the Tom role.
 //!
 //! ## Owns
@@ -17,10 +19,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::ffi::OsStr;
-use std::ffi::OsString;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::ffi::{CStr, CString};
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -2453,31 +2452,19 @@ fn authority_cleanup_parent_is_current(path: &Path, parent: &AuthorityCleanupPar
 }
 
 fn open_regular_entry_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::{AsRawFd, FromRawFd};
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let name = CString::new(name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup entry name contains an interior NUL",
-            )
-        })?;
-        let fd = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `fd` is a successful openat result owned by this function.
-        Ok(unsafe { fs::File::from_raw_fd(fd) })
+        use rustix::fs::{Mode, OFlags, openat};
+
+        openat(
+            parent,
+            name,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(fs::File::from)
+        .map_err(std::io::Error::from)
+        .and_then(|file| require_regular_entry(file, "cleanup entry"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2490,37 +2477,19 @@ fn open_regular_entry_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, st
 }
 
 fn create_directory_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::AsRawFd;
-    #[cfg(unix)]
-    use std::os::unix::io::FromRawFd;
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let name = CString::new(name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup directory name contains an interior NUL",
-            )
-        })?;
-        let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let fd = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `fd` is a successful openat result owned by this function.
-        Ok(unsafe { fs::File::from_raw_fd(fd) })
+        use rustix::fs::{Mode, OFlags, mkdirat, openat};
+
+        mkdirat(parent, name, Mode::RWXU).map_err(std::io::Error::from)?;
+        openat(
+            parent,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(fs::File::from)
+        .map_err(std::io::Error::from)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2533,30 +2502,18 @@ fn create_directory_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std:
 }
 
 fn open_directory_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::{AsRawFd, FromRawFd};
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let name = CString::new(name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup directory name contains an interior NUL",
-            )
-        })?;
-        let fd = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(unsafe { fs::File::from_raw_fd(fd) })
+        use rustix::fs::{Mode, OFlags, openat};
+
+        openat(
+            parent,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(fs::File::from)
+        .map_err(std::io::Error::from)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2569,39 +2526,22 @@ fn open_directory_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::i
 }
 
 /// Enumerate one held directory descriptor without reopening its pathname.
-/// The duplicated descriptor is consumed by `fdopendir`; the caller's
-/// descriptor remains the stable namespace capability for subsequent moves.
+/// `Dir::read_from` obtains an independent descriptor, so the caller's handle
+/// remains the stable namespace capability for subsequent moves.
 fn directory_entry_names(directory: &fs::File) -> Result<Vec<OsString>, std::io::Error> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
+        use rustix::fs::Dir;
         use std::os::unix::ffi::OsStringExt;
-        use std::os::unix::io::AsRawFd;
 
-        let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
-        if duplicate < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let stream = unsafe { libc::fdopendir(duplicate) };
-        if stream.is_null() {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                libc::close(duplicate);
-            }
-            return Err(error);
-        }
+        let mut stream = Dir::read_from(directory).map_err(std::io::Error::from)?;
         let mut names = Vec::new();
-        loop {
-            let entry = unsafe { libc::readdir(stream) };
-            if entry.is_null() {
-                break;
-            }
-            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        for entry in &mut stream {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let name = entry.file_name().to_bytes();
             if name != b"." && name != b".." {
                 names.push(OsString::from_vec(name.to_vec()));
             }
-        }
-        unsafe {
-            libc::closedir(stream);
         }
         Ok(names)
     }
@@ -2624,31 +2564,13 @@ fn directory_entry_identity_at(
 ) -> Result<Option<GovernanceArtifactIdentity>, std::io::Error> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::io::AsRawFd;
-        let name = CString::new(name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "directory entry name contains an interior NUL",
-            )
-        })?;
-        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-        let result = unsafe {
-            libc::fstatat(
-                directory.as_raw_fd(),
-                name.as_ptr(),
-                stat.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
+        use rustix::fs::{AtFlags, statat};
+
+        let stat = match statat(directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error)),
         };
-        if result < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::NotFound {
-                return Ok(None);
-            }
-            return Err(error);
-        }
-        let stat = unsafe { stat.assume_init() };
         Ok(Some(GovernanceArtifactIdentity {
             device: stat.st_dev as u64,
             inode: stat.st_ino,
@@ -2665,30 +2587,19 @@ fn directory_entry_identity_at(
 }
 
 fn open_writable_entry_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::{AsRawFd, FromRawFd};
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let name = CString::new(name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup lock name contains an interior NUL",
-            )
-        })?;
-        let fd = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(unsafe { fs::File::from_raw_fd(fd) })
+        use rustix::fs::{Mode, OFlags, openat};
+
+        openat(
+            parent,
+            name,
+            OFlags::RDWR | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(fs::File::from)
+        .map_err(std::io::Error::from)
+        .and_then(|file| require_regular_entry(file, "cleanup lock"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2698,6 +2609,18 @@ fn open_writable_entry_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, s
             "dirfd-relative cleanup lock open is unavailable on this platform",
         ))
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn require_regular_entry(file: fs::File, context: &str) -> Result<fs::File, std::io::Error> {
+    let metadata = file.metadata()?;
+    if governance_artifact_identity(&metadata).is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{context} is not a regular non-symlink file"),
+        ));
+    }
+    Ok(file)
 }
 
 fn open_or_create_directory_at(
@@ -2714,34 +2637,18 @@ fn open_or_create_directory_at(
 }
 
 fn create_regular_file_at(parent: &fs::File, name: &OsStr) -> Result<fs::File, std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::AsRawFd;
-    #[cfg(unix)]
-    use std::os::unix::io::FromRawFd;
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let name = CString::new(name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "atomic temporary name contains an interior NUL",
-            )
-        })?;
-        let fd = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                0o600,
-            )
-        };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `fd` is a successful openat result owned by this function.
-        Ok(unsafe { fs::File::from_raw_fd(fd) })
+        use rustix::fs::{Mode, OFlags, openat};
+
+        openat(
+            parent,
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map(fs::File::from)
+        .map_err(std::io::Error::from)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2792,39 +2699,18 @@ fn linkat_relative(
     destination_parent: &fs::File,
     destination_name: &OsStr,
 ) -> Result<(), std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::AsRawFd;
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let source_name = CString::new(source_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup entry name contains an interior NUL",
-            )
-        })?;
-        let destination_name = CString::new(destination_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup destination contains an interior NUL",
-            )
-        })?;
-        let result = unsafe {
-            libc::linkat(
-                source_parent.as_raw_fd(),
-                source_name.as_ptr(),
-                destination_parent.as_raw_fd(),
-                destination_name.as_ptr(),
-                0,
-            )
-        };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
+        use rustix::fs::{AtFlags, linkat};
+
+        linkat(
+            source_parent,
+            source_name,
+            destination_parent,
+            destination_name,
+            AtFlags::empty(),
+        )
+        .map_err(std::io::Error::from)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2847,51 +2733,18 @@ fn atomic_no_replace_move_between(
     destination_parent: &fs::File,
     destination_name: &OsStr,
 ) -> Result<(), std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::AsRawFd;
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let source = CString::new(source_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup source name contains an interior NUL",
-            )
-        })?;
-        let destination = CString::new(destination_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cleanup destination name contains an interior NUL",
-            )
-        })?;
-        #[cfg(target_os = "linux")]
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_renameat2 as libc::c_long,
-                source_parent.as_raw_fd(),
-                source.as_ptr(),
-                destination_parent.as_raw_fd(),
-                destination.as_ptr(),
-                1u32,
-            )
-        };
-        #[cfg(target_os = "macos")]
-        let result = unsafe {
-            libc::renameatx_np(
-                source_parent.as_raw_fd(),
-                source.as_ptr(),
-                destination_parent.as_raw_fd(),
-                destination.as_ptr(),
-                0x0000_0004u32,
-            )
-        };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
+        use rustix::fs::{RenameFlags, renameat_with};
+
+        renameat_with(
+            source_parent,
+            source_name,
+            destination_parent,
+            destination_name,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -2925,51 +2778,18 @@ fn atomic_replace_if_identity(
     expected_destination: GovernanceArtifactIdentity,
     expected_source: GovernanceArtifactIdentity,
 ) -> Result<(), std::io::Error> {
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-    #[cfg(unix)]
-    use std::os::unix::io::AsRawFd;
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let source = CString::new(source_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "atomic replacement source contains an interior NUL",
-            )
-        })?;
-        let destination = CString::new(destination_name.as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "atomic replacement destination contains an interior NUL",
-            )
-        })?;
-        let result = unsafe {
-            #[cfg(target_os = "linux")]
-            {
-                libc::syscall(
-                    libc::SYS_renameat2 as libc::c_long,
-                    source_parent.as_raw_fd(),
-                    source.as_ptr(),
-                    destination_parent.as_raw_fd(),
-                    destination.as_ptr(),
-                    2u32,
-                )
-            }
-            #[cfg(target_os = "macos")]
-            {
-                libc::renameatx_np(
-                    source_parent.as_raw_fd(),
-                    source.as_ptr(),
-                    destination_parent.as_raw_fd(),
-                    destination.as_ptr(),
-                    0x0000_0002u32,
-                )
-            }
-        };
-        if result != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        use rustix::fs::{RenameFlags, renameat_with};
+
+        renameat_with(
+            source_parent,
+            source_name,
+            destination_parent,
+            destination_name,
+            RenameFlags::EXCHANGE,
+        )
+        .map_err(std::io::Error::from)?;
         let observed_destination =
             directory_entry_identity_at(destination_parent, destination_name)?;
         let observed_source = directory_entry_identity_at(source_parent, source_name)?;
@@ -2985,36 +2805,17 @@ fn atomic_replace_if_identity(
         // closed rather than guessing which inode may be removed.
         if observed_destination == Some(expected_source)
             && observed_source != Some(expected_destination)
+            && let Err(error) = renameat_with(
+                source_parent,
+                source_name,
+                destination_parent,
+                destination_name,
+                RenameFlags::EXCHANGE,
+            )
         {
-            let restore = unsafe {
-                #[cfg(target_os = "linux")]
-                {
-                    libc::syscall(
-                        libc::SYS_renameat2 as libc::c_long,
-                        source_parent.as_raw_fd(),
-                        source.as_ptr(),
-                        destination_parent.as_raw_fd(),
-                        destination.as_ptr(),
-                        2u32,
-                    )
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    libc::renameatx_np(
-                        source_parent.as_raw_fd(),
-                        source.as_ptr(),
-                        destination_parent.as_raw_fd(),
-                        destination.as_ptr(),
-                        0x0000_0002u32,
-                    )
-                }
-            };
-            if restore != 0 {
-                return Err(std::io::Error::other(format!(
-                    "conditional publication lost its rollback exchange: {}",
-                    std::io::Error::last_os_error()
-                )));
-            }
+            return Err(std::io::Error::other(format!(
+                "conditional publication lost its rollback exchange: {error}"
+            )));
         }
         Err(std::io::Error::other(
             "canonical artifact identity changed during conditional publication",
@@ -17056,28 +16857,71 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn governance_lifetime_lock_descriptors_are_close_on_exec() {
-        use std::os::fd::AsRawFd;
+        use rustix::io::{FdFlags, fcntl_getfd};
 
         let path = persistence_path("lock-close-on-exec");
         let key = SigningKey::from_bytes(&[80; 32]);
         let policy = initialize_signed_policy(&path, &key);
         let persistence = policy.persistence.as_ref().unwrap();
-        for descriptor in [
-            persistence.lock_file.as_raw_fd(),
-            persistence.authority_lock_file.as_raw_fd(),
-        ] {
-            // SAFETY: each descriptor is owned by the live policy for the
-            // duration of this call; F_GETFD does not mutate descriptor state.
-            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
-            assert!(flags >= 0, "governance lock descriptor must be inspectable");
-            assert_ne!(
-                flags & libc::FD_CLOEXEC,
-                0,
+        for descriptor in [&persistence.lock_file, &persistence.authority_lock_file] {
+            let flags =
+                fcntl_getfd(descriptor).expect("governance lock descriptor must be inspectable");
+            assert!(
+                flags.contains(FdFlags::CLOEXEC),
                 "governance lifetime locks must not leak into executed children"
             );
         }
         drop(policy);
         cleanup_persistence(&path);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn descriptor_bound_regular_entry_open_rejects_fifo_without_blocking() {
+        use std::ffi::OsStr;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let path = persistence_path("regular-entry-fifo");
+        let directory_path = path.parent().unwrap();
+        let fifo_path = directory_path.join("hostile-fifo");
+        let parent = fs::File::open(directory_path).unwrap();
+
+        #[cfg(target_os = "linux")]
+        rustix::fs::mkfifoat(
+            &parent,
+            OsStr::new("hostile-fifo"),
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .unwrap();
+        #[cfg(target_os = "macos")]
+        assert!(
+            std::process::Command::new("/usr/bin/mkfifo")
+                .arg(&fifo_path)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let reader_parent = parent.try_clone().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = super::open_regular_entry_at(&reader_parent, OsStr::new("hostile-fifo"));
+            let _ = sender.send(result);
+        });
+        let read_error = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("a hostile FIFO must not block descriptor-bound inspection")
+            .expect_err("a hostile FIFO must not be accepted as a regular entry");
+        assert_eq!(read_error.kind(), std::io::ErrorKind::InvalidData);
+
+        let write_error = super::open_writable_entry_at(&parent, OsStr::new("hostile-fifo"))
+            .expect_err("a hostile FIFO must not be accepted as a writable regular entry");
+        assert_eq!(write_error.kind(), std::io::ErrorKind::InvalidData);
+
+        drop(parent);
+        fs::remove_file(fifo_path).unwrap();
+        fs::remove_dir(directory_path).unwrap();
     }
 
     #[cfg(unix)]
