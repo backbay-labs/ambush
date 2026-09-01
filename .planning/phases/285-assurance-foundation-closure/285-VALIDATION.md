@@ -303,8 +303,9 @@ bash tools/check-phase285-governance-persistence.sh enforced-checkpoint
 bash tools/check-phase285-governance-persistence.sh retention
 bash tools/check-phase285-governance-persistence.sh offline-maintenance
 bash tools/check-phase285-governance-persistence.sh detector-integration
+bash tools/check-phase285-witness-conformance.sh combined-checkpoint
 bash tools/check-phase285-deployment.sh
-git diff --check
+git diff --check HEAD^ HEAD
 bash tools/check-worktree-clean.sh "the Phase 285 final run"
 ```
 
