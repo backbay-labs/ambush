@@ -470,6 +470,105 @@ struct DepositOperationRecord {
     deposit_digest: String,
 }
 
+#[derive(Debug, Clone, Default)]
+struct DepositOperationLedger {
+    records: BTreeMap<String, String>,
+    insertion_order: VecDeque<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DepositOperationInsert {
+    AlreadyRecorded,
+    Inserted { evicted: usize },
+}
+
+impl DepositOperationLedger {
+    fn already_recorded(&self, candidate: &DepositOperationRecord) -> Result<bool, SubstrateError> {
+        let Some(existing_digest) = self.records.get(&candidate.operation_id) else {
+            return Ok(false);
+        };
+        if existing_digest == &candidate.deposit_digest {
+            Ok(true)
+        } else {
+            Err(SubstrateError::InvalidDeposit {
+                reason:
+                    "Providence feedback operation id was reused with a different signed deposit"
+                        .to_string(),
+            })
+        }
+    }
+
+    fn insert_with_limit(
+        &mut self,
+        candidate: &DepositOperationRecord,
+        maximum_entries: usize,
+    ) -> Result<DepositOperationInsert, SubstrateError> {
+        if self.already_recorded(candidate)? {
+            return Ok(DepositOperationInsert::AlreadyRecorded);
+        }
+        if maximum_entries == 0 {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: "Providence feedback operation ledger capacity must be nonzero".to_string(),
+            });
+        }
+
+        let mut evicted = 0usize;
+        while self.records.len() >= maximum_entries {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                return Err(SubstrateError::InvalidDeposit {
+                    reason: "Providence feedback operation ledger order is inconsistent"
+                        .to_string(),
+                });
+            };
+            if self.records.remove(&oldest).is_some() {
+                evicted = evicted.saturating_add(1);
+            }
+        }
+        self.records.insert(
+            candidate.operation_id.clone(),
+            candidate.deposit_digest.clone(),
+        );
+        self.insertion_order
+            .push_back(candidate.operation_id.clone());
+        Ok(DepositOperationInsert::Inserted { evicted })
+    }
+
+    fn evict_oldest(&mut self) -> Result<bool, SubstrateError> {
+        let Some(oldest) = self.insertion_order.pop_front() else {
+            return Ok(false);
+        };
+        if self.records.remove(&oldest).is_none() {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: "Providence feedback operation ledger order is inconsistent".to_string(),
+            });
+        }
+        Ok(true)
+    }
+
+    fn ordered_records(&self) -> Result<Vec<DepositOperationRecord>, SubstrateError> {
+        if self.records.len() != self.insertion_order.len() {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: "Providence feedback operation ledger order is inconsistent".to_string(),
+            });
+        }
+        self.insertion_order
+            .iter()
+            .map(|operation_id| {
+                self.records
+                    .get(operation_id)
+                    .map(|deposit_digest| DepositOperationRecord {
+                        operation_id: operation_id.clone(),
+                        deposit_digest: deposit_digest.clone(),
+                    })
+                    .ok_or_else(|| SubstrateError::InvalidDeposit {
+                        reason: "Providence feedback operation ledger order is inconsistent"
+                            .to_string(),
+                    })
+            })
+            .collect()
+    }
+}
+
 fn deposit_operation_record(
     deposit: &VerifiedDeposit,
 ) -> Result<Option<DepositOperationRecord>, SubstrateError> {
@@ -487,44 +586,11 @@ fn deposit_operation_record(
     }))
 }
 
-fn deposit_operation_already_recorded(
-    operations: &BTreeMap<String, String>,
-    candidate: &DepositOperationRecord,
-) -> Result<bool, SubstrateError> {
-    let Some(existing_digest) = operations.get(&candidate.operation_id) else {
-        return Ok(false);
-    };
-    if existing_digest == &candidate.deposit_digest {
-        Ok(true)
-    } else {
-        Err(SubstrateError::InvalidDeposit {
-            reason: "Providence feedback operation id was reused with a different signed deposit"
-                .to_string(),
-        })
-    }
-}
-
 fn insert_deposit_operation(
-    operations: &mut BTreeMap<String, String>,
+    operations: &mut DepositOperationLedger,
     operation: &DepositOperationRecord,
-) -> Result<(), SubstrateError> {
-    if operations.len() >= MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES
-        && !operations.contains_key(&operation.operation_id)
-    {
-        return Err(SubstrateError::InvalidDeposit {
-            reason: format!(
-                "Providence feedback operation ledger reached its {MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES}-entry hard limit"
-            ),
-        });
-    }
-    if deposit_operation_already_recorded(operations, operation)? {
-        return Ok(());
-    }
-    operations.insert(
-        operation.operation_id.clone(),
-        operation.deposit_digest.clone(),
-    );
-    Ok(())
+) -> Result<DepositOperationInsert, SubstrateError> {
+    operations.insert_with_limit(operation, MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES)
 }
 
 fn exact_deposit_operation_already_retained(
@@ -1255,7 +1321,7 @@ pub struct InMemoryPheromoneSubstrate {
     admission_clock: DepositAdmissionClock,
     retention_limits: DepositRetentionLimits,
     deposits: Arc<RwLock<RetainedDeposits>>,
-    deposit_operations: Arc<RwLock<BTreeMap<String, String>>>,
+    deposit_operations: Arc<RwLock<DepositOperationLedger>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
@@ -1285,7 +1351,7 @@ impl InMemoryPheromoneSubstrate {
             admission_clock,
             retention_limits: DepositRetentionLimits::default(),
             deposits: Arc::new(RwLock::new(RetainedDeposits::default())),
-            deposit_operations: Arc::new(RwLock::new(BTreeMap::new())),
+            deposit_operations: Arc::new(RwLock::new(DepositOperationLedger::default())),
             escalations: Arc::new(RwLock::new(Vec::new())),
             threat_class_configs: Arc::new(RwLock::new(BTreeMap::new())),
             threat_intel_entries: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1348,21 +1414,14 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .deposit_operations
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        if let Some(operation) = operation.as_ref() {
-            if deposit_operation_already_recorded(&operations, operation)? {
-                return Ok(());
-            }
-            if operations.len() >= MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES {
-                return Err(SubstrateError::InvalidDeposit {
-                    reason: format!(
-                        "Providence feedback operation ledger reached its {MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES}-entry hard limit"
-                    ),
-                });
-            }
+        if let Some(operation) = operation.as_ref()
+            && operations.already_recorded(operation)?
+        {
+            return Ok(());
         }
         if exact_deposit_operation_already_retained(&guard.entries, &deposit)? {
             if let Some(operation) = operation.as_ref() {
-                insert_deposit_operation(&mut operations, operation)?;
+                let _ = insert_deposit_operation(&mut operations, operation)?;
             }
             return Ok(());
         }
@@ -1374,7 +1433,7 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             self.admission_clock.trusted_now()?,
         )?;
         if let Some(operation) = operation.as_ref() {
-            insert_deposit_operation(&mut operations, operation)?;
+            let _ = insert_deposit_operation(&mut operations, operation)?;
         }
         Ok(())
     }
@@ -1606,7 +1665,7 @@ pub struct LocalJournalPheromoneSubstrate {
     behavioral_baseline_journal_path: PathBuf,
     behavioral_baseline_sequence_path: PathBuf,
     deposits: Arc<RwLock<RetainedDeposits>>,
-    deposit_operations: Arc<RwLock<BTreeMap<String, String>>>,
+    deposit_operations: Arc<RwLock<DepositOperationLedger>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
@@ -1693,7 +1752,14 @@ impl LocalJournalPheromoneSubstrate {
             rewrite_verified_deposit_jsonl(&journal_path, &deposits.entries)?;
             enforce_journal_file_limit(&journal_path, retention_limits.max_journal_bytes)?;
         }
-        let deposit_operations = load_deposit_operations(&deposit_operation_journal_path)?;
+        let (deposit_operations, operation_rewrite_required) =
+            load_deposit_operations(&deposit_operation_journal_path)?;
+        if operation_rewrite_required {
+            rewrite_deposit_operation_journal(
+                &deposit_operation_journal_path,
+                &deposit_operations,
+            )?;
+        }
         let escalations = load_jsonl(&escalation_journal_path)?;
         let threat_intel_entries = load_threat_intel_entries(&threat_intel_journal_path)?;
         let mut behavioral_baseline_sequences =
@@ -1762,17 +1828,10 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .deposit_operations
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
-        if let Some(operation) = operation.as_ref() {
-            if deposit_operation_already_recorded(&operations, operation)? {
-                return Ok(());
-            }
-            if operations.len() >= MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES {
-                return Err(SubstrateError::InvalidDeposit {
-                    reason: format!(
-                        "Providence feedback operation ledger reached its {MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES}-entry hard limit"
-                    ),
-                });
-            }
+        if let Some(operation) = operation.as_ref()
+            && operations.already_recorded(operation)?
+        {
+            return Ok(());
         }
         if exact_deposit_operation_already_retained(&guard.entries, &deposit)? {
             if let Some(operation) = operation.as_ref() {
@@ -1780,8 +1839,11 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
                 // a crash or directory-sync failure. Rewrite the retained set to
                 // establish its durability before committing the operation marker.
                 rewrite_verified_deposit_jsonl(&self.journal_path, &guard.entries)?;
-                append_deposit_operation_record(&self.deposit_operation_journal_path, operation)?;
-                insert_deposit_operation(&mut operations, operation)?;
+                persist_deposit_operation(
+                    &self.deposit_operation_journal_path,
+                    &mut operations,
+                    operation,
+                )?;
             }
             return Ok(());
         }
@@ -1817,8 +1879,11 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
         }
         *guard = candidate;
         if let Some(operation) = operation.as_ref() {
-            append_deposit_operation_record(&self.deposit_operation_journal_path, operation)?;
-            insert_deposit_operation(&mut operations, operation)?;
+            persist_deposit_operation(
+                &self.deposit_operation_journal_path,
+                &mut operations,
+                operation,
+            )?;
         }
         Ok(())
     }
@@ -2469,11 +2534,12 @@ fn enforce_journal_file_limit(path: &Path, max_bytes: u64) -> Result<(), Substra
     Ok(())
 }
 
-fn load_deposit_operations(path: &Path) -> Result<BTreeMap<String, String>, SubstrateError> {
+fn load_deposit_operations(path: &Path) -> Result<(DepositOperationLedger, bool), SubstrateError> {
     repair_uncommitted_deposit_operation_tail(path)?;
     enforce_journal_file_limit(path, MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES)?;
     let records = load_jsonl::<DepositOperationRecord>(path)?;
-    let mut operations = BTreeMap::new();
+    let mut operations = DepositOperationLedger::default();
+    let mut rewrite_required = false;
     for record in records {
         if record.operation_id.is_empty()
             || record.operation_id.len() > MAX_DEPOSIT_OPERATION_ID_BYTES
@@ -2488,9 +2554,12 @@ fn load_deposit_operations(path: &Path) -> Result<BTreeMap<String, String>, Subs
                     .to_string(),
             });
         }
-        insert_deposit_operation(&mut operations, &record)?;
+        match insert_deposit_operation(&mut operations, &record)? {
+            DepositOperationInsert::AlreadyRecorded => rewrite_required = true,
+            DepositOperationInsert::Inserted { evicted } => rewrite_required |= evicted > 0,
+        }
     }
-    Ok(operations)
+    Ok((operations, rewrite_required))
 }
 
 fn repair_uncommitted_deposit_operation_tail(path: &Path) -> Result<(), SubstrateError> {
@@ -2533,6 +2602,7 @@ fn repair_uncommitted_deposit_operation_tail(path: &Path) -> Result<(), Substrat
 fn append_deposit_operation_record(
     path: &Path,
     operation: &DepositOperationRecord,
+    maximum_bytes: u64,
 ) -> Result<(), SubstrateError> {
     let serialized = serde_json::to_string(operation).map_err(|source| SubstrateError::Parse {
         path: path.to_path_buf(),
@@ -2555,13 +2625,13 @@ fn append_deposit_operation_record(
         .ok_or_else(|| SubstrateError::JournalLimitExceeded {
             path: path.to_path_buf(),
             observed_bytes: u64::MAX,
-            max_bytes: MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES,
+            max_bytes: maximum_bytes,
         })?;
-    if next_bytes > MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES {
+    if next_bytes > maximum_bytes {
         return Err(SubstrateError::JournalLimitExceeded {
             path: path.to_path_buf(),
             observed_bytes: next_bytes,
-            max_bytes: MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES,
+            max_bytes: maximum_bytes,
         });
     }
     ensure_parent_dir(path)?;
@@ -2585,6 +2655,113 @@ fn append_deposit_operation_record(
         sync_rewrite_parent(path, path.parent().unwrap_or_else(|| Path::new(".")))?;
     }
     Ok(())
+}
+
+fn compact_deposit_operation_ledger_to_bytes(
+    path: &Path,
+    operations: &mut DepositOperationLedger,
+    maximum_bytes: u64,
+) -> Result<(), SubstrateError> {
+    let ordered = operations.ordered_records()?;
+    let mut line_bytes = VecDeque::with_capacity(ordered.len());
+    let mut total_bytes = 0u64;
+    for record in ordered {
+        let bytes = serde_json::to_vec(&record).map_err(|source| SubstrateError::Parse {
+            path: path.to_path_buf(),
+            line: 0,
+            source,
+        })?;
+        let bytes = u64::try_from(bytes.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        total_bytes = total_bytes.saturating_add(bytes);
+        line_bytes.push_back(bytes);
+    }
+    while total_bytes > maximum_bytes {
+        let Some(oldest_bytes) = line_bytes.pop_front() else {
+            break;
+        };
+        if !operations.evict_oldest()? {
+            break;
+        }
+        total_bytes = total_bytes.saturating_sub(oldest_bytes);
+    }
+    if total_bytes > maximum_bytes || operations.records.is_empty() {
+        return Err(SubstrateError::JournalLimitExceeded {
+            path: path.to_path_buf(),
+            observed_bytes: total_bytes,
+            max_bytes: maximum_bytes,
+        });
+    }
+    Ok(())
+}
+
+fn rewrite_deposit_operation_journal(
+    path: &Path,
+    operations: &DepositOperationLedger,
+) -> Result<(), SubstrateError> {
+    let records = operations.ordered_records()?;
+    rewrite_jsonl(path, &records)
+}
+
+fn persist_deposit_operation_with_limits(
+    path: &Path,
+    operations: &mut DepositOperationLedger,
+    operation: &DepositOperationRecord,
+    maximum_entries: usize,
+    maximum_bytes: u64,
+) -> Result<(), SubstrateError> {
+    let mut candidate = operations.clone();
+    let insertion = candidate.insert_with_limit(operation, maximum_entries)?;
+    if insertion == DepositOperationInsert::AlreadyRecorded {
+        return Ok(());
+    }
+
+    let count_rollover = matches!(
+        insertion,
+        DepositOperationInsert::Inserted { evicted } if evicted > 0
+    );
+    let persistence = if count_rollover {
+        compact_deposit_operation_ledger_to_bytes(path, &mut candidate, maximum_bytes)?;
+        rewrite_deposit_operation_journal(path, &candidate)
+    } else {
+        match append_deposit_operation_record(path, operation, maximum_bytes) {
+            Ok(()) => Ok(()),
+            Err(SubstrateError::JournalLimitExceeded { .. }) => {
+                compact_deposit_operation_ledger_to_bytes(path, &mut candidate, maximum_bytes)?;
+                rewrite_deposit_operation_journal(path, &candidate)
+            }
+            Err(error) => Err(error),
+        }
+    };
+
+    match persistence {
+        Ok(()) => {
+            *operations = candidate;
+            Ok(())
+        }
+        Err(error @ SubstrateError::DurabilityOutcomeUnknown { .. }) => {
+            // rename(2) made the rolled ledger process-visible. Reconcile
+            // memory before failing closed so an exact retry observes it.
+            *operations = candidate;
+            Err(error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn persist_deposit_operation(
+    path: &Path,
+    operations: &mut DepositOperationLedger,
+    operation: &DepositOperationRecord,
+) -> Result<(), SubstrateError> {
+    persist_deposit_operation_with_limits(
+        path,
+        operations,
+        operation,
+        MAX_DEPOSIT_OPERATION_LEDGER_ENTRIES,
+        MAX_LOCAL_DEPOSIT_OPERATION_JOURNAL_BYTES,
+    )
 }
 
 fn load_retained_deposit_jsonl(
@@ -3876,6 +4053,124 @@ mod tests {
         let _ = std::fs::remove_file(escalation_path);
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_file(threat_intel_path);
+    }
+
+    fn sample_deposit_operation_record(label: &str) -> super::DepositOperationRecord {
+        super::DepositOperationRecord {
+            operation_id: format!("operation-{label}"),
+            deposit_digest: swarm_crypto::sha256_hex(label.as_bytes()),
+        }
+    }
+
+    #[test]
+    fn feedback_operation_ledger_is_a_bounded_conflict_safe_retry_window() {
+        let first = sample_deposit_operation_record("first");
+        let second = sample_deposit_operation_record("second");
+        let third = sample_deposit_operation_record("third");
+        let mut ledger = super::DepositOperationLedger::default();
+
+        assert_eq!(
+            ledger.insert_with_limit(&first, 2).unwrap(),
+            super::DepositOperationInsert::Inserted { evicted: 0 }
+        );
+        assert_eq!(
+            ledger.insert_with_limit(&second, 2).unwrap(),
+            super::DepositOperationInsert::Inserted { evicted: 0 }
+        );
+        assert_eq!(
+            ledger.insert_with_limit(&first, 2).unwrap(),
+            super::DepositOperationInsert::AlreadyRecorded
+        );
+
+        let mut conflict = first.clone();
+        conflict.deposit_digest = swarm_crypto::sha256_hex(b"conflict");
+        assert!(matches!(
+            ledger.insert_with_limit(&conflict, 2),
+            Err(super::SubstrateError::InvalidDeposit { reason })
+                if reason.contains("operation id was reused")
+        ));
+
+        assert_eq!(
+            ledger.insert_with_limit(&third, 2).unwrap(),
+            super::DepositOperationInsert::Inserted { evicted: 1 }
+        );
+        assert!(!ledger.records.contains_key(&first.operation_id));
+        assert!(ledger.records.contains_key(&second.operation_id));
+        assert!(ledger.records.contains_key(&third.operation_id));
+        assert_eq!(
+            ledger.insertion_order,
+            std::collections::VecDeque::from([second.operation_id, third.operation_id])
+        );
+    }
+
+    #[test]
+    fn local_feedback_operation_ledger_rolls_over_durably_by_count_and_bytes() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-pheromone-feedback-operation-rollover-{unique}.jsonl"
+        ));
+        let first = sample_deposit_operation_record("first");
+        let second = sample_deposit_operation_record("second");
+        let third = sample_deposit_operation_record("third");
+        let fourth = sample_deposit_operation_record("fourth");
+        let mut ledger = super::DepositOperationLedger::default();
+
+        super::persist_deposit_operation_with_limits(&path, &mut ledger, &first, 2, 1_000_000)
+            .unwrap();
+        super::persist_deposit_operation_with_limits(&path, &mut ledger, &second, 2, 1_000_000)
+            .unwrap();
+        super::persist_deposit_operation_with_limits(&path, &mut ledger, &third, 2, 1_000_000)
+            .unwrap();
+
+        let (reopened, rewrite_required) = super::load_deposit_operations(&path).unwrap();
+        assert!(!rewrite_required);
+        assert_eq!(
+            reopened.insertion_order,
+            std::collections::VecDeque::from([
+                second.operation_id.clone(),
+                third.operation_id.clone(),
+            ])
+        );
+        assert!(!reopened.records.contains_key(&first.operation_id));
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+
+        let retained_bytes = [&third, &fourth]
+            .into_iter()
+            .map(|record| serde_json::to_vec(record).unwrap().len() + 1)
+            .sum::<usize>() as u64;
+        let mut reopened = reopened;
+        super::persist_deposit_operation_with_limits(
+            &path,
+            &mut reopened,
+            &fourth,
+            10,
+            retained_bytes,
+        )
+        .unwrap();
+
+        let (rolled, rewrite_required) = super::load_deposit_operations(&path).unwrap();
+        assert!(!rewrite_required);
+        assert_eq!(
+            rolled.insertion_order,
+            std::collections::VecDeque::from([
+                third.operation_id.clone(),
+                fourth.operation_id.clone(),
+            ])
+        );
+        assert!(!rolled.records.contains_key(&second.operation_id));
+        assert!(std::fs::metadata(&path).unwrap().len() <= retained_bytes);
+
+        super::append_deposit_operation_record(&path, &fourth, 1_000_000).unwrap();
+        let (deduplicated, rewrite_required) = super::load_deposit_operations(&path).unwrap();
+        assert!(rewrite_required);
+        super::rewrite_deposit_operation_journal(&path, &deduplicated).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+        assert_eq!(deduplicated.insertion_order, rolled.insertion_order);
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
