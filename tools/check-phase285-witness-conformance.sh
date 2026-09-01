@@ -622,6 +622,7 @@ run_self_tests() {
   validate_aggregate_self_test_registry
   phase285_portable_directory_metadata_self_test
   relay_recreation_canonical_route_guard self-test
+  complete_receipt_source_guard self-test
   local count=0 mode
   while IFS= read -r mode; do
     [ -n "$mode" ] || continue
@@ -7732,18 +7733,31 @@ complete_receipt_artifact_hostile_controls() {
   case_dir="$root/absent"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"
   expect_refusal absent 'complete_receipt_artifact[absent]' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record
 
-  case_dir="$root/precreated"; mkdir -m 700 "$case_dir"; : >"$case_dir/ledger.json"; chmod 600 "$case_dir/ledger.json"
-  output="$root/precreated.txt"
-  if PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$case_dir/ledger.json" \
-    PHASE285_COMPLETE_RECEIPT_PATH="$case_dir/receipt.json" \
-    PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$(printf precreated | shasum -a 256 | awk '{print $1}')" \
-    cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
-      service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact >"$output" 2>&1; then
-    echo "complete receipt precreated mutation survived" >&2; return 1
-  fi
-  grep -Fq 'complete receipt evidence is not fresh' "$output" || { cat "$output" >&2; return 1; }
-  grep -Fq 'running 1 test' "$output" || { cat "$output" >&2; return 1; }
-  echo 'complete_receipt_artifact_mutation mutation=precreated intended=fresh-path-refusal executed=1 killed=1'
+  for label in precreated-ledger precreated-receipt; do
+    case_dir="$root/$label"; mkdir -m 700 "$case_dir"
+    if [ "$label" = precreated-ledger ]; then
+      : >"$case_dir/ledger.json"; chmod 600 "$case_dir/ledger.json"
+    else
+      : >"$case_dir/receipt.json"; chmod 600 "$case_dir/receipt.json"
+    fi
+    output="$root/$label.txt"
+    if [ "$label" = precreated-ledger ]; then
+      expected_variable=PHASE285_COMPLETE_RECEIPT_LEDGER_PATH
+    else
+      expected_variable=PHASE285_COMPLETE_RECEIPT_PATH
+    fi
+    if PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$case_dir/ledger.json" \
+      PHASE285_COMPLETE_RECEIPT_PATH="$case_dir/receipt.json" \
+      PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$(printf '%s' "$label" | shasum -a 256 | awk '{print $1}')" \
+      cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
+        service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact >"$output" 2>&1; then
+      echo "complete receipt $label mutation survived" >&2; return 1
+    fi
+    grep -Fq "complete receipt evidence is not fresh: $expected_variable" "$output" \
+      || { cat "$output" >&2; return 1; }
+    grep -Fq 'running 1 test' "$output" || { cat "$output" >&2; return 1; }
+    echo "complete_receipt_artifact_mutation mutation=$label intended=fresh-path-refusal executed=1 killed=1"
+  done
 
   case_dir="$root/aliased"; mkdir -m 700 "$case_dir"; cp "$source_ledger" "$case_dir/ledger.json"; ln "$case_dir/ledger.json" "$case_dir/receipt.json"
   expect_refusal aliased 'complete_receipt_artifact[alias]' "$case_dir" "$case_dir/ledger.json" "$case_dir/receipt.json" "$case_dir/snapshot.json" record
@@ -7779,43 +7793,89 @@ complete_receipt_artifact_hostile_controls() {
   grep -Fq 'ledger identity' "$output" || { cat "$output" >&2; return 1; }
   grep -Fq 'running 1 test' "$output" || { cat "$output" >&2; return 1; }
   echo 'complete_receipt_artifact_mutation mutation=stale intended=ledger-identity killed=1'
-  echo 'complete_receipt_artifact_self_test mutations=9 executed=2 killed=9 passed=1'
+  echo 'complete_receipt_artifact_self_test mutations=10 executed=3 killed=10 passed=1'
 }
 
 complete_receipt_source_guard() {
   local mode="${1:-normal}" library="$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs"
   local external="$ROOT_DIR/crates/swarm-governance-witness/tests/service_checkpoint.rs"
-  python3 -I - "$library" "$external" <<'PY'
-import pathlib, sys
-library, external = [pathlib.Path(path).read_text() for path in sys.argv[1:]]
-start = library.index("fn validate_complete_receipt(")
-end = library.index("\n}\n\n#[cfg(test)]\nmod service_checkpoint_observation_tests", start)
-owned = library[start:end]
-required = [
-    '"PHASE285_COMPLETE_RECEIPT_LEDGER_PATH" | "PHASE285_COMPLETE_RECEIPT_PATH"',
-    ".write(true)", ".create_new(true)", ".mode(0o600)", "file.sync_all()",
-    "fn validate_complete_receipt(", "expected_invocation_token: &str",
-    'return Err("current_invocation")', 'return Err("proxy_cross_copy")',
-    "validate_complete_response_enqueue_attempts(",
-    "if validate_complete_receipt(",
-    "if sender.max_capacity() != 1", "match sender.try_send(receipt)",
-    "run_worker_observation_test_async().await",
-]
-for fragment in required:
-    if fragment not in owned: raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
-for fragment in ('return Err("response_enqueue_fabrication")', "fn validate_complete_response_enqueue_attempts("):
-    if fragment not in library: raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
-for forbidden in ("std::process::Command", "with-nats-jetstream", "bash", "temp_dir()", "remove_file", "create_dir", "remove_dir"):
-    if forbidden in owned: raise SystemExit(f"complete_receipt_source[forbidden:{forbidden}]")
-if library.count("fn validate_complete_receipt(") != 1 or "pub fn validate_complete_receipt(" in library:
-    raise SystemExit("complete_receipt_source[closed-validator]")
-for fragment in ("fn independently_validate_artifacts(", "WitnessServiceResponseV1::decode_for_client_request", "WitnessStoreProxyRequestV1::decode", "WitnessStoreReadResultV1", "proxy cross-copy", "response enqueue fabrication", "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", "PHASE285_COMPLETE_RECEIPT_PATH"):
-    if fragment not in external: raise SystemExit(f"complete_receipt_external[missing:{fragment}]")
-for forbidden in ("run_complete_receipt_suppression_test", "validate_complete_receipt", "std::process::Command"):
-    if forbidden in external: raise SystemExit(f"complete_receipt_external[forbidden:{forbidden}]")
+  python3 -I - "$library" "$external" "$mode" <<'PY'
+import hashlib, pathlib, sys
+library, external = [pathlib.Path(path).read_text() for path in sys.argv[1:3]]
+mode = sys.argv[3]
+if mode not in {"normal", "self-test"}:
+    raise SystemExit("complete_receipt_source[mode]")
+
+freshness_sequence = (
+    "        require_complete_receipt_artifact_paths_fresh();\n"
+    "        let produced_ledger = run_worker_observation_test_async().await;\n"
+)
+
+def validate(library, external):
+    start = library.index("fn validate_complete_receipt(")
+    end = library.index("\n}\n\n#[cfg(test)]\nmod service_checkpoint_observation_tests", start)
+    owned = library[start:end]
+    required = [
+        '"PHASE285_COMPLETE_RECEIPT_LEDGER_PATH" | "PHASE285_COMPLETE_RECEIPT_PATH"',
+        ".write(true)", ".create_new(true)", ".mode(0o600)", "file.sync_all()",
+        "fn validate_complete_receipt(", "expected_invocation_token: &str",
+        'return Err("current_invocation")', 'return Err("proxy_cross_copy")',
+        "validate_complete_response_enqueue_attempts(",
+        "if validate_complete_receipt(",
+        "if sender.max_capacity() != 1", "match sender.try_send(receipt)",
+        "fn require_complete_receipt_artifact_paths_fresh()",
+        "std::fs::symlink_metadata(&path)",
+        freshness_sequence,
+    ]
+    for fragment in required:
+        if fragment not in owned:
+            raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
+    if owned.count(freshness_sequence) != 1:
+        raise SystemExit("complete_receipt_source[freshness-sequence]")
+    for fragment in ('return Err("response_enqueue_fabrication")', "fn validate_complete_response_enqueue_attempts("):
+        if fragment not in library:
+            raise SystemExit(f"complete_receipt_source[missing:{fragment}]")
+    for forbidden in ("std::process::Command", "with-nats-jetstream", "bash", "temp_dir()", "remove_file", "create_dir", "remove_dir"):
+        if forbidden in owned:
+            raise SystemExit(f"complete_receipt_source[forbidden:{forbidden}]")
+    if library.count("fn validate_complete_receipt(") != 1 or "pub fn validate_complete_receipt(" in library:
+        raise SystemExit("complete_receipt_source[closed-validator]")
+    for fragment in ("fn independently_validate_artifacts(", "WitnessServiceResponseV1::decode_for_client_request", "WitnessStoreProxyRequestV1::decode", "WitnessStoreReadResultV1", "proxy cross-copy", "response enqueue fabrication", "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", "PHASE285_COMPLETE_RECEIPT_PATH"):
+        if fragment not in external:
+            raise SystemExit(f"complete_receipt_external[missing:{fragment}]")
+    for forbidden in ("run_complete_receipt_suppression_test", "validate_complete_receipt", "std::process::Command"):
+        if forbidden in external:
+            raise SystemExit(f"complete_receipt_external[forbidden:{forbidden}]")
+
+validate(library, external)
 print("complete_receipt_source_guard passed=1")
+if mode == "self-test":
+    replacements = {
+        "preflight-omission": "        let produced_ledger = run_worker_observation_test_async().await;\n",
+        "preflight-after-live-mutation": (
+            "        let produced_ledger = run_worker_observation_test_async().await;\n"
+            "        require_complete_receipt_artifact_paths_fresh();\n"
+        ),
+    }
+    if library.count(freshness_sequence) != 1:
+        raise SystemExit("complete_receipt_source_self_test[anchor]")
+    digests = set()
+    for label, replacement in replacements.items():
+        mutant = library.replace(freshness_sequence, replacement, 1)
+        digest = hashlib.sha256(mutant.encode()).hexdigest()
+        if digest in digests:
+            raise SystemExit("complete_receipt_source_self_test[duplicate]")
+        digests.add(digest)
+        try:
+            validate(mutant, external)
+        except SystemExit as error:
+            if not str(error).startswith("complete_receipt_source["):
+                raise
+        else:
+            raise SystemExit(f"complete_receipt_source_self_test[survived:{label}]")
+        print(f"complete_receipt_source_mutation mutation={label} source_sha256={digest} killed=1")
+    print("complete_receipt_source_self_test mutations=2 unique=2 killed=2 passed=1")
 PY
-  [ "$mode" = self-test ] || return 0
 }
 
 complete_receipt_write_signal_readiness() {

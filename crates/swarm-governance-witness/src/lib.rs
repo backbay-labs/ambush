@@ -6426,6 +6426,24 @@ mod deadline_state_machine_tests {
         bytes.to_vec()
     }
 
+    fn require_complete_receipt_artifact_paths_fresh() {
+        for variable in [
+            "PHASE285_COMPLETE_RECEIPT_LEDGER_PATH",
+            "PHASE285_COMPLETE_RECEIPT_PATH",
+        ] {
+            let path = complete_receipt_file_path(variable);
+            match std::fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => panic!("complete receipt evidence is not fresh: {variable}"),
+                Err(error) => {
+                    panic!(
+                        "complete receipt evidence freshness preflight failed: {variable}: {error:?}"
+                    )
+                }
+            }
+        }
+    }
+
     fn complete_receipt_from_ledger_value(
         value: &serde_json::Value,
     ) -> LedgerBoundCompleteReceiptV1 {
@@ -6740,6 +6758,7 @@ mod deadline_state_machine_tests {
             "complete receipt invocation token absent",
         );
         let expected_case = "service_checkpoint_complete_receipt";
+        require_complete_receipt_artifact_paths_fresh();
         let produced_ledger = run_worker_observation_test_async().await;
         let reopened_ledger =
             persist_and_reopen("PHASE285_COMPLETE_RECEIPT_LEDGER_PATH", &produced_ledger);

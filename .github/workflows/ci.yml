@@ -95,8 +95,36 @@ jobs:
           toolchain: stable
           components: clippy
 
-      - name: Populate the locked Cargo source cache
-        run: cargo fetch --locked
+      - name: Hydrate the complete locked Cargo source closure
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-source-hydration-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          cargo fetch --locked
+          cargo test -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --no-run
+          python3 -I - "$CARGO_TARGET_DIR" "$RUNNER_TEMP" <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import stat
+          import sys
+
+          target = pathlib.Path(sys.argv[1])
+          runner_temp = pathlib.Path(sys.argv[2]).resolve(strict=True)
+          metadata = target.lstat()
+          if (
+              not target.is_absolute()
+              or target.parent.resolve(strict=True) != runner_temp
+              or target.name != "phase285-source-hydration-target"
+              or stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISDIR(metadata.st_mode)
+          ):
+              raise SystemExit("phase285_source_hydration[target-identity]")
+          shutil.rmtree(target)
+          if os.path.lexists(target):
+              raise SystemExit("phase285_source_hydration[target-residue]")
+          print("phase285_source_hydration closure=governance-witness-all-targets-all-features target_residue=0 passed=1")
+          PY
 
       - name: Install actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
@@ -651,7 +679,33 @@ jobs:
               ),
           }
           if observed_cargo_source_trees != baseline["cargo_source_trees"]:
-              raise SystemExit("candidate_inventory[cargo-source-trees]")
+              deltas = {}
+              for source_kind in ("git", "registry"):
+                  expected_tree = baseline["cargo_source_trees"][source_kind]
+                  observed_tree = observed_cargo_source_trees[source_kind]
+                  if expected_tree == observed_tree:
+                      continue
+                  expected_entries = {
+                      entry[0]: entry[1:] for entry in expected_tree.get("entries", [])
+                  }
+                  observed_entries = {
+                      entry[0]: entry[1:] for entry in observed_tree.get("entries", [])
+                  }
+                  deltas[source_kind] = {
+                      "state": [expected_tree.get("state"), observed_tree.get("state")],
+                      "missing": sorted(set(expected_entries) - set(observed_entries))[:8],
+                      "extra": sorted(set(observed_entries) - set(expected_entries))[:8],
+                      "changed": sorted(
+                          path
+                          for path in set(expected_entries) & set(observed_entries)
+                          if expected_entries[path] != observed_entries[path]
+                      )[:8],
+                  }
+              raise SystemExit(
+                  "candidate_inventory[cargo-source-trees:"
+                  + json.dumps(deltas, sort_keys=True, separators=(",", ":"))
+                  + "]"
+              )
           if ancestor_cargo_controls(root) != baseline["cargo_ancestor_controls"]:
               raise SystemExit("candidate_inventory[ancestor-cargo-controls]")
           sysroot_path = pathlib.Path(baseline["sysroot"]["path"])
@@ -906,7 +960,7 @@ jobs:
           trap verify_candidate_inventory_on_exit EXIT
 
           PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1
-          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=8a5eaf5f7263563db61b74ca8d527af2587c857be818fa07c0bbd12de41143fa
+          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=e6d2e9966d7cbabe523022b89e1ee56e32c1c596ea5a08ad233fbca13f3b0cb5
           export PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
           readonly PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
           verify_integrity_roots
