@@ -173,10 +173,10 @@ phase285_scratch_hostile_controls() {
     exit_code=0
     output="$(TMPDIR="$boundary" phase285_create_confined_scratch "$site-hostile" 2>&1)" || exit_code=$?
     after_children="$(phase285_boundary_child_inventory "$boundary")"
-    [ "$exit_code" -ne 0 ] && [ "$output" = "PHASE285-SCRATCH[parent-overlap]" ] || {
+    if [ "$exit_code" -eq 0 ] || [ "$output" != "PHASE285-SCRATCH[parent-overlap]" ]; then
       echo "Phase 285 hostile TMPDIR was not refused: site=$site boundary=$boundary output=$output" >&2
       return 1
-    }
+    fi
     [ "$before_children" = "$after_children" ] || {
       echo "Phase 285 hostile TMPDIR refusal created a child path: site=$site boundary=$boundary" >&2
       return 1
@@ -600,10 +600,10 @@ phase285_portable_directory_metadata_self_test() {
   trap cleanup_temp_dir_on_exit EXIT
   metadata="$(phase285_directory_metadata "$scratch")"
   IFS=: read -r mode device inode <<<"$metadata"
-  [ "$mode" = 700 ] && [[ "$device" =~ ^[0-9]+$ ]] && [[ "$inode" =~ ^[0-9]+$ ]] || {
+  if [ "$mode" != 700 ] || ! [[ "$device" =~ ^[0-9]+$ ]] || ! [[ "$inode" =~ ^[0-9]+$ ]]; then
     echo "Phase 285 portable directory metadata differs: $metadata" >&2
     return 1
-  }
+  fi
   python3 -I - "$ROOT_DIR/tools/check-phase285-witness-conformance.sh" <<'PY'
 import pathlib
 import sys
@@ -4159,10 +4159,10 @@ PY
 
 run_transport_execution_self_test() {
   local prior_results="${PHASE285_TRANSPORT_PRIOR_RESULTS_FILE:-}"
-  [ -n "$prior_results" ] && [ -f "$prior_results" ] || {
+  if [ -z "$prior_results" ] || [ ! -f "$prior_results" ]; then
     echo "transport zero/omitted self-test requires parent-provided actual prior results" >&2
     return 1
-  }
+  fi
   phase285_scratch_hostile_controls conformance-transport
   phase285_scratch_hostile_controls conformance-witness
   local temp_dir expected_file full_results omitted_results zero_results current_case
@@ -8387,11 +8387,11 @@ run_complete_receipt_focus() {
   if [ -n "$requested_signal" ]; then
     [[ "$control_root" = /* ]] || { echo "complete receipt signal control root must be absolute" >&2; return 2; }
     scratch_mode="$(phase285_directory_metadata "$control_root" 2>/dev/null)" || scratch_mode=""
-    [ "${scratch_mode%%:*}" = 700 ] \
-      && [ ! -e "$control_root/readiness.json" ] && [ ! -L "$control_root/readiness.json" ] \
-      && [ ! -e "$control_root/release.json" ] && [ ! -L "$control_root/release.json" ] || {
+    if [ "${scratch_mode%%:*}" != 700 ] \
+      || [ -e "$control_root/readiness.json" ] || [ -L "$control_root/readiness.json" ] \
+      || [ -e "$control_root/release.json" ] || [ -L "$control_root/release.json" ]; then
       echo "complete receipt signal control root is invalid" >&2; return 2;
-    }
+    fi
     scratch="$(phase285_create_confined_scratch phase285-complete-receipt "$control_root")"
   else
     scratch="$(phase285_create_confined_scratch phase285-complete-receipt)"
@@ -8399,9 +8399,9 @@ run_complete_receipt_focus() {
   PHASE285_WITNESS_TEMP_DIR="$scratch"
   IFS=: read -r scratch_mode PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE PHASE285_COMPLETE_RECEIPT_BOUND_INODE \
     < <(phase285_directory_metadata "$scratch")
-  [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE" ] && [ -n "$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ] || {
+  if [ -z "$PHASE285_COMPLETE_RECEIPT_BOUND_DEVICE" ] || [ -z "$PHASE285_COMPLETE_RECEIPT_BOUND_INODE" ]; then
     echo "complete receipt scratch identity is absent" >&2; return 1;
-  }
+  fi
   complete_receipt_arm_cleanup_traps
   artifact_dir="$scratch/artifacts"
   mkdir -m 700 "$artifact_dir"
@@ -12632,10 +12632,10 @@ run_relay_recreation_mutants_for_ci() {
   ledger="$reservation.ledger.json"
   receipts="$reservation.receipts"
   rm -f -- "$reservation"
-  [ ! -e "$ledger" ] && [ ! -e "$receipts" ] || {
+  if [ -e "$ledger" ] || [ -e "$receipts" ]; then
     echo "relay recreation CI artifacts are not fresh" >&2
     return 1
-  }
+  fi
   PHASE285_RELAY_RECREATION_LEDGER="$ledger" \
   PHASE285_RELAY_RECREATION_RECEIPT_ROOT="$receipts" \
     run_relay_recreation_mutants

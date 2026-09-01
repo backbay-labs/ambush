@@ -1338,7 +1338,8 @@ run_harness() (
   NATS_PORT=""
   NATS_HTTP_PORT=""
   # Invoked by the EXIT trap below.
-  # shellcheck disable=SC2329
+  # ShellCheck 0.9 uses SC2317 and 0.11 uses SC2329 for this EXIT-trap false positive.
+  # shellcheck disable=SC2317,SC2329
   cleanup() {
     local status=$?
     if (( stack_started == 1 )); then
