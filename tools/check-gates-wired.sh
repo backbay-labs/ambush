@@ -459,7 +459,7 @@ DEPENDENCY_CHECKER = "tools/check-witness-dependency-closure.sh"
 PHASE285_WORKFLOW_PATH = ".github/workflows/ci.yml"
 EXPECTED_PHASE285_WORKFLOW_POLICY_SHA256 = "cf25b5b194a3ce7003db3262dbdfd5f87dbb780bd89b35526023ea45c05395ec"
 EXPECTED_PHASE285_WORKSPACE_JOB_SHA256 = "c19f04072a3a1024e886e21f911b71239eec160837ff9e8740903179b5335271"
-EXPECTED_PHASE285_JOB_SHA256 = "6422b6264c37d7d39cd41fa9cef5bff71df0ad44ed6223114285fbed04b41646"
+EXPECTED_PHASE285_JOB_SHA256 = "4a61319fa029e070a21427cc68e0ffe457255f0373d7f1d216be2104e4afe7ea"
 EXPECTED_FMT_JOB_SHA256 = "8320dc038e322c8b2cdbe432b6d77ca825e44aa94913dcf13d7c91bda52a0923"
 EXPECTED_WORKSPACE_RUN_SHA256 = "81a78f526e8ca1fb8b5fde286aaa33db1e363fbe5da76e58ae9b9eaef6f93d67"
 EXPECTED_ASSURANCE_RUN_SHA256 = "b9ade9ed7e3adc91a790900c5c9e2d06392dcdf7d1bcfbba18438c372c258880"
@@ -516,6 +516,7 @@ WORKFLOW_CONTRACT_MUTATION_KINDS = (
     "preceding-path-writer",
     "phase-mutable-action-ref",
     "assurance-source-hydration-omission",
+    "assurance-generated-source-hydration-omission",
     "assurance-source-hydration-target-checkout",
     "assurance-target-dir-checkout",
     "assurance-inventory-omission",
@@ -1028,11 +1029,11 @@ def validate_phase285_raw_workflow_contract(result):
         "          toolchain: stable\n          components: clippy\n",
         "      - name: Hydrate the complete locked Cargo source closure\n",
         "          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-source-hydration-target\n          CARGO_INCREMENTAL: \"0\"\n",
-        "          cargo fetch --locked\n          cargo test -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --no-run\n",
+        "          cargo fetch --locked\n          cargo test -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --no-run\n          bash tools/check-phase285-witness-conformance.sh --self-test jetstream-release-hook\n",
         "          target = pathlib.Path(sys.argv[1])\n          runner_temp = pathlib.Path(sys.argv[2]).resolve(strict=True)\n",
         "              or target.name != \"phase285-source-hydration-target\"\n",
         "          shutil.rmtree(target)\n          if os.path.lexists(target):\n              raise SystemExit(\"phase285_source_hydration[target-residue]\")\n",
-        "          print(\"phase285_source_hydration closure=governance-witness-all-targets-all-features target_residue=0 passed=1\")\n",
+        "          print(\"phase285_source_hydration closure=governance-witness-all-targets-all-features+generated-release-probe target_residue=0 passed=1\")\n",
         "        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7\n",
         "      - name: Run the isolated Phase 285 assurance monolith as the final candidate step\n",
         "          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-assurance-target\n          CARGO_INCREMENTAL: \"0\"\n",
@@ -1372,6 +1373,10 @@ def workflow_contract_mutation_variants(workflow_text):
         "assurance-source-hydration-omission": (
             "          cargo test -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --no-run\n",
             "          : # omitted complete source-closure hydration\n",
+        ),
+        "assurance-generated-source-hydration-omission": (
+            "          bash tools/check-phase285-witness-conformance.sh --self-test jetstream-release-hook\n",
+            "          : # omitted generated release-probe source hydration\n",
         ),
         "assurance-source-hydration-target-checkout": (
             "          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-source-hydration-target\n",

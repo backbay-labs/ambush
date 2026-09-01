@@ -102,6 +102,7 @@ jobs:
         run: |
           cargo fetch --locked
           cargo test -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --no-run
+          bash tools/check-phase285-witness-conformance.sh --self-test jetstream-release-hook
           python3 -I - "$CARGO_TARGET_DIR" "$RUNNER_TEMP" <<'PY'
           import os
           import pathlib
@@ -123,7 +124,7 @@ jobs:
           shutil.rmtree(target)
           if os.path.lexists(target):
               raise SystemExit("phase285_source_hydration[target-residue]")
-          print("phase285_source_hydration closure=governance-witness-all-targets-all-features target_residue=0 passed=1")
+          print("phase285_source_hydration closure=governance-witness-all-targets-all-features+generated-release-probe target_residue=0 passed=1")
           PY
 
       - name: Install actionlint
