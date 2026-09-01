@@ -459,10 +459,10 @@ DEPENDENCY_CHECKER = "tools/check-witness-dependency-closure.sh"
 PHASE285_WORKFLOW_PATH = ".github/workflows/ci.yml"
 EXPECTED_PHASE285_WORKFLOW_POLICY_SHA256 = "cf25b5b194a3ce7003db3262dbdfd5f87dbb780bd89b35526023ea45c05395ec"
 EXPECTED_PHASE285_WORKSPACE_JOB_SHA256 = "c19f04072a3a1024e886e21f911b71239eec160837ff9e8740903179b5335271"
-EXPECTED_PHASE285_JOB_SHA256 = "5714ec807cf7e736624cbbb885e9ce07b0955a5eb7bfc8710247e35f9f4fb813"
+EXPECTED_PHASE285_JOB_SHA256 = "860d79135eca2ce43d15447cb72b8f99e366496a3f159e38a77618495931bada"
 EXPECTED_FMT_JOB_SHA256 = "8320dc038e322c8b2cdbe432b6d77ca825e44aa94913dcf13d7c91bda52a0923"
 EXPECTED_WORKSPACE_RUN_SHA256 = "81a78f526e8ca1fb8b5fde286aaa33db1e363fbe5da76e58ae9b9eaef6f93d67"
-EXPECTED_ASSURANCE_RUN_SHA256 = "8b51514be3ef45906160e332e287a62f0ab1da76f8544f262999429e04c091d6"
+EXPECTED_ASSURANCE_RUN_SHA256 = "54b752cdabeae39e1c65ca4d99e6e380df87058c65ead9c67570d56657a59157"
 EXPECTED_FMT_RUN_SHA256 = "b6e19c16e0d5f97094745b63c78c4f15238111c4de91b081bba774a71abff1e8"
 REQUIRED_PHASE285 = [
     "cargo test --workspace --locked --offline",
@@ -1073,7 +1073,7 @@ def validate_phase285_raw_workflow_contract(result):
         "              raise SystemExit(\"candidate_inventory[inactive-target-root-not-empty]\")\n",
         "          trap verify_candidate_inventory_on_exit EXIT\n",
         "          PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1\n",
-        "          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=2ecd6113230b16ec26e9f886e7d910de30570b8986216d327f252c4b5578e0be\n",
+        "          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=8a5eaf5f7263563db61b74ca8d527af2587c857be818fa07c0bbd12de41143fa\n",
         "          run_assured() {\n            local command_status=0 verification_status=0 cleanup_status=0\n            verify_candidate_inventory || return $?\n            allocate_assurance_target || return $?\n",
         "            cleanup_assurance_target || cleanup_status=$?\n            if test \"$verification_status\" -ne 0; then\n              return \"$verification_status\"\n            fi\n            if test \"$cleanup_status\" -ne 0; then\n              return \"$cleanup_status\"\n            fi\n            return \"$command_status\"\n          }\n",
         "          allocate_assurance_target() {\n",

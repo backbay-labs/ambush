@@ -198,7 +198,10 @@ accounts {
           publish: [
             "\$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef",
             "\$JS.API.STREAM.INFO.KV_phase285_service",
-            "\$JS.API.STREAM.MSG.GET.KV_phase285_service"
+            "\$JS.API.STREAM.MSG.GET.KV_phase285_service",
+            "\$KV.phase285_initializer.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef",
+            "\$JS.API.STREAM.INFO.KV_phase285_initializer",
+            "\$JS.API.STREAM.MSG.GET.KV_phase285_initializer"
           ],
           subscribe: [
             "swarm.governance.witness.store.v1.inspect_ready",
@@ -217,7 +220,12 @@ accounts {
             "\$JS.API.STREAM.INFO.KV_phase285_service",
             "\$JS.API.STREAM.MSG.GET.KV_phase285_service",
             "\$KV.phase285_service.__witness_bucket_manifest",
-            "\$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"$fixture_init_permissions
+            "\$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef",
+            "\$JS.API.STREAM.CREATE.KV_phase285_initializer",
+            "\$JS.API.STREAM.INFO.KV_phase285_initializer",
+            "\$JS.API.STREAM.MSG.GET.KV_phase285_initializer",
+            "\$KV.phase285_initializer.__witness_bucket_manifest",
+            "\$KV.phase285_initializer.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"$fixture_init_permissions
           ],
           subscribe: ["_INBOX.>"]
         }
@@ -414,7 +422,7 @@ source = path.read_text()
 PUBLIC=[f"swarm.governance.witness.v1.{suffix}" for suffix in ["fence","establish","discover","prepare","commit","abort","read_prepared","read_head","fetch_payload"]]
 PRIVATE=[f"swarm.governance.witness.store.v1.{suffix}" for suffix in ["inspect_ready","read_entry","compare_and_swap"]]
 WITNESS_FIXTURE_BUCKETS=["phase285_b_wrong_revision","phase285_b_confirmed","phase285_b_del","phase285_b_purge","phase285_b_unknown","phase285_b_direct","phase285_c_current","phase285_c_predecessor","phase285_c_prepared","phase285_c_abort","phase285_c_genesisabort","phase285_c_anchor","phase285_c_account","phase285_c_global"]
-INIT=["$JS.API.STREAM.CREATE.KV_phase285_service","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_service.__witness_bucket_manifest","$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"]
+INIT=["$JS.API.STREAM.CREATE.KV_phase285_service","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_service.__witness_bucket_manifest","$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef","$JS.API.STREAM.CREATE.KV_phase285_initializer","$JS.API.STREAM.INFO.KV_phase285_initializer","$JS.API.STREAM.MSG.GET.KV_phase285_initializer","$KV.phase285_initializer.__witness_bucket_manifest","$KV.phase285_initializer.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef"]
 for bucket in WITNESS_FIXTURE_BUCKETS:
     INIT.extend([f"$JS.API.STREAM.CREATE.KV_{bucket}",f"$JS.API.STREAM.INFO.KV_{bucket}",f"$JS.API.STREAM.MSG.GET.KV_{bucket}",f"$JS.API.DIRECT.GET.KV_{bucket}.>",f"$KV.{bucket}.>"])
 INIT.append("$JS.API.STREAM.DELETE.KV_phase285_c_anchor")
@@ -523,7 +531,7 @@ def validate(value):
       "phase285_foreign":(PUBLIC+([] if RELAY_PRESENT else ["$JS.API.>","$KV.>"]),["_INBOX.>"]+([] if RELAY_PRESENT else ["$JS.EVENT.ADVISORY.>"]),[]),
       "phase285_witness":(PRIVATE,PUBLIC+["_INBOX.>"],[["1","12s"]]),
       **({"phase285_relay":(public_forward+private_forward,public_routed+private_routed+["_INBOX.>"],[["1","12s"]])} if RELAY_PRESENT else {}),
-      "phase285_witness_store":(["$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service"],PRIVATE+["_INBOX.>"],[["1","3s"]]),
+      "phase285_witness_store":(["$KV.phase285_service.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef","$JS.API.STREAM.INFO.KV_phase285_service","$JS.API.STREAM.MSG.GET.KV_phase285_service","$KV.phase285_initializer.s.0fc95119eb171c924f962c3af0a1f03c70078a8fd8a590189d7358e3c62ba1ef","$JS.API.STREAM.INFO.KV_phase285_initializer","$JS.API.STREAM.MSG.GET.KV_phase285_initializer"],PRIVATE+["_INBOX.>"],[["1","3s"]]),
       "phase285_expected":(INIT,["_INBOX.>"],[]),
     }
     for row in graph["principals"]:

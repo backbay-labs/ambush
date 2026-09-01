@@ -6393,11 +6393,11 @@ PY
     "$ROOT_DIR/crates/swarm-governance-witness/src/public_dispatcher.rs" \
     "$ROOT_DIR/crates/swarm-governance-witness/src/lib.rs" \
     "$ROOT_DIR/crates/swarm-governance-witness/tests/full_service_path.rs" \
-    "$ROOT_DIR" "$scratch" \
+    "$ROOT_DIR" "$scratch" "$list_output" \
     "$(shasum -a 256 "$ROOT_DIR/tools/check-phase285-witness-integrity.sh" | awk '{print $1}')" \
     "$(shasum -a 256 "$ROOT_DIR/tools/fixtures/phase285-witness-integrity.json" | awk '{print $1}')" <<'PY'
 import copy, hashlib, json, os, pathlib, re, selectors, shutil, signal, stat, subprocess, sys, time
-ledger, budget_receipt, callsite_receipt, constructor_receipt, tree, token, config_path, private_path, public_path, library_path, fixture_path, root_path, scratch_path, launcher_pin, manifest_pin = sys.argv[1:]
+ledger, budget_receipt, callsite_receipt, constructor_receipt, tree, token, config_path, private_path, public_path, library_path, fixture_path, root_path, scratch_path, list_path, launcher_pin, manifest_pin = sys.argv[1:]
 ledger = pathlib.Path(ledger)
 budget_receipt = pathlib.Path(budget_receipt)
 callsite_receipt = pathlib.Path(callsite_receipt)
@@ -7374,6 +7374,17 @@ if len(callsite_mutations) != 7:
 
 callsite_panic_header = re.compile(r"^thread '([^']+)'(?: \([0-9]+\))? panicked at .+:$")
 callsite_test_thread = "deadline_state_machine_tests::subscriber_callsite_is_receipt_anchored_and_mutation_sensitive"
+lib_test_inventory = []
+for line in pathlib.Path(list_path).read_text().splitlines():
+    match = re.fullmatch(r"([^:]+(?:::[^:]+)*): test", line)
+    if match:
+        lib_test_inventory.append(match.group(1))
+if (
+    len(lib_test_inventory) != len(set(lib_test_inventory))
+    or lib_test_inventory.count(callsite_test_thread) != 1
+):
+    raise SystemExit("deadline callsite compiled test inventory differs")
+expected_callsite_filtered = str(len(lib_test_inventory) - 1)
 
 def callsite_panic_records(output):
     records = []
@@ -7579,7 +7590,7 @@ for label, name, old, new, expected_count, replace_count, expected_failure in ca
     output = result.stdout
     running = re.findall(r"^running (\d+) test$", output, re.M)
     summaries = re.findall(
-        r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in .+$",
+        r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; (\d+) filtered out; finished in .+$",
         output,
         re.M,
     )
@@ -7591,7 +7602,7 @@ for label, name, old, new, expected_count, replace_count, expected_failure in ca
     if (
         result.returncode != 101
         or running != ["1"]
-        or len(summaries) != 1
+        or summaries != [expected_callsite_filtered]
         or len(test_lines) != 1
         or not callsite_failure_oracle(output, expected_failure)
         or receipt_path.exists()
@@ -8261,7 +8272,7 @@ PY
 run_complete_receipt_focus() {
   local requested_signal="${1:-}" control_root="${2:-}"
   local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
-  local scratch scratch_mode artifact_dir ledger receipt snapshot internal_output external_output token
+  local scratch scratch_mode artifact_dir ledger receipt snapshot internal_output external_output internal_list_output external_list_output token
   [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "complete receipt tree is malformed" >&2; return 1; }
   complete_receipt_source_guard normal
   if [ -n "$requested_signal" ]; then
@@ -8290,6 +8301,8 @@ run_complete_receipt_focus() {
   snapshot="$artifact_dir/snapshot.json"
   internal_output="$scratch/internal.txt"
   external_output="$scratch/external.txt"
+  internal_list_output="$scratch/internal-list.txt"
+  external_list_output="$scratch/external-list.txt"
   token="$(python3 -I - "$accepted_tree" <<'PY'
 import hashlib, os, secrets, sys
 print(hashlib.sha256((sys.argv[1]+":"+str(os.getpid())+":"+secrets.token_hex(32)).encode()).hexdigest())
@@ -8302,26 +8315,40 @@ PY
   fi
   umask 077
   [ ! -e "$ledger" ] && [ ! -e "$receipt" ] || return 1
+  cargo test -p swarm-governance-witness --lib --locked --offline -- --list >"$internal_list_output"
   PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$ledger" PHASE285_COMPLETE_RECEIPT_PATH="$receipt" \
   PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$token" \
     cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$internal_output"
-  python3 -I - "$internal_output" <<'PY'
+  python3 -I - "$internal_output" "$internal_list_output" \
+    service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed <<'PY'
 import re, sys
-text=open(sys.argv[1],encoding="utf-8").read()
-if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","36")]: raise SystemExit("complete receipt internal transcript differs")
+text=open(sys.argv[1],encoding="utf-8").read(); inventory=[]
+for line in open(sys.argv[2],encoding="utf-8"):
+    match=re.fullmatch(r"([^:]+(?:::[^:]+)*): test\n?",line)
+    if match: inventory.append(match.group(1))
+if len(inventory)!=len(set(inventory)) or inventory.count(sys.argv[3])!=1: raise SystemExit("complete receipt internal inventory differs")
+expected=("1","0","0",str(len(inventory)-1))
+if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[expected]: raise SystemExit("complete receipt internal transcript differs")
 PY
   ci_harness_record_passed lib \
     service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed "$internal_output"
   complete_receipt_artifact_snapshot "$artifact_dir" "$ledger" "$receipt" "$snapshot" record
+  cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --list >"$external_list_output"
   PHASE285_COMPLETE_RECEIPT_LEDGER_PATH="$ledger" PHASE285_COMPLETE_RECEIPT_PATH="$receipt" \
   PHASE285_COMPLETE_RECEIPT_INVOCATION_TOKEN="$token" \
     cargo test -p swarm-governance-witness --test service_checkpoint --locked --offline -- --test-threads=1 --ignored \
       complete_receipt_validation_precedes_suppression_and_failures_forward --exact | tee "$external_output"
-  python3 -I - "$external_output" <<'PY'
+  python3 -I - "$external_output" "$external_list_output" \
+    complete_receipt_validation_precedes_suppression_and_failures_forward <<'PY'
 import re, sys
-text=open(sys.argv[1],encoding="utf-8").read()
-if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[("1","0","0","2")]: raise SystemExit("complete receipt external transcript differs")
+text=open(sys.argv[1],encoding="utf-8").read(); inventory=[]
+for line in open(sys.argv[2],encoding="utf-8"):
+    match=re.fullmatch(r"([^:]+(?:::[^:]+)*): test\n?",line)
+    if match: inventory.append(match.group(1))
+if len(inventory)!=len(set(inventory)) or inventory.count(sys.argv[3])!=1: raise SystemExit("complete receipt external inventory differs")
+expected=("1","0","0",str(len(inventory)-1))
+if re.findall(r"^running (\d+) test",text,re.M)!=["1"] or re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",text,re.M)!=[expected]: raise SystemExit("complete receipt external transcript differs")
 PY
   ci_harness_record_passed service_checkpoint \
     complete_receipt_validation_precedes_suppression_and_failures_forward "$external_output"
@@ -9307,11 +9334,19 @@ PY
 }
 
 validate_service_checkpoint_exact_test() {
-  local transcript="$1" expected_filtered="$2" expected_marker="$3"
-  python3 -I - "$transcript" "$expected_filtered" "$expected_marker" <<'PY'
+  local transcript="$1" inventory="$2" expected_fqn="$3" expected_marker="$4"
+  python3 -I - "$transcript" "$inventory" "$expected_fqn" "$expected_marker" <<'PY'
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-expected_filtered, marker = sys.argv[2:]
+inventory = []
+for line in pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
+    match = re.fullmatch(r"([^:]+(?:::[^:]+)*): test", line)
+    if match:
+        inventory.append(match.group(1))
+expected_fqn, marker = sys.argv[3:]
+if len(inventory) != len(set(inventory)) or inventory.count(expected_fqn) != 1:
+    raise SystemExit("service checkpoint compiled test inventory differs")
+expected_filtered = str(len(inventory) - 1)
 running = re.findall(r"^running (\d+) test$", text, re.MULTILINE)
 summary = re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;", text, re.MULTILINE)
 if running != ["1"] or summary != [("1", "0", "0", "0", expected_filtered)]:
@@ -11567,18 +11602,21 @@ PY
 
 run_service_checkpoint_grant_focus() {
   local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
-  local scratch ledger output mode
+  local scratch ledger output list_output mode
   [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint grant tree is malformed" >&2; return 1; }
   scratch="$(phase285_create_confined_scratch phase285-grants)"
   PHASE285_WITNESS_TEMP_DIR="$scratch"
   trap cleanup_temp_dir_on_exit EXIT
   ledger="$scratch/grants.json"
   output="$scratch/grants.txt"
+  list_output="$scratch/grants-list.txt"
+  cargo test -p swarm-governance-witness --lib --locked --offline -- --list >"$list_output"
   PHASE285_GRANT_ONLY=1 PHASE285_GRANT_LEDGER="$ledger" \
   PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
     cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
-  validate_service_checkpoint_exact_test "$output" 36 \
+  validate_service_checkpoint_exact_test "$output" "$list_output" \
+    service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed \
     'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
   mode=normal
   if [ -n "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" ]; then
@@ -12516,7 +12554,7 @@ PY
 
 run_service_checkpoint_relay_positive_focus() {
   local accepted_tree="${PHASE285_SERVICE_CHECKPOINT_TREE:?PHASE285_SERVICE_CHECKPOINT_TREE required}"
-  local scratch grant_ledger relay_ledger output
+  local scratch grant_ledger relay_ledger output list_output
   [[ "$accepted_tree" =~ ^[0-9a-f]{40}$ ]] || { echo "service checkpoint relay tree is malformed" >&2; return 1; }
   [[ "${PHASE285_RELAY_TOPOLOGY_TOKEN:-}" == relay-phase285-* ]] || { echo "service checkpoint relay token is absent" >&2; return 1; }
   scratch="$(phase285_create_confined_scratch phase285-relay-positive)"
@@ -12525,12 +12563,15 @@ run_service_checkpoint_relay_positive_focus() {
   grant_ledger="$scratch/grants.json"
   relay_ledger="$scratch/relay.json"
   output="$scratch/relay.txt"
+  list_output="$scratch/relay-list.txt"
   relay_recreation_source_guard
+  cargo test -p swarm-governance-witness --lib --locked --offline -- --list >"$list_output"
   PHASE285_GRANT_LEDGER="$grant_ledger" PHASE285_RELAY_LEDGER="$relay_ledger" \
   PHASE285_SERVICE_CHECKPOINT_TREE="$accepted_tree" \
     cargo test -p swarm-governance-witness --lib --locked --offline -- --test-threads=1 --ignored \
       service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed --exact | tee "$output"
-  validate_service_checkpoint_exact_test "$output" 36 \
+  validate_service_checkpoint_exact_test "$output" "$list_output" \
+    service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed \
     'test service_checkpoint_relay_tests::complete_receipt_authority_and_grants_are_observed ... ok'
   validate_service_checkpoint_grant_ledger "$grant_ledger" "$accepted_tree" relay
   python3 -I - "$relay_ledger" "$accepted_tree" "$PHASE285_RELAY_TOPOLOGY_TOKEN" <<'PY'

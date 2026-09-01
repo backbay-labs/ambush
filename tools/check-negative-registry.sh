@@ -1216,11 +1216,11 @@ EXPECTED_CRATE_MANIFEST_DIGESTS = {
 GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     "Cargo.toml": "cb2cc5df86f6bab0f60cfe7dd239f58b44997926365512ca4214c738f24b6392",
     "Cargo.lock": "3e60b9058f1d97f703686f5a68739df0c4045a5e0900681a47f92c66ef032510",
-    ".github/workflows/ci.yml": "992edade79f9d20c9456e31dc2d51a44b150125c997af1309621af8e31218c06",
+    ".github/workflows/ci.yml": "ada96352f8f6cb9208be141d38c5dbcf3ffaf20de1e624655f32e7d45b983334",
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "1daa5ccaa8224b5244854683a0fce3ecae4fe30a619ed23074b35ee2d01cb791",
+    "tools/check-single-governor-key.sh": "534c03426f331f8f2ca5f77a61f9826b2b189703be53a536664397c915821c78",
     "crates/swarm-governance/Cargo.toml": "4e1bf8dde6a967a3473401fa9abb65579e0d40d55c32b3dab67c5d355bf93aac",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",

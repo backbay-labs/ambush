@@ -4494,6 +4494,14 @@ fn store_ready_fixture_entries_with(
     fixture: &Fixture,
     mutation: ReadyBindingMutation,
 ) -> ProtocolResult<ReadyFixtureEntries> {
+    store_ready_fixture_entries_for_bucket(fixture, mutation, "phase285_service")
+}
+
+fn store_ready_fixture_entries_for_bucket(
+    fixture: &Fixture,
+    mutation: ReadyBindingMutation,
+    bucket_name: &str,
+) -> ProtocolResult<ReadyFixtureEntries> {
     let max_value_bytes = 1_000_000_u64;
     let max_manifest_bytes = 1_000_000_u64;
     let mut admission_set = fixture.admission_set.clone();
@@ -4521,9 +4529,9 @@ fn store_ready_fixture_entries_with(
         nats_server_version: "2.11.17".to_string(),
         nats_server_image_index_digest:
             "sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00".to_string(),
-        stream_name: "KV_phase285_service".to_string(),
+        stream_name: format!("KV_{bucket_name}"),
         description: "Phase 285 external governance witness".to_string(),
-        subjects: vec!["$KV.phase285_service.>".to_string()],
+        subjects: vec![format!("$KV.{bucket_name}.>")],
         retention: WitnessRetentionPolicyV1::Limits,
         discard: WitnessDiscardPolicyV1::New,
         discard_new_per_subject: false,
@@ -4570,8 +4578,8 @@ fn store_ready_fixture_entries_with(
         subject_delete_marker_ttl_nanos: None,
     };
     if matches!(mutation, ReadyBindingMutation::Stream) {
-        configuration.stream_name = "KV_phase285_service_alternate".to_string();
-        configuration.subjects = vec!["$KV.phase285_service_alternate.>".to_string()];
+        configuration.stream_name = format!("KV_{bucket_name}_alternate");
+        configuration.subjects = vec![format!("$KV.{bucket_name}_alternate.>")];
     }
     configuration.validate()?;
     let configuration_digest = configuration.digest()?;
@@ -5041,7 +5049,11 @@ async fn production_initializer_creates_reopens_and_reproduces_ready() -> Protoc
     use std::os::unix::fs::OpenOptionsExt;
 
     let fixture = Fixture::new(CasMode::Apply)?;
-    let (fixture_ready, entries) = store_ready_fixture_entries(&fixture)?;
+    let (fixture_ready, entries) = store_ready_fixture_entries_for_bucket(
+        &fixture,
+        ReadyBindingMutation::None,
+        "phase285_initializer",
+    )?;
     let scratch =
         std::path::PathBuf::from(std::env::var("SWARM_NATS_HARNESS_SCRATCH").map_err(|_| {
             ProtocolError::InvalidField {
@@ -5162,8 +5174,14 @@ async fn production_initializer_creates_reopens_and_reproduces_ready() -> Protoc
         .get_stream_no_info(&first.bucket_configuration.stream_name)
         .await
         .map_err(|error| ProtocolError::CanonicalEncoding(error.to_string()))?;
+    let subject_prefix = first
+        .bucket_configuration
+        .subjects
+        .first()
+        .and_then(|subject| subject.strip_suffix(".>"))
+        .ok_or(ProtocolError::WitnessOutcomeMismatch)?;
     let subject = format!(
-        "$KV.phase285_service.{}",
+        "{subject_prefix}.{}",
         witness_stream_key(&admission.stream_id)?
     );
     let current = store_stream
