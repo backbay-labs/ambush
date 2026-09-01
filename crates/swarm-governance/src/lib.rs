@@ -7702,12 +7702,13 @@ impl GovernancePersistence {
     /// advisory lock. Ordinary startup runs this read-only preflight before
     /// journal recovery so a replaced pool cannot receive recovery writes.
     fn preflight_cleanup_pool_namespace(&self) -> Result<(), GovernancePersistenceError> {
-        self.preflight_cleanup_pool_namespace_with_maintenance(false)
+        self.preflight_cleanup_pool_namespace_with_maintenance(false, false)
     }
 
     fn preflight_cleanup_pool_namespace_with_maintenance(
         &self,
         allow_active_maintenance: bool,
+        allow_opaque_slots: bool,
     ) -> Result<(), GovernancePersistenceError> {
         if self
             .cleanup_pool_context
@@ -7816,9 +7817,12 @@ impl GovernancePersistence {
                 .map_err(|source| self.cleanup_pool_namespace_error(source.to_string()))?
                 .is_some()
             {
-                inspect_cleanup_pool_slot(
+                let inspection = inspect_cleanup_pool_slot(
                     &parent, &pool_file, &lock_file, &binding, &pool_path, name,
-                )?;
+                );
+                if !allow_opaque_slots {
+                    inspection?;
+                }
             }
         }
         if let Some(mut maintenance) =
@@ -10194,7 +10198,10 @@ fn run_cleanup_pool_maintenance(
     .map_err(map_cleanup_maintenance_contention)?;
     persistence.verify_lock_path()?;
     persistence
-        .preflight_cleanup_pool_namespace_with_maintenance(true)
+        .preflight_cleanup_pool_namespace_with_maintenance(
+            true,
+            mode == GovernanceCleanupPoolMaintenanceMode::Reset,
+        )
         .map_err(map_cleanup_maintenance_contention)?;
     persistence
         .ensure_cleanup_pool_context(&signing_key, false)
