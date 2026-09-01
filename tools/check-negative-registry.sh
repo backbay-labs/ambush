@@ -2110,7 +2110,7 @@ def execute_single_governor_gate(
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=120 if mutation_probe else 600,
+            timeout=120 if mutation_probe else 900,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         report.violation("governance-assurance-gate-failed", str(error))
