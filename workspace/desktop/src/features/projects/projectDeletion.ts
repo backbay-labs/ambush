@@ -19,7 +19,7 @@ export type DeleteProjectEventTemplate = {
 };
 
 /**
- * Buzz lets a human owner manage content authored by their NIP-OA agent, just
+ * Ambush lets a human owner manage content authored by their NIP-OA agent, just
  * as it does for agent-owned channels. The profile ownership evidence mirrors
  * the relay authority used for the owner-signed tombstone.
  */

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
 
-const HELP_SEEN_KEY = "buzz.machine-onboarding.identity-key-help-seen.v1";
+const HELP_SEEN_KEY = "ambush.machine-onboarding.identity-key-help-seen.v1";
 
 test("identity key help explains the first-run choice", async ({ page }) => {
   await installMockBridge(page, undefined, {

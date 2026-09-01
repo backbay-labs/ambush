@@ -358,7 +358,7 @@ mod tests {
 mod real_relay_tests {
     use super::*;
     use crate::{app_state::build_app_state, events, managed_agents, relay};
-    use buzz_core_pkg::kind::KIND_MANAGED_AGENT;
+    use ambush_core_pkg::kind::KIND_MANAGED_AGENT;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use uuid::Uuid;
 
@@ -499,7 +499,7 @@ mod real_relay_tests {
         let compat_owner = nostr::Keys::parse(&owner.secret_key().to_secret_hex()).unwrap();
         let compat_agent = nostr::PublicKey::from_hex(&agent.public_key().to_hex()).unwrap();
         let auth_tag =
-            buzz_sdk_pkg::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "").unwrap();
+            ambush_sdk_pkg::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "").unwrap();
         relay::sync_managed_agent_profile(
             &owner_state,
             &relay_ws_url(),

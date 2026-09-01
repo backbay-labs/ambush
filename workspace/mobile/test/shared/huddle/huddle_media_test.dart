@@ -1,4 +1,4 @@
-import 'package:buzz/shared/huddle/huddle_media.dart';
+import 'package:ambush/shared/huddle/huddle_media.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

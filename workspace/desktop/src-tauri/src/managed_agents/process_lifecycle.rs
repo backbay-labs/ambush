@@ -46,7 +46,7 @@ impl Drop for JobHandle {
 /// failed spawn.
 ///
 /// For the harness spawn path ([`finish_spawn`]) assignment happens immediately
-/// after a normal spawn. The child (buzz-acp) must init tokio, parse its config,
+/// after a normal spawn. The child (ambush-acp) must init tokio, parse its config,
 /// and spawn 24 children (tens-to-hundreds of ms) before any descendant exists,
 /// so the microsecond `OpenProcess` + `AssignProcessToJobObject` reliably wins
 /// that race. Once assigned, Windows places every subsequently-spawned
@@ -191,7 +191,7 @@ pub fn finish_spawn(
     let job = create_job_for_child(child.id());
     if job.is_none() {
         eprintln!(
-            "buzz-desktop: failed to assign agent {agent_name} to a Job Object; \
+            "ambush-desktop: failed to assign agent {agent_name} to a Job Object; \
              teardown will fall back to killing only the harness process"
         );
     }

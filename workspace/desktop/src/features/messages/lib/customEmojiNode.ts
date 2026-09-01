@@ -64,8 +64,8 @@ export function registerCustomEmojiMarkdownIt(
   md: any,
   options: CustomEmojiNodeOptions,
 ): void {
-  const RULE_NAME = "buzz_custom_emoji";
-  const TOKEN_TYPE = "buzz_custom_emoji";
+  const RULE_NAME = "ambush_custom_emoji";
+  const TOKEN_TYPE = "ambush_custom_emoji";
 
   // `parse.setup` runs on every parse against the *same* markdown-it instance,
   // so only register the rule + renderer once — `ruler.before` throws on a
@@ -78,8 +78,8 @@ export function registerCustomEmojiMarkdownIt(
     if (state.src.charCodeAt(state.pos) !== 0x3a /* : */) return false;
 
     // Word-boundary guard: don't fire when the `:` is glued to a preceding
-    // word char. This keeps prose and URLs intact — `not:buzz:` and
-    // `http://x:y:buzz:` must NOT turn the inner `:buzz:` into an image;
+    // word char. This keeps prose and URLs intact — `not:ambush:` and
+    // `http://x:y:ambush:` must NOT turn the inner `:ambush:` into an image;
     // only a `:shortcode:` at a boundary (start of line, after whitespace or
     // punctuation) materializes. Slack-style boundary semantics.
     if (state.pos > 0) {

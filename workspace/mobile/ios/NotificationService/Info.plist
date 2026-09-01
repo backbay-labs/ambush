@@ -2,10 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>BuzzAppGroupIdentifier</key>
-	<string>$(BUZZ_APP_GROUP_IDENTIFIER)</string>
-	<key>BuzzKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)$(BUZZ_KEYCHAIN_ACCESS_GROUP)</string>
+	<key>AmbushAppGroupIdentifier</key>
+	<string>$(AMBUSH_APP_GROUP_IDENTIFIER)</string>
+	<key>AmbushKeychainAccessGroup</key>
+	<string>$(AppIdentifierPrefix)$(AMBUSH_KEYCHAIN_ACCESS_GROUP)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

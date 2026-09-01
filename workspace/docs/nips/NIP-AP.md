@@ -263,7 +263,7 @@ Kind `30178` is stored globally and its content is unvalidated, exactly as for `
 
 Kind `30175` uses **shared-tag-gated read semantics** to protect system prompts and `respond_to_allowlist` from being visible to all community members as a side-effect of device sync.
 
-The gate is kind-generic: the relay applies it to every kind in `SHARED_GATED_KINDS` (`buzz-core/src/kind.rs`), currently `30175` and the `30178` team-catalog projection described below. The rules and enforcement surfaces are identical for each member kind.
+The gate is kind-generic: the relay applies it to every kind in `SHARED_GATED_KINDS` (`ambush-core/src/kind.rs`), currently `30175` and the `30178` team-catalog projection described below. The rules and enforcement surfaces are identical for each member kind.
 
 **Rules:**
 

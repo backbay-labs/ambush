@@ -12,7 +12,7 @@ const LATEST_COMMIT_HASH = "0123456789abcdef0123456789abcdef01234567";
 async function enableProjectsFeature(page: import("@playwright/test").Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem(
-      "buzz-feature-overrides-v1",
+      "ambush-feature-overrides-v1",
       JSON.stringify({ projects: true }),
     );
   });
@@ -57,7 +57,7 @@ async function waitForMockLiveSubscription(
     .poll(() =>
       page.evaluate(
         (name) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: name,
           }) ?? false,
         channelName,
@@ -71,7 +71,7 @@ test("top-level project lists show metadata and overflow actions", async ({
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz.projects.viewMode", "list");
+    window.localStorage.setItem("ambush.projects.viewMode", "list");
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -128,9 +128,9 @@ test("top-level project lists show metadata and overflow actions", async ({
   await expect(
     page.getByRole("button", { name: "Filter repositories" }),
   ).toHaveCount(0);
-  await expect(page.getByTestId("repository-row-buzz")).toBeVisible();
+  await expect(page.getByTestId("repository-row-ambush")).toBeVisible();
   await expect(page.getByTestId("repository-row-relay-tools")).toBeVisible();
-  const repositoryRow = page.getByTestId("repository-row-buzz");
+  const repositoryRow = page.getByTestId("repository-row-ambush");
   await expect(
     repositoryRow.getByTestId("repositories-row-project"),
   ).toHaveCount(0);
@@ -453,7 +453,7 @@ test("creating a project opens its channel conversation", async ({ page }) => {
 
   const createdEvents = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
+      window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
         event.tags.some(
           (tag) => tag[0] === "d" && tag[1] === "multi-repo-demo",
         ),
@@ -464,7 +464,7 @@ test("creating a project opens its channel conversation", async ({ page }) => {
   expect(projectEvent?.content).toBe("");
   expect(projectEvent?.tags.some((tag) => tag[0] === "a")).toBe(true);
   expect(
-    projectEvent?.tags.find((tag) => tag[0] === "buzz-channel")?.[1],
+    projectEvent?.tags.find((tag) => tag[0] === "ambush-channel")?.[1],
   ).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   );
@@ -484,7 +484,7 @@ test("creating a project opens its channel conversation", async ({ page }) => {
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
+          window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
             event.tags.some(
               (tag) => tag[0] === "d" && tag[1] === "multi-repo-demo",
             ),
@@ -499,7 +499,7 @@ test("unsupported relays cannot create a channel-first project", async ({
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_UNSUPPORTED_PROJECT_ANNOUNCEMENTS__ = true;
+    window.__AMBUSH_E2E_UNSUPPORTED_PROJECT_ANNOUNCEMENTS__ = true;
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -515,7 +515,7 @@ test("unsupported relays cannot create a channel-first project", async ({
 
   const acceptedKinds = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__
+      window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__
         ?.filter((event) =>
           event.tags.some(
             (tag) => tag[0] === "d" && tag[1] === "legacy-fallback",
@@ -531,7 +531,7 @@ test("project creation can retry after its repository publication fails", async 
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_EVENT_KINDS__ = [30621];
+    window.__AMBUSH_E2E_REJECT_PROJECT_EVENT_KINDS__ = [30621];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -556,7 +556,7 @@ test("project creation is idempotent after a lost publish acknowledgement", asyn
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__ = [30621];
+    window.__AMBUSH_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__ = [30621];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -580,7 +580,7 @@ test("project creation is idempotent after a lost publish acknowledgement", asyn
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
+          window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
             event.tags.some(
               (tag) => tag[0] === "d" && tag[1] === "lost-ack-project",
             ),
@@ -596,21 +596,23 @@ test("project sidebar rows open the home channel and nest extra channels", async
   await enableProjectsFeature(page);
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
+  await addProjectToSidebar(page, "ambush");
 
-  const projectRow = page.getByTestId("sidebar-project-buzz");
-  const expand = page.getByTestId("sidebar-project-expand-buzz");
-  const nestedChannel = page.getByTestId("sidebar-project-channel-buzz-random");
+  const projectRow = page.getByTestId("sidebar-project-ambush");
+  const expand = page.getByTestId("sidebar-project-expand-ambush");
+  const nestedChannel = page.getByTestId(
+    "sidebar-project-channel-ambush-random",
+  );
   await expect(page).toHaveURL(/\/projects\//);
   await expect(page.getByTestId("project-channel-home")).toBeVisible();
   await expect(projectRow).toHaveAttribute("data-active", "true");
   await expect(expand).toHaveAttribute("aria-expanded", "false");
   await expect(nestedChannel).toBeHidden();
-  await expect(page.getByTestId("sidebar-project-repository-buzz")).toHaveCount(
-    0,
-  );
   await expect(
-    page.getByTestId("sidebar-project-home-channel-buzz"),
+    page.getByTestId("sidebar-project-repository-ambush"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId("sidebar-project-home-channel-ambush"),
   ).toHaveCount(0);
 
   await expand.click();
@@ -619,7 +621,7 @@ test("project sidebar rows open the home channel and nest extra channels", async
   await expect(page).toHaveURL(/\/projects\//);
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
+  await addProjectToSidebar(page, "ambush");
   await expect(expand).toHaveAttribute("aria-expanded", "true");
   await expect(nestedChannel).toBeVisible();
 
@@ -676,7 +678,7 @@ test("project sidebar rows open the home channel and nest extra channels", async
     new RegExp(`repositoryId=${TEST_IDENTITIES.alice.pubkey}%3Arelay-tools`),
   );
 
-  await page.getByTestId("sidebar-project-buzz").click();
+  await page.getByTestId("sidebar-project-ambush").click();
   await expect(page.getByTestId("project-home-context-panel")).toBeVisible();
   await page.getByTestId("add-project-repository").click();
   await expect(page.getByTestId("attach-project-repository")).toBeVisible();
@@ -692,7 +694,7 @@ test("project sidebar rows open the home channel and nest extra channels", async
   ).toHaveCount(0);
   const addedEvents = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.filter(
+      window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.filter(
         (event) =>
           event.tags.some((tag) => tag[0] === "d" && tag[1] === "mobile-app") ||
           event.tags.some(
@@ -706,7 +708,7 @@ test("project sidebar rows open the home channel and nest extra channels", async
   expect(addedEvents.map((event) => event.kind)).toEqual([30621, 30617]);
   expect(
     addedEvents.find((event) => event.kind === 30617)?.tags,
-  ).toContainEqual(["buzz-channel", "cf63feec-21bb-5bf0-a2f8-0e4c3de8ec73"]);
+  ).toContainEqual(["ambush-channel", "cf63feec-21bb-5bf0-a2f8-0e4c3de8ec73"]);
 
   await page.getByTestId("add-project-repository").click();
   await page.getByTestId("attach-project-repository").click();
@@ -724,7 +726,7 @@ test("project sidebar rows open the home channel and nest extra channels", async
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
+          window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
             (event) =>
               event.kind === 30621 &&
               event.tags.some(
@@ -746,12 +748,12 @@ test("latest files commit opens its detail without a divider", async ({
   await page.getByTestId("projects-section-projects").click();
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
   await projectEntry.click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await page.getByRole("tab", { name: "Files" }).click();
 
   const latestCommit = page.getByTestId("project-repository-latest-commit");
@@ -830,7 +832,7 @@ test("project workspace sheet stays independent from an open thread", async ({
   await waitForMockLiveSubscription(page, "sheet-motion-demo");
   const threadRootContent = "Workspace drawer thread root";
   await page.evaluate((content) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "sheet-motion-demo",
       content,
     });
@@ -986,15 +988,15 @@ test("commit detail opens from the commits feed with a diff", async ({
   // Projects filter reveals the complete project cards/rows list.
   await page.getByTestId("projects-section-projects").click();
 
-  // Open the first mock project (dtag "buzz" from the e2e bridge fixture).
+  // Open the first mock project (dtag "ambush" from the e2e bridge fixture).
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
   await projectEntry.click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await page.getByTestId("project-workspace-back").click();
   await page.getByTestId("project-home-context-tasks").click();
   await expect(page.getByTestId("project-home-workspace-sheet")).toBeVisible();
@@ -1063,13 +1065,13 @@ test("commit detail opens from the commits feed with a diff", async ({
     .click();
   await expect(page.getByTestId("project-home-workspace-sheet")).toHaveCount(0);
   await expect(page.getByTestId("project-home-summary-column")).toBeVisible();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   await expect(page.getByTestId("project-workspace-back")).toBeVisible();
   await page.getByTestId("project-workspace-back").click();
   await expect(page.getByTestId("project-channel-home")).toBeVisible();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await expect(page.getByTestId("project-workspace-back")).toBeVisible();
 
   await page.getByRole("tab", { name: "Commits" }).click();
@@ -1198,7 +1200,7 @@ test("project home task sheet expands into the repository Tasks view", async ({
   await page.getByTestId("projects-section-projects").click();
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
@@ -1237,7 +1239,7 @@ test("project discussion row opens its channel thread in context", async ({
   await page.evaluate(
     ({ author, commitHash }) => {
       const now = Math.floor(Date.now() / 1_000);
-      const root = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      const root = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `Context leading to ${commitHash} OR ${commitHash.slice(0, 7)}`,
         createdAt: now - 1,
@@ -1245,7 +1247,7 @@ test("project discussion row opens its channel thread in context", async ({
         pubkey: author,
       });
       if (!root) throw new Error("mock message emitter is not installed");
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `Follow-up about ${commitHash} OR ${commitHash.slice(0, 7)}`,
         createdAt: now,
@@ -1264,11 +1266,11 @@ test("project discussion row opens its channel thread in context", async ({
   await page.getByTestId("projects-section-projects").click();
   await page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first()
     .click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await page.getByRole("tab", { name: "Commits" }).click();
   const commitRow = page.getByTestId("project-activity-feed-item").first();
   await commitRow
@@ -1303,14 +1305,14 @@ test("pull request and issue feeds use compact work item rows", async ({
 
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
   await projectEntry.click();
 
   // Reviews use the compact single-line work-item row.
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await page.getByRole("tab", { name: "Review" }).click();
   const prRows = page.getByTestId("project-pull-request-row");
   await expect(prRows.first()).toBeVisible({ timeout: 10_000 });
@@ -1402,11 +1404,11 @@ test("adding a repository retries and reports an error when the 30617 publicatio
   // exhausts its retry and surfaces a partial-write error.
   await page.addInitScript(() => {
     // Reject kind 30617 twice (initial attempt + one retry).
-    window.__BUZZ_E2E_REJECT_PROJECT_EVENT_KINDS__ = [30617, 30617];
+    window.__AMBUSH_E2E_REJECT_PROJECT_EVENT_KINDS__ = [30617, 30617];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
+  await addProjectToSidebar(page, "ambush");
 
   await page.getByTestId("add-project-repository").click();
   await page.getByTestId("create-project-repository").click();
@@ -1425,7 +1427,7 @@ test("adding a repository retries and reports an error when the 30617 publicatio
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
+          window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
             (event) =>
               event.kind === 30621 &&
               event.tags.some(
@@ -1439,7 +1441,7 @@ test("adding a repository retries and reports an error when the 30617 publicatio
   // The 30617 must NOT have been accepted (both attempts were rejected).
   const acceptedRepo = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
+      window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
         (event) =>
           event.kind === 30617 &&
           event.tags.some(
@@ -1460,11 +1462,11 @@ test("adding a repository treats a lost 30617 acknowledgement as success", async
   // The relay will accept the 30617 but fail to deliver the ACK, then on the
   // retry query the event will be found — the mutation must succeed.
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__ = [30617];
+    window.__AMBUSH_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__ = [30617];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
+  await addProjectToSidebar(page, "ambush");
 
   await page.getByTestId("add-project-repository").click();
   await page.getByTestId("create-project-repository").click();
@@ -1487,7 +1489,7 @@ test("adding a repository treats a lost 30617 acknowledgement as success", async
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
+          window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.filter((event) =>
             event.tags.some(
               (tag) => tag[0] === "d" && tag[1] === "lost-ack-repo",
             ),
@@ -1503,12 +1505,12 @@ test("adding a repository blocks when a standalone 30617 already exists at that 
   await enableProjectsFeature(page);
   // Seed a standalone 30617 (not a project member) owned by the mock identity.
   // The add-repo mutation must block unconditionally when this coordinate exists,
-  // even though it is not yet in the "buzz" project's member list.
+  // even though it is not yet in the "ambush" project's member list.
   const MOCK_OWNER = "deadbeef".repeat(8);
   const STANDALONE_DTAG = "existing-standalone";
   await page.addInitScript(
     ({ owner, dtag }) => {
-      window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__ = [
+      window.__AMBUSH_E2E_EXTRA_PROJECT_EVENTS__ = [
         {
           id: "standalone00".padEnd(64, "0"),
           kind: 30617,
@@ -1531,7 +1533,7 @@ test("adding a repository blocks when a standalone 30617 already exists at that 
   await page.getByTestId("projects-section-projects").click();
   await page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first()
     .click();
@@ -1553,7 +1555,7 @@ test("adding a repository blocks when a standalone 30617 already exists at that 
   // Neither a 30621 (project update) nor a 30617 (new repo) must have been published.
   const publishedForStandalone = await page.evaluate(
     ({ dtag }) =>
-      window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
+      window.__AMBUSH_E2E_ACCEPTED_PROJECT_EVENTS__?.some(
         (event) =>
           event.tags.some((tag) => tag[0] === "d" && tag[1] === dtag) ||
           event.tags.some(
@@ -1572,7 +1574,7 @@ test("navigating via a 30617 entity-link route opens the correct non-primary rep
   page,
 }) => {
   await enableProjectsFeature(page);
-  // Seed a known pull-request for relay-tools (the non-primary member of "buzz")
+  // Seed a known pull-request for relay-tools (the non-primary member of "ambush")
   // with a deterministic id so the URL can be constructed before navigation.
   const ALICE_PUBKEY =
     "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f";
@@ -1581,7 +1583,7 @@ test("navigating via a 30617 entity-link route opens the correct non-primary rep
 
   await page.addInitScript(
     ({ repoAddress, prId, alicePubkey }) => {
-      window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__ = [
+      window.__AMBUSH_E2E_EXTRA_PROJECT_EVENTS__ = [
         {
           id: prId,
           kind: 1618, // KIND_GIT_PULL_REQUEST
@@ -1623,7 +1625,7 @@ test("navigating via a 30617 entity-link route opens the correct non-primary rep
   );
 
   // Direct navigation must not implicitly add the project to the sidebar.
-  await expect(page.getByTestId("sidebar-project-buzz")).toHaveCount(0);
+  await expect(page.getByTestId("sidebar-project-ambush")).toHaveCount(0);
   // The seeded PR proves that this detail route resolved relay-tools rather
   // than falling back to the project's primary repository.
   // Use `first()` to avoid Playwright strict-mode violations: the text appears

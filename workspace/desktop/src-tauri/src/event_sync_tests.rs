@@ -127,7 +127,7 @@ fn migrate_personas_new_persona_after_first_run_gets_retained() {
 #[test]
 fn migrate_personas_edited_persona_re_retains_pending() {
     use crate::managed_agents::retention::{get_retained_event, mark_synced, open_retention_db};
-    use buzz_core_pkg::kind::KIND_PERSONA;
+    use ambush_core_pkg::kind::KIND_PERSONA;
 
     let base = tempfile::tempdir().unwrap();
     write_base_personas(base.path(), &one_persona());
@@ -186,7 +186,7 @@ fn migrate_personas_supersedes_future_dated_head() {
     use crate::managed_agents::retention::{
         get_retained_event, open_retention_db, retain_event, RetainedEvent,
     };
-    use buzz_core_pkg::kind::KIND_PERSONA;
+    use ambush_core_pkg::kind::KIND_PERSONA;
 
     let base = tempfile::tempdir().unwrap();
     write_base_personas(base.path(), &one_persona());
@@ -253,7 +253,7 @@ fn migrate_teams_supersedes_future_dated_head() {
     use crate::managed_agents::retention::{
         get_retained_event, open_retention_db, retain_event, RetainedEvent,
     };
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
 
     let base = tempfile::tempdir().unwrap();
     let team = serde_json::json!([{
@@ -307,7 +307,7 @@ fn migrate_teams_supersedes_future_dated_head() {
 #[test]
 fn deletion_reconcile_tombstones_orphan_persona_head() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use buzz_core_pkg::kind::{KIND_DELETION, KIND_PERSONA};
+    use ambush_core_pkg::kind::{KIND_DELETION, KIND_PERSONA};
 
     let base = tempfile::tempdir().unwrap();
     write_base_personas(base.path(), &one_persona());
@@ -349,7 +349,7 @@ fn deletion_reconcile_tombstones_orphan_persona_head() {
 #[test]
 fn deletion_reconcile_leaves_live_head_untouched() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use buzz_core_pkg::kind::{KIND_DELETION, KIND_PERSONA};
+    use ambush_core_pkg::kind::{KIND_DELETION, KIND_PERSONA};
 
     let base = tempfile::tempdir().unwrap();
     write_base_personas(base.path(), &one_persona());
@@ -388,7 +388,7 @@ fn deletion_reconcile_leaves_live_head_untouched() {
 #[test]
 fn deletion_reconcile_malformed_store_fails_loud_without_tombstoning() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use buzz_core_pkg::kind::{KIND_DELETION, KIND_PERSONA};
+    use ambush_core_pkg::kind::{KIND_DELETION, KIND_PERSONA};
 
     let base = tempfile::tempdir().unwrap();
     write_base_personas(base.path(), &one_persona());
@@ -439,7 +439,7 @@ fn deletion_reconcile_leaves_managed_agent_head_untouched() {
     use crate::managed_agents::retention::{
         get_retained_event, open_retention_db, retain_event, RetainedEvent,
     };
-    use buzz_core_pkg::kind::{KIND_DELETION, KIND_IA_ARCHIVE_REQUEST, KIND_MANAGED_AGENT};
+    use ambush_core_pkg::kind::{KIND_DELETION, KIND_IA_ARCHIVE_REQUEST, KIND_MANAGED_AGENT};
 
     // A valid 32-byte x-only pubkey hex — the 30177 d_tag is the agent pubkey.
     const AGENT_PUBKEY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";

@@ -7,7 +7,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { TranscriptItem } from "../agentSessionTypes";
-import { getBuzzToolInfo } from "../agentSessionToolCatalog";
+import { getAmbushToolInfo } from "../agentSessionToolCatalog";
 import { buildCompactToolSummary } from "../agentSessionToolSummary";
 import type { AgentTranscriptIdentityProps } from "../activityRenderClasses/types";
 import {
@@ -36,8 +36,8 @@ export function ToolItem({
   const [isExpanded, setIsExpanded] = React.useState(false);
   const hasArgs = Object.keys(item.args).length > 0;
   const hasResult = item.result.trim().length > 0;
-  const canonicalToolName = item.buzzToolName ?? item.toolName;
-  const buzzTool = getBuzzToolInfo(canonicalToolName);
+  const canonicalToolName = item.ambushToolName ?? item.toolName;
+  const ambushTool = getAmbushToolInfo(canonicalToolName);
   const compactSummary = buildCompactToolSummary(item);
   const duration = getToolDurationDisplay(item);
   const messageLink = getSentMessageLink(item);
@@ -67,7 +67,7 @@ export function ToolItem({
         <CompactMessageSummary
           args={item.args}
           avatarUrl={agentResolvedAvatarUrl}
-          description={buzzTool?.label}
+          description={ambushTool?.label}
           displayName={agentLabel}
           duration={duration}
           hasArgs={hasArgs}
@@ -130,7 +130,7 @@ export function ToolItem({
 
         <ToolDetailBlocks
           args={item.args}
-          description={buzzTool?.label}
+          description={ambushTool?.label}
           fileEditDiff={compactSummary.fileEditDiff}
           fileReadContent={compactSummary.fileReadContent}
           hasArgs={hasArgs}

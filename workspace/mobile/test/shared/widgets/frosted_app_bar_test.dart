@@ -1,6 +1,6 @@
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/frosted_app_bar.dart';
-import 'package:buzz/shared/widgets/ios_glass_navigation_button.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/frosted_app_bar.dart';
+import 'package:ambush/shared/widgets/ios_glass_navigation_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
@@ -151,7 +151,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final nativeBack = tester.widget<UiKitView>(find.byType(UiKitView));
-    expect(nativeBack.viewType, 'buzz/navigation_glass');
+    expect(nativeBack.viewType, 'ambush/navigation_glass');
     expect(nativeBack.creationParams, containsPair('icon', 'back'));
     expect(
       nativeBack.creationParams,

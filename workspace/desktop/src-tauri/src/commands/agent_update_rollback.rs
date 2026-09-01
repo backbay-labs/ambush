@@ -120,7 +120,7 @@ mod tests {
                 "name": "test-agent",
                 "private_key_nsec": "nsec1fake",
                 "relay_url": "wss://localhost:3000",
-                "acp_command": "buzz-acp",
+                "acp_command": "ambush-acp",
                 "agent_command": "goose",
                 "agent_args": [],
                 "mcp_command": "",

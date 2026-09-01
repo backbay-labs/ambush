@@ -10,25 +10,25 @@ const ISSUE_COMMENTS = [
 ];
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 
-async function openBuzzProject(page: import("@playwright/test").Page) {
+async function openAmbushProject(page: import("@playwright/test").Page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("open-projects-view").click();
   await page.getByTestId("projects-section-projects").click();
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
   await projectEntry.click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
 }
 
 test("issue detail can open agent chat or seed a channel question", async ({
   page,
 }) => {
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   const issueRow = page.getByTestId("project-issue-row").first();
@@ -82,7 +82,7 @@ test("issue discussion ignores an author-claimed origin channel", async ({
   const forgedIssueId = "f".repeat(64);
   await page.addInitScript(
     ({ issueId, owner }) => {
-      window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__ = [
+      window.__AMBUSH_E2E_EXTRA_PROJECT_EVENTS__ = [
         {
           id: issueId,
           kind: 1621,
@@ -90,7 +90,7 @@ test("issue discussion ignores an author-claimed origin channel", async ({
           created_at: Math.floor(Date.now() / 1000) + 10,
           content: "This task claims an unrelated visible channel.",
           tags: [
-            ["a", `30617:${owner}:buzz`],
+            ["a", `30617:${owner}:ambush`],
             ["subject", "Forged origin task"],
             ["h", "9dae0116-799b-5071-a0a8-fdd30a91a35d"],
           ],
@@ -100,7 +100,7 @@ test("issue discussion ignores an author-claimed origin channel", async ({
     { issueId: forgedIssueId, owner: DEFAULT_MOCK_PUBKEY },
   );
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
 
   const issueRow = page
@@ -115,15 +115,15 @@ test("issue discussion ignores an author-claimed origin channel", async ({
     "project-context-related-channel",
   );
   await expect(relatedChannel).toHaveCount(1);
-  await expect(relatedChannel).toContainText("#buzz");
+  await expect(relatedChannel).toContainText("#ambush");
   await expect(channelChoices).not.toContainText("#random");
   await relatedChannel.click();
 
-  await expect(page.getByTestId("chat-title")).toHaveText("buzz");
+  await expect(page.getByTestId("chat-title")).toHaveText("ambush");
   const issueDraftChip = page
     .getByTestId("message-input")
-    .locator('[data-composer-buzz-link=""]', {
-      hasText: "buzz",
+    .locator('[data-composer-ambush-link=""]', {
+      hasText: "ambush",
     });
   await expect(issueDraftChip).toHaveAttribute(
     "data-href",
@@ -131,13 +131,13 @@ test("issue discussion ignores an author-claimed origin channel", async ({
   );
   await page.getByTestId("channel-random").click();
   await expect(
-    page.getByTestId("message-input").locator('[data-composer-buzz-link=""]'),
+    page.getByTestId("message-input").locator('[data-composer-ambush-link=""]'),
   ).toHaveCount(0);
 });
 
 test("issue comments use the project activity timeline", async ({ page }) => {
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   const issueRow = page.getByTestId("project-issue-row").first();
@@ -186,7 +186,7 @@ test("issue comments use the project activity timeline", async ({ page }) => {
 
 test("issue assignees can be assigned and unassigned", async ({ page }) => {
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   const issueRow = page.getByTestId("project-issue-row").first();

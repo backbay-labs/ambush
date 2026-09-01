@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { toast } from "sonner";
 
-const MIGRATION_TOAST_KEY = "buzz-legacy-nest-migrated-notified";
+const MIGRATION_TOAST_KEY = "ambush-legacy-nest-migrated-notified";
 
 /**
  * Surface nest-related backend events as toasts.

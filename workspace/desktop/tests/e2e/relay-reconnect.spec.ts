@@ -9,9 +9,9 @@ async function setMockWebsocketSendsStalled(
   await page.evaluate((shouldStall) => {
     const setter = (
       window as Window & {
-        __BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
+        __AMBUSH_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
       }
-    ).__BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__;
+    ).__AMBUSH_E2E_SET_STALL_WEBSOCKET_SENDS__;
     if (!setter) {
       throw new Error("E2E websocket stall setter is not installed.");
     }
@@ -23,9 +23,9 @@ async function disconnectMockWebsockets(page: import("@playwright/test").Page) {
   const disconnected = await page.evaluate(() => {
     const disconnect = (
       window as Window & {
-        __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
+        __AMBUSH_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
       }
-    ).__BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__;
+    ).__AMBUSH_E2E_DISCONNECT_MOCK_WEBSOCKETS__;
     if (!disconnect) {
       throw new Error("E2E mock websocket disconnect seam is not installed.");
     }
@@ -39,9 +39,9 @@ async function restartMockWebsockets(page: import("@playwright/test").Page) {
   const restarted = await page.evaluate(() => {
     const restart = (
       window as Window & {
-        __BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
+        __AMBUSH_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
       }
-    ).__BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__;
+    ).__AMBUSH_E2E_RESTART_MOCK_WEBSOCKETS__;
     if (!restart)
       throw new Error("E2E websocket restart seam is not installed.");
     return restart();
@@ -54,7 +54,7 @@ async function setMockWebsocketUnavailable(
   unavailable: boolean,
 ) {
   await page.evaluate((value) => {
-    const setUnavailable = window.__BUZZ_E2E_SET_MOCK_WEBSOCKET_UNAVAILABLE__;
+    const setUnavailable = window.__AMBUSH_E2E_SET_MOCK_WEBSOCKET_UNAVAILABLE__;
     if (!setUnavailable) {
       throw new Error("E2E websocket availability seam is not installed.");
     }
@@ -67,7 +67,7 @@ async function activateRelayRateLimit(
   seconds: number,
 ) {
   await page.evaluate((duration) => {
-    const activate = window.__BUZZ_E2E_ACTIVATE_RELAY_RATE_LIMIT__;
+    const activate = window.__AMBUSH_E2E_ACTIVATE_RELAY_RATE_LIMIT__;
     if (!activate) {
       throw new Error("E2E relay rate-limit seam is not installed.");
     }
@@ -79,7 +79,7 @@ async function getMockWebsocketConnectAttempts(
   page: import("@playwright/test").Page,
 ) {
   return page.evaluate(() => {
-    const getAttempts = window.__BUZZ_E2E_GET_WEBSOCKET_CONNECT_ATTEMPTS__;
+    const getAttempts = window.__AMBUSH_E2E_GET_WEBSOCKET_CONNECT_ATTEMPTS__;
     return getAttempts?.() ?? [];
   });
 }
@@ -91,13 +91,13 @@ async function emitMockMessages(
   await page.evaluate((items) => {
     const emit = (
       window as Window & {
-        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
           createdAt: number;
         }) => unknown;
       }
-    ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
     if (!emit) {
       throw new Error("E2E mock message emitter is not installed.");
     }
@@ -113,7 +113,7 @@ async function queueAuthResponses(
   responses: Array<{ success: boolean; message: string }>,
 ) {
   await page.evaluate((queued) => {
-    const queue = window.__BUZZ_E2E_QUEUE_AUTH_RESPONSES__;
+    const queue = window.__AMBUSH_E2E_QUEUE_AUTH_RESPONSES__;
     if (!queue) throw new Error("E2E AUTH response seam is not installed.");
     queue(queued);
   }, responses);
@@ -124,7 +124,7 @@ async function closeLiveSubscriptions(
   reason: string,
 ) {
   const closed = await page.evaluate((message) => {
-    const close = window.__BUZZ_E2E_CLOSE_LIVE_SUBSCRIPTIONS__;
+    const close = window.__AMBUSH_E2E_CLOSE_LIVE_SUBSCRIPTIONS__;
     if (!close) throw new Error("E2E live CLOSED seam is not installed.");
     return close(message);
   }, reason);
@@ -136,7 +136,7 @@ async function queueChannelHistoryCloses(
   reasons: string[],
 ) {
   await page.evaluate((queued) => {
-    const queue = window.__BUZZ_E2E_QUEUE_CHANNEL_HISTORY_CLOSES__;
+    const queue = window.__AMBUSH_E2E_QUEUE_CHANNEL_HISTORY_CLOSES__;
     if (!queue) {
       throw new Error("E2E channel history CLOSED seam is not installed.");
     }
@@ -151,9 +151,9 @@ async function driveConnectionDegraded(
   await page.evaluate((s) => {
     const setter = (
       window as Window & {
-        __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (state: string) => void;
+        __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: (state: string) => void;
       }
-    ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__;
+    ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__;
     if (!setter) {
       throw new Error("E2E relay state setter is not installed.");
     }
@@ -181,7 +181,9 @@ test("stalled early AUTH signing times out and starts a replacement dial", async
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       { timeout: 5_000 },
     )
     .toBe("connected");
@@ -197,7 +199,9 @@ test("AUTH arriving before connect resolves does not lose the first send", async
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       { timeout: 5_000 },
     )
     .toBe("connected");
@@ -226,9 +230,9 @@ test("failed initial relay dial retries automatically", async ({ page }) => {
         page.evaluate(() => {
           const getState = (
             window as Window & {
-              __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
+              __AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
             }
-          ).__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__;
+          ).__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__;
           return getState?.() ?? null;
         }),
       { timeout: 10_000 },
@@ -253,7 +257,7 @@ test("routine traffic cannot bypass outage backoff and recovery stays automatic"
   await page.evaluate(async () => {
     const deadline = Date.now() + 4_200;
     while (Date.now() < deadline) {
-      await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      await window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["channels"],
       });
       await new Promise((resolve) => window.setTimeout(resolve, 100));
@@ -271,7 +275,9 @@ test("routine traffic cannot bypass outage backoff and recovery stays automatic"
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       { timeout: 10_000 },
     )
     .toBe("connected");
@@ -301,7 +307,9 @@ test("authenticated reconnect reports connected while replay is rate-limited", a
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       { timeout: 3_000 },
     )
     .toBe("connected");
@@ -344,7 +352,7 @@ test("rate-limited reconnect backfill does not tear down the authenticated socke
     .toBe(1);
   await expect
     .poll(() =>
-      page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+      page.evaluate(() => window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.()),
     )
     .toBe("connected");
 
@@ -358,7 +366,7 @@ test("rate-limited reconnect backfill does not tear down the authenticated socke
   ).toBe(1);
   expect(
     await page.evaluate(() =>
-      window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+      window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
     ),
   ).toBe("connected");
 });
@@ -374,7 +382,9 @@ test("service restart close resets accumulated backoff", async ({ page }) => {
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       { timeout: 15_000 },
     )
     .toBe("connected");
@@ -384,7 +394,9 @@ test("service restart close resets accumulated backoff", async ({ page }) => {
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       { timeout: 2_500 },
     )
     .toBe("connected");
@@ -480,7 +492,9 @@ test("resume event short-circuits accumulated reconnect backoff", async ({
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       {
         timeout: 2_000,
       },
@@ -528,7 +542,7 @@ test("resume events during repeated AUTH rejection cannot defeat the terminal ca
           window.dispatchEvent(new Event("focus"));
         });
         return page.evaluate(() =>
-          window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
         );
       },
       { intervals: [500], timeout: 20_000 },
@@ -544,7 +558,7 @@ test("resume events during repeated AUTH rejection cannot defeat the terminal ca
   await page.waitForTimeout(1_000);
   expect(
     await page.evaluate(() =>
-      window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+      window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
     ),
   ).toBe("disconnected");
 });
@@ -556,7 +570,7 @@ test("sub-2s degraded flap invalidates relay queries on recovery", async ({
   await expect(page.getByTestId("channel-general")).toBeVisible();
 
   await page.evaluate(() => {
-    const queryClient = window.__BUZZ_E2E_QUERY_CLIENT__ as
+    const queryClient = window.__AMBUSH_E2E_QUERY_CLIENT__ as
       | {
           invalidateQueries: (...args: unknown[]) => unknown;
           __rawHealInvalidations?: number;
@@ -582,7 +596,7 @@ test("sub-2s degraded flap invalidates relay queries on recovery", async ({
       page.evaluate(
         () =>
           (
-            window.__BUZZ_E2E_QUERY_CLIENT__ as unknown as {
+            window.__AMBUSH_E2E_QUERY_CLIENT__ as unknown as {
               __rawHealInvalidations?: number;
             }
           )?.__rawHealInvalidations ?? 0,
@@ -607,7 +621,9 @@ test("transient AUTH rejection reconnects and restores live traffic", async ({
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.()),
+        page.evaluate(() =>
+          window.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.(),
+        ),
       {
         timeout: 10_000,
       },

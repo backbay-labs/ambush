@@ -29,7 +29,7 @@ export function OnboardingSlideTransition({
 }: OnboardingSlideTransitionProps) {
   return (
     <div
-      className={cn("buzz-onboarding-slide w-full", containerClassName)}
+      className={cn("ambush-onboarding-slide w-full", containerClassName)}
       key={transitionKey}
       {...props}
     >
@@ -57,13 +57,13 @@ function TransitionLine({
 }) {
   return (
     <div
-      className="buzz-onboarding-transition-line flex w-full justify-center"
+      className="ambush-onboarding-transition-line flex w-full justify-center"
       data-onboarding-direction={direction}
       data-onboarding-effect={effect}
     >
       <div
         className={cn(
-          "buzz-onboarding-transition-content w-full",
+          "ambush-onboarding-transition-content w-full",
           contentClassName,
         )}
       >

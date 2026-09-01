@@ -68,7 +68,7 @@ fn test_first_attempt_overflow_does_not_erase_later_records() {
     );
 }
 
-/// A step Buzz synthesizes — a failed prerequisite, or post-install
+/// A step Ambush synthesizes — a failed prerequisite, or post-install
 /// verification — reaches the log as well as the UI. `record_step` is the only
 /// path that guarantees this, which is why callers use it instead of
 /// `steps.push`.

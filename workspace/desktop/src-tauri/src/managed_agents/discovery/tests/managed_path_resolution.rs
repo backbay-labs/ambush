@@ -8,7 +8,7 @@ fn login_shell_lookup_treats_command_as_data() {
 
     let _guard = crate::managed_agents::lock_path_mutex();
     let marker =
-        std::env::temp_dir().join(format!("buzz-discovery-marker-{}", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("ambush-discovery-marker-{}", uuid::Uuid::new_v4()));
     let payload = format!("doesnotexist; touch {} #", marker.display());
 
     let resolved = find_via_login_shell(&payload);
@@ -51,7 +51,7 @@ fn common_binary_paths_probes_legacy_goose_install_dir() {
 
 #[cfg(unix)]
 #[test]
-fn resolve_command_prefers_buzz_managed_npm_shim_over_path() {
+fn resolve_command_prefers_ambush_managed_npm_shim_over_path() {
     use std::os::unix::fs::PermissionsExt;
 
     let _guard = crate::managed_agents::lock_path_mutex();
@@ -71,7 +71,7 @@ fn resolve_command_prefers_buzz_managed_npm_shim_over_path() {
     std::env::set_var("XDG_DATA_HOME", &xdg_data);
     let managed_bin = dirs::data_dir()
         .expect("data dir")
-        .join("Buzz")
+        .join("Ambush")
         .join("node-tools")
         .join("bin");
     std::fs::create_dir_all(&managed_bin).expect("create managed bin");
@@ -108,7 +108,7 @@ fn resolve_command_prefers_buzz_managed_npm_shim_over_path() {
     assert_eq!(
         resolved.as_deref(),
         Some(managed_shim.as_path()),
-        "Buzz-managed npm shim must win over PATH/global shims"
+        "Ambush-managed npm shim must win over PATH/global shims"
     );
 }
 
@@ -146,7 +146,7 @@ fn cheap_discovery_never_spawns_login_shell_even_when_cold() {
         r#"{
             "id": "absent-harness",
             "label": "Absent Harness",
-            "command": "buzz-absent-command-xyzzy",
+            "command": "ambush-absent-command-xyzzy",
             "args": []
         }"#,
     )
@@ -191,7 +191,7 @@ fn cheap_discovery_never_spawns_login_shell_even_when_cold() {
 /// Regression: `resolve_command_cached` (the cheap discovery path) must find a
 /// bundled sidecar sitting next to the executable via a filesystem stat, even
 /// with a cold resolve cache. Before the fix it consulted only the managed-shim
-/// dirs + cache, so `buzz-agent` reported "not installed" at every cold launch.
+/// dirs + cache, so `ambush-agent` reported "not installed" at every cold launch.
 /// Here the path form exercises the same `resolve_workspace_command` stat the
 /// cheap path now shares.
 #[cfg(unix)]
@@ -200,9 +200,9 @@ fn cheap_path_resolves_workspace_sidecar_without_cache() {
     use crate::managed_agents::discovery::resolve_command_cached;
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!("buzz-sidecar-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("ambush-sidecar-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let bin = dir.join("buzz-agent");
+    let bin = dir.join("ambush-agent");
     std::fs::write(&bin, "#!/bin/sh\n").expect("write sidecar");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 

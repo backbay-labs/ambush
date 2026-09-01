@@ -65,8 +65,8 @@ export const MANAGED_AGENT_PAIR_ACTION_LABELS: Record<
 /**
  * Canonicalize a relay URL the way the backend keys runtime pairs, so a
  * stored community URL (e.g. `ws://localhost:3000`) matches backend rows
- * (`ws://127.0.0.1:3000`). Mirrors buzz-core's `normalize_relay_url`
- * (`crates/buzz-core/src/relay.rs`): lowercase host, loopback hosts folded
+ * (`ws://127.0.0.1:3000`). Mirrors ambush-core's `normalize_relay_url`
+ * (`crates/ambush-core/src/relay.rs`): lowercase host, loopback hosts folded
  * to 127.0.0.1, default ports and root-path trailing slash stripped.
  * Returns null when the URL cannot be parsed as ws/wss.
  */

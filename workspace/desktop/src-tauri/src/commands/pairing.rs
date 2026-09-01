@@ -2,10 +2,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use buzz_core_pkg::kind::KIND_PAIRING;
-use buzz_core_pkg::pairing::qr::encode_qr;
-use buzz_core_pkg::pairing::session::PairingSession;
-use buzz_core_pkg::pairing::types::{AbortReason, PayloadType};
+use ambush_core_pkg::kind::KIND_PAIRING;
+use ambush_core_pkg::pairing::qr::encode_qr;
+use ambush_core_pkg::pairing::session::PairingSession;
+use ambush_core_pkg::pairing::types::{AbortReason, PayloadType};
 use futures_util::{SinkExt, StreamExt};
 use nostr::ToBech32;
 use serde::Serialize;
@@ -647,7 +647,7 @@ fn event_to_relay_json(event: &nostr::Event) -> String {
     format!("[\"EVENT\",{}]", nostr::JsonUtil::as_json(event))
 }
 
-/// Parse a relay EVENT message into a nostr 0.36 Event (buzz-core compatible).
+/// Parse a relay EVENT message into a nostr 0.36 Event (ambush-core compatible).
 fn parse_relay_event(text: &str, sub_id: &str) -> Option<nostr::Event> {
     let arr: serde_json::Value = serde_json::from_str(text).ok()?;
     let arr = arr.as_array()?;

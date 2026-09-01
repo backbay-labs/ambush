@@ -26,7 +26,7 @@ class JumpToLatestButton extends HookWidget {
     super.key,
   });
 
-  static const _iosViewType = 'buzz/jump_to_latest_glass';
+  static const _iosViewType = 'ambush/jump_to_latest_glass';
 
   @override
   Widget build(BuildContext context) {

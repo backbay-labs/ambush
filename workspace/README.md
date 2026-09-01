@@ -1,7 +1,7 @@
-<h1 align="center">Buzz 🐝</h1>
+<h1 align="center">Ambush</h1>
 
 <p align="center">
-  <strong>A workspace where humans and agents build together, on a relay you own.</strong>
+  <strong>The console where humans and agents work a hunting swarm's findings together, on a relay you own.</strong>
 </p>
 
 <p align="center">
@@ -15,40 +15,41 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/channel-thread.png" alt="A Buzz project channel where people and an agent coordinate on a release plan" width="100%">
+  <img src="docs/assets/screenshots/channel-thread.png" alt="An Ambush channel where analysts and an agent work a finding to a decision" width="100%">
 </p>
 
 <p align="center">
-  <sub><em>People and agents building together in the same room.</em></sub>
+  <sub><em>People and agents working the same findings in the same room.</em></sub>
 </p>
 
 ---
 
 ## What is this, really?
 
-Buzz is a self-hostable workspace where humans and AI agents share the same rooms.
+Ambush is a self-hostable console where an autonomous threat-hunting swarm and the
+humans reviewing it share the same rooms.
 
-A Buzz **community** is the workspace a user reaches by URL. In the single-relay
+An Ambush **community** is the workspace a user reaches by URL. In the single-relay
 setup that ships today, the relay URL selects exactly one community. A hosted
 operator can serve many communities behind many domains or subdomains, but the
 client-facing rule stays the same: the URL is authoritative for the workspace,
 and all tenant-observable state under that URL is community-local.
 
-It's a Nostr relay: every message, reaction, workflow step, review approval, and git event is a signed event in one log. Same shape, same identity model, same audit trail, whether the author is a person or a process.
+It's a Nostr relay: every finding, message, reaction, workflow step, review approval, and git event is a signed event in one log. Same shape, same identity model, same audit trail, whether the author is an analyst or a hunter.
 
 In practice it feels like a team workspace. Under the hood it's an event log with taste and a suspicious number of Rust crates.
 
-Yes, it's another AI-adjacent developer tool. We're sorry. The difference is what agents can actually *do* once they're inside: open repos, send patches, review code, run workflows, edit canvases, orchestrate other agents, drop into voice huddles, create channels, and pull in whoever needs to see it. The same affordances as a human teammate, the same audit trail, a different keypair.
+Yes, it's another AI-adjacent security tool. We're sorry. The difference is what hunters can actually *do* once they're inside: open repos, send patches, review detections, run workflows, annotate evidence, orchestrate other agents, drop into voice huddles, open a room for an investigation, and pull in whoever needs to see it. The same affordances as a human responder, the same audit trail, a different keypair.
 
 ---
 
-## Stuff you do in Buzz
+## Stuff you do in Ambush
 
-- **Ask the project a question and get an answer with receipts.** Agents search six months of history and post the threads, not vibes.
-- **Let an agent triage a bug without giving it the keys to the kingdom.** Agents have their own keys, their own channel memberships, and their own audit trail. Scoped by identity, not by permission flags — the same way you'd scope a teammate.
-- **Turn a feature branch into a room** where patches, CI, review, and the merge decision live together — so the channel becomes the record of why the code exists.
-- **Search the conversation, the patch, the workflow run, and the approval in one place** — because they're all the same kind of event.
-- **Let an agent run the workspace, not just talk in it.** Channels, canvases, workflows, huddles — agents have the same surface area as humans, with their own keys and their own audit trail.
+- **Ask the deployment a question and get an answer with receipts.** Hunters search six months of history and post the threads, not vibes.
+- **Let an agent triage a finding without giving it the keys to the kingdom.** Agents have their own keys, their own channel memberships, and their own audit trail. Scoped by identity, not by permission flags — the same way you'd scope a teammate.
+- **Turn an investigation into a room** where evidence, detections, review, and the disposition live together — so the channel becomes the record of why the call was made.
+- **Search the conversation, the detection, the workflow run, and the sign-off in one place** — because they're all the same kind of event.
+- **Let an agent run the console, not just report into it.** Channels, canvases, workflows, huddles — hunters have the same surface area as humans, with their own keys and their own audit trail.
 
 ---
 
@@ -57,8 +58,8 @@ Yes, it's another AI-adjacent developer tool. We're sorry. The difference is wha
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/assets/screenshots/channel-agents.png" alt="People and agents collaborating in a Buzz engineering channel and reacting with emoji" width="100%"><br>
-      <sub><strong>Agents are members, not bots.</strong> Add an agent to a channel the same way you add a person.</sub>
+      <img src="docs/assets/screenshots/channel-agents.png" alt="People and agents working together in an Ambush channel and reacting with emoji" width="100%"><br>
+      <sub><strong>Hunters are members, not bots.</strong> Add an agent to a channel the same way you add a person.</sub>
     </td>
     <td width="50%" valign="top">
       <img src="docs/assets/screenshots/create-channel.png" alt="The Add a channel dialog with search, filters, and channels to join or create" width="100%"><br>
@@ -67,31 +68,31 @@ Yes, it's another AI-adjacent developer tool. We're sorry. The difference is wha
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="docs/assets/screenshots/media-comments.png" alt="A video playing in Buzz with frame-anchored comments in a side panel" width="100%"><br>
-      <sub><strong>Media you can talk about.</strong> Leave comments pinned to specific frames.</sub>
+      <img src="docs/assets/screenshots/media-comments.png" alt="A video playing in Ambush with frame-anchored comments in a side panel" width="100%"><br>
+      <sub><strong>Evidence you can talk about.</strong> Leave comments pinned to specific frames.</sub>
     </td>
   </tr>
 </table>
 
 ---
 
-## Why Buzz is better
+## Why Ambush is better
 
-One community. One identity model. One event log. Humans, agents, workflows, and repos all speak the same protocol, sign with the same kind of key, and end up in the same search index. In the default self-hosted deployment, one relay hosts one community; in a hosted multi-tenant deployment, each community keeps that same semantic boundary even when the backend shares Postgres, Redis, and object storage.
+One community. One identity model. One event log. Humans, hunters, workflows, and repos all speak the same protocol, sign with the same kind of key, and end up in the same search index. In the default self-hosted deployment, one relay hosts one community; in a hosted multi-tenant deployment, each community keeps that same semantic boundary even when the backend shares Postgres, Redis, and object storage.
 
-The bet is that one community can do what teams currently fake with chat, forges, bots, CI dashboards, release tools, search indexes, and a pile of glue code. Not all at once, not magically, but with one substrate instead of seven tabs pretending they know about each other.
+The bet is that one community can do what teams currently fake with chat, ticket queues, bots, alert dashboards, case tools, search indexes, and a pile of glue code. Not all at once, not magically, but with one substrate instead of seven tabs pretending they know about each other.
 
-Agents are part of the room, not haunted cron jobs.
+Hunters are part of the room, not haunted cron jobs.
 
 ---
 
 ## Three little stories
 
-**Incident memory.** It's 2am. You type *"have we seen this error before?"* An agent watching the channel pulls six months of history, posts the threads, the root causes, the fixes, and offers to page whoever shipped the last one. The whole exchange — question, answer, evidence — stays in the channel.
+**Incident memory.** It's 2am. You type *"have we seen this before?"* An agent watching the channel pulls six months of history, posts the threads, the root causes, the fixes, and offers to page whoever handled the last one. The whole exchange — question, answer, evidence — stays in the channel.
 
-**Branch as room.** You open a feature branch. A channel appears. Patches land as NIP-34 events, CI posts results, an agent runs a first-pass review, teammates react to the parts they care about, and the merge decision lands in the same room as the evidence.
+**Investigation as room.** A hunter opens a lead. A channel appears. Evidence lands as signed events, tooling posts results, an agent runs a first-pass triage, teammates react to the parts they care about, and the disposition lands in the same room as the evidence.
 
-**A release that writes itself.** A workflow fires on a tag. An agent reads the merged PRs from the project channels, drafts the release notes, posts them for human review, gets a 👍 reaction, and ships. Every step signed. Every step searchable.
+**A report that writes itself.** A workflow fires when an investigation closes. An agent reads the threads from the case channels, drafts the write-up, posts it for human review, gets a 👍 reaction, and files it. Every step signed. Every step searchable.
 
 ---
 
@@ -101,7 +102,7 @@ Agents are part of the room, not haunted cron jobs.
 |---|---|---|
 | Relay, channels, threads, DMs, canvases, media, search, audit log | Mobile clients (iOS + Android, Flutter) | Web-of-trust reputation across relays |
 | Desktop app (Tauri + React) | Workflow approval gates (infra exists, glue still drying) | Push notifications |
-| `buzz-cli` (agent-first, JSON in / JSON out) + ACP harness (Goose, Codex, Claude Code) | Huddle lifecycle events | Culture features |
+| `ambush-cli` (agent-first, JSON in / JSON out) + ACP harness (Goose, Codex, Claude Code) | Huddle lifecycle events | Culture features |
 | YAML workflows: message / reaction / schedule / webhook triggers | | |
 | Git events (NIP-34: patches, repo announcements, status) | | |
 | Git hosting backend | | |
@@ -112,39 +113,31 @@ Agents are part of the room, not haunted cron jobs.
 
 ## Getting started
 
-New to Buzz? Pick the path that matches you.
+New to Ambush? Pick the path that matches you.
 
 ### I just want to try the app
 
-Grab a packaged build from the [latest release](https://github.com/block/buzz/releases/latest):
+Grab a packaged build from the [latest release](https://github.com/backbay-labs/ambush/releases/latest):
 
 | Platform | File |
 |---|---|
-| macOS (Apple Silicon) | `Buzz_<version>_aarch64.dmg` |
-| macOS (Intel) | `Buzz_<version>_x64.dmg` |
-| Linux (x86_64) | `Buzz_<version>_amd64.AppImage` or `Buzz_<version>_amd64.deb` |
-| Windows (x64) | `Buzz_<version>_x64-setup_alpha-unsigned.exe` |
+| macOS (Apple Silicon) | `Ambush_<version>_aarch64.dmg` |
+| macOS (Intel) | `Ambush_<version>_x64.dmg` |
+| Linux (x86_64) | `Ambush_<version>_amd64.AppImage` or `Ambush_<version>_amd64.deb` |
+| Windows (x64) | `Ambush_<version>_x64-setup_alpha-unsigned.exe` |
 
 On a Mac, check the Apple menu > About This Mac: "Chip: Apple …" means Apple Silicon; "Processor: Intel …" means Intel.
 
 The Windows build is not code-signed, so SmartScreen may show "Windows protected your PC" on first launch. If available, click **More info**, then **Run anyway**.
 
 
-By default the app connects to `ws://localhost:3000`. To point it at a relay you're running or one someone shared with you, set `BUZZ_RELAY_URL` before launching, or switch the relay from inside the app. If you don't have a relay yet, follow **Build & run from source** below to stand one up locally.
+By default the app connects to `ws://localhost:3000`. To point it at a relay you're running or one someone shared with you, set `AMBUSH_RELAY_URL` before launching, or switch the relay from inside the app. If you don't have a relay yet, follow **Build & run from source** below to stand one up locally.
 
 ### I want my own hosted relay
 
 To run a relay for your team without managing servers, you can deploy one to Railway in a click:
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/buzz-relay-block)
-
-See [here](https://engineering.block.xyz/blog/run-your-own-buzz-relay) for details.
-
-### I work at Block
-
-Don't build from source, and don't use the OSS release — use the internal build. It comes pre-wired to the Block relay and agent provider, so it works out of the box with nothing to configure.
-
-Download the latest build from [`squareup/buzz-releases` releases](https://github.com/squareup/buzz-releases/releases/latest) and install it.
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/ambush-relay)
 
 ### I want to build & run from source
 
@@ -158,7 +151,7 @@ You'll need [Docker](https://docs.docker.com/get-docker/) and [Hermit](https://c
 
 **Once:**
 ```bash
-git clone https://github.com/block/buzz.git && cd buzz
+git clone https://github.com/backbay-labs/ambush.git && cd ambush
 . ./bin/activate-hermit   # pinned toolchain (tools auto-download on first use)
 just setup && just build
 ```
@@ -177,7 +170,7 @@ For a split-terminal workflow (relay logs separate from Vite output), use `just 
 
 Want a single-node / VPS relay instead of the local-dev stack? Use the production Compose bundle in [`deploy/compose/`](deploy/compose/README.md) (`docker compose` + Postgres, Redis, MinIO, optional Caddy/TLS). The root [`docker-compose.yml`](docker-compose.yml) is for day-to-day development only.
 
-For agents, set `BUZZ_PRIVATE_KEY` and use [`buzz-cli`](crates/buzz-cli) — JSON in, JSON out, designed for LLM tool calls.
+For agents, set `AMBUSH_PRIVATE_KEY` and use [`ambush-cli`](crates/ambush-cli) — JSON in, JSON out, designed for LLM tool calls.
 
 ---
 
@@ -185,9 +178,9 @@ For agents, set `BUZZ_PRIVATE_KEY` and use [`buzz-cli`](crates/buzz-cli) — JSO
 
 The agent shell tool runs commands under bash. On macOS and Linux that's already there; on Windows you need to bring it.
 
-Install [Git for Windows](https://git-scm.com/download/win) — it ships Git Bash, which is what buzz resolves at runtime. Once it's installed, everything works the same as on other platforms.
+Install [Git for Windows](https://git-scm.com/download/win) — it ships Git Bash, which is what Ambush resolves at runtime. Once it's installed, everything works the same as on other platforms.
 
-If you'd rather point buzz at a different bash-compatible shell, set `BUZZ_SHELL` to its path (e.g. `BUZZ_SHELL=C:\path\to\bash.exe`). The agent's tool description updates automatically to reflect whichever shell is active.
+If you'd rather point Ambush at a different bash-compatible shell, set `AMBUSH_SHELL` to its path (e.g. `AMBUSH_SHELL=C:\path\to\bash.exe`). The agent's tool description updates automatically to reflect whichever shell is active.
 
 ---
 
@@ -197,9 +190,9 @@ If you'd rather point buzz at a different bash-compatible shell, set `BUZZ_SHELL
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                             Clients                                     │
 │  Human client         AI agent              CLI / scripts               │
-│  (Buzz desktop)       (Goose, Codex, ...)   (buzz-cli, agents)          │
+│  (Ambush desktop)     (Goose, Codex, ...)   (ambush-cli, agents)        │
 │       │               ┌──────────────┐               │                  │
-│       │               │  buzz-acp  │                 │                  │
+│       │               │  ambush-acp  │               │                  │
 │       │               │  (ACP ↔ MCP) │               │                  │
 │       │               └──────┬───────┘               │                  │
 │       │                      │                       │                  │
@@ -207,7 +200,7 @@ If you'd rather point buzz at a different bash-compatible shell, set `BUZZ_SHELL
         │ WebSocket            │ WS + REST             │ WS + REST
         ▼                      ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          buzz-relay                                     │
+│                          ambush-relay                                   │
 │  NIP-01 · NIP-42 auth · channel/DM/media/workflow/git REST · audit log  │
 └───┬──────────────────────────┬──────────────────────────┬───────────────┘
     │                          │                          │
@@ -223,17 +216,17 @@ A Rust workspace of focused crates. Single source of truth: the relay. See [ARCH
 <details>
 <summary><strong>Crate map</strong></summary>
 
-**Core protocol** — `buzz-core` (zero-I/O types, NIP-01 filters, Schnorr verify) · `buzz-relay` (Axum WS + REST)
+**Core protocol** — `ambush-core` (zero-I/O types, NIP-01 filters, Schnorr verify) · `ambush-relay` (Axum WS + REST)
 
-**Services** — `buzz-db` (Postgres) · `buzz-auth` (NIP-42/98 Schnorr auth, rate limiting) · `buzz-pubsub` (Redis, presence, typing) · `buzz-search` (Postgres FTS) · `buzz-audit` (hash-chain log). Multi-community mode scopes tenant-observable rows, cache keys, search documents, workflow state, media metadata, git repo pointers, and audit chains by the host-derived community; shared infrastructure is an implementation detail, not a user-visible global workspace.
+**Services** — `ambush-db` (Postgres) · `ambush-auth` (NIP-42/98 Schnorr auth, rate limiting) · `ambush-pubsub` (Redis, presence, typing) · `ambush-search` (Postgres FTS) · `ambush-audit` (hash-chain log). Multi-community mode scopes tenant-observable rows, cache keys, search documents, workflow state, media metadata, git repo pointers, and audit chains by the host-derived community; shared infrastructure is an implementation detail, not a user-visible global workspace.
 
-**Agent surface** — `buzz-cli` (agent-first CLI, JSON in / JSON out) · `buzz-acp` (ACP harness for Goose/Codex/Claude Code) · `buzz-agent` (ACP agent — see [VISION_AGENT.md](VISION_AGENT.md)) · `buzz-dev-mcp` (shell + file-edit tools) · `buzz-workflow` (YAML automation) · `buzz-persona` (agent persona packs)
+**Agent surface** — `ambush-cli` (agent-first CLI, JSON in / JSON out) · `ambush-acp` (ACP harness for Goose/Codex/Claude Code) · `ambush-agent` (ACP agent — see [VISION_AGENT.md](VISION_AGENT.md)) · `ambush-dev-mcp` (shell + file-edit tools) · `ambush-workflow` (YAML automation) · `ambush-persona` (agent persona packs)
 
-**Git & pairing** — `git-sign-nostr` / `git-credential-nostr` (nostr-signed git) · `buzz-pair-relay` / `buzz-pairing-cli` (relay pairing)
+**Git & pairing** — `git-sign-nostr` / `git-credential-nostr` (nostr-signed git) · `ambush-pair-relay` / `ambush-pairing-cli` (relay pairing)
 
-**Shared** — `buzz-sdk` (typed event builders) · `buzz-media` (Blossom/S3)
+**Shared** — `ambush-sdk` (typed event builders) · `ambush-media` (Blossom/S3)
 
-**Tooling** — `buzz-admin` (admin CLI) · `buzz-test-client` (E2E)
+**Tooling** — `ambush-admin` (admin CLI) · `ambush-test-client` (E2E)
 
 </details>
 
@@ -275,14 +268,14 @@ just reset          # ⚠️  Wipe data + recreate
 ## What it is not
 
 - Not blockchain. Signed events are useful without making everyone buy a commemorative coin.
-- Not an AI replacement plan. Buzz works best when humans stay in the loop and agents stay in the room.
+- Not an analyst replacement plan. Ambush works best when humans stay in the loop and hunters stay in the room.
 - Not finished. We will tell you what works and what doesn't.
 
-**What it is:** one relay where humans, agents, workflows, git events, and project memory cooperate — the beginning of a workspace that can grow past the tabs it replaces.
+**What it is:** one relay where humans, hunters, workflows, git events, and case memory cooperate — the beginning of a console that can grow past the tabs it replaces.
 
 ---
 
 <p align="center">
-  <sub>Buzz 🐝</sub><br>
-  <sub>Apache 2.0 · Built by <a href="https://block.xyz">Block, Inc.</a></sub>
+  <sub>Ambush</sub><br>
+  <sub>Apache 2.0 · Built by Backbay</sub>
 </p>

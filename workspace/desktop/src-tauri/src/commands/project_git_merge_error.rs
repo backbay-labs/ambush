@@ -44,16 +44,16 @@ impl ProjectPullRequestMergeError {
 
 impl From<String> for ProjectPullRequestMergeError {
     fn from(message: String) -> Self {
-        // Relay push-policy denial for a repo with no `buzz-channel` binding.
-        // The stable token is declared in `buzz-core::git_perms`
+        // Relay push-policy denial for a repo with no `ambush-channel` binding.
+        // The stable token is declared in `ambush-core::git_perms`
         // (GIT_NO_CHANNEL_BINDING_TOKEN); the relay guarantees the denial body
         // starts with it. Push failures reach this conversion as raw
         // stderr/`remote:` text, so match the token anywhere in the message.
-        if message.contains(buzz_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_TOKEN) {
+        if message.contains(ambush_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_TOKEN) {
             return Self::new(
-                buzz_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_TOKEN,
+                ambush_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_TOKEN,
                 "This repository is not bound to a channel, so the relay cannot \
-                 authorize pushes. Bind it with: buzz repos bind --id <repo> \
+                 authorize pushes. Bind it with: ambush repos bind --id <repo> \
                  --channel <channel-uuid>",
             );
         }
@@ -133,15 +133,15 @@ mod tests {
         // sits in the message.
         let remote_stderr = format!(
             "remote: {}\nerror: failed to push some refs",
-            buzz_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_BODY
+            ambush_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_BODY
         );
         let error = ProjectPullRequestMergeError::from(remote_stderr);
 
         assert_eq!(
             error.code,
-            buzz_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_TOKEN
+            ambush_core_pkg::git_perms::GIT_NO_CHANNEL_BINDING_TOKEN
         );
-        assert!(error.message.contains("buzz repos bind"));
+        assert!(error.message.contains("ambush repos bind"));
         assert!(error.recovery.is_none());
 
         // Unrelated push failures keep the generic code and original text.

@@ -6,7 +6,7 @@
 //! complete snapshot, and independently gates a resized viewport until the
 //! renderer confirms that it knows the applied [`Viewport`].
 
-use buzz_terminal::{damage::Frame, Viewport};
+use ambush_terminal::{damage::Frame, Viewport};
 use std::fmt;
 
 use uuid::Uuid;
@@ -172,7 +172,7 @@ impl FramePublisher {
     }
 
     /// Drop publication state after channel close, invoke rejection, renderer
-    /// teardown, or explicit detach. The caller owns safe Buzz focus recovery.
+    /// teardown, or explicit detach. The caller owns safe Ambush focus recovery.
     pub(crate) fn fault(&mut self, id: SubscriptionId) -> bool {
         if self
             .subscription
@@ -226,7 +226,7 @@ impl FramePublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_terminal::damage::{CursorFrame, RowFrame};
+    use ambush_terminal::damage::{CursorFrame, RowFrame};
 
     fn viewport(generation: u64, columns: usize, screen_lines: usize) -> Viewport {
         Viewport {

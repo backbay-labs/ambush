@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:buzz/features/channels/mentions/mention_ranking.dart';
+import 'package:ambush/features/channels/mentions/mention_ranking.dart';
 
 // Ported from desktop/src/features/messages/lib/mentionRanking.test.mjs
 // (persona cases omitted — personas are desktop-only).

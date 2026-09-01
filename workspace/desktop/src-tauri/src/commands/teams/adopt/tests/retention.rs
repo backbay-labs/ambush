@@ -16,7 +16,7 @@ use crate::managed_agents::persona_events::persona_d_tag;
 use crate::managed_agents::retention::{
     get_pending_sync, open_retention_db, scoped_retention_db_path, RetainedEvent, RetentionScope,
 };
-use buzz_core_pkg::kind::{KIND_PERSONA, KIND_TEAM};
+use ambush_core_pkg::kind::{KIND_PERSONA, KIND_TEAM};
 use std::cell::Cell;
 
 const RELAY: &str = "wss://relay.example";

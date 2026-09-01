@@ -1,10 +1,10 @@
-# 🛰️ Buzz Remote Agents — Same agent, new body
+# 🛰️ Ambush Remote Agents — Same agent, new body
 
 > An engineer starts a refactor with their agent at 6pm and closes the laptop. The agent doesn't notice — it was never on the laptop. It works the branch channel through the evening, posts its patch, answers the reviewer, and around midnight, with nothing left to do and nobody talking to it, shuts itself down. In the morning the engineer presses Start. The same agent — same name, same key, same shared history — stands up on a machine that did not exist last night, and picks up the conversation.
 
-An agent in Buzz is more than just a process. It has a keypair, a name, a durable history, a reputation — all on the relay. But today its *body* is borrowed: it runs while a desktop app runs, on hardware that sleeps when a human does. Remote agents finish the thought. The agent's home is the relay; the machine is just where it happens to be working.
+An agent in Ambush is more than just a process. It has a keypair, a name, a durable history, a reputation — all on the relay. But today its *body* is borrowed: it runs while a desktop app runs, on hardware that sleeps when a human does. Remote agents finish the thought. The agent's home is the relay; the machine is just where it happens to be working.
 
-Nothing here is new on its own. Deploying containers is solved. Kubernetes is solved. Nostr presence is solved. The insight is that Buzz already *has* a management plane — the relay — so deployment doesn't need to grow one. Each piece is boring. The combination is the thing.
+Nothing here is new on its own. Deploying containers is solved. Kubernetes is solved. Nostr presence is solved. The insight is that Ambush already *has* a management plane — the relay — so deployment doesn't need to grow one. Each piece is boring. The combination is the thing.
 
 ---
 
@@ -20,7 +20,7 @@ So a remote agent's return is a resurrection, not a rebirth: fresh compute, same
 
 Remote-execution systems accumulate control planes. An agent runner, a status poller, a log shipper, a kill switch — each one a live connection into your infrastructure, each one a credential that can leak, each one a thing that must be rebuilt for every new substrate.
 
-Buzz's answer is an axiom: **after deploy, the desktop retains no substrate control channel.** Launch is a single one-way handoff — the desktop resolves the provider through one narrow path, stages one exact artifact for negotiation and deploy, refuses a protocol version it does not understand, and hands over a launch payload it never persists. From that moment, everything flows through the relay: you read the agent's messages to know how it's doing, you mention it to steer it, you tell a healthy agent to stop and it exits on its own. Presence means what it means for everyone else on the relay — *available for conversation* — not substrate telemetry. And if you press Start again, from this machine or another, the deploy converges: one agent identity, one live instance.
+Ambush's answer is an axiom: **after deploy, the desktop retains no substrate control channel.** Launch is a single one-way handoff — the desktop resolves the provider through one narrow path, stages one exact artifact for negotiation and deploy, refuses a protocol version it does not understand, and hands over a launch payload it never persists. From that moment, everything flows through the relay: you read the agent's messages to know how it's doing, you mention it to steer it, you tell a healthy agent to stop and it exits on its own. Presence means what it means for everyone else on the relay — *available for conversation* — not substrate telemetry. And if you press Start again, from this machine or another, the deploy converges: one agent identity, one live instance.
 
 This is not asceticism. It is what makes the body replaceable. A management plane you never build is a management plane you never have to port — and conversation, coordination, and ordinary lifecycle control already have a home on the relay, for every agent, local or remote.
 
@@ -70,4 +70,4 @@ The relay is the workspace. Remote agents make it the *home*. An agent whose ide
 
 ---
 
-*Buzz 🐝 — your agent, everywhere.*
+*Ambush — your agent, everywhere.*

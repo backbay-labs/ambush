@@ -15,7 +15,7 @@ import * as React from "react";
  */
 export type ThreadViewMode = "focus" | "split";
 
-const STORAGE_KEY = "buzz.channels.threadViewMode";
+const STORAGE_KEY = "ambush.channels.threadViewMode";
 
 /** Layout used when nothing is stored, or the stored value is unrecognized. */
 const DEFAULT_THREAD_VIEW_MODE: ThreadViewMode = "split";

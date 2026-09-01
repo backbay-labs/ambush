@@ -4,7 +4,7 @@ import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 import type { Project } from "./projectModels";
 
-const STORAGE_KEY_PREFIX = "buzz-projects.v1";
+const STORAGE_KEY_PREFIX = "ambush-projects.v1";
 export const PROJECTS_QUERY_KEY = ["projects"] as const;
 /** Project provenance is non-enumerable, so equal relay rows must replace snapshots. */
 export const PROJECT_QUERY_STRUCTURAL_SHARING = false;

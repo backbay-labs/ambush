@@ -13,7 +13,7 @@ const TIMELINE_KINDS: [u32; 11] = [
     43004,
     43005,
     43006,
-    buzz_core_pkg::kind::KIND_HUDDLE_STARTED,
+    ambush_core_pkg::kind::KIND_HUDDLE_STARTED,
 ];
 
 fn build_channel_window_filter(

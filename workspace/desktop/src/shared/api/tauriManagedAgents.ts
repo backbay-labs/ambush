@@ -65,7 +65,7 @@ export async function setManagedAgentAutoRestart(
 
 /**
  * B5: persist the canonical startup effort for a local managed agent. Applied
- * as `BUZZ_ACP_EFFORT_LEVEL` at the next spawn. Pass `null` to clear (reverts
+ * as `AMBUSH_ACP_EFFORT_LEVEL` at the next spawn. Pass `null` to clear (reverts
  * to the adapter default). Rejects non-local agents.
  */
 export async function persistAgentEffortLevel(

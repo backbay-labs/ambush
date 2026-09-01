@@ -154,14 +154,14 @@ export function ProjectsView() {
     [projectReadModels],
   );
   const projectsWorkItemsQuery = useProjectsWorkItemsQuery(workItemProjects);
-  // One blobless clone per primary Buzz repository, only while the overview
+  // One blobless clone per primary Ambush repository, only while the overview
   // header is visible.
   const snapshotProjects = React.useMemo(
     () =>
       filter === "all"
         ? projects.filter(
             (project) =>
-              projectRepoHostForProject(project, relayOrigin).kind === "buzz",
+              projectRepoHostForProject(project, relayOrigin).kind === "ambush",
           )
         : [],
     [filter, projects, relayOrigin],
@@ -794,7 +794,7 @@ export function ProjectsView() {
                 ref={scrollIndicatorRef}
               />
               <div
-                className="buzz-content-scrollbar h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-scroll"
+                className="ambush-content-scrollbar h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-scroll"
                 onScroll={handleContentScroll}
               >
                 <div className="px-4 pb-4">

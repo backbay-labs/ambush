@@ -255,7 +255,7 @@ export function AgentDropdownSelect({
                 aria-selected={selected}
                 className={cn(
                   "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm leading-5 text-black opacity-100 transition-colors hover:bg-black/5 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-black/30",
-                  selected && "bg-[var(--buzz-welcome-chartreuse)]/35",
+                  selected && "bg-[var(--ambush-welcome-chartreuse)]/35",
                   option.disabled && "cursor-not-allowed text-black/35",
                 )}
                 data-testid={optionTestId(testId, option.value)}

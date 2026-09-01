@@ -85,13 +85,13 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
     // Start TTS first so STT can observe its active-playback gate.
     if !has_tts && (tts_ready || models::is_tts_ready()) {
         if let Err(e) = maybe_start_tts_pipeline(&state).await {
-            eprintln!("buzz-desktop: TTS hotstart failed: {e}");
+            eprintln!("ambush-desktop: TTS hotstart failed: {e}");
         }
     }
     if transcription_enabled && !has_stt && (stt_ready || models::is_stt_ready()) {
         if let Some(eph_id) = &ephemeral_channel_id {
             if let Err(e) = maybe_start_stt_pipeline(&state, eph_id).await {
-                eprintln!("buzz-desktop: STT hotstart failed: {e}");
+                eprintln!("ambush-desktop: STT hotstart failed: {e}");
             }
         }
     }
@@ -264,10 +264,10 @@ pub(crate) async fn post_connect_setup(
         return Ok(PostConnectOutcome::Stale);
     }
     if let Err(e) = maybe_start_tts_pipeline(state).await {
-        eprintln!("buzz-desktop: TTS pipeline failed to start: {e}");
+        eprintln!("ambush-desktop: TTS pipeline failed to start: {e}");
     }
     if let Err(e) = maybe_start_stt_pipeline(state, ephemeral_channel_id).await {
-        eprintln!("buzz-desktop: STT pipeline failed to start: {e}");
+        eprintln!("ambush-desktop: STT pipeline failed to start: {e}");
     }
 
     Ok(PostConnectOutcome::Ready)
@@ -410,7 +410,7 @@ pub(crate) async fn start_auto_enabled_transcription(state: &AppState, ephemeral
         manager.start_stt_download(state.http_client.clone());
     }
     if let Err(error) = maybe_start_stt_pipeline(state, ephemeral_channel_id).await {
-        eprintln!("buzz-desktop: auto-enabled STT failed to start: {error}");
+        eprintln!("ambush-desktop: auto-enabled STT failed to start: {error}");
     }
     state.emit_huddle_state_changed();
 }
@@ -679,7 +679,7 @@ pub(crate) fn spawn_transcription_task(
             ) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("buzz-desktop: STT build_message: {e}");
+                    eprintln!("ambush-desktop: STT build_message: {e}");
                     continue;
                 }
             };
@@ -691,7 +691,7 @@ pub(crate) fn spawn_transcription_task(
             let body_bytes = match sign_and_guard_stt_body(builder, &keys) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("buzz-desktop: STT publish: {e}");
+                    eprintln!("ambush-desktop: STT publish: {e}");
                     continue;
                 }
             };
@@ -704,7 +704,7 @@ pub(crate) fn spawn_transcription_task(
             ) {
                 Ok(h) => h,
                 Err(e) => {
-                    eprintln!("buzz-desktop: STT NIP-98 auth: {e}");
+                    eprintln!("ambush-desktop: STT NIP-98 auth: {e}");
                     continue;
                 }
             };
@@ -725,10 +725,10 @@ pub(crate) fn spawn_transcription_task(
                     // Route through relay_error_message so a 429 arms the
                     // admission gate for subsequent relay sends.
                     let msg = crate::relay::relay_error_message(resp).await;
-                    eprintln!("buzz-desktop: STT kind:9 post failed: {msg}");
+                    eprintln!("ambush-desktop: STT kind:9 post failed: {msg}");
                 }
                 Err(e) => {
-                    eprintln!("buzz-desktop: STT kind:9 post failed: {e}");
+                    eprintln!("ambush-desktop: STT kind:9 post failed: {e}");
                 }
             }
         }

@@ -18,7 +18,7 @@ class IosNativeSegmentedControl extends HookWidget {
   });
 
   /// The registered iOS platform-view identifier.
-  static const viewType = 'buzz/native_segmented_control';
+  static const viewType = 'ambush/native_segmented_control';
 
   /// Labels displayed by the native segments.
   final List<String> items;

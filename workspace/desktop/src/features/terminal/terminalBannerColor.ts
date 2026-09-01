@@ -7,7 +7,7 @@
  * regenerated only on viewport or theme change.
  *
  * Why the palette and not the CSS vars: `--primary` is a user preference that
- * collapses to `--foreground` on the Buzz themes (ThemeProvider.tsx), and
+ * collapses to `--foreground` on the Ambush themes (ThemeProvider.tsx), and
  * `--secondary` / `--accent` are assigned the same 6% hover tint
  * (adaptive-theme.ts:241-243). A literal primary/secondary/accent fade is two
  * stops, one of which is the background. The TerminalPalette carries the
@@ -388,7 +388,7 @@ export function bannerColor(
   const bg = p.background;
   switch (layer) {
     case "head":
-      // Tyler: "fill the box with buzz term in a three color fade".
+      // Tyler: "fill the box with ambush term in a three color fade".
       return ramp(stops, hue, bg, WORDMARK_FLOOR, false);
     case "field":
       // Tyler: "flow to the edges, fading out" + "colour shift centre to edge".

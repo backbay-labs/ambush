@@ -1,10 +1,10 @@
 //! Claude Code agent spawn-time env helpers.
 //!
 //! A1 contract: `ANTHROPIC_MODEL` is the single startup model authority for
-//! local Claude Code agents. `BUZZ_ACP_MODEL` is removed from the spawned
+//! local Claude Code agents. `AMBUSH_ACP_MODEL` is removed from the spawned
 //! env so the harness never sees two model authorities simultaneously.
 //!
-//! B5 contract: `BUZZ_ACP_EFFORT_LEVEL` is the canonical persisted startup
+//! B5 contract: `AMBUSH_ACP_EFFORT_LEVEL` is the canonical persisted startup
 //! effort authority for all local agents. Written after `descriptor.env` so
 //! user-supplied entries cannot shadow a persisted canonical value.
 
@@ -12,17 +12,17 @@
 /// application ([`apply_effort_env`]) and the snapshot projection
 /// (`spawn_snapshot::effective_effort`) so the value the harness receives and
 /// the value the restart badge compares are named from one place.
-pub const EFFORT_LEVEL_ENV_VAR: &str = "BUZZ_ACP_EFFORT_LEVEL";
+pub const EFFORT_LEVEL_ENV_VAR: &str = "AMBUSH_ACP_EFFORT_LEVEL";
 
 /// Apply the A1 model authority: inject `ANTHROPIC_MODEL` from `effective_model`
-/// (or remove it if `None`) and strip `BUZZ_ACP_MODEL` from the spawned env.
+/// (or remove it if `None`) and strip `AMBUSH_ACP_MODEL` from the spawned env.
 ///
 /// Must be called after `descriptor.env` is written so that any user-supplied
-/// `ANTHROPIC_MODEL` is overridden by the Buzz-resolved value.
+/// `ANTHROPIC_MODEL` is overridden by the Ambush-resolved value.
 pub fn apply_claude_model_env(command: &mut std::process::Command, effective_model: Option<&str>) {
-    // Remove BUZZ_ACP_MODEL — the catalog-switch path is for live ACP switches
+    // Remove AMBUSH_ACP_MODEL — the catalog-switch path is for live ACP switches
     // only; at spawn time ANTHROPIC_MODEL is the sole authority.
-    command.env_remove("BUZZ_ACP_MODEL");
+    command.env_remove("AMBUSH_ACP_MODEL");
     match effective_model {
         Some(m) => {
             command.env("ANTHROPIC_MODEL", m);
@@ -33,11 +33,11 @@ pub fn apply_claude_model_env(command: &mut std::process::Command, effective_mod
     }
 }
 
-/// Apply the B5 effort authority: inject `BUZZ_ACP_EFFORT_LEVEL` from
+/// Apply the B5 effort authority: inject `AMBUSH_ACP_EFFORT_LEVEL` from
 /// `effort_level` (or leave it untouched if `None`).
 ///
 /// Must be called after `descriptor.env` is written so the canonical persisted
-/// value wins over any user-supplied `BUZZ_ACP_EFFORT_LEVEL` entry. When
+/// value wins over any user-supplied `AMBUSH_ACP_EFFORT_LEVEL` entry. When
 /// `effort_level` is `None` there is no canonical value to assert; the command
 /// env is left untouched so a user-supplied value from `descriptor.env`
 /// legitimately seeds startup effort.

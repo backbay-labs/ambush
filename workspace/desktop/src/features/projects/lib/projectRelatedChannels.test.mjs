@@ -15,8 +15,8 @@ const CHANNEL_B = "22222222-2222-4222-8222-222222222222";
 
 function makeProject(overrides = {}) {
   return {
-    id: "project-buzz",
-    name: "buzz",
+    id: "project-ambush",
+    name: "ambush",
     projectChannelId: null,
     repositories: [],
     ...overrides,
@@ -25,8 +25,8 @@ function makeProject(overrides = {}) {
 
 function makeRepository(overrides = {}) {
   return {
-    id: "repo-buzz",
-    name: "buzz",
+    id: "repo-ambush",
+    name: "ambush",
     channelId: CHANNEL_A,
     ...overrides,
   };
@@ -60,15 +60,15 @@ test("collects one row per repository channel binding", () => {
   assert.deepEqual(rows, [
     {
       channelId: CHANNEL_A,
-      projectId: "project-buzz",
-      projectName: "buzz",
-      repositoryId: "repo-buzz",
-      repositoryName: "buzz",
+      projectId: "project-ambush",
+      projectName: "ambush",
+      repositoryId: "repo-ambush",
+      repositoryName: "ambush",
     },
     {
       channelId: CHANNEL_A,
-      projectId: "project-buzz",
-      projectName: "buzz",
+      projectId: "project-ambush",
+      projectName: "ambush",
       repositoryId: "repo-relay",
       repositoryName: "relay-tools",
     },
@@ -125,14 +125,14 @@ test("collapses repositories sharing one project channel", () => {
   assert.deepEqual(collapseProjectRelatedChannelRows(rows), [
     {
       channelId: CHANNEL_A,
-      projectId: "project-buzz",
-      projectName: "buzz",
+      projectId: "project-ambush",
+      projectName: "ambush",
       repositoryNames: ["web", "mobile"],
     },
     {
       channelId: CHANNEL_B,
-      projectId: "project-buzz",
-      projectName: "buzz",
+      projectId: "project-ambush",
+      projectName: "ambush",
       repositoryNames: ["relay"],
     },
   ]);
@@ -149,10 +149,10 @@ test("keeps a project channel only when no repository in that project shares it"
     [
       {
         channelId: CHANNEL_A,
-        projectId: "project-buzz",
-        projectName: "buzz",
-        repositoryId: "repo-buzz",
-        repositoryName: "buzz",
+        projectId: "project-ambush",
+        projectName: "ambush",
+        repositoryId: "repo-ambush",
+        repositoryName: "ambush",
       },
     ],
   );
@@ -167,15 +167,15 @@ test("keeps a project channel only when no repository in that project shares it"
     [
       {
         channelId: CHANNEL_A,
-        projectId: "project-buzz",
-        projectName: "buzz",
-        repositoryId: "repo-buzz",
-        repositoryName: "buzz",
+        projectId: "project-ambush",
+        projectName: "ambush",
+        repositoryId: "repo-ambush",
+        repositoryName: "ambush",
       },
       {
         channelId: CHANNEL_B,
-        projectId: "project-buzz",
-        projectName: "buzz",
+        projectId: "project-ambush",
+        projectName: "ambush",
         repositoryId: null,
         repositoryName: null,
       },
@@ -199,22 +199,22 @@ test("row keys distinguish project-level bindings from repository bindings", () 
   assert.equal(
     projectRelatedChannelRowKey({
       channelId: CHANNEL_A,
-      projectId: "project-buzz",
-      projectName: "buzz",
+      projectId: "project-ambush",
+      projectName: "ambush",
       repositoryId: null,
       repositoryName: null,
     }),
-    `${CHANNEL_A}:project-buzz:project`,
+    `${CHANNEL_A}:project-ambush:project`,
   );
   assert.equal(
     projectRelatedChannelRowKey({
       channelId: CHANNEL_A,
-      projectId: "project-buzz",
-      projectName: "buzz",
-      repositoryId: "repo-buzz",
-      repositoryName: "buzz",
+      projectId: "project-ambush",
+      projectName: "ambush",
+      repositoryId: "repo-ambush",
+      repositoryName: "ambush",
     }),
-    `${CHANNEL_A}:project-buzz:repo-buzz`,
+    `${CHANNEL_A}:project-ambush:repo-ambush`,
   );
 });
 
@@ -241,7 +241,7 @@ test("listProjectBoundChannels puts the home channel first", () => {
       },
       {
         channelId: CHANNEL_A,
-        repositoryId: "repo-buzz",
+        repositoryId: "repo-ambush",
         role: "related",
       },
     ],
@@ -293,7 +293,7 @@ test("listProjectBoundChannels includes extra related channels after home", () =
       },
       {
         channelId: CHANNEL_A,
-        repositoryId: "repo-buzz",
+        repositoryId: "repo-ambush",
         role: "related",
       },
     ],
@@ -318,7 +318,7 @@ test("listProjectChildChannels omits the home channel", () => {
       },
       {
         channelId: CHANNEL_A,
-        repositoryId: "repo-buzz",
+        repositoryId: "repo-ambush",
         role: "related",
       },
     ],

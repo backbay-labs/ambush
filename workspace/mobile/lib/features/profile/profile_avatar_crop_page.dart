@@ -8,7 +8,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:image/image.dart' as image;
 
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 
 const _cropOutputSize = 512;
 
@@ -172,7 +172,7 @@ class ProfileAvatarCropPage extends HookWidget {
             )
           : preparedBytes.value == null || dimensions == null
           ? const Center(
-              child: BuzzLoadingIndicator(
+              child: AmbushLoadingIndicator(
                 color: Colors.white,
                 semanticLabel: 'Preparing photo',
               ),
@@ -368,7 +368,7 @@ class _CropHeaderButton extends StatelessWidget {
         ),
         onPressed: onPressed,
         child: loading
-            ? const BuzzLoadingIndicator(
+            ? const AmbushLoadingIndicator(
                 size: 18,
                 color: Colors.white,
                 semanticLabel: 'Saving photo',

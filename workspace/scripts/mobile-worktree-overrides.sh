@@ -16,8 +16,8 @@
 # profile builds never read these overrides.
 #
 # Android-only test builds can opt into a more explicit side-by-side identity:
-#   BUZZ_ANDROID_DEBUG_APP_NAME="Buzz Huddles"
-#   BUZZ_ANDROID_DEBUG_ID_SUFFIX=".huddles_829c"
+#   AMBUSH_ANDROID_DEBUG_APP_NAME="Ambush Huddles"
+#   AMBUSH_ANDROID_DEBUG_ID_SUFFIX=".huddles_829c"
 # Both values are validated before the generated properties file is written.
 set -euo pipefail
 
@@ -75,17 +75,17 @@ case "$android_slug" in
     [0-9]*) android_slug="w_$android_slug" ;;
 esac
 
-ios_bundle_id="xyz.block.buzz.dogfood.mobile.${ios_slug}"
-android_app_name="${BUZZ_ANDROID_DEBUG_APP_NAME:-Buzz (${label})}"
-android_suffix="${BUZZ_ANDROID_DEBUG_ID_SUFFIX:-.${android_slug}}"
+ios_bundle_id="com.backbay.ambush.dogfood.mobile.${ios_slug}"
+android_app_name="${AMBUSH_ANDROID_DEBUG_APP_NAME:-Ambush (${label})}"
+android_suffix="${AMBUSH_ANDROID_DEBUG_ID_SUFFIX:-.${android_slug}}"
 
 if [[ "$android_app_name" == *$'\n'* || "$android_app_name" == *$'\r'* ]] || \
     ! printf '%s\n' "$android_app_name" | LC_ALL=C grep -Eq '^[A-Za-z0-9._() -]+$'; then
-    echo "BUZZ_ANDROID_DEBUG_APP_NAME must contain only letters, numbers, spaces, ., _, -, or parentheses" >&2
+    echo "AMBUSH_ANDROID_DEBUG_APP_NAME must contain only letters, numbers, spaces, ., _, -, or parentheses" >&2
     exit 2
 fi
 if [[ ! "$android_suffix" =~ ^\.[a-z][a-z0-9_]*$ ]]; then
-    echo "BUZZ_ANDROID_DEBUG_ID_SUFFIX must match \\.[a-z][a-z0-9_]* (for example .huddles_829c)" >&2
+    echo "AMBUSH_ANDROID_DEBUG_ID_SUFFIX must match \\.[a-z][a-z0-9_]* (for example .huddles_829c)" >&2
     exit 2
 fi
 
@@ -94,7 +94,7 @@ cat > "$ios_overrides" <<XCCONFIG
 // Applies to Debug builds only (included from Flutter/Debug.xcconfig before
 // AppOverrides.xcconfig, so a developer's app-specific overrides win).
 BUNDLE_IDENTIFIER = ${ios_bundle_id}
-APP_DISPLAY_NAME = Buzz (${label})
+APP_DISPLAY_NAME = Ambush (${label})
 XCCONFIG
 
 cat > "$android_props" <<PROPERTIES
@@ -107,4 +107,4 @@ PROPERTIES
 
 # The printed identifiers are the generated defaults; on iOS a developer's
 # AppOverrides.xcconfig may override them per variable.
-echo "📱 Worktree ${worktree_name}: iOS label \"${label}\" (${ios_bundle_id}); Android label \"${android_app_name}\" (xyz.block.buzz.mobile${android_suffix})"
+echo "📱 Worktree ${worktree_name}: iOS label \"${label}\" (${ios_bundle_id}); Android label \"${android_app_name}\" (com.backbay.ambush.mobile${android_suffix})"

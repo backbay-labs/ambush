@@ -4,23 +4,23 @@ fn assert_key_eq(a: &Keys, b: &Keys) {
     assert_eq!(a.public_key().to_hex(), b.public_key().to_hex());
 }
 
-/// `BUZZ_PRIVATE_KEY` is process-global; serialize the env-mutating tests
+/// `AMBUSH_PRIVATE_KEY` is process-global; serialize the env-mutating tests
 /// so they don't race each other under the parallel test runner.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Run `body` with `BUZZ_PRIVATE_KEY` set to `value` (or unset when `None`),
+/// Run `body` with `AMBUSH_PRIVATE_KEY` set to `value` (or unset when `None`),
 /// restoring the prior value afterward.
 fn with_env_key<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let prior = std::env::var("BUZZ_PRIVATE_KEY").ok();
+    let prior = std::env::var("AMBUSH_PRIVATE_KEY").ok();
     match value {
-        Some(v) => std::env::set_var("BUZZ_PRIVATE_KEY", v),
-        None => std::env::remove_var("BUZZ_PRIVATE_KEY"),
+        Some(v) => std::env::set_var("AMBUSH_PRIVATE_KEY", v),
+        None => std::env::remove_var("AMBUSH_PRIVATE_KEY"),
     }
     let out = body();
     match prior {
-        Some(v) => std::env::set_var("BUZZ_PRIVATE_KEY", v),
-        None => std::env::remove_var("BUZZ_PRIVATE_KEY"),
+        Some(v) => std::env::set_var("AMBUSH_PRIVATE_KEY", v),
+        None => std::env::remove_var("AMBUSH_PRIVATE_KEY"),
     }
     out
 }

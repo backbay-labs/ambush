@@ -224,7 +224,7 @@ export function ProfileStep({
           What should we call you?
         </h1>
         <p className="mt-5 text-sm leading-6 text-muted-foreground">
-          Pick the name people and agents will see in Buzz. You can change it
+          Pick the name people and agents will see in Ambush. You can change it
           anytime.
         </p>
       </div>
@@ -243,7 +243,7 @@ export function ProfileStep({
               <span className="relative inline-flex select-none items-center gap-0 text-4xl font-semibold text-muted-foreground/35 sm:text-5xl">
                 <span
                   aria-hidden="true"
-                  className="buzz-onboarding-name-placeholder-caret h-[0.9em] w-0.5 rounded-full bg-primary"
+                  className="ambush-onboarding-name-placeholder-caret h-[0.9em] w-0.5 rounded-full bg-primary"
                 />
                 Enter your name
               </span>

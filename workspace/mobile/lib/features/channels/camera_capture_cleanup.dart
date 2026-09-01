@@ -45,7 +45,7 @@ Future<List<XFile>> retainTemporaryImages(List<XFile> images) async {
       final extension = _safeFileExtension(sourcePath);
       final destination = File(
         '${Directory.systemTemp.path}${Platform.pathSeparator}'
-        'buzz-compose-${DateTime.now().microsecondsSinceEpoch}-'
+        'ambush-compose-${DateTime.now().microsecondsSinceEpoch}-'
         '${_retainedImageCounter++}$extension',
       );
       if (sourcePath.isNotEmpty && await File(sourcePath).exists()) {

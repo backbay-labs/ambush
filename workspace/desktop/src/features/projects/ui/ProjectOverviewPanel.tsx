@@ -7,7 +7,7 @@ import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
 import type { RepoSourceHeaderControls } from "./ProjectRepositorySource";
 
 type ProjectOverviewPanelProps = {
-  /** `buzz-channel` binding of the repository, for access-restricted copy. */
+  /** `ambush-channel` binding of the repository, for access-restricted copy. */
   accessChannelId?: string | null;
   externalHost?: string;
   externalUrl?: string | null;

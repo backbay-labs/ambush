@@ -1320,7 +1320,7 @@ def test_reserved_namespace_collision():
     adversarial_raw = "ov_s:evil"  # would misparse as ov_s: control for ctx "evil"
     real_ctx = "c0"
 
-    # Escaping must be a no-op for every context ID Buzz actually
+    # Escaping must be a no-op for every context ID Ambush actually
     # generates, and must trigger for the adversarial one.
     for benign in ("b68cd7cb-6f8d-4641-b743-a7349eb4114b",
                    "msg:" + "a" * 64, "thread:" + "b" * 64):

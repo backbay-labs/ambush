@@ -23,7 +23,7 @@ test.beforeEach(async ({ page }) => {
       {
         id: "other-community",
         name: "Design studio",
-        normalized_host: "design-studio.communities.buzz.xyz",
+        normalized_host: "design-studio.communities.ambush.example.com",
       },
     ],
   });
@@ -66,7 +66,7 @@ test("capture: community icon picker sits beside its hosted community", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        window.__BUZZ_E2E_SIGNED_EVENTS__?.some(
+        window.__AMBUSH_E2E_SIGNED_EVENTS__?.some(
           (event) =>
             event.kind === 9033 &&
             event.tags.some(

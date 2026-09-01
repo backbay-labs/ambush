@@ -6,7 +6,7 @@ import { installMockBridge } from "../helpers/bridge";
 const SAMPLE_NSEC =
   "nsec1u70xptkumvfc4k4hu0rc4fnzcexvw63zvq2ng9vmqujsaayhparqu8eju9";
 
-// --buzz-onboarding-backup-ink (#717106), the olive key ink shared with the
+// --ambush-onboarding-backup-ink (#717106), the olive key ink shared with the
 // backup step.
 const BACKUP_INK = "rgb(113, 113, 6)";
 

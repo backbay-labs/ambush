@@ -6,7 +6,7 @@ import '../../shared/theme/theme.dart';
 class IosProfileTextEditor {
   IosProfileTextEditor._();
 
-  static const _channel = MethodChannel('buzz/profile_text_editor');
+  static const _channel = MethodChannel('ambush/profile_text_editor');
 
   /// Presents the native editor and returns its submitted value, or null when
   /// the user cancels.

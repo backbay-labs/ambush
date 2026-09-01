@@ -200,7 +200,7 @@ fn validate_transport(transport: &TransportAddr, mode: &IrohRelayMode) -> anyhow
 
 /// mesh-llm's default public relay set (`RelayPolicy::DefaultPublic` in
 /// `mesh-llm-host-runtime`). A stock mesh-llm server with no custom relay
-/// config advertises endpoints on exactly these relays, so buzz's `Default`
+/// config advertises endpoints on exactly these relays, so ambush's `Default`
 /// mode MUST accept them — otherwise shared compute rejects every out-of-the-box
 /// mesh-llm serving node (they are not in iroh's own prod relay map).
 ///

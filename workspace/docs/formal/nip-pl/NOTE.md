@@ -1,6 +1,6 @@
 ---
 title: "NIP-PL Formal Models: lease acceptance and stateful gateway authority"
-tags: [nostr, nip-pl, push-notifications, formal-model, buzz]
+tags: [nostr, nip-pl, push-notifications, formal-model, ambush]
 status: active
 created: 2026-07-11
 ---

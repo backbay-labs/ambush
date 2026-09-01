@@ -15,7 +15,7 @@ candidate_number="$2"
 target_sha="$3"
 repo="${GITHUB_REPOSITORY:-}"
 
-[[ "$repo" == "block/buzz" ]] || fail "candidate publishing is restricted to block/buzz"
+[[ "$repo" == "backbay-labs/ambush" ]] || fail "candidate publishing is restricted to backbay-labs/ambush"
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || \
   fail "'$version' is not a mobile release version (expected X.Y.Z)"
 [[ "$candidate_number" =~ ^[1-9][0-9]*$ ]] || \
@@ -47,7 +47,7 @@ done <<< "$refs"
   fail "candidate sequence changed; expected rc.$candidate_number but next is rc.$next"
 
 tag="mobile-v${version}-rc.${candidate_number}"
-message="Buzz Mobile $version release candidate $candidate_number"
+message="Ambush Mobile $version release candidate $candidate_number"
 tag_object_sha="$(
   gh api --method POST "repos/$repo/git/tags" \
     -f tag="$tag" \
@@ -77,4 +77,4 @@ direct_sha="$(gh api "repos/$repo/git/tags/$tag_object_sha" --jq .object.sha)" |
 [[ "$direct_type" == "commit" && "$direct_sha" == "$target_sha" ]] || \
   fail "$tag does not point directly to requested commit $target_sha"
 
-printf 'Published %s at %s through buzz-release-bot.\n' "$tag" "$target_sha"
+printf 'Published %s at %s through ambush-release-bot.\n' "$tag" "$target_sha"

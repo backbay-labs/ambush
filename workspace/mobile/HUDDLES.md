@@ -76,7 +76,7 @@ silence begins that release after the existing 600 ms hold.
 
 ## Native boundary
 
-`buzz/huddle_media` owns microphone permission and the foreground voice audio
+`ambush/huddle_media` owns microphone permission and the foreground voice audio
 session. Each platform probes its native Opus encoder and decoder before
 advertising support. On Android, `AudioRecord` captures 48 kHz mono PCM,
 `MediaCodec` encodes and decodes Opus, and one `AudioTrack` per remote

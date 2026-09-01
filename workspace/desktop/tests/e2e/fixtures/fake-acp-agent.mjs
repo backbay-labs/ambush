@@ -7,11 +7,11 @@ import { createInterface } from "node:readline";
 const exec = promisify(execFile);
 
 const wakeDelayMs = Number.parseInt(
-  process.env.BUZZ_E2E_FAKE_ACP_WAKE_MS ?? "0",
+  process.env.AMBUSH_E2E_FAKE_ACP_WAKE_MS ?? "0",
   10,
 );
 if (!Number.isFinite(wakeDelayMs) || wakeDelayMs < 0) {
-  throw new Error("BUZZ_E2E_FAKE_ACP_WAKE_MS must be a non-negative integer");
+  throw new Error("AMBUSH_E2E_FAKE_ACP_WAKE_MS must be a non-negative integer");
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -68,7 +68,7 @@ for await (const line of input) {
       });
       const channel = prompt.match(/^Channel: .+ \(#([^)]+)\)$/m)?.[1];
       const replyTo = prompt.match(/--reply-to ([0-9a-f]{64})/)?.[1];
-      const cli = process.env.BUZZ_E2E_CLI_BIN;
+      const cli = process.env.AMBUSH_E2E_CLI_BIN;
       if (cli && channel) {
         const args = [
           "messages",

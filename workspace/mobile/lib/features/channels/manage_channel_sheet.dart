@@ -3,7 +3,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import 'channel.dart';
 import 'channel_management_provider.dart';
 
@@ -227,7 +227,7 @@ class ManageChannelSheet extends HookConsumerWidget {
                   );
                 },
                 loading: () => const Center(
-                  child: BuzzLoadingIndicator(
+                  child: AmbushLoadingIndicator(
                     size: 40,
                     semanticLabel: 'Loading channel canvas',
                   ),

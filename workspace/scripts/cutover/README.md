@@ -1,7 +1,7 @@
 # 1321 cutover: single-community → multi-tenant
 
 `1321_backfill_default_community.sql` is a **one-off operator script**, not a
-startup migration. It takes a pre-1321 (single-community) Buzz Postgres to the
+startup migration. It takes a pre-1321 (single-community) Ambush Postgres to the
 1321 multi-tenant schema, assigning every existing row to one default community
 derived from the deployment host.
 
@@ -58,12 +58,12 @@ it resolves the canonical 1321 schema regardless of your cwd.
 
 ## After it commits
 
-Boot the 1321 relay with **`BUZZ_AUTO_MIGRATE=false`**. The schema is already
+Boot the 1321 relay with **`AMBUSH_AUTO_MIGRATE=false`**. The schema is already
 correct; the relay's idempotent boot-time `ensure_configured_community` /
 allowlist→relay_members backfill finds this community and no-ops.
 
 If you want the relay's sqlx migrator to consider `0001` already applied (so a
-later `BUZZ_AUTO_MIGRATE=true` boot doesn't try to re-run it), seed its
+later `AMBUSH_AUTO_MIGRATE=true` boot doesn't try to re-run it), seed its
 `_sqlx_migrations` row to match a fresh 1321 install:
 
 ```sql
@@ -73,7 +73,7 @@ later `BUZZ_AUTO_MIGRATE=true` boot doesn't try to re-run it), seed its
 
 This is **not** required for correct operation — a fresh `0001` run against the
 already-correct schema is a no-op only if the migrator's checksum matches, so
-prefer leaving `BUZZ_AUTO_MIGRATE=false` unless you have a reason to seed.
+prefer leaving `AMBUSH_AUTO_MIGRATE=false` unless you have a reason to seed.
 
 ## Verify (post-commit, outside the txn)
 

@@ -1,6 +1,6 @@
 # Pocket TTS English VCTK presets
 
-Buzz exposes Kyutai's twelve official English VCTK Pocket presets. The WAV
+Ambush exposes Kyutai's twelve official English VCTK Pocket presets. The WAV
 bytes are unchanged from `kyutai/tts-voices` revision
 `323332d33f997de8394f24a193e1a76df720e01a`; only local filenames differ.
 
@@ -32,4 +32,4 @@ https://datashare.ed.ac.uk/handle/10283/3443
 The recordings were enhanced by ai-coustics:
 https://ai-coustics.com/
 
-Neither Kyutai, the VCTK speakers, nor ai-coustics endorses Buzz.
+Neither Kyutai, the VCTK speakers, nor ai-coustics endorses Ambush.

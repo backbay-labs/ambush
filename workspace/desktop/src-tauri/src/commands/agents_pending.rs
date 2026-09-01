@@ -38,7 +38,7 @@ pub(crate) fn retain_managed_agent_pending(
         retain_agent_record(&conn, &scope.owner_keys, record).map(|_| ())
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: agent-retain: {e}");
+        eprintln!("ambush-desktop: agent-retain: {e}");
     }
 }
 
@@ -63,7 +63,7 @@ pub(crate) fn tombstone_managed_agent_pending(
         tombstone_managed_agent_at(&scope.db_path, &scope.owner_keys, agent_pubkey)
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: agent-tombstone: {e}");
+        eprintln!("ambush-desktop: agent-tombstone: {e}");
     }
 }
 
@@ -98,7 +98,7 @@ pub(crate) fn tombstone_managed_agent_at(
             tombstone_retention_d_tag, RetainedEvent,
         },
     };
-    use buzz_core_pkg::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_MANAGED_AGENT};
+    use ambush_core_pkg::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_MANAGED_AGENT};
     use nostr::JsonUtil;
 
     const KIND_DELETE: u32 = 5;
@@ -199,7 +199,7 @@ pub(crate) fn build_agent_archive_request(
     } else {
         let agent = nostr::PublicKey::from_hex(agent_pubkey)
             .map_err(|e| format!("invalid agent pubkey: {e}"))?;
-        let tag_json = buzz_sdk_pkg::nip_oa::compute_auth_tag(keys, &agent, "")
+        let tag_json = ambush_sdk_pkg::nip_oa::compute_auth_tag(keys, &agent, "")
             .map_err(|e| format!("failed to build owner auth tag: {e}"))?;
         let parts: Vec<String> = serde_json::from_str(&tag_json)
             .map_err(|e| format!("failed to parse owner auth tag: {e}"))?;
@@ -229,7 +229,7 @@ mod tests {
     use crate::managed_agents::retention::{
         get_pending_sync, get_retained_event, open_retention_db, retain_event, RetainedEvent,
     };
-    use buzz_core_pkg::kind::KIND_MANAGED_AGENT;
+    use ambush_core_pkg::kind::KIND_MANAGED_AGENT;
 
     // A valid 32-byte x-only pubkey hex — the folded archive request derives an
     // owner auth tag, which parses `agent_pubkey`, so it must be well-formed.
@@ -350,7 +350,7 @@ mod tests {
         // payload is derived from the retained 30177 head's content (not the
         // already-deleted record). Both rows must be present and pending after
         // a successful tombstone.
-        use buzz_core_pkg::kind::KIND_IA_ARCHIVE_REQUEST;
+        use ambush_core_pkg::kind::KIND_IA_ARCHIVE_REQUEST;
 
         let dir = tempfile::tempdir().unwrap();
         let keys = nostr::Keys::generate();
@@ -392,7 +392,7 @@ mod tests {
         // NEITHER the tombstone nor a purged head is left behind. Splitting the
         // two enqueues into separate transactions turns this RED — the kind:5
         // would commit and the head would be gone while the archive is lost.
-        use buzz_core_pkg::kind::KIND_MANAGED_AGENT;
+        use ambush_core_pkg::kind::KIND_MANAGED_AGENT;
 
         let dir = tempfile::tempdir().unwrap();
         let keys = nostr::Keys::generate();

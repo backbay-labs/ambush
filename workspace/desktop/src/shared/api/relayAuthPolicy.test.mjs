@@ -36,7 +36,7 @@ test("restricted rejections latch terminal immediately", () => {
 });
 
 test("the relay's actual ban string latches terminal immediately", () => {
-  // Exact string emitted by crates/buzz-relay/src/handlers/auth.rs at the
+  // Exact string emitted by crates/ambush-relay/src/handlers/auth.rs at the
   // ban seam. A known-permanent ban must never enter the retry loop.
   assert.equal(
     new AuthOkTracker().record(

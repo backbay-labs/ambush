@@ -8,17 +8,17 @@ import { TwoRelayHarness, type RelaySpec } from "./helpers/twoRelayHarness";
 
 const exec = promisify(execFile);
 
-// Live gate: boots a REAL buzz-relay process, points the app at it, SIGTERMs
+// Live gate: boots a REAL ambush-relay process, points the app at it, SIGTERMs
 // the relay mid-session, restarts it on the same port, and asserts the client
 // converges back to "connected". This proves the full restart story end to
 // end: the relay's graceful-drain 1012 close broadcast (server side) and the
 // client's dial-failure retry + 1012 fast-reconnect (desktop side) — the two
 // halves that synthetic mock-websocket specs cannot compose.
 //
-// Requires: BUZZ_E2E_RELAY_RESTART=1, BUZZ_E2E_RELAY_BIN, and
-// BUZZ_E2E_DATABASE_URL (plus reachable Redis and media object store, same
+// Requires: AMBUSH_E2E_RELAY_RESTART=1, AMBUSH_E2E_RELAY_BIN, and
+// AMBUSH_E2E_DATABASE_URL (plus reachable Redis and media object store, same
 // infra as the agents-everywhere live gate).
-const enabled = process.env.BUZZ_E2E_RELAY_RESTART === "1";
+const enabled = process.env.AMBUSH_E2E_RELAY_RESTART === "1";
 
 function required(name: string, value: string | undefined): string {
   if (!value) throw new Error(`${name} is required for the live gate`);
@@ -26,14 +26,14 @@ function required(name: string, value: string | undefined): string {
 }
 
 async function runCli(args: string[], relayUrl: string, privateKey: string) {
-  const binary = required("BUZZ_E2E_CLI_BIN", process.env.BUZZ_E2E_CLI_BIN);
+  const binary = required("AMBUSH_E2E_CLI_BIN", process.env.AMBUSH_E2E_CLI_BIN);
   const { stdout } = await exec(binary, args, {
     cwd: "..",
     env: {
       ...process.env,
-      BUZZ_AUTH_TAG: "",
-      BUZZ_PRIVATE_KEY: privateKey,
-      BUZZ_RELAY_URL: relayUrl,
+      AMBUSH_AUTH_TAG: "",
+      AMBUSH_PRIVATE_KEY: privateKey,
+      AMBUSH_RELAY_URL: relayUrl,
     },
   });
   return stdout;
@@ -77,9 +77,9 @@ async function seedLiveChannel(relayUrl: string) {
 async function connectionState(page: Page): Promise<string> {
   return page.evaluate(() => {
     const win = window as Window & {
-      __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
+      __AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
     };
-    return win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?.() ?? "uninstalled";
+    return win.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?.() ?? "uninstalled";
   });
 }
 
@@ -87,7 +87,7 @@ async function exerciseBackgroundTraffic(page: Page, durationMs: number) {
   await page.evaluate(async (duration) => {
     const deadline = Date.now() + duration;
     while (Date.now() < deadline) {
-      void window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      void window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["channels"],
       });
       await new Promise((resolve) => window.setTimeout(resolve, 100));
@@ -97,13 +97,13 @@ async function exerciseBackgroundTraffic(page: Page, durationMs: number) {
 
 async function resetConnectAttempts(page: Page) {
   await page.evaluate(() => {
-    window.__BUZZ_E2E_RESET_WEBSOCKET_CONNECT_ATTEMPTS__?.();
+    window.__AMBUSH_E2E_RESET_WEBSOCKET_CONNECT_ATTEMPTS__?.();
   });
 }
 
 async function assertConnectAttemptsArePaced(page: Page) {
   const attempts = await page.evaluate(
-    () => window.__BUZZ_E2E_GET_WEBSOCKET_CONNECT_ATTEMPTS__?.() ?? [],
+    () => window.__AMBUSH_E2E_GET_WEBSOCKET_CONNECT_ATTEMPTS__?.() ?? [],
   );
   expect(attempts.length).toBeGreaterThanOrEqual(2);
   expect(attempts.length).toBeLessThanOrEqual(4);
@@ -132,7 +132,7 @@ async function proveLiveDelivery(
 }
 
 test.describe("relay restart live gate", () => {
-  test.skip(!enabled, "set BUZZ_E2E_RELAY_RESTART=1 to run live gate");
+  test.skip(!enabled, "set AMBUSH_E2E_RELAY_RESTART=1 to run live gate");
 
   test("client reconnects after the relay is SIGTERMed and restarted", async ({
     page,
@@ -147,11 +147,11 @@ test.describe("relay restart live gate", () => {
         metrics: portBase + 6_000,
       },
       databaseUrl: required(
-        "BUZZ_E2E_DATABASE_URL",
-        process.env.BUZZ_E2E_DATABASE_URL,
+        "AMBUSH_E2E_DATABASE_URL",
+        process.env.AMBUSH_E2E_DATABASE_URL,
       ),
       redisUrl:
-        process.env.BUZZ_E2E_REDIS_RESTART ?? "redis://127.0.0.1:6379/13",
+        process.env.AMBUSH_E2E_REDIS_RESTART ?? "redis://127.0.0.1:6379/13",
     };
     const harness = await TwoRelayHarness.create([spec]);
     try {

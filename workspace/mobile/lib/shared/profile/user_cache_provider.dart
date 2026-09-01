@@ -141,7 +141,7 @@ class UserCacheNotifier extends Notifier<Map<String, UserProfile>> {
         ..addAll(updatedOrders);
       state = updated;
       if (communityID != null) {
-        unawaited(cacheBuzzPushProfileEvents(communityID, events));
+        unawaited(cacheAmbushPushProfileEvents(communityID, events));
       }
       succeeded = true;
     } catch (_) {

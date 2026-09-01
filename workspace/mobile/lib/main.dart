@@ -8,12 +8,12 @@ import 'shared/push/push_bootstrap.dart';
 import 'shared/push/push_bridge.dart';
 import 'shared/theme/theme_provider.dart';
 
-void main() => runBuzzApp(const App());
+void main() => runAmbushApp(const App());
 
-Future<void> runBuzzApp(Widget app) async {
+Future<void> runAmbushApp(Widget app) async {
   WidgetsFlutterBinding.ensureInitialized();
-  installBuzzPushMethodHandler();
-  await syncPendingBuzzPushNotificationResponse();
+  installAmbushPushMethodHandler();
+  await syncPendingAmbushPushNotificationResponse();
 
   // Pre-load preferences so the first frame uses the saved theme/accent.
   final prefs = await SharedPreferences.getInstance();
@@ -27,7 +27,7 @@ Future<void> runBuzzApp(Widget app) async {
               (scope) => buildMobileInviteJoinRecovery(ref, scope),
         ),
       ],
-      child: BuzzPushBootstrap(child: app),
+      child: AmbushPushBootstrap(child: app),
     ),
   );
 }

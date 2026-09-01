@@ -32,14 +32,14 @@ test("dense single second beyond one window page is fully reachable via composit
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
 
   await page.evaluate(
     ({ denseSecond, denseCount, newerCount }) => {
       // The dense wall: `denseCount` top-level messages all at one second.
       for (let index = 0; index < denseCount; index += 1) {
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "general",
           content: `dense ${index}`,
           createdAt: denseSecond,
@@ -48,7 +48,7 @@ test("dense single second beyond one window page is fully reachable via composit
       // Newer window so the cold load (newest CHANNEL_HISTORY_LIMIT) does NOT
       // include the dense block — it must be paged into from scroll-up.
       for (let index = 0; index < newerCount; index += 1) {
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "general",
           content: `newer ${index}`,
           createdAt: denseSecond + 1 + index,
@@ -150,7 +150,7 @@ test("dense single second beyond one window page is fully reachable via composit
   // continuation request carrying a composite cursor.
   const continuationRequests = await page.evaluate(
     () =>
-      (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+      (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
         (entry) =>
           entry.command === "get_channel_window" &&
           (entry.payload as { cursor?: unknown } | null)?.cursor != null,

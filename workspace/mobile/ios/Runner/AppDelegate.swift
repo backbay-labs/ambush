@@ -1,5 +1,5 @@
 import AVFoundation
-import BuzzPushKit
+import AmbushPushKit
 import Flutter
 import UIKit
 import UserNotifications
@@ -10,19 +10,19 @@ import os.log
   private var mediaUploadChannel: FlutterMethodChannel?
   private var pushChannel: FlutterMethodChannel?
   private let apnsRegistrationBuffer = APNsRegistrationBuffer()
-  private let pushNavigationBuffer = BuzzPushNavigationBuffer()
+  private let pushNavigationBuffer = AmbushPushNavigationBuffer()
   private var apnsDeviceToken: Data?
-  private lazy var endpointGrantStore = BuzzPushEndpointGrantKeychainStore(
-    accessGroup: Bundle.main.object(forInfoDictionaryKey: "BuzzKeychainAccessGroup") as? String
+  private lazy var endpointGrantStore = AmbushPushEndpointGrantKeychainStore(
+    accessGroup: Bundle.main.object(forInfoDictionaryKey: "AmbushKeychainAccessGroup") as? String
   )
   private var enrollmentTask: Task<Void, Never>?
   private var appGroupIdentifier: String? {
-    Bundle.main.object(forInfoDictionaryKey: "BuzzAppGroupIdentifier") as? String
+    Bundle.main.object(forInfoDictionaryKey: "AmbushAppGroupIdentifier") as? String
   }
   private var pushKeychainAccessGroup: String? {
-    Bundle.main.object(forInfoDictionaryKey: "BuzzKeychainAccessGroup") as? String
+    Bundle.main.object(forInfoDictionaryKey: "AmbushKeychainAccessGroup") as? String
   }
-  private lazy var pushSnapshotBridge = BuzzPushSnapshotBridge(
+  private lazy var pushSnapshotBridge = AmbushPushSnapshotBridge(
     appGroupIdentifier: appGroupIdentifier,
     endpointGrantStore: endpointGrantStore,
     keychainAccessGroup: pushKeychainAccessGroup
@@ -49,14 +49,14 @@ import os.log
     let messenger = engineBridge.applicationRegistrar.messenger()
     huddleMediaPlugin = HuddleMediaPlugin(messenger: messenger)
     mediaUploadChannel = FlutterMethodChannel(
-      name: "buzz/media_upload",
+      name: "ambush/media_upload",
       binaryMessenger: messenger
     )
     mediaUploadChannel?.setMethodCallHandler { [weak self] call, result in
       self?.handleMediaUploadMethodCall(call, result: result)
     }
     pushChannel = FlutterMethodChannel(
-      name: "buzz/push",
+      name: "ambush/push",
       binaryMessenger: messenger
     )
     pushChannel?.setMethodCallHandler { [weak self] call, result in
@@ -66,14 +66,14 @@ import os.log
       self?.pushChannel?.invokeMethod(update.method, arguments: update.arguments)
     }
     qrScannerChannel = FlutterMethodChannel(
-      name: "buzz/qr_scanner",
+      name: "ambush/qr_scanner",
       binaryMessenger: messenger
     )
     qrScannerChannel?.setMethodCallHandler { call, result in
       Self.handleQrScannerMethodCall(call, result: result)
     }
     inlinePhotoPickerSupportChannel = FlutterMethodChannel(
-      name: "buzz/inline_photo_picker",
+      name: "ambush/inline_photo_picker",
       binaryMessenger: messenger
     )
     inlinePhotoPickerSupportChannel?.setMethodCallHandler { call, result in
@@ -89,26 +89,26 @@ import os.log
     }
 
     if let inlinePhotoPickerRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzInlinePhotoPicker"
+      forPlugin: "AmbushInlinePhotoPicker"
     ) {
       inlinePhotoPickerRegistrar.register(
         InlinePhotoPickerFactory(
           messenger: messenger,
           parentViewController: inlinePhotoPickerRegistrar.viewController
         ),
-        withId: "buzz/inline_photo_picker"
+        withId: "ambush/inline_photo_picker"
       )
     }
 
     if let concentricSheetRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzConcentricSheetSurface"
+      forPlugin: "AmbushConcentricSheetSurface"
     ) {
       concentricSheetRegistrar.register(
         ConcentricSheetSurfaceFactory(messenger: messenger),
-        withId: "buzz/concentric_sheet_surface"
+        withId: "ambush/concentric_sheet_surface"
       )
       concentricSheetSurfaceChannel = FlutterMethodChannel(
-        name: "buzz/concentric_sheet_surface",
+        name: "ambush/concentric_sheet_surface",
         binaryMessenger: messenger
       )
       concentricSheetSurfaceChannel?.setMethodCallHandler { call, result in
@@ -125,61 +125,61 @@ import os.log
     }
 
     if let jumpToLatestGlassRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzJumpToLatestGlassButton"
+      forPlugin: "AmbushJumpToLatestGlassButton"
     ) {
       jumpToLatestGlassRegistrar.register(
         JumpToLatestGlassButtonFactory(messenger: messenger),
-        withId: "buzz/jump_to_latest_glass"
+        withId: "ambush/jump_to_latest_glass"
       )
     }
 
     if let navigationGlassRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzNavigationGlassButton"
+      forPlugin: "AmbushNavigationGlassButton"
     ) {
       navigationGlassRegistrar.register(
         NavigationGlassButtonFactory(messenger: messenger),
-        withId: "buzz/navigation_glass"
+        withId: "ambush/navigation_glass"
       )
     }
 
     if let segmentedControlRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzNativeSegmentedControl"
+      forPlugin: "AmbushNativeSegmentedControl"
     ) {
       segmentedControlRegistrar.register(
         NativeSegmentedControlFactory(messenger: messenger),
-        withId: "buzz/native_segmented_control"
+        withId: "ambush/native_segmented_control"
       )
     }
 
     if let skinToneRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzNativeSkinToneControl"
+      forPlugin: "AmbushNativeSkinToneControl"
     ) {
       skinToneRegistrar.register(
         NativeSkinToneControlFactory(messenger: messenger),
-        withId: "buzz/native_skin_tone_control"
+        withId: "ambush/native_skin_tone_control"
       )
     }
 
     if let stickyDateGlassRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzStickyDateGlassHeader"
+      forPlugin: "AmbushStickyDateGlassHeader"
     ) {
       stickyDateGlassRegistrar.register(
         StickyDateGlassHeaderFactory(messenger: messenger),
-        withId: "buzz/sticky_date_glass"
+        withId: "ambush/sticky_date_glass"
       )
     }
 
     if let themePaginationGlassRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzThemePaginationGlassControl"
+      forPlugin: "AmbushThemePaginationGlassControl"
     ) {
       themePaginationGlassRegistrar.register(
         ThemePaginationGlassControlFactory(messenger: messenger),
-        withId: "buzz/theme_pagination_glass"
+        withId: "ambush/theme_pagination_glass"
       )
     }
 
     let nativeAttachmentRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzNativeAttachmentPopover"
+      forPlugin: "AmbushNativeAttachmentPopover"
     )
     nativeAttachmentPopoverCoordinator = NativeAttachmentPopoverCoordinator(
       messenger: messenger,
@@ -187,7 +187,7 @@ import os.log
     )
 
     let nativeEmojiPickerRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzNativeEmojiPicker"
+      forPlugin: "AmbushNativeEmojiPicker"
     )
     nativeEmojiPickerCoordinator = NativeEmojiPickerCoordinator(
       messenger: messenger,
@@ -195,7 +195,7 @@ import os.log
     )
 
     let nativeProfileTextEditorRegistrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "BuzzNativeProfileTextEditor"
+      forPlugin: "AmbushNativeProfileTextEditor"
     )
     nativeProfileTextEditorCoordinator = NativeProfileTextEditorCoordinator(
       messenger: messenger,
@@ -203,15 +203,15 @@ import os.log
     )
     if #available(iOS 16.0, *),
       let nativeMessageActionsRegistrar = engineBridge.pluginRegistry.registrar(
-        forPlugin: "BuzzNativeMessageActionSurface"
+        forPlugin: "AmbushNativeMessageActionSurface"
       )
     {
       nativeMessageActionsRegistrar.register(
         NativeMessageActionSurfaceFactory(messenger: messenger),
-        withId: "buzz/native_message_action_surface"
+        withId: "ambush/native_message_action_surface"
       )
       nativeMessageActionSurfaceSupportChannel = FlutterMethodChannel(
-        name: "buzz/native_message_action_surface",
+        name: "ambush/native_message_action_surface",
         binaryMessenger: messenger
       )
       nativeMessageActionSurfaceSupportChannel?.setMethodCallHandler { call, result in
@@ -296,7 +296,7 @@ import os.log
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
-    BuzzPushNotificationResponseCoordinator.handle(
+    AmbushPushNotificationResponseCoordinator.handle(
       actionIdentifier: response.actionIdentifier,
       userInfo: response.notification.request.content.userInfo,
       onTarget: { target in
@@ -326,7 +326,7 @@ import os.log
     )
   }
 
-  private func deliverPushNavigationTarget(_ target: BuzzPushNavigationTarget) {
+  private func deliverPushNavigationTarget(_ target: AmbushPushNavigationTarget) {
     pushChannel?.invokeMethod(
       "notificationOpened",
       arguments: target.flutterArguments
@@ -415,7 +415,7 @@ import os.log
       _, error in
       if let error {
         os_log(
-          "Buzz notification authorization request failed: %{public}@",
+          "Ambush notification authorization request failed: %{public}@",
           type: .error,
           error.localizedDescription
         )
@@ -478,11 +478,11 @@ import os.log
     }
 
     do {
-      let driver = try BuzzDevPushEnrollmentDriver(
+      let driver = try AmbushDevPushEnrollmentDriver(
         gatewayBaseURL: gatewayURL,
         store: endpointGrantStore,
         appAttestKeychainAccessGroup: Bundle.main.object(
-          forInfoDictionaryKey: "BuzzKeychainAccessGroup"
+          forInfoDictionaryKey: "AmbushKeychainAccessGroup"
         ) as? String
       )
       enrollmentTask = Task { [weak self] in
@@ -737,7 +737,7 @@ import os.log
       let exportSession = AVAssetExportSession(
         asset: composition,
         // Passthrough preserves the source's HEVC codec and container
-        // metadata. Buzz accepts only canonical H.264/AAC MP4s with no
+        // metadata. Ambush accepts only canonical H.264/AAC MP4s with no
         // metadata channels, so re-encode instead of copying the movie.
         presetName: AVAssetExportPresetMediumQuality
       )
@@ -770,7 +770,7 @@ import os.log
       case .completed:
         do {
           // AVFoundation writes a standard sample-dependency table (`sdtp`).
-          // Older Buzz relays mistook that playback-only box for metadata. Keep
+          // Older Ambush relays mistook that playback-only box for metadata. Keep
           // its size and payload in a `free` box so chunk offsets stay valid and
           // uploads work before those relays receive the validator fix.
           try Self.neutralizeSampleDependencyBoxes(at: outputURL)
@@ -855,14 +855,14 @@ import os.log
         guard let posterImage else {
           throw lastError
             ?? NSError(
-              domain: "BuzzVideoPoster",
+              domain: "AmbushVideoPoster",
               code: 1,
               userInfo: [NSLocalizedDescriptionKey: "Unable to decode a video frame."]
             )
         }
         guard let jpegData = try MediaSanitizer.encodeJpeg(UIImage(cgImage: posterImage)) else {
           throw NSError(
-            domain: "BuzzVideoPoster",
+            domain: "AmbushVideoPoster",
             code: 2,
             userInfo: [NSLocalizedDescriptionKey: "Unable to encode video poster."]
           )
@@ -948,14 +948,14 @@ import os.log
 
   private static func invalidMp4BoxError() -> NSError {
     NSError(
-      domain: "BuzzVideoTranscode",
+      domain: "AmbushVideoTranscode",
       code: 1,
       userInfo: [NSLocalizedDescriptionKey: "Invalid MP4 box structure."]
     )
   }
 }
 
-extension BuzzPushNavigationTarget {
+extension AmbushPushNavigationTarget {
   fileprivate var flutterArguments: [String: String] {
     [
       "eventId": eventID,

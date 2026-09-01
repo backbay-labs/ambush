@@ -8,26 +8,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:hooks_riverpod/misc.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:buzz/features/channels/channel.dart';
-import 'package:buzz/features/channels/channel_management_provider.dart';
-import 'package:buzz/features/channels/channel_sections/channel_sections_provider.dart';
-import 'package:buzz/features/channels/channel_sections/channel_sections_storage.dart';
-import 'package:buzz/features/channels/channels_page.dart';
-import 'package:buzz/features/channels/channels_provider.dart';
-import 'package:buzz/shared/read_state/read_state_provider.dart';
-import 'package:buzz/features/channels/unread_badge/observed_unread_event.dart';
-import 'package:buzz/features/profile/profile_avatar.dart';
-import 'package:buzz/features/profile/profile_provider.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/shared/auth/auth.dart';
-import 'package:buzz/shared/community/community_icon_provider.dart';
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/avatar_image.dart';
-import 'package:buzz/shared/widgets/buzz_loading_indicator.dart';
-import 'package:buzz/shared/widgets/frosted_app_bar.dart';
-import 'package:buzz/shared/widgets/masked_avatar_badge.dart';
-import 'package:buzz/shared/widgets/skeleton.dart';
+import 'package:ambush/features/channels/channel.dart';
+import 'package:ambush/features/channels/channel_management_provider.dart';
+import 'package:ambush/features/channels/channel_sections/channel_sections_provider.dart';
+import 'package:ambush/features/channels/channel_sections/channel_sections_storage.dart';
+import 'package:ambush/features/channels/channels_page.dart';
+import 'package:ambush/features/channels/channels_provider.dart';
+import 'package:ambush/shared/read_state/read_state_provider.dart';
+import 'package:ambush/features/channels/unread_badge/observed_unread_event.dart';
+import 'package:ambush/features/profile/profile_avatar.dart';
+import 'package:ambush/features/profile/profile_provider.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/shared/auth/auth.dart';
+import 'package:ambush/shared/community/community_icon_provider.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/avatar_image.dart';
+import 'package:ambush/shared/widgets/ambush_loading_indicator.dart';
+import 'package:ambush/shared/widgets/frosted_app_bar.dart';
+import 'package:ambush/shared/widgets/masked_avatar_badge.dart';
+import 'package:ambush/shared/widgets/skeleton.dart';
 
 void main() {
   Widget buildTestable({
@@ -327,7 +327,7 @@ void main() {
     );
   });
 
-  testWidgets('keeps the Buzz background fixed behind the channels list', (
+  testWidgets('keeps the Ambush background fixed behind the channels list', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -1552,12 +1552,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byType(BuzzLoadingIndicator), findsOneWidget);
+    expect(find.byType(AmbushLoadingIndicator), findsOneWidget);
 
     notifier.supersedeLoadingDirectory();
     await tester.pumpAndSettle();
 
-    expect(find.byType(BuzzLoadingIndicator), findsNothing);
+    expect(find.byType(AmbushLoadingIndicator), findsNothing);
     expect(find.text('Couldn’t load open channels.'), findsOneWidget);
     expect(find.byKey(const Key('browse-channels-retry')), findsOneWidget);
 

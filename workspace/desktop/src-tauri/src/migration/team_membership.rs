@@ -65,20 +65,20 @@ fn orchestrate_repair_then_detach(
     match repair() {
         Ok(repaired) => {
             if repaired > 0 {
-                eprintln!("buzz-desktop: team-membership-repair: repaired {repaired} record(s)");
+                eprintln!("ambush-desktop: team-membership-repair: repaired {repaired} record(s)");
             }
             match detach() {
                 Ok(0) => {}
                 Ok(n) => {
                     eprintln!(
-                        "buzz-desktop: detach-dir-teams: detached {n} directory-backed team(s)"
+                        "ambush-desktop: detach-dir-teams: detached {n} directory-backed team(s)"
                     )
                 }
-                Err(e) => eprintln!("buzz-desktop: detach-dir-teams: {e}"),
+                Err(e) => eprintln!("ambush-desktop: detach-dir-teams: {e}"),
             }
         }
         Err(e) => eprintln!(
-            "buzz-desktop: team-membership-repair: {e} — skipping directory-backed detach this \
+            "ambush-desktop: team-membership-repair: {e} — skipping directory-backed detach this \
              boot to preserve source_dir for a clean-repair retry"
         ),
     }
@@ -203,7 +203,7 @@ fn rewrite_stale_persona_ids(teams: &mut [TeamRecord], agents: &[ManagedAgentRec
                 .collect();
             let [only] = candidates.as_slice() else {
                 eprintln!(
-                    "buzz-desktop: team-membership-repair: team {:?}: leaving unresolvable \
+                    "ambush-desktop: team-membership-repair: team {:?}: leaving unresolvable \
                      persona id {:?} ({} candidate(s))",
                     team.id,
                     id,
@@ -322,7 +322,7 @@ fn backfill_instance_team_ids(teams: &[TeamRecord], agents: &mut [ManagedAgentRe
                 }
                 _ => {
                     eprintln!(
-                        "buzz-desktop: team-membership-repair: unbinding instance {:?} — persona \
+                        "ambush-desktop: team-membership-repair: unbinding instance {:?} — persona \
                          {persona_id:?} left its team's roster with no single-team successor",
                         agent.pubkey
                     );
@@ -337,7 +337,7 @@ fn backfill_instance_team_ids(teams: &[TeamRecord], agents: &mut [ManagedAgentRe
                     repaired += 1;
                 }
                 Some(None) => eprintln!(
-                    "buzz-desktop: team-membership-repair: leaving instance {:?} unbound — persona \
+                    "ambush-desktop: team-membership-repair: leaving instance {:?} unbound — persona \
                      {persona_id:?} spans multiple teams",
                     agent.pubkey
                 ),

@@ -26,7 +26,7 @@ fn validate_accepts_valid_env_vars() {
 
 #[test]
 fn validate_rejects_reserved_key() {
-    let config = config_with_env(&[("BUZZ_PRIVATE_KEY", "should-not-be-settable")]);
+    let config = config_with_env(&[("AMBUSH_PRIVATE_KEY", "should-not-be-settable")]);
     let err = validate_global_config(&config).unwrap_err();
     assert!(
         err.contains("reserved"),
@@ -55,8 +55,8 @@ fn validate_rejects_derived_key_goose_model() {
 }
 
 #[test]
-fn validate_rejects_derived_key_buzz_agent_provider() {
-    let config = config_with_env(&[("BUZZ_AGENT_PROVIDER", "anthropic")]);
+fn validate_rejects_derived_key_ambush_agent_provider() {
+    let config = config_with_env(&[("AMBUSH_AGENT_PROVIDER", "anthropic")]);
     let err = validate_global_config(&config).unwrap_err();
     assert!(
         err.contains("structured provider/model fields"),
@@ -79,7 +79,7 @@ fn validate_ignores_empty_values_for_reserved_key_check() {
     // A reserved key with an EMPTY value is a no-op (stripped at save time).
     // validate_global_config skips empty-value entries so it does not reject
     // an empty clear for a key that happens to share a name with a reserved key.
-    let config = config_with_env(&[("BUZZ_PRIVATE_KEY", "")]);
+    let config = config_with_env(&[("AMBUSH_PRIVATE_KEY", "")]);
     // Strip is done inside validate — empty values are stripped before checking.
     assert!(
         validate_global_config(&config).is_ok(),
@@ -306,7 +306,7 @@ fn bare_record() -> ManagedAgentRecord {
         auth_tag: None,
         relay_url: "ws://localhost:3000".to_string(),
         avatar_url: None,
-        acp_command: "buzz-acp".to_string(),
+        acp_command: "ambush-acp".to_string(),
         agent_command: "goose".to_string(),
         agent_command_override: None,
         agent_args: vec![],
@@ -492,7 +492,7 @@ fn inherited_shared_compute_translates_to_supported_agent_transport() {
         provider: Some(super::super::RELAY_MESH_PROVIDER_ID.to_string()),
         ..Default::default()
     };
-    let runtime = super::super::known_acp_runtime("buzz-agent").expect("buzz-agent runtime");
+    let runtime = super::super::known_acp_runtime("ambush-agent").expect("ambush-agent runtime");
 
     let effective = super::super::readiness::resolve_effective_agent_env(
         &record,
@@ -502,11 +502,14 @@ fn inherited_shared_compute_translates_to_supported_agent_transport() {
     );
 
     assert_eq!(
-        effective.env.get("BUZZ_AGENT_PROVIDER").map(String::as_str),
+        effective
+            .env
+            .get("AMBUSH_AGENT_PROVIDER")
+            .map(String::as_str),
         Some("openai")
     );
     assert_eq!(
-        effective.env.get("BUZZ_AGENT_MODEL").map(String::as_str),
+        effective.env.get("AMBUSH_AGENT_MODEL").map(String::as_str),
         Some("auto")
     );
     assert_eq!(

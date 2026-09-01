@@ -79,7 +79,7 @@ test("activityStorageKey produces different keys for different pubkeys", () => {
 test("activityStorageKey differs from legacy unscoped key", () => {
   const pubkey = "abc123";
   const relay = "wss://relay.example.com";
-  const legacyKey = `buzz-thread-activity.v1:${pubkey}`;
+  const legacyKey = `ambush-thread-activity.v1:${pubkey}`;
   const scopedKey = activityStorageKey(pubkey, relay);
   assert.notEqual(legacyKey, scopedKey);
   assert.ok(

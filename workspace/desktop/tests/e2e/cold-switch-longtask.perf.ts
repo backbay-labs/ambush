@@ -59,7 +59,7 @@ test("MEASURE: cold-switch longtask cost into deep-history at the 300 ceiling", 
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
 
   // Arm a longtask observer that buffers into a window array we can read and
@@ -77,7 +77,7 @@ test("MEASURE: cold-switch longtask cost into deep-history at the 300 ceiling", 
   await page.reload();
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
       Array.isArray(
         (window as unknown as { __LONGTASKS__?: number[] }).__LONGTASKS__,
       ),

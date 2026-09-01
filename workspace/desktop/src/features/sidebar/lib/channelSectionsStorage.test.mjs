@@ -232,7 +232,7 @@ test("writeChannelSectionsStore: returns false when setItem throws", () => {
 });
 
 test("storageKey: returns expected format with pubkey", () => {
-  assert.equal(storageKey("abc123"), "buzz-channel-sections.v1:abc123");
+  assert.equal(storageKey("abc123"), "ambush-channel-sections.v1:abc123");
 });
 
 // ─── Relay-scoped key tests ───────────────────────────────────────────────────
@@ -242,13 +242,13 @@ test("storageKey: with relayUrl includes normalized+encoded relay in key", () =>
   const key = storageKey("pk1", relay);
   assert.equal(
     key,
-    `buzz-channel-sections.v1:pk1:${encodeURIComponent(normalizeRelayUrl(relay))}`,
+    `ambush-channel-sections.v1:pk1:${encodeURIComponent(normalizeRelayUrl(relay))}`,
   );
 });
 
 test("storageKey: without relayUrl returns legacy pubkey-only key", () => {
-  assert.equal(storageKey("pk1"), "buzz-channel-sections.v1:pk1");
-  assert.equal(storageKey("pk1", undefined), "buzz-channel-sections.v1:pk1");
+  assert.equal(storageKey("pk1"), "ambush-channel-sections.v1:pk1");
+  assert.equal(storageKey("pk1", undefined), "ambush-channel-sections.v1:pk1");
 });
 
 test("storageKey: two different relays produce different keys for same pubkey", () => {

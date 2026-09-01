@@ -2,28 +2,28 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/theme.dart';
-import 'buzz_sheet_header.dart';
-import 'buzz_titled_sheet_layout.dart';
+import 'ambush_sheet_header.dart';
+import 'ambush_titled_sheet_layout.dart';
 import 'concentric_sheet_surface.dart';
 
 /// Shared motion for occasional modal UI.
 ///
 /// The strong ease-out makes entrances respond immediately, while the shorter
 /// exit keeps dismissals from feeling sluggish.
-const buzzModalAnimationStyle = AnimationStyle(
+const ambushModalAnimationStyle = AnimationStyle(
   curve: Cubic(0.23, 1, 0.32, 1),
   duration: Duration(milliseconds: 280),
   reverseCurve: Cubic(0.77, 0, 0.175, 1),
   reverseDuration: Duration(milliseconds: 220),
 );
 
-/// Shows a bottom sheet with Buzz's shared motion and sheet chrome.
+/// Shows a bottom sheet with Ambush's shared motion and sheet chrome.
 ///
 /// Sheets include the shared close control by default. On iOS, the surface
 /// uses native concentric corners when available and paints a requested drag
 /// handle inside the shared header so its spacing is consistent on every
 /// platform.
-Future<T?> showBuzzModalBottomSheet<T>({
+Future<T?> showAmbushModalBottomSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   String? title,
@@ -102,7 +102,7 @@ Future<T?> showBuzzModalBottomSheet<T>({
     anchorPoint: anchorPoint,
     sheetAnimationStyle: reduceMotion
         ? AnimationStyle.noAnimation
-        : (sheetAnimationStyle ?? buzzModalAnimationStyle),
+        : (sheetAnimationStyle ?? ambushModalAnimationStyle),
     requestFocus: requestFocus,
   );
 }
@@ -129,7 +129,7 @@ class _SheetContent extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (showCloseButton)
-            BuzzSheetHeader(title: title, showDragHandle: showDragHandle)
+            AmbushSheetHeader(title: title, showDragHandle: showDragHandle)
           else if (showDragHandle)
             const Padding(
               padding: EdgeInsets.only(top: Grid.xxs, bottom: Grid.xs),
@@ -140,7 +140,7 @@ class _SheetContent extends StatelessWidget {
       );
     }
 
-    return BuzzTitledSheetLayout(
+    return AmbushTitledSheetLayout(
       title: title!,
       showDragHandle: showDragHandle,
       surfaceColor: surfaceColor,
@@ -160,7 +160,7 @@ class _StandaloneSheetDragHandle extends StatelessWidget {
       button: true,
       onTap: () => Navigator.of(context).pop(),
       child: Container(
-        key: const ValueKey('buzz-sheet-drag-handle'),
+        key: const ValueKey('ambush-sheet-drag-handle'),
         width: 32,
         height: 4,
         decoration: BoxDecoration(
@@ -172,8 +172,8 @@ class _StandaloneSheetDragHandle extends StatelessWidget {
   }
 }
 
-/// Shows a dialog with Buzz's shared motion, respecting reduced-motion settings.
-Future<T?> showBuzzDialog<T>({
+/// Shows a dialog with Ambush's shared motion, respecting reduced-motion settings.
+Future<T?> showAmbushDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   bool barrierDismissible = true,
@@ -205,6 +205,6 @@ Future<T?> showBuzzDialog<T>({
     requestFocus: requestFocus,
     animationStyle: reduceMotion
         ? AnimationStyle.noAnimation
-        : (animationStyle ?? buzzModalAnimationStyle),
+        : (animationStyle ?? ambushModalAnimationStyle),
   );
 }

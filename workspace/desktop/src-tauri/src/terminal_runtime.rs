@@ -1,13 +1,13 @@
-//! Rust-owned PTY sessions and the typed Tauri transport for Buzz Substrate.
+//! Rust-owned PTY sessions and the typed Tauri transport for Ambush Substrate.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use buzz_terminal::context::{context_vars, GuiContext};
-use buzz_terminal::damage::{Frame, Style};
-use buzz_terminal::{Fences, SharedTerminal, Size, Terminal, Viewport};
+use ambush_terminal::context::{context_vars, GuiContext};
+use ambush_terminal::damage::{Frame, Style};
+use ambush_terminal::{Fences, SharedTerminal, Size, Terminal, Viewport};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -224,7 +224,7 @@ struct ReaderThread {
     stopping: Arc<AtomicBool>,
 }
 
-impl buzz_terminal::lifecycle::DrainingReader for ReaderThread {
+impl ambush_terminal::lifecycle::DrainingReader for ReaderThread {
     fn begin_closing(&self) {
         self.terminal.begin_closing();
     }
@@ -247,7 +247,7 @@ struct Session {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pty_size: Arc<Mutex<PtySize>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
-    reader: Option<Box<dyn buzz_terminal::lifecycle::DrainingReader + Send>>,
+    reader: Option<Box<dyn ambush_terminal::lifecycle::DrainingReader + Send>>,
     publisher: Arc<Mutex<FramePublisher>>,
     channel: Arc<Mutex<Option<Channel<TerminalMessage>>>>,
 }
@@ -290,7 +290,7 @@ impl Session {
         if let Some(reader) = self.reader.take() {
             #[cfg(unix)]
             {
-                let _ = buzz_terminal::lifecycle::shutdown_draining(&mut self.child, reader);
+                let _ = ambush_terminal::lifecycle::shutdown_draining(&mut self.child, reader);
             }
             #[cfg(not(unix))]
             {
@@ -384,7 +384,7 @@ pub(crate) fn terminal_attach(
             .find(|session| session.id == existing_id)
             .ok_or_else(|| "terminal session not found".to_string())?;
         let subscription = SubscriptionId::new();
-        let mut encoder = buzz_terminal::damage::Encoder::new();
+        let mut encoder = ambush_terminal::damage::Encoder::new();
         let snapshot = session.terminal.snapshot(&mut encoder);
         let viewport = snapshot.viewport;
         *session.channel.lock().map_err(|e| e.to_string())? = Some(on_frame);
@@ -418,17 +418,17 @@ pub(crate) fn terminal_attach(
     let shell = {
         #[cfg(unix)]
         {
-            buzz_terminal::shell::resolve_shell(std::env::var("SHELL").ok().as_deref())
+            ambush_terminal::shell::resolve_shell(std::env::var("SHELL").ok().as_deref())
         }
         #[cfg(windows)]
         {
-            buzz_terminal::shell::resolve_shell(std::env::var("ComSpec").ok().as_deref())
+            ambush_terminal::shell::resolve_shell(std::env::var("ComSpec").ok().as_deref())
         }
     };
     let mut command = CommandBuilder::new_default_prog();
-    buzz_terminal::env_fence::fence_env(
+    ambush_terminal::env_fence::fence_env(
         &mut command,
-        &buzz_terminal::path::user_shell_path(),
+        &ambush_terminal::path::user_shell_path(),
         &shell,
     );
     let context = GuiContext {
@@ -470,9 +470,11 @@ pub(crate) fn terminal_attach(
     std::thread::spawn(move || {
         while let Ok(action) = actions.recv() {
             let presentation = match &action {
-                buzz_terminal::Action::Title(title) => Some(TerminalMessage::Title(title.clone())),
-                buzz_terminal::Action::ResetTitle => Some(TerminalMessage::ResetTitle),
-                buzz_terminal::Action::Bell => Some(TerminalMessage::Bell),
+                ambush_terminal::Action::Title(title) => {
+                    Some(TerminalMessage::Title(title.clone()))
+                }
+                ambush_terminal::Action::ResetTitle => Some(TerminalMessage::ResetTitle),
+                ambush_terminal::Action::Bell => Some(TerminalMessage::Bell),
                 _ => None,
             };
             if let Some(message) = presentation {
@@ -483,7 +485,7 @@ pub(crate) fn terminal_attach(
                 continue;
             }
             let size = action_size.lock().map(|size| *size).unwrap_or_default();
-            if let Some(reply) = buzz_terminal::listener::reply(
+            if let Some(reply) = ambush_terminal::listener::reply(
                 action,
                 size.cols,
                 size.rows,
@@ -506,8 +508,8 @@ pub(crate) fn terminal_attach(
     let thread_stopping = Arc::clone(&reader_stopping);
     let reader_handle = std::thread::spawn(move || {
         let mut buffer = [0u8; 16 * 1024];
-        let mut encoder = buzz_terminal::damage::Encoder::new();
-        let mut snapshot_encoder = buzz_terminal::damage::Encoder::new();
+        let mut encoder = ambush_terminal::damage::Encoder::new();
+        let mut snapshot_encoder = ambush_terminal::damage::Encoder::new();
         loop {
             let count = match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
@@ -566,7 +568,7 @@ pub(crate) fn terminal_attach(
     });
 
     let subscription = SubscriptionId::new();
-    let mut snapshot_encoder = buzz_terminal::damage::Encoder::new();
+    let mut snapshot_encoder = ambush_terminal::damage::Encoder::new();
     let viewport = terminal.lock().viewport();
     let bootstrap = publisher
         .lock()
@@ -687,7 +689,7 @@ pub(crate) fn terminal_resize(
         let publication = {
             let mut publisher = session.publisher.lock().map_err(|e| e.to_string())?;
             publisher.resize_applied(viewport);
-            let mut encoder = buzz_terminal::damage::Encoder::new();
+            let mut encoder = ambush_terminal::damage::Encoder::new();
             publisher
                 .offer(session.terminal.snapshot(&mut encoder))
                 .map_err(|_| "terminal resize snapshot rejected".to_string())?
@@ -714,7 +716,7 @@ pub(crate) fn terminal_resize(
 /// that is `full` by construction; sharing the reader's would be sharing dedup
 /// state across two coordinate systems.
 fn publish_viewport(session: &Session) -> Result<()> {
-    let mut encoder = buzz_terminal::damage::Encoder::new();
+    let mut encoder = ambush_terminal::damage::Encoder::new();
     let publication = session
         .publisher
         .lock()
@@ -814,13 +816,13 @@ pub(crate) fn terminal_focus(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_terminal::damage::{CursorFrame, RowFrame, Span};
+    use ambush_terminal::damage::{CursorFrame, RowFrame, Span};
 
     fn publication(spans: Vec<Span>) -> Publication {
         Publication {
             subscription_id: SubscriptionId::new(),
             sequence: 7,
-            frame: buzz_terminal::damage::Frame {
+            frame: ambush_terminal::damage::Frame {
                 rows: vec![RowFrame {
                     line: 3,
                     wrapped: true,

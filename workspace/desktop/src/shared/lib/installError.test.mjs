@@ -26,7 +26,7 @@ test("getInstallErrorMessage: failed step without hint contains step name and st
     failed([
       {
         step: "adapter",
-        command: "npm install -g @block/buzz-acp",
+        command: "npm install -g @block/ambush-acp",
         success: false,
         stdout: "",
         stderr: "EACCES: permission denied",
@@ -43,7 +43,7 @@ test("getInstallErrorMessage: failed step without hint does not contain hint-ish
     failed([
       {
         step: "adapter",
-        command: "npm install -g @block/buzz-acp",
+        command: "npm install -g @block/ambush-acp",
         success: false,
         stdout: "",
         stderr: "EACCES: permission denied",
@@ -61,7 +61,7 @@ test("getInstallErrorMessage: failed step with hint starts with hint and still c
     failed([
       {
         step: "adapter",
-        command: "npm install -g @block/buzz-acp",
+        command: "npm install -g @block/ambush-acp",
         success: false,
         stdout: "",
         stderr: "EACCES: permission denied, mkdir '/usr/local/lib'",

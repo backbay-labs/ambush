@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { useBakedBuildEnvQuery } from "../hooks";
 import { useGlobalAgentConfig } from "../useGlobalAgentConfig";
-import { BUZZ_AGENT_THINKING_EFFORT } from "./buzzAgentConfig";
+import { AMBUSH_AGENT_THINKING_EFFORT } from "./ambushAgentConfig";
 import { getInheritedAgentDefaults } from "./bakedEnvHelpers";
 
 export function useAgentDialogDefaults({
@@ -20,7 +20,7 @@ export function useAgentDialogDefaults({
       ...globalConfig.env_vars,
       ...inheritedEnvVars,
       ...(inheritedDefaults.effort.value
-        ? { [BUZZ_AGENT_THINKING_EFFORT]: inheritedDefaults.effort.value }
+        ? { [AMBUSH_AGENT_THINKING_EFFORT]: inheritedDefaults.effort.value }
         : {}),
     }),
     [globalConfig.env_vars, inheritedDefaults.effort.value, inheritedEnvVars],

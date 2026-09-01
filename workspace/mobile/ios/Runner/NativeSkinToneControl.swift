@@ -43,7 +43,7 @@ private final class NativeSkinToneControlPlatformView: NSObject, FlutterPlatform
   ) {
     containerView = UIView(frame: frame)
     channel = FlutterMethodChannel(
-      name: "buzz/native_skin_tone_control/\(viewId)",
+      name: "ambush/native_skin_tone_control/\(viewId)",
       binaryMessenger: messenger
     )
     super.init()

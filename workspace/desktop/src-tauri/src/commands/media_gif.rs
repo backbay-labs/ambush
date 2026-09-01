@@ -2,7 +2,7 @@
 //!
 //! Split out of `media.rs` to keep that file under the desktop line-size
 //! limit. The relay rejects media carrying metadata (`MetadataForbidden` in
-//! buzz-media's `validate_gif_metadata_free`); these helpers drop the GIF
+//! ambush-media's `validate_gif_metadata_free`); these helpers drop the GIF
 //! metadata channels it forbids without re-encoding, so animation timing,
 //! disposal, and pixel data survive byte-identical.
 
@@ -24,7 +24,7 @@ fn gif_sub_blocks_end(body: &[u8], mut i: usize) -> Option<usize> {
 /// GIF carries three unrestricted metadata channels — comment extensions
 /// (0xFE), plain-text extensions (0x01), and application extensions (0xFF)
 /// other than the standard NETSCAPE2.0/ANIMEXTS1.0 looping ones. The relay
-/// rejects all of them (`MetadataForbidden` in buzz-media's
+/// rejects all of them (`MetadataForbidden` in ambush-media's
 /// `validate_gif_metadata_free`), and encoders like Photoshop and Giphy emit
 /// them routinely, so uploads fail unless the client drops them first.
 ///

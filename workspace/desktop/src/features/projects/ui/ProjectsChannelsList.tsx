@@ -13,7 +13,7 @@ import {
 import { selectionItemFromChannel } from "@/features/projects/lib/projectSelection";
 import { matchesProjectsSearch } from "@/features/projects/lib/projectsSearch";
 import { listRowDescription } from "@/features/projects/lib/projectsViewHelpers";
-import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
+import { AmbushLoadingState } from "@/shared/ui/AmbushLoadingState";
 import { ProjectEntityListRow } from "./ProjectEntityListRow";
 import { ProjectSelectableGroup } from "./ProjectSelectableGroup";
 import { ProjectPanelState } from "./ProjectPanelState";
@@ -130,7 +130,7 @@ export function ProjectsChannelsList({
   }, [rows]);
 
   if (channelsQuery.isLoading && rows.length === 0) {
-    return <BuzzLoadingState label="Loading project channels" />;
+    return <AmbushLoadingState label="Loading project channels" />;
   }
   if (rows.length === 0) {
     const searching = Boolean(searchQuery.trim());

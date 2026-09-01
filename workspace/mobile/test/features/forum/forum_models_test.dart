@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:buzz/features/forum/forum_models.dart';
+import 'package:ambush/features/forum/forum_models.dart';
 
 Map<String, dynamic> _postJson({
   String eventId = 'evt1',

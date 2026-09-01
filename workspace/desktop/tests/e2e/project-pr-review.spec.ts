@@ -27,7 +27,7 @@ async function expectSinglePrimaryTextColumn(row: Locator) {
 async function enableProjectsFeature(page: import("@playwright/test").Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem(
-      "buzz-feature-overrides-v1",
+      "ambush-feature-overrides-v1",
       JSON.stringify({ projects: true }),
     );
   });
@@ -41,7 +41,7 @@ async function waitForMockLiveSubscription(
     .poll(() =>
       page.evaluate(
         (name) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: name,
           }) ?? false,
         channelName,
@@ -50,18 +50,18 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
-async function openBuzzProject(page: import("@playwright/test").Page) {
+async function openAmbushProject(page: import("@playwright/test").Page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("open-projects-view").click();
   await page.getByTestId("projects-section-projects").click();
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
   await projectEntry.click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
 }
 
 async function addProjectToSidebar(
@@ -118,7 +118,7 @@ test("same-second request changes supersedes approval", async ({ page }) => {
     Date.now = () => 1_900_000_000_000;
   });
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Review" }).click();
   const aliceRow = pullRequestRowByAuthor(page, "alice").first();
@@ -155,7 +155,7 @@ test("same-second request changes supersedes approval", async ({ page }) => {
 
   const [approvalEvent, changeRequestEvent] = await page.evaluate(() => {
     const decisions =
-      window.__BUZZ_E2E_SIGNED_EVENTS__?.filter(
+      window.__AMBUSH_E2E_SIGNED_EVENTS__?.filter(
         (event) =>
           event.kind === 1 &&
           event.tags.some(
@@ -178,10 +178,10 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_EVENT_KINDS__ = [1631];
+    window.__AMBUSH_E2E_REJECT_PROJECT_EVENT_KINDS__ = [1631];
   });
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Review" }).click();
   const prRows = page.getByTestId("project-pull-request-row");
@@ -293,7 +293,7 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_SIGNED_EVENTS__?.filter(
+          window.__AMBUSH_E2E_SIGNED_EVENTS__?.filter(
             (event) =>
               event.kind === 1 &&
               event.tags.some(
@@ -359,7 +359,7 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
     ),
   ).toHaveCount(1);
   const changeRequestEvent = await page.evaluate(() =>
-    window.__BUZZ_E2E_SIGNED_EVENTS__
+    window.__AMBUSH_E2E_SIGNED_EVENTS__
       ?.filter(
         (event) =>
           event.kind === 1 &&
@@ -375,7 +375,7 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
   expect(changeRequestEvent?.tags).toContainEqual(["c", expect.any(String)]);
   const reviewDecisionEvents = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_SIGNED_EVENTS__?.filter(
+      window.__AMBUSH_E2E_SIGNED_EVENTS__?.filter(
         (event) =>
           event.kind === 1 &&
           event.tags.some(
@@ -443,7 +443,7 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
     ),
   ).toHaveCount(1);
   const approvalEvent = await page.evaluate(() =>
-    window.__BUZZ_E2E_SIGNED_EVENTS__
+    window.__AMBUSH_E2E_SIGNED_EVENTS__
       ?.filter(
         (event) =>
           event.kind === 1 &&
@@ -544,7 +544,7 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_SIGNED_EVENTS__?.filter(
+          window.__AMBUSH_E2E_SIGNED_EVENTS__?.filter(
             (event) => event.kind === 1631,
           ).length ?? 0,
       ),
@@ -567,14 +567,14 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_SIGNED_EVENTS__?.filter(
+          window.__AMBUSH_E2E_SIGNED_EVENTS__?.filter(
             (event) => event.kind === 1631,
           ).length ?? 0,
       ),
     )
     .toBe(1);
   const mergedEvent = await page.evaluate(() =>
-    window.__BUZZ_E2E_SIGNED_EVENTS__
+    window.__AMBUSH_E2E_SIGNED_EVENTS__
       ?.filter((event) => event.kind === 1631)
       .at(-1),
   );
@@ -585,13 +585,13 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
   expect(mergedEvent?.tags.some((tag) => tag[0] === "e")).toBe(true);
   const mergeCommandCount = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_COMMANDS__?.filter(
+      window.__AMBUSH_E2E_COMMANDS__?.filter(
         (command) => command === "merge_project_pull_request",
       ).length ?? 0,
   );
   expect(mergeCommandCount).toBe(1);
   const mergePayload = await page.evaluate(() =>
-    window.__BUZZ_E2E_COMMAND_PAYLOADS__?.find(
+    window.__AMBUSH_E2E_COMMAND_PAYLOADS__?.find(
       (entry) => entry.command === "merge_project_pull_request",
     ),
   );
@@ -611,9 +611,9 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
 test("merge conflicts offer persistent terminal recovery", async ({ page }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
   await page.evaluate(() => {
-    window.__BUZZ_E2E_PROJECT_MERGE_ERROR__ = {
+    window.__AMBUSH_E2E_PROJECT_MERGE_ERROR__ = {
       code: "merge_conflict",
       message: "Pull request has merge conflicts.",
       recovery: {
@@ -647,7 +647,9 @@ test("merge conflicts offer persistent terminal recovery", async ({ page }) => {
     page.getByText("Recovery commit fetched and terminal opened."),
   ).toBeHidden({ timeout: 10_000 });
   await expect(recovery).toContainText("git switch 'main'");
-  await expect(recovery).toContainText("git merge 'refs/buzz/merge-recovery/");
+  await expect(recovery).toContainText(
+    "git merge 'refs/ambush/merge-recovery/",
+  );
   await expect(
     recovery.getByRole("button", { name: "Copy commands" }),
   ).toBeEnabled();
@@ -660,7 +662,7 @@ test("merge conflicts offer persistent terminal recovery", async ({ page }) => {
     .poll(() =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_COMMAND_PAYLOADS__?.find(
+          window.__AMBUSH_E2E_COMMAND_PAYLOADS__?.find(
             (entry) => entry.command === "open_project_merge_recovery_terminal",
           ) ?? null,
       ),
@@ -682,7 +684,7 @@ test("reviewer can leave a commit-scoped inline diff comment", async ({
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Review" }).click();
   const aliceRow = pullRequestRowByAuthor(page, "alice").first();
@@ -708,14 +710,14 @@ test("reviewer can leave a commit-scoped inline diff comment", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        window.__BUZZ_E2E_SIGNED_EVENTS__?.find(
+        window.__AMBUSH_E2E_SIGNED_EVENTS__?.find(
           (event) => event.content === "Please add a type for this parameter.",
         ),
       ),
     )
     .not.toBeUndefined();
   const inlineCommentEvent = await page.evaluate(() =>
-    window.__BUZZ_E2E_SIGNED_EVENTS__?.find(
+    window.__AMBUSH_E2E_SIGNED_EVENTS__?.find(
       (event) => event.content === "Please add a type for this parameter.",
     ),
   );
@@ -767,7 +769,7 @@ test("reviewer can leave a commit-scoped inline diff comment", async ({
 test("managed agent repository owner can merge", async ({ page }) => {
   await enableProjectsFeature(page);
   await page.addInitScript((owner) => {
-    window.__BUZZ_E2E_PROJECT_OWNER_OVERRIDE__ = owner;
+    window.__AMBUSH_E2E_PROJECT_OWNER_OVERRIDE__ = owner;
   }, TEST_IDENTITIES.alice.pubkey);
   await installMockBridge(page, {
     managedAgents: [
@@ -781,7 +783,7 @@ test("managed agent repository owner can merge", async ({ page }) => {
       },
     ],
   });
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Review" }).click();
   const agentRow = pullRequestRowByAuthor(page, "Brain").first();
@@ -797,7 +799,7 @@ test("managed agent repository owner can merge", async ({ page }) => {
     .click();
   await expect(page.getByText("Review requested.")).toBeVisible();
   const reviewRequestPayload = await page.evaluate(() =>
-    window.__BUZZ_E2E_COMMAND_PAYLOADS__?.find(
+    window.__AMBUSH_E2E_COMMAND_PAYLOADS__?.find(
       (entry) => entry.command === "sign_project_pull_request_review_request",
     ),
   );
@@ -817,7 +819,7 @@ test("managed agent repository owner can merge", async ({ page }) => {
   await page.getByRole("button", { name: "Reopen review" }).click();
   await expect(page.getByText("Review reopened.")).toBeVisible();
   const statusPayloads = await page.evaluate(() =>
-    window.__BUZZ_E2E_COMMAND_PAYLOADS__?.filter(
+    window.__AMBUSH_E2E_COMMAND_PAYLOADS__?.filter(
       (entry) => entry.command === "sign_project_pull_request_status",
     ),
   );
@@ -841,7 +843,7 @@ test("managed agent repository owner can merge", async ({ page }) => {
   await expect(page.getByText("Merged feature into main.")).toBeVisible();
 
   const mergePayload = await page.evaluate(() =>
-    window.__BUZZ_E2E_COMMAND_PAYLOADS__?.find(
+    window.__AMBUSH_E2E_COMMAND_PAYLOADS__?.find(
       (entry) => entry.command === "merge_project_pull_request",
     ),
   );
@@ -858,7 +860,7 @@ test("managed agent repository owner can merge", async ({ page }) => {
 test("viewer without repository ownership cannot merge", async ({ page }) => {
   await enableProjectsFeature(page);
   await page.addInitScript((owner) => {
-    window.__BUZZ_E2E_PROJECT_OWNER_OVERRIDE__ = owner;
+    window.__AMBUSH_E2E_PROJECT_OWNER_OVERRIDE__ = owner;
   }, TEST_IDENTITIES.alice.pubkey);
   await installMockBridge(page, {
     managedAgents: [
@@ -868,7 +870,7 @@ test("viewer without repository ownership cannot merge", async ({ page }) => {
       },
     ],
   });
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Review" }).click();
   const prRow = page.getByTestId("project-pull-request-row").first();
@@ -880,7 +882,7 @@ test("viewer without repository ownership cannot merge", async ({ page }) => {
   ).toHaveCount(0);
   const mergeCommandCount = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_COMMANDS__?.filter(
+      window.__AMBUSH_E2E_COMMANDS__?.filter(
         (command) => command === "merge_project_pull_request",
       ).length ?? 0,
   );
@@ -888,14 +890,14 @@ test("viewer without repository ownership cannot merge", async ({ page }) => {
 
   const authorizationError = await page.evaluate(async (targetOwner) => {
     try {
-      await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+      await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
         "merge_project_pull_request",
         {
           input: {
             expectedCommit: "1".repeat(40),
             pullRequestAuthor: "2".repeat(64),
             pullRequestId: "3".repeat(64),
-            repoAddress: `30617:${targetOwner}:buzz`,
+            repoAddress: `30617:${targetOwner}:ambush`,
             sourceBranch: "feature/untrusted",
             statusCreatedAt: 1,
             targetBranch: "main",
@@ -918,7 +920,7 @@ test("project pull requests preserve partial results from batched queries", asyn
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1619];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1619];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -935,7 +937,7 @@ test("project pull requests preserve partial results from batched queries", asyn
 
   const workItemFilters = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_PROJECT_QUERY_FILTERS__?.filter(
+      window.__AMBUSH_E2E_PROJECT_QUERY_FILTERS__?.filter(
         (filter) => filter.limit === 2_000,
       ) ?? [],
   );
@@ -952,7 +954,7 @@ test("project pull requests preserve partial results from batched queries", asyn
     workItemFilters.every((filter) => (filter["#a"]?.length ?? 0) > 1),
   ).toBe(true);
   const expectedRepoAddresses = [
-    `30617:${DEFAULT_MOCK_PUBKEY}:buzz`,
+    `30617:${DEFAULT_MOCK_PUBKEY}:ambush`,
     `30617:${TEST_IDENTITIES.alice.pubkey}:relay-tools`,
     `30617:${TEST_IDENTITIES.bob.pubkey}:design-system`,
   ].sort();
@@ -961,7 +963,7 @@ test("project pull requests preserve partial results from batched queries", asyn
   }
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
   });
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(
@@ -1040,7 +1042,7 @@ test("project pull requests report aggregate root query failures", async ({
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1618];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1618];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -1052,7 +1054,7 @@ test("project pull requests report aggregate root query failures", async ({
   await expect(page.getByText("No reviews yet")).toHaveCount(0);
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
   });
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByText("Could not load reviews")).toHaveCount(0);
@@ -1066,7 +1068,7 @@ test("project issues preserve partial results from aggregate queries", async ({
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -1085,7 +1087,7 @@ test("project issues preserve partial results from aggregate queries", async ({
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
   });
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(
@@ -1098,7 +1100,7 @@ test("project overview reports aggregate work-item failures", async ({
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1618];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [1618];
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -1110,7 +1112,7 @@ test("project overview reports aggregate work-item failures", async ({
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
+    window.__AMBUSH_E2E_REJECT_PROJECT_QUERY_KINDS__ = [];
   });
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByText("Could not load project activity.")).toHaveCount(
@@ -1154,8 +1156,8 @@ test("sidebar distinguishes the Projects overview from an open project", async (
   await projectsOverview.click();
   await expect(projectsOverview).toHaveAttribute("data-active", "true");
 
-  await addProjectToSidebar(page, "buzz");
-  const sidebarProject = page.getByTestId("sidebar-project-buzz");
+  await addProjectToSidebar(page, "ambush");
+  const sidebarProject = page.getByTestId("sidebar-project-ambush");
   await expect(projectsOverview).toHaveAttribute("data-active", "false");
   await expect(sidebarProject).toHaveAttribute("data-active", "true");
   await expect(sidebarProject).toHaveCSS(
@@ -1396,7 +1398,7 @@ test("project section icons lead their titles", async ({ page }) => {
   await page.getByTestId("projects-section-issues").click();
   await expectIconBeforeTitle("projects-page-header");
 
-  await openBuzzProject(page);
+  await openAmbushProject(page);
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   await expectIconBeforeTitle("project-section-header");
 });
@@ -1406,7 +1408,7 @@ test("project detail lists follow overview header geometry", async ({
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   for (const [tab, title] of [
     ["Tasks", "Tasks"],
@@ -1504,14 +1506,14 @@ test("channels tab opens the latest matching conversation without leaving the pr
   await page.evaluate(
     ({ author, latestContent, olderContent, repoToken }) => {
       const now = Math.floor(Date.now() / 1_000);
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `${olderContent} ${repoToken}`,
         createdAt: now - 1,
         kind: 9,
         pubkey: author,
       });
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `${latestContent} ${repoToken}`,
         createdAt: now,
@@ -1523,7 +1525,7 @@ test("channels tab opens the latest matching conversation without leaving the pr
       author: TEST_IDENTITIES.alice.pubkey,
       latestContent,
       olderContent,
-      repoToken: `${DEFAULT_MOCK_PUBKEY} buzz`,
+      repoToken: `${DEFAULT_MOCK_PUBKEY} ambush`,
     },
   );
 
@@ -1531,12 +1533,12 @@ test("channels tab opens the latest matching conversation without leaving the pr
   await page.getByTestId("projects-section-projects").click();
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
   await projectEntry.click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await page.getByRole("tab", { name: "Channels", exact: true }).click();
   const channelRow = page.getByTestId("project-channel-row").first();
   await expect(channelRow).toBeVisible({ timeout: 10_000 });
@@ -1692,7 +1694,7 @@ test("project overview presents collapsible context beside grouped activity", as
   const overviewLayout = page.getByTestId("projects-overview-layout");
   const overviewContentPod = page.getByTestId("projects-overview-content-pod");
   const appContentSurface = page
-    .locator("[data-buzz-content-surface]")
+    .locator("[data-ambush-content-surface]")
     .filter({ has: overviewLayout })
     .first();
   await expect(appContentSurface).toHaveCSS(
@@ -1850,9 +1852,9 @@ test("project overview presents collapsible context beside grouped activity", as
   );
   const channelRows = page.getByTestId("project-channel-row");
   expect(await channelRows.count()).toBeGreaterThan(0);
-  await expect(channelRows.first()).toContainText("#buzz");
+  await expect(channelRows.first()).toContainText("#ambush");
   const channelsList = page.getByTestId("projects-channels-list");
-  await expect(channelsList).toContainText("buzz");
+  await expect(channelsList).toContainText("ambush");
   await expect(channelsList).toContainText("relay-tools");
   await expect(channelsList).toContainText("design-system");
   const channelCount = await channelRows.count();
@@ -2062,12 +2064,12 @@ test("project overview chrome toggles a detached resizable agent chat", async ({
       const entries =
         (
           window as Window & {
-            __BUZZ_E2E_COMMAND_LOG__?: Array<{
+            __AMBUSH_E2E_COMMAND_LOG__?: Array<{
               command: string;
               payload: { content?: string };
             }>;
           }
-        ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
+        ).__AMBUSH_E2E_COMMAND_LOG__ ?? [];
       return entries
         .filter((entry) => entry.command === "send_channel_message")
         .at(-1)?.payload.content;
@@ -2118,7 +2120,7 @@ test("project overview drawer control animates the context rail", async ({
     .getByTestId("projects-overview-context-icon")
     .locator("rect")
     .nth(1);
-  const contentSurface = page.locator("[data-buzz-content-surface]");
+  const contentSurface = page.locator("[data-ambush-content-surface]");
   await expect(page.getByTestId("projects-overview-layout")).toHaveAttribute(
     "data-project-context-detached",
     "true",
@@ -2179,10 +2181,10 @@ test("Projects search replaces and restores the section tabs", async ({
     page.getByTestId("projects-page-tabs").getByRole("combobox"),
   ).toHaveValue("updated");
 
-  await search.fill("buzz");
+  await search.fill("ambush");
   await expect(
     page.locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     ),
   ).toBeVisible();
 
@@ -2321,8 +2323,8 @@ test("repository changes discard captured selection context before agent sends",
   await enableProjectsFeature(page);
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await addProjectToSidebar(page, "ambush");
+  await page.getByTestId("project-home-context-repo-ambush").click();
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
 
   const selectedRow = page.getByTestId("project-issue-row").first();
@@ -2357,7 +2359,7 @@ test("repository changes discard captured selection context before agent sends",
   await expect
     .poll(() =>
       page.evaluate((prefix) => {
-        const sent = window.__BUZZ_E2E_COMMAND_PAYLOADS__?.find(
+        const sent = window.__AMBUSH_E2E_COMMAND_PAYLOADS__?.find(
           (entry) =>
             entry.command === "send_channel_message" &&
             typeof entry.payload === "object" &&
@@ -2373,7 +2375,7 @@ test("repository changes discard captured selection context before agent sends",
   const sentContent = await page.evaluate(
     (prefix) =>
       (
-        window.__BUZZ_E2E_COMMAND_PAYLOADS__?.find(
+        window.__AMBUSH_E2E_COMMAND_PAYLOADS__?.find(
           (entry) =>
             entry.command === "send_channel_message" &&
             typeof entry.payload === "object" &&
@@ -2501,7 +2503,7 @@ test("repository drawer control animates the context rail from the far right", a
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   const chat = page.getByTestId("project-right-panel-chat-tab");
   const terminal = page.getByTestId("project-terminal-toggle");
@@ -2510,7 +2512,7 @@ test("repository drawer control animates the context rail from the far right", a
   const rail = page.getByTestId("project-context-rail");
   const repositoryPanel = page.getByTestId("project-repository-actions-panel");
   const layout = page.getByTestId("project-panel-layout");
-  const contentSurface = page.locator("[data-buzz-content-surface]");
+  const contentSurface = page.locator("[data-ambush-content-surface]");
   const workspaceHeader = page.getByTestId("project-workspace-tab-menu");
   await expect(
     workspaceHeader.getByTestId("project-right-panel-chat-tab"),
@@ -2577,11 +2579,11 @@ test("selecting repository workspace rows switches the context pod to the cluste
   await page.getByTestId("projects-section-projects").click();
   await page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first()
     .click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
 
   await page.getByRole("tab", { name: "Commits" }).click();
   const commitRows = page.getByTestId("project-activity-feed-item");
@@ -2700,7 +2702,7 @@ test("project detail chat resize tracks the pointer without easing", async ({
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
   await page.getByTestId("project-right-panel-chat-tab").click();
 
   const chatPanel = page.getByTestId("project-agent-chat-panel");
@@ -2765,12 +2767,12 @@ test("repository rows identify their git host", async ({ page }) => {
   await page.getByRole("button", { name: "Repositories", exact: true }).click();
   await page.getByRole("button", { name: "List layout" }).click();
 
-  const buzzHostIcon = page
-    .getByTestId("repository-row-buzz")
+  const ambushHostIcon = page
+    .getByTestId("repository-row-ambush")
     .getByTestId("repository-host-icon");
-  await expect(buzzHostIcon).toHaveAttribute(
+  await expect(ambushHostIcon).toHaveAttribute(
     "aria-label",
-    "Buzz-hosted repository",
+    "Ambush-hosted repository",
   );
   await expect(
     page
@@ -2889,7 +2891,7 @@ test("project detail content areas do not paint background fills", async ({
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   const expectVisiblePanelsToBeTransparent = async ({
     bordered = true,
@@ -2941,7 +2943,7 @@ test("project without a checkout offers fetch feedback and cloning", async ({
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await expect(
     page.getByRole("button", { name: "Remote", exact: true }),
@@ -2971,7 +2973,7 @@ test("project without a checkout offers fetch feedback and cloning", async ({
   await cloneItem.click();
   await expect(page.getByText("Cloned repository.")).toBeVisible();
   const commands = await page.evaluate(
-    () => window.__BUZZ_E2E_COMMANDS__ ?? [],
+    () => window.__AMBUSH_E2E_COMMANDS__ ?? [],
   );
   expect(commands).toContain("clone_project_repository");
   const openFolder = page.getByRole("button", { name: "Open", exact: true });
@@ -2981,7 +2983,7 @@ test("project without a checkout offers fetch feedback and cloning", async ({
   );
   await openFolder.click();
   expect(
-    await page.evaluate(() => window.__BUZZ_E2E_COMMANDS__ ?? []),
+    await page.evaluate(() => window.__AMBUSH_E2E_COMMANDS__ ?? []),
   ).toContain("open_project_repository_folder");
   await expect(page.getByText("Couldn’t open repository folder")).toHaveCount(
     0,
@@ -2996,7 +2998,7 @@ test("project branches can be created from the selected remote branch", async ({
     projectHeadBranch: "master",
     relaySelf: TEST_IDENTITIES.bob.pubkey,
   });
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("button", { name: /main/ }).click();
   await page.getByTestId("project-create-branch").click();
@@ -3025,11 +3027,11 @@ test("project branches can be created from the selected remote branch", async ({
     page.getByRole("menuitemradio", { name: "feature/branch-management" }),
   ).toBeVisible();
   const commands = await page.evaluate(
-    () => window.__BUZZ_E2E_COMMANDS__ ?? [],
+    () => window.__AMBUSH_E2E_COMMANDS__ ?? [],
   );
   expect(commands).toContain("create_project_remote_branch");
 
-  await openBuzzProject(page);
+  await openAmbushProject(page);
   await page.getByRole("button", { name: /main/ }).click();
   await expect(
     page.getByRole("menuitemradio", { name: "feature/branch-management" }),
@@ -3041,7 +3043,7 @@ test("repository tags can be browsed as immutable remote snapshots", async ({
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   const repositoryPanel = page.getByTestId("project-repository-actions-panel");
   await repositoryPanel
@@ -3054,7 +3056,7 @@ test("repository tags can be browsed as immutable remote snapshots", async ({
   await expect(page.getByText("Cloned repository.")).toBeVisible();
   await expect(
     repositoryPanel.getByTestId("project-repository-local-path"),
-  ).toHaveText("…/buzz/REPOS/buzz");
+  ).toHaveText("…/ambush/REPOS/ambush");
   await expect(
     repositoryPanel.getByRole("button", { name: "Open", exact: true }),
   ).toHaveAttribute("title", "Open local repository folder");
@@ -3073,7 +3075,7 @@ test("repository tags can be browsed as immutable remote snapshots", async ({
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+        const call = [...(window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])]
           .reverse()
           .find((entry) => entry.command === "get_project_repo_snapshot");
         return (call?.payload as { targetRef?: string } | undefined)?.targetRef;
@@ -3094,7 +3096,7 @@ test("project branches can be deleted but the default branch cannot", async ({
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("button", { name: /main/ }).click();
   await expect(page.getByTestId("project-delete-branch")).toBeDisabled();
@@ -3116,7 +3118,7 @@ test("project branches can be deleted but the default branch cannot", async ({
   ).toBeVisible();
   await expect(page.getByRole("button", { name: /main/ })).toBeVisible();
   const commands = await page.evaluate(
-    () => window.__BUZZ_E2E_COMMANDS__ ?? [],
+    () => window.__AMBUSH_E2E_COMMANDS__ ?? [],
   );
   expect(commands).toContain("delete_project_remote_branch");
 });
@@ -3130,11 +3132,11 @@ test("external repositories stay on local source after a branch round trip", asy
     const localBranch =
       "wintermute/entity-link-recipient-cards-with-a-long-branch-name";
     window.sessionStorage.setItem(
-      "buzz-e2e-project-branches",
+      "ambush-e2e-project-branches",
       JSON.stringify({ "relay-tools": { [localBranch]: commit } }),
     );
-    window.__BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__ = {
-      local_path: "/tmp/buzz/REPOS/relay-tools",
+    window.__AMBUSH_E2E_PROJECT_REPO_SYNC_STATUS__ = {
+      local_path: "/tmp/ambush/REPOS/relay-tools",
       local_branch: localBranch,
       local_branches: ["main", localBranch],
       local_head: commit,
@@ -3152,8 +3154,8 @@ test("external repositories stay on local source after a branch round trip", asy
       can_pull: false,
       pull_block_reason: "Local branch is up to date.",
     };
-    window.__BUZZ_E2E_PROJECT_LOCAL_REPO_SNAPSHOT__ = {
-      path: "/tmp/buzz/REPOS/relay-tools",
+    window.__AMBUSH_E2E_PROJECT_LOCAL_REPO_SNAPSHOT__ = {
+      path: "/tmp/ambush/REPOS/relay-tools",
       snapshot: {
         latest_commit: null,
         commits: [],
@@ -3173,7 +3175,7 @@ test("external repositories stay on local source after a branch round trip", asy
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
+  await addProjectToSidebar(page, "ambush");
   await page.getByTestId("project-home-context-repo-relay-tools").click();
   await page.getByRole("button", { name: "github.com" }).click();
   await page.getByRole("menuitemradio", { name: /^Local/ }).click();
@@ -3253,8 +3255,8 @@ test("repository files beyond the eager preview limit load on demand", async ({
         latest_commit: null,
       },
     ];
-    window.__BUZZ_E2E_PROJECT_LOCAL_REPO_SNAPSHOT__ = {
-      path: "/tmp/buzz/REPOS/relay-tools",
+    window.__AMBUSH_E2E_PROJECT_LOCAL_REPO_SNAPSHOT__ = {
+      path: "/tmp/ambush/REPOS/relay-tools",
       snapshot: {
         latest_commit: null,
         commits: [],
@@ -3262,14 +3264,14 @@ test("repository files beyond the eager preview limit load on demand", async ({
         files: deferredFiles,
       },
     };
-    window.__BUZZ_E2E_PROJECT_REPO_FILE_CONTENTS__ = {
+    window.__AMBUSH_E2E_PROJECT_REPO_FILE_CONTENTS__ = {
       "README.md": "# Deferred README",
       "src/application.rs": "fn deferred() {}",
     };
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
+  await addProjectToSidebar(page, "ambush");
   await page.getByTestId("project-home-context-repo-relay-tools").click();
   await page.getByRole("button", { name: "github.com" }).click();
   await page.getByRole("menuitemradio", { name: /^Local/ }).click();
@@ -3286,7 +3288,7 @@ test("repository files beyond the eager preview limit load on demand", async ({
   ).toBeVisible();
 
   const commands = await page.evaluate(
-    () => window.__BUZZ_E2E_COMMANDS__ ?? [],
+    () => window.__AMBUSH_E2E_COMMANDS__ ?? [],
   );
   expect(commands).toContain("get_project_local_repo_file_content");
 });
@@ -3295,8 +3297,8 @@ test("pushed local branch can open a pull request", async ({ page }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
     const commit = "1234567890abcdef1234567890abcdef12345678";
-    window.__BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__ = {
-      local_path: "/tmp/buzz/REPOS/buzz",
+    window.__AMBUSH_E2E_PROJECT_REPO_SYNC_STATUS__ = {
+      local_path: "/tmp/ambush/REPOS/ambush",
       local_branch: "feature/projects-workflow",
       local_branches: ["feature/projects-workflow", "space"],
       local_head: commit,
@@ -3316,7 +3318,7 @@ test("pushed local branch can open a pull request", async ({ page }) => {
     };
   });
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("button", { name: /main/ }).click();
   await expect(
@@ -3331,7 +3333,7 @@ test("pushed local branch can open a pull request", async ({ page }) => {
     .getByRole("button", { name: "Create review" })
     .click();
   await expect(page.getByTestId("create-pull-request-repository")).toHaveValue(
-    /:buzz$/,
+    /:ambush$/,
   );
   await expect(page.getByTestId("create-pull-request-base-branch")).toHaveValue(
     "main",
@@ -3353,7 +3355,7 @@ test("pushed local branch can open a pull request", async ({ page }) => {
 
   const createdEvents = await page.evaluate(
     () =>
-      window.__BUZZ_E2E_SIGNED_EVENTS__?.filter(
+      window.__AMBUSH_E2E_SIGNED_EVENTS__?.filter(
         (event) => event.kind === 1618,
       ) ?? [],
   );
@@ -3375,7 +3377,7 @@ test("project task can be created with a category from the tasks header", async 
 }) => {
   await enableProjectsFeature(page);
   await installMockBridge(page);
-  await openBuzzProject(page);
+  await openAmbushProject(page);
 
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   await page
@@ -3395,7 +3397,7 @@ test("project task can be created with a category from the tasks header", async 
   await expect(page.getByText("Task created.")).toBeVisible();
 
   const createdEvent = await page.evaluate(() =>
-    window.__BUZZ_E2E_SIGNED_EVENTS__?.find((event) => event.kind === 1621),
+    window.__AMBUSH_E2E_SIGNED_EVENTS__?.find((event) => event.kind === 1621),
   );
   expect(createdEvent?.tags).toContainEqual([
     "subject",

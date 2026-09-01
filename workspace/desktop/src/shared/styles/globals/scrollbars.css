@@ -1,53 +1,53 @@
-.buzz-sidebar-scrollbar {
+.ambush-sidebar-scrollbar {
   scrollbar-color: transparent transparent;
 }
 
-.buzz-sidebar-scrollbar:hover {
+.ambush-sidebar-scrollbar:hover {
   scrollbar-color: var(
-      --buzz-sidebar-scrollbar-thumb,
+      --ambush-sidebar-scrollbar-thumb,
       hsl(var(--sidebar-border) / 0.8)
     )
     transparent;
 }
 
-.buzz-sidebar-scrollbar::-webkit-scrollbar {
+.ambush-sidebar-scrollbar::-webkit-scrollbar {
   height: 10px;
   width: 10px;
 }
 
-.buzz-sidebar-scrollbar::-webkit-scrollbar-track {
+.ambush-sidebar-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.buzz-sidebar-scrollbar::-webkit-scrollbar-thumb {
+.ambush-sidebar-scrollbar::-webkit-scrollbar-thumb {
   background-clip: content-box;
   background-color: transparent;
   border: 3px solid transparent;
   border-radius: 999px;
 }
 
-.buzz-sidebar-scrollbar:hover::-webkit-scrollbar-thumb {
+.ambush-sidebar-scrollbar:hover::-webkit-scrollbar-thumb {
   background-color: var(
-    --buzz-sidebar-scrollbar-thumb,
+    --ambush-sidebar-scrollbar-thumb,
     hsl(var(--sidebar-border) / 0.8)
   );
 }
 
 /* Channel activity keeps its chrome outside the scrolling surface. The slim,
  * low-contrast thumb belongs only to the activity list beneath the header. */
-.buzz-channel-activity-scrollbar {
+.ambush-channel-activity-scrollbar {
   scrollbar-gutter: stable;
 }
 
-.buzz-channel-activity-scrollbar::-webkit-scrollbar {
+.ambush-channel-activity-scrollbar::-webkit-scrollbar {
   width: 8px;
 }
 
-.buzz-channel-activity-scrollbar::-webkit-scrollbar-track {
+.ambush-channel-activity-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.buzz-channel-activity-scrollbar::-webkit-scrollbar-thumb {
+.ambush-channel-activity-scrollbar::-webkit-scrollbar-thumb {
   background-clip: content-box;
   background-color: hsl(var(--foreground) / 0.15);
   border: 2px solid transparent;
@@ -66,16 +66,16 @@
  * set, engines ignore the `::-webkit-scrollbar` pseudo styles and fall back
  * to overlay scrollbars, which reintroduces the bug.
  */
-.buzz-content-scrollbar {
+.ambush-content-scrollbar {
   scrollbar-gutter: stable;
 }
 
-.buzz-content-scrollbar::-webkit-scrollbar {
+.ambush-content-scrollbar::-webkit-scrollbar {
   height: 10px;
   width: 10px;
 }
 
-.buzz-content-scrollbar::-webkit-scrollbar-track {
+.ambush-content-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -84,7 +84,7 @@
  * indicator element positioned over the gutter, because WebKit does not
  * re-resolve `::-webkit-scrollbar` styles when classes/attributes on the
  * scroller change dynamically. */
-.buzz-content-scrollbar::-webkit-scrollbar-thumb {
+.ambush-content-scrollbar::-webkit-scrollbar-thumb {
   background-clip: content-box;
   background-color: transparent;
   border: 3px solid transparent;
@@ -93,7 +93,7 @@
 
 /* Scrollbar-part pseudo-classes are resolved by the scrollbar itself, so
  * these DO update dynamically — keep the thumb visible under the pointer. */
-.buzz-content-scrollbar::-webkit-scrollbar-thumb:hover,
-.buzz-content-scrollbar::-webkit-scrollbar-thumb:active {
+.ambush-content-scrollbar::-webkit-scrollbar-thumb:hover,
+.ambush-content-scrollbar::-webkit-scrollbar-thumb:active {
   background-color: hsl(var(--border) / 0.9);
 }

@@ -5,7 +5,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_sheet_header.dart';
+import '../../shared/widgets/ambush_sheet_header.dart';
 import '../../shared/widgets/ios_glass_navigation_button.dart';
 import 'profile_provider.dart';
 
@@ -105,7 +105,7 @@ class ProfileTextEditSheet extends HookWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          BuzzSheetHeader(title: title, trailing: closeButton),
+          AmbushSheetHeader(title: title, trailing: closeButton),
           Flexible(
             child: SafeArea(
               top: false,

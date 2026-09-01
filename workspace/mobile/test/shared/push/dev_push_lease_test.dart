@@ -1,14 +1,14 @@
 import 'dart:convert';
 
-import 'package:buzz/shared/auth/auth_provider.dart';
-import 'package:buzz/shared/crypto/nip44.dart';
-import 'package:buzz/shared/push/dev_push_lease.dart';
-import 'package:buzz/shared/push/push_bridge.dart';
-import 'package:buzz/shared/push/push_subscription.dart';
-import 'package:buzz/shared/relay/nostr_models.dart';
-import 'package:buzz/shared/relay/relay_session.dart';
-import 'package:buzz/shared/relay/relay_socket.dart';
-import 'package:buzz/shared/relay/signed_event_relay.dart';
+import 'package:ambush/shared/auth/auth_provider.dart';
+import 'package:ambush/shared/crypto/nip44.dart';
+import 'package:ambush/shared/push/dev_push_lease.dart';
+import 'package:ambush/shared/push/push_bridge.dart';
+import 'package:ambush/shared/push/push_subscription.dart';
+import 'package:ambush/shared/relay/nostr_models.dart';
+import 'package:ambush/shared/relay/relay_session.dart';
+import 'package:ambush/shared/relay/relay_socket.dart';
+import 'package:ambush/shared/relay/signed_event_relay.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:nostr/nostr.dart' as nostr;
@@ -22,15 +22,15 @@ void main() {
 
   test('publishes strict kind-30350 lease and waits for accepted OK', () async {
     Map<String, dynamic>? submitted;
-    final publication = await publishBuzzDevPushLease(
+    final publication = await publishAmbushDevPushLease(
       grant: grant,
       leaseGeneration: 7,
       descriptor: descriptor,
       nsec: signer.nsec,
       memberPubkey: signer.public,
       subscriptions: [
-        BuzzPushSubscription(
-          filter: BuzzPushFilter(kinds: const [9], pTags: [signer.public]),
+        AmbushPushSubscription(
+          filter: AmbushPushFilter(kinds: const [9], pTags: [signer.public]),
           notificationClass: 'default',
         ),
       ],
@@ -58,7 +58,7 @@ void main() {
     expect(publication.eventId, 'accepted-id');
     expect(grant.relayOrigin, descriptor.origin);
     expect(jsonDecode(publication.plaintext)['origin'], descriptor.origin);
-    expect(submitted!['kind'], buzzPushLeaseKind);
+    expect(submitted!['kind'], ambushPushLeaseKind);
     expect(submitted!['createdAt'], 1752620000);
     expect(submitted!['tags'], [
       ['d', 'c' * 32],
@@ -72,7 +72,7 @@ void main() {
     expect(jsonDecode(plaintext), {
       'v': 1,
       'origin': 'wss://tenant.example:8443',
-      'app_profile': 'buzz-ios-dogfood',
+      'app_profile': 'ambush-ios-dogfood',
       'transport': 'apns',
       'endpoint': 'opaque-grant',
       'generation': 7,
@@ -92,7 +92,7 @@ void main() {
   test('uses the community lease address instead of the endpoint id', () async {
     List<List<String>>? submittedTags;
 
-    await publishBuzzDevPushLease(
+    await publishAmbushDevPushLease(
       grant: grant,
       leaseInstallationId: 'e' * 32,
       descriptor: descriptor,
@@ -120,7 +120,7 @@ void main() {
 
   test('rejects a malformed community lease address', () async {
     await expectLater(
-      publishBuzzDevPushLease(
+      publishAmbushDevPushLease(
         grant: grant,
         leaseInstallationId: 'malformed',
         descriptor: descriptor,
@@ -185,7 +185,7 @@ void main() {
       await _deliverAcknowledgement(acknowledgements, session);
       await rejection;
       final acceptedFuture = relayClient.submit(
-        kind: buzzPushLeaseKind,
+        kind: ambushPushLeaseKind,
         content: 'restored',
         tags: [
           ['d', 'c' * 32],
@@ -198,7 +198,7 @@ void main() {
       final accepted = await acceptedFuture;
 
       expect(accepted.content, 'saved');
-      expect(events.map((event) => event.kind), [40002, buzzPushLeaseKind]);
+      expect(events.map((event) => event.kind), [40002, ambushPushLeaseKind]);
       expect(events.every((event) => event.pubkey == signer.public), isTrue);
       for (final event in events) {
         expect(
@@ -219,14 +219,14 @@ void main() {
 
   test('propagates relay rejection instead of accepting locally', () async {
     await expectLater(
-      publishBuzzDevPushLease(
+      publishAmbushDevPushLease(
         grant: grant,
         descriptor: descriptor,
         nsec: signer.nsec,
         memberPubkey: signer.public,
         subscriptions: [
-          BuzzPushSubscription(
-            filter: BuzzPushFilter(kinds: const [9], pTags: [signer.public]),
+          AmbushPushSubscription(
+            filter: AmbushPushFilter(kinds: const [9], pTags: [signer.public]),
             notificationClass: 'default',
           ),
         ],
@@ -251,7 +251,7 @@ void main() {
 
   test('publishes a minimal higher-generation inactive tombstone', () async {
     Map<String, dynamic>? submitted;
-    final publication = await publishBuzzPushLeaseTombstone(
+    final publication = await publishAmbushPushLeaseTombstone(
       descriptor: descriptor,
       installationId: grant.installationId,
       generation: 3,
@@ -285,7 +285,7 @@ void main() {
       'generation': 3,
       'active': false,
     });
-    expect(submitted!['kind'], buzzPushLeaseKind);
+    expect(submitted!['kind'], ambushPushLeaseKind);
     expect(submitted!['tags'], [
       ['d', grant.installationId],
       ['expiration', '1755212000'],
@@ -304,7 +304,7 @@ void main() {
         'wss://tenant.example:8443/';
 
     expect(
-      () => BuzzPushLeaseDescriptor.fromRelayInformation(information),
+      () => AmbushPushLeaseDescriptor.fromRelayInformation(information),
       throwsA(isA<FormatException>()),
     );
   });
@@ -314,7 +314,7 @@ void main() {
     (information['push'] as Map<String, dynamic>)['h_grammar'] = 'opaque';
 
     expect(
-      () => BuzzPushLeaseDescriptor.fromRelayInformation(information),
+      () => AmbushPushLeaseDescriptor.fromRelayInformation(information),
       throwsA(isA<FormatException>()),
     );
   });
@@ -324,7 +324,7 @@ void main() {
     (information['push'] as Map<String, dynamic>)['future'] = true;
 
     expect(
-      () => BuzzPushLeaseDescriptor.fromRelayInformation(information),
+      () => AmbushPushLeaseDescriptor.fromRelayInformation(information),
       throwsA(isA<FormatException>()),
     );
   });
@@ -388,8 +388,10 @@ Future<void> _deliverAcknowledgement(
   session.debugHandleMessage(acknowledgements.removeAt(0));
 }
 
-BuzzPushLeaseDescriptor _descriptor(String relayPubkey) =>
-    BuzzPushLeaseDescriptor.fromRelayInformation(_descriptorJson(relayPubkey));
+AmbushPushLeaseDescriptor _descriptor(String relayPubkey) =>
+    AmbushPushLeaseDescriptor.fromRelayInformation(
+      _descriptorJson(relayPubkey),
+    );
 
 Map<String, dynamic> _descriptorJson(String relayPubkey) => {
   'supported_extensions': ['nip-er', 'nip-pl'],
@@ -399,7 +401,7 @@ Map<String, dynamic> _descriptorJson(String relayPubkey) => {
       {'id': 'relay-v1', 'pubkey': relayPubkey, 'current': true},
     ],
     'app_profiles': [
-      {'id': 'buzz-ios-dogfood', 'transport': 'apns'},
+      {'id': 'ambush-ios-dogfood', 'transport': 'apns'},
     ],
     'push_kinds': [9, 40002, 45001, 45003],
     'h_grammar': 'uuid-v4-lowercase',
@@ -423,13 +425,13 @@ Map<String, dynamic> _descriptorJson(String relayPubkey) => {
   },
 };
 
-BuzzPushEndpointGrant _grant(String relayPubkey) => BuzzPushEndpointGrant(
+AmbushPushEndpointGrant _grant(String relayPubkey) => AmbushPushEndpointGrant(
   relayOrigin: 'wss://tenant.example:8443',
   relayPubkey: relayPubkey,
   installationId: 'c' * 32,
   endpointGrant: 'opaque-grant',
   endpointHash: 'd' * 64,
-  appProfile: 'buzz-ios-dogfood',
+  appProfile: 'ambush-ios-dogfood',
   endpointEpoch: 1,
   generation: 1,
   expiresAt: 1756212000,

@@ -81,12 +81,12 @@ test("edit-provider-only: chosen provider persists, runtime omitted on auto-seed
 test("explicit-runtime-chosen: runtime and model both persisted when user explicitly selects runtime", () => {
   const result = buildRuntimeModelProviderPayload({
     ...BUILTIN_EDIT_BASE,
-    runtime: "buzz-agent",
+    runtime: "ambush-agent",
     model: "claude-opus-4-8",
     provider: "",
     isAutoSeeded: false, // user made an explicit choice
   });
-  assert.equal(result.runtime, "buzz-agent", "runtime must be persisted");
+  assert.equal(result.runtime, "ambush-agent", "runtime must be persisted");
   assert.equal(result.model, "claude-opus-4-8", "model must be persisted");
   assert.equal(result.provider, undefined, "empty provider must be omitted");
 });

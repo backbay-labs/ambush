@@ -12,15 +12,15 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: "Branch, tag, refs/heads/*, or refs/tags/* in block/buzz to publish for bb-block staging"
+        description: "Branch, tag, refs/heads/*, or refs/tags/* in backbay-labs/ambush to publish for bb-block staging"
         required: true
         type: string
 
 permissions: {}
 
 env:
-  IMAGE_NAME: ghcr.io/block/buzz-staging-dev
-  ECR_REPOSITORY: 929862310821.dkr.ecr.us-west-2.amazonaws.com/ghcr.io/block/buzz-staging-dev
+  IMAGE_NAME: ghcr.io/backbay-labs/ambush-staging-dev
+  ECR_REPOSITORY: 929862310821.dkr.ecr.us-west-2.amazonaws.com/ghcr.io/backbay-labs/ambush-staging-dev
 
 jobs:
   resolve:
@@ -39,8 +39,8 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "$REPOSITORY" != "block/buzz" ]; then
-            echo "::error::Staging dev relay image publication is restricted to block/buzz"
+          if [ "$REPOSITORY" != "backbay-labs/ambush" ]; then
+            echo "::error::Staging dev relay image publication is restricted to backbay-labs/ambush"
             exit 1
           fi
 
@@ -169,8 +169,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           labels: |
-            org.opencontainers.image.title=Buzz staging dev relay
-            org.opencontainers.image.description=Pre-merge Buzz relay runtime image for bb-block staging only
+            org.opencontainers.image.title=Ambush staging dev relay
+            org.opencontainers.image.description=Pre-merge Ambush relay runtime image for bb-block staging only
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.revision=${{ needs.resolve.outputs.target_sha }}
 
@@ -268,7 +268,7 @@ jobs:
             echo
             echo "Set bb-block staging BPCI values to:"
             echo '```yaml'
-            echo "buzz:"
+            echo "ambush:"
             echo "  image:"
             echo "    repository: ${ECR_REPOSITORY}"
             echo "    tag: ${IMAGE_TAG}"

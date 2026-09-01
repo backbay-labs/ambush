@@ -1,6 +1,6 @@
-import 'package:buzz/features/channels/message_action_backdrop_state.dart';
-import 'package:buzz/features/channels/sticky_date_header.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/features/channels/message_action_backdrop_state.dart';
+import 'package:ambush/features/channels/sticky_date_header.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,7 +14,7 @@ void main() {
       final state = ValueNotifier(
         const StickyDateHeaderState(label: 'Yesterday'),
       );
-      const channel = MethodChannel('buzz/sticky_date_glass/42');
+      const channel = MethodChannel('ambush/sticky_date_glass/42');
       final methodCalls = <MethodCall>[];
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
         call,
@@ -31,7 +31,7 @@ void main() {
         );
 
         var nativeView = tester.widget<UiKitView>(find.byType(UiKitView));
-        expect(nativeView.viewType, 'buzz/sticky_date_glass');
+        expect(nativeView.viewType, 'ambush/sticky_date_glass');
         expect(nativeView.creationParams, <String, Object>{
           'label': 'Yesterday',
           'brightness': 'light',

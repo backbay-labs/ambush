@@ -5,7 +5,7 @@ use crate::managed_agents::retention::{
     scoped_retention_db_path, tombstone_retention_d_tag, RetainedEvent,
 };
 use crate::managed_agents::team_events::build_team_event;
-use buzz_core_pkg::kind::KIND_TEAM;
+use ambush_core_pkg::kind::KIND_TEAM;
 use nostr::JsonUtil;
 use std::path::{Path, PathBuf};
 
@@ -177,7 +177,7 @@ mod membership_wiring {
             "name": persona_id,
             "persona_id": persona_id,
             "relay_url": "ws://localhost:3000",
-            "acp_command": "buzz-acp",
+            "acp_command": "ambush-acp",
             "agent_command": "goose",
             "agent_args": [],
             "mcp_command": "",

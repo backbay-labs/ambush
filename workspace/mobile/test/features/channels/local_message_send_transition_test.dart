@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:buzz/features/channels/local_message_send_animation_provider.dart';
-import 'package:buzz/features/channels/local_message_send_transition.dart';
+import 'package:ambush/features/channels/local_message_send_animation_provider.dart';
+import 'package:ambush/features/channels/local_message_send_transition.dart';
 
 Widget _testable({
   bool animate = true,

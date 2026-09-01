@@ -20,16 +20,16 @@ enum DeepLinkCommunityPreparation { ready, switched, unavailable, failed }
 ///
 /// Listens to [AppLinks.uriLinkStream], which delivers both the cold-start link
 /// (the URL that launched the app) and links received while running.
-class PendingDeepLinkNotifier extends Notifier<BuzzDeepLink?> {
+class PendingDeepLinkNotifier extends Notifier<AmbushDeepLink?> {
   @visibleForTesting
   static Stream<Uri>? debugUriStreamOverride;
 
   StreamSubscription<Uri>? _subscription;
-  final Queue<BuzzDeepLink> _waiting = Queue<BuzzDeepLink>();
+  final Queue<AmbushDeepLink> _waiting = Queue<AmbushDeepLink>();
   VoidCallback? _pushNotificationListener;
 
   @override
-  BuzzDeepLink? build() {
+  AmbushDeepLink? build() {
     _waiting.clear();
     final stream = debugUriStreamOverride ?? AppLinks().uriLinkStream;
     _subscription = stream.listen(open);
@@ -51,7 +51,7 @@ class PendingDeepLinkNotifier extends Notifier<BuzzDeepLink?> {
 
   /// Parse and park an incoming URI. Unsupported links are ignored loudly.
   void open(Uri uri) {
-    final link = parseBuzzDeepLink(uri);
+    final link = parseAmbushDeepLink(uri);
     if (link == null) {
       debugPrint('deep-link: ignoring unsupported link: $uri');
       return;
@@ -70,7 +70,7 @@ class PendingDeepLinkNotifier extends Notifier<BuzzDeepLink?> {
   /// Selects the device-local community carried by a structured push target.
   /// Ordinary shared deep links have no community ID and remain unchanged.
   Future<DeepLinkCommunityPreparation> prepareCommunity(
-    BuzzDeepLink link,
+    AmbushDeepLink link,
   ) async {
     if (link is! MessageDeepLink || link.communityId == null) {
       return DeepLinkCommunityPreparation.ready;
@@ -96,7 +96,7 @@ class PendingDeepLinkNotifier extends Notifier<BuzzDeepLink?> {
     }
   }
 
-  void _enqueue(BuzzDeepLink link) {
+  void _enqueue(AmbushDeepLink link) {
     if (state == null) {
       state = link;
     } else {
@@ -106,6 +106,6 @@ class PendingDeepLinkNotifier extends Notifier<BuzzDeepLink?> {
 }
 
 final pendingDeepLinkProvider =
-    NotifierProvider<PendingDeepLinkNotifier, BuzzDeepLink?>(
+    NotifierProvider<PendingDeepLinkNotifier, AmbushDeepLink?>(
       PendingDeepLinkNotifier.new,
     );

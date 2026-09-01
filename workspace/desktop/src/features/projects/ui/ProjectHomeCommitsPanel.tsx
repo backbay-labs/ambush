@@ -8,7 +8,7 @@ import type { ViewerGitIdentity } from "@/features/projects/lib/projectContribut
 import type { ProjectRepositorySnapshotResult } from "@/features/projects/useProjectRepositorySnapshots";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ProjectRepoCommit } from "@/shared/api/types";
-import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
+import { AmbushLoadingState } from "@/shared/ui/AmbushLoadingState";
 import { ProjectPanelState } from "./ProjectPanelState";
 import { ActivityPanel } from "./ProjectDetailFeedPanels";
 
@@ -50,7 +50,7 @@ export function ProjectHomeCommitsPanel({
       )
     : null;
   if (results.some((result) => result.isLoading) && loaded.length === 0) {
-    return <BuzzLoadingState label="Loading commits" />;
+    return <AmbushLoadingState label="Loading commits" />;
   }
   if (loaded.length === 0) {
     return (

@@ -21,7 +21,7 @@ export const PANEL_BASE_CLASS =
 export const PANEL_OVERLAY_CLASS =
   "fixed bottom-0 right-0 top-11 z-40 h-auto shadow-xl max-w-[calc(100vw-2rem)]";
 
-export const PANEL_ENTER_MOTION_CLASS = "buzz-side-panel-enter";
+export const PANEL_ENTER_MOTION_CLASS = "ambush-side-panel-enter";
 
 export const PANEL_ENTER_BASE_CLASS = `${PANEL_BASE_CLASS} ${PANEL_ENTER_MOTION_CLASS}`;
 

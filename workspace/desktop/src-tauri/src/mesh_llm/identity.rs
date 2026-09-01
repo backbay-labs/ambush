@@ -1,11 +1,11 @@
 //! Mesh owner identity for admission.
 //!
 //! Each machine gets a mesh-llm owner keypair (ed25519, distinct from the
-//! Buzz/Nostr identity). The node presents a signed ownership attestation
+//! Ambush/Nostr identity). The node presents a signed ownership attestation
 //! binding `owner_id -> endpoint_id`, and serve nodes enforce an allowlist of
 //! member owner ids (see `DesktopMeshRuntime::start`). The keystore lives at
 //! mesh-llm's default path (`~/.mesh-llm/owner-keystore.json`) so a machine
-//! has one owner identity whether mesh runs embedded in Buzz or standalone.
+//! has one owner identity whether mesh runs embedded in Ambush or standalone.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -23,7 +23,7 @@ pub struct OwnerIdentity {
 }
 
 impl OwnerIdentity {
-    /// Sign a Buzz-to-MeshLLM ownership binding. The member's Nostr signature
+    /// Sign an Ambush-to-MeshLLM ownership binding. The member's Nostr signature
     /// authenticates the discovery event; this Ed25519 signature proves the
     /// advertised owner id is backed by the MeshLLM owner key itself.
     pub fn sign_member_binding(&self, member_pubkey: &str) -> anyhow::Result<String> {
@@ -54,7 +54,7 @@ impl OwnerIdentity {
 
 pub fn member_binding_bytes(member_pubkey: &str) -> Vec<u8> {
     format!(
-        "buzz-mesh-owner-binding-v1:{}",
+        "ambush-mesh-owner-binding-v1:{}",
         member_pubkey.trim().to_ascii_lowercase()
     )
     .into_bytes()
@@ -77,7 +77,7 @@ pub fn member_endpoint_binding_bytes(member_pubkey: &str, endpoint_tokens: &[Str
         digest.update(endpoint.as_bytes());
     }
     format!(
-        "buzz-mesh-owner-endpoint-binding-v1:{}:{}",
+        "ambush-mesh-owner-endpoint-binding-v1:{}:{}",
         member_pubkey.trim().to_ascii_lowercase(),
         hex::encode(digest.finalize())
     )

@@ -7,7 +7,7 @@ const SHOTS = "test-results/drafts";
 
 // Mock bridge default pubkey — must match DEFAULT_MOCK_PUBKEY in bridge.ts
 const MOCK_PUBKEY = "deadbeef".repeat(8);
-const DRAFT_STORE_KEY = `buzz-drafts.v1:${MOCK_PUBKEY}`;
+const DRAFT_STORE_KEY = `ambush-drafts.v1:${MOCK_PUBKEY}`;
 
 // Channel IDs from the mock bridge seed data
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
@@ -76,14 +76,14 @@ const ACTIVE_DRAFTS: StoredDrafts = {
 async function patchCommunityPubkey(page: import("@playwright/test").Page) {
   await page.addInitScript(
     ({ pubkey }) => {
-      const raw = window.localStorage.getItem("buzz-communities");
+      const raw = window.localStorage.getItem("ambush-communities");
       const communities = raw
         ? (JSON.parse(raw) as Array<Record<string, unknown>>)
         : [];
       if (communities[0]) {
         communities[0].pubkey = pubkey;
         window.localStorage.setItem(
-          "buzz-communities",
+          "ambush-communities",
           JSON.stringify(communities),
         );
       }

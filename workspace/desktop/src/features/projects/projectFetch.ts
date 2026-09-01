@@ -9,7 +9,7 @@ import {
 import type { Project } from "./projectModels";
 import { markProjectDataAuthoritative } from "./projectSnapshot";
 
-const HIDDEN_PROJECT_CARDS_KEY = "buzz.projects.hidden-cards.v1";
+const HIDDEN_PROJECT_CARDS_KEY = "ambush.projects.hidden-cards.v1";
 
 function readHiddenProjectCards(): string[] {
   if (typeof window === "undefined") {

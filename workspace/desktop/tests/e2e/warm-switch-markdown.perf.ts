@@ -50,7 +50,7 @@ const THROTTLE_RATE = 4;
 const MARKDOWN_MESSAGE_COUNT = 60;
 
 /** One representative agent-style message: fence, table, list, mention,
- * emphasis, inline code, and a link — the mix real Buzz channels carry. */
+ * emphasis, inline code, and a link — the mix real Ambush channels carry. */
 function markdownBody(index: number): string {
   return [
     `**Update ${index}** from the build agent — _step ${index} of ${MARKDOWN_MESSAGE_COUNT}_ :tada:`,
@@ -98,7 +98,7 @@ async function waitForMockLiveSubscription(
     .poll(() =>
       page.evaluate(
         (ch) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: ch,
           }) ?? false,
         channelName,
@@ -213,7 +213,7 @@ test("MEASURE: warm channel-switch cost (plain 300-row + markdown-heavy)", async
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
 
   // Arm the longtask observer; addInitScript applies on next navigation.
@@ -229,7 +229,7 @@ test("MEASURE: warm channel-switch cost (plain 300-row + markdown-heavy)", async
   await page.reload();
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
       Array.isArray(
         (window as unknown as { __LONGTASKS__?: number[] }).__LONGTASKS__,
       ),
@@ -245,7 +245,7 @@ test("MEASURE: warm channel-switch cost (plain 300-row + markdown-heavy)", async
     ({ count, bodies }) => {
       const base = Math.floor(Date.now() / 1000) - count - 10;
       for (let index = 0; index < count; index += 1) {
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "random",
           content: bodies[index],
           createdAt: base + index,

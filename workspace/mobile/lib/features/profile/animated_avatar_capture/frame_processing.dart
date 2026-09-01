@@ -5,7 +5,7 @@ part of '../animated_avatar_capture.dart';
 Future<Directory> createAnimatedAvatarFrameDirectory({
   Directory? parent,
 }) async => (parent ?? await getTemporaryDirectory()).createTemp(
-  'buzz-avatar-capture-',
+  'ambush-avatar-capture-',
 );
 
 Future<List<Uint8List>> _removeBackgrounds(List<Uint8List> frames) async {

@@ -75,7 +75,7 @@ test("reaction popover resolves a reactor with no authored message in the window
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await page.waitForFunction(
     () =>
-      window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+      window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
         channelName: "general",
         kind: 7,
       }) === true,
@@ -83,7 +83,7 @@ test("reaction popover resolves a reactor with no authored message in the window
 
   await page.evaluate(
     ({ pubkey, targetId, avatarUrl }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: ":react:",
         extraTags: [
@@ -123,7 +123,7 @@ test("maximum-length reaction name wraps inside a fixed-width popover", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await page.waitForFunction(
     () =>
-      window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+      window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
         channelName: "general",
         kind: 7,
       }) === true,
@@ -132,7 +132,7 @@ test("maximum-length reaction name wraps inside a fixed-width popover", async ({
   const reaction = `:${MAX_REACTION_NAME}:`;
   await page.evaluate(
     ({ content, targetId, avatarUrl }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content,
         extraTags: [

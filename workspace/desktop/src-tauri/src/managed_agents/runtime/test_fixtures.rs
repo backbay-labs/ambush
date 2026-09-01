@@ -1,6 +1,6 @@
 use crate::managed_agents::types::{ManagedAgentRecord, RespondTo};
 
-pub(super) const EXPECTED_ACCESS_ENV: &str = "BUZZ_TEST_EXPECTED_AGENT_ACCESS_OWNER_ONLY";
+pub(super) const EXPECTED_ACCESS_ENV: &str = "AMBUSH_TEST_EXPECTED_AGENT_ACCESS_OWNER_ONLY";
 
 pub(super) fn expected_owner_only() -> bool {
     match std::env::var(EXPECTED_ACCESS_ENV) {
@@ -43,7 +43,7 @@ pub(super) fn fixture(
         auth_tag,
         relay_url: "ws://localhost:3000".into(),
         avatar_url: None,
-        acp_command: "buzz-acp".into(),
+        acp_command: "ambush-acp".into(),
         agent_command: "goose".into(),
         agent_command_override: None,
         agent_args: vec![],

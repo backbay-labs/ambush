@@ -269,7 +269,7 @@ export async function ensureChannelAgentPresetInChannel(
 
   const created = await createManagedAgent({
     name: expectedName,
-    acpCommand: "buzz-acp",
+    acpCommand: "ambush-acp",
     agentCommand: input.runtime.command,
     // Do NOT seed agentArgs from runtime.defaultArgs (see instanceInputForDefinition.ts
     // for the rationale — empty args let spawn resolve definition args live).
@@ -370,7 +370,7 @@ export async function provisionChannelManagedAgent(
 
   const created = await createManagedAgent({
     name: trimmedName,
-    acpCommand: "buzz-acp",
+    acpCommand: "ambush-acp",
     agentCommand: input.runtime.command,
     harnessOverride: input.harnessOverride ?? false,
     // Do NOT seed agentArgs from runtime.defaultArgs (see instanceInputForDefinition.ts

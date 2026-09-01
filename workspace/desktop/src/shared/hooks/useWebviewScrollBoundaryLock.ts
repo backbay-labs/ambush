@@ -1,7 +1,7 @@
 import * as React from "react";
 
 const BOUNDARY_EPSILON_PX = 1;
-const CONVERSATION_SCROLL_SELECTOR = "[data-buzz-conversation-scroll]";
+const CONVERSATION_SCROLL_SELECTOR = "[data-ambush-conversation-scroll]";
 const TERMINAL_SUBSTRATE_SELECTOR = '[data-terminal-owner="terminal"]';
 const SCROLLABLE_OVERFLOW_VALUES = new Set(["auto", "scroll", "overlay"]);
 
@@ -64,7 +64,7 @@ function isConversationScroller(element: HTMLElement) {
 /**
  * Stops macOS/WKWebView rubber-band gestures from escaping into the viewport.
  *
- * Buzz is laid out as fixed-height nested panes. On macOS, a wheel/trackpad
+ * Ambush is laid out as fixed-height nested panes. On macOS, a wheel/trackpad
  * gesture that starts over a non-scrollable pane (or over a scrollable pane at
  * its boundary) can still be handed to the WKWebView viewport, which rubber-
  * bands the entire app and reveals a blank strip beside the UI. CSS
@@ -76,7 +76,7 @@ function isConversationScroller(element: HTMLElement) {
  *
  * Real scrolling is left alone: if any scroll container under the pointer can
  * move in the wheel direction, the browser handles it normally. At vertical
- * boundaries, only containers marked with `data-buzz-conversation-scroll` are
+ * boundaries, only containers marked with `data-ambush-conversation-scroll` are
  * allowed to receive the gesture so their own local elastic affordance can
  * remain; every other boundary — including all horizontal ones — is locked and
  * cannot chain to the viewport.

@@ -17,7 +17,7 @@ pub async fn discover_backend_providers() -> Result<Vec<BackendProviderInfo>, St
 
 #[tauri::command]
 pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::Value, String> {
-    // Validate that the requested path is actually a discovered buzz-backend-* binary.
+    // Validate that the requested path is actually a discovered ambush-backend-* binary.
     // This prevents arbitrary binary execution via a compromised frontend or IPC.
     let candidates = discover_provider_candidates();
     let path = std::path::PathBuf::from(&binary_path);
@@ -29,7 +29,7 @@ pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::V
         .any(|(_, p)| p.canonicalize().ok().as_ref() == Some(&canonical));
     if !is_known {
         return Err(format!(
-            "binary '{binary_path}' is not a discovered buzz-backend-* provider"
+            "binary '{binary_path}' is not a discovered ambush-backend-* provider"
         ));
     }
     // request_id is for provider-side logging — not validated in the response

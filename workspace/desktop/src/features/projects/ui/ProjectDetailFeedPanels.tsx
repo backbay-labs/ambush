@@ -17,7 +17,7 @@ import { commitShareLink } from "@/features/projects/lib/projectShareLinks";
 import { relativeTime } from "@/features/projects/lib/projectsViewHelpers";
 import type { ProjectRepoCommit } from "@/shared/api/types";
 import { truncatePubkey } from "@/shared/lib/pubkey";
-import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
+import { AmbushLoadingState } from "@/shared/ui/AmbushLoadingState";
 import {
   resolveUserLabel,
   type UserProfileLookup,
@@ -96,7 +96,9 @@ export function ContributorsPanel({
       profileLinked: matchedPubkey !== null,
       reviewCount: signedCounts?.reviews ?? null,
       role: signedPubkey
-        ? matchedProfile?.nip05Handle || contributor.email || "Buzz contributor"
+        ? matchedProfile?.nip05Handle ||
+          contributor.email ||
+          "Ambush contributor"
         : heuristicProfile
           ? `${
               heuristicProfile.profile.nip05Handle ||
@@ -125,7 +127,7 @@ export function ContributorsPanel({
       return {
         avatarUrl: profile?.avatarUrl ?? null,
         commitCount: signedCounts.commits,
-        id: `buzz:${pubkey}`,
+        id: `ambush:${pubkey}`,
         isAgent,
         label: profile
           ? resolveUserLabel({ profiles, pubkey })
@@ -135,7 +137,7 @@ export function ContributorsPanel({
         reviewCount: signedCounts.reviews,
         role:
           profile?.nip05Handle ||
-          (isAgent ? "Agent contributor" : "Buzz contributor"),
+          (isAgent ? "Agent contributor" : "Ambush contributor"),
         taskCount: signedCounts.tasks,
       };
     });
@@ -301,7 +303,7 @@ export function ActivityPanel({
   });
 
   if (isLoading) {
-    return <BuzzLoadingState label="Loading activity" />;
+    return <AmbushLoadingState label="Loading activity" />;
   }
 
   if (items.length === 0) {

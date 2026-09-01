@@ -6,7 +6,7 @@ const FORCE_FRESH_VALUE = "true";
  */
 export const forceFreshOnboarding =
   import.meta.env?.DEV === true &&
-  import.meta.env.VITE_BUZZ_FORCE_FRESH_ONBOARDING === FORCE_FRESH_VALUE;
+  import.meta.env.VITE_AMBUSH_FORCE_FRESH_ONBOARDING === FORCE_FRESH_VALUE;
 
 const devBootId = forceFreshOnboarding ? crypto.randomUUID() : null;
 

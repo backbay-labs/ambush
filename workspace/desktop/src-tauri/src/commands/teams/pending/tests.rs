@@ -3,7 +3,7 @@ use crate::managed_agents::retention::{
     get_pending_sync, get_retained_event, open_retention_db, retain_event,
     scoped_retention_db_path, tombstone_retention_d_tag,
 };
-use buzz_core_pkg::kind::{event_is_shared, KIND_TEAM};
+use ambush_core_pkg::kind::{event_is_shared, KIND_TEAM};
 use nostr::JsonUtil;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

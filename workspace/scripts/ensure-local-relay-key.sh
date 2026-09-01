@@ -9,11 +9,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 existing_key="$({
-  unset BUZZ_RELAY_PRIVATE_KEY
+  unset AMBUSH_RELAY_PRIVATE_KEY
   set +u
   # shellcheck disable=SC1090
   source "${ENV_FILE}" || exit 1
-  printf '%s' "${BUZZ_RELAY_PRIVATE_KEY:-}"
+  printf '%s' "${AMBUSH_RELAY_PRIVATE_KEY:-}"
 })"
 
 if [[ -n "${existing_key}" ]]; then
@@ -43,9 +43,9 @@ trap 'rm -f "${temp_file}"' EXIT
 
 awk -v key="${relay_key}" '
   BEGIN { replaced = 0 }
-  /^[[:space:]]*(export[[:space:]]+)?BUZZ_RELAY_PRIVATE_KEY=/ {
+  /^[[:space:]]*(export[[:space:]]+)?AMBUSH_RELAY_PRIVATE_KEY=/ {
     if (!replaced) {
-      print "BUZZ_RELAY_PRIVATE_KEY=" key
+      print "AMBUSH_RELAY_PRIVATE_KEY=" key
       replaced = 1
     }
     next
@@ -54,7 +54,7 @@ awk -v key="${relay_key}" '
   END {
     if (!replaced) {
       if (NR > 0) print ""
-      print "BUZZ_RELAY_PRIVATE_KEY=" key
+      print "AMBUSH_RELAY_PRIVATE_KEY=" key
     }
   }
 ' "${ENV_FILE}" > "${temp_file}"
@@ -63,4 +63,4 @@ chmod 600 "${temp_file}"
 mv "${temp_file}" "${ENV_FILE}"
 trap - EXIT
 
-echo "Generated BUZZ_RELAY_PRIVATE_KEY in ${ENV_FILE}."
+echo "Generated AMBUSH_RELAY_PRIVATE_KEY in ${ENV_FILE}."

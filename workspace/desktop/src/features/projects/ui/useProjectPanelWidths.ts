@@ -10,7 +10,7 @@ export function useProjectPanelWidths(mode: ProjectRightPanelMode) {
   const repositoryContextWidth = useThreadPanelWidth(undefined, {
     defaultWidthPx: PROJECT_CONTEXT_PANEL_DEFAULT_WIDTH_PX,
     minWidthPx: PROJECT_CONTEXT_PANEL_MIN_WIDTH_PX,
-    sessionKey: "buzz.desktop.project-context-width",
+    sessionKey: "ambush.desktop.project-context-width",
   });
   return {
     activeRightPanelWidth:

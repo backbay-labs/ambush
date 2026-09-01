@@ -27,12 +27,12 @@ async function seedReminders(
   events: unknown[],
 ) {
   await page.evaluate((seeded) => {
-    window.__BUZZ_E2E_SEED_MOCK_REMINDERS__?.(
+    window.__AMBUSH_E2E_SEED_MOCK_REMINDERS__?.(
       seeded as Parameters<
-        NonNullable<typeof window.__BUZZ_E2E_SEED_MOCK_REMINDERS__>
+        NonNullable<typeof window.__AMBUSH_E2E_SEED_MOCK_REMINDERS__>
       >[0],
     );
-    window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+    window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
       queryKey: ["reminders"],
     });
   }, events);
@@ -255,7 +255,7 @@ function aliceReminderContent() {
 // Inbox nav item's `(1)` count. The count is gated behind `homeBadgeEnabled`,
 // so seed that setting on before installMockBridge (addInitScript runs at
 // document start, ahead of the app reading localStorage).
-const NOTIFICATION_SETTINGS_KEY = `buzz-notification-settings.v2:${MOCK_PUBKEY}`;
+const NOTIFICATION_SETTINGS_KEY = `ambush-notification-settings.v2:${MOCK_PUBKEY}`;
 
 test.describe("reminders nav badge", () => {
   test.beforeEach(async ({ page }) => {

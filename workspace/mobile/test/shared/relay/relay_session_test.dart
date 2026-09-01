@@ -7,8 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart' as http_testing;
 import 'package:nostr/nostr.dart' as nostr;
 import 'package:pointycastle/digests/sha256.dart';
-import 'package:buzz/shared/auth/auth_provider.dart';
-import 'package:buzz/shared/relay/relay.dart';
+import 'package:ambush/shared/auth/auth_provider.dart';
+import 'package:ambush/shared/relay/relay.dart';
 
 void main() {
   test('queryRelay sends NIP-98 auth over POST /query', () async {

@@ -26,7 +26,7 @@ manifest.write_text(
 
 lock = Path("desktop/src-tauri/Cargo.lock")
 text = lock.read_text()
-start = text.index('name = "buzz-desktop"')
+start = text.index('name = "ambush-desktop"')
 version = text.index(f'version = "{current_version}"', start)
 lock.write_text(
     text[:version]
@@ -36,7 +36,7 @@ lock.write_text(
 PY
 version_only=$("$key_script" "${args[@]}")
 [[ "$original" == "$version_only" ]] || { echo "desktop version changed cache key" >&2; exit 1; }
-printf '\n# dependency input\n' >> crates/buzz-acp/Cargo.toml
+printf '\n# dependency input\n' >> crates/ambush-acp/Cargo.toml
 dependency_changed=$("$key_script" "${args[@]}")
 [[ "$original" != "$dependency_changed" ]] || { echo "dependency manifest did not change cache key" >&2; exit 1; }
 [[ "$original" == desktop-rust-release-v1-Linux-x86_64-unknown-linux-gnu-* ]] || { echo "unexpected key: $original" >&2; exit 1; }

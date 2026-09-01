@@ -40,13 +40,13 @@ function filterRequiredKeys(
 // ── global provider + global API key → not missing, no amber row ─────────
 
 test("editAgent_globalProvider_globalApiKey_noPerAgentEnv_notMissing", () => {
-  // Setup: buzz-agent runtime, provider = anthropic (from global), key in globalEnvVars.
+  // Setup: ambush-agent runtime, provider = anthropic (from global), key in globalEnvVars.
   // Expected: requiredEnvKeys is empty, requiredEnvKeyMissing is false.
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   // ANTHROPIC_API_KEY should be in the raw list.
   assert.ok(
     allKeys.includes("ANTHROPIC_API_KEY"),
-    "ANTHROPIC_API_KEY must appear in raw required keys for buzz-agent/anthropic",
+    "ANTHROPIC_API_KEY must appear in raw required keys for ambush-agent/anthropic",
   );
 
   const globalEnvVars = { ANTHROPIC_API_KEY: "sk-global" };
@@ -68,9 +68,9 @@ test("editAgent_globalProvider_globalApiKey_noPerAgentEnv_notMissing", () => {
 // ── global provider, global API key empty → still missing, amber row shows ──
 
 test("editAgent_globalProvider_globalApiKeyEmpty_stillMissing", () => {
-  // Setup: buzz-agent runtime, provider = anthropic (from global), key NOT in globalEnvVars.
+  // Setup: ambush-agent runtime, provider = anthropic (from global), key NOT in globalEnvVars.
   // Expected: ANTHROPIC_API_KEY still required (amber row), requiredEnvKeyMissing true.
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const globalEnvVars = {};
   const perAgentEnvVars = {};
 
@@ -89,7 +89,7 @@ test("editAgent_globalProvider_globalApiKeyEmpty_stillMissing", () => {
 // ── per-agent env satisfies the key (global is bonus) → not missing ───────
 
 test("editAgent_perAgentEnvSatisfiesKey_notMissing", () => {
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const globalEnvVars = {};
   const perAgentEnvVars = { ANTHROPIC_API_KEY: "sk-per-agent" };
 
@@ -108,8 +108,11 @@ test("editAgent_globalSatisfiesOneKey_otherKeyStillMissing", () => {
   // Use openai provider which requires OPENAI_API_KEY only.
   // Globally satisfy it but leave per-agent empty to confirm the logic
   // doesn't accidentally clear unrelated keys.
-  const allKeysOpenai = requiredCredentialEnvKeys("buzz-agent", "openai");
-  const allKeysAnthropic = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeysOpenai = requiredCredentialEnvKeys("ambush-agent", "openai");
+  const allKeysAnthropic = requiredCredentialEnvKeys(
+    "ambush-agent",
+    "anthropic",
+  );
 
   // Satisfy anthropic globally but test openai path separately.
   const globalEnvVarsWithAnthropic = { ANTHROPIC_API_KEY: "sk-global" };
@@ -148,7 +151,7 @@ test("editAgent_globalSatisfied_agentLocalExplicitlyEmpty_stillRequired", () => 
   // Setup: global has ANTHROPIC_API_KEY="sk-global", but agent-local has "".
   // Backend effective value: "" (agent overwrites global) → missing.
   // Expected: ANTHROPIC_API_KEY must remain required (amber row appears).
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const globalEnvVars = { ANTHROPIC_API_KEY: "sk-global" };
   const perAgentEnvVars = { ANTHROPIC_API_KEY: "" };
 
@@ -172,7 +175,7 @@ test("editAgent_globalSatisfied_agentLocalKeyAbsent_stillSilenced", () => {
   // Contrast: global has ANTHROPIC_API_KEY="sk-global", agent-local does NOT
   // have the key at all (key absent from envVars object).
   // In this case the global satisfies it and the amber row must be absent.
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const globalEnvVars = { ANTHROPIC_API_KEY: "sk-global" };
   const perAgentEnvVars = {}; // key NOT present — differs from explicit ""
 
@@ -196,7 +199,7 @@ test("editAgent_globalSatisfied_agentLocalKeyAbsent_stillSilenced", () => {
 // ── F2: persona-satisfied credential keys ──────────────────────────────────
 
 test("editAgent_personaSatisfied_keyNotRequired", () => {
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const personaEnvVars = { ANTHROPIC_API_KEY: "sk-persona" };
 
   const filteredKeys = filterRequiredKeys(allKeys, {}, {}, personaEnvVars);
@@ -213,7 +216,7 @@ test("editAgent_personaSatisfied_keyNotRequired", () => {
 });
 
 test("editAgent_personaSatisfied_agentLocalEmpty_stillRequired", () => {
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const personaEnvVars = { ANTHROPIC_API_KEY: "sk-persona" };
   const perAgentEnvVars = { ANTHROPIC_API_KEY: "" };
 

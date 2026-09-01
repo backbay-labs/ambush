@@ -40,8 +40,8 @@ import { useMeshServingUsage } from "../hooks/useMeshServingUsage";
 import { deriveMeshShareToggle } from "../shareToggleState";
 import { deriveServingIndicator } from "../servingUsage";
 
-const MODEL_DRAFT_STORAGE_KEY = "buzz.mesh-compute.share.model.v1";
-const MAX_VRAM_DRAFT_STORAGE_KEY = "buzz.mesh-compute.share.max-vram-gb.v1";
+const MODEL_DRAFT_STORAGE_KEY = "ambush.mesh-compute.share.model.v1";
+const MAX_VRAM_DRAFT_STORAGE_KEY = "ambush.mesh-compute.share.max-vram-gb.v1";
 
 // Keep the Share compute controls visually and behaviorally aligned with the
 // agent configuration fields. This is intentionally the same shell used by
@@ -581,7 +581,7 @@ function MeshModelPicker({
         {catalog
           ? `Recommended for this machine${catalog.gpuName ? ` (${catalog.gpuName}, ${catalog.vramDisplay} AI memory)` : ""}.`
           : "Choose a model or enter a model reference or local file."}{" "}
-        Buzz downloads remote models when sharing starts.
+        Ambush downloads remote models when sharing starts.
       </p>
     </div>
   );
@@ -640,7 +640,8 @@ function StatusLine({
     return (
       <p className="text-sm text-muted-foreground">
         This machine is currently using another member's shared compute. Turn on
-        sharing to switch to the selected local model; Buzz may briefly restart.
+        sharing to switch to the selected local model; Ambush may briefly
+        restart.
       </p>
     );
   }

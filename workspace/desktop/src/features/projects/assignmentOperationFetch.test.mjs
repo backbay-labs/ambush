@@ -63,7 +63,7 @@ function eventId(index) {
 
 /**
  * Relay model matching production semantics (`filter_to_query_params` +
- * `filter_fully_pushable` in `crates/buzz-relay/src/handlers/req.rs`):
+ * `filter_fully_pushable` in `crates/ambush-relay/src/handlers/req.rs`):
  *
  * 1. SQL applies kinds / `#e` / `since` / `until` (inclusive), orders
  *    `(created_at DESC, id ASC)`, and cuts to `LIMIT` — clamped to 1,000.

@@ -9,7 +9,7 @@ type ComposerSpoilerMount = {
   cleanup: () => void;
 };
 
-const SPOILER_SELECTOR = ".buzz-spoiler[data-spoiler]";
+const SPOILER_SELECTOR = ".ambush-spoiler[data-spoiler]";
 
 export function useComposerSpoilerParticles(
   editor: Editor | null,
@@ -59,7 +59,7 @@ function mountComposerSpoilerParticles(
 ): () => void {
   const document = editorRoot.ownerDocument;
   const overlayRoot = document.createElement("div");
-  overlayRoot.className = "buzz-spoiler-composer-particles";
+  overlayRoot.className = "ambush-spoiler-composer-particles";
   scrollRoot.appendChild(overlayRoot);
 
   const mounts = new Map<HTMLElement, ComposerSpoilerMount>();
@@ -105,7 +105,7 @@ function mountComposerSpoilerParticles(
   const mountSpoiler = (spoiler: HTMLElement) => {
     const canvas = document.createElement("canvas");
     canvas.className =
-      "buzz-spoiler__particles buzz-spoiler__particles--composer";
+      "ambush-spoiler__particles ambush-spoiler__particles--composer";
     overlayRoot.appendChild(canvas);
 
     const cleanup = mountSpoilerParticleCanvas({

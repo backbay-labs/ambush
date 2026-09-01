@@ -18,7 +18,7 @@ test("empty/whitespace lastError → null", () => {
   assert.equal(friendlyAgentLastError("   "), null);
 });
 
-test("buzz-acp wrapped auth failure → denied copy", () => {
+test("ambush-acp wrapped auth failure → denied copy", () => {
   const result = friendlyAgentLastError(
     "Agent reported error: llm auth: 401 unauthorized: ...",
   );
@@ -28,8 +28,8 @@ test("buzz-acp wrapped auth failure → denied copy", () => {
   });
 });
 
-test("unwrapped buzz-agent prefix → denied copy", () => {
-  // buzz-agent's AgentError::LlmAuth Display is "llm auth: <body>"; if the
+test("unwrapped ambush-agent prefix → denied copy", () => {
+  // ambush-agent's AgentError::LlmAuth Display is "llm auth: <body>"; if the
   // desktop ever picks that up directly (no AcpError wrapper), we should
   // still recognize it as denial.
   const result = friendlyAgentLastError("llm auth: 403 forbidden");
@@ -89,7 +89,7 @@ test("code -32002 → model-not-found copy (severity: denied)", () => {
   });
 });
 
-test("code -32001 → Buzz shared compute denied copy (structured path)", () => {
+test("code -32001 → Ambush shared compute denied copy (structured path)", () => {
   const result = friendlyAgentLastError("any error text", -32001);
   assert.deepEqual(result, {
     severity: "denied",

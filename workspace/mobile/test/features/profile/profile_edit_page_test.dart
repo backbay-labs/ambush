@@ -1,29 +1,29 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:buzz/features/profile/profile_edit_page.dart';
-import 'package:buzz/features/profile/profile_avatar_draft.dart';
-import 'package:buzz/features/profile/profile_avatar_crop_page.dart';
-import 'package:buzz/features/profile/avatar_background_grid.dart';
-import 'package:buzz/features/profile/avatar_editor_option_button.dart';
-import 'package:buzz/features/profile/animated_avatar_capture.dart';
-import 'package:buzz/features/profile/emoji_avatar_tile.dart';
-import 'package:buzz/features/profile/image_avatar_capture.dart';
-import 'package:buzz/shared/widgets/immediate_page_route.dart';
-import 'package:buzz/features/profile/profile_provider.dart';
-import 'package:buzz/shared/emoji/emoji_avatar.dart';
-import 'package:buzz/shared/emoji/emoji_data.dart';
-import 'package:buzz/shared/emoji/emoji_data_provider.dart';
-import 'package:buzz/shared/emoji/native_emoji_glyph.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/avatar_image.dart';
-import 'package:buzz/shared/widgets/frosted_app_bar.dart';
-import 'package:buzz/shared/widgets/ios_native_segmented_control.dart';
-import 'package:buzz/shared/widgets/ios_glass_navigation_button.dart';
-import 'package:buzz/shared/widgets/playing_avatar_image.dart';
-import 'package:buzz/shared/widgets/progressive_animated_avatar.dart';
+import 'package:ambush/features/profile/profile_edit_page.dart';
+import 'package:ambush/features/profile/profile_avatar_draft.dart';
+import 'package:ambush/features/profile/profile_avatar_crop_page.dart';
+import 'package:ambush/features/profile/avatar_background_grid.dart';
+import 'package:ambush/features/profile/avatar_editor_option_button.dart';
+import 'package:ambush/features/profile/animated_avatar_capture.dart';
+import 'package:ambush/features/profile/emoji_avatar_tile.dart';
+import 'package:ambush/features/profile/image_avatar_capture.dart';
+import 'package:ambush/shared/widgets/immediate_page_route.dart';
+import 'package:ambush/features/profile/profile_provider.dart';
+import 'package:ambush/shared/emoji/emoji_avatar.dart';
+import 'package:ambush/shared/emoji/emoji_data.dart';
+import 'package:ambush/shared/emoji/emoji_data_provider.dart';
+import 'package:ambush/shared/emoji/native_emoji_glyph.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/avatar_image.dart';
+import 'package:ambush/shared/widgets/frosted_app_bar.dart';
+import 'package:ambush/shared/widgets/ios_native_segmented_control.dart';
+import 'package:ambush/shared/widgets/ios_glass_navigation_button.dart';
+import 'package:ambush/shared/widgets/playing_avatar_image.dart';
+import 'package:ambush/shared/widgets/progressive_animated_avatar.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -201,7 +201,7 @@ void main() {
 
   testWidgets('uses the native profile text form on iOS', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    const channel = MethodChannel('buzz/profile_text_editor');
+    const channel = MethodChannel('ambush/profile_text_editor');
     MethodCall? receivedCall;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -262,7 +262,7 @@ void main() {
     expect(find.text('Display name'), findsOneWidget);
     expect(find.text('Profile description'), findsOneWidget);
     expect(find.text('Alice'), findsOneWidget);
-    expect(find.text('Building Buzz'), findsOneWidget);
+    expect(find.text('Building Ambush'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('profile-display-name-row')));
     await tester.pumpAndSettle();
@@ -737,7 +737,7 @@ void main() {
       find.byKey(const ValueKey('progressive-animated-avatar-local-handoff')),
       findsOneWidget,
     );
-    expect(notifier.savedAvatarUrls.single, contains('#buzz-anim='));
+    expect(notifier.savedAvatarUrls.single, contains('#ambush-anim='));
   });
 
   testWidgets('saves a desktop-compatible emoji avatar', (tester) async {
@@ -930,7 +930,7 @@ class _FakeProfileNotifier extends ProfileNotifier {
     this.profile = const UserProfile(
       pubkey: 'aabb',
       displayName: 'Alice',
-      about: 'Building Buzz',
+      about: 'Building Ambush',
     ),
     this.failedAvatarSaves = 0,
     this.updatesProfileState = false,

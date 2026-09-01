@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-/// Fixed audio framing contract shared with Buzz Desktop and `buzz-relay`.
+/// Fixed audio framing contract shared with Ambush Desktop and `ambush-relay`.
 ///
 /// Huddle audio rooms pin the first participant's protocol version. This
 /// compatibility build requests the released v2 contract so it can connect to

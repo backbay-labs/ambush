@@ -9,8 +9,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart' as http_testing;
 import 'package:image_picker/image_picker.dart';
 import 'package:nostr/nostr.dart' as nostr;
-import 'package:buzz/shared/relay/media_auth.dart';
-import 'package:buzz/shared/relay/media_upload.dart';
+import 'package:ambush/shared/relay/media_auth.dart';
+import 'package:ambush/shared/relay/media_upload.dart';
 
 final _pngBytes = Uint8List.fromList([
   0x89,
@@ -237,7 +237,7 @@ final _animatedWebpBytes = Uint8List.fromList([
   0x00,
 ]);
 
-const _mediaUploadPlatformChannel = MethodChannel('buzz/media_upload');
+const _mediaUploadPlatformChannel = MethodChannel('ambush/media_upload');
 
 void _setMockMediaUploadPlatformHandler(
   Future<Object?> Function(MethodCall call)? handler,
@@ -289,7 +289,7 @@ void main() {
       final authEvent = jsonDecode(decoded) as Map<String, dynamic>;
       expect(authEvent['kind'], 24242);
       expect(authEvent['pubkey'], keychain.public);
-      expect(authEvent['content'], 'Get buzz-media');
+      expect(authEvent['content'], 'Get ambush-media');
       expect(authEvent['tags'], contains(equals(['t', 'get'])));
       expect(authEvent['tags'], contains(equals(['server', 'relay.example'])));
       expect(authEvent['tags'], contains(equals(['expiration', '1700000600'])));

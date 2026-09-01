@@ -23,7 +23,7 @@ function liveHead(tags = []) {
     tags: [
       ["d", "sprout"],
       ["name", "Sprout"],
-      ["buzz-channel", CHANNEL_A],
+      ["ambush-channel", CHANNEL_A],
       ...tags,
     ],
   };
@@ -40,7 +40,7 @@ test("appends a related channel tag and preserves the live head", () => {
   assert.deepEqual(patched.project.tags, [
     ["d", "sprout"],
     ["name", "Sprout"],
-    ["buzz-channel", CHANNEL_A],
+    ["ambush-channel", CHANNEL_A],
     ["description", "A project"],
     [PROJECT_RELATED_CHANNEL_TAG, CHANNEL_B],
   ]);

@@ -486,7 +486,7 @@ export function ProfileSettingsCard({
       <div>
         <SettingsSectionHeader
           title="Profile"
-          description="Update how your name, avatar, and bio appear across Buzz."
+          description="Update how your name, avatar, and bio appear across Ambush."
         />
 
         <div className="space-y-3">
@@ -616,8 +616,8 @@ export function ProfileSettingsCard({
                             >
                               <span
                                 className={cn(
-                                  "buzz-avatar-emoji-glyph flex h-full w-full items-center justify-center text-[6rem] leading-[6.25rem]",
-                                  avatarSquishKey > 0 && "buzz-avatar-squish",
+                                  "ambush-avatar-emoji-glyph flex h-full w-full items-center justify-center text-[6rem] leading-[6.25rem]",
+                                  avatarSquishKey > 0 && "ambush-avatar-squish",
                                 )}
                                 data-testid="profile-avatar-preview-emoji"
                                 key={avatarSquishKey}

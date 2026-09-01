@@ -17,11 +17,11 @@ const KUBERNETES_CONFIG = {
   cpu_limit: "1",
   cpu_request: "1",
   image:
-    "ghcr.io/block/buzz-sprig:sha-6530b58@sha256:17facfc7608d8ddb33bc056c9aaba1098f4ef6abe5655702fbfd7584d1f74d76",
+    "ghcr.io/backbay-labs/ambush-sprig:sha-6530b58@sha256:17facfc7608d8ddb33bc056c9aaba1098f4ef6abe5655702fbfd7584d1f74d76",
   inactivity_seconds: 7200,
   memory_limit: "1Gi",
   memory_request: "1Gi",
-  namespace: "buzz-agents-gfq7aq",
+  namespace: "ambush-agents-gfq7aq",
 };
 
 async function openEditDialog(
@@ -67,13 +67,13 @@ test("editing a kubernetes agent shows its saved run-on settings", async ({
 
   // Every saved field renders as a labeled row with its stored value.
   await expect(runOn.getByTestId("edit-agent-run-on-namespace")).toContainText(
-    "buzz-agents-gfq7aq",
+    "ambush-agents-gfq7aq",
   );
   await expect(runOn.getByTestId("edit-agent-run-on-context")).toContainText(
     "docker-desktop",
   );
   await expect(runOn.getByTestId("edit-agent-run-on-image")).toContainText(
-    "ghcr.io/block/buzz-sprig",
+    "ghcr.io/backbay-labs/ambush-sprig",
   );
   await expect(
     runOn.getByTestId("edit-agent-run-on-cpu_request"),

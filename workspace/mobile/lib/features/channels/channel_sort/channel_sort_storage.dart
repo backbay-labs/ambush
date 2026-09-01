@@ -8,9 +8,9 @@ String normalizeChannelSortRelayUrl(String relayUrl) =>
     relayUrl.trim().replaceFirst(RegExp(r'/+$'), '').toLowerCase();
 
 String channelSortKey(String pubkey, String relayUrl) =>
-    'buzz.channel-sort.v1:$pubkey:${Uri.encodeComponent(normalizeChannelSortRelayUrl(relayUrl))}';
+    'ambush.channel-sort.v1:$pubkey:${Uri.encodeComponent(normalizeChannelSortRelayUrl(relayUrl))}';
 
-String legacyChannelSortKey(String pubkey) => 'buzz.channel-sort.v1:$pubkey';
+String legacyChannelSortKey(String pubkey) => 'ambush.channel-sort.v1:$pubkey';
 
 /// Per-group sidebar sort mode. The wire values match desktop exactly.
 enum ChannelSortMode {

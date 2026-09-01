@@ -4,16 +4,16 @@
 # =============================================================================
 # Stands up a FULLY ISOLATED relay for seeding + parity/perf runs, from source
 # on the current branch. Never touches the shared :3000 team relay or the
-# default `buzz-*` dev stack. Backing services run under the dedicated
-# `buzz-harness` Compose project (docker-compose.harness.yml); the relay runs
+# default `ambush-*` dev stack. Backing services run under the dedicated
+# `ambush-harness` Compose project (docker-compose.harness.yml); the relay runs
 # in the foreground on override ports.
 #
 #   Topology (reuse this exact tuple for desktop parity runs):
-#     compose project : buzz-harness
-#     postgres        : localhost:5471  (db=buzz, user=buzz, pass=buzz_dev)
+#     compose project : ambush-harness
+#     postgres        : localhost:5471  (db=ambush, user=ambush, pass=ambush_dev)
 #     redis           : localhost:6471
 #     minio           : localhost:9471 (console 9472)
-#     relay main      : localhost:3030   ← BUZZ_E2E_RELAY_URL=http://localhost:3030
+#     relay main      : localhost:3030   ← AMBUSH_E2E_RELAY_URL=http://localhost:3030
 #     relay health    : localhost:8088
 #     relay metrics   : localhost:9202
 #
@@ -21,7 +21,7 @@
 #   ./scripts/start-isolated-test-relay.sh [--profile <cargo-profile>]
 #
 # Teardown (safe — scoped to our project only):
-#   docker compose -p buzz-harness -f docker-compose.harness.yml down -v
+#   docker compose -p ambush-harness -f docker-compose.harness.yml down -v
 # =============================================================================
 set -euo pipefail
 
@@ -50,7 +50,7 @@ case "${CARGO_PROFILE}" in
     ;;
 esac
 
-PROJECT="buzz-harness"
+PROJECT="ambush-harness"
 COMPOSE_FILE="docker-compose.harness.yml"
 
 # Isolated ports (distinct from :3000 team relay, default dev stack, and Eva's
@@ -68,14 +68,14 @@ log() { echo -e "${BLUE}[isolated-relay]${NC} $*"; }
 ok()  { echo -e "${GREEN}[isolated-relay]${NC} $*"; }
 err() { echo -e "${RED}[isolated-relay]${NC} $*" >&2; }
 
-# ── Backing services (scoped to buzz-harness only) ───────────────────────────
+# ── Backing services (scoped to ambush-harness only) ───────────────────────────
 log "Bringing up backing services (project=${PROJECT})..."
 docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" up -d
 
 wait_pg() {
   for _ in $(seq 1 60); do
     if docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" exec -T postgres \
-         pg_isready -U buzz >/dev/null 2>&1; then
+         pg_isready -U ambush >/dev/null 2>&1; then
       ok "Postgres ready"; return 0
     fi
     sleep 2
@@ -85,18 +85,18 @@ wait_pg() {
 wait_pg
 
 # ── Schema + partitions ──────────────────────────────────────────────────────
-export PGPASSWORD=buzz_dev
+export PGPASSWORD=ambush_dev
 psql_h() { docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" exec -T postgres \
-  psql -U buzz -d buzz -v ON_ERROR_STOP=1 "$@"; }
+  psql -U ambush -d ambush -v ON_ERROR_STOP=1 "$@"; }
 
 log "Resetting isolated database and applying schema..."
-# This database belongs only to the buzz-harness Compose project. Reset it on
+# This database belongs only to the ambush-harness Compose project. Reset it on
 # every launch so stale partitions/events from an earlier proof cannot alter
 # schema planning or test results.
 psql_h -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 export PGSCHEMA_PLAN_HOST=localhost PGSCHEMA_PLAN_PORT=${PG_PORT}
-export PGSCHEMA_PLAN_DB=buzz PGSCHEMA_PLAN_USER=buzz PGSCHEMA_PLAN_PASSWORD=buzz_dev
-export PGHOST=localhost PGPORT=${PG_PORT} PGUSER=buzz PGDATABASE=buzz
+export PGSCHEMA_PLAN_DB=ambush PGSCHEMA_PLAN_USER=ambush PGSCHEMA_PLAN_PASSWORD=ambush_dev
+export PGHOST=localhost PGPORT=${PG_PORT} PGUSER=ambush PGDATABASE=ambush
 ./bin/pgschema apply --file schema/schema.sql --auto-approve
 psql_h < scripts/reconcile-schema-after-pgschema.sql
 ok "Schema applied"
@@ -106,12 +106,12 @@ ok "Schema applied"
 # the channel/member seed. It keys everything off a fixed COMMUNITY_ID and an
 # overridable host — point that host at OUR relay so the tenant binding matches,
 # and point its DB env at OUR isolated postgres. (psql is on PATH, so it uses
-# BUZZ_DB_HOST/PORT rather than the shared `buzz-postgres` container.)
+# AMBUSH_DB_HOST/PORT rather than the shared `ambush-postgres` container.)
 log "Seeding community (host=${COMMUNITY_HOST}), channels, and members..."
-BUZZ_COMMUNITY_HOST="${COMMUNITY_HOST}" \
-  BUZZ_DB_HOST=localhost BUZZ_DB_PORT=${PG_PORT} BUZZ_DB_USER=buzz \
-  BUZZ_DB_PASS=buzz_dev BUZZ_DB_NAME=buzz \
-  BUZZ_DB_DOCKER_CONTAINER="${PROJECT}-postgres-1" \
+AMBUSH_COMMUNITY_HOST="${COMMUNITY_HOST}" \
+  AMBUSH_DB_HOST=localhost AMBUSH_DB_PORT=${PG_PORT} AMBUSH_DB_USER=ambush \
+  AMBUSH_DB_PASS=ambush_dev AMBUSH_DB_NAME=ambush \
+  AMBUSH_DB_DOCKER_CONTAINER="${PROJECT}-postgres-1" \
   ./scripts/setup-desktop-test-data.sh
 ok "Community + channels + members seeded"
 
@@ -123,7 +123,7 @@ if [[ -x "${HOME}/.cargo/bin/cargo" ]]; then
   export PATH="${HOME}/.cargo/bin:${PATH}"
 fi
 log "Building relay (profile=${CARGO_BUILD_PROFILE}, cargo=$(command -v cargo), $(cargo --version))..."
-cargo build --profile "${CARGO_BUILD_PROFILE}" -p buzz-relay
+cargo build --profile "${CARGO_BUILD_PROFILE}" -p ambush-relay
 ok "Relay built"
 
 # ── Run relay (detached tmux session) ────────────────────────────────────────
@@ -142,25 +142,25 @@ if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"${RELAY_MAIN}" -sTCP:LISTE
 fi
 log "Starting relay in tmux session '${TMUX_SESSION}' on :${RELAY_MAIN} (health :${RELAY_HEALTH}, metrics :${RELAY_METRICS})..."
 tmux new-session -d -s "${TMUX_SESSION}" "cd '${REPO_ROOT}' && env \
-  DATABASE_URL=postgres://buzz:buzz_dev@localhost:${PG_PORT}/buzz \
+  DATABASE_URL=postgres://ambush:ambush_dev@localhost:${PG_PORT}/ambush \
   REDIS_URL=redis://localhost:${REDIS_PORT} \
   RELAY_URL=ws://localhost:${RELAY_MAIN} \
-  BUZZ_BIND_ADDR=0.0.0.0:${RELAY_MAIN} \
-  BUZZ_HEALTH_PORT=${RELAY_HEALTH} \
-  BUZZ_METRICS_PORT=${RELAY_METRICS} \
-  BUZZ_S3_ENDPOINT=http://localhost:${MINIO_PORT} \
-  BUZZ_S3_ACCESS_KEY=buzz_dev \
-  BUZZ_S3_SECRET_KEY=buzz_dev_secret \
-  BUZZ_S3_BUCKET=buzz-media \
-  BUZZ_RELAY_PRIVATE_KEY=${RELAY_PRIVATE_KEY} \
-  BUZZ_REQUIRE_AUTH_TOKEN=false \
-  BUZZ_RECONCILE_CHANNELS=true \
-  './target/${CARGO_TARGET_PROFILE}/buzz-relay' > '${RELAY_LOG}' 2>&1"
+  AMBUSH_BIND_ADDR=0.0.0.0:${RELAY_MAIN} \
+  AMBUSH_HEALTH_PORT=${RELAY_HEALTH} \
+  AMBUSH_METRICS_PORT=${RELAY_METRICS} \
+  AMBUSH_S3_ENDPOINT=http://localhost:${MINIO_PORT} \
+  AMBUSH_S3_ACCESS_KEY=ambush_dev \
+  AMBUSH_S3_SECRET_KEY=ambush_dev_secret \
+  AMBUSH_S3_BUCKET=ambush-media \
+  AMBUSH_RELAY_PRIVATE_KEY=${RELAY_PRIVATE_KEY} \
+  AMBUSH_REQUIRE_AUTH_TOKEN=false \
+  AMBUSH_RECONCILE_CHANNELS=true \
+  './target/${CARGO_TARGET_PROFILE}/ambush-relay' > '${RELAY_LOG}' 2>&1"
 
 # Wait for the main port to accept connections.
 for _ in $(seq 1 30); do
   if curl -s -o /dev/null "http://localhost:${RELAY_MAIN}/"; then
-    ok "Relay live — BUZZ_E2E_RELAY_URL=http://localhost:${RELAY_MAIN}"
+    ok "Relay live — AMBUSH_E2E_RELAY_URL=http://localhost:${RELAY_MAIN}"
     ok "Logs: ${RELAY_LOG}   Attach: tmux attach -t ${TMUX_SESSION}"
     ok "Stop relay: tmux kill-session -t ${TMUX_SESSION}"
     ok "Full teardown: docker compose -p ${PROJECT} -f ${COMPOSE_FILE} down -v"

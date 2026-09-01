@@ -257,7 +257,7 @@ fn upsert_event(tx: &Transaction<'_>, scope: &str, event: &IngestEvent) -> Resul
 
 fn seed_membership(tx: &Transaction<'_>, scope: &str, seed: &MembershipSeed) -> Result<(), String> {
     // The renderer snapshot is authoritative while it remains the only writer.
-    // Replace transactionally so removals made while Buzz was closed are not
+    // Replace transactionally so removals made while Ambush was closed are not
     // silently resurrected by an insert-only seed.
     tx.execute("DELETE FROM unread_membership WHERE scope=?1", [scope])
         .map_err(|e| format!("reset unread membership: {e}"))?;

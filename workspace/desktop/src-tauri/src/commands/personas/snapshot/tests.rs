@@ -272,7 +272,7 @@ fn import_corrupt_bytes_fail_closed() {
 fn import_wrong_format_string_fails_closed() {
     use crate::managed_agents::agent_snapshot::encode_snapshot_json;
     let mut snapshot = make_snapshot(MemoryLevel::None, vec![]);
-    snapshot.format = "not-buzz-agent-snapshot".to_string();
+    snapshot.format = "not-ambush-agent-snapshot".to_string();
     let bytes = encode_snapshot_json(&snapshot).unwrap();
     let result = decode_snapshot_from_bytes(&bytes);
     assert!(result.is_err(), "wrong format must fail closed");
@@ -489,7 +489,7 @@ fn import_none_level_with_entries_is_rejected() {
     // Produce JSON bytes with level:none but non-empty entries.  serde happily
     // serializes this — the guard fires in decode_snapshot_from_bytes.
     let raw = serde_json::json!({
-        "format": "buzz-agent-snapshot",
+        "format": "ambush-agent-snapshot",
         "version": 1,
         "definition": { "name": "test" },
         "profile": { "displayName": "Test" },
@@ -850,13 +850,13 @@ fn import_source_identity_fields_never_consumed() {
 /// Verified by the sentinel slug value.
 #[test]
 fn import_core_slug_maps_to_core_body() {
-    let slug = buzz_core_pkg::engram::CORE_SLUG;
+    let slug = ambush_core_pkg::engram::CORE_SLUG;
     assert_eq!(slug, "core", "CORE_SLUG must equal 'core'");
     // core slug → Body::Core; anything else → Body::Memory
-    let is_core = slug == buzz_core_pkg::engram::CORE_SLUG;
+    let is_core = slug == ambush_core_pkg::engram::CORE_SLUG;
     assert!(is_core, "slug 'core' must map to Body::Core");
     let mem_slug = "mem/research";
-    let is_mem = mem_slug != buzz_core_pkg::engram::CORE_SLUG;
+    let is_mem = mem_slug != ambush_core_pkg::engram::CORE_SLUG;
     assert!(is_mem, "slug 'mem/*' must map to Body::Memory");
 }
 

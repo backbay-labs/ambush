@@ -3,7 +3,7 @@ use crate::managed_agents::retention::{
     get_pending_sync, get_retained_event, retain_event, scoped_retention_db_path,
     tombstone_retention_d_tag,
 };
-use buzz_core_pkg::kind::KIND_PERSONA;
+use ambush_core_pkg::kind::KIND_PERSONA;
 
 const KIND_DELETE: u32 = 5;
 const OWNER: &str = "a1b2c3";

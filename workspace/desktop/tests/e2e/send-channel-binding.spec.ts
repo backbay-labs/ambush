@@ -28,8 +28,8 @@ function autocomplete(page: import("@playwright/test").Page) {
 async function readCommandLog(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     return (
-      (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-        .__BUZZ_E2E_COMMANDS__ ?? []
+      (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+        .__AMBUSH_E2E_COMMANDS__ ?? []
     );
   });
 }

@@ -103,7 +103,7 @@ async function chooseSharedComputeProvider(
   await page
     .getByRole("menuitemradio", {
       exact: true,
-      name: "Buzz shared compute",
+      name: "Ambush shared compute",
     })
     .click();
 }
@@ -123,18 +123,18 @@ test("creates a new mocked stream", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toContainText(channelName);
 });
 
-test("Buzz shared compute explains automatic model selection", async ({
+test("Ambush shared compute explains automatic model selection", async ({
   page,
 }) => {
   await page.goto("/");
   await page.evaluate(() => {
     (
       window as Window & {
-        __BUZZ_E2E_SET_MESH__?: (mesh: {
+        __AMBUSH_E2E_SET_MESH__?: (mesh: {
           models?: Array<{ id: string; name: string | null }>;
         }) => void;
       }
-    ).__BUZZ_E2E_SET_MESH__?.({ models: [] });
+    ).__AMBUSH_E2E_SET_MESH__?.({ models: [] });
   });
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("new-agent-card").click();
@@ -144,8 +144,8 @@ test("Buzz shared compute explains automatic model selection", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-            .__BUZZ_E2E_COMMANDS__ ?? [],
+          (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+            .__AMBUSH_E2E_COMMANDS__ ?? [],
       ),
     )
     .toContain("discover_agent_models");
@@ -158,7 +158,7 @@ test("Buzz shared compute explains automatic model selection", async ({
   await expect(page.locator("#persona-custom-model")).toHaveCount(0);
 });
 
-test("create agent persists Buzz shared compute with auto model", async ({
+test("create agent persists Ambush shared compute with auto model", async ({
   page,
 }) => {
   const agentName = `Shared compute agent ${Date.now()}`;
@@ -183,12 +183,12 @@ test("create agent persists Buzz shared compute with auto model", async ({
   const createPayload = await page.evaluate((name) => {
     const log = (
       window as Window & {
-        __BUZZ_E2E_COMMAND_LOG__?: Array<{
+        __AMBUSH_E2E_COMMAND_LOG__?: Array<{
           command: string;
           payload: unknown;
         }>;
       }
-    ).__BUZZ_E2E_COMMAND_LOG__;
+    ).__AMBUSH_E2E_COMMAND_LOG__;
     return log
       ?.filter((entry) => entry.command === "create_managed_agent")
       .map((entry) => entry.payload as { input?: Record<string, unknown> })
@@ -196,7 +196,7 @@ test("create agent persists Buzz shared compute with auto model", async ({
   }, agentName);
 
   expect(createPayload).toMatchObject({
-    agentCommand: "buzz-agent",
+    agentCommand: "ambush-agent",
     model: "auto",
     provider: "relay-mesh",
     spawnAfterCreate: true,
@@ -218,7 +218,7 @@ test("create agent supports parallelism and system prompt overrides", async ({
     .locator("#persona-system-prompt")
     .fill("You are concise and parallelize independent work.");
 
-  // The buzz-agent runtime auto-selects once the ACP runtime catalog loads;
+  // The ambush-agent runtime auto-selects once the ACP runtime catalog loads;
   // Customize reveals the per-agent LLM provider and model fields.
   await page.getByRole("tab", { name: "Customize for this agent" }).click();
   const llmProvider = page.locator("#persona-llm-provider");
@@ -690,12 +690,12 @@ test("global search offers a conversation-specific scope in direct messages", as
         const calls =
           (
             window as Window & {
-              __BUZZ_E2E_COMMAND_LOG__?: Array<{
+              __AMBUSH_E2E_COMMAND_LOG__?: Array<{
                 command: string;
                 payload: unknown;
               }>;
             }
-          ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
+          ).__AMBUSH_E2E_COMMAND_LOG__ ?? [];
 
         return calls.findLast((entry) => entry.command === "search_messages")
           ?.payload;
@@ -765,9 +765,9 @@ test("global one-character search does not query the relay", async ({
     const calls =
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_LOG__?: Array<{ command: string }>;
+          __AMBUSH_E2E_COMMAND_LOG__?: Array<{ command: string }>;
         }
-      ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
+      ).__AMBUSH_E2E_COMMAND_LOG__ ?? [];
     return calls.filter((entry) => entry.command === "search_messages").length;
   });
   expect(messageSearchCalls).toBe(0);

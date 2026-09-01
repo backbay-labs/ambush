@@ -15,7 +15,7 @@ import { getInstallErrorMessage } from "@/shared/lib/installError";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
-import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
+import { AmbushLogoMotion } from "@/shared/ui/ambush-logo/AmbushLogoMotion";
 import { Spinner } from "@/shared/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import {
@@ -80,7 +80,7 @@ function RuntimeReadinessIndicator({
   return (
     <span
       aria-hidden="true"
-      className="pointer-events-none absolute right-8 top-8 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--buzz-welcome-chartreuse)] bg-[var(--buzz-welcome-chartreuse)]"
+      className="pointer-events-none absolute right-8 top-8 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--ambush-welcome-chartreuse)] bg-[var(--ambush-welcome-chartreuse)]"
       data-testid={`onboarding-runtime-check-${runtime.id}`}
     >
       <Check
@@ -155,7 +155,7 @@ function RuntimeStatus({
       <div className="flex flex-col items-center gap-1.5">
         <Button
           aria-label={`Sign in to ${runtime.label}`}
-          className="buzz-onboarding-runtime-setup h-5 rounded-full bg-[var(--buzz-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--buzz-welcome-chartreuse)]/40"
+          className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
           data-testid={`onboarding-runtime-instructions-${runtime.id}`}
           onClick={() => {
             if (didSignInCheckTimeOut) {
@@ -243,7 +243,7 @@ function RuntimeStatus({
       return (
         <Button
           aria-label={`Check ${runtime.label} again`}
-          className="buzz-onboarding-runtime-setup h-5 rounded-full bg-[var(--buzz-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--buzz-welcome-chartreuse)]/40"
+          className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
           data-testid={`onboarding-runtime-recheck-${runtime.id}`}
           onClick={() => void runtimesQuery.forceRefresh()}
           type="button"
@@ -280,7 +280,7 @@ function RuntimeStatus({
     return (
       <Button
         aria-label={`Check ${runtime.label} again`}
-        className="buzz-onboarding-runtime-setup h-5 rounded-full bg-[var(--buzz-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--buzz-welcome-chartreuse)]/40"
+        className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
         disabled={runtimesQuery.isFetching}
         onClick={() => void runtimesQuery.forceRefresh()}
         type="button"
@@ -296,7 +296,7 @@ function RuntimeStatus({
     return (
       <Button
         aria-label={`${installError ? "Retry installing" : "Install"} ${runtime.label}`}
-        className="buzz-onboarding-runtime-setup h-5 rounded-full bg-[var(--buzz-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--buzz-welcome-chartreuse)]/40"
+        className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
         data-testid={`onboarding-runtime-install-${runtime.id}`}
         onClick={onInstall}
         type="button"
@@ -310,7 +310,7 @@ function RuntimeStatus({
   return (
     <Button
       aria-label={`View ${runtime.label} install instructions`}
-      className="buzz-onboarding-runtime-setup h-5 rounded-full bg-[var(--buzz-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--buzz-welcome-chartreuse)]/40"
+      className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
       data-testid={`onboarding-runtime-instructions-${runtime.id}`}
       onClick={() => void openUrl(runtime.installInstructionsUrl)}
       type="button"
@@ -370,7 +370,7 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
           <code className="rounded bg-white/10 px-0.5 font-mono text-xs text-white">
             codex-acp
           </code>{" "}
-          adapter. Older Buzz releases using the legacy adapter contract may
+          adapter. Older Ambush releases using the legacy adapter contract may
           lose community access until{" "}
           <code className="rounded bg-white/10 px-0.5 font-mono text-xs text-white">
             @zed-industries/codex-acp@0.16.0
@@ -629,7 +629,7 @@ function RuntimeProvidersLoadingState() {
       role="status"
     >
       <div className="flex flex-col items-center text-foreground opacity-35">
-        <FlappingBee className="h-auto w-16" />
+        <AmbushLogoMotion className="h-auto w-16" />
         <p className="mt-5 text-2xl font-normal leading-8">
           Finding your providers...
         </p>
@@ -661,7 +661,7 @@ function RuntimeProvidersSection({
           Set up your agent harnesses
         </h1>
         <p className="mx-auto mt-3 max-w-[760px] text-sm leading-6 text-foreground/90">
-          Buzz checks for command-line harnesses on this machine. Install the
+          Ambush checks for command-line harnesses on this machine. Install the
           CLI or sign in to at least one to continue.
         </p>
       </div>
@@ -699,7 +699,7 @@ function RuntimeProvidersSection({
           </p>
         ) : null}
 
-        <p className="mx-auto flex max-w-[440px] items-start justify-center gap-1.5 text-center text-xs leading-5 text-[var(--buzz-onboarding-backup-ink)]">
+        <p className="mx-auto flex max-w-[440px] items-start justify-center gap-1.5 text-center text-xs leading-5 text-[var(--ambush-onboarding-backup-ink)]">
           <Info aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             More harnesses (Cursor, Grok, Amp&hellip;){" "}

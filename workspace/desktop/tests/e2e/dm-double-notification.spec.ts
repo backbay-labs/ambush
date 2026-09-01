@@ -9,21 +9,21 @@ const isCi = Boolean(process.env.CI);
 const relaySeedHookTimeoutMs = isCi ? 90_000 : 30_000;
 
 const RELAY_HTTP_URL =
-  process.env.BUZZ_E2E_RELAY_URL ?? "http://localhost:3000";
+  process.env.AMBUSH_E2E_RELAY_URL ?? "http://localhost:3000";
 
-// setup-desktop-test-data.sh: uuid5(NAMESPACE_DNS, "buzz.channel.dm.alice-tyler")
+// setup-desktop-test-data.sh: uuid5(NAMESPACE_DNS, "ambush.channel.dm.alice-tyler")
 const ALICE_TYLER_DM_CHANNEL_ID = "5a9c064e-0411-5242-ae6b-0363ba99b8e6";
 
 async function getLoggedNotifications(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     const win = window as Window & {
-      __BUZZ_E2E_NOTIFICATIONS__?: Array<{
+      __AMBUSH_E2E_NOTIFICATIONS__?: Array<{
         body: string | null;
         title: string;
       }>;
     };
 
-    return win.__BUZZ_E2E_NOTIFICATIONS__ ?? [];
+    return win.__AMBUSH_E2E_NOTIFICATIONS__ ?? [];
   });
 }
 

@@ -16,9 +16,9 @@ async function readCommandLog(page: import("@playwright/test").Page) {
     return (
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_LOG__?: CommandLogEntry[];
+          __AMBUSH_E2E_COMMAND_LOG__?: CommandLogEntry[];
         }
-      ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+      ).__AMBUSH_E2E_COMMAND_LOG__ ?? []
     );
   });
 }
@@ -478,12 +478,12 @@ test("team sharing keeps link copy and export in the shared surface", async ({
     const commands =
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+          __AMBUSH_E2E_COMMAND_LOG__?: Array<{
             command: string;
             payload: { html?: string; text?: string };
           }>;
         }
-      ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
+      ).__AMBUSH_E2E_COMMAND_LOG__ ?? [];
     return commands.findLast(
       (entry) => entry.command === "copy_text_to_clipboard",
     )?.payload;

@@ -260,8 +260,8 @@ for (const platform of [
       .poll(() =>
         page.evaluate(
           () =>
-            (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-              .__BUZZ_E2E_COMMANDS__ ?? [],
+            (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+              .__AMBUSH_E2E_COMMANDS__ ?? [],
         ),
       )
       .toContain("read_clipboard_text");
@@ -483,9 +483,9 @@ test("selected hard-break lines stay newline-separated in one code block", async
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
+              __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
             }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
+          ).__AMBUSH_E2E_SIGNED_EVENTS__?.at(-1)?.content,
       ),
     )
     .toBe("```\none\ntwo\nthree\n```");
@@ -526,9 +526,9 @@ test("selected list items become one multiline code block and keep neighbors", a
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
+              __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
             }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
+          ).__AMBUSH_E2E_SIGNED_EVENTS__?.at(-1)?.content,
       ),
     )
     .toBe("- before\n\n```\none\ntwo\n```\n\n- after");
@@ -553,9 +553,9 @@ test("caret-only block formatting serializes the prior draft unchanged", async (
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
+              __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
             }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
+          ).__AMBUSH_E2E_SIGNED_EVENTS__?.at(-1)?.content,
       ),
     )
     .toBe("before\n\n- item");
@@ -586,9 +586,9 @@ test("block formatting preserves the lines around a selected composer line", asy
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
+              __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
             }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
+          ).__AMBUSH_E2E_SIGNED_EVENTS__?.at(-1)?.content,
       ),
     )
     .toBe("before\n\n- selected\n\nafter");
@@ -671,17 +671,17 @@ test("right-clicking selected composer text hides the selection formatter", asyn
   await input.evaluate((element) => {
     (
       window as Window & {
-        __BUZZ_E2E_CONTEXTMENU_DEFAULT_PREVENTED__?: boolean;
+        __AMBUSH_E2E_CONTEXTMENU_DEFAULT_PREVENTED__?: boolean;
       }
-    ).__BUZZ_E2E_CONTEXTMENU_DEFAULT_PREVENTED__ = false;
+    ).__AMBUSH_E2E_CONTEXTMENU_DEFAULT_PREVENTED__ = false;
     element.addEventListener(
       "contextmenu",
       (event) => {
         (
           window as Window & {
-            __BUZZ_E2E_CONTEXTMENU_DEFAULT_PREVENTED__?: boolean;
+            __AMBUSH_E2E_CONTEXTMENU_DEFAULT_PREVENTED__?: boolean;
           }
-        ).__BUZZ_E2E_CONTEXTMENU_DEFAULT_PREVENTED__ = event.defaultPrevented;
+        ).__AMBUSH_E2E_CONTEXTMENU_DEFAULT_PREVENTED__ = event.defaultPrevented;
       },
       { once: true },
     );
@@ -698,9 +698,9 @@ test("right-clicking selected composer text hides the selection formatter", asyn
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_CONTEXTMENU_DEFAULT_PREVENTED__?: boolean;
+              __AMBUSH_E2E_CONTEXTMENU_DEFAULT_PREVENTED__?: boolean;
             }
-          ).__BUZZ_E2E_CONTEXTMENU_DEFAULT_PREVENTED__,
+          ).__AMBUSH_E2E_CONTEXTMENU_DEFAULT_PREVENTED__,
       ),
     )
     .toBe(false);
@@ -709,7 +709,7 @@ test("right-clicking selected composer text hides the selection formatter", asyn
   await expect(tray).toBeVisible();
 });
 
-test("Buzz theme uses the primary color for the selection formatter", async ({
+test("Ambush theme uses the primary color for the selection formatter", async ({
   page,
 }) => {
   await openGeneral(page);

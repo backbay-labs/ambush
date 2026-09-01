@@ -1,6 +1,6 @@
 //! Signed-event builders for desktop write operations.
 //!
-//! Mirrors the buzz-sdk builder patterns but uses nostr 0.37 API
+//! Mirrors the ambush-sdk builder patterns but uses nostr 0.37 API
 //! (the desktop is excluded from the workspace which pins nostr 0.36).
 //!
 //! Mental model:
@@ -8,7 +8,7 @@
 //!
 //! Each function validates inputs and returns a nostr::EventBuilder.
 //! Signing and submission happen in relay::submit_event.
-use buzz_core_pkg::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST};
+use ambush_core_pkg::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST};
 use nostr::{EventBuilder, EventId, Kind, Tag};
 use uuid::Uuid;
 
@@ -19,13 +19,13 @@ use message_tags::{
 };
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/// Maximum content size — matches buzz-sdk (64 KiB).
+/// Maximum content size — matches ambush-sdk (64 KiB).
 const MAX_CONTENT_BYTES: usize = 64 * 1024;
 
-/// Maximum mention count — matches buzz-sdk.
+/// Maximum mention count — matches ambush-sdk.
 const MAX_MENTIONS: usize = 50;
 
-/// Maximum emoji length in characters — matches buzz-sdk.
+/// Maximum emoji length in characters — matches ambush-sdk.
 const MAX_EMOJI_CHARS: usize = 64;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ pub fn build_create_channel(
     about: Option<&str>,
     ttl_seconds: Option<i32>,
 ) -> Result<EventBuilder, String> {
-    let name = buzz_sdk_pkg::canonical_channel_name(name);
+    let name = ambush_sdk_pkg::canonical_channel_name(name);
     if name.trim().is_empty() {
         return Err("channel name is required".into());
     }
@@ -151,7 +151,7 @@ pub fn build_update_channel(
             return Err("visibility must be \"open\" or \"private\"".into());
         }
     }
-    let name = name.map(buzz_sdk_pkg::canonical_channel_name);
+    let name = name.map(ambush_sdk_pkg::canonical_channel_name);
     if name.is_some_and(|name| name.trim().is_empty()) {
         return Err("channel name is required".into());
     }
@@ -373,7 +373,7 @@ pub fn build_message_edit(
     emoji_tags(edit_tags.custom_emoji, &mut tags)?;
     if let Some(mention_refs) = edit_tags.mention_refs {
         mention_reference_tags(mention_refs, &mut tags)?;
-        tags.push(tag(vec!["buzz:mention-snapshot"])?);
+        tags.push(tag(vec!["ambush:mention-snapshot"])?);
     }
     if suppress_link_previews {
         tags.push(tag(vec!["link-preview", "none"])?);
@@ -916,7 +916,7 @@ mod tests {
             "stable mention reference must be present: {tags:?}"
         );
         assert!(
-            tags.iter().any(|tag| tag == &["buzz:mention-snapshot"]),
+            tags.iter().any(|tag| tag == &["ambush:mention-snapshot"]),
             "snapshot marker must be present: {tags:?}"
         );
     }
@@ -925,7 +925,7 @@ mod tests {
     fn empty_edit_mention_snapshot_is_explicit() {
         let tags = edit_tags_with_refs(&[], Some(&[]));
         assert!(
-            tags.iter().any(|tag| tag == &["buzz:mention-snapshot"]),
+            tags.iter().any(|tag| tag == &["ambush:mention-snapshot"]),
             "empty snapshot must still clear stale references: {tags:?}"
         );
         assert!(!tags
@@ -941,7 +941,7 @@ mod tests {
             .any(|tag| tag.first().map(String::as_str) == Some("mention")));
         assert!(!tags
             .iter()
-            .any(|tag| tag.first().map(String::as_str) == Some("buzz:mention-snapshot")));
+            .any(|tag| tag.first().map(String::as_str) == Some("ambush:mention-snapshot")));
     }
 
     #[test]

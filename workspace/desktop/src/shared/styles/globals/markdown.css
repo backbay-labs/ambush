@@ -17,51 +17,51 @@
 }
 
 .message-markdown [data-link-preview] {
-  --buzz-link-preview-icon-bg: hsl(var(--muted));
-  --buzz-link-preview-icon-color: hsl(var(--foreground));
+  --ambush-link-preview-icon-bg: hsl(var(--muted));
+  --ambush-link-preview-icon-color: hsl(var(--foreground));
 }
 
 .dark .message-markdown [data-link-preview] {
-  --buzz-link-preview-icon-bg: #24292f;
+  --ambush-link-preview-icon-bg: #24292f;
 }
 
 .message-markdown [data-link-preview="github-issue"],
 .message-markdown [data-link-preview="github-pull-request"],
 .message-markdown [data-link-preview="github-repository"] {
-  --buzz-link-preview-icon-color: #24292f;
+  --ambush-link-preview-icon-color: #24292f;
 }
 
 .dark .message-markdown [data-link-preview="github-issue"],
 .dark .message-markdown [data-link-preview="github-pull-request"],
 .dark .message-markdown [data-link-preview="github-repository"] {
-  --buzz-link-preview-icon-color: #fff;
+  --ambush-link-preview-icon-color: #fff;
 }
 
 .message-markdown [data-link-preview="linear-issue"] {
-  --buzz-link-preview-icon-color: #5e6ad2;
+  --ambush-link-preview-icon-color: #5e6ad2;
 }
 
 .dark .message-markdown [data-link-preview="linear-issue"] {
-  --buzz-link-preview-icon-color: #828fff;
+  --ambush-link-preview-icon-color: #828fff;
 }
 
 .message-markdown [data-link-preview="google-drive-file"],
 .message-markdown [data-link-preview="google-drive-folder"],
 .message-markdown [data-link-preview="google-docs-document"] {
-  --buzz-link-preview-icon-color: #4285f4;
+  --ambush-link-preview-icon-color: #4285f4;
 }
 
 .message-markdown [data-link-preview="google-sheets-spreadsheet"] {
-  --buzz-link-preview-icon-color: #34a853;
+  --ambush-link-preview-icon-color: #34a853;
 }
 
 .message-markdown [data-link-preview="google-slides-presentation"] {
-  --buzz-link-preview-icon-color: #fbbc04;
+  --ambush-link-preview-icon-color: #fbbc04;
 }
 
 .message-markdown .link-preview-media {
-  background-color: var(--buzz-link-preview-icon-bg);
-  color: var(--buzz-link-preview-icon-color);
+  background-color: var(--ambush-link-preview-icon-bg);
+  color: var(--ambush-link-preview-icon-color);
 }
 
 .message-markdown .mention-chip,
@@ -100,10 +100,10 @@
   white-space: normal;
 }
 
-.message-markdown .mention-chip.buzz-link-unavailable,
-.message-markdown .mention-chip.buzz-link-unavailable:hover,
-.message-markdown .mention-chip.buzz-link-deleted,
-.message-markdown .mention-chip.buzz-link-deleted:hover {
+.message-markdown .mention-chip.ambush-link-unavailable,
+.message-markdown .mention-chip.ambush-link-unavailable:hover,
+.message-markdown .mention-chip.ambush-link-deleted,
+.message-markdown .mention-chip.ambush-link-deleted:hover {
   background: hsl(var(--secondary));
   color: hsl(var(--secondary-foreground) / 0.7);
 }

@@ -16,7 +16,7 @@ import '../../shared/emoji/emoji_search.dart';
 import '../../shared/emoji/native_emoji_glyph.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_sheet_header.dart';
+import '../../shared/widgets/ambush_sheet_header.dart';
 import '../../shared/widgets/modal_presentation.dart';
 import 'recent_emoji_provider.dart';
 
@@ -63,7 +63,7 @@ void _showFlutterEmojiPicker({
   required void Function(String emoji) onSelect,
   VoidCallback? onDismiss,
 }) {
-  showBuzzModalBottomSheet<void>(
+  showAmbushModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showCloseButton: false,
@@ -211,7 +211,7 @@ class _EmojiPickerContent extends HookConsumerWidget {
     return Column(
       children: [
         LayoutBuilder(
-          builder: (context, constraints) => BuzzSheetHeader(
+          builder: (context, constraints) => AmbushSheetHeader(
             showDragHandle: true,
             leading: SizedBox(
               width: constraints.maxWidth - Grid.gutter * 2 - 44 - Grid.xxs,

@@ -260,7 +260,7 @@ pub enum InboundOutcome {
 ///   the relay already superseded stops republishing instead of looping.
 /// - Equal `created_at`: NIP-01 addressable-event tiebreak — the event with
 ///   the lexicographically LOWEST id wins, exactly the head the relay itself
-///   retains (`buzz-db` rejects an incoming coordinate whose id is `>=` the
+///   retains (`ambush-db` rejects an incoming coordinate whose id is `>=` the
 ///   accepted head's at equal time). Nostr time is seconds-granularity, so two
 ///   devices can retain distinct successors in the same second; without a
 ///   shared deterministic winner each side skips the other's head on every
@@ -348,7 +348,7 @@ where
 /// Resolve and commit an inbound NIP-09 tombstone against BOTH its own kind:5
 /// retention row AND the covered target head, matching the relay's
 /// coordinate-deletion contract (a deletion removes only target rows with
-/// `created_at <= tombstone.created_at`, `buzz-db`).
+/// `created_at <= tombstone.created_at`, `ambush-db`).
 ///
 /// Order, so a crash or store failure never loses the recovery source:
 /// 1. Covered head strictly NEWER than the tombstone → `Skipped`: a historical

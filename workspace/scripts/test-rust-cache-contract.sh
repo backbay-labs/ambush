@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root=${BUZZ_RUST_CACHE_CONTRACT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+root=${AMBUSH_RUST_CACHE_CONTRACT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 renovate="$root/renovate.json"
 known_good='e18b497796c12c097a38f9edb9d0641fb99eee32'
 known_bad='6323deb102c322ba6fcbdcafc7e3dddab59af2b6'

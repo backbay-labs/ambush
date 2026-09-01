@@ -57,7 +57,7 @@ pub fn get_default_relay_url() -> String {
 
 #[tauri::command]
 pub fn auto_connect_default_relay_enabled() -> bool {
-    option_env!("BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY").is_some()
+    option_env!("AMBUSH_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY").is_some()
 }
 
 #[cfg(test)]
@@ -67,7 +67,7 @@ mod auto_connect_default_relay_tests {
     #[test]
     #[ignore]
     fn compiled_flag_matches_expected() {
-        let expected = std::env::var("BUZZ_TEST_EXPECTED_AUTO_CONNECT_DEFAULT_RELAY")
+        let expected = std::env::var("AMBUSH_TEST_EXPECTED_AUTO_CONNECT_DEFAULT_RELAY")
             .expect("compiled-flag test requires an expected value");
         assert_eq!(
             auto_connect_default_relay_enabled(),
@@ -78,10 +78,10 @@ mod auto_connect_default_relay_tests {
 
 #[tauri::command]
 pub fn is_shared_identity() -> bool {
-    std::env::var("BUZZ_SHARE_IDENTITY")
+    std::env::var("AMBUSH_SHARE_IDENTITY")
         .map(|v| v == "1")
         .unwrap_or(false)
-        && std::env::var("BUZZ_PRIVATE_KEY")
+        && std::env::var("AMBUSH_PRIVATE_KEY")
             .ok()
             .and_then(|k| Keys::parse(k.trim()).ok())
             .is_some()
@@ -154,7 +154,7 @@ pub async fn decrypt_observer_event(
             return Err("observer event has invalid signature".into());
         }
 
-        buzz_core_pkg::observer::decrypt_observer_payload(&keys, &event)
+        ambush_core_pkg::observer::decrypt_observer_payload(&keys, &event)
             .map_err(|error| format!("decrypt observer event failed: {error}"))
     })
     .await
@@ -172,12 +172,12 @@ pub fn build_observer_control_event(
         .map_err(|error| format!("invalid agent pubkey: {error}"))?;
     let agent_pubkey_hex = agent_pubkey.to_hex();
     let encrypted =
-        buzz_core_pkg::observer::encrypt_observer_payload(&keys, &agent_pubkey, &payload)
+        ambush_core_pkg::observer::encrypt_observer_payload(&keys, &agent_pubkey, &payload)
             .map_err(|error| format!("encrypt observer control failed: {error}"))?;
-    let builder = buzz_sdk_pkg::build_agent_observer_frame(
+    let builder = ambush_sdk_pkg::build_agent_observer_frame(
         &agent_pubkey_hex,
         &agent_pubkey_hex,
-        buzz_core_pkg::observer::OBSERVER_FRAME_CONTROL,
+        ambush_core_pkg::observer::OBSERVER_FRAME_CONTROL,
         &encrypted,
     )
     .map_err(|error| format!("build observer control failed: {error}"))?;
@@ -373,7 +373,7 @@ pub async fn import_identity(
         let pubkey_hex = pubkey.to_hex();
         let display_name = truncated_display_name(&pubkey)?;
 
-        eprintln!("buzz-desktop: imported identity pubkey {}", pubkey_hex);
+        eprintln!("ambush-desktop: imported identity pubkey {}", pubkey_hex);
 
         Ok(IdentityInfo {
             pubkey: pubkey_hex,
@@ -442,7 +442,7 @@ pub(crate) fn commit_imported_identity(
     // per the ordering contract above.
     if let Err(e) = crate::key_backup::cleanup_stale_backup(&previous_pubkey, &pubkey, data_dir) {
         eprintln!(
-            "buzz-desktop: import committed, but stale key backup cleanup failed: {e}; \
+            "ambush-desktop: import committed, but stale key backup cleanup failed: {e}; \
              the leftover identity.ncryptsec encrypts the PREVIOUS key and will be \
              replaced by the next backup creation"
         );
@@ -530,21 +530,21 @@ pub async fn persist_current_identity(
 /// restart is safe — the sentinel persists and the wipe completes on the next
 /// open.
 ///
-/// Not available in shared-identity mode (`BUZZ_SHARE_IDENTITY=1`): the key
+/// Not available in shared-identity mode (`AMBUSH_SHARE_IDENTITY=1`): the key
 /// comes from an env var, not the keychain, so wiping would have no effect and
 /// would be confusing.
 #[tauri::command]
 pub async fn sign_out(app: tauri::AppHandle) -> Result<(), String> {
     if is_shared_identity() {
         return Err(
-            "Sign out isn't available while BUZZ_SHARE_IDENTITY provides your identity. Unset BUZZ_SHARE_IDENTITY and BUZZ_PRIVATE_KEY, then relaunch to sign out."
+            "Sign out isn't available while AMBUSH_SHARE_IDENTITY provides your identity. Unset AMBUSH_SHARE_IDENTITY and AMBUSH_PRIVATE_KEY, then relaunch to sign out."
                 .to_string(),
         );
     }
 
     // Stop all managed agents before restart so they don't race the wipe.
     if let Err(e) = crate::shutdown::shutdown_managed_agents(&app) {
-        eprintln!("buzz-desktop sign-out: agent shutdown: {e}");
+        eprintln!("ambush-desktop sign-out: agent shutdown: {e}");
     }
 
     // Write the reset sentinel — destruction happens on next boot.
@@ -744,9 +744,9 @@ mod nostr_identity_binding_tests {
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567".into(),
         ]));
         assert!(tags.contains(&vec!["verification_code".into(), "123456".into(),]));
-        assert!(tags.contains(&vec!["audience".into(), "buzz:nostr-identity".into()]));
+        assert!(tags.contains(&vec!["audience".into(), "ambush:nostr-identity".into()]));
         assert!(tags.contains(&vec!["action".into(), "bind_nostr_identity".into(),]));
-        assert!(tags.contains(&vec!["protocol".into(), "buzz-nostr-identity".into(),]));
+        assert!(tags.contains(&vec!["protocol".into(), "ambush-nostr-identity".into(),]));
         assert!(tags.contains(&vec!["version".into(), "1".into(),]));
         assert!(tags.contains(&vec!["origin".into(), "https://example.com".into(),]));
         assert!(tags.contains(&vec!["expires_at".into(), "2999-01-01T00:00:00Z".into(),]));

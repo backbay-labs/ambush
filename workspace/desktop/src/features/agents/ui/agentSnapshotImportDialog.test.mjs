@@ -81,7 +81,7 @@ function makePreview(overrides = {}) {
     hasSourceAllowlist: true,
     sourceAllowlistCount: 2,
     sourceAllowlist: ["a".repeat(64), "b".repeat(64)],
-    manifestJson: '{\n  "format": "buzz-agent-snapshot"\n}',
+    manifestJson: '{\n  "format": "ambush-agent-snapshot"\n}',
     locked: false,
     ...overrides,
   };

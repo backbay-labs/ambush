@@ -71,7 +71,7 @@ final class JumpToLatestGlassButtonPlatformView: NSObject, FlutterPlatformView {
   ) {
     containerView = UIView(frame: frame)
     channel = FlutterMethodChannel(
-      name: "buzz/jump_to_latest_glass/\(viewId)",
+      name: "ambush/jump_to_latest_glass/\(viewId)",
       binaryMessenger: messenger
     )
     super.init()
@@ -191,7 +191,7 @@ final class NavigationGlassButtonPlatformView: NSObject, FlutterPlatformView {
   ) {
     containerView = UIView(frame: frame)
     channel = FlutterMethodChannel(
-      name: "buzz/navigation_glass/\(viewId)",
+      name: "ambush/navigation_glass/\(viewId)",
       binaryMessenger: messenger
     )
     super.init()
@@ -372,7 +372,7 @@ final class NavigationGlassButtonPlatformView: NSObject, FlutterPlatformView {
     button.configuration?.showsActivityIndicator = false
     if let foregroundColor {
       // Glass uses the view tint for its selected treatment. Keep it aligned
-      // with the Buzz theme instead of falling back to the system blue tint.
+      // with the Ambush theme instead of falling back to the system blue tint.
       button.tintColor = foregroundColor
       button.configuration?.baseForegroundColor = foregroundColor
       activityIndicator.color = foregroundColor
@@ -546,7 +546,7 @@ final class NativeSegmentedControlPlatformView: NSObject, FlutterPlatformView {
     let items = arguments?["items"] as? [String] ?? []
     containerView = UIView(frame: frame)
     channel = FlutterMethodChannel(
-      name: "buzz/native_segmented_control/\(viewId)",
+      name: "ambush/native_segmented_control/\(viewId)",
       binaryMessenger: messenger
     )
     segmentedControl = UISegmentedControl(items: items)

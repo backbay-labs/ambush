@@ -25,7 +25,7 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
 });
 
 const CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
-const CHANNEL_HREF = `buzz://channel/${CHANNEL_ID}`;
+const CHANNEL_HREF = `ambush://channel/${CHANNEL_ID}`;
 const MESSAGE_LINK_CHANNELS = [{ id: CHANNEL_ID, name: "general" }];
 
 before(() => {
@@ -89,8 +89,8 @@ async function mountComposerEditor() {
     render(React.createElement(Harness));
   });
   // Tiptap emits `create` from a `setTimeout(…, 0)`, and Link's `onCreate` is
-  // what teaches linkify the `buzz` protocol. Paste before that lands and a
-  // `buzz://` assertion passes for the wrong reason.
+  // what teaches linkify the `ambush` protocol. Paste before that lands and a
+  // `ambush://` assertion passes for the wrong reason.
   await waitFor(() =>
     assert.ok(editor?.isInitialized, "composer editor never emitted `create`"),
   );
@@ -102,7 +102,7 @@ async function mountComposerEditor() {
   assert.equal(
     findLinks(CHANNEL_HREF)[0]?.href,
     CHANNEL_HREF,
-    "expected Link's onCreate to register the buzz protocol with linkify",
+    "expected Link's onCreate to register the ambush protocol with linkify",
   );
   return editor;
 }
@@ -184,7 +184,7 @@ test("mixed paragraph and code-block selection is replaced, never part-linked", 
   assert.ok(!editor.state.doc.textContent.includes("ordinary"));
 });
 
-test("mixed selection paste of a Buzz link becomes a chip, not a part-link", async () => {
+test("mixed selection paste of an Ambush link becomes a chip, not a part-link", async () => {
   const editor = await mountComposerEditor();
   seedDocument(
     editor,

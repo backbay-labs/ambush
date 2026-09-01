@@ -50,10 +50,12 @@ function ErrorBanner({ message }: { message: string | null }) {
 }
 
 const NEUTRAL_EMOJI_PICKER_THEME_VARS = {
-  "--buzz-emoji-picker-rgb-background":
-    "var(--buzz-onboarding-emoji-picker-background)",
-  "--buzz-emoji-picker-rgb-color": "var(--buzz-onboarding-emoji-picker-color)",
-  "--buzz-emoji-picker-rgb-input": "var(--buzz-onboarding-emoji-picker-input)",
+  "--ambush-emoji-picker-rgb-background":
+    "var(--ambush-onboarding-emoji-picker-background)",
+  "--ambush-emoji-picker-rgb-color":
+    "var(--ambush-onboarding-emoji-picker-color)",
+  "--ambush-emoji-picker-rgb-input":
+    "var(--ambush-onboarding-emoji-picker-input)",
 } as React.CSSProperties;
 
 const AVATAR_ACTIONS_MOTION_TRANSITION = {
@@ -90,8 +92,8 @@ function AvatarPreview({
         >
           <span
             className={cn(
-              "buzz-avatar-emoji-glyph flex h-full w-full items-center justify-center text-[6rem] leading-[6.25rem]",
-              avatarSquishKey > 0 && "buzz-avatar-squish",
+              "ambush-avatar-emoji-glyph flex h-full w-full items-center justify-center text-[6rem] leading-[6.25rem]",
+              avatarSquishKey > 0 && "ambush-avatar-squish",
             )}
             data-testid="onboarding-avatar-preview-emoji"
             key={avatarSquishKey}

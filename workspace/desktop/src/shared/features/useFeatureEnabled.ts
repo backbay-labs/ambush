@@ -55,7 +55,7 @@ function getSnapshot(): string {
 /**
  * Server-side snapshot for useSyncExternalStore.
  *
- * Buzz is a Tauri desktop app and does not currently SSR. Returning an
+ * Ambush is a Tauri desktop app and does not currently SSR. Returning an
  * explicit empty-state snapshot is safer than omitting this argument: under
  * any future test harness or SSR experiment, the hook returns "no overrides"
  * instead of throwing.

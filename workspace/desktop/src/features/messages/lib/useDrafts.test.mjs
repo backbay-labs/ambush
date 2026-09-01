@@ -196,7 +196,7 @@ test("clearDraft_removes_entry_from_store_and_localstorage", () => {
 
 test("corrupt_localstorage_json_is_silently_ignored", () => {
   setup("pubkey-corrupt");
-  localStorage.setItem("buzz-drafts.v1:pubkey-corrupt", "{not-valid-json");
+  localStorage.setItem("ambush-drafts.v1:pubkey-corrupt", "{not-valid-json");
   // Re-init to force a fresh read from the corrupted store.
   clearAllDrafts();
   initDraftStore("pubkey-corrupt");
@@ -221,7 +221,7 @@ test("invalid_draft_entries_in_localstorage_are_skipped", () => {
     "chan-bad": { content: 42, selectionStart: "no" },
     "chan-missing": { content: "x" },
   });
-  localStorage.setItem("buzz-drafts.v1:pubkey-invalid", data);
+  localStorage.setItem("ambush-drafts.v1:pubkey-invalid", data);
   clearAllDrafts();
   initDraftStore("pubkey-invalid");
   assert.ok(loadDraftEntry("chan-v"), "valid draft should load");
@@ -545,7 +545,7 @@ test("pre_status_entry_without_status_field_is_read_as_active", () => {
     // NOTE: no 'status' field
   };
   localStorage.setItem(
-    "buzz-drafts.v1:pubkey-migrate",
+    "ambush-drafts.v1:pubkey-migrate",
     JSON.stringify({ "chan-legacy": legacyEntry }),
   );
   // Force re-read from localStorage.
@@ -570,7 +570,7 @@ test("pre_status_entry_appears_in_getActiveDraftEntries_after_migration", () => 
     spoileredAttachmentUrls: [],
   };
   localStorage.setItem(
-    "buzz-drafts.v1:pubkey-migrate2",
+    "ambush-drafts.v1:pubkey-migrate2",
     JSON.stringify({ "chan-old": legacyEntry }),
   );
   clearAllDrafts();
@@ -598,7 +598,7 @@ test("pre_status_sent_entry_is_dropped_on_read", () => {
     status: "sent",
   };
   localStorage.setItem(
-    "buzz-drafts.v1:pubkey-normalise",
+    "ambush-drafts.v1:pubkey-normalise",
     JSON.stringify({ "sent:chan-z:1725148800000-1": oldSentEntry }),
   );
   clearAllDrafts();
@@ -646,7 +646,7 @@ function makeFullImeta(overrides = {}) {
 
 /** Read the raw persisted store blob for the current pubkey (legacy v1 key). */
 function readRawStore(pubkey) {
-  const raw = localStorage.getItem(`buzz-drafts.v1:${pubkey}`);
+  const raw = localStorage.getItem(`ambush-drafts.v1:${pubkey}`);
   return raw ? JSON.parse(raw) : {};
 }
 
@@ -954,7 +954,7 @@ test("legacy_draft_without_mention_refs_migrates_to_empty_refs", () => {
   clearAllDrafts();
   const now = new Date().toISOString();
   storage.setItem(
-    "buzz-drafts.v1:legacy-owner",
+    "ambush-drafts.v1:legacy-owner",
     JSON.stringify({
       "chan-legacy": {
         content: "legacy @Ada",
@@ -979,7 +979,7 @@ test("invalid_mention_ref_rejects_corrupt_draft", () => {
   clearAllDrafts();
   const now = new Date().toISOString();
   storage.setItem(
-    "buzz-drafts.v1:corrupt-mention-owner",
+    "ambush-drafts.v1:corrupt-mention-owner",
     JSON.stringify({
       "chan-corrupt": {
         content: "bad ref",
@@ -1035,10 +1035,10 @@ test("cross_relay_isolation_via_initDraftStore_without_clearAllDrafts", () => {
 
   // Verify localStorage has two distinct keys.
   const v2a = storage.getItem(
-    "buzz-drafts.v2:wss://relay-a.example.com:pubkey-shared",
+    "ambush-drafts.v2:wss://relay-a.example.com:pubkey-shared",
   );
   const v2b = storage.getItem(
-    "buzz-drafts.v2:wss://relay-b.example.com:pubkey-shared",
+    "ambush-drafts.v2:wss://relay-b.example.com:pubkey-shared",
   );
   assert.ok(v2a, "v2 key for relay A must exist");
   assert.ok(v2b, "v2 key for relay B must exist");
@@ -1053,7 +1053,7 @@ test("legacy_migration_v1_entries_readable_after_scoped_init_v1_key_removed", ()
 
   // Seed a v1 bucket (pre-upgrade state).
   storage.setItem(
-    `buzz-drafts.v1:${pk}`,
+    `ambush-drafts.v1:${pk}`,
     JSON.stringify({
       "chan-old": {
         content: "Legacy draft",
@@ -1079,13 +1079,13 @@ test("legacy_migration_v1_entries_readable_after_scoped_init_v1_key_removed", ()
 
   // v1 key must be deleted after migration.
   assert.equal(
-    storage.getItem(`buzz-drafts.v1:${pk}`),
+    storage.getItem(`ambush-drafts.v1:${pk}`),
     null,
     "v1 key must be removed after migration",
   );
 
   // v2 key must exist.
-  const v2 = storage.getItem(`buzz-drafts.v2:wss://relay.example.com:${pk}`);
+  const v2 = storage.getItem(`ambush-drafts.v2:wss://relay.example.com:${pk}`);
   assert.ok(v2, "v2 key must hold the migrated data");
 });
 
@@ -1097,7 +1097,7 @@ test("legacy_migration_second_relay_init_does_not_reimport_deleted_v1", () => {
 
   // Seed v1.
   storage.setItem(
-    `buzz-drafts.v1:${pk}`,
+    `ambush-drafts.v1:${pk}`,
     JSON.stringify({
       "chan-first": {
         content: "First workspace draft",
@@ -1118,7 +1118,7 @@ test("legacy_migration_second_relay_init_does_not_reimport_deleted_v1", () => {
   assert.ok(loadDraftEntry("chan-first"), "relay A got the legacy draft");
 
   // v1 key is gone.
-  assert.equal(storage.getItem(`buzz-drafts.v1:${pk}`), null);
+  assert.equal(storage.getItem(`ambush-drafts.v1:${pk}`), null);
 
   // Second workspace initializes — must NOT see the legacy draft.
   clearAllDrafts();
@@ -1140,7 +1140,7 @@ test("v2_already_exists_legacy_bucket_ignored", () => {
   // Seed both v1 and v2 — simulates a user who already ran post-upgrade
   // but still has a leftover v1 key.
   storage.setItem(
-    `buzz-drafts.v1:${pk}`,
+    `ambush-drafts.v1:${pk}`,
     JSON.stringify({
       "chan-legacy": {
         content: "Should be ignored",
@@ -1156,7 +1156,7 @@ test("v2_already_exists_legacy_bucket_ignored", () => {
     }),
   );
   storage.setItem(
-    `buzz-drafts.v2:${relay}:${pk}`,
+    `ambush-drafts.v2:${relay}:${pk}`,
     JSON.stringify({
       "chan-v2": {
         content: "V2 draft",
@@ -1184,7 +1184,7 @@ test("v2_already_exists_legacy_bucket_ignored", () => {
   );
   // v1 key is NOT deleted (no migration path ran).
   assert.ok(
-    storage.getItem(`buzz-drafts.v1:${pk}`),
+    storage.getItem(`ambush-drafts.v1:${pk}`),
     "v1 key preserved when v2 already existed (no migration)",
   );
 });
@@ -1203,7 +1203,7 @@ test("clearAllDrafts_without_reinit_blocks_reads_and_writes_to_previous_bucket",
 
   // Snapshot A's bucket before teardown.
   const bucketBefore = storage.getItem(
-    "buzz-drafts.v2:wss://relay-a.example.com:pubkey-teardown",
+    "ambush-drafts.v2:wss://relay-a.example.com:pubkey-teardown",
   );
 
   // Simulate community switch teardown — clearAllDrafts with NO re-init.
@@ -1219,7 +1219,9 @@ test("clearAllDrafts_without_reinit_blocks_reads_and_writes_to_previous_bucket",
   // A write attempt must not modify A's stored bucket.
   saveDraftEntry("chan-1", makeDraft({ content: "Rogue write" }));
   assert.equal(
-    storage.getItem("buzz-drafts.v2:wss://relay-a.example.com:pubkey-teardown"),
+    storage.getItem(
+      "ambush-drafts.v2:wss://relay-a.example.com:pubkey-teardown",
+    ),
     bucketBefore,
     "A's stored bucket must be byte-unchanged after unscoped write",
   );
@@ -1243,7 +1245,7 @@ test("failed_v2_flush_during_migration_preserves_v1_key", () => {
 
   // Seed v1 bucket.
   storage.setItem(
-    `buzz-drafts.v1:${pk}`,
+    `ambush-drafts.v1:${pk}`,
     JSON.stringify({
       "chan-legacy": {
         content: "Precious legacy",
@@ -1273,13 +1275,13 @@ test("failed_v2_flush_during_migration_preserves_v1_key", () => {
 
   // v1 key must still be present (flush failed, so legacy NOT deleted).
   assert.ok(
-    storage.getItem(`buzz-drafts.v1:${pk}`),
+    storage.getItem(`ambush-drafts.v1:${pk}`),
     "v1 key must be preserved when v2 flush fails",
   );
 
   // v2 key must NOT exist (flush failed).
   assert.equal(
-    storage.getItem(`buzz-drafts.v2:wss://relay.example.com:${pk}`),
+    storage.getItem(`ambush-drafts.v2:wss://relay.example.com:${pk}`),
     null,
     "v2 key must not exist when flush failed",
   );
@@ -1292,7 +1294,7 @@ test("successful_v2_flush_during_migration_deletes_v1_key", () => {
   const now = new Date().toISOString();
 
   storage.setItem(
-    `buzz-drafts.v1:${pk}`,
+    `ambush-drafts.v1:${pk}`,
     JSON.stringify({
       "chan-old": {
         content: "Migrating",
@@ -1311,12 +1313,12 @@ test("successful_v2_flush_during_migration_deletes_v1_key", () => {
   initDraftStore(pk, "wss://relay.example.com");
 
   assert.equal(
-    storage.getItem(`buzz-drafts.v1:${pk}`),
+    storage.getItem(`ambush-drafts.v1:${pk}`),
     null,
     "v1 key deleted after successful migration",
   );
   assert.ok(
-    storage.getItem(`buzz-drafts.v2:wss://relay.example.com:${pk}`),
+    storage.getItem(`ambush-drafts.v2:wss://relay.example.com:${pk}`),
     "v2 key created after successful migration",
   );
   assert.equal(loadDraftEntry("chan-old")?.content, "Migrating");
@@ -1375,7 +1377,7 @@ test("no_relay_legacy_caller_form_still_reads_writes_v1_key", () => {
 
   // Seed a v1 bucket.
   storage.setItem(
-    `buzz-drafts.v1:${pk}`,
+    `ambush-drafts.v1:${pk}`,
     JSON.stringify({
       "chan-legacy": {
         content: "Legacy no-relay",
@@ -1401,7 +1403,7 @@ test("no_relay_legacy_caller_form_still_reads_writes_v1_key", () => {
   saveDraftEntry("chan-new", makeDraft({ content: "New no-relay" }));
 
   // Verify it lands in the v1 key.
-  const raw = JSON.parse(storage.getItem(`buzz-drafts.v1:${pk}`));
+  const raw = JSON.parse(storage.getItem(`ambush-drafts.v1:${pk}`));
   assert.ok(raw["chan-new"], "new draft must be in v1 key");
   assert.equal(raw["chan-new"].content, "New no-relay");
 });

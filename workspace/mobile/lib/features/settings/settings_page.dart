@@ -74,7 +74,7 @@ class SettingsPage extends HookConsumerWidget {
     );
 
     Future<void> showEditProfileSheet() async {
-      final action = await showBuzzModalBottomSheet<_ProfileEditAction>(
+      final action = await showAmbushModalBottomSheet<_ProfileEditAction>(
         context: context,
         title: 'Edit profile',
         builder: (sheetContext) => SafeArea(

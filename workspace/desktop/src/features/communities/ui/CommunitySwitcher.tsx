@@ -36,6 +36,7 @@ import {
   useRelayConnection,
 } from "@/shared/api/useRelayConnection";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
+import { getInitials } from "@/shared/lib/initials";
 import { useActiveCommunityIcon } from "@/features/communities/useCommunityIcons";
 import { EditCommunityDialog } from "./EditCommunityDialog";
 
@@ -72,9 +73,11 @@ type CommunitySwitcherProps = {
 export function CommunityEmojiIcon({
   className,
   iconUrl,
+  name,
 }: {
   className: string;
   iconUrl?: string | null;
+  name: string;
 }) {
   if (iconUrl) {
     return (
@@ -93,7 +96,9 @@ export function CommunityEmojiIcon({
   }
   return (
     <span aria-hidden="true" className={className}>
-      <span className="-translate-y-px leading-normal">🐝</span>
+      <span className="-translate-y-px leading-normal">
+        {getInitials(name)}
+      </span>
     </span>
   );
 }
@@ -175,7 +180,7 @@ export function CommunitySwitcher({
       if (result?.status === "already-absent") {
         toast("Community removed", {
           description:
-            "You were no longer a member, so Buzz removed the community from this device.",
+            "You were no longer a member, so Ambush removed the community from this device.",
         });
       }
     } catch (error) {
@@ -220,6 +225,7 @@ export function CommunitySwitcher({
               : "flex w-5 shrink-0 items-center justify-center text-xs"
           }
           iconUrl={activeIcon}
+          name={activeCommunity?.name ?? "No community"}
         />
       )}
       <span

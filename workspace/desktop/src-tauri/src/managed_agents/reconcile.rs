@@ -26,7 +26,7 @@ use super::{
     retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
     ManagedAgentRecord,
 };
-use buzz_core_pkg::kind::KIND_MANAGED_AGENT;
+use ambush_core_pkg::kind::KIND_MANAGED_AGENT;
 use nostr::JsonUtil;
 
 /// Reconcile `managed-agents.json` into kind:30177 events in the retention
@@ -45,11 +45,11 @@ pub(crate) fn reconcile_agents_to_events(
         Ok(0) => {}
         Ok(reconciled) => {
             eprintln!(
-                "buzz-desktop: agent-event-reconcile: {reconciled} agents reconciled to retention"
+                "ambush-desktop: agent-event-reconcile: {reconciled} agents reconciled to retention"
             );
         }
         Err(e) => {
-            eprintln!("buzz-desktop: agent-event-reconcile: {e}");
+            eprintln!("ambush-desktop: agent-event-reconcile: {e}");
         }
     }
 }

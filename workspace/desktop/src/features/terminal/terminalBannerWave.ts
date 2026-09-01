@@ -8,9 +8,9 @@
  *
  * Tyler, amendment (msg 25bf80a2) — AUTHORITATIVE: the field wave
  * "originates bottom right and travels top left", not plain right-to-left.
- * This SUPERSEDES the original directive: "slow waves of the buzz theme colors
+ * This SUPERSEDES the original directive: "slow waves of the ambush theme colors
  * moving across the honeycomb lattice right to left, with a separate slow
- * color wave on the `buzz term` going left to right". The wordmark half is
+ * color wave on the `ambush term` going left to right". The wordmark half is
  * unchanged by the amendment; only the field's axis moved.
  *
  * Two independent waves, different axes, different periods:
@@ -107,7 +107,7 @@ export type BannerWaveConfig = {
  * direction vector points up-and-left. The wordmark keeps its own
  * left-to-right sweep, anchored to the letters rather than the viewport.
  *
- * Tyler, amendment (msg 4e7abbc8): "double the animation speed on the buzz
+ * Tyler, amendment (msg 4e7abbc8): "double the animation speed on the ambush
  * term splash screen". Both periods halved from the original 26s/19s; the
  * "slow" gate's floor moved from 10s to 5s to match.
  */
@@ -178,7 +178,7 @@ const wrap01 = (value: number) => value - Math.floor(value);
  * is stop 2, and those two ends are as far apart as the palette gets. Feeding
  * it a wrapping phase means that every cycle, somewhere on screen, adjacent
  * cells straddle the 1 -> 0 wrap and jump the entire width of the palette. On
- * buzz-dark that seam measured 182.5 in sRGB distance (#3dcf55 against
+ * ambush-dark that seam measured 182.5 in sRGB distance (#3dcf55 against
  * #7bb7ff) — a hard colour edge sweeping across the lattice once per period,
  * which is not "slow waves of the theme colours", it is a glitch.
  *
@@ -353,7 +353,7 @@ export function phaseAt(seconds: number): { field: number; wordmark: number } {
 /**
  * Phase-INDEPENDENT colour table. This is what makes the animation affordable.
  *
- * Measured on this box, buzz-dark, median of 7: calling `bannerColor` per cell
+ * Measured on this box, ambush-dark, median of 7: calling `bannerColor` per cell
  * costs 42.7ms for a 112x46 banner (256% of a 60Hz frame) and 203ms at 228x90
  * (1218%). Per-cell-per-frame is not a micro-optimisation problem, it is dead
  * on arrival by 2.6-12x. The cost is concentrated: the field's `atRatio` pin is

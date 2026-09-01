@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
-test("home page loads with Buzz branding", async ({ page }) => {
+test("home page loads with Ambush branding", async ({ page }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("main").getByRole("img", { name: "Buzz" }),
+    page.getByRole("main").getByRole("img", { name: "Ambush" }),
   ).toBeVisible();
 });
 
@@ -13,7 +13,7 @@ test("home page shows repositories section", async ({ page }) => {
   await expect(page.getByText("Repositories")).toBeVisible();
 });
 
-test("invite requires age and legal consent before opening Buzz", async ({
+test("invite requires age and legal consent before opening Ambush", async ({
   page,
 }) => {
   await page.route("**/api/join-policy", async (route) => {
@@ -42,24 +42,24 @@ test("invite requires age and legal consent before opening Buzz", async ({
           prerelease: false,
           assets: [
             {
-              name: "Buzz_0.4.9_aarch64.dmg",
+              name: "Ambush_0.4.9_aarch64.dmg",
               browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_aarch64.dmg",
+                "https://github.com/backbay-labs/ambush/releases/download/v0.4.9/Ambush_0.4.9_aarch64.dmg",
             },
             {
-              name: "Buzz_0.4.9_x64.dmg",
+              name: "Ambush_0.4.9_x64.dmg",
               browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64.dmg",
+                "https://github.com/backbay-labs/ambush/releases/download/v0.4.9/Ambush_0.4.9_x64.dmg",
             },
             {
-              name: "Buzz_0.4.9_amd64.AppImage",
+              name: "Ambush_0.4.9_amd64.AppImage",
               browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_amd64.AppImage",
+                "https://github.com/backbay-labs/ambush/releases/download/v0.4.9/Ambush_0.4.9_amd64.AppImage",
             },
             {
-              name: "Buzz_0.4.9_x64-setup_alpha-unsigned.exe",
+              name: "Ambush_0.4.9_x64-setup_alpha-unsigned.exe",
               browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64-setup_alpha-unsigned.exe",
+                "https://github.com/backbay-labs/ambush/releases/download/v0.4.9/Ambush_0.4.9_x64-setup_alpha-unsigned.exe",
             },
           ],
         },
@@ -72,15 +72,15 @@ test("invite requires age and legal consent before opening Buzz", async ({
     page.getByRole("link", { name: "Download it now" }),
   ).toHaveAttribute(
     "href",
-    "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64-setup_alpha-unsigned.exe",
+    "https://github.com/backbay-labs/ambush/releases/download/v0.4.9/Ambush_0.4.9_x64-setup_alpha-unsigned.exe",
   );
 
   const ageConfirmation = page.getByLabel("I am 18 years of age or older.");
   const agreementConfirmation = page.getByLabel(
-    "I agree to the Buzz Terms of Service and Privacy Policy.",
+    "I agree to the Ambush Terms of Service and Privacy Policy.",
   );
   const acceptInvite = page.getByRole("button", {
-    name: "Accept invite in Buzz",
+    name: "Accept invite in Ambush",
   });
 
   await expect(ageConfirmation).toBeVisible();
@@ -106,7 +106,7 @@ test("invite requires age and legal consent before opening Buzz", async ({
   await page
     .locator("label")
     .filter({
-      hasText: "I agree to the Buzz Terms of Service and Privacy Policy.",
+      hasText: "I agree to the Ambush Terms of Service and Privacy Policy.",
     })
     .click({ position: { x: 8, y: 8 } });
   await expect(agreementConfirmation).toBeChecked();
@@ -248,7 +248,9 @@ test("invite asks Safari users to choose their Mac download", async ({
   await chooser.getByRole("link", { name: /Newer Mac/ }).click();
   const openedPage = await openedPagePromise;
   await expect(chooser).toBeHidden();
-  await expect(openedPage).toHaveURL("https://github.com/block/buzz/releases");
+  await expect(openedPage).toHaveURL(
+    "https://github.com/backbay-labs/ambush/releases",
+  );
   await expect(page).toHaveURL(/\/invite\/demo-code$/);
   await openedPage.close();
 
@@ -324,14 +326,14 @@ test("invite download falls back for mobile and non-desktop devices", async ({
             prerelease: false,
             assets: [
               {
-                name: "Buzz_0.4.9_x64.dmg",
+                name: "Ambush_0.4.9_x64.dmg",
                 browser_download_url:
-                  "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64.dmg",
+                  "https://github.com/backbay-labs/ambush/releases/download/v0.4.9/Ambush_0.4.9_x64.dmg",
               },
               {
-                name: "Buzz_0.4.9_amd64.AppImage",
+                name: "Ambush_0.4.9_amd64.AppImage",
                 browser_download_url:
-                  "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_amd64.AppImage",
+                  "https://github.com/backbay-labs/ambush/releases/download/v0.4.9/Ambush_0.4.9_amd64.AppImage",
               },
             ],
           },
@@ -343,7 +345,10 @@ test("invite download falls back for mobile and non-desktop devices", async ({
     await expect(
       page.getByRole("link", { name: "Download it now" }),
       device.name,
-    ).toHaveAttribute("href", "https://github.com/block/buzz/releases");
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/backbay-labs/ambush/releases",
+    );
     await context.close();
   }
 });

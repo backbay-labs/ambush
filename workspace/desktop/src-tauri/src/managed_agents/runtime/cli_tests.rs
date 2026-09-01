@@ -23,7 +23,7 @@ fn claude_spawn_uses_the_probed_cli_executable() {
     // invalidate both before configuration and after restoring PATH.
     crate::managed_agents::clear_resolve_cache();
 
-    let mut command = std::process::Command::new("buzz-acp");
+    let mut command = std::process::Command::new("ambush-acp");
     configure_runtime_cli(&mut command, known_acp_runtime("claude-agent-acp"));
 
     if let Some(path) = original_path {

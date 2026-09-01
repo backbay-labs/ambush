@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:mocktail/mocktail.dart';
-import 'package:buzz/shared/security/sensitive_action_authorizer.dart';
+import 'package:ambush/shared/security/sensitive_action_authorizer.dart';
 
 class _MockLocalAuthentication extends Mock implements LocalAuthentication {}
 
@@ -35,7 +35,7 @@ void main() {
     expect(result, DeviceAuthResult.success);
     verify(
       () => authentication.authenticate(
-        localizedReason: 'Confirm sending your Buzz identity to desktop',
+        localizedReason: 'Confirm sending your Ambush identity to desktop',
         authMessages: any(named: 'authMessages'),
         biometricOnly: false,
         sensitiveTransaction: true,

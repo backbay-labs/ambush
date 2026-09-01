@@ -370,7 +370,7 @@ test("atom: caret offsets around an atom round-trip", () => {
 });
 
 test("message-link atom projects to its full underlying deep link", () => {
-  const href = "buzz://message?channel=general-id&id=root-id";
+  const href = "ambush://message?channel=general-id&id=root-id";
   const d = eDoc(ePara(eText("See "), messageLink(href), eText(" now")));
   const p = buildPlainTextProjection(d);
   assert.equal(p.text, `See ${href} now`);

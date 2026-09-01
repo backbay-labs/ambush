@@ -56,7 +56,7 @@ mod tests {
             "name": "standalone-agent",
             "private_key_nsec": "nsec1fake",
             "relay_url": "wss://localhost:3000",
-            "acp_command": "buzz-acp",
+            "acp_command": "ambush-acp",
             "agent_command": "goose",
             "agent_args": [],
             "mcp_command": "",
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn create_accepts_visible_multiline_definition_less_prompt() {
         let input = create_request("Review changes.\n\tCall out security risks.");
-        validate_create_definition("Reviewer 🐝", None, &input)
+        validate_create_definition("Reviewer 🚀", None, &input)
             .expect("visible multiline instructions should remain valid");
     }
 

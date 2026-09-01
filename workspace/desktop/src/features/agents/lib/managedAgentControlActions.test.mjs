@@ -12,7 +12,7 @@ function agent(overrides = {}) {
     name: "Mesh Agent",
     personaId: null,
     relayUrl: "ws://localhost:3000",
-    acpCommand: "buzz-acp",
+    acpCommand: "ambush-acp",
     agentCommand: "goose",
     agentArgs: [],
     mcpCommand: "",
@@ -44,7 +44,7 @@ function agent(overrides = {}) {
 test("relay-mesh agents delegate start to the backend preflight", async () => {
   const meshAgent = agent({
     envVars: {
-      BUZZ_AGENT_PROVIDER: "openai",
+      AMBUSH_AGENT_PROVIDER: "openai",
       OPENAI_COMPAT_BASE_URL: "http://127.0.0.1:9337/v1/",
     },
   });

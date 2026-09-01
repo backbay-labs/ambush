@@ -18,7 +18,7 @@
 //! whole window even with glass off.
 //!
 //! Vibrancy applies an `NSVisualEffectView` behind the webview so the desktop
-//! (and windows behind Buzz) blurs through wherever the WKWebView canvas is
+//! (and windows behind Ambush) blurs through wherever the WKWebView canvas is
 //! transparent. It is a native, macOS-only effect: there is no "intensity"
 //! setting at the OS level, only a set of material presets. The frontend tunes
 //! perceived intensity by adjusting CSS surface opacity while this command
@@ -77,7 +77,7 @@ pub fn set_window_vibrancy(
         // `apply_vibrancy` appends a new tagged `NSVisualEffectView` each call,
         // while `clear_vibrancy` only removes one. Repeated enables (theme
         // switches, follow-system flips) would otherwise stack blur views and
-        // leave a stale one behind on the next non-Buzz theme. Clear any
+        // leave a stale one behind on the next non-Ambush theme. Clear any
         // existing view first so exactly one material is ever installed. The
         // clear is a no-op (returns `false`) when none is present.
         let _ = clear_vibrancy(&window);

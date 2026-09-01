@@ -7,7 +7,7 @@ use crate::{
         AgentDefinition,
     },
 };
-use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
+use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -211,7 +211,7 @@ async fn test_unshare_leaves_an_untagged_head_retained_after_publication() {
     assert!(!result.team.shared);
     let row = retained_head(&db_path, &owner);
     assert!(
-        !buzz_core_pkg::kind::event_is_shared(
+        !ambush_core_pkg::kind::event_is_shared(
             &<nostr::Event as nostr::JsonUtil>::from_json(&row.raw_event).unwrap()
         ),
         "unshare retracts by replacement, so the coordinate stays readable by its author"

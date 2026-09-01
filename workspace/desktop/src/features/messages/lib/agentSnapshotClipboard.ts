@@ -3,7 +3,7 @@ import type { ImetaMedia } from "./imetaMediaMarkdown";
 
 // Keep the original attribute name for clipboard compatibility. The payload
 // now accepts both agent and team snapshot filenames.
-const CLIPBOARD_ATTRIBUTE = "data-buzz-agent-snapshot";
+const CLIPBOARD_ATTRIBUTE = "data-ambush-agent-snapshot";
 const MAX_AGENT_SNAPSHOT_BYTES = 10 * 1024 * 1024;
 const MAX_TEAM_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 const MAX_DISPLAY_NAME_LENGTH = 200;
@@ -40,7 +40,7 @@ function isSafeSnapshotUrl(value: string): boolean {
   }
 }
 
-/** Build Buzz-specific clipboard HTML with the raw URL as its visible link. */
+/** Build Ambush-specific clipboard HTML with the raw URL as its visible link. */
 export function buildSnapshotClipboardHtml({
   attachment,
   displayName,
@@ -150,7 +150,7 @@ export function parseSnapshotClipboardHtml(html: string): ImetaMedia | null {
 
 export const parseAgentSnapshotClipboardHtml = parseSnapshotClipboardHtml;
 
-/** Convert a Buzz snapshot clipboard payload into one pending attachment. */
+/** Convert an Ambush snapshot clipboard payload into one pending attachment. */
 export function handleSnapshotPaste(
   event: Pick<ClipboardEvent, "clipboardData" | "preventDefault">,
   setPendingImeta: (

@@ -14,7 +14,7 @@ const DEAD_PROBE_EVICT_THRESHOLD: u32 = 2;
 
 /// Sentinel prefix on errors owned by this recovery path. Recovery clears only
 /// these errors and never an unrelated agent failure.
-pub(crate) const MESH_REARM_ERROR_SENTINEL: &str = "[buzz-mesh-rearm] ";
+pub(crate) const MESH_REARM_ERROR_SENTINEL: &str = "[ambush-mesh-rearm] ";
 
 /// App-scoped recovery coordination. The runtime id binds a dead-probe streak
 /// to one specific handle, while `rearm_lock` prevents overlapping watchdog
@@ -191,7 +191,7 @@ pub(crate) async fn recover_stale_mesh_runtime(
             Some(runtime) => (runtime.id(), runtime.is_starting().await, runtime.mode()),
             None => {
                 state.mesh_recovery.reset_probe_streak();
-                // A cancelled SDK startup can outlive its Buzz-side task briefly
+                // A cancelled SDK startup can outlive its Ambush-side task briefly
                 // because the embedded runtime runs on its own thread. Never start
                 // a replacement merely because the tracked handle is gone: first
                 // prove the old ingress is either still useful or has released the
@@ -211,13 +211,13 @@ pub(crate) async fn recover_stale_mesh_runtime(
     let consecutive = state.mesh_recovery.record_dead_probe(candidate_id);
     if startup_in_progress && consecutive < DEAD_PROBE_EVICT_THRESHOLD {
         eprintln!(
-            "buzz-mesh: ingress is not live on the first startup probe; allowing the supervised SDK task one watchdog interval"
+            "ambush-mesh: ingress is not live on the first startup probe; allowing the supervised SDK task one watchdog interval"
         );
         return MeshRuntimeRecovery::Debouncing;
     }
     if !should_evict_after_probe(urgency, probe, consecutive) {
         eprintln!(
-            "buzz-mesh: ingress probe {probe:?} ({consecutive}/{DEAD_PROBE_EVICT_THRESHOLD}); debouncing"
+            "ambush-mesh: ingress probe {probe:?} ({consecutive}/{DEAD_PROBE_EVICT_THRESHOLD}); debouncing"
         );
         return MeshRuntimeRecovery::Debouncing;
     }
@@ -248,9 +248,9 @@ pub(crate) async fn recover_stale_mesh_runtime(
 
     match tokio::time::timeout(STALE_STOP_TIMEOUT, stale.stop()).await {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("buzz-mesh: stale runtime stop failed: {error:#}"),
+        Ok(Err(error)) => eprintln!("ambush-mesh: stale runtime stop failed: {error:#}"),
         Err(_) => eprintln!(
-            "buzz-mesh: stale runtime stop exceeded {}s; waiting for port release",
+            "ambush-mesh: stale runtime stop exceeded {}s; waiting for port release",
             STALE_STOP_TIMEOUT.as_secs()
         ),
     }
@@ -258,7 +258,7 @@ pub(crate) async fn recover_stale_mesh_runtime(
         MeshRuntimeRecovery::Evicted
     } else {
         eprintln!(
-            "buzz-mesh: old runtime still owns the local ingress; deferring replacement to avoid a port-conflict loop"
+            "ambush-mesh: old runtime still owns the local ingress; deferring replacement to avoid a port-conflict loop"
         );
         MeshRuntimeRecovery::ReleasePending
     }
@@ -289,7 +289,7 @@ pub(crate) async fn rearm_relay_mesh_for_running_agents(app: &AppHandle) -> Resu
         MeshRuntimeRecovery::RestartRequired => {
             if runtime_mode == Some(crate::mesh_llm::MeshNodeMode::Serve) {
                 eprintln!(
-                    "buzz-mesh: serving ingress failed; restarting Buzz to restore Share Compute without changing roles"
+                    "ambush-mesh: serving ingress failed; restarting Ambush to restore Share Compute without changing roles"
                 );
                 app.request_restart();
                 return Ok(());
@@ -304,7 +304,7 @@ pub(crate) async fn rearm_relay_mesh_for_running_agents(app: &AppHandle) -> Resu
                 return Ok(());
             }
             eprintln!(
-                "buzz-mesh: supervised client startup lost its ingress before the SDK exposed a shutdown handle; restarting Buzz"
+                "ambush-mesh: supervised client startup lost its ingress before the SDK exposed a shutdown handle; restarting Ambush"
             );
             app.request_restart();
             return Ok(());
@@ -344,15 +344,15 @@ pub(crate) async fn rearm_relay_mesh_for_running_agents(app: &AppHandle) -> Resu
         {
             Ok(()) => {
                 if let Err(error) = clear_mesh_last_error_if_set(app, &record.pubkey) {
-                    eprintln!("buzz-mesh: failed to clear recovery error: {error}");
+                    eprintln!("ambush-mesh: failed to clear recovery error: {error}");
                 }
             }
             Err(error) => {
                 let message = format!(
-                    "{MESH_REARM_ERROR_SENTINEL}Buzz shared compute offline — failed to re-arm local ingress for this agent: {error}"
+                    "{MESH_REARM_ERROR_SENTINEL}Ambush shared compute offline — failed to re-arm local ingress for this agent: {error}"
                 );
                 if let Err(persist_error) = persist_mesh_last_error(app, &record.pubkey, &message) {
-                    eprintln!("buzz-mesh: failed to persist recovery error: {persist_error}");
+                    eprintln!("ambush-mesh: failed to persist recovery error: {persist_error}");
                 }
                 first_error.get_or_insert(message);
             }
@@ -456,7 +456,7 @@ mod tests {
             catalog_source: None,
             team_catalog_source: None,
             env_vars: std::collections::BTreeMap::from([
-                ("BUZZ_AGENT_PROVIDER".to_string(), "openai".to_string()),
+                ("AMBUSH_AGENT_PROVIDER".to_string(), "openai".to_string()),
                 (
                     "OPENAI_COMPAT_BASE_URL".to_string(),
                     "http://127.0.0.1:9337/v1/".to_string(),

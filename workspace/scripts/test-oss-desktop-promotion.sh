@@ -10,7 +10,7 @@ release="$root/.github/workflows/release.yml"
 # mutate the rolling updater release.
 grep -Fq 'cp latest.json staged/updater-manifest.json' "$release"
 [[ "$(grep -c 'gh release upload' "$release")" -eq 1 ]]
-! grep -Fq 'gh release upload buzz-desktop-latest' "$release"
+! grep -Fq 'gh release upload ambush-desktop-latest' "$release"
 
 grep -Fq 'workflow_dispatch:' "$workflow"
 grep -Fq 'group: oss-desktop-auto-update-promotion' "$workflow"

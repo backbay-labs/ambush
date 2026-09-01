@@ -146,7 +146,7 @@ Reminder? decodeReminderEvent(
 }
 
 /// Fetches the user's NIP-ER reminders (kind 30300, self-encrypted). These
-/// are the same relay events Buzz Desktop reads and writes, so reminders
+/// are the same relay events Ambush Desktop reads and writes, so reminders
 /// created on Desktop appear here and vice versa.
 class RemindersNotifier extends AsyncNotifier<List<Reminder>> {
   @override

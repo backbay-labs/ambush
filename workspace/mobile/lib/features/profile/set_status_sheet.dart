@@ -12,7 +12,7 @@ import '../../shared/custom_emoji/custom_emoji_render.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/app_list.dart';
 import '../../shared/widgets/app_list_card.dart';
-import '../../shared/widgets/buzz_titled_sheet_layout.dart';
+import '../../shared/widgets/ambush_titled_sheet_layout.dart';
 import '../../shared/widgets/modal_presentation.dart';
 import '../channels/emoji_picker.dart';
 import 'user_status.dart';
@@ -43,7 +43,7 @@ enum _StatusDuration {
 }
 
 void showSetStatusSheet(BuildContext context, {UserStatus? currentStatus}) {
-  showBuzzModalBottomSheet<void>(
+  showAmbushModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showCloseButton: false,
@@ -160,7 +160,7 @@ class _SetStatusSheet extends HookConsumerWidget {
 
     return SafeArea(
       top: false,
-      child: BuzzTitledSheetLayout(
+      child: AmbushTitledSheetLayout(
         title: 'Set a status',
         showDragHandle: true,
         leading: headerAction,
@@ -392,7 +392,7 @@ Future<_StatusDuration?> _showStatusDurationSheet(
   BuildContext context, {
   required _StatusDuration selected,
 }) {
-  return showBuzzModalBottomSheet<_StatusDuration>(
+  return showAmbushModalBottomSheet<_StatusDuration>(
     context: context,
     title: 'Duration',
     isScrollControlled: true,

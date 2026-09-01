@@ -1,13 +1,13 @@
 import 'dart:async';
 
-import 'package:buzz/features/channels/emoji_picker.dart';
-import 'package:buzz/features/channels/recent_emoji_provider.dart';
-import 'package:buzz/shared/custom_emoji/custom_emoji.dart';
-import 'package:buzz/shared/custom_emoji/custom_emoji_provider.dart';
-import 'package:buzz/shared/emoji/emoji_data.dart';
-import 'package:buzz/shared/emoji/emoji_data_provider.dart';
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/features/channels/emoji_picker.dart';
+import 'package:ambush/features/channels/recent_emoji_provider.dart';
+import 'package:ambush/shared/custom_emoji/custom_emoji.dart';
+import 'package:ambush/shared/custom_emoji/custom_emoji_provider.dart';
+import 'package:ambush/shared/emoji/emoji_data.dart';
+import 'package:ambush/shared/emoji/emoji_data_provider.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -131,8 +131,8 @@ const _customEmoji = [
 ];
 const _relayCustomEmoji = [
   CustomEmoji(
-    shortcode: 'buzzbee',
-    url: 'https://relay.example/media/buzzbee.png',
+    shortcode: 'ambushbee',
+    url: 'https://relay.example/media/ambushbee.png',
   ),
 ];
 
@@ -145,7 +145,7 @@ class _FakeCustomEmojiPaletteNotifier extends CustomEmojiPaletteNotifier {
   Future<List<CustomEmoji>> build() => palette;
 }
 
-const _nativeEmojiPickerChannel = MethodChannel('buzz/native_emoji_picker');
+const _nativeEmojiPickerChannel = MethodChannel('ambush/native_emoji_picker');
 
 void _setMockNativeEmojiPickerHandler(
   Future<Object?> Function(MethodCall call)? handler,
@@ -667,7 +667,7 @@ void main() {
       expect(selected, ['\u{1F525}']);
       expect(
         prefs.getString(
-          'buzz.quick-reaction-emojis.v1:http://localhost:3000:self',
+          'ambush.quick-reaction-emojis.v1:http://localhost:3000:self',
         ),
         isNull,
       );
@@ -760,8 +760,8 @@ void main() {
             'url': 'https://example.test/parrot.gif',
           },
           {
-            'shortcode': 'buzzbee',
-            'url': 'https://relay.example/media/buzzbee.png',
+            'shortcode': 'ambushbee',
+            'url': 'https://relay.example/media/ambushbee.png',
           },
         ]);
         expect(find.byType(EmojiPickerSheet), findsNothing);
@@ -775,7 +775,7 @@ void main() {
         final relayHeaders = await _sendNativeEmojiPickerCall(
           tester,
           'mediaHeaders',
-          'https://relay.example/media/buzzbee.png',
+          'https://relay.example/media/ambushbee.png',
         );
         expect(
           (relayHeaders as Map<Object?, Object?>)['Authorization'],
@@ -787,7 +787,7 @@ void main() {
         await _sendNativeEmojiPickerCall(tester, 'dismissed');
         expect(selected, ['\u{1F525}']);
         expect(dismissals, 1);
-        expect(prefs.getInt('buzz.emoji-picker.skin-tone.v1'), 4);
+        expect(prefs.getInt('ambush.emoji-picker.skin-tone.v1'), 4);
       } finally {
         _setMockNativeEmojiPickerHandler(null);
         debugDefaultTargetPlatformOverride = previousPlatform;

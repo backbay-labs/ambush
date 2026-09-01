@@ -9,7 +9,7 @@ import {
 
 const SHOTS = "test-results/entity-link-recipient-cards";
 
-// Regression coverage for Buzz-native entity links after standalone cards were
+// Regression coverage for Ambush-native entity links after standalone cards were
 // removed. Raw and authored entity links keep their inline navigation and
 // relay-backed metadata tooltips, while external sender snapshots still render.
 
@@ -25,13 +25,13 @@ const EXTERNAL_HREF = "https://example.com/entity-chip-control";
 const RELAY_ORIGIN = "http://localhost:3000";
 const CLONE_HREF = `${RELAY_ORIGIN}/git/${ALICE_PUBKEY}/relay-tools.git`;
 
-test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
+test("agent-style Ambush links stay chip-only with metadata tooltips", async ({
   page,
 }) => {
   await page.addInitScript(
     ({ repoAddress, prId, issueId, alicePubkey, prSubject, issueSubject }) => {
       const createdAt = Math.floor(Date.now() / 1000) - 60;
-      window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__ = [
+      window.__AMBUSH_E2E_EXTRA_PROJECT_EVENTS__ = [
         {
           id: prId,
           kind: 1618, // KIND_GIT_PULL_REQUEST
@@ -73,25 +73,25 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("channel-general").click();
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
 
   // Simulate an agent/CLI sender: plain kind-9 message with angle-bracket
-  // buzz:// URLs in a Markdown list and NO link-preview snapshot tags.
+  // ambush:// URLs in a Markdown list and NO link-preview snapshot tags.
   await page.evaluate(
     ({ prId, issueId, alicePubkey, externalHref, cloneHref }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         pubkey: alicePubkey,
         content: [
           "PR is up — review when you can:",
           "",
-          `- Pull request with enough leading context to wrap: <buzz://pr?id=${prId}&owner=${alicePubkey}&d=relay-tools>`,
-          `- Issue: <buzz://issue?id=${issueId}&owner=${alicePubkey}&d=relay-tools>`,
-          `- Repository: <buzz://repo?owner=${alicePubkey}&d=relay-tools>`,
-          `- Labeled issue: [triage this issue](buzz://issue?id=${issueId}&owner=${alicePubkey}&d=relay-tools)`,
+          `- Pull request with enough leading context to wrap: <ambush://pr?id=${prId}&owner=${alicePubkey}&d=relay-tools>`,
+          `- Issue: <ambush://issue?id=${issueId}&owner=${alicePubkey}&d=relay-tools>`,
+          `- Repository: <ambush://repo?owner=${alicePubkey}&d=relay-tools>`,
+          `- Labeled issue: [triage this issue](ambush://issue?id=${issueId}&owner=${alicePubkey}&d=relay-tools)`,
           `- Labeled clone: [clone relay-tools](${cloneHref})`,
-          `- Missing repo: <buzz://repo?owner=${alicePubkey}&d=missing-repo>`,
+          `- Missing repo: <ambush://repo?owner=${alicePubkey}&d=missing-repo>`,
           `- External control: <${externalHref}>`,
         ].join("\n"),
         extraTags: [
@@ -126,7 +126,7 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
     .last();
   await expect(row).toBeVisible();
 
-  await expect(row.locator('[data-link-preview^="buzz-"]')).toHaveCount(0);
+  await expect(row.locator('[data-link-preview^="ambush-"]')).toHaveCount(0);
   const externalCard = row.locator('[data-link-preview="generic-link"]');
   await expect(externalCard).toBeVisible();
   await expect(externalCard).toContainText("External preview survives");
@@ -148,12 +148,12 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   await prChip.hover();
   const prTooltip = page.getByRole("tooltip");
   const prContext = prTooltip.locator(
-    '[data-buzz-tooltip-metadata-content=""]',
+    '[data-ambush-tooltip-metadata-content=""]',
   );
   await expect(prContext).toHaveText(PR_SUBJECT);
   await expect(prContext).toHaveClass(/line-clamp-3/);
   await expect(prContext).toHaveCSS("overflow-wrap", "anywhere");
-  const prFooter = prTooltip.locator('[data-buzz-tooltip-metadata-type=""]');
+  const prFooter = prTooltip.locator('[data-ambush-tooltip-metadata-type=""]');
   await expect(prFooter).toHaveText("Pull request · relay-tools");
   await expect(prFooter).toHaveCSS("overflow-wrap", "anywhere");
   await expect(prFooter).toHaveCSS("white-space", "normal");
@@ -174,7 +174,7 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   expect(tooltipSemanticColors.actual).toEqual(tooltipSemanticColors.expected);
   await expect(prChip).toHaveText("relay-tools");
 
-  const issueChip = row.locator('[data-buzz-link-kind="issue"]');
+  const issueChip = row.locator('[data-ambush-link-kind="issue"]');
   // The issue chip is the repository name alone — resolved metadata never
   // reaches the inline label, so it neither absorbs the title nor falls back
   // to the event hash.
@@ -190,7 +190,7 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   await issueChip.hover();
   const issueTooltip = page.getByRole("tooltip");
   const issueContext = issueTooltip.locator(
-    '[data-buzz-tooltip-metadata-content=""]',
+    '[data-ambush-tooltip-metadata-content=""]',
   );
   await expect(issueContext).toHaveText(ISSUE_SUBJECT);
   await expect(issueContext).toHaveClass(/line-clamp-3/);
@@ -204,7 +204,7 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
     )
     .toBe(true);
   await expect(
-    issueTooltip.locator('[data-buzz-tooltip-metadata-type=""]'),
+    issueTooltip.locator('[data-ambush-tooltip-metadata-type=""]'),
   ).toHaveText("Issue · relay-tools");
 
   const labeledIssue = row
@@ -215,7 +215,7 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   await expect(
     page
       .getByRole("tooltip")
-      .locator('[data-buzz-tooltip-metadata-content=""]'),
+      .locator('[data-ambush-tooltip-metadata-content=""]'),
   ).toHaveText(ISSUE_SUBJECT);
 
   // Repository metadata remains available from its inline chip.
@@ -226,10 +226,10 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   await repoChip.hover();
   const repoTooltip = page.getByRole("tooltip");
   await expect(
-    repoTooltip.locator('[data-buzz-tooltip-metadata-content=""]'),
+    repoTooltip.locator('[data-ambush-tooltip-metadata-content=""]'),
   ).toContainText("Operator tooling and admin CLI for relay deployments.");
   await expect(
-    repoTooltip.locator('[data-buzz-tooltip-metadata-type=""]'),
+    repoTooltip.locator('[data-ambush-tooltip-metadata-type=""]'),
   ).toHaveText("Repository");
 
   const labeledClone = row
@@ -242,7 +242,7 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   await labeledClone.hover();
   const cloneTooltip = page.getByRole("tooltip");
   await expect(
-    cloneTooltip.locator('[data-buzz-tooltip-metadata-content=""]'),
+    cloneTooltip.locator('[data-ambush-tooltip-metadata-content=""]'),
   ).toContainText("Operator tooling and admin CLI for relay deployments.");
   await labeledClone.click();
   await expect(page.locator("[data-project-detail-screen]")).toBeVisible();
@@ -251,7 +251,7 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   const missingRepoChip = row.getByRole("button", {
     name: "Open repository missing-repo",
   });
-  await expect(missingRepoChip).not.toHaveClass(/buzz-link-unavailable/);
+  await expect(missingRepoChip).not.toHaveClass(/ambush-link-unavailable/);
   const missingRepoColors = await missingRepoChip.evaluate((element) => {
     const styles = getComputedStyle(element);
     const probe = document.createElement("span");
@@ -272,10 +272,10 @@ test("agent-style Buzz links stay chip-only with metadata tooltips", async ({
   await missingRepoChip.hover();
   const missingRepoTooltip = page.getByRole("tooltip");
   await expect(
-    missingRepoTooltip.locator('[data-buzz-tooltip-metadata-content=""]'),
+    missingRepoTooltip.locator('[data-ambush-tooltip-metadata-content=""]'),
   ).toHaveCount(0);
   const missingRepoFooter = missingRepoTooltip.locator(
-    '[data-buzz-tooltip-metadata-type=""]',
+    '[data-ambush-tooltip-metadata-type=""]',
   );
   await expect(missingRepoFooter).toHaveText("Repository");
   await expect(missingRepoFooter).toHaveClass(/text-secondary-foreground\/80/);
@@ -293,7 +293,7 @@ test("issue chip width is metadata-independent while the title loads", async ({
 }) => {
   await page.addInitScript(
     ({ repoAddress, issueId, alicePubkey, issueSubject }) => {
-      window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__ = [
+      window.__AMBUSH_E2E_EXTRA_PROJECT_EVENTS__ = [
         {
           id: issueId,
           kind: 1621, // KIND_GIT_ISSUE
@@ -321,14 +321,14 @@ test("issue chip width is metadata-independent while the title loads", async ({
   // result and never recovers, which would hide the resolved-title half of
   // this invariant. Natural relay latency supplies the pending window.
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   await page.evaluate(
     ({ issueId, alicePubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         pubkey: alicePubkey,
-        content: `Issue link: buzz://issue?id=${issueId}&owner=${alicePubkey}&d=relay-tools`,
+        content: `Issue link: ambush://issue?id=${issueId}&owner=${alicePubkey}&d=relay-tools`,
       });
     },
     { issueId: ISSUE_ID, alicePubkey: ALICE_PUBKEY },
@@ -342,7 +342,7 @@ test("issue chip width is metadata-independent while the title loads", async ({
 
   const tooltipContent = page
     .getByRole("tooltip")
-    .locator('[data-buzz-tooltip-metadata-content=""]');
+    .locator('[data-ambush-tooltip-metadata-content=""]');
   const widths = new Set<number>();
   const tooltipSamples: string[] = [];
   await expect
@@ -376,33 +376,33 @@ test("entity tooltip uses project context while relay metadata is delayed", asyn
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("channel-general").click();
   await page.evaluate(() =>
-    window.__BUZZ_E2E_ACTIVATE_RELAY_RATE_LIMIT__?.(300),
+    window.__AMBUSH_E2E_ACTIVATE_RELAY_RATE_LIMIT__?.(300),
   );
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   await page.evaluate(
     ({ issueId, owner }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
-        content: `Delayed issue: buzz://issue?id=${issueId}&owner=${owner}&d=buzz`,
+        content: `Delayed issue: ambush://issue?id=${issueId}&owner=${owner}&d=ambush`,
       });
     },
     { issueId: ISSUE_ID, owner: DEFAULT_MOCK_PUBKEY },
   );
 
   const issueChip = page.getByRole("button", {
-    name: /Open issue .* in repository buzz/,
+    name: /Open issue .* in repository ambush/,
   });
   await issueChip.hover();
   await expect(
     page
       .getByRole("tooltip")
-      .locator('[data-buzz-tooltip-metadata-content=""]'),
-  ).toHaveText("buzz · The complete Buzz community platform.");
+      .locator('[data-ambush-tooltip-metadata-content=""]'),
+  ).toHaveText("ambush · The complete Ambush community platform.");
 });
 
-test("desktop composer and sent message keep Buzz entities chip-only", async ({
+test("desktop composer and sent message keep Ambush entities chip-only", async ({
   page,
 }) => {
   await installMockBridge(page);
@@ -410,10 +410,10 @@ test("desktop composer and sent message keep Buzz entities chip-only", async ({
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("channel-general").click();
 
-  const repoLink = `buzz://repo?owner=${ALICE_PUBKEY}&d=relay-tools`;
+  const repoLink = `ambush://repo?owner=${ALICE_PUBKEY}&d=relay-tools`;
   await page.getByTestId("message-input").fill(`Check out ${repoLink}`);
 
-  // Buzz-native links do not enter the standalone composer-preview surface.
+  // Ambush-native links do not enter the standalone composer-preview surface.
   await expect(page.locator("[data-composer-link-previews]")).toHaveCount(0);
 
   await waitForAnimations(page);
@@ -425,7 +425,7 @@ test("desktop composer and sent message keep Buzz entities chip-only", async ({
   await page.getByTestId("send-message").click();
 
   const row = page.getByTestId("message-row").last();
-  await expect(row.locator('[data-link-preview^="buzz-"]')).toHaveCount(0);
+  await expect(row.locator('[data-link-preview^="ambush-"]')).toHaveCount(0);
   const repoChip = row.getByRole("button", {
     name: "Open repository relay-tools",
   });
@@ -434,7 +434,7 @@ test("desktop composer and sent message keep Buzz entities chip-only", async ({
   await expect(
     page
       .getByRole("tooltip")
-      .locator('[data-buzz-tooltip-metadata-content=""]'),
+      .locator('[data-ambush-tooltip-metadata-content=""]'),
   ).toContainText("Operator tooling and admin CLI for relay deployments.");
 
   await waitForAnimations(page);
@@ -457,7 +457,7 @@ test("composer classifies a same-relay clone URL as a repository chip, not a car
   // so the mismatch cannot appear. Point the bridge at an https relay so the
   // composer's classification is the only variable.
   const relayHttpUrl = "https://relay.e2e.example";
-  const cloneHref = `${relayHttpUrl}/git/${DEFAULT_MOCK_PUBKEY}/buzz.git`;
+  const cloneHref = `${relayHttpUrl}/git/${DEFAULT_MOCK_PUBKEY}/ambush.git`;
   await installBridge(page, {
     mode: "mock",
     relayHttpUrl,
@@ -490,17 +490,17 @@ test("composer classifies a same-relay clone URL as a repository chip, not a car
 
   const row = page.getByTestId("message-row").last();
   await expect(row.locator("[data-link-preview]")).toHaveCount(0);
-  const repoChip = row.getByRole("button", { name: "Open repository buzz" });
+  const repoChip = row.getByRole("button", { name: "Open repository ambush" });
   await expect(repoChip).toBeVisible();
   await repoChip.hover();
   await expect(
     page
       .getByRole("tooltip")
-      .locator('[data-buzz-tooltip-metadata-content=""]'),
+      .locator('[data-ambush-tooltip-metadata-content=""]'),
   ).toContainText("Relay, desktop, and mobile clients");
 
   // The chip navigates in-app, proving the clone URL resolved onto the
-  // canonical buzz://repo target rather than being handed to the OS.
+  // canonical ambush://repo target rather than being handed to the OS.
   await repoChip.click();
   await expect(page.locator("[data-project-detail-screen]")).toBeVisible();
 });
@@ -508,11 +508,11 @@ test("composer classifies a same-relay clone URL as a repository chip, not a car
 test("reopening the same entity link reapplies its workspace state", async ({
   page,
 }) => {
-  const repoAddress = `30617:${DEFAULT_MOCK_PUBKEY}:buzz`;
+  const repoAddress = `30617:${DEFAULT_MOCK_PUBKEY}:ambush`;
   await page.addInitScript(
     ({ issueId, issueSubject, prId, prSubject, repoAddress, owner }) => {
       const createdAt = Math.floor(Date.now() / 1000) - 60;
-      window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__ = [
+      window.__AMBUSH_E2E_EXTRA_PROJECT_EVENTS__ = [
         {
           id: prId,
           kind: 1618, // KIND_GIT_PULL_REQUEST
@@ -551,9 +551,9 @@ test("reopening the same entity link reapplies its workspace state", async ({
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("open-projects-view")).toBeVisible();
-  const repoLink = `buzz://repo?owner=${DEFAULT_MOCK_PUBKEY}&d=buzz&tab=prs`;
-  const prLink = `buzz://pr?id=${PR_ID}&owner=${DEFAULT_MOCK_PUBKEY}&d=buzz`;
-  const issueLink = `buzz://issue?id=${ISSUE_ID}&owner=${DEFAULT_MOCK_PUBKEY}&d=buzz`;
+  const repoLink = `ambush://repo?owner=${DEFAULT_MOCK_PUBKEY}&d=ambush&tab=prs`;
+  const prLink = `ambush://pr?id=${PR_ID}&owner=${DEFAULT_MOCK_PUBKEY}&d=ambush`;
+  const issueLink = `ambush://issue?id=${ISSUE_ID}&owner=${DEFAULT_MOCK_PUBKEY}&d=ambush`;
   const emitEntityLink = async (link: string) => {
     await page.waitForFunction(
       () => typeof window.__TAURI_INTERNALS__?.invoke === "function",
@@ -618,15 +618,15 @@ test("deleted reply links identify deletion and fall back to their thread root",
   const deletedReplyId = "c".repeat(64);
   const threadRootId = "b".repeat(64);
   const channelId = "9dae0116-799b-5071-a0a8-fdd30a91a35d";
-  const link = `buzz://message?channel=${channelId}&id=${deletedReplyId}&thread=${threadRootId}`;
+  const link = `ambush://message?channel=${channelId}&id=${deletedReplyId}&thread=${threadRootId}`;
   await installMockBridge(page, { deletedEventIds: [deletedReplyId] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   await page.evaluate(
     ({ id }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "Surviving thread root",
         id,
@@ -660,12 +660,12 @@ test("deleted top-level message links identify deletion and fall back to channel
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "buzz-dark");
-    window.localStorage.setItem("buzz-accent-color", "#c0a2f1");
+    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-accent-color", "#c0a2f1");
   });
   const missingMessageId = "d".repeat(64);
   const channelId = "9dae0116-799b-5071-a0a8-fdd30a91a35d";
-  const link = `buzz://message?channel=${channelId}&id=${missingMessageId}`;
+  const link = `ambush://message?channel=${channelId}&id=${missingMessageId}`;
   await installMockBridge(page, { deletedEventIds: [missingMessageId] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("channel-general").click();
@@ -684,11 +684,11 @@ test("deleted top-level message links identify deletion and fall back to channel
     "data-message-link-state",
     "deleted",
   );
-  await expect(deletedLink).toHaveClass(/buzz-link-deleted/);
-  await expect(deletedLink).not.toHaveClass(/buzz-link-unavailable/);
+  await expect(deletedLink).toHaveClass(/ambush-link-deleted/);
+  await expect(deletedLink).not.toHaveClass(/ambush-link-unavailable/);
   const unavailableColors = await linkMessage.evaluate((message) => {
     const probe = document.createElement("span");
-    probe.className = "mention-chip buzz-link-unavailable";
+    probe.className = "mention-chip ambush-link-unavailable";
     message.querySelector(".message-markdown")?.append(probe);
     const styles = getComputedStyle(probe);
     const colors = {
@@ -724,7 +724,7 @@ test("deleted top-level message links identify deletion and fall back to channel
 test("cold-start entity links drain after the React listener mounts", async ({
   page,
 }) => {
-  const href = `buzz://repo?owner=${DEFAULT_MOCK_PUBKEY}&d=buzz&tab=prs`;
+  const href = `ambush://repo?owner=${DEFAULT_MOCK_PUBKEY}&d=ambush&tab=prs`;
   await installMockBridge(page, {
     pendingEntityDeepLinks: [{ id: "cold-start-project", href }],
   });

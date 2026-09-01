@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:buzz/features/channels/channel_stars/channel_stars_storage.dart';
+import 'package:ambush/features/channels/channel_stars/channel_stars_storage.dart';
 
 /// Tests for [ChannelStarStore] parsing and [mergeStores] last-writer-wins.
 void main() {

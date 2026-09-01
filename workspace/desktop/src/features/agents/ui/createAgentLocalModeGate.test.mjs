@@ -44,11 +44,11 @@ import {
 
 // ── Core predicate: provider-selection support ─────────────────────────────
 
-test("localMode_buzzAgent_supportsProviderSelection", () => {
+test("localMode_ambushAgent_supportsProviderSelection", () => {
   assert.equal(
-    runtimeSupportsLlmProviderSelection("buzz-agent"),
+    runtimeSupportsLlmProviderSelection("ambush-agent"),
     true,
-    "buzz-agent must support LLM provider selection",
+    "ambush-agent must support LLM provider selection",
   );
 });
 
@@ -78,9 +78,9 @@ test("localMode_custom_doesNotSupportProviderSelection", () => {
 
 // ── IMPORTANT 1: normalized field gate (provider + model) ─────────────────
 
-test("localMode_buzzAgent_emptyProvider_notSatisfied", () => {
-  // Scenario: user selects buzz-agent but leaves provider empty.
-  // Rust readiness requires BUZZ_AGENT_PROVIDER — empty = NotReady.
+test("localMode_ambushAgent_emptyProvider_notSatisfied", () => {
+  // Scenario: user selects ambush-agent but leaves provider empty.
+  // Rust readiness requires AMBUSH_AGENT_PROVIDER — empty = NotReady.
   // The gate must report not-satisfied and surface the missing field marker,
   // but does NOT block the save button.
   const result = computeLocalModeGate({
@@ -88,7 +88,7 @@ test("localMode_buzzAgent_emptyProvider_notSatisfied", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.ok(
@@ -102,16 +102,16 @@ test("localMode_buzzAgent_emptyProvider_notSatisfied", () => {
   );
 });
 
-test("localMode_buzzAgent_emptyModel_notSatisfied", () => {
-  // Scenario: buzz-agent + anthropic + API key present, but model left empty.
-  // Rust readiness requires BUZZ_AGENT_MODEL — empty = NotReady.
+test("localMode_ambushAgent_emptyModel_notSatisfied", () => {
+  // Scenario: ambush-agent + anthropic + API key present, but model left empty.
+  // Rust readiness requires AMBUSH_AGENT_MODEL — empty = NotReady.
   // The gate surfaces the missing field marker; save button is still enabled.
   const result = computeLocalModeGate({
     envVars: { ANTHROPIC_API_KEY: "sk-ant-test" },
     isProviderMode: false,
     model: "",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.ok(
@@ -125,10 +125,10 @@ test("localMode_buzzAgent_emptyModel_notSatisfied", () => {
   );
 });
 
-// ── Gate: buzz-agent / anthropic with missing key → markers shown ─────────
+// ── Gate: ambush-agent / anthropic with missing key → markers shown ─────────
 
-test("localMode_buzzAgent_anthropic_missingKey_notSatisfied", () => {
-  // Scenario: user selects buzz-agent/anthropic + fills model, but hasn't
+test("localMode_ambushAgent_anthropic_missingKey_notSatisfied", () => {
+  // Scenario: user selects ambush-agent/anthropic + fills model, but hasn't
   // supplied ANTHROPIC_API_KEY — the exact crash-loop case the nudge handles.
   // Gate reports not-satisfied (required marker + env row shown); save allowed.
   const result = computeLocalModeGate({
@@ -136,7 +136,7 @@ test("localMode_buzzAgent_anthropic_missingKey_notSatisfied", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.ok(
@@ -150,14 +150,14 @@ test("localMode_buzzAgent_anthropic_missingKey_notSatisfied", () => {
   );
 });
 
-test("localMode_buzzAgent_anthropic_allRequired_present_allowed", () => {
+test("localMode_ambushAgent_anthropic_allRequired_present_allowed", () => {
   // All three required fields present: provider, model, and credential key.
   const result = computeLocalModeGate({
     envVars: { ANTHROPIC_API_KEY: "sk-ant-test" },
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.deepEqual(
@@ -217,7 +217,7 @@ test("localMode_gate_bypassed_for_providerMode", () => {
     isProviderMode: true,
     model: "",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -233,10 +233,10 @@ test("localMode_requiredEnvKeys_surfaces_anthropicKey", () => {
   // requiredCredentialEnvKeys returns ALL required keys for the provider
   // (including already-satisfied ones) — what EnvVarsEditor receives for
   // its amber locked rows. Verify the full key list, not just missing keys.
-  const allKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const allKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   assert.ok(
     allKeys.includes("ANTHROPIC_API_KEY"),
-    "requiredCredentialEnvKeys must include ANTHROPIC_API_KEY for buzz-agent/anthropic",
+    "requiredCredentialEnvKeys must include ANTHROPIC_API_KEY for ambush-agent/anthropic",
   );
 });
 
@@ -248,9 +248,9 @@ test("localMode_requiredEnvKeys_gate_and_envVarsEditor_share_same_key_set", () =
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
-  const fullKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const fullKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
 
   for (const key of gateResult.missingEnvKeys) {
     assert.ok(
@@ -269,14 +269,14 @@ test("localMode_providerSelection_drives_requiredKey", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
   const databricksGate = computeLocalModeGate({
     envVars: {},
     isProviderMode: false,
     model: "databricks-meta-llama",
     provider: "databricks",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.ok(
@@ -352,7 +352,7 @@ test("localMode_goose_databricksHost_noFileConfig_stillRequired", () => {
 });
 
 test("localMode_goose_providerSatisfiedByFileConfig_noNormalizedFieldRequired", () => {
-  // Scenario: goose, no provider in Buzz env but file config has provider + model.
+  // Scenario: goose, no provider in Ambush env but file config has provider + model.
   // Neither 'provider' nor 'model' should be required.
   const fileConfig = {
     provider: "anthropic",
@@ -640,7 +640,7 @@ test("localMode_globalEnvVars_satisfies_missing_env_key", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -664,7 +664,7 @@ test("localMode_perAgentEnvVar_wins_over_globalEnvVars_for_gate", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -682,7 +682,7 @@ test("localMode_globalEnvVars_empty_still_fails_gate", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -718,7 +718,7 @@ test("localMode_globalProvider_inherited_no_key_surfacesAsRequired", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -742,7 +742,7 @@ test("localMode_globalProvider_inherited_globalEnv_satisfies_key", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -775,7 +775,7 @@ test("localMode_requiredKey_stays_in_requiredEnvKeys_when_locally_filled", () =>
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.ok(
@@ -795,7 +795,7 @@ test("localMode_requiredKey_stays_in_requiredEnvKeys_when_locally_filled", () =>
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -818,7 +818,7 @@ test("localMode_requiredKey_stays_in_requiredEnvKeys_when_locally_filled", () =>
 
 test("providerDefaultLabel_noGlobal_returnsSelectAProvider", () => {
   // No global provider → placeholder signals user must choose.
-  const label = getDefaultLlmProviderLabel("buzz-agent", undefined);
+  const label = getDefaultLlmProviderLabel("ambush-agent", undefined);
   assert.equal(
     label,
     "Select a provider\u2026",
@@ -828,7 +828,7 @@ test("providerDefaultLabel_noGlobal_returnsSelectAProvider", () => {
 
 test("providerDefaultLabel_emptyGlobal_returnsSelectAProvider", () => {
   // Empty string treated the same as absent.
-  const label = getDefaultLlmProviderLabel("buzz-agent", "");
+  const label = getDefaultLlmProviderLabel("ambush-agent", "");
   assert.equal(
     label,
     "Select a provider\u2026",
@@ -839,7 +839,7 @@ test("providerDefaultLabel_emptyGlobal_returnsSelectAProvider", () => {
 test("providerDefaultLabel_globalSet_returnsInheritLabel", () => {
   // Global provider set → label shows the provider name so the user
   // knows what they're inheriting.
-  const label = getDefaultLlmProviderLabel("buzz-agent", "anthropic");
+  const label = getDefaultLlmProviderLabel("ambush-agent", "anthropic");
   assert.equal(
     label,
     "Use agent defaults (anthropic)",
@@ -849,7 +849,7 @@ test("providerDefaultLabel_globalSet_returnsInheritLabel", () => {
 
 test("providerDefaultLabel_globalSetWithWhitespace_trimsAndReturnsInherit", () => {
   // Surrounding whitespace is stripped before building the label.
-  const label = getDefaultLlmProviderLabel("buzz-agent", "  openai  ");
+  const label = getDefaultLlmProviderLabel("ambush-agent", "  openai  ");
   assert.equal(
     label,
     "Use agent defaults (openai)",
@@ -859,8 +859,8 @@ test("providerDefaultLabel_globalSetWithWhitespace_trimsAndReturnsInherit", () =
 
 test("providerDefaultLabel_sharedCompute_neverLeaksInternalId", () => {
   assert.equal(
-    getDefaultLlmProviderLabel("buzz-agent", "relay-mesh"),
-    "Use agent defaults (Buzz shared compute)",
+    getDefaultLlmProviderLabel("ambush-agent", "relay-mesh"),
+    "Use agent defaults (Ambush shared compute)",
   );
 });
 
@@ -868,26 +868,26 @@ test("providerDefaultLabel_sharedCompute_neverLeaksInternalId", () => {
 
 test("bakedDefaults_emptyGlobal_usesBuildValuesForCreateAndEditLabels", () => {
   const bakedEnv = [
-    { key: "BUZZ_AGENT_PROVIDER", value: "databricks_v2", masked: false },
+    { key: "AMBUSH_AGENT_PROVIDER", value: "databricks_v2", masked: false },
     {
-      key: "BUZZ_AGENT_MODEL",
+      key: "AMBUSH_AGENT_MODEL",
       value: "goose-claude-opus-4-8",
       masked: false,
     },
-    { key: "BUZZ_AGENT_THINKING_EFFORT", value: "high", masked: false },
+    { key: "AMBUSH_AGENT_THINKING_EFFORT", value: "high", masked: false },
   ];
   const provider = resolveInheritedDefault(
     null,
     bakedEnv,
-    "BUZZ_AGENT_PROVIDER",
+    "AMBUSH_AGENT_PROVIDER",
   );
-  const model = resolveInheritedDefault(null, bakedEnv, "BUZZ_AGENT_MODEL");
+  const model = resolveInheritedDefault(null, bakedEnv, "AMBUSH_AGENT_MODEL");
   const effort = resolveInheritedDefault(
     null,
     bakedEnv,
-    "BUZZ_AGENT_THINKING_EFFORT",
+    "AMBUSH_AGENT_THINKING_EFFORT",
   );
-  const providerOptions = getPersonaProviderOptions("", "buzz-agent");
+  const providerOptions = getPersonaProviderOptions("", "ambush-agent");
 
   assert.deepEqual(provider, { source: "build", value: "databricks_v2" });
   assert.equal(
@@ -907,21 +907,21 @@ test("bakedDefaults_emptyGlobal_usesBuildValuesForCreateAndEditLabels", () => {
 
 test("bakedDefaults_explicitGlobalsOverrideBuildValues", () => {
   const bakedEnv = [
-    { key: "BUZZ_AGENT_PROVIDER", value: "databricks_v2", masked: false },
-    { key: "BUZZ_AGENT_MODEL", value: "build-model", masked: false },
-    { key: "BUZZ_AGENT_THINKING_EFFORT", value: "high", masked: false },
+    { key: "AMBUSH_AGENT_PROVIDER", value: "databricks_v2", masked: false },
+    { key: "AMBUSH_AGENT_MODEL", value: "build-model", masked: false },
+    { key: "AMBUSH_AGENT_THINKING_EFFORT", value: "high", masked: false },
   ];
 
   assert.deepEqual(
-    resolveInheritedDefault("anthropic", bakedEnv, "BUZZ_AGENT_PROVIDER"),
+    resolveInheritedDefault("anthropic", bakedEnv, "AMBUSH_AGENT_PROVIDER"),
     { source: "global", value: "anthropic" },
   );
   assert.deepEqual(
-    resolveInheritedDefault("global-model", bakedEnv, "BUZZ_AGENT_MODEL"),
+    resolveInheritedDefault("global-model", bakedEnv, "AMBUSH_AGENT_MODEL"),
     { source: "global", value: "global-model" },
   );
   assert.deepEqual(
-    resolveInheritedDefault("low", bakedEnv, "BUZZ_AGENT_THINKING_EFFORT"),
+    resolveInheritedDefault("low", bakedEnv, "AMBUSH_AGENT_THINKING_EFFORT"),
     { source: "global", value: "low" },
   );
 });
@@ -1040,7 +1040,7 @@ test("globalAwareGate_globalProviderSet_requiredKeyAppearsWhenMissing", () => {
     isProviderMode: false,
     model: "",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
     runtimeFileConfig: undefined,
   });
   assert.ok(
@@ -1058,7 +1058,7 @@ test("globalAwareGate_globalProviderAndKeySet_requiredKeyAbsent", () => {
     isProviderMode: false,
     model: "",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
     runtimeFileConfig: undefined,
   });
   assert.equal(
@@ -1089,7 +1089,7 @@ test("f3_templateDialog_localAnthropicWithGlobalModel_modelNotRequired", () => {
     isProviderMode: false,
     model: "",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(
@@ -1117,7 +1117,7 @@ test("f3_templateDialog_localProviderBlankGlobalAnthropicNoModel_saveBlocked", (
     isProviderMode: false,
     model: "",
     provider: "",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.ok(
@@ -1165,7 +1165,7 @@ test("f3b_buildTemplateModelDropdownOptions_anthropicGlobalModelSet_containsInhe
   // Case 1: explicit-model provider (anthropic) + global model set.
   // getPersonaModelOptions filters out the zero-value option for anthropic.
   // buildTemplateModelDropdownOptions must prepend it from globalModel.
-  const staticOptions = getPersonaModelOptions("buzz-agent", "anthropic");
+  const staticOptions = getPersonaModelOptions("ambush-agent", "anthropic");
   const result = buildTemplateModelDropdownOptions(
     staticOptions,
     "claude-opus-4-5",
@@ -1185,7 +1185,7 @@ test("f3b_buildTemplateModelDropdownOptions_anthropicGlobalModelSet_containsInhe
 test("f3b_buildTemplateModelDropdownOptions_anthropicNoGlobalModel_noZeroValueEntry", () => {
   // Case 2: explicit-model provider (anthropic) + NO global model.
   // No zero-value option must be seeded — model remains required, Save stays blocked.
-  const staticOptions = getPersonaModelOptions("buzz-agent", "anthropic");
+  const staticOptions = getPersonaModelOptions("ambush-agent", "anthropic");
   const result = buildTemplateModelDropdownOptions(staticOptions, "");
   const inheritEntry = result.find((o) => o.value === "__auto_model__");
   assert.equal(
@@ -1199,7 +1199,7 @@ test("f3b_buildTemplateModelDropdownOptions_blankProviderGlobalModelSet_noDouble
   // Case 3: provider that does NOT require an explicit model (blank string).
   // getPersonaModelOptions returns a zero-value option; the helper must not
   // prepend a second one.
-  const staticOptions = getPersonaModelOptions("buzz-agent", "");
+  const staticOptions = getPersonaModelOptions("ambush-agent", "");
   const hasExisting = staticOptions.some((o) => o.id === "");
   assert.ok(
     hasExisting,
@@ -1224,7 +1224,7 @@ test("f3b_buildTemplateModelDropdownOptions_blankProviderGlobalModelSet_noDouble
 
 // ── Unified PROVIDER_CREDENTIAL_CONFIG table regression ───────────────────
 // These tests guard the dialog-level fix: requiredCredentialEnvKeys must
-// include ANTHROPIC_API_KEY for explicit buzz-agent/anthropic so that the
+// include ANTHROPIC_API_KEY for explicit ambush-agent/anthropic so that the
 // EnvVarsEditor amber row renders without a separate dedicated field.
 
 test("providerConfig_explicitAnthropic_requiredKeysIncludesApiKey", () => {
@@ -1232,10 +1232,10 @@ test("providerConfig_explicitAnthropic_requiredKeysIncludesApiKey", () => {
   // the required-row list (via the now-deleted PersonaProviderApiKeyField
   // special-case). The gate itself was always correct — this test documents
   // that requiredCredentialEnvKeys + computeLocalModeGate produce the row.
-  const required = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const required = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   assert.ok(
     required.includes("ANTHROPIC_API_KEY"),
-    "buzz-agent + explicit anthropic must list ANTHROPIC_API_KEY as required",
+    "ambush-agent + explicit anthropic must list ANTHROPIC_API_KEY as required",
   );
 });
 
@@ -1243,8 +1243,8 @@ test("providerConfig_inheritThenExplicitAnthropic_sameRequiredKeys", () => {
   // Regression: switching from inherit ("") to explicit "anthropic" must still
   // produce ANTHROPIC_API_KEY as a required key (the row was disappearing on
   // the inherit→explicit switch because the filter re-engaged).
-  const inheritKeys = requiredCredentialEnvKeys("buzz-agent", "");
-  const explicitKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const inheritKeys = requiredCredentialEnvKeys("ambush-agent", "");
+  const explicitKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   assert.ok(
     !inheritKeys.includes("ANTHROPIC_API_KEY"),
     "inherit (empty provider) must not list ANTHROPIC_API_KEY",
@@ -1258,10 +1258,13 @@ test("providerConfig_inheritThenExplicitAnthropic_sameRequiredKeys", () => {
 test("providerConfig_databricks_requiredKeyIsHost_noSecretClear", () => {
   // Verify Databricks and Anthropic are symmetric: both produce required rows,
   // and the clearing semantics differ only by secretEnvVar presence.
-  const databricksKeys = requiredCredentialEnvKeys("buzz-agent", "databricks");
+  const databricksKeys = requiredCredentialEnvKeys(
+    "ambush-agent",
+    "databricks",
+  );
   assert.ok(
     databricksKeys.includes("DATABRICKS_HOST"),
-    "buzz-agent + databricks must list DATABRICKS_HOST as required",
+    "ambush-agent + databricks must list DATABRICKS_HOST as required",
   );
   // getProviderApiKeyEnvVar (secretEnvVar) must return null for databricks:
   // DATABRICKS_HOST is a URL, not a secret, and must not be cleared on switch.
@@ -1345,7 +1348,7 @@ test("localMode_globalEnvSatisfied_agentLocalExplicitlyEmpty_stillRequired", () 
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.ok(
@@ -1373,7 +1376,7 @@ test("localMode_globalEnvSatisfied_agentLocalKeyAbsent_silenced", () => {
     isProviderMode: false,
     model: "claude-3-5-sonnet-20241022",
     provider: "anthropic",
-    runtimeId: "buzz-agent",
+    runtimeId: "ambush-agent",
   });
 
   assert.equal(

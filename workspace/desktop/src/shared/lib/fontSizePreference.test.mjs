@@ -31,12 +31,12 @@ const preference = await import("./fontSizePreference.ts");
 
 test("scales fixed line-height utilities with the typography rem", () => {
   assert.deepEqual(config.theme.extend.lineHeight, {
-    3: "calc(var(--buzz-type-rem) * 0.75)",
-    4: "var(--buzz-type-rem)",
-    5: "calc(var(--buzz-type-rem) * 1.25)",
-    6: "calc(var(--buzz-type-rem) * 1.5)",
-    7: "calc(var(--buzz-type-rem) * 1.75)",
-    8: "calc(var(--buzz-type-rem) * 2)",
+    3: "calc(var(--ambush-type-rem) * 0.75)",
+    4: "var(--ambush-type-rem)",
+    5: "calc(var(--ambush-type-rem) * 1.25)",
+    6: "calc(var(--ambush-type-rem) * 1.5)",
+    7: "calc(var(--ambush-type-rem) * 1.75)",
+    8: "calc(var(--ambush-type-rem) * 2)",
     "message-author": "var(--conversation-author-line-height)",
   });
 });
@@ -46,20 +46,20 @@ test("derives the typography rem from the real root so zoom scales layout too", 
   // (never an absolute px) or text would zoom while containers froze.
   assert.match(
     typographyCss,
-    /--buzz-type-rem:\s*calc\(1rem \* var\(--buzz-type-scale\)\);/,
+    /--ambush-type-rem:\s*calc\(1rem \* var\(--ambush-type-scale\)\);/,
   );
-  assert.doesNotMatch(typographyCss, /--buzz-type-rem:\s*[\d.]+px/);
+  assert.doesNotMatch(typographyCss, /--ambush-type-rem:\s*[\d.]+px/);
 });
 
 test("maps the font size attribute to the 13 / 14 / 15px type contract", () => {
-  assert.match(typographyCss, /:root\s*\{[^}]*--buzz-type-scale:\s*1;/s);
+  assert.match(typographyCss, /:root\s*\{[^}]*--ambush-type-scale:\s*1;/s);
   assert.match(
     typographyCss,
-    /:root\[data-font-size="smaller"\]\s*\{\s*--buzz-type-scale:\s*calc\(13 \/ 14\);/,
+    /:root\[data-font-size="smaller"\]\s*\{\s*--ambush-type-scale:\s*calc\(13 \/ 14\);/,
   );
   assert.match(
     typographyCss,
-    /:root\[data-font-size="larger"\]\s*\{\s*--buzz-type-scale:\s*calc\(15 \/ 14\);/,
+    /:root\[data-font-size="larger"\]\s*\{\s*--ambush-type-scale:\s*calc\(15 \/ 14\);/,
   );
 });
 

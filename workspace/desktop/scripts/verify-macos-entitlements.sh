@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Fail a macOS release if the signing service dropped Buzz's entitlements.
+# Fail a macOS release if the signing service dropped Ambush's entitlements.
 
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <path-to-Buzz.app>" >&2
+  echo "Usage: $0 <path-to-Ambush.app>" >&2
   exit 2
 fi
 
@@ -18,7 +18,7 @@ EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO
 EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/$EXECUTABLE_NAME"
 [[ -f "$EXECUTABLE_PATH" ]] || { echo "Missing app executable: $EXECUTABLE_PATH" >&2; exit 1; }
 
-ENTITLEMENTS="$(mktemp -t buzz-entitlements)"
+ENTITLEMENTS="$(mktemp -t ambush-entitlements)"
 trap 'rm -f "$ENTITLEMENTS"' EXIT
 
 codesign --display --entitlements "$ENTITLEMENTS" --xml "$EXECUTABLE_PATH" 2>/dev/null

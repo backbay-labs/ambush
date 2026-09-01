@@ -12,7 +12,7 @@ export function summarizeMessageLinkContent(content: string): string {
     .replace(/\|\|[^|]*(?:\|(?!\|)[^|]*)*\|\|/g, " ")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/<?(?:https?|buzz):\/\/\S+>?/g, " ")
+    .replace(/<?(?:https?|ambush):\/\/\S+>?/g, " ")
     .replace(/[`*_~>#|]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

@@ -9,7 +9,7 @@ version: 1
 
 ## CRITICAL: How to Host Screenshots for PRs
 
-**NEVER use `buzz upload`, the relay media endpoint, or any third-party image
+**NEVER use `ambush upload`, the relay media endpoint, or any third-party image
 host (imgur, imgbb, etc.) for PR screenshots.** Relay media URLs fail through
 GitHub's camo proxy (`Non-Image content-type returned`). External hosts are
 unreliable and may expose content.
@@ -18,7 +18,7 @@ unreliable and may expose content.
 git branch with immutable commit-SHA URLs that render correctly on GitHub.
 If you manually compose or edit PR markdown, run
 `scripts/check-pr-image-urls.sh <markdown-file>` before posting. The checker
-fails on Buzz/relay media URLs so broken images are caught locally.
+fails on Ambush/relay media URLs so broken images are caught locally.
 
 This hosting rule applies to any PNG you want in a PR, including mobile
 simulator screenshots captured outside the desktop Playwright helper.

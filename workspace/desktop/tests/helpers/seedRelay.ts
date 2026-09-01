@@ -11,12 +11,12 @@ import { TEST_IDENTITIES } from "./bridge";
 // Publishes REAL signed Nostr events through the relay ingest path
 // (`POST /events`), never raw SQL. This is the load-bearing fidelity choice:
 // `thread_metadata` (depth, root, reply counts) is computed AT INGEST
-// (buzz-relay/src/handlers/ingest.rs). Eva's channel-window surface reads that
+// (ambush-relay/src/handlers/ingest.rs). Eva's channel-window surface reads that
 // metadata; a raw-SQL bulk load would bypass computation and hand the window
 // surface empty/wrong summaries — a false green. See
 // PLANS/GUI_OVERHAUL_TEST_HARNESS_DAWN.md.
 //
-// Transport auth: the test relay runs BUZZ_REQUIRE_AUTH_TOKEN=false
+// Transport auth: the test relay runs AMBUSH_REQUIRE_AUTH_TOKEN=false
 // (start-relay-for-tests.sh), so `POST /events` accepts a plain `X-Pubkey`
 // header (bridge.rs verify_bridge_auth dev fallback). The EVENT is still fully
 // signed — only the per-request NIP-98 auth envelope is skipped. `POST /events`
@@ -25,7 +25,7 @@ import { TEST_IDENTITIES } from "./bridge";
 // (setup-desktop-test-data.sh seeds tyler/alice/bob/charlie into `general`),
 // which `enforce_relay_membership` requires.
 //
-// Canonical tag shapes (crates/buzz-sdk/src/builders.rs thread_tags + ingest):
+// Canonical tag shapes (crates/ambush-sdk/src/builders.rs thread_tags + ingest):
 //   top-level : ["h", channelId]                       — no e-tag → depth NULL
 //   direct    : ["e", parentId, "", "reply"]           — reply alone; root=parent
 //   nested    : ["e", rootId, "", "root"],
@@ -41,7 +41,7 @@ const KIND_REACTION = 7;
 const KIND_DELETION = 5;
 
 const DEFAULT_RELAY_HTTP =
-  process.env.BUZZ_E2E_RELAY_URL ?? "http://localhost:3000";
+  process.env.AMBUSH_E2E_RELAY_URL ?? "http://localhost:3000";
 
 type IdentityName = keyof typeof TEST_IDENTITIES;
 

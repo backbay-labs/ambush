@@ -1,14 +1,14 @@
 import 'dart:ui' as ui;
 
-import 'package:buzz/features/channels/channel_management_provider.dart';
-import 'package:buzz/features/channels/message_actions.dart';
-import 'package:buzz/features/channels/message_long_press_region.dart';
-import 'package:buzz/shared/read_state/read_state_provider.dart';
-import 'package:buzz/features/channels/thread_follows/thread_follows_provider.dart';
-import 'package:buzz/features/channels/timeline_message.dart';
-import 'package:buzz/shared/reminders/reminder_service.dart';
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/features/channels/channel_management_provider.dart';
+import 'package:ambush/features/channels/message_actions.dart';
+import 'package:ambush/features/channels/message_long_press_region.dart';
+import 'package:ambush/shared/read_state/read_state_provider.dart';
+import 'package:ambush/features/channels/thread_follows/thread_follows_provider.dart';
+import 'package:ambush/features/channels/timeline_message.dart';
+import 'package:ambush/shared/reminders/reminder_service.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1469,7 +1469,7 @@ void main() {
           'https://example.com/download',
           'image/gif; charset=binary',
         ),
-        matches(RegExp(r'^buzz-\d+\.gif$')),
+        matches(RegExp(r'^ambush-\d+\.gif$')),
       );
     });
   });
@@ -1481,14 +1481,14 @@ void main() {
           message: _message(rootId: 'root-1'),
           channelId: _channelId,
         ),
-        'buzz://message?channel=chan-1&id=msg-1&thread=root-1',
+        'ambush://message?channel=chan-1&id=msg-1&thread=root-1',
       );
     });
 
     test('omits thread for top-level messages', () {
       expect(
         messageLinkFor(message: _message(), channelId: _channelId),
-        'buzz://message?channel=chan-1&id=msg-1',
+        'ambush://message?channel=chan-1&id=msg-1',
       );
     });
   });

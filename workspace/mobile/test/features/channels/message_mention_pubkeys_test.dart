@@ -1,5 +1,5 @@
-import 'package:buzz/features/channels/channel.dart';
-import 'package:buzz/features/channels/message_mention_pubkeys.dart';
+import 'package:ambush/features/channels/channel.dart';
+import 'package:ambush/features/channels/message_mention_pubkeys.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _self = 'self';

@@ -46,7 +46,7 @@ export const SLOT_LABELS: Record<SoundSlot, string> = {
 };
 
 // The agent job protocol (kinds 43001-43006) is defined and queryable but
-// nothing emits the events yet — buzz-acp publishes plain stream messages.
+// nothing emits the events yet — ambush-acp publishes plain stream messages.
 // These slots stay wired (resolver, defaults, settings) but render disabled
 // with a "coming soon" badge until an emitter exists.
 export const COMING_SOON_SLOTS: ReadonlySet<SoundSlot> = new Set([

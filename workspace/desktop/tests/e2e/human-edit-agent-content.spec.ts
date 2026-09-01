@@ -23,20 +23,20 @@ async function invoke(
     Boolean(
       (
         window as Window & {
-          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+          __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         }
-      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__,
+      ).__AMBUSH_E2E_INVOKE_MOCK_COMMAND__,
     ),
   );
   return page.evaluate(
     async ({ cmd, p }) => {
       const win = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
       };
-      const fn = win.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+      const fn = win.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
       if (!fn) throw new Error("Mock bridge unavailable");
       return fn(cmd, p);
     },

@@ -30,11 +30,11 @@ async function invokeMockCommand(
   await page.waitForFunction(
     () => {
       const w = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         __TAURI_INTERNALS__?: { invoke?: unknown };
       };
       return (
-        typeof w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
+        typeof w.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
         typeof w.__TAURI_INTERNALS__?.invoke === "function"
       );
     },
@@ -44,7 +44,7 @@ async function invokeMockCommand(
   return page.evaluate(
     async ({ command: cmd, payload: pl }) => {
       const w = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
@@ -56,7 +56,7 @@ async function invokeMockCommand(
         };
       };
       const invoke =
-        w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ?? w.__TAURI_INTERNALS__?.invoke;
+        w.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ ?? w.__TAURI_INTERNALS__?.invoke;
       if (!invoke) throw new Error("Mock invoke bridge is unavailable.");
       return invoke(cmd, pl);
     },
@@ -65,7 +65,7 @@ async function invokeMockCommand(
 }
 
 /**
- * Build a `buzz:config-nudge` sentinel body from a requirements array.
+ * Build a `ambush:config-nudge` sentinel body from a requirements array.
  * Mirrors the format nudge_body() in setup_mode.rs produces.
  */
 function makeNudgeSentinel(
@@ -78,7 +78,7 @@ function makeNudgeSentinel(
     agent_pubkey: agentPubkey,
     requirements,
   });
-  return `**${agentName}** needs configuration before it can respond.\n\n\`\`\`buzz:config-nudge\n${payload}\n\`\`\``;
+  return `**${agentName}** needs configuration before it can respond.\n\n\`\`\`ambush:config-nudge\n${payload}\n\`\`\``;
 }
 
 /**

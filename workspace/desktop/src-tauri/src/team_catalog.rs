@@ -13,7 +13,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use buzz_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
+use ambush_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
 use nostr::Event;
 use serde::Serialize;
 use tauri::State;

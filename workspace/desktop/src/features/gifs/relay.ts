@@ -9,7 +9,7 @@ import {
 import { relayHttpFromWs } from "@/shared/api/inviteHelpers";
 import { signRelayEvent } from "@/shared/api/tauri";
 
-const KLIPY_CUSTOMER_ID_STORAGE_KEY_PREFIX = "buzz:klipy-customer-id:v1:";
+const KLIPY_CUSTOMER_ID_STORAGE_KEY_PREFIX = "ambush:klipy-customer-id:v1:";
 const NIP98_KIND = 27235;
 
 function customerId(relayUrl: string): string {

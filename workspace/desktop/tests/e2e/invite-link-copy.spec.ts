@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
       json: {
         code: "qr-download-test",
         expires_at: Math.floor(Date.now() / 1000) + 86_400,
-        url: "buzz://join?relay=wss%3A%2F%2Frelay.example.com&code=qr-download-test",
+        url: "ambush://join?relay=wss%3A%2F%2Frelay.example.com&code=qr-download-test",
       },
       status: 200,
     });
@@ -39,7 +39,7 @@ test("copies a freshly minted invite link from the link field", async ({
   await expect(page.getByTestId("member-role")).toHaveCount(0);
   await expect(page.getByTestId("confirm-add-member")).toHaveCount(0);
   await expect(page.getByTestId("invite-link-url")).toHaveValue(
-    "buzz://join?relay=wss%3A%2F%2Frelay.example.com&code=qr-download-test",
+    "ambush://join?relay=wss%3A%2F%2Frelay.example.com&code=qr-download-test",
   );
   await expect(page.getByTestId("invite-link-qr-code")).toHaveCount(0);
   await expect(page.getByTestId("invite-link-max-uses-trigger")).toHaveText(
@@ -52,18 +52,18 @@ test("copies a freshly minted invite link from the link field", async ({
   const payload = await page.evaluate(() => {
     const log = (
       window as Window & {
-        __BUZZ_E2E_COMMAND_LOG__?: Array<{
+        __AMBUSH_E2E_COMMAND_LOG__?: Array<{
           command: string;
           payload: Record<string, unknown> | null;
         }>;
       }
-    ).__BUZZ_E2E_COMMAND_LOG__;
+    ).__AMBUSH_E2E_COMMAND_LOG__;
     return log?.findLast(({ command }) => command === "copy_text_to_clipboard")
       ?.payload;
   });
 
   expect(payload).toEqual({
-    text: "buzz://join?relay=wss%3A%2F%2Frelay.example.com&code=qr-download-test",
+    text: "ambush://join?relay=wss%3A%2F%2Frelay.example.com&code=qr-download-test",
   });
 });
 
@@ -106,7 +106,7 @@ test("retries a failed invite-link generation", async ({ page }) => {
       json: {
         code: "retry-test",
         expires_at: Math.floor(Date.now() / 1000) + 86_400,
-        url: "buzz://join?relay=wss%3A%2F%2Frelay.example.com&code=retry-test",
+        url: "ambush://join?relay=wss%3A%2F%2Frelay.example.com&code=retry-test",
       },
       status: 200,
     });
@@ -127,7 +127,7 @@ test("retries a failed invite-link generation", async ({ page }) => {
 
   await copyButton.click();
   await expect(linkField).toHaveValue(
-    "buzz://join?relay=wss%3A%2F%2Frelay.example.com&code=retry-test",
+    "ambush://join?relay=wss%3A%2F%2Frelay.example.com&code=retry-test",
   );
   await expect(copyButton).toHaveText("Copy link");
   expect(attempts).toBe(2);

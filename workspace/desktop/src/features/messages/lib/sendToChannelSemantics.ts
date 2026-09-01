@@ -34,7 +34,7 @@ export function getSendToChannelSemantics(
   const mentionPubkeys: string[] = [];
   const effectiveMentionPubkeys = message.edited
     ? new Set(
-        (message.tags ?? []).some((tag) => tag[0] === "buzz:mention-snapshot")
+        (message.tags ?? []).some((tag) => tag[0] === "ambush:mention-snapshot")
           ? (message.tags ?? [])
               .filter((tag) => tag[0] === "mention")
               .map((tag) => normalizePubkey(tag[1] ?? ""))

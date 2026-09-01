@@ -113,7 +113,7 @@ function isAtBottomNow(
  * If no such row exists (e.g. nothing scrolled past the top, list shorter
  * than the viewport, etc.) the anchor is `at-bottom`.
  *
- * Algorithm credit: Sami's [13] in the buzz-bugs scroll-redesign thread,
+ * Algorithm credit: Sami's [13] in the ambush-bugs scroll-redesign thread,
  * supersedes the Matrix-style bottom-up walk in [7]. The top-crossing
  * choice is what keeps the row the reader is *reading* fixed under
  * in-viewport reflow (image-load, embed expansion).

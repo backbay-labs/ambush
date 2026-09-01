@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nostr/nostr.dart' as nostr;
 import 'package:pointycastle/digests/sha256.dart';
-import 'package:buzz/shared/crypto/nip_oa.dart';
+import 'package:ambush/shared/crypto/nip_oa.dart';
 
 String _sha256Hex(String input) {
   final digest = SHA256Digest().process(Uint8List.fromList(utf8.encode(input)));

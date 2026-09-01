@@ -185,7 +185,7 @@ export type RepoSourceHeaderControls = {
   localLabel: string;
   localPath?: string | null;
   remoteLabel: string;
-  remoteKind?: "buzz" | "external";
+  remoteKind?: "ambush" | "external";
   remoteUnavailableReason?: ProjectRepoUnavailableReason;
   externalUrl?: string | null;
   /** Opens repository-scoped assistance when remote access is restricted. */

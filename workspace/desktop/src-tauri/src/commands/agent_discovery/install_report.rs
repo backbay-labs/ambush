@@ -34,7 +34,7 @@ pub(super) struct InstallOutcome {
 }
 
 impl InstallOutcome {
-    /// A step Buzz synthesized rather than ran — a failed prerequisite, or the
+    /// A step Ambush synthesized rather than ran — a failed prerequisite, or the
     /// post-install verification. Its own message is the whole record.
     pub(super) fn synthesized(step: InstallStepResult) -> Self {
         Self {
@@ -453,7 +453,7 @@ fn redact(text: &str, secrets: &Secrets) -> String {
 
 /// Values of environment variables whose *name* marks them as secret.
 ///
-/// An install inherits Buzz's environment and installers echo it back — npm
+/// An install inherits Ambush's environment and installers echo it back — npm
 /// prints the resolved registry config on an auth failure, and a shell that
 /// traces its commands prints every expansion. Without this, only the
 /// hard-coded key shapes would be scrubbed, so a plain `NPM_TOKEN` or

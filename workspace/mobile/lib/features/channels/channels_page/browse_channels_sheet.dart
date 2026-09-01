@@ -68,7 +68,7 @@ class _BrowseChannelsSheet extends HookConsumerWidget {
               const SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.all(Grid.sm),
-                  child: Center(child: BuzzLoadingIndicator()),
+                  child: Center(child: AmbushLoadingIndicator()),
                 ),
               )
             else if (directoryHasError &&

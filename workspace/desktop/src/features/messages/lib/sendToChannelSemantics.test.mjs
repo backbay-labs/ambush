@@ -69,7 +69,7 @@ test("edited messages preserve snapshotted mention recipients without profiles",
       body: "Now pinging @Renamed",
       edited: true,
       pubkey: SOURCE,
-      tags: [["p", MENTION], ["mention", MENTION], ["buzz:mention-snapshot"]],
+      tags: [["p", MENTION], ["mention", MENTION], ["ambush:mention-snapshot"]],
     }),
     {
       mentionPubkeys: [MENTION],
@@ -84,7 +84,7 @@ test("an empty edited mention snapshot drops stale original recipients", () => {
       body: "No longer pinging anyone",
       edited: true,
       pubkey: SOURCE,
-      tags: [["p", MENTION], ["buzz:mention-snapshot"]],
+      tags: [["p", MENTION], ["ambush:mention-snapshot"]],
     }),
     { mentionPubkeys: [], semanticTags: [] },
   );

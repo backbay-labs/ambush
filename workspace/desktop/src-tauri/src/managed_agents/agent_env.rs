@@ -1,7 +1,7 @@
 //! Build-time agent env passthrough.
 //!
-//! Internal builds (buzz-releases) bake arbitrary `KEY=VALUE` pairs into the
-//! binary via `BUZZ_BUILD_AGENT_ENV` (base64-encoded, newline-delimited).
+//! Internal builds (ambush-releases) bake arbitrary `KEY=VALUE` pairs into the
+//! binary via `AMBUSH_BUILD_AGENT_ENV` (base64-encoded, newline-delimited).
 //! OSS builds leave the compile-time var unset — nothing is injected.
 
 use std::collections::BTreeMap;
@@ -9,13 +9,13 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 
 /// Seconds a woken lazy harness stays warm before it releases its worker
-/// subprocesses back to the empty-slot state (via `BUZZ_ACP_IDLE_POOL_SLEEP`).
+/// subprocesses back to the empty-slot state (via `AMBUSH_ACP_IDLE_POOL_SLEEP`).
 /// The next accepted event re-wakes it through the same lazy path. Matches the
 /// harness's own 15-minute per-turn idle window so a warm pool survives a
 /// normal back-and-forth but a truly quiet harness stops paying for workers.
 const IDLE_POOL_SLEEP_SECS: &str = "900";
 
-/// Value for `BUZZ_ACP_IDLE_POOL_SLEEP`. Idle re-sleep is only meaningful for
+/// Value for `AMBUSH_ACP_IDLE_POOL_SLEEP`. Idle re-sleep is only meaningful for
 /// lazy harnesses (the harness ignores it otherwise); gate to `lazy` here so
 /// the env reads inert (`"0"` = disabled) for eager harnesses. This is a
 /// desktop-owned lifetime policy (reserved key), not user-tunable.
@@ -29,7 +29,7 @@ pub(super) fn idle_pool_sleep_env(lazy: bool) -> &'static str {
 
 /// Return the baked-in build-time env pairs as a map.
 ///
-/// Internal builds (buzz-releases) bake provider/model defaults and arbitrary
+/// Internal builds (ambush-releases) bake provider/model defaults and arbitrary
 /// `KEY=VALUE` pairs into the binary at compile time. This function returns
 /// those pairs as an owned map so callers can fold them into an in-process env
 /// at the **lowest** precedence layer — user/persona values layered on top
@@ -40,9 +40,9 @@ pub(super) fn idle_pool_sleep_env(lazy: bool) -> &'static str {
 /// map — a safe no-op.
 pub(crate) fn baked_build_env() -> BTreeMap<String, String> {
     build_env_map(
-        option_env!("BUZZ_DESKTOP_BUILD_BUZZ_AGENT_PROVIDER"),
-        option_env!("BUZZ_DESKTOP_BUILD_BUZZ_AGENT_MODEL"),
-        option_env!("BUZZ_DESKTOP_BUILD_AGENT_ENV"),
+        option_env!("AMBUSH_DESKTOP_BUILD_AMBUSH_AGENT_PROVIDER"),
+        option_env!("AMBUSH_DESKTOP_BUILD_AMBUSH_AGENT_MODEL"),
+        option_env!("AMBUSH_DESKTOP_BUILD_AGENT_ENV"),
     )
 }
 
@@ -58,12 +58,12 @@ fn build_env_map(
     let mut map = BTreeMap::new();
     if let Some(provider) = raw_provider {
         if !provider.is_empty() {
-            map.insert("BUZZ_AGENT_PROVIDER".to_string(), provider.to_string());
+            map.insert("AMBUSH_AGENT_PROVIDER".to_string(), provider.to_string());
         }
     }
     if let Some(model) = raw_model {
         if !model.is_empty() {
-            map.insert("BUZZ_AGENT_MODEL".to_string(), model.to_string());
+            map.insert("AMBUSH_AGENT_MODEL".to_string(), model.to_string());
         }
     }
     if let Some(raw) = raw_agent_env {
@@ -81,11 +81,11 @@ fn build_env_map(
     // reaching this filter means the binary was produced by a build that
     // skipped that check. Drop the key rather than let it override the access
     // gate: the baked map is written into the spawned agent's environment last
-    // (see `managed_agents/runtime.rs`), so a baked `BUZZ_ACP_RESPOND_TO` would
+    // (see `managed_agents/runtime.rs`), so a baked `AMBUSH_ACP_RESPOND_TO` would
     // otherwise win over the gate Desktop just set.
     map.retain(|key, _| {
         if super::env_vars::is_reserved_env_key(key) {
-            eprintln!("buzz-desktop: ignoring reserved env var `{key}` from the baked build env");
+            eprintln!("ambush-desktop: ignoring reserved env var `{key}` from the baked build env");
             return false;
         }
         true
@@ -110,7 +110,7 @@ pub(crate) fn discovery_env_with_baked_floor(
 /// Call this BEFORE writing record/persona metadata env vars so that the
 /// record's explicit choices (written after) override the baked defaults.
 /// User-supplied `record.env_vars` (written last) always win.
-pub(crate) fn build_buzz_agent_provider_defaults(cmd: &mut std::process::Command) {
+pub(crate) fn build_ambush_agent_provider_defaults(cmd: &mut std::process::Command) {
     for (key, value) in baked_build_env() {
         cmd.env(key, value);
     }
@@ -140,26 +140,26 @@ pub(crate) fn parse_agent_env_lines(raw: &str) -> Vec<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        baked_build_env, build_buzz_agent_provider_defaults, build_env_map,
+        baked_build_env, build_ambush_agent_provider_defaults, build_env_map,
         discovery_env_with_baked_floor, parse_agent_env_lines,
     };
 
     #[test]
-    fn buzz_agent_provider_defaults_empty_in_oss_build() {
-        // OSS (and normal test) builds set neither BUZZ_BUILD_BUZZ_AGENT_*,
-        // so nothing is baked in and no BUZZ_AGENT_* is injected on spawn.
+    fn ambush_agent_provider_defaults_empty_in_oss_build() {
+        // OSS (and normal test) builds set neither AMBUSH_BUILD_AMBUSH_AGENT_*,
+        // so nothing is baked in and no AMBUSH_AGENT_* is injected on spawn.
         let mut cmd = std::process::Command::new("env");
         cmd.env_clear();
-        build_buzz_agent_provider_defaults(&mut cmd);
+        build_ambush_agent_provider_defaults(&mut cmd);
         let output = cmd.output().expect("env should run");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            !stdout.contains("BUZZ_AGENT_PROVIDER="),
-            "BUZZ_AGENT_PROVIDER should not be injected in OSS builds"
+            !stdout.contains("AMBUSH_AGENT_PROVIDER="),
+            "AMBUSH_AGENT_PROVIDER should not be injected in OSS builds"
         );
         assert!(
-            !stdout.contains("BUZZ_AGENT_MODEL="),
-            "BUZZ_AGENT_MODEL should not be injected in OSS builds"
+            !stdout.contains("AMBUSH_AGENT_MODEL="),
+            "AMBUSH_AGENT_MODEL should not be injected in OSS builds"
         );
         assert!(
             !stdout.contains("DATABRICKS_HOST="),
@@ -249,7 +249,7 @@ mod tests {
 
     // ── baked defaults ordering regression ───────────────────────────────
     //
-    // `build_buzz_agent_provider_defaults` must run BEFORE
+    // `build_ambush_agent_provider_defaults` must run BEFORE
     // `runtime_metadata_env_vars` writes the record's provider/model so that
     // record values win (last-write-wins). This test simulates the ordering by
     // writing the baked default first, then overwriting with the record value.
@@ -258,17 +258,17 @@ mod tests {
         let mut cmd = std::process::Command::new("env");
         cmd.env_clear();
         // Simulate what an internal build's baked defaults would inject.
-        cmd.env("BUZZ_AGENT_PROVIDER", "databricks");
+        cmd.env("AMBUSH_AGENT_PROVIDER", "databricks");
         // Simulate what runtime_metadata_env_vars writes from the record (comes after).
-        cmd.env("BUZZ_AGENT_PROVIDER", "anthropic");
+        cmd.env("AMBUSH_AGENT_PROVIDER", "anthropic");
         let output = cmd.output().expect("env should run");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("BUZZ_AGENT_PROVIDER=anthropic"),
+            stdout.contains("AMBUSH_AGENT_PROVIDER=anthropic"),
             "record provider must win over baked default (last-write-wins)"
         );
         assert!(
-            !stdout.contains("BUZZ_AGENT_PROVIDER=databricks"),
+            !stdout.contains("AMBUSH_AGENT_PROVIDER=databricks"),
             "baked default must not survive when record provider is written after"
         );
     }
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn baked_build_env_is_empty_in_oss_build() {
-        // In OSS/test builds none of the BUZZ_DESKTOP_BUILD_* compile-time vars
+        // In OSS/test builds none of the AMBUSH_DESKTOP_BUILD_* compile-time vars
         // are set, so baked_build_env() must return an empty map — no
         // accidental injection onto in-process discovery.
         assert!(
@@ -295,11 +295,11 @@ mod tests {
     fn build_env_map_provider_and_model_are_mapped() {
         let map = build_env_map(Some("databricks"), Some("my-model"), None);
         assert_eq!(
-            map.get("BUZZ_AGENT_PROVIDER").map(String::as_str),
+            map.get("AMBUSH_AGENT_PROVIDER").map(String::as_str),
             Some("databricks")
         );
         assert_eq!(
-            map.get("BUZZ_AGENT_MODEL").map(String::as_str),
+            map.get("AMBUSH_AGENT_MODEL").map(String::as_str),
             Some("my-model")
         );
     }
@@ -308,11 +308,11 @@ mod tests {
     fn build_env_map_empty_provider_is_skipped() {
         let map = build_env_map(Some(""), Some("my-model"), None);
         assert!(
-            !map.contains_key("BUZZ_AGENT_PROVIDER"),
+            !map.contains_key("AMBUSH_AGENT_PROVIDER"),
             "empty provider must be skipped"
         );
         assert_eq!(
-            map.get("BUZZ_AGENT_MODEL").map(String::as_str),
+            map.get("AMBUSH_AGENT_MODEL").map(String::as_str),
             Some("my-model")
         );
     }
@@ -392,22 +392,22 @@ mod tests {
     // ── baked reserved-key filtering ──────────────────────────────────────
     //
     // The baked map is written into a spawned agent's environment LAST (see
-    // `managed_agents/runtime.rs`), after Buzz sets the access gates. If a
+    // `managed_agents/runtime.rs`), after Ambush sets the access gates. If a
     // baked reserved key survived here, an internal build packaged with
-    // `BUZZ_ACP_RESPOND_TO=anyone` would answer anyone while the UI shows
+    // `AMBUSH_ACP_RESPOND_TO=anyone` would answer anyone while the UI shows
     // "Only me". `build.rs` rejects such a key at build time; these tests pin
     // the runtime backstop for a binary built without that check.
 
     #[test]
     fn build_env_map_drops_baked_access_gate_keys() {
         use base64::Engine as _;
-        let raw = "BUZZ_ACP_RESPOND_TO=anyone\nBUZZ_ACP_ALLOWED_RESPOND_TO=anyone\nBUZZ_ACP_RESPOND_TO_ALLOWLIST=deadbeef\nDATABRICKS_MODEL=goose-claude-opus-4-8";
+        let raw = "AMBUSH_ACP_RESPOND_TO=anyone\nAMBUSH_ACP_ALLOWED_RESPOND_TO=anyone\nAMBUSH_ACP_RESPOND_TO_ALLOWLIST=deadbeef\nDATABRICKS_MODEL=goose-claude-opus-4-8";
         let blob = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
         let map = build_env_map(None, None, Some(&blob));
         for key in [
-            "BUZZ_ACP_RESPOND_TO",
-            "BUZZ_ACP_ALLOWED_RESPOND_TO",
-            "BUZZ_ACP_RESPOND_TO_ALLOWLIST",
+            "AMBUSH_ACP_RESPOND_TO",
+            "AMBUSH_ACP_ALLOWED_RESPOND_TO",
+            "AMBUSH_ACP_RESPOND_TO_ALLOWLIST",
         ] {
             assert!(
                 !map.contains_key(key),
@@ -428,7 +428,7 @@ mod tests {
         // baked filter: env lookup is case-sensitive on Unix, but a lowercase
         // spelling would still be a reserved key smuggled past a case-sensitive
         // check on Windows.
-        let raw = "buzz_acp_respond_to=anyone\nBuzz_Private_Key=nsec1fake";
+        let raw = "ambush_acp_respond_to=anyone\nAmbush_Private_Key=nsec1fake";
         let blob = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
         let map = build_env_map(None, None, Some(&blob));
         assert!(

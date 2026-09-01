@@ -14,7 +14,7 @@ final class NativeProfileTextEditorCoordinator: NSObject,
     parentViewController: UIViewController?
   ) {
     channel = FlutterMethodChannel(
-      name: "buzz/profile_text_editor",
+      name: "ambush/profile_text_editor",
       binaryMessenger: messenger
     )
     self.parentViewController = parentViewController

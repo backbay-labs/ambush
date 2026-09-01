@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:buzz/shared/huddle/huddle_auth.dart';
-import 'package:buzz/shared/huddle/huddle_transport.dart';
-import 'package:buzz/shared/huddle/huddle_wire.dart';
+import 'package:ambush/shared/huddle/huddle_auth.dart';
+import 'package:ambush/shared/huddle/huddle_transport.dart';
+import 'package:ambush/shared/huddle/huddle_wire.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -527,7 +527,7 @@ void main() {
       var connection = 0;
       final transport = HuddleTransport(
         parameters: HuddleConnectionParameters(
-          relayWebSocketUrl: 'wss://buzz.example',
+          relayWebSocketUrl: 'wss://ambush.example',
           nsec: _privateKey,
           parentChannelId: _parentChannelId,
           ephemeralChannelId: _ephemeralChannelId,
@@ -588,7 +588,7 @@ void main() {
     var connection = 0;
     final transport = HuddleTransport(
       parameters: HuddleConnectionParameters(
-        relayWebSocketUrl: 'wss://buzz.example',
+        relayWebSocketUrl: 'wss://ambush.example',
         nsec: _privateKey,
         parentChannelId: _parentChannelId,
         ephemeralChannelId: _ephemeralChannelId,
@@ -645,7 +645,7 @@ void main() {
     var connection = 0;
     final transport = HuddleTransport(
       parameters: HuddleConnectionParameters(
-        relayWebSocketUrl: 'wss://buzz.example',
+        relayWebSocketUrl: 'wss://ambush.example',
         nsec: _privateKey,
         parentChannelId: _parentChannelId,
         ephemeralChannelId: _ephemeralChannelId,
@@ -703,7 +703,7 @@ void main() {
     var connection = 0;
     final transport = HuddleTransport(
       parameters: HuddleConnectionParameters(
-        relayWebSocketUrl: 'wss://buzz.example',
+        relayWebSocketUrl: 'wss://ambush.example',
         nsec: _privateKey,
         parentChannelId: _parentChannelId,
         ephemeralChannelId: _ephemeralChannelId,
@@ -777,7 +777,7 @@ void main() {
 HuddleTransport _transport(_ControlledWebSocketChannel channel) =>
     HuddleTransport(
       parameters: HuddleConnectionParameters(
-        relayWebSocketUrl: 'wss://buzz.example',
+        relayWebSocketUrl: 'wss://ambush.example',
         nsec: _privateKey,
         parentChannelId: _parentChannelId,
         ephemeralChannelId: _ephemeralChannelId,

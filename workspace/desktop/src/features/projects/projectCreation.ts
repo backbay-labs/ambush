@@ -163,13 +163,13 @@ export function buildProjectAnnouncementTemplate({
   const projectTags: string[][] = [
     ["d", dtag],
     ["name", normalizedName],
-    ["buzz-channel", normalizedProjectChannelId],
+    ["ambush-channel", normalizedProjectChannelId],
   ];
   if (normalizedDescription) {
     projectTags.push(["description", normalizedDescription]);
   }
   if (projectVisibility === "unlisted") {
-    projectTags.push(["buzz-visibility", "unlisted"]);
+    projectTags.push(["ambush-visibility", "unlisted"]);
   }
   for (const address of [...repositoryAddresses].sort()) {
     projectTags.push(["a", address]);
@@ -217,7 +217,7 @@ export function buildDefaultProjectRepositoryTemplate({
   const repositoryTags: string[][] = [
     ["d", dtag],
     ["name", normalizedName],
-    ["buzz-channel", normalizedProjectChannelId],
+    ["ambush-channel", normalizedProjectChannelId],
   ];
   if (normalizedDescription) {
     repositoryTags.push(["description", normalizedDescription]);

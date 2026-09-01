@@ -188,14 +188,14 @@ mod tests {
         // Mirrors codex [projects."<path>"] { trust_level = "trusted" }
         let config = json!({
             "projects": {
-                "/Users/foo/dev/buzz": { "trust_level": "trusted" },
+                "/Users/foo/dev/ambush": { "trust_level": "trusted" },
                 "/Users/foo/dev/other": { "trust_level": "untrusted" }
             }
         });
         let result = extract_config_fields(&config, &[]);
         assert_eq!(
             result
-                .get("projects./Users/foo/dev/buzz.trust_level")
+                .get("projects./Users/foo/dev/ambush.trust_level")
                 .map(|s| s.as_str()),
             Some("trusted")
         );

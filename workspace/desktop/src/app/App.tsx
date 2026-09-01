@@ -63,7 +63,7 @@ import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChang
 import { setAvatarProfileSyncQueryClient } from "@/features/profile/avatarProfileSync";
 import { seedProjectSnapshot } from "@/features/projects/projectSnapshot";
 import { EncryptedBackupProvider } from "@/features/settings/EncryptedBackupProvider";
-import { createBuzzQueryClient } from "@/shared/api/queryClient";
+import { createAmbushQueryClient } from "@/shared/api/queryClient";
 import { hydrateChannelHeads } from "@/features/messages/lib/channelHeadCache";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { isSharedIdentity as isSharedIdentityCmd } from "@/shared/api/tauri";
@@ -73,9 +73,9 @@ import {
   listenForDeepLinks,
 } from "@/shared/deep-link";
 import { cn } from "@/shared/lib/cn";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
-import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
-import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
+import { AmbushMark } from "@/shared/ui/ambush-logo/AmbushMark";
+import { AmbushLogoMotion } from "@/shared/ui/ambush-logo/AmbushLogoMotion";
+import { AmbushWordmark } from "@/shared/ui/ambush-logo/AmbushWordmark";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 
 const LOADING_TEXT = "Setting up your community...";
@@ -102,13 +102,13 @@ function useInitialRenderReady() {
 }
 
 // E2E runs skip the hold (it would slow every spec's boot and block pointer
-// actionability); a spec can opt back in via __BUZZ_E2E__.bootSplashHoldMs.
+// actionability); a spec can opt back in via __AMBUSH_E2E__.bootSplashHoldMs.
 function bootSplashHoldMs(): number {
   const e2e = (
     window as Window & {
-      __BUZZ_E2E__?: { bootSplashHoldMs?: number };
+      __AMBUSH_E2E__?: { bootSplashHoldMs?: number };
     }
-  ).__BUZZ_E2E__;
+  ).__AMBUSH_E2E__;
   if (e2e) {
     return e2e.bootSplashHoldMs ?? 0;
   }
@@ -139,10 +139,10 @@ function useBootSplashHold(): BootSplashPhase {
   return phase;
 }
 
-// Animated Buzz mark for the loading gates. The static BuzzMark renders in
+// Animated Ambush mark for the loading gates. The static AmbushMark renders in
 // normal flow and sizes the box — it's plain SVG (no JS/SMIL), so it paints on
 // the very first frame even before scripting starts, avoiding a blank flash on
-// hard reload. The animated FuzzyLogo is layered on top and takes over once it
+// hard reload. The animated AmbushWordmark is layered on top and takes over once it
 // begins playing.
 function BeeLoader({
   ariaLabel,
@@ -155,8 +155,8 @@ function BeeLoader({
 }) {
   return (
     <div className={cn("relative", tintClassName, className)}>
-      <BuzzMark className="block h-auto w-full" />
-      <FuzzyLogo
+      <AmbushMark className="block h-auto w-full" />
+      <AmbushWordmark
         ariaLabel={ariaLabel}
         className="absolute inset-0 h-full! w-full! [&>svg]:h-full [&>svg]:w-full [&>svg]:max-w-full"
         fuzz
@@ -168,20 +168,20 @@ function BeeLoader({
 }
 
 // Cold boot gate: the theme-adaptive grainient background with a single
-// centered Buzz bee flying over it — the same static mark as before, now with
-// its wings flapping (ported from the Buzz website's wing-flap). Replaces the
+// centered Ambush bee flying over it — the same static mark as before, now with
+// its wings flapping (ported from the Ambush website's wing-flap). Replaces the
 // old "Setting up your community" text, which stays as an sr-only caption.
 function AppLoadingGate() {
   return (
     <div
-      className="buzz-setup-loading-shell flex min-h-dvh flex-col items-center justify-center overflow-hidden px-6 py-10"
+      className="ambush-setup-loading-shell flex min-h-dvh flex-col items-center justify-center overflow-hidden px-6 py-10"
       data-testid="app-loading-gate"
       role="status"
     >
       <StartupWindowDragRegion />
       <ThemeGrainientBackground />
       <span className="sr-only">{LOADING_TEXT}</span>
-      <FlappingBee className="relative z-10 h-auto w-28" />
+      <AmbushLogoMotion className="relative z-10 h-auto w-28" />
     </div>
   );
 }
@@ -233,7 +233,7 @@ function CommunityQueryProvider({
   // redundant read on a discarded client. The provider is keyed on the
   // community, so one client maps to one {pubkey, relayUrl} scope.
   const [queryClient] = useState(() => {
-    const client = createBuzzQueryClient();
+    const client = createAmbushQueryClient();
     if (pubkey && relayUrl) {
       seedProjectSnapshot(client, { pubkey, relayUrl });
       void hydrateChannelHeads(client, { pubkey, relayUrl });
@@ -245,17 +245,17 @@ function CommunityQueryProvider({
 
   useEffect(() => {
     const e2eWindow = window as Window & {
-      __BUZZ_E2E__?: unknown;
-      __BUZZ_E2E_QUERY_CLIENT__?: typeof queryClient;
+      __AMBUSH_E2E__?: unknown;
+      __AMBUSH_E2E_QUERY_CLIENT__?: typeof queryClient;
     };
-    if (!e2eWindow.__BUZZ_E2E__) {
+    if (!e2eWindow.__AMBUSH_E2E__) {
       return;
     }
 
-    e2eWindow.__BUZZ_E2E_QUERY_CLIENT__ = queryClient;
+    e2eWindow.__AMBUSH_E2E_QUERY_CLIENT__ = queryClient;
     return () => {
-      if (e2eWindow.__BUZZ_E2E_QUERY_CLIENT__ === queryClient) {
-        delete e2eWindow.__BUZZ_E2E_QUERY_CLIENT__;
+      if (e2eWindow.__AMBUSH_E2E_QUERY_CLIENT__ === queryClient) {
+        delete e2eWindow.__AMBUSH_E2E_QUERY_CLIENT__;
       }
     };
   }, [queryClient]);
@@ -802,7 +802,7 @@ export function App() {
   useCloseWindowShortcut();
   useInitialRenderReady();
   const [sharedIdentity, setSharedIdentity] = useState<boolean | null>(null);
-  const [queryClient] = useState(createBuzzQueryClient);
+  const [queryClient] = useState(createAmbushQueryClient);
 
   useEffect(() => {
     isSharedIdentityCmd()

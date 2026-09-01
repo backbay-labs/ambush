@@ -6,7 +6,7 @@ import {
   hasMentionClipboardHtml,
   normalizeMentionClipboardHtml,
 } from "@/features/messages/lib/normalizeMentionClipboard";
-import { getBuzzCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
+import { getAmbushCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 
 export function useComposerPasteHandler(options: {
   editor: Editor | null;
@@ -33,7 +33,7 @@ export function useComposerPasteHandler(options: {
             if (file) void uploadFileRef.current(file);
             return true;
           }
-          const codeBlockText = getBuzzCodeBlockClipboardText(
+          const codeBlockText = getAmbushCodeBlockClipboardText(
             event.clipboardData,
           );
           if (codeBlockText !== null) {

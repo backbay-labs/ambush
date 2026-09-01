@@ -1,4 +1,4 @@
-const STORAGE_KEY = "buzz:huddle-backing-channel-ids:v1";
+const STORAGE_KEY = "ambush:huddle-backing-channel-ids:v1";
 const MAX_TRACKED_CHANNELS = 100;
 
 function readStoredIds(): string[] {

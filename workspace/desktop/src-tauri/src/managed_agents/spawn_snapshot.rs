@@ -96,7 +96,7 @@ pub(crate) struct SpawnConfigInputs<'a> {
 /// [`ManagedAgentProcess`]: super::ManagedAgentProcess
 #[derive(Clone, Serialize)]
 pub(crate) struct SpawnConfigSnapshot {
-    /// The ACP harness binary the desktop launches (`buzz-acp`).
+    /// The ACP harness binary the desktop launches (`ambush-acp`).
     pub acp_command: String,
     /// The effective agent command the harness drives.
     pub command: String,
@@ -111,7 +111,7 @@ pub(crate) struct SpawnConfigSnapshot {
     pub system_prompt: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
-    /// `None` when a user env override shadows `BUZZ_ACP_SESSION_TITLE`: spawn
+    /// `None` when a user env override shadows `AMBUSH_ACP_SESSION_TITLE`: spawn
     /// writes the title BEFORE the user env layer, so the override is what
     /// actually runs and it already reaches this snapshot through `env`.
     /// Capturing the record-derived value under an override would badge a
@@ -120,7 +120,7 @@ pub(crate) struct SpawnConfigSnapshot {
     pub auth_tag: Option<String>,
     pub respond_to: String,
     /// `None` outside allowlist mode — spawn sets
-    /// `BUZZ_ACP_RESPOND_TO_ALLOWLIST` only there, so edits to a dormant list
+    /// `AMBUSH_ACP_RESPOND_TO_ALLOWLIST` only there, so edits to a dormant list
     /// must not badge. Normalized (trim/lowercase/dedup) as the env receives
     /// it, so edits that don't survive normalization must not badge either.
     pub respond_to_allowlist: Option<Vec<String>>,
@@ -129,7 +129,7 @@ pub(crate) struct SpawnConfigSnapshot {
     pub parallelism: u32,
     /// The startup effort the harness will actually apply, resolved by
     /// [`effective_effort`]: the persisted canonical `record.effort_level` when
-    /// present, else the user-seeded `BUZZ_ACP_EFFORT_LEVEL` from the layered
+    /// present, else the user-seeded `AMBUSH_ACP_EFFORT_LEVEL` from the layered
     /// env. This is the *sole* representation of effort in the snapshot — the
     /// key is stripped from `env` (see `from_inputs`) so an authority handoff
     /// that leaves the effective value unchanged (canonical `low` replacing a
@@ -140,7 +140,7 @@ pub(crate) struct SpawnConfigSnapshot {
 
 /// The startup effort a spawn would actually apply, mirroring `apply_effort_env`
 /// exactly: the persisted canonical `record.effort_level` wins, and only when it
-/// is absent does a user-supplied `BUZZ_ACP_EFFORT_LEVEL` from the layered env
+/// is absent does a user-supplied `AMBUSH_ACP_EFFORT_LEVEL` from the layered env
 /// seed startup effort. This is the resolver input for the snapshot's single
 /// `effort_level` representation; the same precedence runs at spawn time in
 /// `runtime.rs`, so badge and process can never disagree.
@@ -180,7 +180,7 @@ impl SpawnConfigSnapshot {
             // Effort has ONE representation in the snapshot: `effort_level`
             // below, always holding `effective_effort`. Stripping the env key
             // here means a canonical/user-env authority handoff at the same
-            // value is a no-op (no phantom `env.BUZZ_ACP_EFFORT_LEVEL` add or
+            // value is a no-op (no phantom `env.AMBUSH_ACP_EFFORT_LEVEL` add or
             // remove) and an env-only effort edit surfaces as exactly one
             // `effort_level` entry rather than a duplicate under `env.`.
             env: {

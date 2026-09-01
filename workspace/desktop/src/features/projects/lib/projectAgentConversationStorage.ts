@@ -1,4 +1,4 @@
-const CONVERSATION_STORAGE_PREFIX = "buzz.projects.agentConversation";
+const CONVERSATION_STORAGE_PREFIX = "ambush.projects.agentConversation";
 
 /** Builds the identity boundary for Projects conversation pointers and drafts. */
 export function projectsConversationScope(

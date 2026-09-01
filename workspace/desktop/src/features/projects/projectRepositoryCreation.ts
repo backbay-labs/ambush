@@ -62,7 +62,7 @@ function buildProjectPatchTemplate({
   }
 
   // Replace all existing `a` tags with the new set, preserving everything else
-  // (d, name, description, buzz-channel, buzz-visibility, relay hints embedded
+  // (d, name, description, ambush-channel, ambush-visibility, relay hints embedded
   // in `a` tags, and any future/unknown tags).
   const nonMemberTags = liveHead.tags.filter((tag) => tag[0] !== "a");
   const existingHints = new Map<string, string>();
@@ -122,9 +122,9 @@ export function buildRepositoryChannelBindingTemplate({
     content: repository.eventContent ?? repository.description,
     tags: [
       ...repository.eventTags
-        .filter((tag) => tag[0] !== "buzz-channel")
+        .filter((tag) => tag[0] !== "ambush-channel")
         .map((tag) => [...tag]),
-      ["buzz-channel", normalizedChannelId],
+      ["ambush-channel", normalizedChannelId],
     ],
   };
 }
@@ -229,7 +229,7 @@ export function buildAddedRepositoryEventTemplatesFromHead({
   if (!isValidProjectChannelId(normalizedAccessChannelId)) {
     throw new Error("Repository access channel is invalid.");
   }
-  repositoryTags.push(["buzz-channel", normalizedAccessChannelId]);
+  repositoryTags.push(["ambush-channel", normalizedAccessChannelId]);
   if (normalizedDescription) {
     repositoryTags.push(["description", normalizedDescription]);
   }

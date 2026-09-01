@@ -30,18 +30,18 @@ const GOOSE_AVAILABLE = {
   auth_status: { status: "not_applicable" },
 };
 
-/** buzz-agent is always available and has no auth step. */
-const BUZZ_AGENT_AVAILABLE = {
-  id: "buzz-agent",
-  label: "Buzz Agent",
+/** ambush-agent is always available and has no auth step. */
+const AMBUSH_AGENT_AVAILABLE = {
+  id: "ambush-agent",
+  label: "Ambush Agent",
   avatar_url: "",
   availability: "available",
-  command: "buzz-agent",
-  binary_path: "/usr/local/bin/buzz-agent",
+  command: "ambush-agent",
+  binary_path: "/usr/local/bin/ambush-agent",
   default_args: [],
-  mcp_command: "buzz-dev-mcp",
+  mcp_command: "ambush-dev-mcp",
   install_hint: "",
-  install_instructions_url: "https://github.com/block/buzz",
+  install_instructions_url: "https://github.com/backbay-labs/ambush",
   can_auto_install: false,
   underlying_cli_path: null,
   node_required: false,
@@ -83,7 +83,7 @@ const CODEX_NOT_INSTALLED = {
   binary_path: null,
   default_args: [],
   mcp_command: null,
-  install_hint: "Buzz talks to Codex through the Codex CLI.",
+  install_hint: "Ambush talks to Codex through the Codex CLI.",
   install_instructions_url: "https://developers.openai.com/codex/cli/",
   can_auto_install: true,
   underlying_cli_path: null,
@@ -121,7 +121,7 @@ test.describe("Doctor panel state screenshots", () => {
         GOOSE_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         CODEX_NOT_INSTALLED,
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
     });
 
@@ -142,18 +142,18 @@ test.describe("Doctor panel state screenshots", () => {
           rows.map((row) => row.getAttribute("data-testid")),
         ),
     ).toEqual([
-      "doctor-runtime-buzz-agent",
+      "doctor-runtime-ambush-agent",
       "doctor-runtime-goose",
       "doctor-runtime-claude",
       "doctor-runtime-codex",
     ]);
-    for (const runtimeId of ["goose", "claude", "codex", "buzz-agent"]) {
+    for (const runtimeId of ["goose", "claude", "codex", "ambush-agent"]) {
       await expect(
         page.getByTestId(`doctor-runtime-logo-${runtimeId}`),
       ).toBeVisible();
     }
     const rowHeights = await Promise.all(
-      ["goose", "claude", "codex", "buzz-agent"].map((runtimeId) =>
+      ["goose", "claude", "codex", "ambush-agent"].map((runtimeId) =>
         page
           .getByTestId(`doctor-runtime-${runtimeId}`)
           .evaluate((element) =>
@@ -186,7 +186,7 @@ test.describe("Doctor panel state screenshots", () => {
         .locator("..")
         .locator(".."),
     ).toHaveCSS("align-items", "flex-end");
-    for (const runtimeId of ["goose", "claude", "buzz-agent"]) {
+    for (const runtimeId of ["goose", "claude", "ambush-agent"]) {
       await expect(
         page.getByTestId(`doctor-runtime-menu-${runtimeId}`),
       ).toHaveCount(0);
@@ -222,7 +222,7 @@ test.describe("Doctor panel state screenshots", () => {
       0,
     );
     await expect(page.getByTestId("doctor-runtime-codex")).not.toContainText(
-      "Buzz talks to Codex through the Codex CLI.",
+      "Ambush talks to Codex through the Codex CLI.",
     );
 
     await runtimeList.scrollIntoViewIfNeeded();
@@ -239,7 +239,7 @@ test.describe("Doctor panel state screenshots", () => {
         GOOSE_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         CODEX_NOT_INSTALLED,
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
     });
 
@@ -282,7 +282,7 @@ test.describe("Doctor panel state screenshots", () => {
           auth_status: { status: "logged_out" },
           login_hint: "Run `codex login` to authenticate.",
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
     });
 
@@ -327,7 +327,7 @@ test.describe("Doctor panel state screenshots", () => {
           login_hint: "Run the Claude CLI to complete authentication.",
         },
         CODEX_NOT_INSTALLED,
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
     });
 
@@ -375,7 +375,7 @@ test.describe("Doctor panel state screenshots", () => {
           install_instructions_url:
             "https://github.com/agentclientprotocol/codex-acp",
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
     });
 
@@ -438,7 +438,7 @@ test.describe("Doctor panel state screenshots", () => {
           can_auto_install: true,
           node_required: false,
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       installAcpRuntimeDelayMs: 250,
       installAcpRuntimeResults: [
@@ -472,9 +472,9 @@ test.describe("Doctor panel state screenshots", () => {
               success: false,
               stdout: "",
               stderr:
-                "The installer finished, but Buzz still could not use codex (observed: NotInstalled).",
+                "The installer finished, but Ambush still could not use codex (observed: NotInstalled).",
               exit_code: null,
-              hint: "Buzz requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Buzz was open, restart Buzz and check again.",
+              hint: "Ambush requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Ambush was open, restart Ambush and check again.",
             },
           ],
         },
@@ -533,7 +533,7 @@ test.describe("Doctor panel state screenshots", () => {
         GOOSE_AVAILABLE,
         CLAUDE_AVAILABLE_LOGGED_IN,
         CODEX_NOT_INSTALLED,
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       acpRuntimesCatalogAfterInstall: [
         GOOSE_AVAILABLE,
@@ -546,7 +546,7 @@ test.describe("Doctor panel state screenshots", () => {
           underlying_cli_path: "/usr/local/bin/codex",
           auth_status: { status: "logged_in" },
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       installAcpRuntimeResult: {
         success: true,
@@ -598,7 +598,7 @@ test.describe("Doctor panel state screenshots", () => {
           auth_status: { status: "logged_out" },
           login_hint: "Run `codex login` to authenticate.",
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       // After the mocked connect succeeds, discovery reports logged_in so
       // the row face can flip from "Sign-in needed" to Ready.
@@ -613,7 +613,7 @@ test.describe("Doctor panel state screenshots", () => {
           underlying_cli_path: "/usr/local/bin/codex",
           auth_status: { status: "logged_in" },
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       connectAcpRuntimeDelayMs: 250,
       acpAuthMethods: {
@@ -676,7 +676,7 @@ test.describe("Doctor panel state screenshots", () => {
           login_hint: "Run the Claude CLI to complete authentication.",
         },
         CODEX_NOT_INSTALLED,
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       acpAuthMethods: {
         claude: { methods: [] },
@@ -709,7 +709,7 @@ test.describe("Doctor panel state screenshots", () => {
           availability: "available",
           auth_status: { status: "logged_out" },
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       acpAuthMethodsErrors: {
         codex: "Could not inspect the Codex adapter.",
@@ -734,7 +734,7 @@ test.describe("Doctor panel state screenshots", () => {
           availability: "available",
           auth_status: { status: "logged_out" },
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       acpAuthMethods: {
         codex: {
@@ -770,7 +770,7 @@ test.describe("Doctor panel state screenshots", () => {
           availability: "available",
           auth_status: { status: "logged_out" },
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       acpAuthMethods: {
         codex: {
@@ -810,7 +810,7 @@ test.describe("Doctor panel state screenshots", () => {
           underlying_cli_path: "/usr/local/bin/codex",
           can_auto_install: true,
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       installAcpRuntimeDelayMs: 250,
     });
@@ -828,7 +828,7 @@ test.describe("Doctor panel state screenshots", () => {
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("Update Codex adapter?");
     await expect(dialog).toContainText(
-      "Older Buzz releases using the legacy adapter may lose community access",
+      "Older Ambush releases using the legacy adapter may lose community access",
     );
     await expect(page.getByTestId("doctor-runtime-loading-codex")).toHaveCount(
       0,
@@ -868,7 +868,7 @@ test.describe("Doctor panel state screenshots", () => {
           node_required: false,
         },
         GOOSE_AVAILABLE,
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       installAcpRuntimeByRuntime: {
         claude: {
@@ -920,7 +920,7 @@ test.describe("Doctor panel state screenshots", () => {
           auth_status: { status: "logged_in" },
         },
         GOOSE_AVAILABLE,
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
     });
 
@@ -987,7 +987,7 @@ test.describe("Doctor panel state screenshots", () => {
           can_auto_install: true,
           node_required: false,
         },
-        BUZZ_AGENT_AVAILABLE,
+        AMBUSH_AGENT_AVAILABLE,
       ],
       installAcpRuntimeDelayMs: 500,
       installAcpRuntimeOutputLines: [
@@ -1006,7 +1006,7 @@ test.describe("Doctor panel state screenshots", () => {
             exit_code: 1,
           },
         ],
-        log_path: "/tmp/buzz-install-codex.log",
+        log_path: "/tmp/ambush-install-codex.log",
       },
     });
 
@@ -1043,7 +1043,7 @@ test.describe("Doctor panel state screenshots", () => {
 
     // The failure points at the log holding bounded output for every attempt.
     await expect(installError).toContainText("npm ERR! code E404");
-    await expect(installError).toContainText("/tmp/buzz-install-codex.log");
+    await expect(installError).toContainText("/tmp/ambush-install-codex.log");
 
     await row.scrollIntoViewIfNeeded();
     await waitForAnimations(page);

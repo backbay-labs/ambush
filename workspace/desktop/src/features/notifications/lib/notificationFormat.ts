@@ -56,9 +56,9 @@ export type MessageNotificationSource =
   | "thread_reply";
 
 const MESSAGE_BODY_FALLBACKS: Record<MessageNotificationSource, string> = {
-  mention: "Something in Buzz needs your attention.",
+  mention: "Something in Ambush needs your attention.",
   approval: "A workflow is waiting for your approval.",
-  needs_action: "Something in Buzz needs your attention.",
+  needs_action: "Something in Ambush needs your attention.",
   dm: "New message",
   thread_reply: "New reply",
 };

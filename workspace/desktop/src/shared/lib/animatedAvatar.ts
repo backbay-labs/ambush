@@ -4,7 +4,7 @@
  * An animated avatar is persisted in the kind-0 `picture` field as a single
  * string so it round-trips through any Nostr client:
  *
- *   <posterUrl>#buzz-anim=<encodeURIComponent(animationUrl)>
+ *   <posterUrl>#ambush-anim=<encodeURIComponent(animationUrl)>
  *
  * The poster is a static image (the frame the user picked) and the fragment
  * carries the animation (an animated PNG) to play on hover. Clients that
@@ -12,7 +12,7 @@
  * fragment is never sent over HTTP, so they simply render the poster.
  */
 
-const ANIMATED_AVATAR_SEPARATOR = "#buzz-anim=";
+const ANIMATED_AVATAR_SEPARATOR = "#ambush-anim=";
 
 export type AnimatedAvatarDescriptor = {
   /** Static image shown when the avatar is idle. */

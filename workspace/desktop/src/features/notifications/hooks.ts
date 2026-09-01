@@ -35,7 +35,7 @@ export type { DesktopNotificationPermissionState } from "./lib/desktop";
 
 // v2: settings model reworked around per-event rows (flutter default sound,
 // slotAlertsEnabled, no singleSound/soundEnabled) — v1 values are abandoned.
-const NOTIFICATION_SETTINGS_STORAGE_KEY = "buzz-notification-settings.v2";
+const NOTIFICATION_SETTINGS_STORAGE_KEY = "ambush-notification-settings.v2";
 const HOME_FEED_SEEN_MAX_ITEMS = 500;
 const EMPTY_FEED_ID_SET: ReadonlySet<string> = new Set();
 
@@ -270,7 +270,7 @@ export function useNotificationSettings(pubkey?: string) {
         }));
         setErrorMessage(
           nextPermission === "denied"
-            ? "Desktop notifications are blocked for Buzz. Enable them in system settings to turn alerts on."
+            ? "Desktop notifications are blocked for Ambush. Enable them in system settings to turn alerts on."
             : "Desktop notifications are unavailable in this environment.",
         );
         return false;
@@ -538,12 +538,12 @@ export function useHomeFeedNotifications(pubkey: string | undefined) {
     }
 
     window.addEventListener(
-      "buzz:e2e-home-feed-updated",
+      "ambush:e2e-home-feed-updated",
       handleMockHomeFeedUpdate,
     );
     return () => {
       window.removeEventListener(
-        "buzz:e2e-home-feed-updated",
+        "ambush:e2e-home-feed-updated",
         handleMockHomeFeedUpdate,
       );
     };

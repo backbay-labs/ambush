@@ -167,7 +167,7 @@ export function useUnreadChannels(
 
   // Channels manually marked unread this session. NIP-RS markers are monotonic,
   // so this flag creates the badge without lowering synced read state.
-  // Persisted to buzz-forced-unread.v1 for cross-reload and rail-observer visibility.
+  // Persisted to ambush-forced-unread.v1 for cross-reload and rail-observer visibility.
   const forcedUnreadRef = React.useRef<ForcedUnreadMap>(
     pubkey ? forcedUnreadStore.read(pubkey) : {},
   );

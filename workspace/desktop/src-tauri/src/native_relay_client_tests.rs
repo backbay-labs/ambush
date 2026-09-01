@@ -168,7 +168,7 @@ async fn finite_fetch_multiplexes_with_persistent_delivery_on_a_real_websocket()
         tokio::spawn(async move {
             session
                 .fetch_events(
-                    serde_json::json!({ "kinds": [buzz_core_pkg::kind::KIND_PERSONA], "limit": 500 }),
+                    serde_json::json!({ "kinds": [ambush_core_pkg::kind::KIND_PERSONA], "limit": 500 }),
                     Duration::from_secs(10),
                 )
                 .await

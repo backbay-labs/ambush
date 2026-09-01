@@ -8,8 +8,8 @@ import type { ProjectSelectionItem } from "@/features/projects/lib/projectSelect
 import type { ProjectRightPanelMode } from "./ProjectRightPanelControls";
 
 const REPOSITORY_PANEL_COLLAPSED_KEY =
-  "buzz.desktop.project-repository-panel-collapsed";
-const PROJECT_RIGHT_PANEL_MODE_KEY = "buzz.desktop.project-right-panel-mode";
+  "ambush.desktop.project-repository-panel-collapsed";
+const PROJECT_RIGHT_PANEL_MODE_KEY = "ambush.desktop.project-right-panel-mode";
 
 function initialCollapsed() {
   try {

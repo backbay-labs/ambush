@@ -15,16 +15,16 @@ export const STARTER_WELCOME_CHANNEL_NAME = "welcome-everyone";
 export const STARTER_WELCOME_CHANNEL_DESCRIPTION =
   "Say hi, ask a question, or share what brought you here.";
 export const WELCOME_CHANNEL_READY_EVENT =
-  "buzz:onboarding-welcome-channel-ready";
+  "ambush:onboarding-welcome-channel-ready";
 export const WELCOME_SURFACE_READY_EVENT =
-  "buzz:onboarding-welcome-surface-ready";
+  "ambush:onboarding-welcome-surface-ready";
 
 const PENDING_WELCOME_CHANNEL_STORAGE_KEY =
-  "buzz:onboarding-welcome-channel.v1";
+  "ambush:onboarding-welcome-channel.v1";
 const WELCOME_INITIAL_UNREAD_SUPPRESSION_STORAGE_KEY =
-  "buzz:onboarding-welcome-initial-unread-suppression.v1";
+  "ambush:onboarding-welcome-initial-unread-suppression.v1";
 const PENDING_WELCOME_CHANNEL_MAX_AGE_MS = 5 * 60 * 1000;
-const WELCOME_CHANNEL_ENSURED_STORAGE_KEY = "buzz-welcome-channel-ensured.v2";
+const WELCOME_CHANNEL_ENSURED_STORAGE_KEY = "ambush-welcome-channel-ensured.v2";
 
 type WelcomeChannelClient = {
   createChannel: (input: CreateChannelInput) => Promise<Channel>;

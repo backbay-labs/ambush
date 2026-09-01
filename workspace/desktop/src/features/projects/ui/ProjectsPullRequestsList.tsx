@@ -20,7 +20,7 @@ import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
-import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
+import { AmbushLoadingState } from "@/shared/ui/AmbushLoadingState";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { DropdownMenuItem } from "@/shared/ui/dropdown-menu";
@@ -248,7 +248,7 @@ export function ProjectsPullRequestsList({
   );
 
   if (isLoading) {
-    return <BuzzLoadingState label="Loading reviews" />;
+    return <AmbushLoadingState label="Loading reviews" />;
   }
 
   const loadNotice = (

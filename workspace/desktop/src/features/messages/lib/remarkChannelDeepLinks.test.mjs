@@ -14,22 +14,22 @@ function run(value) {
 
 test("turns a bare channel deep link into a custom node", () => {
   const children = run(
-    "Open buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32 now",
+    "Open ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32 now",
   );
   assert.equal(children[1].type, "channel-deep-link");
   assert.equal(
     children[1].value,
-    "buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32",
+    "ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32",
   );
 });
 
 test("peels trailing sentence punctuation", () => {
   const children = run(
-    "Open buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32.",
+    "Open ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32.",
   );
   assert.equal(
     children[1].value,
-    "buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32",
+    "ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32",
   );
   assert.equal(children[2].value, ".");
 });

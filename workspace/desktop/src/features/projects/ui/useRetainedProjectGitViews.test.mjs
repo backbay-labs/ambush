@@ -16,12 +16,12 @@ import { buildProjectDetailCrumbs } from "./useProjectDetailCrumbs.ts";
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "@/features/forum/ui/ForumComposer") {
-      return { shortCircuit: true, url: "buzz-pr-panel-stub:ForumComposer" };
+      return { shortCircuit: true, url: "ambush-pr-panel-stub:ForumComposer" };
     }
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
-    if (url === "buzz-pr-panel-stub:ForumComposer") {
+    if (url === "ambush-pr-panel-stub:ForumComposer") {
       return {
         format: "module",
         shortCircuit: true,
@@ -37,18 +37,18 @@ const OWNER = "a".repeat(64);
 const REVIEW_A_ID = "b".repeat(64);
 
 const repository = {
-  id: `${OWNER}:buzz`,
-  dtag: "buzz",
-  name: "buzz",
+  id: `${OWNER}:ambush`,
+  dtag: "ambush",
+  name: "ambush",
   description: "",
-  cloneUrls: ["https://example.com/buzz.git"],
+  cloneUrls: ["https://example.com/ambush.git"],
   webUrl: null,
   owner: OWNER,
   contributors: [],
   createdAt: 0,
   status: "open",
   defaultBranch: "main",
-  repoAddress: `30617:${OWNER}:buzz`,
+  repoAddress: `30617:${OWNER}:ambush`,
   channelId: "trusted-repository-channel",
 };
 
@@ -117,7 +117,7 @@ function productionConsumers({ activeRepoPullRequest, selectedPullRequest }) {
   const agent = buildProjectDetailAgentContext({
     activeTab: "prs",
     branch: "feature-a",
-    project: { name: "buzz" },
+    project: { name: "ambush" },
     repository: {
       name: repository.name,
       repoAddress: repository.repoAddress,

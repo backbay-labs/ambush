@@ -13,7 +13,7 @@ import {
 // the same WebSocket path as every other desktop write (mirrors relayMembers.ts);
 // reads are NIP-98-authed HTTP GETs to /moderation/*, which have no WS equivalent.
 //
-// Wire contract is pinned by the relay/CLI (buzz-sdk builders, report.rs,
+// Wire contract is pinned by the relay/CLI (ambush-sdk builders, report.rs,
 // api/bridge.rs). Command events (9040–9044) carry NO `h` tag — the relay binds
 // the tenant from the connection host, and a stray `h` is rejected as
 // channel-scoping a global-only command.
@@ -30,7 +30,7 @@ export type ReportType =
   | "profanity"
   | "other";
 
-/** A moderator's disposition of a queued report (buzz-sdk resolve builder). */
+/** A moderator's disposition of a queued report (ambush-sdk resolve builder). */
 export type ResolutionStatus = "resolved" | "dismissed";
 export type ResolutionAction =
   | "delete"

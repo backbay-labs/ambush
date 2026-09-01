@@ -24,7 +24,7 @@ import type { RelayEvent } from "../../src/shared/api/types";
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
 type MockWindow = Window & {
-  __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+  __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
     channelName: string;
     content: string;
     parentEventId?: string | null;
@@ -34,7 +34,7 @@ type MockWindow = Window & {
     kind?: number;
     extraTags?: string[][];
   }) => RelayEvent;
-  __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+  __AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
     category: "mention" | "needs_action" | "activity" | "agent_activity";
     channel_id: string | null;
     channel_name: string;
@@ -45,7 +45,7 @@ type MockWindow = Window & {
     pubkey: string;
     tags: string[][];
   }) => unknown;
-  __BUZZ_E2E_REPLACE_MOCK_FEED_ITEM__?: (
+  __AMBUSH_E2E_REPLACE_MOCK_FEED_ITEM__?: (
     oldId: string,
     item: {
       category: "mention" | "needs_action" | "activity" | "agent_activity";
@@ -59,17 +59,17 @@ type MockWindow = Window & {
       tags: string[][];
     },
   ) => unknown;
-  __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
+  __AMBUSH_E2E_COMMAND_PAYLOADS__?: Array<{
     command: string;
     payload: unknown;
   }>;
-  __BUZZ_E2E_SCROLL_INTO_VIEW_COUNT__?: number;
-  /** When set to an event ID string, get_event calls for that ID are deferred until __BUZZ_E2E_RELEASE_GET_EVENT__ is called. */
-  __BUZZ_E2E_DEFER_GET_EVENT__?: string | null;
+  __AMBUSH_E2E_SCROLL_INTO_VIEW_COUNT__?: number;
+  /** When set to an event ID string, get_event calls for that ID are deferred until __AMBUSH_E2E_RELEASE_GET_EVENT__ is called. */
+  __AMBUSH_E2E_DEFER_GET_EVENT__?: string | null;
   /** Flush all deferred get_event calls; returns the count released. */
-  __BUZZ_E2E_RELEASE_GET_EVENT__?: () => number;
+  __AMBUSH_E2E_RELEASE_GET_EVENT__?: () => number;
   /** Running count of get_event invocations since installMockBridge. */
-  __BUZZ_E2E_GET_EVENT_CALL_COUNT__?: number;
+  __AMBUSH_E2E_GET_EVENT_CALL_COUNT__?: number;
 };
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -78,11 +78,11 @@ async function waitForBridgeReady(page: import("@playwright/test").Page) {
   await page.waitForFunction(() => {
     const win = window as MockWindow;
     return (
-      typeof win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      typeof win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ === "function" &&
-      typeof win.__BUZZ_E2E_REPLACE_MOCK_FEED_ITEM__ === "function" &&
-      typeof win.__BUZZ_E2E_RELEASE_GET_EVENT__ === "function" &&
-      Array.isArray(win.__BUZZ_E2E_COMMAND_PAYLOADS__)
+      typeof win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__ === "function" &&
+      typeof win.__AMBUSH_E2E_REPLACE_MOCK_FEED_ITEM__ === "function" &&
+      typeof win.__AMBUSH_E2E_RELEASE_GET_EVENT__ === "function" &&
+      Array.isArray(win.__AMBUSH_E2E_COMMAND_PAYLOADS__)
     );
   });
 }
@@ -90,15 +90,16 @@ async function waitForBridgeReady(page: import("@playwright/test").Page) {
 /** Installs a scrollIntoView spy that counts calls inside the detail pane. */
 async function installScrollSpy(page: import("@playwright/test").Page) {
   await page.evaluate(() => {
-    (window as MockWindow).__BUZZ_E2E_SCROLL_INTO_VIEW_COUNT__ = 0;
+    (window as MockWindow).__AMBUSH_E2E_SCROLL_INTO_VIEW_COUNT__ = 0;
     const original = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = function (
       this: Element,
       ...args: Parameters<typeof original>
     ) {
       if (this.closest('[data-testid="home-inbox-detail"]')) {
-        (window as MockWindow).__BUZZ_E2E_SCROLL_INTO_VIEW_COUNT__ =
-          ((window as MockWindow).__BUZZ_E2E_SCROLL_INTO_VIEW_COUNT__ ?? 0) + 1;
+        (window as MockWindow).__AMBUSH_E2E_SCROLL_INTO_VIEW_COUNT__ =
+          ((window as MockWindow).__AMBUSH_E2E_SCROLL_INTO_VIEW_COUNT__ ?? 0) +
+          1;
       }
       return original.apply(this, args);
     };
@@ -107,13 +108,13 @@ async function installScrollSpy(page: import("@playwright/test").Page) {
 
 async function getScrollIntoViewCount(page: import("@playwright/test").Page) {
   return page.evaluate(
-    () => (window as MockWindow).__BUZZ_E2E_SCROLL_INTO_VIEW_COUNT__ ?? 0,
+    () => (window as MockWindow).__AMBUSH_E2E_SCROLL_INTO_VIEW_COUNT__ ?? 0,
   );
 }
 
 async function resetScrollIntoViewCount(page: import("@playwright/test").Page) {
   await page.evaluate(() => {
-    (window as MockWindow).__BUZZ_E2E_SCROLL_INTO_VIEW_COUNT__ = 0;
+    (window as MockWindow).__AMBUSH_E2E_SCROLL_INTO_VIEW_COUNT__ = 0;
   });
 }
 
@@ -121,8 +122,8 @@ async function resetScrollIntoViewCount(page: import("@playwright/test").Page) {
 async function clearCommandPayloads(page: import("@playwright/test").Page) {
   await page.evaluate(() => {
     const win = window as MockWindow;
-    if (win.__BUZZ_E2E_COMMAND_PAYLOADS__) {
-      win.__BUZZ_E2E_COMMAND_PAYLOADS__.length = 0;
+    if (win.__AMBUSH_E2E_COMMAND_PAYLOADS__) {
+      win.__AMBUSH_E2E_COMMAND_PAYLOADS__.length = 0;
     }
   });
 }
@@ -147,7 +148,8 @@ async function getScrollTop(page: import("@playwright/test").Page) {
 /** Returns the last `send_channel_message` payload captured in the command log. */
 async function getLastSendPayload(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
-    const payloads = (window as MockWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [];
+    const payloads =
+      (window as MockWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [];
     for (let i = payloads.length - 1; i >= 0; i--) {
       if (payloads[i].command === "send_channel_message") {
         return payloads[i].payload as {
@@ -183,8 +185,8 @@ async function seedNestedAnchor(page: import("@playwright/test").Page) {
   return page.evaluate(
     ({ channelId, currentPubkey, senderPubkey }) => {
       const win = window as MockWindow;
-      const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-      const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+      const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+      const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
       if (!emit || !push) throw new Error("Bridge helpers not ready");
 
       const root = emit({
@@ -237,8 +239,8 @@ async function injectNewerSibling(
   return page.evaluate(
     ({ channelId, currentPubkey, senderPubkey, rootEventId, oldAnchorId }) => {
       const win = window as MockWindow;
-      const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-      const replace = win.__BUZZ_E2E_REPLACE_MOCK_FEED_ITEM__;
+      const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+      const replace = win.__AMBUSH_E2E_REPLACE_MOCK_FEED_ITEM__;
       if (!emit || !replace) throw new Error("Bridge helpers not ready");
 
       const sibling = emit({
@@ -299,7 +301,7 @@ test.describe("inbox stable-conversation regressions", () => {
     // Add filler replies to make the detail pane scrollable.
     await page.evaluate(
       ({ senderPubkey, rootId }) => {
-        const emit = (window as MockWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+        const emit = (window as MockWindow).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
         if (!emit) return;
         for (let i = 0; i < 30; i++) {
           emit({
@@ -390,7 +392,7 @@ test.describe("inbox stable-conversation regressions", () => {
     await composer.fill("Test reply to verify parentEventId");
     await detail.getByRole("button", { name: /send/i }).click();
     await page.waitForFunction(() =>
-      ((window as MockWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some(
+      ((window as MockWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).some(
         (p) => p.command === "send_channel_message",
       ),
     );
@@ -414,8 +416,8 @@ test.describe("inbox stable-conversation regressions", () => {
     const anchorB = await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emit || !push) throw new Error("Bridge helpers not ready");
 
         const rootB = emit({
@@ -548,8 +550,8 @@ test.describe("inbox stable-conversation regressions", () => {
     const { coldRoot, coldAnchor, coldSibling } = await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emit || !push) throw new Error("Bridge helpers not ready");
 
         const coldRoot = emit({
@@ -647,7 +649,7 @@ test.describe("inbox stable-conversation regressions", () => {
     await composerCold.fill("Reply from cold-recovered anchor");
     await getDetailPane(page).getByRole("button", { name: /send/i }).click();
     await page.waitForFunction(() =>
-      ((window as MockWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some(
+      ((window as MockWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).some(
         (p) => p.command === "send_channel_message",
       ),
     );
@@ -685,7 +687,7 @@ test.describe("inbox stable-conversation regressions", () => {
     await composerBack.fill("Reply after back navigation");
     await getDetailPane(page).getByRole("button", { name: /send/i }).click();
     await page.waitForFunction(() =>
-      ((window as MockWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some(
+      ((window as MockWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).some(
         (p) => p.command === "send_channel_message",
       ),
     );
@@ -723,7 +725,7 @@ test.describe("inbox stable-conversation regressions", () => {
     await composerFwd.fill("Reply after forward navigation");
     await getDetailPane(page).getByRole("button", { name: /send/i }).click();
     await page.waitForFunction(() =>
-      ((window as MockWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some(
+      ((window as MockWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).some(
         (p) => p.command === "send_channel_message",
       ),
     );
@@ -741,7 +743,7 @@ test.describe("inbox stable-conversation regressions", () => {
     // resolve and populate the recovered item.
     //
     // Sequence (deterministic via defer/release seam):
-    //   1. Enable __BUZZ_E2E_DEFER_GET_EVENT__ so get_event is held in-flight.
+    //   1. Enable __AMBUSH_E2E_DEFER_GET_EVENT__ so get_event is held in-flight.
     //   2. Navigate to ?item=<coldAnchor> (absent from feed) — triggers one
     //      get_event call, which is now queued (provably in-flight).
     //   3. Wait for exactly one deferred call to be queued (state-based).
@@ -761,8 +763,8 @@ test.describe("inbox stable-conversation regressions", () => {
     const { coldRoot, coldAnchor, coldSibling } = await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emit || !push) throw new Error("Bridge helpers not ready");
 
         const coldRoot = emit({
@@ -812,8 +814,8 @@ test.describe("inbox stable-conversation regressions", () => {
     // (ancestor context, thread roots) continue to resolve immediately.
     await page.evaluate(
       ({ targetId }) => {
-        (window as MockWindow).__BUZZ_E2E_DEFER_GET_EVENT__ = targetId;
-        (window as MockWindow).__BUZZ_E2E_GET_EVENT_CALL_COUNT__ = 0;
+        (window as MockWindow).__AMBUSH_E2E_DEFER_GET_EVENT__ = targetId;
+        (window as MockWindow).__AMBUSH_E2E_GET_EVENT_CALL_COUNT__ = 0;
       },
       { targetId: coldAnchor.id },
     );
@@ -835,7 +837,7 @@ test.describe("inbox stable-conversation regressions", () => {
     // ── Step 3: wait until exactly one get_event call is queued ────────
     // State-based: poll the call counter rather than sleeping.
     await page.waitForFunction(
-      () => (window as MockWindow).__BUZZ_E2E_GET_EVENT_CALL_COUNT__ === 1,
+      () => (window as MockWindow).__AMBUSH_E2E_GET_EVENT_CALL_COUNT__ === 1,
     );
 
     // ── Step 4: push an unrelated feed item (re-runs cold-recovery effect)
@@ -843,8 +845,8 @@ test.describe("inbox stable-conversation regressions", () => {
     await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emit || !push) return;
         const unrelated = emit({
           channelName: "general",
@@ -880,7 +882,7 @@ test.describe("inbox stable-conversation regressions", () => {
 
     // ── Step 5: release the deferred get_event ─────────────────────────
     const released = await page.evaluate(
-      () => (window as MockWindow).__BUZZ_E2E_RELEASE_GET_EVENT__?.() ?? 0,
+      () => (window as MockWindow).__AMBUSH_E2E_RELEASE_GET_EVENT__?.() ?? 0,
     );
     expect(released).toBe(1);
 
@@ -889,7 +891,7 @@ test.describe("inbox stable-conversation regressions", () => {
     // so this is always 0 after release — the pre-release count was 1).
     expect(
       await page.evaluate(
-        () => (window as MockWindow).__BUZZ_E2E_GET_EVENT_CALL_COUNT__ ?? 0,
+        () => (window as MockWindow).__AMBUSH_E2E_GET_EVENT_CALL_COUNT__ ?? 0,
       ),
     ).toBe(0); // reset to 0 by release
 
@@ -920,7 +922,7 @@ test.describe("inbox stable-conversation regressions", () => {
     await composer.fill("Reply after race-test cold recovery");
     await getDetailPane(page).getByRole("button", { name: /send/i }).click();
     await page.waitForFunction(() =>
-      ((window as MockWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some(
+      ((window as MockWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).some(
         (p) => p.command === "send_channel_message",
       ),
     );
@@ -961,8 +963,8 @@ test.describe("inbox stable-conversation regressions", () => {
     const { fetchRoot, fetchNewest } = await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emit || !push) throw new Error("Bridge helpers not ready");
 
         const fetchRoot = emit({
@@ -1068,8 +1070,8 @@ test.describe("inbox stable-conversation regressions", () => {
     await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey, rootId, oldId }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const replace = win.__BUZZ_E2E_REPLACE_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const replace = win.__AMBUSH_E2E_REPLACE_MOCK_FEED_ITEM__;
         if (!emit || !replace) throw new Error("Bridge helpers not ready");
         const passive = emit({
           channelName: "general",
@@ -1139,8 +1141,8 @@ test.describe("inbox stable-conversation regressions", () => {
     const { fetchNewest, olderReplyIds } = await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emit || !push) throw new Error("Bridge helpers not ready");
 
         const fetchRoot = emit({
@@ -1259,7 +1261,7 @@ test.describe("inbox stable-conversation regressions", () => {
     await page.evaluate(
       ({ senderPubkey, targetIds }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
         if (!emit) return;
         for (const targetId of targetIds) {
           emit({
@@ -1349,8 +1351,8 @@ test.describe("inbox stable-conversation regressions", () => {
     const { fetchNewest, olderReplyIds } = await page.evaluate(
       ({ channelId, currentPubkey, senderPubkey }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const push = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const push = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emit || !push) throw new Error("Bridge helpers not ready");
 
         const fetchRoot = emit({
@@ -1482,7 +1484,7 @@ test.describe("inbox stable-conversation regressions", () => {
     await page.evaluate(
       ({ senderPubkey, targetIds }) => {
         const win = window as MockWindow;
-        const emit = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+        const emit = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
         if (!emit) return;
         for (const targetId of targetIds) {
           emit({

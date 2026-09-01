@@ -50,7 +50,7 @@ const VIEWER = "a".repeat(64);
 
 function seedCommunity() {
   window.localStorage.setItem(
-    "buzz-communities",
+    "ambush-communities",
     JSON.stringify([
       {
         id: "community-a",
@@ -60,7 +60,7 @@ function seedCommunity() {
       },
     ]),
   );
-  window.localStorage.setItem("buzz-active-community-id", "community-a");
+  window.localStorage.setItem("ambush-active-community-id", "community-a");
 }
 
 function hiddenDmSnapshot(count) {

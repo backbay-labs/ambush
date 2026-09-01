@@ -5,7 +5,7 @@
  * model's six-axis capability profile (thinking mode, supported efforts,
  * default effort, Databricks v2 wire route, normalization policy, and picker
  * label). This module imports that manifest and interprets it at runtime,
- * mirroring the Rust interpreter in `crates/buzz-agent/src/model_capabilities.rs`
+ * mirroring the Rust interpreter in `crates/ambush-agent/src/model_capabilities.rs`
  * line for line. There is no codegen: both interpreters read the same
  * hand-curated manifest, and the shared normative corpus
  * (`scripts/normative-corpus.json`) is the cross-language contract that
@@ -28,7 +28,7 @@
 import { z } from "zod";
 import manifestJson from "@model-capabilities-manifest";
 
-/** Valid thinking-effort values accepted by buzz-agent (mirrors parse_thinking_effort in config.rs). */
+/** Valid thinking-effort values accepted by ambush-agent (mirrors parse_thinking_effort in config.rs). */
 export const THINKING_EFFORT_VALUES = [
   "none",
   "minimal",

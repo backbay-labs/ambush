@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { detectPrefixQuery } from "./detectPrefixQuery.ts";
 
-const CHANNELS = ["buzz-bugs", "buzz dev", "general"];
+const CHANNELS = ["ambush-bugs", "ambush dev", "general"];
 const PEOPLE = ["alice", "bob jones"];
 
 // Helper: detect at end-of-string (the usual cursor position while typing).
@@ -13,40 +13,40 @@ const at = (prefix, text, names) =>
 // ── Existing behavior: start-of-string and after whitespace still trigger ─────
 
 test("triggers at start of string", () => {
-  assert.deepEqual(at("#", "#buzz", CHANNELS), {
-    query: "buzz",
+  assert.deepEqual(at("#", "#ambush", CHANNELS), {
+    query: "ambush",
     startIndex: 0,
   });
 });
 
 test("triggers after whitespace", () => {
-  assert.deepEqual(at("#", "go to #buzz", CHANNELS), {
-    query: "buzz",
+  assert.deepEqual(at("#", "go to #ambush", CHANNELS), {
+    query: "ambush",
     startIndex: 6,
   });
 });
 
 test("does NOT trigger when glued to a word character", () => {
-  assert.equal(at("#", "foo#buzz", CHANNELS), null);
+  assert.equal(at("#", "foo#ambush", CHANNELS), null);
   assert.equal(at("@", "email@bob", PEOPLE), null);
 });
 
 // ── The bug fix: opening brackets count as a boundary ─────────────────────────
 
 test("7796a4f4: ( before # triggers channel query", () => {
-  assert.deepEqual(at("#", "(#buzz", CHANNELS), {
-    query: "buzz",
+  assert.deepEqual(at("#", "(#ambush", CHANNELS), {
+    query: "ambush",
     startIndex: 1,
   });
 });
 
 test("7796a4f4: [ and { before # also trigger", () => {
-  assert.deepEqual(at("#", "[#buzz", CHANNELS), {
-    query: "buzz",
+  assert.deepEqual(at("#", "[#ambush", CHANNELS), {
+    query: "ambush",
     startIndex: 1,
   });
-  assert.deepEqual(at("#", "{#buzz", CHANNELS), {
-    query: "buzz",
+  assert.deepEqual(at("#", "{#ambush", CHANNELS), {
+    query: "ambush",
     startIndex: 1,
   });
 });
@@ -68,8 +68,8 @@ test("bracket mid-sentence (word before the bracket) still triggers", () => {
 });
 
 test("nested brackets: (( before # triggers, startIndex at the prefix", () => {
-  assert.deepEqual(at("#", "((#buzz", CHANNELS), {
-    query: "buzz",
+  assert.deepEqual(at("#", "((#ambush", CHANNELS), {
+    query: "ambush",
     startIndex: 2,
   });
 });
@@ -77,8 +77,8 @@ test("nested brackets: (( before # triggers, startIndex at the prefix", () => {
 // ── Multi-word path: bracket boundary works for space-containing names ─────────
 
 test("multi-word channel name after ( resolves via multi-word path", () => {
-  assert.deepEqual(at("#", "(#buzz de", CHANNELS), {
-    query: "buzz de",
+  assert.deepEqual(at("#", "(#ambush de", CHANNELS), {
+    query: "ambush de",
     startIndex: 1,
   });
 });
@@ -91,9 +91,9 @@ test("multi-word person name after ( resolves via multi-word path", () => {
 });
 
 test("multi-word: glued-to-word prefix still rejected", () => {
-  // `x#buzz de` — `#` preceded by `x`, no boundary → no query even though
-  // "buzz de" is a prefix of a known channel.
-  assert.equal(at("#", "x#buzz de", CHANNELS), null);
+  // `x#ambush de` — `#` preceded by `x`, no boundary → no query even though
+  // "ambush de" is a prefix of a known channel.
+  assert.equal(at("#", "x#ambush de", CHANNELS), null);
 });
 
 // ── Completed mention: exact name + trailing space closes the query ───────────

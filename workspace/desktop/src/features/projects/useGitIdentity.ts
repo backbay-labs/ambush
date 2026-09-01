@@ -4,7 +4,7 @@ import { getGitIdentity } from "@/shared/api/projectGit";
 
 /**
  * The viewer's configured git identity (`git config user.name/user.email`),
- * used to attribute their own commits to their Buzz profile.
+ * used to attribute their own commits to their Ambush profile.
  */
 export function useGitIdentityQuery() {
   return useQuery({

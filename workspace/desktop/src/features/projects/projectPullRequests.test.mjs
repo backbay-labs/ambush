@@ -51,7 +51,7 @@ test("preserves an optional source channel from the pull request", () => {
 
 test("preserves a private-safe agent origin without a channel ID", () => {
   const event = pullRequestEvent();
-  event.tags.push(["buzz-origin-agent", "Builder"]);
+  event.tags.push(["ambush-origin-agent", "Builder"]);
 
   const pullRequest = eventToProjectPullRequest(event);
   assert.equal(pullRequest.channelId, null);

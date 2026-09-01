@@ -144,7 +144,7 @@ test("malformed copied snapshot field types fall through to normal paste", () =>
     const encodedPayload = encodeURIComponent(
       JSON.stringify({ ...validPayload, ...override }),
     );
-    const html = `<a data-buzz-agent-snapshot="${encodedPayload}">Snapshot</a>`;
+    const html = `<a data-ambush-agent-snapshot="${encodedPayload}">Snapshot</a>`;
 
     assert.doesNotThrow(() => parseAgentSnapshotClipboardHtml(html));
     assert.equal(parseAgentSnapshotClipboardHtml(html), null);

@@ -8,11 +8,11 @@ import 'package:http/testing.dart' as http_testing;
 import 'package:nostr/nostr.dart' as nostr;
 import 'package:pointycastle/digests/sha256.dart';
 
-import 'package:buzz/app.dart';
-import 'package:buzz/features/channels/channel.dart';
-import 'package:buzz/features/invites/invite_join_provider.dart';
-import 'package:buzz/shared/auth/auth.dart';
-import 'package:buzz/shared/deeplink/deep_link.dart';
+import 'package:ambush/app.dart';
+import 'package:ambush/features/channels/channel.dart';
+import 'package:ambush/features/invites/invite_join_provider.dart';
+import 'package:ambush/shared/auth/auth.dart';
+import 'package:ambush/shared/deeplink/deep_link.dart';
 
 import '../../shared/community/community_storage_test.dart';
 

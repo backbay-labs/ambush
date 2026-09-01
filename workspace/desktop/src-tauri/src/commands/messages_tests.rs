@@ -163,7 +163,7 @@ fn thread_replies_filter_carries_non_p_gated_kinds_to_clear_the_gate() {
     for kind in kinds {
         let k = kind.as_u64().expect("kind is a number") as u32;
         assert!(
-            !buzz_core_pkg::kind::P_GATED_KINDS.contains(&k),
+            !ambush_core_pkg::kind::P_GATED_KINDS.contains(&k),
             "kind {k} is p-gated; a p-gated kind in the filter re-triggers the \
                  403 that this fix exists to prevent"
         );
@@ -211,7 +211,7 @@ fn legacy_managed_agent_auth_tag_verifies_for_agent_pubkey() {
         .expect("legacy auth tag should compute")
         .expect("legacy auth tag should be present");
 
-    let owner = buzz_sdk_pkg::nip_oa::verify_auth_tag(&tag, &agent_keys.public_key())
+    let owner = ambush_sdk_pkg::nip_oa::verify_auth_tag(&tag, &agent_keys.public_key())
         .expect("legacy auth tag should verify");
     assert_eq!(owner, owner_keys.public_key());
 }

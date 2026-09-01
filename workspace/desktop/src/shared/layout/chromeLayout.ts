@@ -6,8 +6,8 @@ export const TOP_CHROME_HEIGHT_DEFAULT = "40px";
 export const CHANNEL_CONTENT_TOP_PADDING_DEFAULT = "5.75rem";
 
 export const chromeCssVars = {
-  topChromeHeight: "--buzz-top-chrome-height",
-  channelContentTopPadding: "--buzz-channel-content-top-padding",
+  topChromeHeight: "--ambush-top-chrome-height",
+  channelContentTopPadding: "--ambush-channel-content-top-padding",
 } as const;
 
 export const chromeCssVarDefaults = {
@@ -42,22 +42,22 @@ export const topChromeInset = {
 /** Tailwind class fragments for the global top chrome backdrop strip. */
 export const topChromeBackdrop = {
   /** Height matching the global top chrome search/drag strip. */
-  height: "h-(--buzz-top-chrome-height,40px)",
+  height: "h-(--ambush-top-chrome-height,40px)",
   /** `after:` pseudo-element offset aligned to the bottom of top chrome. */
-  dividerTop: "after:top-(--buzz-top-chrome-height,40px)",
+  dividerTop: "after:top-(--ambush-top-chrome-height,40px)",
 } as const;
 
 /** Tailwind class fragments for measured channel header chrome. */
 export const channelChrome = {
   /** Padding-top that clears the measured channel header chrome. */
-  contentPadding: "pt-(--buzz-channel-content-top-padding,5.75rem)",
+  contentPadding: "pt-(--ambush-channel-content-top-padding,5.75rem)",
   /** Absolute/fixed top offset below the measured channel header chrome. */
-  top: "top-(--buzz-channel-content-top-padding,5.75rem)",
+  top: "top-(--ambush-channel-content-top-padding,5.75rem)",
   /** Sticky timeline controls sit slightly below the channel navigation. */
   stickyTimelineTop:
-    "top-[calc(var(--buzz-channel-content-top-padding,5.75rem)+0.5rem)]",
+    "top-[calc(var(--ambush-channel-content-top-padding,5.75rem)+0.5rem)]",
   /** Height matching the measured channel header chrome. */
-  headerHeight: "h-(--buzz-channel-content-top-padding,5.75rem)",
+  headerHeight: "h-(--ambush-channel-content-top-padding,5.75rem)",
   /** Negative margin for overlaid channel chrome that should not affect flow. */
-  negativeMargin: "-mb-(--buzz-channel-content-top-padding,5.75rem)",
+  negativeMargin: "-mb-(--ambush-channel-content-top-padding,5.75rem)",
 } as const;

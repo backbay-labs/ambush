@@ -2,14 +2,14 @@
 set -euo pipefail
 
 VERSION="${1:-}"
-REPOSITORY="${GITHUB_REPOSITORY:-block/buzz}"
+REPOSITORY="${GITHUB_REPOSITORY:-backbay-labs/ambush}"
 TAG="desktop-v${VERSION}"
 CANDIDATE="updater-manifest.json"
-ROLLING_TAG="buzz-desktop-latest"
+ROLLING_TAG="ambush-desktop-latest"
 EXPECTED_PLATFORMS='["darwin-aarch64","darwin-x86_64","linux-x86_64","windows-x86_64"]'
 
 fail() { echo "::error::$*" >&2; exit 1; }
-[[ "$REPOSITORY" == "block/buzz" ]] || fail "promotion is restricted to block/buzz"
+[[ "$REPOSITORY" == "backbay-labs/ambush" ]] || fail "promotion is restricted to backbay-labs/ambush"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must be stable semver X.Y.Z"
 command -v gh >/dev/null || fail "gh is required"
 command -v jq >/dev/null || fail "jq is required"
@@ -36,12 +36,12 @@ jq -e --arg version "$VERSION" --argjson expected "$EXPECTED_PLATFORMS" '
   .version == $version and
   (.platforms | keys == $expected) and
   ([.platforms[] | (.signature | type == "string" and length > 0)] | all) and
-  ([.platforms[] | (.url | type == "string" and startswith("https://github.com/block/buzz/releases/download/desktop-v" + $version + "/"))] | all)
+  ([.platforms[] | (.url | type == "string" and startswith("https://github.com/backbay-labs/ambush/releases/download/desktop-v" + $version + "/"))] | all)
 ' "$candidate" >/dev/null || fail "$CANDIDATE failed version, platform, signature, or URL validation"
 
 while IFS= read -r url; do
   asset="${url##*/}"
-  [[ "$url" == "https://github.com/block/buzz/releases/download/$TAG/$asset" ]] || fail "$CANDIDATE contains non-canonical updater URL: $url"
+  [[ "$url" == "https://github.com/backbay-labs/ambush/releases/download/$TAG/$asset" ]] || fail "$CANDIDATE contains non-canonical updater URL: $url"
   grep -Fxq "$asset" <<<"$release_assets" || fail "$CANDIDATE references missing release asset: $asset"
 done < <(jq -r '.platforms[].url' "$candidate")
 

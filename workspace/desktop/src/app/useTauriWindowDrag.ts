@@ -28,7 +28,7 @@ export function useTauriWindowDrag() {
       }
 
       // Tauri's injected data-tauri-drag-region listener hardcodes maximize on
-      // double-click. Buzz handles drag and double-click itself so macOS title
+      // double-click. Ambush handles drag and double-click itself so macOS title
       // bar preferences can be respected.
       event.stopImmediatePropagation();
     }

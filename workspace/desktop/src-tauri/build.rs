@@ -8,38 +8,38 @@ include!("src/managed_agents/reserved_env_keys.rs");
 use base64::Engine as _;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=BUZZ_RELAY_URL");
-    println!("cargo:rerun-if-env-changed=BUZZ_RELAY_HTTP");
-    println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");
-    println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_ENDPOINT");
-    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_PROVIDER");
-    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_MODEL");
-    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AGENT_ENV");
-    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_RELAY_RECONNECT_CMD");
-    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AGENT_ACCESS_OWNER_ONLY");
-    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY");
-    println!("cargo:rustc-check-cfg=cfg(buzz_updater_enabled)");
+    println!("cargo:rerun-if-env-changed=AMBUSH_RELAY_URL");
+    println!("cargo:rerun-if-env-changed=AMBUSH_RELAY_HTTP");
+    println!("cargo:rerun-if-env-changed=AMBUSH_UPDATER_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=AMBUSH_UPDATER_ENDPOINT");
+    println!("cargo:rerun-if-env-changed=AMBUSH_BUILD_AMBUSH_AGENT_PROVIDER");
+    println!("cargo:rerun-if-env-changed=AMBUSH_BUILD_AMBUSH_AGENT_MODEL");
+    println!("cargo:rerun-if-env-changed=AMBUSH_BUILD_AGENT_ENV");
+    println!("cargo:rerun-if-env-changed=AMBUSH_BUILD_RELAY_RECONNECT_CMD");
+    println!("cargo:rerun-if-env-changed=AMBUSH_BUILD_AGENT_ACCESS_OWNER_ONLY");
+    println!("cargo:rerun-if-env-changed=AMBUSH_BUILD_AUTO_CONNECT_DEFAULT_RELAY");
+    println!("cargo:rustc-check-cfg=cfg(ambush_updater_enabled)");
 
     // Explicit owner-only agent-access capability. Release packaging sets this
     // presence-only marker; OSS/custom builds leave agent access configurable.
-    if std::env::var("BUZZ_BUILD_AGENT_ACCESS_OWNER_ONLY").is_ok() {
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_AGENT_ACCESS_OWNER_ONLY=1");
+    if std::env::var("AMBUSH_BUILD_AGENT_ACCESS_OWNER_ONLY").is_ok() {
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_AGENT_ACCESS_OWNER_ONLY=1");
     }
 
-    if let Ok(relay_url) = std::env::var("BUZZ_RELAY_URL") {
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_RELAY_URL={relay_url}");
+    if let Ok(relay_url) = std::env::var("AMBUSH_RELAY_URL") {
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_RELAY_URL={relay_url}");
     }
 
-    if let Ok(relay_http) = std::env::var("BUZZ_RELAY_HTTP") {
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_RELAY_HTTP={relay_http}");
+    if let Ok(relay_http) = std::env::var("AMBUSH_RELAY_HTTP") {
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_RELAY_HTTP={relay_http}");
     }
 
-    if let Ok(provider) = std::env::var("BUZZ_BUILD_BUZZ_AGENT_PROVIDER") {
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_BUZZ_AGENT_PROVIDER={provider}");
+    if let Ok(provider) = std::env::var("AMBUSH_BUILD_AMBUSH_AGENT_PROVIDER") {
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_AMBUSH_AGENT_PROVIDER={provider}");
     }
 
-    if let Ok(model) = std::env::var("BUZZ_BUILD_BUZZ_AGENT_MODEL") {
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_BUZZ_AGENT_MODEL={model}");
+    if let Ok(model) = std::env::var("AMBUSH_BUILD_AMBUSH_AGENT_MODEL") {
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_AMBUSH_AGENT_MODEL={model}");
     }
 
     // Generic KEY=VALUE pairs to inject into every spawned agent process.
@@ -48,7 +48,7 @@ fn main() {
     // The validated value is base64-encoded before emitting so the single-line
     // Cargo build-script output carries all pairs (Cargo output is line-oriented;
     // a raw multiline value would be silently truncated to the first line).
-    if let Ok(raw) = std::env::var("BUZZ_BUILD_AGENT_ENV") {
+    if let Ok(raw) = std::env::var("AMBUSH_BUILD_AGENT_ENV") {
         for (line_no, line) in raw.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
@@ -56,7 +56,7 @@ fn main() {
             }
             let eq = line.find('=').unwrap_or_else(|| {
                 panic!(
-                    "BUZZ_BUILD_AGENT_ENV line {}: missing '=' separator in {:?}",
+                    "AMBUSH_BUILD_AGENT_ENV line {}: missing '=' separator in {:?}",
                     line_no + 1,
                     line
                 )
@@ -64,57 +64,57 @@ fn main() {
             let key = &line[..eq];
             if key.is_empty() {
                 panic!(
-                    "BUZZ_BUILD_AGENT_ENV line {}: key must not be empty in {:?}",
+                    "AMBUSH_BUILD_AGENT_ENV line {}: key must not be empty in {:?}",
                     line_no + 1,
                     line
                 );
             }
             // The baked env is written into every spawned agent's environment
-            // LAST (see `managed_agents/runtime.rs`), after Buzz sets the
+            // LAST (see `managed_agents/runtime.rs`), after Ambush sets the
             // access gates and identity vars. A baked reserved key would
             // therefore silently override the gate the UI promises, so reject
             // it at build time instead of shipping a binary that bypasses its
             // own enforcement.
             if is_reserved_env_key(key) {
                 panic!(
-                    "BUZZ_BUILD_AGENT_ENV line {}: `{}` is reserved by Buzz and cannot be baked \
-                     into a build (it would override Buzz's own identity/access env)",
+                    "AMBUSH_BUILD_AGENT_ENV line {}: `{}` is reserved by Ambush and cannot be baked \
+                     into a build (it would override Ambush's own identity/access env)",
                     line_no + 1,
                     key
                 );
             }
         }
         let encoded = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_AGENT_ENV={encoded}");
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_AGENT_ENV={encoded}");
     }
 
-    if let Ok(val) = std::env::var("BUZZ_BUILD_RELAY_RECONNECT_CMD") {
+    if let Ok(val) = std::env::var("AMBUSH_BUILD_RELAY_RECONNECT_CMD") {
         let parsed: serde_json::Value = serde_json::from_str(&val)
-            .unwrap_or_else(|e| panic!("BUZZ_BUILD_RELAY_RECONNECT_CMD is not valid JSON: {e}"));
+            .unwrap_or_else(|e| panic!("AMBUSH_BUILD_RELAY_RECONNECT_CMD is not valid JSON: {e}"));
         serde_json::from_value::<ReconnectHookConfig>(parsed).unwrap_or_else(|e| {
-            panic!("BUZZ_BUILD_RELAY_RECONNECT_CMD doesn't match ReconnectHookConfig: {e}")
+            panic!("AMBUSH_BUILD_RELAY_RECONNECT_CMD doesn't match ReconnectHookConfig: {e}")
         });
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_RELAY_RECONNECT_CMD={val}");
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_RELAY_RECONNECT_CMD={val}");
     }
 
     // Presence-only release capability: internal desktop builds opt into
     // auto-connecting their configured default relay on first run. OSS builds
     // leave this unset and retain explicit community selection.
-    if std::env::var("BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY").is_ok() {
-        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY=1");
+    if std::env::var("AMBUSH_BUILD_AUTO_CONNECT_DEFAULT_RELAY").is_ok() {
+        println!("cargo:rustc-env=AMBUSH_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY=1");
     }
 
-    let updater_public_key = std::env::var("BUZZ_UPDATER_PUBLIC_KEY")
+    let updater_public_key = std::env::var("AMBUSH_UPDATER_PUBLIC_KEY")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let updater_endpoint = std::env::var("BUZZ_UPDATER_ENDPOINT")
+    let updater_endpoint = std::env::var("AMBUSH_UPDATER_ENDPOINT")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
     if updater_public_key.is_some() && updater_endpoint.is_some() {
-        println!("cargo:rustc-cfg=buzz_updater_enabled");
+        println!("cargo:rustc-cfg=ambush_updater_enabled");
     }
 
     // Cargo test executables get no embedded Windows manifest (tauri_build

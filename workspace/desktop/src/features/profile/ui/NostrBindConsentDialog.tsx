@@ -19,9 +19,9 @@ import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
 
 const COPY_SUCCESS_MESSAGE =
-  "Signed response copied. Paste it into the Buzz admin console.";
+  "Signed response copied. Paste it into the Ambush admin console.";
 const PREVIEW_COPY_SUCCESS_MESSAGE = "Preview response copied.";
-const COPY_FAILURE_MESSAGE = "Buzz couldn't access the clipboard. Try again.";
+const COPY_FAILURE_MESSAGE = "Ambush couldn't access the clipboard. Try again.";
 const EXPIRED_LINK_MESSAGE =
   "This binding link has expired. Request a new one from the requesting app.";
 const VERIFICATION_CODE_LENGTH = 6;
@@ -34,9 +34,9 @@ const NOSTR_BIND_PREVIEW_PAYLOAD: NostrBindDeepLinkPayload = {
   challengeId: "550e8400-e29b-41d4-a716-446655440000",
   nonce: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567",
   verificationCode: "123456",
-  audience: "buzz:nostr-identity",
+  audience: "ambush:nostr-identity",
   action: "bind_nostr_identity",
-  protocol: "buzz-nostr-identity",
+  protocol: "ambush-nostr-identity",
   version: "1",
   origin: "https://example.com",
   expiresAt: "2099-01-01T00:00:00Z",
@@ -114,7 +114,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 
 function appendCallbackStatus(callbackUrl: string): string {
   const url = new URL(callbackUrl);
-  url.searchParams.set("buzz_bind", "signed");
+  url.searchParams.set("ambush_bind", "signed");
   return url.toString();
 }
 
@@ -298,7 +298,7 @@ export function NostrBindConsentDialog() {
         .catch((error) => {
           console.warn("get_identity for nostr bind failed:", error);
           setIdentity(null);
-          setError("Could not load the current Buzz identity.");
+          setError("Could not load the current Ambush identity.");
         });
     });
 
@@ -645,14 +645,14 @@ export function NostrBindConsentDialog() {
         {payload ? (
           <DialogPrimitive.Content
             aria-describedby="nostr-bind-description"
-            className="buzz-onboarding-neutral-theme buzz-startup-shell fixed inset-0 z-50 flex overflow-y-auto bg-background px-4 py-12 text-foreground outline-hidden"
+            className="ambush-onboarding-neutral-theme ambush-startup-shell fixed inset-0 z-50 flex overflow-y-auto bg-background px-4 py-12 text-foreground outline-hidden"
             data-system-color-scheme={systemColorScheme}
             data-testid="nostr-bind-page"
           >
             <StartupWindowDragRegion />
             <div className="m-auto flex w-full max-w-[500px] flex-col items-center text-center">
               <img
-                alt="Buzz"
+                alt="Ambush"
                 className="h-14 w-14 rounded-xl shadow-xs"
                 src="/app-icon@2x.png"
                 srcSet="/app-icon@2x.png 1x, /app-icon@3x.png 2x"
@@ -668,15 +668,15 @@ export function NostrBindConsentDialog() {
                   <DialogPrimitive.Title className="mt-6 text-3xl font-semibold tracking-tight">
                     {payload.returnMode === "browser_fragment_v1"
                       ? "Continue in your browser"
-                      : "Finish on the Buzz website"}
+                      : "Finish on the Ambush website"}
                   </DialogPrimitive.Title>
                   <DialogPrimitive.Description
                     className="mt-3 max-w-[440px] text-sm leading-6 text-muted-foreground"
                     id="nostr-bind-description"
                   >
                     {payload.returnMode === "browser_fragment_v1"
-                      ? "Buzz opened your browser to finish verification."
-                      : "Copy the response below, then paste it into the Buzz website to finish verification."}
+                      ? "Ambush opened your browser to finish verification."
+                      : "Copy the response below, then paste it into the Ambush website to finish verification."}
                   </DialogPrimitive.Description>
 
                   {error ? (

@@ -49,8 +49,8 @@ function autocomplete(page: import("@playwright/test").Page) {
 async function readCommandLog(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     return (
-      (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-        .__BUZZ_E2E_COMMANDS__ ?? []
+      (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+        .__AMBUSH_E2E_COMMANDS__ ?? []
     );
   });
 }
@@ -60,12 +60,12 @@ async function readCommandPayloadLog(page: import("@playwright/test").Page) {
     return (
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+          __AMBUSH_E2E_COMMAND_LOG__?: Array<{
             command: string;
             payload: unknown;
           }>;
         }
-      ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+      ).__AMBUSH_E2E_COMMAND_LOG__ ?? []
     );
   });
 }
@@ -77,12 +77,12 @@ async function readOutgoingMentionPubkeys(
   return page.evaluate((expectedContent) => {
     const signedEvent = (
       window as Window & {
-        __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
+        __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{
           content?: string;
           tags?: string[][];
         }>;
       }
-    ).__BUZZ_E2E_SIGNED_EVENTS__?.find(
+    ).__AMBUSH_E2E_SIGNED_EVENTS__?.find(
       (event) => event.content === expectedContent,
     );
     if (signedEvent) {
@@ -94,12 +94,12 @@ async function readOutgoingMentionPubkeys(
     const entries =
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+          __AMBUSH_E2E_COMMAND_LOG__?: Array<{
             command: string;
             payload: unknown;
           }>;
         }
-      ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
+      ).__AMBUSH_E2E_COMMAND_LOG__ ?? [];
 
     for (const entry of entries) {
       if (entry.command === "send_channel_message") {
@@ -164,7 +164,7 @@ async function emitMockMessage(
     ({ ch, kind, mentionPubkeys, msg, parentEventId, pubkey }) => {
       return (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
             kind?: number;
@@ -173,7 +173,7 @@ async function emitMockMessage(
             pubkey?: string;
           }) => { id: string; created_at: number; pubkey: string };
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: ch,
         content: msg,
         kind,
@@ -209,12 +209,12 @@ async function waitForMockLiveSubscription(
           return (
             (
               window as Window & {
-                __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                   channelName: string;
                   kind?: number;
                 }) => boolean;
               }
-            ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
               channelName: currentChannelName,
               kind: expectedKind,
             }) ?? false
@@ -355,14 +355,14 @@ test("duplicate owned agents preserve provenance and exact pubkey selection", as
   await page.getByTestId("channel-general").click();
   await page.evaluate(
     async ({ channelId, pubkey }) => {
-      const invoke = window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+      const invoke = window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) throw new Error("Mock bridge is not installed.");
       await invoke("add_channel_members", {
         channelId,
         pubkeys: [pubkey],
         role: "bot",
       });
-      await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      await window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["channels"],
       });
     },
@@ -386,11 +386,11 @@ test("duplicate owned agents preserve provenance and exact pubkey selection", as
   );
   await expect(relayProvenanceMarker).toHaveAttribute(
     "aria-label",
-    "From another Buzz setup",
+    "From another Ambush setup",
   );
   await expect(relayProvenanceMarker).toHaveAttribute(
     "title",
-    "From another Buzz setup",
+    "From another Ambush setup",
   );
   await expect(relayProvenanceMarker).toBeVisible();
   await expect(relayProvenanceMarker).toHaveText("");
@@ -470,7 +470,7 @@ test("duplicate owned agents preserve provenance and exact pubkey selection", as
   ).toHaveCount(0);
   await expect(remoteSidebarMarker).toHaveAttribute(
     "aria-label",
-    "From another Buzz setup",
+    "From another Ambush setup",
   );
   await expect(remoteSidebarMarker).toHaveText("");
   await expect(remoteSidebarMarker.locator("svg")).toBeVisible();
@@ -712,7 +712,7 @@ test("thread autocomplete keeps multiple long names readable in a narrow panel",
   });
   await page.setViewportSize({ width: 900, height: 640 });
   await page.addInitScript(() => {
-    window.sessionStorage.setItem("buzz.desktop.thread-panel-width", "300");
+    window.sessionStorage.setItem("ambush.desktop.thread-panel-width", "300");
   });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -965,7 +965,7 @@ test("selecting a person mention inserts @Name into input", async ({
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "buzz-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-dark");
   });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -1568,14 +1568,14 @@ test("cached relay-agent suggestions are removed when channel authorization disa
 
   await page.evaluate(async (channelId) => {
     const bridge = window as Window & {
-      __BUZZ_E2E_INVALIDATE_CHANNELS__?: () => Promise<void>;
-      __BUZZ_E2E_MUTATE_CHANNEL__?: (opts: {
+      __AMBUSH_E2E_INVALIDATE_CHANNELS__?: () => Promise<void>;
+      __AMBUSH_E2E_MUTATE_CHANNEL__?: (opts: {
         channelId: string;
         channelType: null;
       }) => void;
     };
-    bridge.__BUZZ_E2E_MUTATE_CHANNEL__?.({ channelId, channelType: null });
-    await bridge.__BUZZ_E2E_INVALIDATE_CHANNELS__?.();
+    bridge.__AMBUSH_E2E_MUTATE_CHANNEL__?.({ channelId, channelType: null });
+    await bridge.__AMBUSH_E2E_INVALIDATE_CHANNELS__?.();
   }, GENERAL_CHANNEL_ID);
 
   await expect(aliceSuggestion).toHaveCount(0);
@@ -1645,9 +1645,9 @@ test("forum sends revalidate relay-agent authorization before signing", async ({
   });
   await expect(removeAttachment).toBeVisible();
   await page.evaluate(() => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.agentListDelayMs = 1_000;
-    window.__BUZZ_E2E__.mock.relayAgentListErrors = Array(100).fill(
+    window.__AMBUSH_E2E__.mock ??= {};
+    window.__AMBUSH_E2E__.mock.agentListDelayMs = 1_000;
+    window.__AMBUSH_E2E__.mock.relayAgentListErrors = Array(100).fill(
       "mock forum directory revoked before send",
     );
   });
@@ -1691,7 +1691,7 @@ test("managed agents use the channel roster for membership labels", async ({
     .poll(() =>
       page.evaluate(
         (channelId) =>
-          window.__BUZZ_E2E_QUERY_CLIENT__?.getQueryState([
+          window.__AMBUSH_E2E_QUERY_CLIENT__?.getQueryState([
             "channels",
             channelId,
             "members",
@@ -1702,14 +1702,14 @@ test("managed agents use the channel roster for membership labels", async ({
     .toBe("success");
   await page.evaluate(
     async ({ channelId, pubkey }) => {
-      const invoke = window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+      const invoke = window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) throw new Error("Mock bridge is not installed.");
       await invoke("add_channel_members", {
         channelId,
         pubkeys: [pubkey],
         role: "bot",
       });
-      await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      await window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["channels"],
         exact: true,
       });
@@ -1751,16 +1751,16 @@ test("relay-agent directory errors fail closed and recover after a fresh fetch",
   await expect(autocomplete(page)).toHaveCount(0);
 
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+    await window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
       queryKey: ["relay-agents"],
     });
   });
   await expect(autocomplete(page).getByText("quinn")).toBeVisible();
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.agentListDelayMs = 1_000;
-    void window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+    window.__AMBUSH_E2E__.mock ??= {};
+    window.__AMBUSH_E2E__.mock.agentListDelayMs = 1_000;
+    void window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
       queryKey: ["relay-agents"],
     });
   });
@@ -1768,7 +1768,7 @@ test("relay-agent directory errors fail closed and recover after a fresh fetch",
     .poll(async () =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_QUERY_CLIENT__?.getQueryState(["relay-agents"])
+          window.__AMBUSH_E2E_QUERY_CLIENT__?.getQueryState(["relay-agents"])
             ?.fetchStatus,
       ),
     )
@@ -1780,7 +1780,7 @@ test("relay-agent directory errors fail closed and recover after a fresh fetch",
     .poll(async () =>
       page.evaluate(
         () =>
-          window.__BUZZ_E2E_QUERY_CLIENT__?.getQueryState(["relay-agents"])
+          window.__AMBUSH_E2E_QUERY_CLIENT__?.getQueryState(["relay-agents"])
             ?.fetchStatus,
       ),
     )
@@ -1806,14 +1806,14 @@ test("relay-only allowlisted agents emit a p tag when sent", async ({
   await page.getByTestId("channel-general").click();
   await page.evaluate(
     async ({ channelId, pubkey }) => {
-      const invoke = window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+      const invoke = window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) throw new Error("Mock bridge is not installed.");
       await invoke("add_channel_members", {
         channelId,
         pubkeys: [pubkey],
         role: "bot",
       });
-      await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      await window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["channels"],
       });
     },
@@ -1882,8 +1882,8 @@ test("managed agents keep their p tag when relay discovery fails before send", a
   await expect(input).toHaveText("@quinn hello");
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.relayAgentListErrors = Array(5).fill(
+    window.__AMBUSH_E2E__.mock ??= {};
+    window.__AMBUSH_E2E__.mock.relayAgentListErrors = Array(5).fill(
       "mock unrelated relay directory failure",
     );
   });
@@ -1912,14 +1912,14 @@ test("targeted revocation before send causes no agent side effects", async ({
   await page.getByTestId("channel-general").click();
   await page.evaluate(
     async ({ channelId, pubkey }) => {
-      const invoke = window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+      const invoke = window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) throw new Error("Mock bridge is not installed.");
       await invoke("add_channel_members", {
         channelId,
         pubkeys: [pubkey],
         role: "bot",
       });
-      await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      await window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["channels"],
       });
     },
@@ -1936,8 +1936,8 @@ test("targeted revocation before send causes no agent side effects", async ({
   await page.keyboard.type("hello");
 
   await page.evaluate((pubkey) => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.relayAgentRevalidationRevokedPubkeys = [pubkey];
+    window.__AMBUSH_E2E__.mock ??= {};
+    window.__AMBUSH_E2E__.mock.relayAgentRevalidationRevokedPubkeys = [pubkey];
   }, ALLOWLIST_RELAY_AGENT_PUBKEY);
   const baselineCommands = await readCommandLog(page);
   await page.getByTestId("send-message").click();
@@ -2047,8 +2047,8 @@ test("selected relay agents revoked after the invite prompt cause no side effect
   await expect(inviteButton).toBeVisible();
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.relayAgentListErrors = Array(5).fill(
+    window.__AMBUSH_E2E__.mock ??= {};
+    window.__AMBUSH_E2E__.mock.relayAgentListErrors = Array(5).fill(
       "mock directory revoked after invite prompt",
     );
   });
@@ -2098,14 +2098,14 @@ test("selected relay agents revoked during send emit no p tag", async ({
   await page.keyboard.type("hello");
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.agentListDelayMs = 300;
+    window.__AMBUSH_E2E__.mock ??= {};
+    window.__AMBUSH_E2E__.mock.agentListDelayMs = 300;
   });
   await page.getByTestId("send-message").click();
   await page.getByRole("button", { name: "Invite", exact: true }).click();
   await page.evaluate(() => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.relayAgentListErrors = Array(100).fill(
+    window.__AMBUSH_E2E__.mock ??= {};
+    window.__AMBUSH_E2E__.mock.relayAgentListErrors = Array(100).fill(
       "mock directory revoked mid-send",
     );
   });
@@ -2146,14 +2146,14 @@ test("owner-only builds admit cross-owner relay agents authorized by allowlist",
   await page.getByTestId("channel-general").click();
   await page.evaluate(
     async ({ channelId, pubkey }) => {
-      const invoke = window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+      const invoke = window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) throw new Error("Mock bridge is not installed.");
       await invoke("add_channel_members", {
         channelId,
         pubkeys: [pubkey],
         role: "bot",
       });
-      await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      await window.__AMBUSH_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["channels"],
       });
     },
@@ -2495,7 +2495,7 @@ test("mentioning a non-member managed agent adds and starts it before sending", 
   await expect(mentionChip).toBeVisible();
 
   const persistedPolicy = await page.evaluate(async (pubkey) => {
-    const invoke = window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+    const invoke = window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
     if (!invoke) throw new Error("Mock bridge is not installed.");
     const agents = (await invoke("list_managed_agents", {})) as Array<{
       pubkey: string;
@@ -2601,7 +2601,7 @@ test("system add rows use plain names while remove rows retain agent mention sty
 
   await page.evaluate(
     ({ actorPubkey, kind, targetPubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: JSON.stringify({
           type: "member_joined",
@@ -2610,7 +2610,7 @@ test("system add rows use plain names while remove rows retain agent mention sty
         }),
         kind,
       });
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: JSON.stringify({
           type: "member_removed",
@@ -2672,7 +2672,7 @@ test("groups contiguous arrival activity with hidden names in the standard toolt
     ({ actorPubkey, addedTargets, kind }) => {
       const createdAt = Math.floor(Date.now() / 1_000);
       for (const [index, target] of addedTargets.entries()) {
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "general",
           content: JSON.stringify({
             type: "member_joined",
@@ -2745,7 +2745,7 @@ test("system agent profile exposes owned agent actions", async ({ page }) => {
 
   await page.evaluate(
     ({ actorPubkey, kind, targetPubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: JSON.stringify({
           type: "member_joined",
@@ -2790,7 +2790,7 @@ test("system agent activity avatar stack is decorative", async ({ page }) => {
 
   await page.evaluate(
     ({ kind, targetPubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: JSON.stringify({
           type: "member_joined",
@@ -2827,7 +2827,7 @@ test("membership activity folds a member joining then leaving", async ({
   await page.evaluate(
     ({ alicePubkey, kind }) => {
       const createdAt = Math.floor(Date.now() / 1_000);
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: JSON.stringify({
           type: "member_joined",
@@ -2837,7 +2837,7 @@ test("membership activity folds a member joining then leaving", async ({
         createdAt,
         kind,
       });
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: JSON.stringify({ type: "member_left", actor: alicePubkey }),
         createdAt: createdAt + 1,
@@ -2905,7 +2905,7 @@ test("system member-joined rows render the joined person as a plain profile name
 
   await page.evaluate(
     ({ kind, pubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: JSON.stringify({
           type: "member_joined",
@@ -3481,7 +3481,7 @@ test("owned bot profile exposes message and huddle actions", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).find(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).find(
             (entry) => entry.command === "start_huddle",
           )?.payload,
       ),
@@ -3600,7 +3600,7 @@ test("profile popover wave sends a direct message for a human profile", async ({
       expect.objectContaining({
         command: "send_channel_message",
         payload: expect.objectContaining({
-          content: expect.stringContaining("<!-- buzz:wave:v1 -->"),
+          content: expect.stringContaining("<!-- ambush:wave:v1 -->"),
         }),
       }),
     ]),

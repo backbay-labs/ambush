@@ -19,19 +19,19 @@ type RelayConnectionState =
 async function setChannelsReadError(page: Page, error: string | null) {
   await page.evaluate((nextError) => {
     const testWindow = window as Window & {
-      __BUZZ_E2E__?: { mock?: { channelsReadError?: string } };
+      __AMBUSH_E2E__?: { mock?: { channelsReadError?: string } };
     };
 
-    if (!testWindow.__BUZZ_E2E__?.mock) {
+    if (!testWindow.__AMBUSH_E2E__?.mock) {
       throw new Error("Mock bridge config is not installed.");
     }
 
     if (nextError === null) {
-      delete testWindow.__BUZZ_E2E__.mock.channelsReadError;
+      delete testWindow.__AMBUSH_E2E__.mock.channelsReadError;
       return;
     }
 
-    testWindow.__BUZZ_E2E__.mock.channelsReadError = nextError;
+    testWindow.__AMBUSH_E2E__.mock.channelsReadError = nextError;
   }, error);
 }
 
@@ -46,13 +46,13 @@ async function setRelayConnectionState(
     // after we've driven it to a degraded value.
     await page.waitForFunction(() => {
       const win = window as Window & {
-        __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
-        __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+        __AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
+        __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
       };
       return (
-        typeof win.__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function" &&
-        typeof win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__ === "function" &&
-        win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__() === "connected"
+        typeof win.__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__ === "function" &&
+        typeof win.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__ === "function" &&
+        win.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__() === "connected"
       );
     });
   } else {
@@ -62,20 +62,20 @@ async function setRelayConnectionState(
       () =>
         typeof (
           window as Window & {
-            __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+            __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
           }
-        ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
+        ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
     );
   }
   await page.evaluate((nextState) => {
     const testWindow = window as Window & {
-      __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (
+      __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: (
         state: RelayConnectionState,
       ) => void;
     };
 
     const setConnectionState =
-      testWindow.__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__;
+      testWindow.__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__;
     if (!setConnectionState) {
       throw new Error("Mock relay connection state helper is not installed.");
     }
@@ -91,11 +91,11 @@ async function emitRelayConnectionState(
   await page.evaluate((nextState) => {
     const setConnectionState = (
       window as Window & {
-        __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (
+        __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: (
           state: RelayConnectionState,
         ) => void;
       }
-    ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__;
+    ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__;
     if (!setConnectionState) {
       throw new Error("Mock relay connection state helper is not installed.");
     }

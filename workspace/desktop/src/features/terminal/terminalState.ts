@@ -1,4 +1,4 @@
-export type TerminalOwner = "buzz" | "terminal";
+export type TerminalOwner = "ambush" | "terminal";
 
 export type HandoffState = {
   owner: TerminalOwner;
@@ -19,7 +19,7 @@ export type HandoffResult = {
 };
 
 export const INITIAL_HANDOFF_STATE: HandoffState = {
-  owner: "buzz",
+  owner: "ambush",
   chordArmed: false,
   composing: false,
 };
@@ -55,7 +55,7 @@ export function reduceHandoff(
     state: {
       ...state,
       chordArmed: false,
-      owner: state.owner === "buzz" ? "terminal" : "buzz",
+      owner: state.owner === "ambush" ? "terminal" : "ambush",
     },
     toggled: true,
   };

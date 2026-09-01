@@ -10,10 +10,10 @@ test("restart paints a persisted head before the single authoritative refresh", 
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   await page.evaluate((content) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content,
     });
@@ -25,7 +25,7 @@ test("restart paints a persisted head before the single authoritative refresh", 
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMANDS__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMANDS__ ?? []).filter(
             (command) => command === "channel_head_cache_store",
           ).length,
       ),
@@ -35,7 +35,7 @@ test("restart paints a persisted head before the single authoritative refresh", 
   const persistedCache = await page.evaluate(() =>
     Object.fromEntries(
       Object.entries(window.localStorage).filter(([key]) =>
-        key.startsWith("buzz-e2e-channel-head:"),
+        key.startsWith("ambush-e2e-channel-head:"),
       ),
     ),
   );
@@ -45,12 +45,12 @@ test("restart paints a persisted head before the single authoritative refresh", 
       window.localStorage.setItem(key, value);
     }
     const testWindow = window as Window & {
-      __BUZZ_E2E__?: { mock?: Record<string, unknown> };
+      __AMBUSH_E2E__?: { mock?: Record<string, unknown> };
     };
-    testWindow.__BUZZ_E2E__ = {
-      ...testWindow.__BUZZ_E2E__,
+    testWindow.__AMBUSH_E2E__ = {
+      ...testWindow.__AMBUSH_E2E__,
       mock: {
-        ...testWindow.__BUZZ_E2E__?.mock,
+        ...testWindow.__AMBUSH_E2E__?.mock,
         channelHeadDelayMs: 5_000,
       },
     };
@@ -59,7 +59,7 @@ test("restart paints a persisted head before the single authoritative refresh", 
   await expect(page.getByTestId("channel-general")).toBeVisible();
   const restartedCallsBeforeOpen = await page.evaluate(
     () =>
-      (window.__BUZZ_E2E_COMMANDS__ ?? []).filter(
+      (window.__AMBUSH_E2E_COMMANDS__ ?? []).filter(
         (command) => command === "get_channel_window",
       ).length,
   );
@@ -72,7 +72,7 @@ test("restart paints a persisted head before the single authoritative refresh", 
     .poll(() =>
       page.evaluate(
         (callsBeforeOpen) =>
-          (window.__BUZZ_E2E_COMMANDS__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMANDS__ ?? []).filter(
             (command) => command === "get_channel_window",
           ).length - callsBeforeOpen,
         restartedCallsBeforeOpen,

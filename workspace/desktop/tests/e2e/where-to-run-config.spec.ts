@@ -30,7 +30,7 @@ type Page = import("@playwright/test").Page;
 
 const PROVIDER = {
   id: "kubernetes",
-  binaryPath: "/mock/buzz-backend-kubernetes",
+  binaryPath: "/mock/ambush-backend-kubernetes",
 };
 
 const PROBE_RESULT = {
@@ -48,7 +48,7 @@ const PROBE_RESULT = {
       namespace: {
         type: "string",
         title: "Namespace",
-        default: "buzz-agents-mock01",
+        default: "ambush-agents-mock01",
       },
     },
     required: ["namespace"],
@@ -59,8 +59,8 @@ async function probeInvocations(page: Page): Promise<number> {
   return page.evaluate(
     () =>
       (
-        window as Window & { __BUZZ_E2E_COMMANDS__?: string[] }
-      ).__BUZZ_E2E_COMMANDS__?.filter(
+        window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] }
+      ).__AMBUSH_E2E_COMMANDS__?.filter(
         (command) => command === "probe_backend_provider",
       ).length ?? 0,
   );
@@ -126,7 +126,7 @@ test("typing into a defaultless provider field sticks and probes only once", asy
   await expect(contextField).toBeVisible({ timeout: 10_000 });
   // Defaults prefilled from the schema; context has none.
   await expect(dialog.locator("#provider-cfg-namespace")).toHaveValue(
-    "buzz-agents-mock01",
+    "ambush-agents-mock01",
   );
   await expect(contextField).toHaveValue("");
 
@@ -175,7 +175,7 @@ test("config fields render only after a slow probe resolves, with defaults", asy
     timeout: 10_000,
   });
   await expect(dialog.locator("#provider-cfg-namespace")).toHaveValue(
-    "buzz-agents-mock01",
+    "ambush-agents-mock01",
   );
   expect(await probeInvocations(page)).toBe(1);
 });

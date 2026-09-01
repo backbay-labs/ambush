@@ -100,12 +100,12 @@ export async function expectSmoothCorners(
     .toBe(true);
 }
 
-/** Wait for the Buzz overrides to be installed in Emoji Mart's shadow root. */
+/** Wait for the Ambush overrides to be installed in Emoji Mart's shadow root. */
 export async function expectEmojiMartStylesInstalled(picker: Locator) {
   await expect
     .poll(async () =>
       picker.evaluate((element) =>
-        Boolean(element.shadowRoot?.querySelector("#buzz-emoji-mart-style")),
+        Boolean(element.shadowRoot?.querySelector("#ambush-emoji-mart-style")),
       ),
     )
     .toBe(true);

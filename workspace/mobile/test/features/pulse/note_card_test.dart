@@ -1,8 +1,8 @@
-import 'package:buzz/shared/profile/user_cache_provider.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/features/pulse/note_card.dart';
-import 'package:buzz/features/pulse/pulse_models.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/shared/profile/user_cache_provider.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/features/pulse/note_card.dart';
+import 'package:ambush/features/pulse/pulse_models.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';

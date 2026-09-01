@@ -59,24 +59,24 @@ fn clearing_canonical_reveals_env_fallback_and_creates_a_diff() {
 // ── B5 effort: single canonical representation ───────────────────────────
 //
 // `effective_effort` and the snapshot's `effort_level` field are the sole
-// carrier of startup effort. `BUZZ_ACP_EFFORT_LEVEL` is stripped from the
+// carrier of startup effort. `AMBUSH_ACP_EFFORT_LEVEL` is stripped from the
 // snapshot `env` so an authority handoff at an unchanged effective value
 // (canonical replacing a user-env seed, or the reverse) raises no spurious
 // restart badge, while a genuine effort change surfaces exactly once.
 
-/// Look up the `env.BUZZ_ACP_EFFORT_LEVEL` leaf of a canonical snapshot, if any.
+/// Look up the `env.AMBUSH_ACP_EFFORT_LEVEL` leaf of a canonical snapshot, if any.
 fn effort_env_leaf(canonical: &serde_json::Value) -> Option<&serde_json::Value> {
     canonical
         .get("env")
-        .and_then(|env| env.get("BUZZ_ACP_EFFORT_LEVEL"))
+        .and_then(|env| env.get("AMBUSH_ACP_EFFORT_LEVEL"))
 }
 
-/// A record whose user env seeds `BUZZ_ACP_EFFORT_LEVEL` (the pre-canonical
+/// A record whose user env seeds `AMBUSH_ACP_EFFORT_LEVEL` (the pre-canonical
 /// authority: no persisted `effort_level`, effort comes from user env_vars).
 fn record_with_env_effort(value: &str) -> ManagedAgentRecord {
     let mut rec = record();
     rec.env_vars
-        .insert("BUZZ_ACP_EFFORT_LEVEL".into(), value.into());
+        .insert("AMBUSH_ACP_EFFORT_LEVEL".into(), value.into());
     rec
 }
 
@@ -86,7 +86,7 @@ fn effective_effort_prefers_persisted_canonical_over_user_env() {
     // user env layer). The env value is ignored when a canonical is present.
     let mut rec = record();
     rec.effort_level = Some("high".into());
-    let env = BTreeMap::from([("BUZZ_ACP_EFFORT_LEVEL".to_string(), "low".to_string())]);
+    let env = BTreeMap::from([("AMBUSH_ACP_EFFORT_LEVEL".to_string(), "low".to_string())]);
     assert_eq!(effective_effort(&rec, &env).as_deref(), Some("high"));
 }
 
@@ -95,7 +95,7 @@ fn effective_effort_falls_back_to_user_env_when_no_canonical() {
     // No persisted canonical → the user-seeded env value is the effective
     // startup effort, exactly what a spawn would leave in place.
     let rec = record();
-    let env = BTreeMap::from([("BUZZ_ACP_EFFORT_LEVEL".to_string(), "low".to_string())]);
+    let env = BTreeMap::from([("AMBUSH_ACP_EFFORT_LEVEL".to_string(), "low".to_string())]);
     assert_eq!(effective_effort(&rec, &env).as_deref(), Some("low"));
 }
 
@@ -118,7 +118,7 @@ fn snapshot_carries_effort_in_field_not_env() {
     assert_eq!(
         effort_env_leaf(&canonical),
         None,
-        "BUZZ_ACP_EFFORT_LEVEL must be stripped from the snapshot env"
+        "AMBUSH_ACP_EFFORT_LEVEL must be stripped from the snapshot env"
     );
 }
 
@@ -155,7 +155,7 @@ fn equal_value_effort_authority_handoff_canonical_to_env_is_no_op() {
 #[test]
 fn env_only_effort_edit_changes_effort_level_not_env() {
     // An env-only effort edit (no canonical) moves the single `effort_level`
-    // representation and never reintroduces an `env.BUZZ_ACP_EFFORT_LEVEL`
+    // representation and never reintroduces an `env.AMBUSH_ACP_EFFORT_LEVEL`
     // leaf, so the diff names `effort_level` once rather than duplicating it.
     let low = snap(&record_with_env_effort("low"));
     let high = snap(&record_with_env_effort("high"));

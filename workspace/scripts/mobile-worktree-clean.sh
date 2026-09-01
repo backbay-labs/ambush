@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Uninstalls stale worktree-suffixed Buzz debug builds from booted iOS
+# Uninstalls stale worktree-suffixed Ambush debug builds from booted iOS
 # simulators and connected Android devices/emulators. Unsuffixed app installs
-# (`xyz.block.buzz.dogfood.mobile` and `xyz.block.buzz.mobile`) are never
+# (`com.backbay.ambush.dogfood.mobile` and `com.backbay.ambush.mobile`) are never
 # touched. Only identifiers with a worktree suffix appended after the dogfood
 # or production id are matched. Run `just mobile-clean` (or this script
 # directly); pass --dry-run to list what would be removed without uninstalling.
 set -euo pipefail
 
-ios_prefix="xyz.block.buzz.dogfood.mobile."
-android_prefix="xyz.block.buzz.mobile."
+ios_prefix="com.backbay.ambush.dogfood.mobile."
+android_prefix="com.backbay.ambush.mobile."
 
 dry_run=0
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -58,7 +58,7 @@ if command -v adb &>/dev/null; then
 fi
 
 if [[ "$removed" == "0" ]]; then
-    echo "no worktree-suffixed Buzz installs found (production apps untouched)"
+    echo "no worktree-suffixed Ambush installs found (production apps untouched)"
 elif [[ "$dry_run" == "1" ]]; then
     echo "dry run: $removed worktree install(s) would be removed (production apps untouched)"
 else

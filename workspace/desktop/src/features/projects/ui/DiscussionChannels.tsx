@@ -21,7 +21,7 @@ import { useSearchMessagesQuery } from "@/features/search/hooks";
 import type { SearchHit } from "@/shared/api/searchTypes";
 import { KIND_FORUM_COMMENT, KIND_FORUM_POST } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
-import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
+import { AmbushLoadingState } from "@/shared/ui/AmbushLoadingState";
 import { Markdown } from "@/shared/ui/markdown";
 import {
   ProjectEntityFacepile,
@@ -397,7 +397,7 @@ export function DiscussionChannelsPanel({
   const profiles = profilesQuery.data?.profiles;
 
   if (isLoading) {
-    return <BuzzLoadingState label="Loading channel discussions" />;
+    return <AmbushLoadingState label="Loading channel discussions" />;
   }
   if (channels.length === 0) {
     return (

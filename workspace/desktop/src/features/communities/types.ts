@@ -11,7 +11,7 @@ export type Community = {
   pubkey?: string;
   addedAt: string;
   /**
-   * Absolute directory the agent's `~/.buzz/REPOS` symlinks to, so agents
+   * Absolute directory the agent's `~/.ambush/REPOS` symlinks to, so agents
    * work in the user's existing checkouts instead of re-cloning. `~` is
    * expanded to an absolute path before save. Unset = the default real
    * `REPOS` directory inside the nest.

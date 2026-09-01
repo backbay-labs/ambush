@@ -1,6 +1,6 @@
 import type * as React from "react";
 
-import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
+import { AmbushLoadingState } from "@/shared/ui/AmbushLoadingState";
 import { ProjectPanelState } from "./ProjectPanelState";
 
 /** Which center pane `PullRequestsPanel` should show. A retained selected
@@ -42,7 +42,7 @@ export function PullRequestsPanelSurface({
     selectedPullRequest,
   });
   if (kind === "loading") {
-    return <BuzzLoadingState label="Loading reviews" />;
+    return <AmbushLoadingState label="Loading reviews" />;
   }
   if (kind === "detail") {
     return detail;

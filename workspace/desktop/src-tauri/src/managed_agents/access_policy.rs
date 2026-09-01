@@ -2,7 +2,7 @@
 //!
 //! ## What this build capability guarantees, and what it does not
 //!
-//! `BUZZ_BUILD_AGENT_ACCESS_OWNER_ONLY` marks a build whose managed agents may
+//! `AMBUSH_BUILD_AGENT_ACCESS_OWNER_ONLY` marks a build whose managed agents may
 //! answer only their owner. Enforcement is applied at the two boundaries where
 //! Desktop hands access to something that runs the agent, and nowhere else. The
 //! stored record and its relay-advertised access fields are left untouched, so
@@ -12,8 +12,8 @@
 //! Enforced:
 //!
 //! - **Local spawn.** [`build_respond_to_env_with_policy`] clamps
-//!   `BUZZ_ACP_RESPOND_TO` to `owner-only` and pins the independent
-//!   `BUZZ_ACP_ALLOWED_RESPOND_TO=owner-only` guard on every start, whatever
+//!   `AMBUSH_ACP_RESPOND_TO` to `owner-only` and pins the independent
+//!   `AMBUSH_ACP_ALLOWED_RESPOND_TO=owner-only` guard on every start, whatever
 //!   the record says.
 //! - **Provider deployment, including upgrades.**
 //!   [`projected_access_with_policy`] projects owner-only into every payload.
@@ -26,8 +26,8 @@
 //!
 //! The harness gate this projection targets admits the human owner *and* every
 //! cryptographically NIP-OA-verified agent that shares that owner (see
-//! `crates/buzz-acp/src/lib.rs`). That is the intended boundary, not an
-//! oversight: an owner's own agents are inside their trust boundary, and Buzz's
+//! `crates/ambush-acp/src/lib.rs`). That is the intended boundary, not an
+//! oversight: an owner's own agents are inside their trust boundary, and Ambush's
 //! built-in Welcome team relies on it, because the lead instructs its teammates
 //! while every teammate is created owner-only (see
 //! `welcomeTeammateHasExpectedAccess` in
@@ -41,10 +41,10 @@ use super::{validate_respond_to_allowlist, ManagedAgentRecord, RespondTo};
 
 pub(crate) type RespondToEnv = (Vec<(&'static str, String)>, Vec<&'static str>);
 
-/// Release packaging sets `BUZZ_BUILD_AGENT_ACCESS_OWNER_ONLY`; OSS/custom
+/// Release packaging sets `AMBUSH_BUILD_AGENT_ACCESS_OWNER_ONLY`; OSS/custom
 /// builds do not.
 pub(crate) fn owner_only_access_build() -> bool {
-    option_env!("BUZZ_DESKTOP_BUILD_AGENT_ACCESS_OWNER_ONLY").is_some()
+    option_env!("AMBUSH_DESKTOP_BUILD_AGENT_ACCESS_OWNER_ONLY").is_some()
 }
 
 pub(crate) fn owner_only() -> bool {
@@ -84,30 +84,30 @@ pub(crate) fn build_respond_to_env_with_policy(
         );
     }
 
-    let mut set = vec![("BUZZ_ACP_RESPOND_TO", respond_to.as_str().to_string())];
+    let mut set = vec![("AMBUSH_ACP_RESPOND_TO", respond_to.as_str().to_string())];
     let mut remove = Vec::new();
     if enforced_owner_only {
         set.push((
-            "BUZZ_ACP_ALLOWED_RESPOND_TO",
+            "AMBUSH_ACP_ALLOWED_RESPOND_TO",
             RespondTo::OwnerOnly.as_str().to_string(),
         ));
     } else {
-        remove.push("BUZZ_ACP_ALLOWED_RESPOND_TO");
+        remove.push("AMBUSH_ACP_ALLOWED_RESPOND_TO");
     }
     if respond_to == RespondTo::Allowlist {
-        set.push(("BUZZ_ACP_RESPOND_TO_ALLOWLIST", normalized.join(",")));
+        set.push(("AMBUSH_ACP_RESPOND_TO_ALLOWLIST", normalized.join(",")));
     } else {
-        remove.push("BUZZ_ACP_RESPOND_TO_ALLOWLIST");
+        remove.push("AMBUSH_ACP_RESPOND_TO_ALLOWLIST");
     }
 
     if record.auth_tag.is_none() {
         if let Some(owner) = owner_hex {
-            set.push(("BUZZ_ACP_AGENT_OWNER", owner.to_string()));
+            set.push(("AMBUSH_ACP_AGENT_OWNER", owner.to_string()));
         } else {
-            remove.push("BUZZ_ACP_AGENT_OWNER");
+            remove.push("AMBUSH_ACP_AGENT_OWNER");
         }
     } else {
-        remove.push("BUZZ_ACP_AGENT_OWNER");
+        remove.push("AMBUSH_ACP_AGENT_OWNER");
     }
     Ok((set, remove))
 }
@@ -163,13 +163,13 @@ mod tests {
                 build_respond_to_env_with_policy(&record, Some("owner"), true).unwrap();
             let gate_set: std::collections::HashMap<_, _> = gate_set.into_iter().collect();
             assert_eq!(
-                gate_set.get("BUZZ_ACP_RESPOND_TO").map(String::as_str),
+                gate_set.get("AMBUSH_ACP_RESPOND_TO").map(String::as_str),
                 Some("owner-only"),
                 "owner-only runtime env did not clamp {label} agent",
             );
             assert_eq!(
                 gate_set
-                    .get("BUZZ_ACP_ALLOWED_RESPOND_TO")
+                    .get("AMBUSH_ACP_ALLOWED_RESPOND_TO")
                     .map(String::as_str),
                 Some("owner-only"),
                 "owner-only runtime env omitted the {label} agent guard",

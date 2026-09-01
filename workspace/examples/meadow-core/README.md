@@ -1,6 +1,6 @@
 # Meadow Core
 
-A minimal three-agent persona pack for Buzz.
+A minimal three-agent persona pack for Ambush.
 
 | Agent | Role |
 |-------|------|
@@ -12,18 +12,18 @@ A minimal three-agent persona pack for Buzz.
 
 ```bash
 # Validate the pack
-buzz pack validate ./examples/meadow-core
+ambush pack validate ./examples/meadow-core
 
 # Inspect resolved config
-buzz pack inspect ./examples/meadow-core
+ambush pack inspect ./examples/meadow-core
 ```
 
 The desktop app's Import button does not accept this pack directory or a zip of it — it imports
 agent/team *snapshots* (`.agent.json`/`.team.json`, exported from agents already running in the
-app), not persona-pack source. `buzz pack inspect` above shows the fully-resolved per-agent
+app), not persona-pack source. `ambush pack inspect` above shows the fully-resolved per-agent
 config; use it as reference to recreate these agents in the desktop app by hand. Direct
 persona-pack runtime integration is not currently implemented. See "Desktop App Import" in
-`crates/buzz-persona/PERSONA_PACK_SPEC.md` for the current import paths.
+`crates/ambush-persona/PERSONA_PACK_SPEC.md` for the current import paths.
 
 ## Structure
 
@@ -48,4 +48,4 @@ Edit any `.persona.md` file to change the agent's behavior. The YAML
 frontmatter controls config (model, triggers, channels). The markdown
 body is the system prompt.
 
-See `crates/buzz-persona/PERSONA_PACK_SPEC.md` for the full format reference.
+See `crates/ambush-persona/PERSONA_PACK_SPEC.md` for the full format reference.

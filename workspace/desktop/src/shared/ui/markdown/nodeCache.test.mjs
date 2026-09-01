@@ -34,26 +34,26 @@ test("content changes miss the cache", () => {
 
 test("customEmoji is keyed by value, not identity", () => {
   clearMarkdownNodeCache();
-  const emoji = [{ shortcode: "buzz", url: "https://relay/buzz.png" }];
+  const emoji = [{ shortcode: "ambush", url: "https://relay/ambush.png" }];
   const first = renderCachedMarkdown({
     ...BASE,
-    content: "hi :buzz:",
+    content: "hi :ambush:",
     customEmoji: emoji,
   });
   // Fresh array, same values — the exact remount scenario (useMessageEmoji
   // rebuilds the array): must HIT.
   const second = renderCachedMarkdown({
     ...BASE,
-    content: "hi :buzz:",
-    customEmoji: [{ shortcode: "buzz", url: "https://relay/buzz.png" }],
+    content: "hi :ambush:",
+    customEmoji: [{ shortcode: "ambush", url: "https://relay/ambush.png" }],
   });
   assert.equal(first, second);
   // Same content, different emoji set (e.g. emoji added while editing —
   // custom-emoji.spec.ts Bug 2): must MISS so the new emoji renders.
   const third = renderCachedMarkdown({
     ...BASE,
-    content: "hi :buzz:",
-    customEmoji: [{ shortcode: "buzz", url: "https://relay/other.png" }],
+    content: "hi :ambush:",
+    customEmoji: [{ shortcode: "ambush", url: "https://relay/other.png" }],
   });
   assert.notEqual(first, third);
 });

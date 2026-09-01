@@ -40,9 +40,9 @@ test("normal first launch uses the already-persisted identity", async ({
     () =>
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
+          __AMBUSH_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
         }
-      ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [],
+      ).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [],
   );
   expect(commands.some((entry) => entry.command === "get_identity")).toBe(true);
   expect(
@@ -111,7 +111,7 @@ test("lost boot offers phone recovery with a single-use QR", async ({
   await expect(page.getByTestId("identity-recovery-pairing")).toBeVisible();
   await expect(page.getByTestId("identity-recovery-qr")).toBeVisible();
   await expect(
-    page.getByText("Scan this code with a signed-in Buzz phone."),
+    page.getByText("Scan this code with a signed-in Ambush phone."),
   ).toBeVisible();
   await expect(
     page.getByText("On your phone, open Settings → Send identity to desktop."),
@@ -131,12 +131,12 @@ test("lost boot offers phone recovery with a single-use QR", async ({
   const copiedPayload = await page.evaluate(() => {
     const log = (
       window as Window & {
-        __BUZZ_E2E_COMMAND_LOG__?: Array<{
+        __AMBUSH_E2E_COMMAND_LOG__?: Array<{
           command: string;
           payload: Record<string, unknown> | null;
         }>;
       }
-    ).__BUZZ_E2E_COMMAND_LOG__;
+    ).__AMBUSH_E2E_COMMAND_LOG__;
     return log?.findLast(({ command }) => command === "copy_text_to_clipboard")
       ?.payload;
   });
@@ -146,9 +146,9 @@ test("lost boot offers phone recovery with a single-use QR", async ({
     () =>
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
+          __AMBUSH_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
         }
-      ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [],
+      ).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [],
   );
   expect(
     commands.some(
@@ -175,9 +175,9 @@ test("phone recovery uses the desktop pairing card semantics", async ({
   await expect(qrCode).toBeVisible();
   await expect(qrCode).toHaveAttribute("data-qr-matrix-size", "57");
   await expect(qrCode.locator("[data-qr-finder-pattern]")).toHaveCount(3);
-  await expect(qrCode.locator(".buzz-qr-cell-reveal").first()).toHaveCSS(
+  await expect(qrCode.locator(".ambush-qr-cell-reveal").first()).toHaveCSS(
     "animation-name",
-    "buzz-qr-cell-reveal",
+    "ambush-qr-cell-reveal",
   );
   const qrBox = await qrContainer.boundingBox();
   const copyBox = await copyButton.boundingBox();
@@ -201,7 +201,7 @@ test("phone recovery uses the desktop pairing card semantics", async ({
   ).toBeVisible();
   await expect(
     card.getByText(
-      "This gives this desktop permanent access to your Buzz identity. Only continue if you trust it.",
+      "This gives this desktop permanent access to your Ambush identity. Only continue if you trust it.",
     ),
   ).toBeVisible();
   await expect(
@@ -255,7 +255,7 @@ test("canceling recovery uses the standard pairing cancellation state", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             ({ command }) => command === "cancel_pairing",
           ).length,
       ),
@@ -333,7 +333,7 @@ test("desktop refreshes recovery codes before the relay expires them", async ({
   const recoveryStarts = () =>
     page.evaluate(
       () =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           ({ command }) => command === "start_identity_recovery_pairing",
         ).length,
     );
@@ -388,9 +388,9 @@ test("start-new-identity from lost mode persists the ephemeral key after confirm
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
+              __AMBUSH_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
             }
-          ).__BUZZ_E2E_COMMAND_PAYLOADS__?.some(
+          ).__AMBUSH_E2E_COMMAND_PAYLOADS__?.some(
             (e) => e.command === "persist_current_identity",
           ) ?? false,
       ),
@@ -482,9 +482,9 @@ test("locked screen relaunch button records the process-restart invoke", async (
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
+              __AMBUSH_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
             }
-          ).__BUZZ_E2E_COMMAND_PAYLOADS__?.some(
+          ).__AMBUSH_E2E_COMMAND_PAYLOADS__?.some(
             (e) => e.command === "plugin:process|restart",
           ) ?? false,
       ),

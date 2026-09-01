@@ -10,7 +10,7 @@ const AGENT_A = "a".repeat(64);
 const AGENT_B = "b".repeat(64);
 const THREAD_ROOT_ID = "mock-general-welcome";
 const KEEP_MENTIONED_AGENTS_PINNED_STORAGE_KEY =
-  "buzz.messages.keepMentionedAgentsPinned";
+  "ambush.messages.keepMentionedAgentsPinned";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((storageKey) => {
@@ -27,8 +27,8 @@ async function keepMentionedAgentsPinned(page: Page) {
 async function seedTheme(page: Page, theme: string, accent = "#c0a2f1") {
   await page.addInitScript(
     ({ selectedTheme, selectedAccent }) => {
-      window.localStorage.setItem("buzz-theme", selectedTheme);
-      window.localStorage.setItem("buzz-accent-color", selectedAccent);
+      window.localStorage.setItem("ambush-theme", selectedTheme);
+      window.localStorage.setItem("ambush-accent-color", selectedAccent);
     },
     { selectedTheme: theme, selectedAccent: accent },
   );
@@ -94,7 +94,7 @@ async function pressPrimaryShiftM(page: Page) {
 
 async function readOutgoingMentionPubkeys(page: Page, content: string) {
   return page.evaluate((expectedContent) => {
-    const signedEvent = window.__BUZZ_E2E_SIGNED_EVENTS__?.find(
+    const signedEvent = window.__AMBUSH_E2E_SIGNED_EVENTS__?.find(
       (event) => event.content === expectedContent,
     );
     if (signedEvent) {
@@ -103,7 +103,7 @@ async function readOutgoingMentionPubkeys(page: Page, content: string) {
         .map((tag) => tag[1]);
     }
 
-    for (const entry of window.__BUZZ_E2E_COMMAND_LOG__ ?? []) {
+    for (const entry of window.__AMBUSH_E2E_COMMAND_LOG__ ?? []) {
       if (entry.command === "send_channel_message") {
         const payload = entry.payload as
           | { content?: string; mentionPubkeys?: string[] }
@@ -144,7 +144,7 @@ async function emitMockMessage(
 ) {
   await page.evaluate(
     ({ body, mentions }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: body,
         mentionPubkeys: mentions,
@@ -231,7 +231,7 @@ test("keeps a queued-attachment send locked through upload and send settlement",
   const sendAttempts = () =>
     page.evaluate(
       () =>
-        window.__BUZZ_E2E_COMMAND_LOG__?.filter(
+        window.__AMBUSH_E2E_COMMAND_LOG__?.filter(
           (entry) => entry.command === "send_channel_message",
         ).length ?? 0,
     );
@@ -621,8 +621,10 @@ test("always-mentioned agents remain selected without replaying their animation 
       snapshots.push(element.textContent ?? ""),
     ).observe(element, { childList: true, characterData: true, subtree: true });
     (
-      window as typeof window & { __BUZZ_COMPOSER_TEXT_SNAPSHOTS__?: string[] }
-    ).__BUZZ_COMPOSER_TEXT_SNAPSHOTS__ = snapshots;
+      window as typeof window & {
+        __AMBUSH_COMPOSER_TEXT_SNAPSHOTS__?: string[];
+      }
+    ).__AMBUSH_COMPOSER_TEXT_SNAPSHOTS__ = snapshots;
   });
   const avatar = composer.getByTestId(`composer-address-lock-${AGENT_A}`);
   const initialPulseVersion = Number(
@@ -631,8 +633,10 @@ test("always-mentioned agents remain selected without replaying their animation 
   await input.type("hello");
   await input.evaluate((element) => {
     const snapshots = (
-      window as typeof window & { __BUZZ_COMPOSER_TEXT_SNAPSHOTS__?: string[] }
-    ).__BUZZ_COMPOSER_TEXT_SNAPSHOTS__;
+      window as typeof window & {
+        __AMBUSH_COMPOSER_TEXT_SNAPSHOTS__?: string[];
+      }
+    ).__AMBUSH_COMPOSER_TEXT_SNAPSHOTS__;
     snapshots?.splice(0, snapshots.length, element.textContent ?? "");
   });
   await input.press("Enter");
@@ -644,9 +648,9 @@ test("always-mentioned agents remain selected without replaying their animation 
         () =>
           (
             window as typeof window & {
-              __BUZZ_COMPOSER_TEXT_SNAPSHOTS__?: string[];
+              __AMBUSH_COMPOSER_TEXT_SNAPSHOTS__?: string[];
             }
-          ).__BUZZ_COMPOSER_TEXT_SNAPSHOTS__ ?? [],
+          ).__AMBUSH_COMPOSER_TEXT_SNAPSHOTS__ ?? [],
       ),
     )
     .not.toContain("");
@@ -1087,7 +1091,7 @@ test("implicit automatic mentions stay out of persisted drafts", async ({
     .poll(() =>
       page.evaluate((channelId) => {
         for (const storageKey of Object.keys(window.localStorage)) {
-          if (!storageKey.startsWith("buzz-drafts.v2:")) continue;
+          if (!storageKey.startsWith("ambush-drafts.v2:")) continue;
           const drafts = JSON.parse(
             window.localStorage.getItem(storageKey) ?? "{}",
           ) as Record<string, { channelId?: string; content?: string }>;
@@ -1125,7 +1129,7 @@ test("an authored duplicate leading mention survives draft restoration", async (
     .poll(() =>
       page.evaluate((channelId) => {
         for (const storageKey of Object.keys(window.localStorage)) {
-          if (!storageKey.startsWith("buzz-drafts.v2:")) continue;
+          if (!storageKey.startsWith("ambush-drafts.v2:")) continue;
           const drafts = JSON.parse(
             window.localStorage.getItem(storageKey) ?? "{}",
           ) as Record<string, { channelId?: string; content?: string }>;
@@ -1165,7 +1169,7 @@ test("typed deletion preserves an identical authored mention in drafts", async (
     .poll(() =>
       page.evaluate((channelId) => {
         for (const storageKey of Object.keys(window.localStorage)) {
-          if (!storageKey.startsWith("buzz-drafts.v2:")) continue;
+          if (!storageKey.startsWith("ambush-drafts.v2:")) continue;
           const draft = (
             JSON.parse(
               window.localStorage.getItem(storageKey) ?? "{}",
@@ -1198,7 +1202,7 @@ test("removing an automatic mention preserves an identical authored mention in d
     .poll(() =>
       page.evaluate((channelId) => {
         for (const storageKey of Object.keys(window.localStorage)) {
-          if (!storageKey.startsWith("buzz-drafts.v2:")) continue;
+          if (!storageKey.startsWith("ambush-drafts.v2:")) continue;
           const draft = (
             JSON.parse(
               window.localStorage.getItem(storageKey) ?? "{}",
@@ -1234,7 +1238,7 @@ test("multiple automatic mentions stay out of persisted drafts", async ({
     .poll(() =>
       page.evaluate((channelId) => {
         for (const storageKey of Object.keys(window.localStorage)) {
-          if (!storageKey.startsWith("buzz-drafts.v2:")) continue;
+          if (!storageKey.startsWith("ambush-drafts.v2:")) continue;
           const draft = (
             JSON.parse(
               window.localStorage.getItem(storageKey) ?? "{}",
@@ -1276,7 +1280,7 @@ test("re-enabling an automatic mention preserves an authored duplicate after dra
     .poll(() =>
       page.evaluate((channelId) => {
         for (const storageKey of Object.keys(window.localStorage)) {
-          if (!storageKey.startsWith("buzz-drafts.v2:")) continue;
+          if (!storageKey.startsWith("ambush-drafts.v2:")) continue;
           const drafts = JSON.parse(
             window.localStorage.getItem(storageKey) ?? "{}",
           ) as Record<string, { channelId?: string; content?: string }>;
@@ -1361,7 +1365,7 @@ test("reduced motion removes addressed agents without spatial animation", async 
   await expect(removeButton).toHaveCount(0);
 });
 
-for (const theme of ["buzz", "buzz-dark"]) {
+for (const theme of ["ambush", "ambush-dark"]) {
   test(`captures the mention-button placement in ${theme}`, async ({
     page,
   }) => {
@@ -1397,7 +1401,7 @@ test("the mention-button placement fits the narrow composer", async ({
 });
 
 test("captures the lightweight auto-pin popover", async ({ page }) => {
-  await seedTheme(page, "buzz-dark");
+  await seedTheme(page, "ambush-dark");
   await installAudienceFixtures(page);
   await openGeneral(page);
 

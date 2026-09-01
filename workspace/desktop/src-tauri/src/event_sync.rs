@@ -90,11 +90,11 @@ pub fn migrate_personas_to_events(app: &tauri::AppHandle, keys: &nostr::Keys, db
         Ok(0) => {}
         Ok(migrated) => {
             eprintln!(
-                "buzz-desktop: persona-event-migration: {migrated} personas migrated to retention"
+                "ambush-desktop: persona-event-migration: {migrated} personas migrated to retention"
             );
         }
         Err(e) => {
-            eprintln!("buzz-desktop: persona-event-migration: {e}");
+            eprintln!("ambush-desktop: persona-event-migration: {e}");
         }
     }
 }
@@ -118,7 +118,7 @@ fn migrate_personas_in_dir_at(
         persona_events::{build_persona_event, monotonic_created_at, persona_d_tag},
         retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
     };
-    use buzz_core_pkg::kind::KIND_PERSONA;
+    use ambush_core_pkg::kind::KIND_PERSONA;
     use nostr::JsonUtil;
 
     let pubkey = keys.public_key().to_hex();
@@ -160,7 +160,7 @@ fn migrate_personas_in_dir_at(
         scoped_record.shared = existing
             .as_ref()
             .and_then(|row| nostr::Event::from_json(&row.raw_event).ok())
-            .is_some_and(|event| buzz_core_pkg::kind::event_is_shared(&event));
+            .is_some_and(|event| ambush_core_pkg::kind::event_is_shared(&event));
         let event = build_persona_event(&scoped_record)
             .map_err(|e| format!("failed to build event for '{}': {e}", record.display_name))?
             .custom_created_at(monotonic_created_at(
@@ -227,7 +227,9 @@ pub fn migrate_teams_to_events(
     match migrate_teams_in_dir_at(&base_dir, keys, db_path) {
         Ok(0) => Ok(()),
         Ok(migrated) => {
-            eprintln!("buzz-desktop: team-event-migration: {migrated} teams migrated to retention");
+            eprintln!(
+                "ambush-desktop: team-event-migration: {migrated} teams migrated to retention"
+            );
             Ok(())
         }
         Err(e) => Err(format!("team-event-migration: {e}")),
@@ -255,7 +257,7 @@ fn migrate_teams_in_dir_at(
         team_events::build_team_event,
         TeamRecord,
     };
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
     use nostr::JsonUtil;
 
     let pubkey = keys.public_key().to_hex();
@@ -362,11 +364,11 @@ fn reconcile_team_catalog_heads(app: &tauri::AppHandle, keys: &nostr::Keys, db_p
         Ok(0) => {}
         Ok(reconciled) => {
             eprintln!(
-                "buzz-desktop: team-catalog-reconcile: {reconciled} shared team heads refreshed"
+                "ambush-desktop: team-catalog-reconcile: {reconciled} shared team heads refreshed"
             );
         }
         Err(e) => {
-            eprintln!("buzz-desktop: team-catalog-reconcile: {e}");
+            eprintln!("ambush-desktop: team-catalog-reconcile: {e}");
         }
     }
 }
@@ -407,7 +409,7 @@ fn reconcile_team_catalog_heads_core(
         },
         TeamRecord,
     };
-    use buzz_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
+    use ambush_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
     use nostr::JsonUtil;
 
     let pubkey = keys.public_key().to_hex();
@@ -457,13 +459,15 @@ fn reconcile_team_catalog_heads_core(
             })()
             .unwrap_or_else(|| head.d_tag.clone());
             let reason = "team no longer exists".to_string();
-            eprintln!("buzz-desktop: team-catalog-reconcile: tombstoning '{team_name}' — {reason}");
+            eprintln!(
+                "ambush-desktop: team-catalog-reconcile: tombstoning '{team_name}' — {reason}"
+            );
             // `tombstone_team_catalog_coordinate` opens its own WAL connection;
             // `conn` is kept alive for the retain_event calls in later
             // iterations.
             if let Err(e) = tombstone_team_catalog_coordinate(db_path, keys, &head.d_tag) {
                 eprintln!(
-                    "buzz-desktop: team-catalog-reconcile: tombstone failed for '{}': {e}",
+                    "ambush-desktop: team-catalog-reconcile: tombstone failed for '{}': {e}",
                     head.d_tag
                 );
             } else {
@@ -491,7 +495,7 @@ fn reconcile_team_catalog_heads_core(
             Ok(builder) => builder,
             Err(reason) => {
                 eprintln!(
-                    "buzz-desktop: team-catalog-reconcile: tombstoning '{}' — {reason}",
+                    "ambush-desktop: team-catalog-reconcile: tombstoning '{}' — {reason}",
                     team.name
                 );
                 // `tombstone_team_catalog_coordinate` opens its own WAL
@@ -499,7 +503,7 @@ fn reconcile_team_catalog_heads_core(
                 // processing remaining heads (I2 — multi-head continuation).
                 if let Err(e) = tombstone_team_catalog_coordinate(db_path, keys, &team.id) {
                     eprintln!(
-                        "buzz-desktop: team-catalog-reconcile: tombstone failed for '{}': {e}",
+                        "ambush-desktop: team-catalog-reconcile: tombstone failed for '{}': {e}",
                         team.name
                     );
                 } else {
@@ -566,7 +570,7 @@ fn emit_team_catalog_auto_retracted(app: &tauri::AppHandle, team_name: &str, rea
         "team-catalog-auto-retracted",
         TeamCatalogAutoRetractedPayload { team_name, reason },
     ) {
-        eprintln!("buzz-desktop: team-catalog-reconcile: failed to emit retraction notice: {e}");
+        eprintln!("ambush-desktop: team-catalog-reconcile: failed to emit retraction notice: {e}");
     }
 }
 
@@ -627,13 +631,13 @@ fn tombstone_orphan_heads(
         // relay, and boot reconcile enumerates disk records, so nothing else
         // will ever retract it. Re-run the (idempotent) atomic tombstone.
         eprintln!(
-            "buzz-desktop: deletion-reconcile: tombstoning orphan kind:{kind} head '{}'",
+            "ambush-desktop: deletion-reconcile: tombstoning orphan kind:{kind} head '{}'",
             head.d_tag
         );
         match tombstone(db_path, keys, &head.d_tag) {
             Ok(()) => tombstoned += 1,
             Err(e) => eprintln!(
-                "buzz-desktop: deletion-reconcile: tombstone failed for kind:{kind} '{}': {e}",
+                "ambush-desktop: deletion-reconcile: tombstone failed for kind:{kind} '{}': {e}",
                 head.d_tag
             ),
         }
@@ -667,9 +671,9 @@ fn reconcile_deleted_heads(app: &tauri::AppHandle, keys: &nostr::Keys, db_path: 
     match reconcile_deleted_heads_at(&base_dir, keys, db_path) {
         Ok(0) => {}
         Ok(tombstoned) => {
-            eprintln!("buzz-desktop: deletion-reconcile: {tombstoned} orphan heads tombstoned");
+            eprintln!("ambush-desktop: deletion-reconcile: {tombstoned} orphan heads tombstoned");
         }
-        Err(e) => eprintln!("buzz-desktop: deletion-reconcile: {e}"),
+        Err(e) => eprintln!("ambush-desktop: deletion-reconcile: {e}"),
     }
 }
 
@@ -696,7 +700,7 @@ fn reconcile_deleted_heads_at(
 ) -> Result<u32, String> {
     use crate::commands::{tombstone_persona_at, tombstone_team_at};
     use crate::managed_agents::{persona_events::persona_d_tag, retention::open_retention_db};
-    use buzz_core_pkg::kind::{KIND_PERSONA, KIND_TEAM};
+    use ambush_core_pkg::kind::{KIND_PERSONA, KIND_TEAM};
     use std::collections::HashSet;
 
     let pubkey = keys.public_key().to_hex();

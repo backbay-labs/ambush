@@ -28,7 +28,7 @@ fn reported_target(
 }
 
 #[test]
-fn buzz_mesh_join_uses_the_same_live_member_from_every_other_node() {
+fn ambush_mesh_join_uses_the_same_live_member_from_every_other_node() {
     let targets = vec![
         reported_target("member-c", "model-c", "addr-c"),
         reported_target("member-a", "model-a", "addr-a"),
@@ -36,14 +36,14 @@ fn buzz_mesh_join_uses_the_same_live_member_from_every_other_node() {
     ];
 
     assert_eq!(
-        buzz_mesh_join_targets(targets.clone(), "member-b")
+        ambush_mesh_join_targets(targets.clone(), "member-b")
             .into_iter()
             .next()
             .map(|target| target.endpoint_addr),
         Some("addr-a".to_string())
     );
     assert_eq!(
-        buzz_mesh_join_targets(targets, "member-c")
+        ambush_mesh_join_targets(targets, "member-c")
             .into_iter()
             .next()
             .map(|target| target.endpoint_addr),
@@ -52,14 +52,14 @@ fn buzz_mesh_join_uses_the_same_live_member_from_every_other_node() {
 }
 
 #[test]
-fn buzz_mesh_bootstrap_member_does_not_dial_itself() {
+fn ambush_mesh_bootstrap_member_does_not_dial_itself() {
     let targets = vec![
         reported_target("member-b", "model-b", "addr-b"),
         reported_target("member-a", "model-a", "addr-a"),
     ];
 
     assert_eq!(
-        buzz_mesh_join_targets(targets, "MEMBER-A")
+        ambush_mesh_join_targets(targets, "MEMBER-A")
             .into_iter()
             .next(),
         Some(reported_target("member-b", "model-b", "addr-b"))
@@ -67,14 +67,14 @@ fn buzz_mesh_bootstrap_member_does_not_dial_itself() {
 }
 
 #[test]
-fn buzz_mesh_join_ignores_targets_without_a_validated_reporter() {
+fn ambush_mesh_join_ignores_targets_without_a_validated_reporter() {
     let targets = vec![
         target("unbound-model", "unbound-addr"),
         reported_target("member-b", "model-b", "addr-b"),
     ];
 
     assert_eq!(
-        buzz_mesh_join_targets(targets, "member-c")
+        ambush_mesh_join_targets(targets, "member-c")
             .into_iter()
             .next()
             .map(|target| target.endpoint_addr),
@@ -83,14 +83,14 @@ fn buzz_mesh_join_ignores_targets_without_a_validated_reporter() {
 }
 
 #[test]
-fn buzz_mesh_join_keeps_other_device_with_the_same_member_key() {
+fn ambush_mesh_join_keeps_other_device_with_the_same_member_key() {
     let mut self_target = reported_target("same-member", "model-a", "self-addr");
     self_target.owner_id = Some("owner-self".to_string());
     let mut other_device = reported_target("same-member", "model-b", "other-addr");
     other_device.owner_id = Some("owner-other".to_string());
 
     assert_eq!(
-        buzz_mesh_join_targets(vec![self_target, other_device], "owner-self")
+        ambush_mesh_join_targets(vec![self_target, other_device], "owner-self")
             .into_iter()
             .next()
             .map(|target| target.endpoint_addr),
@@ -99,14 +99,14 @@ fn buzz_mesh_join_keeps_other_device_with_the_same_member_key() {
 }
 
 #[test]
-fn buzz_mesh_name_is_stable_and_does_not_expose_the_relay() {
-    let first = buzz_mesh_name_for_relay("WSS://EXAMPLE.COM/");
-    let second = buzz_mesh_name_for_relay("wss://example.com:443/some/path?ignored=yes");
-    let other_relay = buzz_mesh_name_for_relay("wss://other.example.com");
+fn ambush_mesh_name_is_stable_and_does_not_expose_the_relay() {
+    let first = ambush_mesh_name_for_relay("WSS://EXAMPLE.COM/");
+    let second = ambush_mesh_name_for_relay("wss://example.com:443/some/path?ignored=yes");
+    let other_relay = ambush_mesh_name_for_relay("wss://other.example.com");
 
     assert_eq!(first, second);
     assert_ne!(first, other_relay);
-    assert!(first.starts_with("buzz-community-"));
+    assert!(first.starts_with("ambush-community-"));
     assert!(!first.contains("example"));
 }
 
@@ -117,7 +117,7 @@ fn sharing_config_keeps_the_community_where_sharing_was_enabled() {
         model_id: Some("test-model".to_string()),
         max_vram_gb: Some(24),
         join_token: None,
-        mesh_name: Some("buzz-community-test".to_string()),
+        mesh_name: Some("ambush-community-test".to_string()),
         relay_url: Some("wss://community.example".to_string()),
         trusted_owner_ids: Some(Vec::new()),
     };
@@ -333,7 +333,7 @@ async fn cold_client_preflight_requires_explicit_target() {
 ///
 /// Before this change, `ensure_client_node_for_model` hard-errored whenever
 /// the running runtime was in `Serve` mode ("stop sharing before using
-/// Buzz shared compute as a client"). That forbade exactly what a user should be
+/// Ambush shared compute as a client"). That forbade exactly what a user should be
 /// able to do: host model A while pointing an agent at a different model B
 /// through the same `9337` ingress.
 ///
@@ -344,7 +344,7 @@ async fn cold_client_preflight_requires_explicit_target() {
 /// frontend selected earlier.
 ///
 /// Hardware-gated (`#[ignore]`): loads a real model. Run with:
-///   cargo test -p buzz-desktop --features mesh-llm \
+///   cargo test -p ambush-desktop --features mesh-llm \
 ///     ensure_serve_runtime_serves_other_model -- --ignored --nocapture
 #[test]
 #[ignore = "loads a real model; run manually with --ignored"]
@@ -363,7 +363,7 @@ fn ensure_serve_runtime_serves_other_model() {
                 const DEFAULT_HOSTED_MODEL: &str =
                     "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M";
                 const OTHER_MODEL: &str = "some/other-model-not-hosted-locally:Q4_K_M";
-                let hosted_model = std::env::var("BUZZ_MESH_TEST_MODEL")
+                let hosted_model = std::env::var("AMBUSH_MESH_TEST_MODEL")
                     .unwrap_or_else(|_| DEFAULT_HOSTED_MODEL.to_string());
 
                 let state = build_app_state();
@@ -489,7 +489,7 @@ fn ensure_serve_runtime_serves_other_model() {
                             "model": "auto",
                             "messages": [{
                                 "role": "user",
-                                "content": "Reply with exactly BUZZ_SINGLE_SHARE_OK and nothing else."
+                                "content": "Reply with exactly AMBUSH_SINGLE_SHARE_OK and nothing else."
                             }],
                             "max_tokens": 512,
                             "temperature": 0

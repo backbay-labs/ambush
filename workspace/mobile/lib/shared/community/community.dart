@@ -26,7 +26,7 @@ class Community {
   final String? nsec;
   final SensitiveActionPolicy sensitiveActionPolicy;
   final bool pushNotificationsEnabled;
-  final BuzzPushLeaseSubscriptionState pushSubscriptionState;
+  final AmbushPushLeaseSubscriptionState pushSubscriptionState;
 
   /// Stable random address component for this community's relay push lease.
   ///
@@ -46,7 +46,8 @@ class Community {
     this.nsec,
     this.sensitiveActionPolicy = SensitiveActionPolicy.disabledByUser,
     this.pushNotificationsEnabled = false,
-    this.pushSubscriptionState = const BuzzPushLeaseSubscriptionState.desired(),
+    this.pushSubscriptionState =
+        const AmbushPushLeaseSubscriptionState.desired(),
     this.pushLeaseInstallationId,
     this.starterSetupIncomplete = false,
     required this.addedAt,
@@ -81,7 +82,7 @@ class Community {
     Object? nsec = _sentinel,
     SensitiveActionPolicy? sensitiveActionPolicy,
     bool? pushNotificationsEnabled,
-    BuzzPushLeaseSubscriptionState? pushSubscriptionState,
+    AmbushPushLeaseSubscriptionState? pushSubscriptionState,
     Object? pushLeaseInstallationId = _sentinel,
     bool? starterSetupIncomplete,
   }) {
@@ -132,8 +133,8 @@ class Community {
     final pushNotificationsEnabled =
         json['pushNotificationsEnabled'] as bool? ?? false;
     var pushSubscriptionState = json['pushSubscriptionState'] == null
-        ? const BuzzPushLeaseSubscriptionState.desired()
-        : BuzzPushLeaseSubscriptionState.fromJson(
+        ? const AmbushPushLeaseSubscriptionState.desired()
+        : AmbushPushLeaseSubscriptionState.fromJson(
             Map<String, dynamic>.from(json['pushSubscriptionState'] as Map),
           );
     if (!pushNotificationsEnabled &&

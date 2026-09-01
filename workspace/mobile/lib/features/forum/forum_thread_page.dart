@@ -9,7 +9,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/mentions/agent_identity_provider.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import '../../shared/widgets/modal_presentation.dart';
@@ -81,7 +81,7 @@ class ForumThreadPage extends HookConsumerWidget {
         loading: () => Padding(
           padding: EdgeInsets.only(top: frostedAppBarHeight(context)),
           child: const Center(
-            child: BuzzLoadingIndicator(
+            child: AmbushLoadingIndicator(
               size: 44,
               semanticLabel: 'Loading thread',
             ),
@@ -114,7 +114,7 @@ class ForumThreadPage extends HookConsumerWidget {
     WidgetRef ref,
     ForumThreadResponse thread,
   ) {
-    showBuzzModalBottomSheet<void>(
+    showAmbushModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
@@ -161,7 +161,7 @@ class ForumThreadPage extends HookConsumerWidget {
   }
 
   void _confirmDeletePost(BuildContext context, WidgetRef ref, String eventId) {
-    showBuzzDialog<void>(
+    showAmbushDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete post'),
@@ -537,7 +537,7 @@ class _ReplyRow extends ConsumerWidget {
         currentPubkey != null &&
         reply.pubkey.toLowerCase() == currentPubkey!.toLowerCase();
 
-    showBuzzModalBottomSheet<void>(
+    showAmbushModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
@@ -585,7 +585,7 @@ class _ReplyRow extends ConsumerWidget {
   }
 
   void _confirmDelete(BuildContext context, WidgetRef ref) {
-    showBuzzDialog<void>(
+    showAmbushDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete reply'),

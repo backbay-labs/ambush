@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/shared/theme/theme.dart';
 
 void main() {
   group('default accent', () {

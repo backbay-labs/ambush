@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/app_list.dart';
-import 'package:buzz/shared/widgets/app_list_card.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/app_list.dart';
+import 'package:ambush/shared/widgets/app_list_card.dart';
 
 Widget _host(Widget child) => MaterialApp(
   theme: AppTheme.light(),
@@ -56,13 +56,13 @@ void main() {
           const AppListRow(
             icon: Icons.palette,
             title: 'Theme',
-            value: 'Buzz',
+            value: 'Ambush',
             trailing: Icon(Icons.chevron_right, key: Key('chevron')),
           ),
         ),
       );
 
-      final value = tester.getRect(find.text('Buzz'));
+      final value = tester.getRect(find.text('Ambush'));
       final chevron = tester.getRect(find.byKey(const Key('chevron')));
       // Only the row's own inter-widget gap sits between them — no flex slack.
       expect(chevron.left - value.right, closeTo(Grid.xxs, 0.5));

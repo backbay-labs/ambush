@@ -22,7 +22,7 @@ const MANAGED_AGENTS = [
 // Helper: wait until the seed hook is available in the page.
 async function waitForSeedHook(page: import("@playwright/test").Page) {
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_SEED_OBSERVER_EVENTS__ === "function",
+    () => typeof window.__AMBUSH_E2E_SEED_OBSERVER_EVENTS__ === "function",
     null,
     { timeout: 10_000 },
   );
@@ -79,7 +79,7 @@ async function seedObserverEvents(
 ) {
   await page.evaluate(
     ({ pubkey, evts }) => {
-      window.__BUZZ_E2E_SEED_OBSERVER_EVENTS__?.({
+      window.__AMBUSH_E2E_SEED_OBSERVER_EVENTS__?.({
         agentPubkey: pubkey,
         events: evts,
       });
@@ -149,7 +149,7 @@ test.describe("observer feed screenshots", () => {
             prompt: [
               {
                 type: "text",
-                text: "[Buzz event: Kind 9]\nContent: @Observer Agent help me debug this",
+                text: "[Ambush event: Kind 9]\nContent: @Observer Agent help me debug this",
               },
               {
                 type: "text",
@@ -207,7 +207,7 @@ test.describe("observer feed screenshots", () => {
           method: "session/new",
           params: {
             systemPrompt:
-              "[Base]\nYou are a helpful AI assistant running in Buzz.\n\n[System]\nYou are Observer Agent. You coordinate multi-agent workflows in the #agents channel.",
+              "[Base]\nYou are a helpful AI assistant running in Ambush.\n\n[System]\nYou are Observer Agent. You coordinate multi-agent workflows in the #agents channel.",
           },
         },
       },
@@ -362,7 +362,7 @@ test.describe("observer feed screenshots", () => {
             prompt: [
               {
                 type: "text",
-                text: "[Buzz event: Kind 9]\nContent: @Observer Agent help me debug this",
+                text: "[Ambush event: Kind 9]\nContent: @Observer Agent help me debug this",
               },
               {
                 type: "text",
@@ -418,7 +418,7 @@ test.describe("observer feed screenshots", () => {
           method: "session/new",
           params: {
             systemPrompt:
-              "[Base]\nYou are a helpful AI assistant running in Buzz.\n\n[System]\nYou are Observer Agent. You coordinate multi-agent workflows in the #agents channel.\n\n[Team Instructions]\nAlways tag on handoff.\n\n[Agent Memory — core]\nI am Observer Agent.\n## Lessons Learned\nAlways tag on handoff.\n\n[Channel Canvas]\nCanvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+              "[Base]\nYou are a helpful AI assistant running in Ambush.\n\n[System]\nYou are Observer Agent. You coordinate multi-agent workflows in the #agents channel.\n\n[Team Instructions]\nAlways tag on handoff.\n\n[Agent Memory — core]\nI am Observer Agent.\n## Lessons Learned\nAlways tag on handoff.\n\n[Channel Canvas]\nCanvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
           },
         },
       },
@@ -672,7 +672,7 @@ test.describe("observer feed screenshots", () => {
     // Verifies the consolidated presentation: session/new.systemPrompt always
     // renders as a standalone top-level "System prompt" card (never injected into
     // the CheckCheck bundle). The CheckCheck dialog contains only per-turn context
-    // (Buzz event / Thread context) — no Base/System/Team Instructions/Core Memory/Channel Canvas sections.
+    // (Ambush event / Thread context) — no Base/System/Team Instructions/Core Memory/Channel Canvas sections.
     await seedObserverEvents(page, OBSERVER_AGENT_PUBKEY, [
       {
         seq: 1,
@@ -698,7 +698,7 @@ test.describe("observer feed screenshots", () => {
           method: "session/new",
           params: {
             systemPrompt:
-              "[Base]\nYou are a helpful AI assistant running in Buzz.\n\n[System]\nYou are Observer Agent. You coordinate multi-agent workflows in the #agents channel.\n\n[Team Instructions]\nAlways tag on handoff.\n\n[Agent Memory — core]\nI am Observer Agent.\n## Lessons Learned\nAlways tag on handoff.\n\n[Channel Canvas]\nCanvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+              "[Base]\nYou are a helpful AI assistant running in Ambush.\n\n[System]\nYou are Observer Agent. You coordinate multi-agent workflows in the #agents channel.\n\n[Team Instructions]\nAlways tag on handoff.\n\n[Agent Memory — core]\nI am Observer Agent.\n## Lessons Learned\nAlways tag on handoff.\n\n[Channel Canvas]\nCanvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
           },
         },
       },
@@ -728,7 +728,7 @@ test.describe("observer feed screenshots", () => {
             prompt: [
               {
                 type: "text",
-                text: "[Buzz event: Kind 9]\nContent: @Observer Agent help me debug this",
+                text: "[Ambush event: Kind 9]\nContent: @Observer Agent help me debug this",
               },
               {
                 type: "text",
@@ -777,12 +777,12 @@ test.describe("observer feed screenshots", () => {
       timeout: 5_000,
     });
 
-    // Per-turn prompt context (Buzz event / Thread context) does NOT appear
+    // Per-turn prompt context (Ambush event / Thread context) does NOT appear
     // as a standalone feed row — it lives behind the CheckCheck toggle.
     await expect(feedPanel.getByText("Prompt context")).toHaveCount(0);
 
     // Open the CheckCheck dialog: it contains ONLY per-turn context sections
-    // (Buzz event, Thread context). Base/System/Team Instructions/Core Memory/Channel Canvas must NOT appear.
+    // (Ambush event, Thread context). Base/System/Team Instructions/Core Memory/Channel Canvas must NOT appear.
     await feedPanel.getByTestId("transcript-prompt-context-toggle").click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible({ timeout: 5_000 });
@@ -790,9 +790,9 @@ test.describe("observer feed screenshots", () => {
       .getByTestId("transcript-prompt-context-sections")
       .locator("article");
     const sectionTitles = await sectionArticles.allInnerTexts();
-    // Only per-turn context sections (Buzz event + Thread context) — no system-prompt sections.
+    // Only per-turn context sections (Ambush event + Thread context) — no system-prompt sections.
     expect(sectionTitles.length).toBe(2);
-    expect(sectionTitles[0]).toContain("Buzz event");
+    expect(sectionTitles[0]).toContain("Ambush event");
     expect(sectionTitles[1]).toContain("Thread context");
     // Collect all article heading text and assert none of the five
     // system-prompt section labels appear — including exact "System" which

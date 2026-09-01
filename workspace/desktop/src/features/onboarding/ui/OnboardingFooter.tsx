@@ -25,8 +25,8 @@ export type OnboardingBackAction = {
  * `OnboardingSlideTransition`'s transform. A transformed ancestor establishes a
  * containing block that would otherwise trap `position: fixed`, which is why
  * the CTAs can't simply live inside the step and use `fixed` themselves. The
- * slot stays inside the `.buzz-onboarding-neutral-theme` subtree so
- * `--buzz-welcome-chartreuse` and the theme color tokens still resolve for the
+ * slot stays inside the `.ambush-onboarding-neutral-theme` subtree so
+ * `--ambush-welcome-chartreuse` and the theme color tokens still resolve for the
  * docked buttons.
  */
 export function OnboardingFooterProvider({
@@ -47,7 +47,7 @@ export function OnboardingFooterProvider({
           the CTA a floor to sit on instead of colliding with form fields. */}
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-x-0 bottom-0 z-10 h-36 bg-[linear-gradient(to_top,var(--buzz-onboarding-shell-bottom)_35%,transparent)]"
+        className="pointer-events-none fixed inset-x-0 bottom-0 z-10 h-36 bg-[linear-gradient(to_top,var(--ambush-onboarding-shell-bottom)_35%,transparent)]"
       />
       {backAction ? (
         <div className="fixed bottom-5 left-6 z-20">

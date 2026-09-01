@@ -13,7 +13,7 @@ const RUNTIME_OVERRIDE_PUBKEY = TEST_IDENTITIES.outsider.pubkey;
 // (matches PUBKEY_MULTI_ORIGIN in e2eBridge buildMockConfigSurface).
 const MULTI_ORIGIN_PUBKEY =
   "abc1230000000000000000000000000000000000000000000000000000000def";
-const BUZZ_AGENT_PUBKEY =
+const AMBUSH_AGENT_PUBKEY =
   "b0220000000000000000000000000000000000000000000000000000000000a9";
 
 const MANAGED_AGENTS = [
@@ -47,11 +47,11 @@ async function waitForInvokeBridge(page: import("@playwright/test").Page) {
   await page.waitForFunction(
     () => {
       const tauriWindow = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         __TAURI_INTERNALS__?: { invoke?: unknown };
       };
       return (
-        typeof tauriWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
+        typeof tauriWindow.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
         typeof tauriWindow.__TAURI_INTERNALS__?.invoke === "function"
       );
     },
@@ -69,7 +69,7 @@ async function invokeMockCommand(
   return page.evaluate(
     async ({ command: cmd, payload: pl }) => {
       const tauriWindow = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
@@ -81,7 +81,7 @@ async function invokeMockCommand(
         };
       };
       const invoke =
-        tauriWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
+        tauriWindow.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ ??
         tauriWindow.__TAURI_INTERNALS__?.invoke;
       if (!invoke) throw new Error("Mock invoke bridge is unavailable.");
       return invoke(cmd, pl);
@@ -192,7 +192,7 @@ test.describe("config bridge screenshots", () => {
     await expect(panel.getByText("gpt-4o-mini", { exact: true })).toHaveCount(
       0,
     );
-    await expect(panel.getByText("Set in Buzz")).toHaveCount(0);
+    await expect(panel.getByText("Set in Ambush")).toHaveCount(0);
     await settleAnimations(panel);
 
     await panel.screenshot({ path: `${SHOTS}/01-folded-config-panel.png` });
@@ -286,19 +286,19 @@ test.describe("config bridge screenshots", () => {
     await panel.screenshot({ path: `${SHOTS}/05-advanced-expanded.png` });
   });
 
-  test("06 — buzz-agent empty MCP servers", async ({ page }) => {
+  test("06 — ambush-agent empty MCP servers", async ({ page }) => {
     await installMockBridge(page, {
       managedAgents: [
         {
-          pubkey: BUZZ_AGENT_PUBKEY,
-          name: "Buzz Agent",
+          pubkey: AMBUSH_AGENT_PUBKEY,
+          name: "Ambush Agent",
           status: "running" as const,
           channelNames: ["agents"],
         },
       ],
     });
 
-    const panel = await openAgentProfileFromChannel(page, "Buzz Agent", {
+    const panel = await openAgentProfileFromChannel(page, "Ambush Agent", {
       anchorText: "MCP servers",
       tab: "Runtime",
     });

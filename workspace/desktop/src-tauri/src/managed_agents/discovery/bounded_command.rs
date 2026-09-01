@@ -758,7 +758,7 @@ mod tests {
     // No CI lane executes Windows tests for this helper, so these are
     // `#[ignore]`-gated for a sanctioned local run on a real Windows machine:
     //
-    //   cargo test -p buzz-desktop --lib bounded_command -- --ignored --nocapture
+    //   cargo test -p ambush-desktop --lib bounded_command -- --ignored --nocapture
     //
     // Both assert on the actual PowerShell-recorded descendant PID (not the
     // already-exited root), so neutering the Job Object ownership leaves that

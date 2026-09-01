@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:async';
 
-import 'package:buzz/shared/relay/media_auth.dart';
-import 'package:buzz/shared/relay/media_image.dart';
+import 'package:ambush/shared/relay/media_auth.dart';
+import 'package:ambush/shared/relay/media_image.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;

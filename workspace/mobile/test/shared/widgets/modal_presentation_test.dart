@@ -1,6 +1,6 @@
-import 'package:buzz/shared/widgets/concentric_sheet_surface.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/modal_presentation.dart';
+import 'package:ambush/shared/widgets/concentric_sheet_surface.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/modal_presentation.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -12,7 +12,7 @@ void main() {
     final decoration =
         tester
                 .widget<DecoratedBox>(
-                  find.byKey(const ValueKey('buzz-sheet-scroll-divider')),
+                  find.byKey(const ValueKey('ambush-sheet-scroll-divider')),
                 )
                 .decoration
             as BoxDecoration;
@@ -56,7 +56,7 @@ void main() {
     'replaces the Flutter fallback when native support is available',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      const surfaceChannel = MethodChannel('buzz/concentric_sheet_surface');
+      const surfaceChannel = MethodChannel('ambush/concentric_sheet_surface');
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         surfaceChannel,
         (call) async => call.method == 'isSupported' ? true : null,
@@ -95,7 +95,7 @@ void main() {
     'native surfaces can limit concentric clipping to bottom corners',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      const surfaceChannel = MethodChannel('buzz/concentric_sheet_surface');
+      const surfaceChannel = MethodChannel('ambush/concentric_sheet_surface');
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         surfaceChannel,
         (call) async => call.method == 'isSupported' ? true : null,
@@ -144,8 +144,8 @@ void main() {
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    const supportChannel = MethodChannel('buzz/concentric_sheet_surface');
-    const viewChannel = MethodChannel('buzz/concentric_sheet_surface/42');
+    const supportChannel = MethodChannel('ambush/concentric_sheet_surface');
+    const viewChannel = MethodChannel('ambush/concentric_sheet_surface/42');
     final colorUpdates = <MethodCall>[];
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       supportChannel,
@@ -230,7 +230,7 @@ void main() {
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    const surfaceChannel = MethodChannel('buzz/concentric_sheet_surface');
+    const surfaceChannel = MethodChannel('ambush/concentric_sheet_surface');
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       surfaceChannel,
       (call) async => call.method == 'isSupported' ? true : null,
@@ -242,7 +242,7 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => FilledButton(
-                onPressed: () => showBuzzModalBottomSheet<void>(
+                onPressed: () => showAmbushModalBottomSheet<void>(
                   context: context,
                   title: 'Members',
                   builder: (sheetContext) => ColoredBox(
@@ -267,7 +267,7 @@ void main() {
         find.byWidgetPredicate(
           (widget) =>
               widget is UiKitView &&
-              widget.viewType == 'buzz/concentric_sheet_surface',
+              widget.viewType == 'ambush/concentric_sheet_surface',
         ),
       );
       expect(
@@ -287,11 +287,11 @@ void main() {
       );
       expect(nativeSurface.creationParams, isNot(contains('headerGradient')));
       expect(
-        find.byKey(const ValueKey('buzz-sheet-header-gradient')),
+        find.byKey(const ValueKey('ambush-sheet-header-gradient')),
         findsNothing,
       );
       expect(
-        find.byKey(const ValueKey('buzz-sheet-surface-clip')),
+        find.byKey(const ValueKey('ambush-sheet-surface-clip')),
         findsNothing,
       );
       final contentClip = tester.widget<ClipRSuperellipse>(
@@ -303,7 +303,8 @@ void main() {
       final nativeClose = tester.widget<UiKitView>(
         find.byWidgetPredicate(
           (widget) =>
-              widget is UiKitView && widget.viewType == 'buzz/navigation_glass',
+              widget is UiKitView &&
+              widget.viewType == 'ambush/navigation_glass',
         ),
       );
       expect(nativeClose.creationParams, containsPair('icon', 'close'));
@@ -327,7 +328,7 @@ void main() {
             home: Scaffold(
               body: Builder(
                 builder: (context) => FilledButton(
-                  onPressed: () => showBuzzModalBottomSheet<void>(
+                  onPressed: () => showAmbushModalBottomSheet<void>(
                     context: context,
                     title: 'Sheet title',
                     showDragHandle: true,
@@ -344,23 +345,23 @@ void main() {
         await tester.pumpAndSettle();
 
         final closeButton = find.byTooltip('Close sheet');
-        final title = find.byKey(const ValueKey('buzz-sheet-title'));
+        final title = find.byKey(const ValueKey('ambush-sheet-title'));
         expect(closeButton, findsOneWidget);
         expect(title, findsOneWidget);
         expect(
-          find.byKey(const ValueKey('buzz-sheet-surface-clip')),
+          find.byKey(const ValueKey('ambush-sheet-surface-clip')),
           findsOneWidget,
         );
         expect(tester.getSize(closeButton), const Size.square(44));
         expect(tester.widget<Text>(title).style?.fontSize, 16);
         expect(
-          find.byKey(const ValueKey('buzz-sheet-header-gradient')),
+          find.byKey(const ValueKey('ambush-sheet-header-gradient')),
           findsNothing,
         );
         expect(
           tester
               .widget<ColoredBox>(
-                find.byKey(const ValueKey('buzz-sheet-surface')),
+                find.byKey(const ValueKey('ambush-sheet-surface')),
               )
               .color,
           lightColorScheme.surfaceContainerHighest,
@@ -368,7 +369,9 @@ void main() {
         expect(
           tester.getTopLeft(find.text('Sheet body')).dy -
               tester
-                  .getTopLeft(find.byKey(const ValueKey('buzz-sheet-surface')))
+                  .getTopLeft(
+                    find.byKey(const ValueKey('ambush-sheet-surface')),
+                  )
                   .dy,
           80,
         );
@@ -413,7 +416,7 @@ void main() {
           isFalse,
         );
         expect(
-          find.byKey(const ValueKey('buzz-sheet-drag-handle')),
+          find.byKey(const ValueKey('ambush-sheet-drag-handle')),
           findsOneWidget,
         );
         expect(
@@ -455,7 +458,7 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => FilledButton(
-                onPressed: () => showBuzzModalBottomSheet<void>(
+                onPressed: () => showAmbushModalBottomSheet<void>(
                   context: context,
                   builder: (sheetContext) => ColoredBox(
                     key: const ValueKey('untitled-sheet-container'),
@@ -506,7 +509,7 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => FilledButton(
-                onPressed: () => showBuzzModalBottomSheet<void>(
+                onPressed: () => showAmbushModalBottomSheet<void>(
                   context: context,
                   title: 'Theme',
                   isScrollControlled: true,
@@ -575,7 +578,7 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => FilledButton(
-                onPressed: () => showBuzzModalBottomSheet<void>(
+                onPressed: () => showAmbushModalBottomSheet<void>(
                   context: context,
                   showDragHandle: true,
                   builder: (_) => const Text('Sheet body'),
@@ -595,7 +598,7 @@ void main() {
         isFalse,
       );
       final internalHandle = find.byKey(
-        const ValueKey('buzz-sheet-drag-handle'),
+        const ValueKey('ambush-sheet-drag-handle'),
       );
       expect(internalHandle, findsOneWidget);
       expect(tester.getSize(internalHandle), const Size(32, 4));
@@ -625,7 +628,7 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => FilledButton(
-                onPressed: () => showBuzzModalBottomSheet<void>(
+                onPressed: () => showAmbushModalBottomSheet<void>(
                   context: context,
                   showDragHandle: true,
                   showCloseButton: false,
@@ -642,7 +645,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.byKey(const ValueKey('buzz-sheet-drag-handle')),
+        find.byKey(const ValueKey('ambush-sheet-drag-handle')),
         findsOneWidget,
       );
       expect(find.byTooltip('Close sheet'), findsNothing);

@@ -8,10 +8,10 @@ const RELAY_UNREACHABLE = "relay unreachable: connection refused";
 const MOCK_AVATAR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAE0lEQVR4nGOQ2rrsPz7MMDIUAACluJ0BkoZ9dQAAAABJRU5ErkJggg==";
 
-// Self-profile cache key: buzz-self-profile.v1:<relay>:<pubkey>
+// Self-profile cache key: ambush-self-profile.v1:<relay>:<pubkey>
 const MOCK_PUBKEY = "deadbeef".repeat(8);
 const MOCK_RELAY_URL = "ws://localhost:3000";
-const SELF_PROFILE_CACHE_KEY = `buzz-self-profile.v1:${MOCK_RELAY_URL}:${MOCK_PUBKEY}`;
+const SELF_PROFILE_CACHE_KEY = `ambush-self-profile.v1:${MOCK_RELAY_URL}:${MOCK_PUBKEY}`;
 
 async function settle(page: import("@playwright/test").Page) {
   await page.evaluate(() =>
@@ -42,13 +42,13 @@ async function driveConnectionDegraded(
     // the state override and write "connected" back over it.
     await page.waitForFunction(() => {
       const win = window as Window & {
-        __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
-        __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+        __AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
+        __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
       };
       return (
-        typeof win.__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function" &&
-        typeof win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__ === "function" &&
-        win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__() === "connected"
+        typeof win.__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__ === "function" &&
+        typeof win.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__ === "function" &&
+        win.__AMBUSH_E2E_GET_RELAY_CONNECTION_STATE__() === "connected"
       );
     });
   } else {
@@ -58,17 +58,17 @@ async function driveConnectionDegraded(
       () =>
         typeof (
           window as Window & {
-            __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+            __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
           }
-        ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
+        ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
     );
   }
   await page.evaluate((s) => {
     const setter = (
       window as Window & {
-        __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (state: string) => void;
+        __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: (state: string) => void;
       }
-    ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__;
+    ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__;
     if (!setter) throw new Error("E2E relay state setter not installed.");
     setter(s);
   }, state);
@@ -93,9 +93,9 @@ test.describe("relay connectivity", () => {
       () =>
         typeof (
           window as Window & {
-            __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+            __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
           }
-        ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
+        ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
     );
     await driveConnectionDegraded(page, "reconnecting");
 

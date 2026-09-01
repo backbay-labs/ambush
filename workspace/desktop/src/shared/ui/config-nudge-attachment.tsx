@@ -157,7 +157,7 @@ export function focusTargetForRequirement(
 }
 
 /**
- * Inline card rendered when the desktop detects a `buzz:config-nudge`
+ * Inline card rendered when the desktop detects a `ambush:config-nudge`
  * sentinel in a kind:9 message body.
  *
  * Uses the `Attachment` primitive's built-in `state="error"` destructive-tint
@@ -379,7 +379,7 @@ function RequirementRow({
       return (
         <div className="flex items-center gap-2 text-xs leading-4 text-muted-foreground">
           <span className="flex-1 [overflow-wrap:anywhere]">
-            Git for Windows is required for buzz-agent shell tools
+            Git for Windows is required for ambush-agent shell tools
           </span>
         </div>
       );
@@ -399,8 +399,8 @@ function RequirementRow({
     }
     case "cli_config_invalid": {
       // Config-invalid rows are purely informational — the user must edit an
-      // external file. No Agent runtimes CTA (Buzz can't repair ~/.codex/config.toml)
-      // and no Edit Agent CTA (the field isn't managed by Buzz).
+      // external file. No Agent runtimes CTA (Ambush can't repair ~/.codex/config.toml)
+      // and no Edit Agent CTA (the field isn't managed by Ambush).
       const cli = requirement.probe_args[0] ?? "the CLI";
       const configFile = `~/.${cli}/config.toml`;
       return (

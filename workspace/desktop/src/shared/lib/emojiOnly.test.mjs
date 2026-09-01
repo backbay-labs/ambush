@@ -4,7 +4,7 @@ import test from "node:test";
 import { isEmojiOnlyMessage } from "./emojiOnly.ts";
 
 const CUSTOM_EMOJI = [
-  { shortcode: "buzz", url: "https://relay/buzz.png" },
+  { shortcode: "ambush", url: "https://relay/ambush.png" },
   { shortcode: "party_parrot", url: "https://relay/parrot.gif" },
 ];
 
@@ -15,13 +15,16 @@ test("detects unicode emoji-only messages", () => {
 });
 
 test("detects known custom emoji-only shortcode messages", () => {
-  assert.equal(isEmojiOnlyMessage(":buzz:", CUSTOM_EMOJI), true);
-  assert.equal(isEmojiOnlyMessage(":buzz: :party_parrot:", CUSTOM_EMOJI), true);
-  assert.equal(isEmojiOnlyMessage(":Buzz:", CUSTOM_EMOJI), true);
+  assert.equal(isEmojiOnlyMessage(":ambush:", CUSTOM_EMOJI), true);
+  assert.equal(
+    isEmojiOnlyMessage(":ambush: :party_parrot:", CUSTOM_EMOJI),
+    true,
+  );
+  assert.equal(isEmojiOnlyMessage(":Ambush:", CUSTOM_EMOJI), true);
 });
 
 test("allows mixed unicode and custom emoji", () => {
-  assert.equal(isEmojiOnlyMessage("😀 :buzz: ❤️", CUSTOM_EMOJI), true);
+  assert.equal(isEmojiOnlyMessage("😀 :ambush: ❤️", CUSTOM_EMOJI), true);
 });
 
 test("rejects prose, markdown, and unknown shortcodes", () => {

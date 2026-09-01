@@ -3,7 +3,7 @@ use nostr::{EventId, Tag};
 use super::check_pubkey;
 
 const MAX_THREAD_ROOT_EXCERPT_CHARS: usize = 64;
-const SENT_FROM_THREAD_TAG: &str = "buzz:sent-from-thread";
+const SENT_FROM_THREAD_TAG: &str = "ambush:sent-from-thread";
 const AGENT_ADDRESS_MENTION_MARKER: &str = "agent-address";
 
 pub(super) fn mention_reference_tags(

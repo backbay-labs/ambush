@@ -25,7 +25,7 @@ import type { PersonaDropdownOption } from "./agentConfigOptions";
  * Inbound author gate UI for create/edit agent dialogs.
  *
  * Dropdown:
- *   - Only me        (default; maps to `buzz-acp --respond-to=owner-only`)
+ *   - Only me        (default; maps to `ambush-acp --respond-to=owner-only`)
  *   - Anyone         (`--respond-to=anyone` — fully open agent)
  *   - Selected people (`--respond-to=allowlist`, plus the selected pubkeys as
  *                     `--respond-to-allowlist`)

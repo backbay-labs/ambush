@@ -18,7 +18,7 @@ class FallbackPairingQrScanner extends HookWidget {
     super.key,
   });
 
-  /// The current Buzz screen that moves down to reveal the camera.
+  /// The current Ambush screen that moves down to reveal the camera.
   final Widget appSurface;
 
   /// Called after the app surface has returned, with a scanned value if any.

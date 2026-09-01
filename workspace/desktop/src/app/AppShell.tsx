@@ -665,7 +665,7 @@ export function AppShell() {
     topLevelUnreadChannelIds,
     unreadChannelNotificationCount,
   });
-  // Dispatch `buzz://` deep links only from the main window; the companion is dedicated to its active Huddle route.
+  // Dispatch `ambush://` deep links only from the main window; the companion is dedicated to its active Huddle route.
   useAppDeepLinks(!isHuddleRoom);
   const handleOpenCreateChannel = React.useCallback(
     () => setIsCreateChannelOpen(true),

@@ -59,7 +59,7 @@ export function mergeObserverEventWindows(
  * event rail's rows (`RawEventRail`) so both name the same row identically.
  *
  * `seq` alone is not unique across an agent's observer history: it's a
- * monotonic counter local to one agent process (see buzz-acp's
+ * monotonic counter local to one agent process (see ambush-acp's
  * `ObserverHandle`), so it resets to 1 after every process restart while
  * `timestamp` keeps climbing. Pairing them matches the exact `(seq,
  * timestamp)` key `mergeObserverEventWindows` already dedups on above, and

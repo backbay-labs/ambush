@@ -1,12 +1,12 @@
-import 'package:buzz/shared/push/dev_push_lease.dart';
-import 'package:buzz/shared/community/community.dart';
-import 'package:buzz/shared/push/push_bootstrap.dart';
-import 'package:buzz/shared/push/push_subscription.dart';
+import 'package:ambush/shared/push/dev_push_lease.dart';
+import 'package:ambush/shared/community/community.dart';
+import 'package:ambush/shared/push/push_bootstrap.dart';
+import 'package:ambush/shared/push/push_subscription.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('failed bootstrap attempt becomes retryable after the delay', () async {
-    final gate = BuzzPushAttemptGate(retryDelay: Duration.zero);
+    final gate = AmbushPushAttemptGate(retryDelay: Duration.zero);
     addTearDown(gate.dispose);
     var retries = 0;
 
@@ -19,7 +19,7 @@ void main() {
   });
 
   test('a new attempt cancels an obsolete scheduled retry', () async {
-    final gate = BuzzPushAttemptGate(retryDelay: Duration.zero);
+    final gate = AmbushPushAttemptGate(retryDelay: Duration.zero);
     addTearDown(gate.dispose);
     var retries = 0;
 
@@ -33,7 +33,7 @@ void main() {
   });
 
   test('successful bootstrap becomes retryable at renewal time', () async {
-    final gate = BuzzPushAttemptGate(retryDelay: Duration.zero);
+    final gate = AmbushPushAttemptGate(retryDelay: Duration.zero);
     addTearDown(gate.dispose);
     var retries = 0;
 
@@ -46,7 +46,7 @@ void main() {
   });
 
   test('completed bootstrap attempt can run again for later work', () {
-    final gate = BuzzPushAttemptGate();
+    final gate = AmbushPushAttemptGate();
     addTearDown(gate.dispose);
 
     expect(gate.tryBegin('attempt'), isTrue);
@@ -55,11 +55,11 @@ void main() {
   });
 
   test('publication attempt changes when the relay executor rotates', () {
-    final subscription = BuzzPushSubscription(
-      filter: BuzzPushFilter(kinds: const [9], pTags: [_hex('a')]),
+    final subscription = AmbushPushSubscription(
+      filter: AmbushPushFilter(kinds: const [9], pTags: [_hex('a')]),
       notificationClass: 'default',
     );
-    final original = buzzPushPublicationAttemptKey(
+    final original = ambushPushPublicationAttemptKey(
       communityId: 'community',
       relayBaseUrl: 'https://relay.example',
       token: 'token',
@@ -68,7 +68,7 @@ void main() {
     );
 
     expect(
-      buzzPushPublicationAttemptKey(
+      ambushPushPublicationAttemptKey(
         communityId: 'community',
         relayBaseUrl: 'https://relay.example',
         token: 'token',
@@ -78,7 +78,7 @@ void main() {
       isNot(original),
     );
     expect(
-      buzzPushPublicationAttemptKey(
+      ambushPushPublicationAttemptKey(
         communityId: 'community',
         relayBaseUrl: 'https://relay.example',
         token: 'token',
@@ -97,28 +97,28 @@ void main() {
     final enabled = disabled.copyWith(pushNotificationsEnabled: true);
 
     expect(
-      buzzPushLifecycleEnabled(
+      ambushPushLifecycleEnabled(
         community: disabled,
         descriptor: _descriptor(keyId: 'relay-v1', pubkey: _hex('b')),
       ),
       isFalse,
     );
     expect(
-      buzzPushLifecycleEnabled(
+      ambushPushLifecycleEnabled(
         community: enabled,
         descriptor: _descriptor(keyId: 'relay-v1', pubkey: _hex('b')),
       ),
       isTrue,
     );
     expect(
-      buzzPushLifecycleEnabled(community: enabled, descriptor: null),
+      ambushPushLifecycleEnabled(community: enabled, descriptor: null),
       isFalse,
     );
   });
 
   test('pending opt-out tombstone keeps active push lifecycle disabled', () {
-    final subscription = BuzzPushSubscription(
-      filter: BuzzPushFilter(kinds: const [9], pTags: [_hex('a')]),
+    final subscription = AmbushPushSubscription(
+      filter: AmbushPushFilter(kinds: const [9], pTags: [_hex('a')]),
       notificationClass: 'default',
     );
     final community =
@@ -128,13 +128,13 @@ void main() {
         ).copyWith(
           pushNotificationsEnabled: false,
           pushSubscriptionState:
-              BuzzPushLeaseSubscriptionState.desired(desired: [subscription])
+              AmbushPushLeaseSubscriptionState.desired(desired: [subscription])
                   .withAccepted(subscriptions: [subscription], generation: 3)
                   .withPendingTombstone(4),
         );
 
     expect(
-      buzzPushLifecycleEnabled(
+      ambushPushLifecycleEnabled(
         community: community,
         descriptor: _descriptor(keyId: 'relay-v1', pubkey: _hex('b')),
       ),
@@ -165,7 +165,7 @@ void main() {
       }
 
       await expectLater(
-        publishBuzzPushLeaseRecoverably(
+        publishAmbushPushLeaseRecoverably(
           reserveGeneration: reserve,
           publish: publish,
           markAccepted: markAccepted,
@@ -175,7 +175,7 @@ void main() {
       expect(relayGeneration, 1);
       expect(acceptedGeneration, 0);
 
-      await publishBuzzPushLeaseRecoverably(
+      await publishAmbushPushLeaseRecoverably(
         reserveGeneration: reserve,
         publish: publish,
         markAccepted: markAccepted,
@@ -186,10 +186,10 @@ void main() {
   );
 }
 
-BuzzPushLeaseDescriptor _descriptor({
+AmbushPushLeaseDescriptor _descriptor({
   required String keyId,
   required String pubkey,
-}) => BuzzPushLeaseDescriptor(
+}) => AmbushPushLeaseDescriptor(
   origin: 'wss://relay.example',
   executorKeyId: keyId,
   executorPubkey: pubkey,

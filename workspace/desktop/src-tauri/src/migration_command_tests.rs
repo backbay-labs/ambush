@@ -17,13 +17,13 @@ fn reconcile_legacy_command_names_rewrites_renamed_sidecars() {
     reconcile_legacy_command_names_in_file(&dir.path().join("agents/managed-agents.json"));
 
     let records = read_agents_json(dir.path());
-    assert_eq!(records[0]["acp_command"], "buzz-acp");
-    assert_eq!(records[0]["agent_command"], "buzz-agent");
-    assert_eq!(records[0]["mcp_command"], "buzz-dev-mcp");
+    assert_eq!(records[0]["acp_command"], "ambush-acp");
+    assert_eq!(records[0]["agent_command"], "ambush-agent");
+    assert_eq!(records[0]["mcp_command"], "ambush-dev-mcp");
 }
 
 #[test]
-fn reconcile_legacy_command_names_updates_removed_mcp_server_for_buzz_agent() {
+fn reconcile_legacy_command_names_updates_removed_mcp_server_for_ambush_agent() {
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
         dir.path(),
@@ -38,9 +38,9 @@ fn reconcile_legacy_command_names_updates_removed_mcp_server_for_buzz_agent() {
     reconcile_legacy_command_names_in_file(&dir.path().join("agents/managed-agents.json"));
 
     let records = read_agents_json(dir.path());
-    assert_eq!(records[0]["acp_command"], "buzz-acp");
-    assert_eq!(records[0]["agent_command"], "buzz-agent");
-    assert_eq!(records[0]["mcp_command"], "buzz-dev-mcp");
+    assert_eq!(records[0]["acp_command"], "ambush-acp");
+    assert_eq!(records[0]["agent_command"], "ambush-agent");
+    assert_eq!(records[0]["mcp_command"], "ambush-dev-mcp");
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn reconcile_legacy_command_names_clears_removed_mcp_server_for_goose() {
     reconcile_legacy_command_names_in_file(&dir.path().join("agents/managed-agents.json"));
 
     let records = read_agents_json(dir.path());
-    assert_eq!(records[0]["acp_command"], "buzz-acp");
+    assert_eq!(records[0]["acp_command"], "ambush-acp");
     assert_eq!(records[0]["agent_command"], "goose");
     assert_eq!(records[0]["mcp_command"], "");
 }
@@ -97,7 +97,7 @@ fn reconcile_legacy_command_names_rewrites_persona_runtime() {
     reconcile_legacy_persona_runtimes_in_file(&dir.path().join("agents/personas.json"));
 
     let records = read_personas_json(dir.path());
-    assert_eq!(records[0]["runtime"], "buzz-agent");
+    assert_eq!(records[0]["runtime"], "ambush-agent");
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn reconcile_legacy_command_names_rewrites_runtime_after_provider_migration() {
     reconcile_legacy_persona_runtimes_in_file(&path);
 
     let records = read_personas_json(dir.path());
-    assert_eq!(records[0]["runtime"], "buzz-agent");
+    assert_eq!(records[0]["runtime"], "ambush-agent");
     assert!(records[0].get("provider").is_none());
 }
 
@@ -154,7 +154,7 @@ fn rewrite_legacy_persona_md_runtime_rewrites_frontmatter_only() {
 
     let updated = rewrite_legacy_persona_md_runtime(content).unwrap();
 
-    assert!(updated.contains("runtime: buzz-agent\n"));
+    assert!(updated.contains("runtime: ambush-agent\n"));
     assert!(updated.contains("Body mentions runtime: sprout-agent.\n"));
 }
 
@@ -181,5 +181,5 @@ fn reconcile_legacy_team_persona_runtime_files_rewrites_persona_md() {
     reconcile_legacy_team_persona_runtime_files(&dir.path().join("agents/teams"));
 
     let updated = std::fs::read_to_string(persona_path).unwrap();
-    assert!(updated.contains("runtime: buzz-agent\n"));
+    assert!(updated.contains("runtime: ambush-agent\n"));
 }

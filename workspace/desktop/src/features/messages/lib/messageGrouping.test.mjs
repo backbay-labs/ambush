@@ -11,7 +11,7 @@ import {
 test("startsNewMessageGroup: sent-from-thread messages start a fresh group", () => {
   assert.equal(
     startsNewMessageGroup({
-      tags: [["buzz:sent-from-thread", "root-event", "Root summary"]],
+      tags: [["ambush:sent-from-thread", "root-event", "Root summary"]],
     }),
     true,
   );

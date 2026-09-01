@@ -18,22 +18,22 @@ type AnchorSnapshot = {
 async function waitForMockTimelineBridge(page: Page) {
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      typeof window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ === "function",
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_PREPEND_MOCK_HISTORY__ === "function",
   );
 }
 
 async function seedNoShiftTimeline(page: Page) {
   await page.evaluate(() => {
     for (let index = 0; index < 40; index += 1) {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `no-shift current ${index}\nsecond line ${index}\nthird line ${index}`,
         createdAt: 1_700_100_000 + index,
       });
     }
 
-    window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__?.({
+    window.__AMBUSH_E2E_PREPEND_MOCK_HISTORY__?.({
       channelName: "general",
       count: 600,
       lineCount: 3,
@@ -210,7 +210,7 @@ test("timeline does not recompute row estimates during ordinary scroll", async (
   await waitForMockTimelineBridge(page);
   await page.evaluate(() => {
     for (let index = 0; index < 120; index += 1) {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `estimate memo row ${index}\nsecond line ${index}`,
         createdAt: 1_700_500_000 + index,
@@ -268,14 +268,14 @@ test("timeline reserves mixed-media rows before fast scrollback", async ({
   await page.goto("/");
   await waitForMockTimelineBridge(page);
   await page.evaluate(() => {
-    window.__BUZZ_E2E__ = {
-      ...window.__BUZZ_E2E__,
-      mock: { ...window.__BUZZ_E2E__?.mock, channelWindowDelayMs: 10_000 },
+    window.__AMBUSH_E2E__ = {
+      ...window.__AMBUSH_E2E__,
+      mock: { ...window.__AMBUSH_E2E__?.mock, channelWindowDelayMs: 10_000 },
     };
   });
   await page.evaluate((imageUrl) => {
     for (let index = 0; index < 18; index += 1) {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `mixed-scroll lead-in ${index}\nplain lead-in line ${index}`,
         createdAt: 1_700_600_000 + index,
@@ -283,7 +283,7 @@ test("timeline reserves mixed-media rows before fast scrollback", async ({
     }
     const dimmedUrl =
       "http://localhost:3000/media/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.png";
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: ["mixed-scroll dimmed media", `![dimmed](${dimmedUrl})`].join(
         "\n",
@@ -301,14 +301,14 @@ test("timeline reserves mixed-media rows before fast scrollback", async ({
       ],
       createdAt: 1_700_600_100,
     });
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: ["mixed-scroll no-dim media", `![no dim](${imageUrl})`].join(
         "\n",
       ),
       createdAt: 1_700_600_101,
     });
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: [
         "mixed-scroll fenced code",
@@ -324,15 +324,15 @@ test("timeline reserves mixed-media rows before fast scrollback", async ({
       ].join("\n"),
       createdAt: 1_700_600_102,
     });
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: [
         "mixed-scroll link preview",
-        "https://github.com/block/sprout/pull/1334",
+        "https://github.com/backbay-labs/ambush/pull/1334",
       ].join("\n"),
       createdAt: 1_700_600_103,
     });
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: [
         "mixed-scroll tall text",
@@ -345,7 +345,7 @@ test("timeline reserves mixed-media rows before fast scrollback", async ({
       createdAt: 1_700_600_104,
     });
     for (let index = 0; index < 36; index += 1) {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `mixed-scroll tail ${index}\nplain tail line ${index}`,
         createdAt: 1_700_600_200 + index,
@@ -468,9 +468,9 @@ test("timeline prepend plus late row reflow keeps the reading row stable", async
     .not.toBeNull();
 
   await page.evaluate(() => {
-    window.__BUZZ_E2E__ = {
-      ...window.__BUZZ_E2E__,
-      mock: { ...window.__BUZZ_E2E__?.mock, channelWindowDelayMs: 1_000 },
+    window.__AMBUSH_E2E__ = {
+      ...window.__AMBUSH_E2E__,
+      mock: { ...window.__AMBUSH_E2E__?.mock, channelWindowDelayMs: 1_000 },
     };
     (
       window as unknown as { __CHANNEL_WINDOW_INFLIGHT__?: number }
@@ -607,7 +607,7 @@ test("thread panel late row reflow keeps the reading reply stable", async ({
   await waitForMockTimelineBridge(page);
 
   const rootId = await page.evaluate(() => {
-    const root = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const root = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: "thread no-shift root",
       createdAt: 1_700_300_000,
@@ -615,7 +615,7 @@ test("thread panel late row reflow keeps the reading reply stable", async ({
     if (!root) throw new Error("Failed to seed thread no-shift root");
 
     for (let index = 0; index < 48; index += 1) {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `thread no-shift reply ${index}\nsecond line ${index}\nthird line ${index}`,
         parentEventId: root.id,
@@ -704,7 +704,7 @@ test("thread panel stays put while replies stream in mid-scroll", async ({
   });
 
   const rootId = await page.evaluate(() => {
-    const root = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const root = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: "thread stream root",
       createdAt: 1_700_400_000,
@@ -712,7 +712,7 @@ test("thread panel stays put while replies stream in mid-scroll", async ({
     if (!root) throw new Error("Failed to seed thread stream root");
 
     for (let index = 0; index < 48; index += 1) {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `thread stream reply ${index}\nsecond line ${index}\nthird line ${index}`,
         parentEventId: root.id,
@@ -820,7 +820,7 @@ test("thread panel stays put while replies stream in mid-scroll", async ({
     });
     await page.evaluate(
       ({ rootEventId, index }) => {
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "general",
           content: `thread stream live reply ${index}\nsecond line ${index}`,
           parentEventId: rootEventId,

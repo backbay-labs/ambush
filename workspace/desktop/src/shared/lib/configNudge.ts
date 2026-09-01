@@ -1,11 +1,11 @@
 /**
- * Utilities for extracting and parsing the `buzz:config-nudge` sentinel that
- * `buzz-acp`'s setup-listener appends to its kind:9 nudge body.
+ * Utilities for extracting and parsing the `ambush:config-nudge` sentinel that
+ * `ambush-acp`'s setup-listener appends to its kind:9 nudge body.
  *
  * Wire format (appended by `setup_mode.rs::nudge_body()`):
  *
  * ```
- * ```buzz:config-nudge
+ * ```ambush:config-nudge
  * {"agent_name":"…","agent_pubkey":"…","requirements":[…]}
  * ```
  * ```
@@ -63,7 +63,7 @@ export type ConfigNudgeRequirement =
     };
 
 /**
- * The structured payload embedded in the `buzz:config-nudge` sentinel block.
+ * The structured payload embedded in the `ambush:config-nudge` sentinel block.
  * Mirrors the Rust `SetupPayload` struct.
  */
 export type ConfigNudgePayload = {
@@ -75,7 +75,7 @@ export type ConfigNudgePayload = {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const FENCE_OPEN = "```buzz:config-nudge";
+const FENCE_OPEN = "```ambush:config-nudge";
 const FENCE_CLOSE = "```";
 
 // ── Extractor ─────────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ export function extractConfigNudge(content: string): ConfigNudgePayload | null {
 }
 
 /**
- * Strip the `buzz:config-nudge` sentinel block (and any preceding blank line)
+ * Strip the `ambush:config-nudge` sentinel block (and any preceding blank line)
  * from a message body. Returns the original string unchanged when no sentinel
  * is present.
  *

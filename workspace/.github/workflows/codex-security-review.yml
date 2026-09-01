@@ -19,16 +19,16 @@ jobs:
     # MEMBER and OWNER are GitHub's associations for members of the `block`
     # organization. The trusted prepare step checks the live PR instead of the
     # event snapshot. Outside contributors require this exact command from one
-    # of those members: @buzz-security-review <full-head-sha>
+    # of those members: @ambush-security-review <full-head-sha>
     if: >-
-      github.repository == 'block/buzz' && (
+      github.repository == 'backbay-labs/ambush' && (
         (
           github.event_name == 'pull_request_target' &&
           github.event.pull_request.draft == false
         ) || (
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
-          startsWith(github.event.comment.body, '@buzz-security-review ') &&
+          startsWith(github.event.comment.body, '@ambush-security-review ') &&
           contains(fromJSON('["MEMBER", "OWNER"]'), github.event.comment.author_association)
         )
       )
@@ -63,7 +63,7 @@ jobs:
   prepare-base-reconciliation:
     name: Find Reviews From the Previous Base
     if: >-
-      github.repository == 'block/buzz' && (
+      github.repository == 'backbay-labs/ambush' && (
         github.event_name == 'push' ||
         github.event_name == 'repository_dispatch'
       )
@@ -183,7 +183,7 @@ jobs:
   invalidate-previous-review:
     name: Mark Previous Review Stale
     if: >-
-      github.repository == 'block/buzz' &&
+      github.repository == 'backbay-labs/ambush' &&
       github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -379,10 +379,10 @@ jobs:
               }
             }
           prompt: |
-            # Buzz Security, Correctness & Reliability Review
+            # Ambush Security, Correctness & Reliability Review
 
             You are reviewing pull request #${{ needs.prepare-review.outputs.pr_number }}
-            for Buzz, an open-source, Nostr-based collaboration platform. Buzz includes
+            for Ambush, an open-source, Nostr-based collaboration platform. Ambush includes
             a multi-tenant Rust relay, Postgres event store and search, Redis pub/sub,
             git smart HTTP hosting, workflow and agent execution surfaces, a Tauri/React
             desktop client, a browser client, and a Flutter mobile client.

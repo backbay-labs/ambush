@@ -4,7 +4,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import '../channels/message_content.dart';
@@ -80,7 +80,7 @@ class ComposeNotePage extends HookConsumerWidget {
                   ? SizedBox(
                       width: 16,
                       height: 16,
-                      child: BuzzLoadingIndicator(
+                      child: AmbushLoadingIndicator(
                         size: 16,
                         semanticLabel: _isReply
                             ? 'Sending reply'

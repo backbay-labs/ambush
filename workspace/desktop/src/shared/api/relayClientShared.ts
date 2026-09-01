@@ -33,7 +33,7 @@ export function isRelayConnectionDegraded(state: ConnectionState): boolean {
  * Aggregate cap on explicit `#h` channel values the relay accepts across one
  * REQ's filters before rejecting it as `restricted: too many explicit
  * channels`. Mirrors `MAX_EXPLICIT_CHANNEL_VALUES` in
- * `crates/buzz-relay/src/handlers/req.rs`. A subscription over more hidden DMs
+ * `crates/ambush-relay/src/handlers/req.rs`. A subscription over more hidden DMs
  * than this must be split into multiple REQs, each within the cap.
  */
 export const MAX_EXPLICIT_CHANNEL_VALUES = 128;

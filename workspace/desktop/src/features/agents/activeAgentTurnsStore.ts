@@ -13,7 +13,7 @@ import {
 } from "@/shared/lib/useDocumentVisible";
 import type { ObserverEvent } from "./ui/agentSessionTypes";
 
-/** Harness emits turn_liveness every ~10s (BUZZ_ACP_TURN_LIVENESS_SECS). */
+/** Harness emits turn_liveness every ~10s (AMBUSH_ACP_TURN_LIVENESS_SECS). */
 const LIVENESS_INTERVAL_MS = 10_000;
 /** Remove a turn after this long with no activity. Tolerates one fully dropped
  * liveness ping plus slack before pruning a turn whose host died without
@@ -30,7 +30,7 @@ const FRAME_GAP_PAUSE_MS = LIVENESS_INTERVAL_MS * 2;
 const PRUNE_PAUSE_MAX_MS = 3 * 60_000;
 /** Maximum concurrent active turns tracked per agent. Purely an unbounded-growth
  * guard, so it sits at the harness's hard upper bound for parallel agent
- * subprocesses (`--agents` / `BUZZ_ACP_AGENTS` accepts `1..=32`) rather than the
+ * subprocesses (`--agents` / `AMBUSH_ACP_AGENTS` accepts `1..=32`) rather than the
  * Desktop default of 24 — any lower value silently evicts a live turn, dropping
  * its working badge. */
 const MAX_TURNS_PER_AGENT = 32;

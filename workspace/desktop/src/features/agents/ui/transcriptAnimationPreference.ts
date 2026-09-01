@@ -7,7 +7,7 @@ import * as React from "react";
  * preference, not community-scoped data, so it is intentionally not reset on
  * community switch.
  */
-const STORAGE_KEY = "buzz:animate-transcript-activity";
+const STORAGE_KEY = "ambush:animate-transcript-activity";
 
 const listeners = new Set<() => void>();
 

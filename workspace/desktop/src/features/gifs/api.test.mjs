@@ -83,7 +83,7 @@ test("relayKlipyCapability requires safe search and share endpoints", () => {
         search: "/gifs/search",
         share: "/gifs/share",
       },
-      supported_extensions: ["nip-er", "buzz-gif"],
+      supported_extensions: ["nip-er", "ambush-gif"],
     }),
     { searchPath: "/gifs/search", sharePath: "/gifs/share" },
   );
@@ -95,14 +95,14 @@ test("relayKlipyCapability requires safe search and share endpoints", () => {
         search: "/gifs/search",
         share: "/gifs/share",
       },
-      supported_extensions: ["buzz-gif"],
+      supported_extensions: ["ambush-gif"],
     }),
     null,
   );
   assert.equal(
     relayKlipyCapability({
       gif: { provider: "klipy", search: "/gifs/search" },
-      supported_extensions: ["buzz-gif"],
+      supported_extensions: ["ambush-gif"],
     }),
     null,
   );
@@ -123,7 +123,7 @@ test("relayKlipyCapability requires safe search and share endpoints", () => {
           search: path,
           share: "/gifs/share",
         },
-        supported_extensions: ["buzz-gif"],
+        supported_extensions: ["ambush-gif"],
       }),
       null,
     );
@@ -134,7 +134,7 @@ test("relayKlipyCapability requires safe search and share endpoints", () => {
           search: "/gifs/search",
           share: path,
         },
-        supported_extensions: ["buzz-gif"],
+        supported_extensions: ["ambush-gif"],
       }),
       null,
     );

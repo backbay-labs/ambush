@@ -40,7 +40,7 @@ test("readWatermark: returns 0 when no key exists", () => {
 
 test("readWatermark: returns 0 when stored value is 0", () => {
   withFreshStorage((ls) => {
-    ls.setItem(`buzz-sync-watermark.v1:sections:pk:${RELAY_ENCODED}`, "0");
+    ls.setItem(`ambush-sync-watermark.v1:sections:pk:${RELAY_ENCODED}`, "0");
     assert.equal(readWatermark("pk", "sections", RELAY), 0);
   });
 });
@@ -48,7 +48,7 @@ test("readWatermark: returns 0 when stored value is 0", () => {
 test("readWatermark: returns stored positive integer", () => {
   withFreshStorage((ls) => {
     ls.setItem(
-      `buzz-sync-watermark.v1:sections:pk:${RELAY_ENCODED}`,
+      `ambush-sync-watermark.v1:sections:pk:${RELAY_ENCODED}`,
       "1700000000",
     );
     assert.equal(readWatermark("pk", "sections", RELAY), 1700000000);
@@ -57,8 +57,8 @@ test("readWatermark: returns stored positive integer", () => {
 
 test("readWatermark: scopes by blobType", () => {
   withFreshStorage((ls) => {
-    ls.setItem(`buzz-sync-watermark.v1:sections:pk:${RELAY_ENCODED}`, "100");
-    ls.setItem(`buzz-sync-watermark.v1:sort:pk:${RELAY_ENCODED}`, "200");
+    ls.setItem(`ambush-sync-watermark.v1:sections:pk:${RELAY_ENCODED}`, "100");
+    ls.setItem(`ambush-sync-watermark.v1:sort:pk:${RELAY_ENCODED}`, "200");
     assert.equal(readWatermark("pk", "sections", RELAY), 100);
     assert.equal(readWatermark("pk", "sort", RELAY), 200);
   });

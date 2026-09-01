@@ -11,13 +11,13 @@ export type ProviderRuntimeCapability = "capable" | "locked" | "unknown";
  * destructive write.
  *
  * Before the catalog loads, `prospectiveRuntimeId` can already be a known
- * persona runtime string (e.g. `buzz-agent`). A catalog lookup then returns
+ * persona runtime string (e.g. `ambush-agent`). A catalog lookup then returns
  * `undefined`, which would misclassify a provider-backed runtime as "unknown"
  * and omit the provider while still clearing the command override / writing env
  * — leaving the record inheriting a provider-backed runtime with a null
  * provider. To avoid that, we resolve capability STATICALLY for known ids:
  *
- * - buzz-agent / goose → "capable" (`isProviderCapable`, id-based).
+ * - ambush-agent / goose → "capable" (`isProviderCapable`, id-based).
  * - claude / codex → "locked" (CLI-login runtimes; no LLM provider selection).
  * - anything else (custom, empty, genuinely unknown) → "unknown".
  *
@@ -124,7 +124,7 @@ export function hasMissingRequiredEnvKey(
  * (e.g. Claude — `agent.agentCommandOverride != null` at dialog open) has its
  * `provider` cleared and carries no persona credential, then the user checks
  * "Inherit runtime from template" for a provider-backed persona (e.g.
- * buzz-agent/Anthropic). Persisting the local (empty) provider + credential-
+ * ambush-agent/Anthropic). Persisting the local (empty) provider + credential-
  * less env would leave a definition-less instance's record fields blank.
  * Only in that case — inheriting AND the local provider is empty AND the agent
  * was harness-pinned at open — do we substitute the persona snapshot: the
@@ -135,7 +135,7 @@ export function hasMissingRequiredEnvKey(
  * the user re-points to Databricks) is a deliberate edit and passes through
  * unchanged — we never overwrite it with the persona provider.
  *
- * MODEL follows the same transition rule. buzz-agent/goose readiness requires a
+ * MODEL follows the same transition rule. ambush-agent/goose readiness requires a
  * model, but a Claude-pinned agent's record often carries no model (Claude
  * resolves its own). On the inherit-transition to a provider-backed persona with
  * a set `persona.model`, persisting the empty local model would save a

@@ -239,7 +239,7 @@ final class ThemePaginationGlassControlPlatformView: NSObject, FlutterPlatformVi
   ) {
     control = ThemePaginationControl(frame: frame)
     channel = FlutterMethodChannel(
-      name: "buzz/theme_pagination_glass/\(viewId)",
+      name: "ambush/theme_pagination_glass/\(viewId)",
       binaryMessenger: messenger
     )
     super.init()

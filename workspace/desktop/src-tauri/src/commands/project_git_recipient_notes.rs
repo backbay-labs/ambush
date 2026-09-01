@@ -301,7 +301,7 @@ mod tests {
         let keys = Keys::generate();
         let owner = keys.public_key().to_hex();
         let assignee = "b".repeat(64);
-        let repo_address = format!("30617:{owner}:buzz");
+        let repo_address = format!("30617:{owner}:ambush");
         let event = Event::from_json(
             build_issue_assignment_event(
                 &keys,
@@ -333,7 +333,7 @@ mod tests {
     fn issue_assignment_rejects_invalid_metadata() {
         let keys = Keys::generate();
         let owner = keys.public_key().to_hex();
-        let repo_address = format!("30617:{owner}:buzz");
+        let repo_address = format!("30617:{owner}:ambush");
 
         assert!(build_issue_assignment_event(
             &keys,
@@ -369,7 +369,7 @@ mod tests {
         let keys = Keys::generate();
         let owner = keys.public_key().to_hex();
         let assignee = "b".repeat(64);
-        let repo_address = format!("30617:{owner}:buzz");
+        let repo_address = format!("30617:{owner}:ambush");
         let event = Event::from_json(
             build_issue_unassignment_event(
                 &keys,
@@ -401,7 +401,7 @@ mod tests {
         let keys = Keys::generate();
         let owner = keys.public_key().to_hex();
         let reviewer = "b".repeat(64);
-        let repo_address = format!("30617:{owner}:buzz");
+        let repo_address = format!("30617:{owner}:ambush");
         let event = Event::from_json(
             build_review_request_event(
                 &keys,

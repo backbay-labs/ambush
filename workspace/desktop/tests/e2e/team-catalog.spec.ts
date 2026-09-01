@@ -106,11 +106,11 @@ async function listMockTeams(page: import("@playwright/test").Page) {
   return page.evaluate(async () => {
     const invoke = (
       window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
         ) => Promise<unknown>;
       }
-    ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+    ).__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
     if (!invoke) throw new Error("Mock invoke bridge is not installed.");
     return (await invoke("list_teams")) as Array<{
       name: string;
@@ -242,11 +242,11 @@ test("a head that moved while the dialog was open is rejected", async ({
     ({ ownerPubkey, teamDTag }) => {
       const replace = (
         window as Window & {
-          __BUZZ_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__?: (
+          __AMBUSH_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__?: (
             event: unknown,
           ) => void;
         }
-      ).__BUZZ_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__;
+      ).__AMBUSH_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__;
       if (!replace) throw new Error("Team catalog head seam is not installed.");
       replace({
         id: "3".repeat(64),
@@ -331,11 +331,11 @@ test("at an equal timestamp the lower-id head is canonical and a superseding hea
     ({ ownerPubkey, teamDTag }) => {
       const replace = (
         window as Window & {
-          __BUZZ_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__?: (
+          __AMBUSH_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__?: (
             event: unknown,
           ) => void;
         }
-      ).__BUZZ_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__;
+      ).__AMBUSH_E2E_REPLACE_MOCK_TEAM_CATALOG_HEAD__;
       if (!replace) throw new Error("Team catalog head seam is not installed.");
       replace({
         id: "9".repeat(64),

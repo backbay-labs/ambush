@@ -3,7 +3,7 @@ import { ProjectChannelRequestDialog } from "@/features/projects/ui/ProjectChann
 import { AgentCardDialogs } from "./AgentCardViewerDialog";
 import { AgentDialog } from "./AgentDialog";
 
-/** Global review surfaces opened by owned agents through the Buzz harness. */
+/** Global review surfaces opened by owned agents through the Ambush harness. */
 export function AgentManagementDialogs() {
   const management = useAgentManagement();
 

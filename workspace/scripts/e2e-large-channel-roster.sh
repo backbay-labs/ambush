@@ -7,13 +7,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 : "${DATABASE_URL:?set DATABASE_URL to the isolated relay database}"
-: "${BUZZ_RELAY_URL:=http://localhost:3030}"
+: "${AMBUSH_RELAY_URL:=http://localhost:3030}"
 : "${RELAY_URL:=ws://localhost:3030}"
-: "${BUZZ_RELAY_PRIVATE_KEY:=0000000000000000000000000000000000000000000000000000000000000001}"
-export BUZZ_RELAY_URL RELAY_URL BUZZ_RELAY_PRIVATE_KEY
-unset BUZZ_AUTH_TAG
+: "${AMBUSH_RELAY_PRIVATE_KEY:=0000000000000000000000000000000000000000000000000000000000000001}"
+export AMBUSH_RELAY_URL RELAY_URL AMBUSH_RELAY_PRIVATE_KEY
+unset AMBUSH_AUTH_TAG
 
-for binary in buzz buzz-admin; do
+for binary in ambush ambush-admin; do
   resolved="$(command -v "$binary" || true)"
   [[ "$resolved" == "$REPO_ROOT/target/release/$binary" ]] || {
     echo "error: $binary must resolve to $REPO_ROOT/target/release/$binary (got ${resolved:-not found})" >&2
@@ -27,14 +27,14 @@ key_field() {
   awk -v label="$1" '$1 == label && $2 == "key:" { print $3 }'
 }
 
-OWNER_GEN="$(buzz-admin generate-key)"
+OWNER_GEN="$(ambush-admin generate-key)"
 OWNER_SK="$(printf '%s\n' "$OWNER_GEN" | key_field Secret)"
-export BUZZ_PRIVATE_KEY="$OWNER_SK"
+export AMBUSH_PRIVATE_KEY="$OWNER_SK"
 
-CHANNEL="$(buzz channels create \
+CHANNEL="$(ambush channels create \
   --name "roster-boundary-$$" --type stream --visibility open | jq -er '.channel_id')"
 
-LATE_GEN="$(buzz-admin generate-key)"
+LATE_GEN="$(ambush-admin generate-key)"
 LATE_SK="$(printf '%s\n' "$LATE_GEN" | key_field Secret)"
 LATE_PUBKEY="$(printf '%s\n' "$LATE_GEN" | key_field Public)"
 
@@ -63,11 +63,11 @@ FROM channels
 WHERE id = :'channel'::uuid;
 SQL
 
-TRIGGER_GEN="$(buzz-admin generate-key)"
+TRIGGER_GEN="$(ambush-admin generate-key)"
 TRIGGER_PUBKEY="$(printf '%s\n' "$TRIGGER_GEN" | key_field Public)"
-buzz channels add-member --channel "$CHANNEL" --pubkey "$TRIGGER_PUBKEY" --role member >/dev/null
+ambush channels add-member --channel "$CHANNEL" --pubkey "$TRIGGER_PUBKEY" --role member >/dev/null
 
-BEFORE="$(buzz channels members --channel "$CHANNEL")"
+BEFORE="$(ambush channels members --channel "$CHANNEL")"
 BEFORE_COUNT="$(jq 'length' <<<"$BEFORE")"
 jq -e --arg pk "$LATE_PUBKEY" 'any(.[]; .pubkey == $pk and .role == "member")' \
   <<<"$BEFORE" >/dev/null
@@ -75,11 +75,11 @@ jq -e --arg pk "$LATE_PUBKEY" 'any(.[]; .pubkey == $pk and .role == "member")' \
 printf 'PASS discovery-before-republish channel=%s members=%s late_pubkey=%s\n' \
   "$CHANNEL" "$BEFORE_COUNT" "$LATE_PUBKEY"
 
-export BUZZ_PRIVATE_KEY="$LATE_SK"
-ACTION="$(buzz messages send --channel "$CHANNEL" --content "member-1501-action")"
+export AMBUSH_PRIVATE_KEY="$LATE_SK"
+ACTION="$(ambush messages send --channel "$CHANNEL" --content "member-1501-action")"
 jq -e '.accepted == true' <<<"$ACTION" >/dev/null
 ACTION_ID="$(jq -er '.event_id' <<<"$ACTION")"
-buzz messages get --channel "$CHANNEL" --limit 10 \
+ambush messages get --channel "$CHANNEL" --limit 10 \
   | jq -e --arg id "$ACTION_ID" 'any(.[]; .id == $id and .content == "member-1501-action")' >/dev/null
 printf 'PASS late-member-action event_id=%s\n' "$ACTION_ID"
 
@@ -101,7 +101,7 @@ SQL
 jq -e 'has("39000") and has("39001")' <<<"$DISCOVERY_BEFORE" >/dev/null
 
 DATABASE_URL="$DATABASE_URL" RELAY_URL="$RELAY_URL" \
-  buzz-admin reconcile-channels --channel "$CHANNEL" >/dev/null
+  ambush-admin reconcile-channels --channel "$CHANNEL" >/dev/null
 
 DISCOVERY_AFTER="$(psql "$DATABASE_URL" -AtX -v ON_ERROR_STOP=1 \
   --set=channel="$CHANNEL" <<'SQL'
@@ -118,7 +118,7 @@ SQL
 [[ "$DISCOVERY_AFTER" == "$DISCOVERY_BEFORE" ]]
 printf 'PASS targeted-repair-preserves-metadata-and-admin-events channel=%s\n' "$CHANNEL"
 
-AFTER="$(buzz channels members --channel "$CHANNEL")"
+AFTER="$(ambush channels members --channel "$CHANNEL")"
 AFTER_COUNT="$(jq 'length' <<<"$AFTER")"
 jq -e --arg pk "$LATE_PUBKEY" 'any(.[]; .pubkey == $pk and .role == "member")' \
   <<<"$AFTER" >/dev/null

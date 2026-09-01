@@ -28,7 +28,7 @@ type WelcomeSetupProps = {
 };
 
 const COMMUNITY_OPTION_CARD_CLASS =
-  "w-full max-w-[320px] items-center px-6 py-4 text-center text-sm font-normal leading-6 text-foreground [--buzz-card-textured-min-height:88px] transition-[filter] duration-150 ease-out hover:brightness-[0.98] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/35";
+  "w-full max-w-[320px] items-center px-6 py-4 text-center text-sm font-normal leading-6 text-foreground [--ambush-card-textured-min-height:88px] transition-[filter] duration-150 ease-out hover:brightness-[0.98] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/35";
 
 export function WelcomeSetup({
   initialPage = "welcome",
@@ -118,7 +118,7 @@ export function WelcomeSetup({
 
   return (
     <div
-      className="buzz-onboarding-neutral-theme buzz-startup-shell flex h-dvh items-start justify-center overflow-y-auto bg-background px-4 pb-36 pt-[106px] text-foreground"
+      className="ambush-onboarding-neutral-theme ambush-startup-shell flex h-dvh items-start justify-center overflow-y-auto bg-background px-4 pb-36 pt-[106px] text-foreground"
       data-system-color-scheme={systemColorScheme}
       data-testid="welcome-setup"
     >
@@ -129,7 +129,7 @@ export function WelcomeSetup({
           {page === "welcome" ? (
             <OnboardingSlideTransition
               className="flex h-full min-h-0 w-full flex-col items-center text-center"
-              containerClassName="h-full min-h-0 [&>.buzz-onboarding-transition-line]:h-full"
+              containerClassName="h-full min-h-0 [&>.ambush-onboarding-transition-line]:h-full"
               direction={transitionDirection}
               transitionKey={`welcome-${transitionDirection}`}
             >
@@ -187,7 +187,7 @@ export function WelcomeSetup({
           ) : page === "existing" ? (
             <OnboardingSlideTransition
               className="flex h-full min-h-0 w-full flex-col items-center text-center"
-              containerClassName="h-full min-h-0 [&>.buzz-onboarding-transition-line]:h-full"
+              containerClassName="h-full min-h-0 [&>.ambush-onboarding-transition-line]:h-full"
               direction={transitionDirection}
               transitionKey={`existing-${transitionDirection}`}
             >

@@ -1,13 +1,13 @@
 import 'dart:async';
 
-import 'package:buzz/features/pairing/pairing_qr_scanner.dart';
+import 'package:ambush/features/pairing/pairing_qr_scanner.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-const _qrScannerPlatformChannel = MethodChannel('buzz/qr_scanner');
+const _qrScannerPlatformChannel = MethodChannel('ambush/qr_scanner');
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

@@ -84,8 +84,8 @@ pub async fn upload_media_bytes_raw(
         InvokeBody::Raw(data) => data.clone(),
         InvokeBody::Json(_) => return Err("raw upload requires a byte body".to_string()),
     };
-    let filename = optional_raw_upload_header(&request, "x-buzz-filename")?;
-    let progress_id = optional_raw_upload_header(&request, "x-buzz-progress-id")?;
+    let filename = optional_raw_upload_header(&request, "x-ambush-filename")?;
+    let progress_id = optional_raw_upload_header(&request, "x-ambush-progress-id")?;
 
     let cancellation = begin_media_upload(progress_id.as_deref());
     let result = upload_media_bytes_inner(

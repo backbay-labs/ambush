@@ -1,11 +1,11 @@
 import 'dart:async';
 
-import 'package:buzz/features/profile/profile_avatar_draft.dart';
-import 'package:buzz/features/profile/profile_edit_page.dart';
-import 'package:buzz/features/profile/profile_provider.dart';
-import 'package:buzz/features/profile/profile_text_editor.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/shared/relay/relay.dart';
+import 'package:ambush/features/profile/profile_avatar_draft.dart';
+import 'package:ambush/features/profile/profile_edit_page.dart';
+import 'package:ambush/features/profile/profile_provider.dart';
+import 'package:ambush/features/profile/profile_text_editor.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/shared/relay/relay.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -53,7 +53,7 @@ void main() {
   testWidgets('native text retry retains the failed value', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    const channel = MethodChannel('buzz/profile_text_editor');
+    const channel = MethodChannel('ambush/profile_text_editor');
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -100,7 +100,7 @@ void main() {
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    const channel = MethodChannel('buzz/profile_text_editor');
+    const channel = MethodChannel('ambush/profile_text_editor');
     var presentations = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (_) async {
@@ -133,7 +133,7 @@ void main() {
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    const channel = MethodChannel('buzz/profile_text_editor');
+    const channel = MethodChannel('ambush/profile_text_editor');
     final submission = Completer<String?>();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (_) => submission.future);
@@ -184,7 +184,7 @@ void main() {
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    const channel = MethodChannel('buzz/profile_text_editor');
+    const channel = MethodChannel('ambush/profile_text_editor');
     var presentations = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (_) async {
@@ -221,7 +221,7 @@ void main() {
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    const channel = MethodChannel('buzz/profile_text_editor');
+    const channel = MethodChannel('ambush/profile_text_editor');
     var presentations = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (_) async {
@@ -593,7 +593,7 @@ class _RetryProfileNotifier extends ProfileNotifier {
   Future<UserProfile?> build() async => const UserProfile(
     pubkey: 'aabb',
     displayName: 'Alice',
-    about: 'Building Buzz',
+    about: 'Building Ambush',
   );
 
   @override
@@ -622,7 +622,7 @@ class _CommunityChangedProfileNotifier extends ProfileNotifier {
   Future<UserProfile?> build() async => const UserProfile(
     pubkey: 'aabb',
     displayName: 'Alice',
-    about: 'Building Buzz',
+    about: 'Building Ambush',
   );
 
   @override
@@ -640,7 +640,7 @@ class _DeferredFailureProfileNotifier extends ProfileNotifier {
   Future<UserProfile?> build() async => const UserProfile(
     pubkey: 'aabb',
     displayName: 'Alice',
-    about: 'Building Buzz',
+    about: 'Building Ambush',
   );
 
   @override

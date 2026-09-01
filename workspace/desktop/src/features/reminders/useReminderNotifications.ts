@@ -23,7 +23,7 @@ import {
   resolveSlotSound,
 } from "@/features/notifications/lib/sound";
 
-const WATERMARK_STORAGE_PREFIX = "buzz:lastReminderCheck:";
+const WATERMARK_STORAGE_PREFIX = "ambush:lastReminderCheck:";
 
 function watermarkStorageKey(pubkey: string): string {
   return `${WATERMARK_STORAGE_PREFIX}${pubkey.trim().toLowerCase()}`;

@@ -37,7 +37,7 @@ test("buildRepositoryChannelBindingTemplate preserves repository metadata", () =
     ["d", "desktop"],
     ["name", "Desktop"],
     ["x-custom", "preserve-me"],
-    ["buzz-channel", "11111111-1111-4111-8111-111111111111"],
+    ["ambush-channel", "11111111-1111-4111-8111-111111111111"],
   ]);
 });
 
@@ -56,7 +56,7 @@ test("buildProjectPatchTemplate preserves unknown tags from the live head", () =
       ["d", "platform"],
       ["name", "Platform"],
       ["description", "Multi-repo project"],
-      ["buzz-channel", "11111111-1111-4111-8111-111111111111"],
+      ["ambush-channel", "11111111-1111-4111-8111-111111111111"],
       ["future-metadata", "preserve-me"],
       ["alt", "extension tag that must survive round-trip"],
       ["a", existingAddress],
@@ -78,7 +78,7 @@ test("buildProjectPatchTemplate preserves unknown tags from the live head", () =
     ["d", "platform"],
     ["name", "Platform"],
     ["description", "Multi-repo project"],
-    ["buzz-channel", "11111111-1111-4111-8111-111111111111"],
+    ["ambush-channel", "11111111-1111-4111-8111-111111111111"],
     ["future-metadata", "preserve-me"],
     ["alt", "extension tag that must survive round-trip"],
   ]);
@@ -368,7 +368,7 @@ test("retry after event 2 fails (event 1 succeeded) returns resume templates tha
     content: "",
     tags: [
       ["d", "platform"],
-      ["buzz-channel", accessChannelId],
+      ["ambush-channel", accessChannelId],
       ["a", existingAddress],
     ],
   };

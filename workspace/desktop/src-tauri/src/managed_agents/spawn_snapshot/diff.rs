@@ -88,7 +88,7 @@ fn policy_for(path: &str) -> MaskPolicy {
         // they are looking at.
         "auth_tag" => MaskPolicy::MaskedSuffix,
         // Env values: consult the shared allowlist. Allowlisted keys (e.g.
-        // `BUZZ_AGENT_THINKING_EFFORT`) render plain so the user sees the
+        // `AMBUSH_AGENT_THINKING_EFFORT`) render plain so the user sees the
         // actual enum values; every other env key stays masked.
         _ if path.starts_with("env.") => {
             let key = &path[4..];

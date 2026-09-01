@@ -5,15 +5,15 @@ import { matchesProjectsSearch } from "./projectsSearch.ts";
 
 test("matches every case-insensitive token across fields", () => {
   assert.equal(
-    matchesProjectsSearch("buzz mobile", [
-      "Buzz Platform",
+    matchesProjectsSearch("ambush mobile", [
+      "Ambush Platform",
       "Desktop, relay, and mobile clients",
     ]),
     true,
   );
   assert.equal(
-    matchesProjectsSearch("buzz missing", [
-      "Buzz Platform",
+    matchesProjectsSearch("ambush missing", [
+      "Ambush Platform",
       "Desktop, relay, and mobile clients",
     ]),
     false,

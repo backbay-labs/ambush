@@ -28,7 +28,7 @@ test("runtime change to a provider-locked runtime, full reset (Persona/Edit): cl
       envVars: { ANTHROPIC_API_KEY: "sk-1", KEEP: "x" },
     },
     {
-      previousRuntime: "buzz-agent",
+      previousRuntime: "ambush-agent",
       nextRuntime: "claude",
       nextRuntimeCanChooseProvider: false,
       lockedRuntimeReset: "full",
@@ -50,7 +50,7 @@ test("runtime change to a provider-locked runtime, provider-only reset (Create):
       model: "my-custom",
     },
     {
-      previousRuntime: "buzz-agent",
+      previousRuntime: "ambush-agent",
       nextRuntime: "claude",
       nextRuntimeCanChooseProvider: false,
       lockedRuntimeReset: "provider-only",
@@ -69,7 +69,7 @@ test("runtime change between provider-selection runtimes keeps provider state", 
   };
   const next = selectionOnRuntimeChange(current, {
     previousRuntime: "goose",
-    nextRuntime: "buzz-agent",
+    nextRuntime: "ambush-agent",
     nextRuntimeCanChooseProvider: true,
     lockedRuntimeReset: "full",
   });
@@ -87,7 +87,7 @@ test("provider switch clears the previous managed API key and sets the provider"
       envVars: { ANTHROPIC_API_KEY: "sk-1", KEEP: "x" },
     },
     {
-      runtime: "buzz-agent",
+      runtime: "ambush-agent",
       nextValue: "openai",
       clearModelWhenApiKeyMissing: false,
     },
@@ -105,7 +105,7 @@ test("custom-provider entry clears the managed key and enters custom editing", (
       envVars: { ANTHROPIC_API_KEY: "sk-1" },
     },
     {
-      runtime: "buzz-agent",
+      runtime: "ambush-agent",
       nextValue: "__custom_provider__",
       clearModelWhenApiKeyMissing: false,
     },
@@ -119,7 +119,7 @@ test("auto-provider selection maps to empty provider", () => {
   const next = selectionOnProviderDropdownChange(
     { ...base, provider: "anthropic", envVars: { ANTHROPIC_API_KEY: "sk-1" } },
     {
-      runtime: "buzz-agent",
+      runtime: "ambush-agent",
       nextValue: "__auto_provider__",
       clearModelWhenApiKeyMissing: false,
     },
@@ -132,7 +132,7 @@ test("Persona mode clears the model when the new provider's API key is missing",
   const next = selectionOnProviderDropdownChange(
     { ...base, model: "claude-4", provider: "" },
     {
-      runtime: "buzz-agent",
+      runtime: "ambush-agent",
       nextValue: "anthropic",
       clearModelWhenApiKeyMissing: true,
     },
@@ -147,7 +147,7 @@ test("Create/Edit mode keeps the model when the new provider's API key is missin
   const next = selectionOnProviderDropdownChange(
     { ...base, model: "my-custom-model", provider: "" },
     {
-      runtime: "buzz-agent",
+      runtime: "ambush-agent",
       nextValue: "anthropic",
       clearModelWhenApiKeyMissing: false,
     },
@@ -159,7 +159,7 @@ test("custom-model editing suppresses the model-scope clear on provider switch",
   const next = selectionOnProviderDropdownChange(
     { ...base, model: "anything", isCustomModelEditing: true },
     {
-      runtime: "buzz-agent",
+      runtime: "ambush-agent",
       nextValue: "openai",
       clearModelWhenApiKeyMissing: false,
     },

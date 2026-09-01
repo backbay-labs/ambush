@@ -34,7 +34,7 @@ import { LocalArchiveSettingsCard } from "@/features/local-archive/ui/LocalArchi
 import { cn } from "@/shared/lib/cn";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { Badge } from "@/shared/ui/badge";
-import { isBuzzTheme, useTheme } from "@/shared/theme/ThemeProvider";
+import { isAmbushTheme, useTheme } from "@/shared/theme/ThemeProvider";
 import {
   LIGHT_THEMES,
   SYNTAX_THEMES,
@@ -42,7 +42,7 @@ import {
   getThemePair,
 } from "@/shared/theme/theme-loader";
 import {
-  BUZZ_GRADIENT_STOPS,
+  AMBUSH_GRADIENT_STOPS,
   SystemPreferencePreviewFrame,
   ThemePreviewFrame,
   type ThemePreviewVars,
@@ -340,9 +340,9 @@ function PairedThemeTile({
             ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
             : "group-hover:ring-2 group-hover:ring-border",
         )}
-        darkGradient={darkName ? BUZZ_GRADIENT_STOPS[darkName] : undefined}
+        darkGradient={darkName ? AMBUSH_GRADIENT_STOPS[darkName] : undefined}
         darkVars={darkVars}
-        lightGradient={BUZZ_GRADIENT_STOPS[lightName]}
+        lightGradient={AMBUSH_GRADIENT_STOPS[lightName]}
         lightVars={lightVars}
       />
       <span
@@ -383,7 +383,7 @@ function SingleThemeTile({
             ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
             : "group-hover:ring-2 group-hover:ring-border",
         )}
-        sidebarGradient={BUZZ_GRADIENT_STOPS[name]}
+        sidebarGradient={AMBUSH_GRADIENT_STOPS[name]}
         vars={vars}
       />
       <span
@@ -408,8 +408,8 @@ const APPEARANCE_MODE_OPTIONS = [
 
 // Reveal/hide motion for the accent picker: a small translate + opacity fade.
 // The picker sits below the theme grid and reads as tucking up behind it, so
-// it enters from above (slides *down* into place when a non-Buzz theme reveals
-// it) and exits upward (slides up behind the grid when Buzz hides it). No
+// it enters from above (slides *down* into place when a non-Ambush theme reveals
+// it) and exits upward (slides up behind the grid when Ambush hides it). No
 // height/scale — height collapse clipped the swatches behind the grid's bottom
 // fade (the "white bar"). Snappier than the modal 0.2s since this is a small
 // settings control, sharing the modal/ProfileSettingsCard easing curve.
@@ -437,11 +437,11 @@ function ThemeSettingsCard() {
   const showCommunityScope = communities.length > 1;
   const communityLabel = appearanceCommunityLabel(activeCommunity?.name);
 
-  // Buzz themes pin a neutral accent (GitHub black in light, white in dark),
-  // so the accent picker is hidden while a Buzz theme is active. `themeName` is
-  // the effective theme, so this also covers System mode resolving to Buzz.
-  const buzzThemeSelected = isBuzzTheme(themeName);
-  const accentPickerHidden = buzzThemeSelected;
+  // Ambush themes pin a neutral accent (GitHub black in light, white in dark),
+  // so the accent picker is hidden while an Ambush theme is active. `themeName` is
+  // the effective theme, so this also covers System mode resolving to Ambush.
+  const ambushThemeSelected = isAmbushTheme(themeName);
+  const accentPickerHidden = ambushThemeSelected;
   const shouldReduceMotion = useReducedMotion();
 
   const previewVarsByTheme = useThemePreviewVars();
@@ -542,19 +542,19 @@ function ThemeSettingsCard() {
       className="h-[112px] w-[168px] shrink-0"
       darkGradient={
         selectedPairedDarkTheme
-          ? BUZZ_GRADIENT_STOPS[selectedPairedDarkTheme]
+          ? AMBUSH_GRADIENT_STOPS[selectedPairedDarkTheme]
           : undefined
       }
       darkVars={
         selectedPairedDarkTheme ? getVars(selectedPairedDarkTheme) : null
       }
-      lightGradient={BUZZ_GRADIENT_STOPS[selectedPairedTheme]}
+      lightGradient={AMBUSH_GRADIENT_STOPS[selectedPairedTheme]}
       lightVars={getVars(selectedPairedTheme)}
     />
   ) : (
     <ThemePreviewFrame
       className="h-[112px] w-[168px] shrink-0"
-      sidebarGradient={BUZZ_GRADIENT_STOPS[selectedTheme]}
+      sidebarGradient={AMBUSH_GRADIENT_STOPS[selectedTheme]}
       vars={getVars(selectedTheme)}
     />
   );
@@ -576,7 +576,7 @@ function ThemeSettingsCard() {
           }}
         />
         {/* Bottom fade — hidden while the accent picker is visible so its
-            near-white gradient (Buzz light) can't mask the swatches below it
+            near-white gradient (Ambush light) can't mask the swatches below it
             (the "white bar"). Kept only when the picker is hidden. */}
         {accentPickerHidden ? (
           <div
@@ -638,7 +638,7 @@ function ThemeSettingsCard() {
     >
       <SettingsSectionHeader
         title="Appearance"
-        description="Choose how Buzz looks and feels."
+        description="Choose how Ambush looks and feels."
       />
 
       <SettingsOptionGroupList>
@@ -698,7 +698,7 @@ function ThemeSettingsCard() {
                 className="text-sm font-normal text-muted-foreground/70"
                 data-settings-subcopy
               >
-                Choose the colors used throughout Buzz.
+                Choose the colors used throughout Ambush.
               </p>
             </div>
             <button
@@ -749,7 +749,7 @@ function ThemeSettingsCard() {
             </AnimatePresence>
           )}
 
-          {/* Accent color picker — hidden for Buzz themes (pinned neutral accent).
+          {/* Accent color picker — hidden for Ambush themes (pinned neutral accent).
               Reveal/hide with the translate-up + opacity fade defined by
               ACCENT_PICKER_TRANSITION above. Reduced motion skips the transition
               and just renders/unrenders. */}
@@ -783,7 +783,7 @@ function ThemeSettingsCard() {
           )}
 
           <GlassBackgroundSetting />
-          {buzzThemeSelected ? <ProminentActiveTabSetting /> : null}
+          {ambushThemeSelected ? <ProminentActiveTabSetting /> : null}
         </SettingsOptionGroup>
 
         <SettingsOptionGroup

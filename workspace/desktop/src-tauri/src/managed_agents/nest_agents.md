@@ -1,6 +1,6 @@
-# Buzz Nest
+# Ambush Nest
 
-Your persistent workspace. Created once by the Buzz desktop app. The static content above the managed-section markers is regenerated on upgrades — add custom notes below the markers or in separate files.
+Your persistent workspace. Created once by the Ambush desktop app. The static content above the managed-section markers is regenerated on upgrades — add custom notes below the markers or in separate files.
 
 ## Directory Layout
 
@@ -57,9 +57,9 @@ Git authorship, co-authorship, DCO sign-off, and cryptographic signing are separ
 
 A repository may require an accountable human as author and the implementing agent as co-author. An agent-owned repository may use the agent as author and require no human trailer. In both cases, repository-local policy controls.
 
-<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->
+<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->
 ## Active Agents
 
-*(No agents deployed yet. Add agents in the Buzz desktop app.)*
+*(No agents deployed yet. Add agents in the Ambush desktop app.)*
 
-<!-- END BUZZ MANAGED -->
+<!-- END AMBUSH MANAGED -->

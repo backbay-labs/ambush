@@ -19,18 +19,18 @@ require_literal "actions: read"
 require_literal "actions/workflows/ci.yml/runs"
 require_literal 'select-qualified-ci-run.jq'
 require_literal "needs: [build, qualify]"
-require_literal "https://buzz.block.xyz/attestations/deployment-eligibility/v1"
+require_literal "https://ambush.example.com/attestations/deployment-eligibility/v1"
 require_literal "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"
 require_literal "if: matrix.variant == 'release'"
-require_literal "BUZZ_SOURCE_SHA"
-require_literal "BUZZ_BUILD_ID"
-require_literal "BUZZ_BUILD_URL"
-require_literal '- "deploy/charts/buzz/Chart.yaml"'
+require_literal "AMBUSH_SOURCE_SHA"
+require_literal "AMBUSH_BUILD_ID"
+require_literal "AMBUSH_BUILD_URL"
+require_literal '- "deploy/charts/ambush/Chart.yaml"'
 require_literal '- "scripts/create-deployment-eligibility-predicate.jq"'
 require_literal '- "scripts/select-qualified-ci-run.jq"'
 require_literal '- "scripts/test-relay-image-eligibility-workflow.sh"'
 
-if grep -Fq "buzz-staging-dev" "$workflow"; then
+if grep -Fq "ambush-staging-dev" "$workflow"; then
   echo "canonical relay image workflow references the preview-only image package" >&2
   exit 1
 fi
@@ -85,17 +85,17 @@ JSON
 }
 
 predicate=$(jq -n \
-  --arg source_repository "block/buzz" \
+  --arg source_repository "backbay-labs/ambush" \
   --arg source_ref "refs/heads/main" \
   --arg source_sha "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
   --arg build_workflow ".github/workflows/docker.yml" \
   --argjson build_run_id 200 \
   --argjson build_run_attempt 2 \
-  --arg build_run_url "https://github.com/block/buzz/actions/runs/200/attempts/2" \
+  --arg build_run_url "https://github.com/backbay-labs/ambush/actions/runs/200/attempts/2" \
   --arg qualification_workflow ".github/workflows/ci.yml" \
   --argjson qualification_run_id 201 \
   --argjson qualification_run_attempt 1 \
-  --arg qualification_run_url "https://github.com/block/buzz/actions/runs/201" \
+  --arg qualification_run_url "https://github.com/backbay-labs/ambush/actions/runs/201" \
   --arg chart_version "0.1.8" \
   -f "$predicate_builder")
 
@@ -106,7 +106,7 @@ jq -e '
   .build.run_id == 200 and
   .qualification.run_id == 201 and
   .qualification.conclusion == "success" and
-  .helm_chart == {"name":"buzz","compatible_version":"0.1.8"} and
+  .helm_chart == {"name":"ambush","compatible_version":"0.1.8"} and
   (has("schema") | not) and
   (.helm_chart | has("schema_compatibility") | not)
 ' <<<"$predicate" >/dev/null || {

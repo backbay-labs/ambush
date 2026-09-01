@@ -7,8 +7,8 @@ import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota"
  * blob outgrows the single-slot budget (NIP-RS multi-slot mode).
  */
 
-const CLIENT_ID_KEY_PREFIX = "buzz.nip-rs.client-id";
-const SLOT_ID_KEY_PREFIX = "buzz.nip-rs.slot-id";
+const CLIENT_ID_KEY_PREFIX = "ambush.nip-rs.client-id";
+const SLOT_ID_KEY_PREFIX = "ambush.nip-rs.slot-id";
 
 export function generateHex(bytes: number): string {
   const arr = new Uint8Array(bytes);

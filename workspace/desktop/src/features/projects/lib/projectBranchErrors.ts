@@ -1,6 +1,6 @@
 /**
- * Relay push-policy denial token for a repository with no `buzz-channel`
- * binding. Declared in Rust as `buzz-core::git_perms::
+ * Relay push-policy denial token for a repository with no `ambush-channel`
+ * binding. Declared in Rust as `ambush-core::git_perms::
  * GIT_NO_CHANNEL_BINDING_TOKEN`; the relay's denial body starts with it
  * ("no_channel_binding: repository has no channel binding"). The legacy
  * spaced phrase is kept as a second matcher so this build also recognizes
@@ -12,7 +12,7 @@ const NO_CHANNEL_BINDING_LEGACY_PHRASE = "no channel binding";
 const NO_CHANNEL_BINDING_COPY =
   "This repository is not linked to a project channel, so the relay cannot " +
   "authorize access. The repository owner can link it with: " +
-  "buzz repos bind --id <repo> --channel <channel-uuid>";
+  "ambush repos bind --id <repo> --channel <channel-uuid>";
 
 /** True when a git/relay error text is the unbound-repository denial. */
 export function isNoChannelBindingError(message: string): boolean {

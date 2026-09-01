@@ -7,9 +7,9 @@ request, discussion, or other public channel.**
 
 Use GitHub's private vulnerability reporting form instead:
 
-**[Report a vulnerability privately](https://github.com/block/buzz/security/advisories/new)**
+**[Report a vulnerability privately](https://github.com/backbay-labs/ambush/security/advisories/new)**
 
-Submitting the form starts a private security advisory with the Buzz
+Submitting the form starts a private security advisory with the Ambush
 maintainers. Use that advisory for vulnerability details, follow-up questions,
 and coordinated remediation. Include as much detail as possible:
 
@@ -19,7 +19,7 @@ and coordinated remediation. Include as much detail as possible:
 - Any suggested mitigations you've identified
 
 If GitHub's private reporting form is unavailable to you, email
-**buzz@block.xyz** and do not include vulnerability details in a public issue.
+**security@ambush.example.com** and do not include vulnerability details in a public issue.
 
 You will receive an acknowledgment within **48 hours**. We aim to provide a
 full response — including a timeline for a fix — within **7 days** of initial
@@ -42,7 +42,7 @@ We will credit reporters in release notes unless you prefer to remain anonymous.
 | `main` (latest) | ✅ Active |
 | Previous releases | ⚠️ Best-effort; upgrade recommended |
 
-Buzz is pre-1.0. We do not maintain long-term support branches at this stage.
+Ambush is pre-1.0. We do not maintain long-term support branches at this stage.
 All security fixes land on `main` first.
 
 ---
@@ -75,7 +75,7 @@ unless the subscriber is a member.
 
 ### Append-Only Audit Log
 
-All events are written to a tamper-evident audit log (`buzz-audit`). Each
+All events are written to a tamper-evident audit log (`ambush-audit`). Each
 log entry is chained to the previous one via a SHA-256 hash chain. Because the
 chain is keyless, it is tamper-evident but not tamper-resistant: it detects
 accidental corruption or single-row edits, but an attacker with database write
@@ -84,7 +84,7 @@ for SOX-grade compliance and eDiscovery.
 
 ### Desktop Secret Storage — OS Keyring
 
-The Buzz desktop app stores nsec private keys in the operating system keyring
+The Ambush desktop app stores nsec private keys in the operating system keyring
 rather than in plaintext files: macOS Keychain, Windows Credential Manager, or
 the Linux Secret Service (`gnome-keyring` / `kwallet` via D-Bus). This covers
 both the human identity key and every managed-agent key.
@@ -97,7 +97,7 @@ plaintext file and does **not** migrate, so a transient outage cannot resurrect
 a rotated key from a leftover file.
 
 When no keyring backend is available (headless Linux with no Secret Service, for
-example), keys fall back to a `0o600` owner-only file. The `BUZZ_PRIVATE_KEY`
+example), keys fall back to a `0o600` owner-only file. The `AMBUSH_PRIVATE_KEY`
 environment variable, when set, always takes precedence over both stores — this
 is how harnessed agents and CI receive their identity.
 

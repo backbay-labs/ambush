@@ -1,7 +1,7 @@
-import 'package:buzz/features/profile/set_status_sheet.dart';
-import 'package:buzz/features/profile/user_status.dart';
-import 'package:buzz/features/profile/user_status_provider.dart';
-import 'package:buzz/shared/custom_emoji/custom_emoji_provider.dart';
+import 'package:ambush/features/profile/set_status_sheet.dart';
+import 'package:ambush/features/profile/user_status.dart';
+import 'package:ambush/features/profile/user_status_provider.dart';
+import 'package:ambush/shared/custom_emoji/custom_emoji_provider.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -43,7 +43,7 @@ void main() {
     );
   });
 
-  testWidgets('uses Buzz rows, desktop presets, and a real duration', (
+  testWidgets('uses Ambush rows, desktop presets, and a real duration', (
     tester,
   ) async {
     final statusNotifier = _RecordingUserStatusNotifier();

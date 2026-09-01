@@ -91,7 +91,7 @@ test("addProjectChannel removes its channel and does not publish when the projec
     id: "e".repeat(64),
     tags: [
       ["d", "platform"],
-      ["buzz-related-channel", "33333333-3333-4333-8333-333333333333"],
+      ["ambush-related-channel", "33333333-3333-4333-8333-333333333333"],
     ],
   });
   const fetchResults = [[originalHead], [concurrentHead]];

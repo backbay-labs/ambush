@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn reconcile_databricks_v1_to_v2_rewrites_v1_provider_on_block_build() {
     // rewrite_v1_provider=true simulates a Block build (baked env has
-    // BUZZ_AGENT_PROVIDER=databricks_v2). The structured provider field
+    // AMBUSH_AGENT_PROVIDER=databricks_v2). The structured provider field
     // must be migrated V1→V2 and the stale V1 model field must be cleared
     // so the baked DATABRICKS_MODEL wins at spawn time instead of the V1 name.
     let dir = tempfile::tempdir().unwrap();
@@ -30,7 +30,7 @@ fn reconcile_databricks_v1_to_v2_rewrites_v1_provider_on_block_build() {
         "provider: \"databricks\" must be rewritten to \"databricks_v2\" on Block builds"
     );
     // Stale V1 model must be cleared so the baked DATABRICKS_MODEL is not
-    // shadowed by BUZZ_AGENT_MODEL at spawn time (last-write-wins in Command::env).
+    // shadowed by AMBUSH_AGENT_MODEL at spawn time (last-write-wins in Command::env).
     assert!(
         records[0].get("model").is_none_or(|v| v.is_null()),
         "stale V1 model field must be cleared when provider is rewritten to V2"
@@ -49,7 +49,7 @@ fn reconcile_databricks_v1_to_v2_preserves_v1_provider_on_oss_build() {
             "name": "Brain",
             "provider": "databricks",
             "model": "dbrx-instruct",
-            "env_vars": { "BUZZ_AGENT_PROVIDER": "databricks" }
+            "env_vars": { "AMBUSH_AGENT_PROVIDER": "databricks" }
         }]),
     );
 
@@ -67,8 +67,10 @@ fn reconcile_databricks_v1_to_v2_preserves_v1_provider_on_oss_build() {
     assert_eq!(records[0]["model"], "dbrx-instruct");
     // Stale env var is still stripped even on OSS builds.
     assert!(
-        records[0]["env_vars"].get("BUZZ_AGENT_PROVIDER").is_none(),
-        "BUZZ_AGENT_PROVIDER must be stripped even when provider rewrite is disabled"
+        records[0]["env_vars"]
+            .get("AMBUSH_AGENT_PROVIDER")
+            .is_none(),
+        "AMBUSH_AGENT_PROVIDER must be stripped even when provider rewrite is disabled"
     );
 }
 
@@ -76,7 +78,7 @@ fn reconcile_databricks_v1_to_v2_preserves_v1_provider_on_oss_build() {
 fn reconcile_databricks_v1_to_v2_clears_model_on_provider_rewrite() {
     // When a V1 record is migrated to V2 on a Block build, the model field
     // must be removed. A stale V1 model name (e.g. "dbrx-instruct") emitted
-    // via BUZZ_AGENT_MODEL at spawn time would shadow the baked DATABRICKS_MODEL
+    // via AMBUSH_AGENT_MODEL at spawn time would shadow the baked DATABRICKS_MODEL
     // (last-write-wins), sending the agent to a V1 model on V2 endpoints.
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
@@ -133,7 +135,7 @@ fn reconcile_databricks_v1_to_v2_preserves_v2_provider() {
 }
 
 #[test]
-fn reconcile_databricks_v1_to_v2_strips_stale_buzz_agent_provider_from_env_vars() {
+fn reconcile_databricks_v1_to_v2_strips_stale_ambush_agent_provider_from_env_vars() {
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
         dir.path(),
@@ -142,7 +144,7 @@ fn reconcile_databricks_v1_to_v2_strips_stale_buzz_agent_provider_from_env_vars(
             "provider": "databricks_v2",
             "model": "goose-claude-4-6-sonnet",
             "env_vars": {
-                "BUZZ_AGENT_PROVIDER": "databricks",
+                "AMBUSH_AGENT_PROVIDER": "databricks",
                 "DATABRICKS_HOST": "https://dbc.example.com"
             }
         }]),
@@ -156,8 +158,10 @@ fn reconcile_databricks_v1_to_v2_strips_stale_buzz_agent_provider_from_env_vars(
     let records = read_agents_json(dir.path());
     // Stale derived key must be removed.
     assert!(
-        records[0]["env_vars"].get("BUZZ_AGENT_PROVIDER").is_none(),
-        "BUZZ_AGENT_PROVIDER must be stripped from env_vars"
+        records[0]["env_vars"]
+            .get("AMBUSH_AGENT_PROVIDER")
+            .is_none(),
+        "AMBUSH_AGENT_PROVIDER must be stripped from env_vars"
     );
     // Non-derived keys must be preserved.
     assert_eq!(
@@ -176,8 +180,8 @@ fn reconcile_databricks_v1_to_v2_strips_all_derived_keys_from_env_vars() {
             "provider": "anthropic",
             "model": "claude-opus-4-5",
             "env_vars": {
-                "BUZZ_AGENT_PROVIDER": "anthropic",
-                "BUZZ_AGENT_MODEL": "claude-opus-4-5",
+                "AMBUSH_AGENT_PROVIDER": "anthropic",
+                "AMBUSH_AGENT_MODEL": "claude-opus-4-5",
                 "GOOSE_PROVIDER": "anthropic",
                 "GOOSE_MODEL": "claude-opus-4-5",
                 "ANTHROPIC_API_KEY": "sk-test"
@@ -193,8 +197,8 @@ fn reconcile_databricks_v1_to_v2_strips_all_derived_keys_from_env_vars() {
     let records = read_agents_json(dir.path());
     let env_vars = &records[0]["env_vars"];
     // All four derived keys must be stripped.
-    assert!(env_vars.get("BUZZ_AGENT_PROVIDER").is_none());
-    assert!(env_vars.get("BUZZ_AGENT_MODEL").is_none());
+    assert!(env_vars.get("AMBUSH_AGENT_PROVIDER").is_none());
+    assert!(env_vars.get("AMBUSH_AGENT_MODEL").is_none());
     assert!(env_vars.get("GOOSE_PROVIDER").is_none());
     assert!(env_vars.get("GOOSE_MODEL").is_none());
     // Non-derived key must be preserved.
@@ -212,12 +216,12 @@ fn reconcile_databricks_v1_to_v2_handles_multiple_records_block_build() {
             {
                 "name": "Agent A",
                 "provider": "databricks",
-                "env_vars": { "BUZZ_AGENT_PROVIDER": "databricks" }
+                "env_vars": { "AMBUSH_AGENT_PROVIDER": "databricks" }
             },
             {
                 "name": "Agent B",
                 "provider": "anthropic",
-                "env_vars": { "BUZZ_AGENT_MODEL": "claude-3-5-sonnet" }
+                "env_vars": { "AMBUSH_AGENT_MODEL": "claude-3-5-sonnet" }
             },
             {
                 "name": "Agent C",
@@ -235,10 +239,12 @@ fn reconcile_databricks_v1_to_v2_handles_multiple_records_block_build() {
     let records = read_agents_json(dir.path());
     // A: provider rewritten, stale env_var stripped.
     assert_eq!(records[0]["provider"], "databricks_v2");
-    assert!(records[0]["env_vars"].get("BUZZ_AGENT_PROVIDER").is_none());
-    // B: provider untouched, stale BUZZ_AGENT_MODEL stripped.
+    assert!(records[0]["env_vars"]
+        .get("AMBUSH_AGENT_PROVIDER")
+        .is_none());
+    // B: provider untouched, stale AMBUSH_AGENT_MODEL stripped.
     assert_eq!(records[1]["provider"], "anthropic");
-    assert!(records[1]["env_vars"].get("BUZZ_AGENT_MODEL").is_none());
+    assert!(records[1]["env_vars"].get("AMBUSH_AGENT_MODEL").is_none());
     // C: V2 provider, no stale keys — unchanged.
     assert_eq!(records[2]["provider"], "databricks_v2");
 }
@@ -251,7 +257,7 @@ fn reconcile_databricks_v1_to_v2_is_idempotent() {
         &serde_json::json!([{
             "name": "Brain",
             "provider": "databricks",
-            "env_vars": { "BUZZ_AGENT_PROVIDER": "databricks" }
+            "env_vars": { "AMBUSH_AGENT_PROVIDER": "databricks" }
         }]),
     );
     let path = dir.path().join("agents/managed-agents.json");
@@ -300,8 +306,8 @@ fn reconcile_databricks_v1_to_v2_strips_derived_keys_from_keyless_persona_defini
             "name": "Fizz",
             "persona_id": "builtin:fizz",
             "env_vars": {
-                "BUZZ_AGENT_PROVIDER": "databricks",
-                "BUZZ_AGENT_MODEL": "goose-claude-4-6-sonnet",
+                "AMBUSH_AGENT_PROVIDER": "databricks",
+                "AMBUSH_AGENT_MODEL": "goose-claude-4-6-sonnet",
                 "DATABRICKS_HOST": "https://dbc.example.com"
             }
         }]),
@@ -316,12 +322,12 @@ fn reconcile_databricks_v1_to_v2_strips_derived_keys_from_keyless_persona_defini
     let env_vars = &records[0]["env_vars"];
     // Derived keys stripped even though there is no top-level "provider" field.
     assert!(
-        env_vars.get("BUZZ_AGENT_PROVIDER").is_none(),
-        "BUZZ_AGENT_PROVIDER must be stripped from keyless persona definition env_vars"
+        env_vars.get("AMBUSH_AGENT_PROVIDER").is_none(),
+        "AMBUSH_AGENT_PROVIDER must be stripped from keyless persona definition env_vars"
     );
     assert!(
-        env_vars.get("BUZZ_AGENT_MODEL").is_none(),
-        "BUZZ_AGENT_MODEL must be stripped from keyless persona definition env_vars"
+        env_vars.get("AMBUSH_AGENT_MODEL").is_none(),
+        "AMBUSH_AGENT_MODEL must be stripped from keyless persona definition env_vars"
     );
     // Non-derived key preserved.
     assert_eq!(env_vars["DATABRICKS_HOST"], "https://dbc.example.com");
@@ -338,8 +344,8 @@ fn reconcile_databricks_v1_to_v2_strips_derived_keys_case_insensitively() {
             "name": "Brain",
             "provider": "databricks_v2",
             "env_vars": {
-                "buzz_agent_provider": "databricks",
-                "Buzz_Agent_Model": "goose-claude-4-6-sonnet",
+                "ambush_agent_provider": "databricks",
+                "Ambush_Agent_Model": "goose-claude-4-6-sonnet",
                 "DATABRICKS_HOST": "https://dbc.example.com"
             }
         }]),
@@ -353,8 +359,8 @@ fn reconcile_databricks_v1_to_v2_strips_derived_keys_case_insensitively() {
     let records = read_agents_json(dir.path());
     let env_vars = &records[0]["env_vars"];
     // Mixed-case derived keys must be stripped.
-    assert!(env_vars.get("buzz_agent_provider").is_none());
-    assert!(env_vars.get("Buzz_Agent_Model").is_none());
+    assert!(env_vars.get("ambush_agent_provider").is_none());
+    assert!(env_vars.get("Ambush_Agent_Model").is_none());
     // Non-derived key preserved.
     assert_eq!(env_vars["DATABRICKS_HOST"], "https://dbc.example.com");
 }

@@ -18,7 +18,7 @@ use crate::managed_agents::{
     AgentDefinition, TeamRecord,
 };
 
-use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
+use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
 
 /// A signed catalog head, retained and awaiting relay acceptance.
 ///
@@ -53,7 +53,7 @@ pub(super) enum RefreshOrRetractOutcome {
 /// its read gate, so the client's notion of "shared" cannot drift from the
 /// relay's.
 fn retained_team_is_shared(row: Option<&RetainedEvent>) -> bool {
-    use buzz_core_pkg::kind::event_is_shared;
+    use ambush_core_pkg::kind::event_is_shared;
     use nostr::JsonUtil;
 
     row.and_then(|retained| nostr::Event::from_json(&retained.raw_event).ok())
@@ -88,7 +88,7 @@ fn project_scoped_team_sharing(scope: Result<RetentionScope, String>, teams: &mu
     });
     if let Err(error) = projected {
         eprintln!(
-            "buzz-desktop: team-share-projection unavailable, reporting every team as unshared: {error}"
+            "ambush-desktop: team-share-projection unavailable, reporting every team as unshared: {error}"
         );
         for team in teams {
             team.shared = false;
@@ -207,7 +207,7 @@ pub(super) fn tombstone_team_catalog_pending<R: tauri::Runtime>(
         tombstone_team_catalog_at(&scope.db_path, &scope.owner_keys, d_tag)
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: team-catalog-tombstone: {e}");
+        eprintln!("ambush-desktop: team-catalog-tombstone: {e}");
     }
 }
 
@@ -241,13 +241,16 @@ pub(super) fn refresh_shared_team_catalog_head_resolving<R: tauri::Runtime>(
     match result {
         Ok(RefreshOrRetractOutcome::RemovalQueued { ref reason }) => {
             eprintln!(
-                "buzz-desktop: team-catalog-refresh: retracting '{}' — {reason}",
+                "ambush-desktop: team-catalog-refresh: retracting '{}' — {reason}",
                 team.name
             );
             emit_team_catalog_auto_retracted(app, &team.name, reason);
         }
         Err(ref e) => {
-            eprintln!("buzz-desktop: team-catalog-refresh: '{}' — {e}", team.name);
+            eprintln!(
+                "ambush-desktop: team-catalog-refresh: '{}' — {e}",
+                team.name
+            );
         }
         _ => {}
     }
@@ -277,7 +280,7 @@ pub(super) fn resolve_and_refresh_or_retract_at(
             // (rather than via `refresh_or_retract_shared_head_at`) so the
             // resolution-error reason is preserved in the payload.
             use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-            use buzz_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
+            use ambush_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
             use nostr::JsonUtil;
 
             let pubkey = keys.public_key().to_hex();
@@ -314,7 +317,7 @@ pub(super) fn refresh_or_retract_shared_head_at(
         retention::{get_retained_event, open_retention_db, retain_event},
         team_catalog::build_team_catalog_event,
     };
-    use buzz_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
+    use ambush_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
     use nostr::JsonUtil;
 
     let pubkey = keys.public_key().to_hex();
@@ -416,14 +419,14 @@ pub(super) fn refresh_shared_team_catalog_heads_for_persona<R: tauri::Runtime>(
             match outcome {
                 Ok(RefreshOrRetractOutcome::RemovalQueued { ref reason }) => {
                     eprintln!(
-                        "buzz-desktop: team-catalog-refresh: retracting '{}' after persona edit — {reason}",
+                        "ambush-desktop: team-catalog-refresh: retracting '{}' after persona edit — {reason}",
                         team.name
                     );
                     emit_team_catalog_auto_retracted(app, &team.name, reason);
                 }
                 Err(ref e) => {
                     eprintln!(
-                        "buzz-desktop: team-catalog-refresh: '{}' after persona edit — {e}",
+                        "ambush-desktop: team-catalog-refresh: '{}' after persona edit — {e}",
                         team.name
                     );
                 }
@@ -433,7 +436,7 @@ pub(super) fn refresh_shared_team_catalog_heads_for_persona<R: tauri::Runtime>(
         Ok(())
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: team-catalog-refresh-for-persona: {e}");
+        eprintln!("ambush-desktop: team-catalog-refresh-for-persona: {e}");
     }
 }
 
@@ -492,7 +495,7 @@ fn emit_team_catalog_auto_retracted<R: tauri::Runtime>(
         "team-catalog-auto-retracted",
         TeamCatalogAutoRetractedPayload { team_name, reason },
     ) {
-        eprintln!("buzz-desktop: team-catalog-auto-retracted: failed to emit notice: {e}");
+        eprintln!("ambush-desktop: team-catalog-auto-retracted: failed to emit notice: {e}");
     }
 }
 

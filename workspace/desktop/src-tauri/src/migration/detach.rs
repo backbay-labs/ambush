@@ -86,7 +86,7 @@ pub(super) fn detach_directory_backed_teams_in_dir(base_dir: &Path) -> Result<us
                 }
             }
             // F1 (Thufir): clear instance-side pack plumbing. These fields
-            // drove BUZZ_ACP_PERSONA_PACK / BUZZ_ACP_PERSONA_NAME env vars
+            // drove AMBUSH_ACP_PERSONA_PACK / AMBUSH_ACP_PERSONA_NAME env vars
             // at spawn, which T3 already removed. Clearing removes the dead
             // data so T6 can safely delete the consuming code.
             if agent.persona_team_dir.is_some() || agent.persona_name_in_team.is_some() {
@@ -125,7 +125,7 @@ pub(super) fn detach_directory_backed_teams_in_dir(base_dir: &Path) -> Result<us
                         }
                     }
                     Err(e) => eprintln!(
-                        "buzz-desktop: detach-dir-teams: team {}: \
+                        "ambush-desktop: detach-dir-teams: team {}: \
                          failed to read instructions.md (preserving existing value): {e}",
                         team.id
                     ),

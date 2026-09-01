@@ -29,7 +29,7 @@ const PERSONA_SYNC_KINDS = [
 ];
 
 // One history page. The relay clamps a REQ `limit` to its advertised
-// `max_limit` (1000; `crates/buzz-db` `DEFAULT_MAX_PAGE_LIMIT`), so a single
+// `max_limit` (1000; `crates/ambush-db` `DEFAULT_MAX_PAGE_LIMIT`), so a single
 // query can never return an owner's complete history once it exceeds the page —
 // `startPersonaSync` pages to exhaustion (see `fetchOwnerHistoryToExhaustion`).
 const PERSONA_HISTORY_PAGE_LIMIT = 500;

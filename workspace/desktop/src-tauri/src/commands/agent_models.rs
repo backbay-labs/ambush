@@ -29,7 +29,7 @@ use crate::{
     util::now_iso,
 };
 
-/// Query available models from an agent via `buzz-acp models --json`.
+/// Query available models from an agent via `ambush-acp models --json`.
 ///
 /// Spawns a short-lived subprocess (no relay connection needed). The subprocess
 /// starts the agent, queries its model catalog, and exits. ~2-5s total.
@@ -239,7 +239,7 @@ pub async fn discover_agent_models(
         &merged_env,
     );
 
-    // Buzz shared compute discovery must not depend on the local OpenAI ingress: that
+    // Ambush shared compute discovery must not depend on the local OpenAI ingress: that
     // client endpoint is started only after a live target is selected.
     #[cfg(feature = "mesh-llm")]
     if input.provider.as_deref().map(str::trim)
@@ -253,11 +253,11 @@ pub async fn discover_agent_models(
             ],
         )
         .await
-        .map_err(|error| format!("Buzz shared compute model discovery failed: {error}"))?;
+        .map_err(|error| format!("Ambush shared compute model discovery failed: {error}"))?;
         let availability = crate::mesh_llm::availability_from_events(events);
         if availability.models.is_empty() {
             return Err(availability.reason.unwrap_or_else(|| {
-                "No live Buzz shared compute models are available".to_string()
+                "No live Ambush shared compute models are available".to_string()
             }));
         }
         return Ok(AgentModelsResponse {
@@ -281,7 +281,7 @@ pub async fn discover_agent_models(
     if input.provider.as_deref().map(str::trim)
         == Some(crate::managed_agents::RELAY_MESH_PROVIDER_ID)
     {
-        return Err("Buzz shared compute is not available in this build".to_string());
+        return Err("Ambush shared compute is not available in this build".to_string());
     }
 
     if let Some(models) =
@@ -704,7 +704,7 @@ pub(super) use update::{flush_managed_agent_policy, managed_agent_access_policy_
 
 // ── Model normalization ───────────────────────────────────────────────────────
 
-/// Normalize raw `buzz-acp models --json` output into a typed DTO for the frontend.
+/// Normalize raw `ambush-acp models --json` output into a typed DTO for the frontend.
 ///
 /// Merges models from both ACP paths (stable configOptions + unstable SessionModelState),
 /// deduplicates by ID (stable takes precedence), and returns a unified list.

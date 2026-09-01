@@ -83,7 +83,7 @@ fn plan_subscriptions(
     for sub in subscriptions {
         let Some(scope_type) = parse_scope_type(&sub.scope_type) else {
             eprintln!(
-                "buzz-desktop: archive sync: unknown scope_type {:?}, skipping",
+                "ambush-desktop: archive sync: unknown scope_type {:?}, skipping",
                 sub.scope_type
             );
             continue;
@@ -241,7 +241,7 @@ async fn reconcile<I: ArchiveSyncIo + ?Sized>(io: &I, scopes: &mut HashMap<Strin
     let subscriptions = match io.list_subscriptions().await {
         Ok(subscriptions) => subscriptions,
         Err(error) => {
-            eprintln!("buzz-desktop: archive sync: list_save_subscriptions failed: {error}");
+            eprintln!("ambush-desktop: archive sync: list_save_subscriptions failed: {error}");
             return;
         }
     };
@@ -263,7 +263,7 @@ async fn flush<I: ArchiveSyncIo + ?Sized>(io: &I, candidates: Vec<ArchiveCandida
         // kind-44200 events must not invalidate usage queries.
         Ok(result) if result.persisted_agent_metrics > 0 => io.notify_agent_metrics_changed(),
         Ok(_) => {}
-        Err(error) => eprintln!("buzz-desktop: archive sync: archive_events failed: {error}"),
+        Err(error) => eprintln!("ambush-desktop: archive sync: archive_events failed: {error}"),
     }
 }
 

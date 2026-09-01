@@ -4,7 +4,7 @@ import * as React from "react";
 export type ConversationDensity = "compact" | "comfortable" | "spacious";
 
 export const CONVERSATION_DENSITY_STORAGE_KEY =
-  "buzz.appearance.conversationDensity";
+  "ambush.appearance.conversationDensity";
 export const DEFAULT_CONVERSATION_DENSITY: ConversationDensity = "comfortable";
 
 const listeners = new Set<() => void>();

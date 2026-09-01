@@ -49,7 +49,7 @@ test.describe("Pocket voice settings", () => {
     );
 
     const savedCommands = await page.evaluate(() =>
-      (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+      (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
         .filter((entry) =>
           ["set_pocket_voice", "set_tts_enabled"].includes(entry.command),
         )
@@ -141,7 +141,7 @@ test.describe("Pocket voice settings", () => {
     await page.getByRole("button", { name: "Preview" }).click();
 
     const mutations = await page.evaluate(() =>
-      (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+      (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
         .filter((entry) =>
           [
             "import_pocket_voice",
@@ -186,7 +186,7 @@ test.describe("Pocket voice settings", () => {
     await expect(page.getByTestId("voice-settings-error")).toBeHidden();
 
     const audioCommands = await page.evaluate(() =>
-      (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter((entry) =>
+      (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter((entry) =>
         ["preview_pocket_voice", "delete_pocket_voice"].includes(entry.command),
       ),
     );

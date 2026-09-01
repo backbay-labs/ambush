@@ -22,7 +22,7 @@
 //! - any runtime field (`runtime_pid`, `last_*`, `backend_agent_id`, …) — these
 //!   mutate on every start/stop and describe transient process state.
 
-use buzz_core_pkg::kind::KIND_MANAGED_AGENT;
+use ambush_core_pkg::kind::KIND_MANAGED_AGENT;
 use nostr::{EventBuilder, Kind, Tag};
 use serde::{Deserialize, Serialize};
 
@@ -171,11 +171,11 @@ mod tests {
             auth_tag: Some("authtagsecret".to_string()),
             relay_url: "wss://relay.example".to_string(),
             avatar_url: Some("https://example.com/a.png".to_string()),
-            acp_command: "buzz-acp".to_string(),
+            acp_command: "ambush-acp".to_string(),
             agent_command: "goose".to_string(),
             agent_command_override: None,
             agent_args: vec!["--flag".to_string()],
-            mcp_command: "buzz-dev-mcp".to_string(),
+            mcp_command: "ambush-dev-mcp".to_string(),
             turn_timeout_seconds: 320,
             idle_timeout_seconds: None,
             max_turn_duration_seconds: None,
@@ -189,7 +189,7 @@ mod tests {
             auto_restart_on_config_change: true,
             runtime_pid: Some(4242),
             backend: super::super::BackendKind::Provider {
-                id: "buzz-backend-x".to_string(),
+                id: "ambush-backend-x".to_string(),
                 config: serde_json::json!({ "api_key": "sk-provider-secret" }),
             },
             backend_agent_id: Some("remote-id".to_string()),

@@ -186,7 +186,7 @@ test("sustained advances persist within each one-second window", () => {
     }
 
     const contexts = JSON.parse(
-      storage.getItem(`buzz.channel-read-state.v2:${"5".repeat(64)}`),
+      storage.getItem(`ambush.channel-read-state.v2:${"5".repeat(64)}`),
     );
     assert.equal(contexts["channel-1"], new Date(2_800_000).toISOString());
     assert.equal(timers.size, 1, "latest advance should open the next window");
@@ -213,7 +213,7 @@ test("visibility hidden flushes pending local state", () => {
     assert.equal(timers.size, 0, "flush should cancel the trailing timer");
     assert.equal(storage.writes.length - baselineWrites, 3);
     const contexts = JSON.parse(
-      storage.getItem(`buzz.channel-read-state.v2:${"2".repeat(64)}`),
+      storage.getItem(`ambush.channel-read-state.v2:${"2".repeat(64)}`),
     );
     assert.equal(contexts["channel-1"], new Date(100_000).toISOString());
   } finally {
@@ -227,7 +227,7 @@ test("hydrateFromLocalStorage persists immediately", () => {
   const storage = makeLocalStorage();
   const pubkey = "3".repeat(64);
   storage.setItem(
-    `buzz.channel-read-state.v2:${pubkey}`,
+    `ambush.channel-read-state.v2:${pubkey}`,
     JSON.stringify({ "channel-1": new Date(100_000).toISOString() }),
   );
   globalThis.window.localStorage = storage;
@@ -302,7 +302,7 @@ test("destroyed manager cannot persist after an in-flight fetch resolves", async
       "the stale manager must not schedule persistence after destruction",
     );
     const contexts = JSON.parse(
-      storage.getItem(`buzz.channel-read-state.v2:${pubkey}`),
+      storage.getItem(`ambush.channel-read-state.v2:${pubkey}`),
     );
     assert.equal(
       contexts["channel-1"],

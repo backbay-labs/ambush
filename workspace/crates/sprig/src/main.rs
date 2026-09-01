@@ -14,8 +14,8 @@ fn dispatch() -> Result<(), String> {
         .to_ascii_lowercase();
 
     match cmd.as_str() {
-        "buzz-acp" => buzz_acp::run().map_err(|e| e.to_string()),
-        "buzz-agent" => buzz_agent::run().map_err(|e| e.to_string()),
+        "ambush-acp" => ambush_acp::run().map_err(|e| e.to_string()),
+        "ambush-agent" => ambush_agent::run().map_err(|e| e.to_string()),
         "sprig" => match std::env::args().nth(1).as_deref() {
             Some("-V") | Some("--version") => {
                 println!("sprig {}", env!("CARGO_PKG_VERSION"));
@@ -36,18 +36,18 @@ fn dispatch() -> Result<(), String> {
                 ))
             }
         },
-        // buzz-dev-mcp also handles its own multicall names: rg, tree,
-        // buzz, git-credential-nostr, and git-sign-nostr.
-        _ => buzz_dev_mcp::run().map_err(|e| e.to_string()),
+        // ambush-dev-mcp also handles its own multicall names: rg, tree,
+        // ambush, git-credential-nostr, and git-sign-nostr.
+        _ => ambush_dev_mcp::run().map_err(|e| e.to_string()),
     }
 }
 
 fn print_usage() {
     println!(
-        "Sprig — all-in-one Buzz ACP harness, agent, and developer MCP\n\n\
+        "Sprig — all-in-one Ambush ACP harness, agent, and developer MCP\n\n\
 Sprig is a multicall binary. Invoke it through one of the personality names:\n\n\
-  buzz-acp       ACP harness\n  buzz-agent     ACP-compliant agent\n  buzz-dev-mcp   Developer MCP server\n\n\
-Developer MCP helper names are also supported: rg, tree, buzz, git-credential-nostr, git-sign-nostr.\n\n\
-Installers can create links with:\n  ln -s sprig buzz-acp\n  ln -s sprig buzz-agent\n  ln -s sprig buzz-dev-mcp"
+  ambush-acp       ACP harness\n  ambush-agent     ACP-compliant agent\n  ambush-dev-mcp   Developer MCP server\n\n\
+Developer MCP helper names are also supported: rg, tree, ambush, git-credential-nostr, git-sign-nostr.\n\n\
+Installers can create links with:\n  ln -s sprig ambush-acp\n  ln -s sprig ambush-agent\n  ln -s sprig ambush-dev-mcp"
     );
 }

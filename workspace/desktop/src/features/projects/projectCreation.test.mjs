@@ -25,7 +25,7 @@ test("buildProjectAnnouncementTemplate emits a channel-first NIP-MP project", ()
   assert.deepEqual(templates.project.tags, [
     ["d", "sprout"],
     ["name", "Sprout"],
-    ["buzz-channel", CHANNEL],
+    ["ambush-channel", CHANNEL],
     ["description", "A workspace that starts as a conversation"],
   ]);
   assert.equal(templates.project.content, "");
@@ -48,8 +48,8 @@ test("buildProjectAnnouncementTemplate records unlisted visibility and members",
   assert.deepEqual(templates.project.tags, [
     ["d", "sprout"],
     ["name", "Sprout"],
-    ["buzz-channel", CHANNEL],
-    ["buzz-visibility", "unlisted"],
+    ["ambush-channel", CHANNEL],
+    ["ambush-visibility", "unlisted"],
     ["a", address],
   ]);
 });
@@ -70,14 +70,14 @@ test("buildProjectBootstrapTemplates binds a default repository to the home chan
   assert.deepEqual(templates.project.tags, [
     ["d", "sprout"],
     ["name", "Sprout"],
-    ["buzz-channel", CHANNEL],
+    ["ambush-channel", CHANNEL],
     ["description", "A workspace that starts as a conversation"],
     ["a", repositoryAddress],
   ]);
   assert.deepEqual(templates.repository.tags, [
     ["d", "sprout"],
     ["name", "Sprout"],
-    ["buzz-channel", CHANNEL],
+    ["ambush-channel", CHANNEL],
     ["description", "A workspace that starts as a conversation"],
   ]);
 });

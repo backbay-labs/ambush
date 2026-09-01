@@ -1,6 +1,6 @@
 part of '../emoji_picker.dart';
 
-const _nativeEmojiPickerChannel = MethodChannel('buzz/native_emoji_picker');
+const _nativeEmojiPickerChannel = MethodChannel('ambush/native_emoji_picker');
 
 /// Guards the process-global native method-call handler: one native sheet may
 /// own it at a time. A reentrant open would replace the handler and hijack the
@@ -43,7 +43,7 @@ Future<void> _presentIosEmojiPicker({
     // the composer appears unresponsive.
     final loadingSheetBuilt = Completer<void>();
     loadingSheet =
-        showBuzzModalBottomSheet<void>(
+        showAmbushModalBottomSheet<void>(
           context: context,
           isScrollControlled: true,
           showCloseButton: false,

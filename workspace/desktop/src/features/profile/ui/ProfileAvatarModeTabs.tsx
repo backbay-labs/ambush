@@ -42,7 +42,7 @@ export function ProfileAvatarModeTabs({
         aria-label="Avatar type"
         className={cn(
           isOnboardingModal
-            ? "relative isolate grid h-10 w-full max-w-[320px] grid-cols-3 overflow-hidden rounded-full bg-[color:rgb(var(--buzz-onboarding-avatar-control-fg)_/_0.12)] p-1 text-muted-foreground"
+            ? "relative isolate grid h-10 w-full max-w-[320px] grid-cols-3 overflow-hidden rounded-full bg-[color:rgb(var(--ambush-onboarding-avatar-control-fg)_/_0.12)] p-1 text-muted-foreground"
             : "relative isolate grid h-14 w-full grid-cols-3 overflow-hidden rounded-full bg-muted p-1 text-muted-foreground",
         )}
       >
@@ -51,7 +51,7 @@ export function ProfileAvatarModeTabs({
           className={cn(
             "absolute bottom-1 left-1 top-1 z-0 rounded-full shadow transition-transform duration-[250ms] ease-out",
             isOnboardingModal
-              ? "bg-[rgb(var(--buzz-onboarding-avatar-action-bg))]"
+              ? "bg-[rgb(var(--ambush-onboarding-avatar-action-bg))]"
               : "bg-background",
           )}
           style={{
@@ -63,7 +63,7 @@ export function ProfileAvatarModeTabs({
           <TabsTrigger
             className={cn(
               isOnboardingModal
-                ? "relative z-10 h-full rounded-full bg-transparent px-4 text-sm font-normal shadow-none transition-colors data-[state=active]:bg-transparent data-[state=active]:text-[rgb(var(--buzz-onboarding-avatar-action-fg))] data-[state=active]:shadow-none"
+                ? "relative z-10 h-full rounded-full bg-transparent px-4 text-sm font-normal shadow-none transition-colors data-[state=active]:bg-transparent data-[state=active]:text-[rgb(var(--ambush-onboarding-avatar-action-fg))] data-[state=active]:shadow-none"
                 : "relative z-10 h-full rounded-full bg-transparent text-sm font-medium shadow-none transition-colors data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none",
             )}
             disabled={disabled}

@@ -55,7 +55,7 @@ function summary(overrides: Record<string, unknown>) {
   return {
     id: FEEDBACK_ONE,
     communityId: "6d474feb-c50a-44e4-a0b5-f30532df49bc",
-    communityHost: "design.buzz.xyz",
+    communityHost: "design.ambush.example.com",
     submitterPubkey: "21".repeat(32),
     category: "bug",
     bodySummary: "Composer froze on paste.",
@@ -272,11 +272,11 @@ test("a purged feedback detail derives no attachments from an absent host", asyn
         eventId: "31".repeat(32),
         submitterPubkey: "21".repeat(32),
         category: "bug",
-        body: "Broken.\n\n![shot](https://design.buzz.xyz/media/x.png)",
+        body: "Broken.\n\n![shot](https://design.ambush.example.com/media/x.png)",
         tags: [
           [
             "imeta",
-            "url https://design.buzz.xyz/media/x.png",
+            "url https://design.ambush.example.com/media/x.png",
             "m image/png",
             `x ${imageHash}`,
             "filename shot.png",
@@ -327,15 +327,15 @@ test("a hostile attachment served as octet-stream is download-only, never a navi
       body: JSON.stringify({
         id: FEEDBACK_ONE,
         communityId: "6d474feb-c50a-44e4-a0b5-f30532df49bc",
-        communityHost: "design.buzz.xyz",
+        communityHost: "design.ambush.example.com",
         eventId: "31".repeat(32),
         submitterPubkey: "21".repeat(32),
         category: "bug",
-        body: "Broken.\n\n![shot](https://design.buzz.xyz/media/x.png)",
+        body: "Broken.\n\n![shot](https://design.ambush.example.com/media/x.png)",
         tags: [
           [
             "imeta",
-            "url https://design.buzz.xyz/media/x.png",
+            "url https://design.ambush.example.com/media/x.png",
             "m image/png",
             `x ${hash}`,
             "filename shot.png",

@@ -8,7 +8,7 @@ use super::{dedupe_models, MeshAvailability, MeshModelOption, MeshServeTarget, M
 /// Running-node status notes are refreshed every 45 seconds. Routing ignores
 /// notes older than two minutes so crashed/offline devices stop contributing
 /// compute without a relay-side cleanup job. Admission intentionally does not:
-/// Buzz membership, rather than device liveness, is the trust boundary.
+/// Ambush membership, rather than device liveness, is the trust boundary.
 pub(super) const STATUS_FRESHNESS_SECS: u64 = 120;
 pub(crate) const MESH_STATUS_PAGE_SIZE: usize = 100;
 
@@ -174,11 +174,11 @@ fn endpoint_binding_is_valid(event: &nostr::Event, content: &serde_json::Value) 
 
 pub fn availability_from_events(events: Vec<nostr::Event>) -> MeshAvailability {
     if events.is_empty() {
-        return MeshAvailability::unavailable("Buzz shared compute status is not published yet");
+        return MeshAvailability::unavailable("Ambush shared compute status is not published yet");
     }
     let Some(members) = latest_membership_list(&events) else {
         return MeshAvailability::unavailable(
-            "Buzz shared compute is waiting for the current member roster",
+            "Ambush shared compute is waiting for the current member roster",
         );
     };
 
@@ -258,7 +258,7 @@ pub fn availability_from_events(events: Vec<nostr::Event>) -> MeshAvailability {
     }
 
     if !saw_valid_status {
-        return MeshAvailability::unavailable("Buzz shared compute status is malformed");
+        return MeshAvailability::unavailable("Ambush shared compute status is malformed");
     }
 
     let serve_targets = dedupe_targets(all_targets);
@@ -268,7 +268,7 @@ pub fn availability_from_events(events: Vec<nostr::Event>) -> MeshAvailability {
         reason: if available {
             None
         } else {
-            Some("no Buzz shared compute serving members are available".to_string())
+            Some("no Ambush shared compute serving members are available".to_string())
         },
         models,
         serve_targets,

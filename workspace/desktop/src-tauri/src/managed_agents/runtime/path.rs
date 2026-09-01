@@ -36,7 +36,7 @@ pub(crate) fn should_skip_claude_executable(path: &std::path::Path, is_windows: 
 /// `None` because Git Bash returns POSIX colon-delimited paths that poison
 /// native children. On Unix it is the failure mode: a login shell that exits
 /// non-zero or prints nothing also yields `None`, and the child is then left
-/// with only Buzz's managed Node dirs — no `curl`, `sh`, or `tar`, which
+/// with only Ambush's managed Node dirs — no `curl`, `sh`, or `tar`, which
 /// silently breaks every `curl … | bash` install. The inherited PATH is the
 /// floor under both cases, appended last so managed dirs keep precedence.
 ///
@@ -54,7 +54,7 @@ pub(crate) fn should_use_inherited(had_shell_path: bool, has_local_context: bool
 /// Pure PATH composition kernel shared by the install shell and the runtime/probe paths.
 ///
 /// Merges already-split PATH entries in precedence order:
-///   1. `managed` — Buzz-controlled dirs (highest precedence, e.g. managed Node/npm bins)
+///   1. `managed` — Ambush-controlled dirs (highest precedence, e.g. managed Node/npm bins)
 ///   2. `login`   — login-shell PATH entries (split before calling)
 ///   3. `inherited` — current-process PATH entries (split before calling), appended
 ///      only when `use_inherited` is `true`
@@ -81,8 +81,8 @@ pub(crate) fn compose_path_entries(
 ///
 /// Concatenates, in priority order:
 ///   1. `<home>/.local/bin` — bundled CLI symlink
-///   2. Buzz-managed npm prefix bin dir — app-private ACP adapter shims
-///   3. Buzz-managed Node.js bin dir — app-private Node/npm runtime
+///   2. Ambush-managed npm prefix bin dir — app-private ACP adapter shims
+///   3. Ambush-managed Node.js bin dir — app-private Node/npm runtime
 ///   4. `nvm_bin` — nvm's default Node.js bin dir (if the user uses nvm)
 ///   5. exe parent dir — DMG sidecars under `Contents/MacOS/`
 ///   6. user's login-shell `PATH` — runtimes like node/python from other managers
@@ -99,7 +99,7 @@ pub(crate) fn compose_path_entries(
 /// split into individual entries before joining. Pushing it as a single segment
 /// would make `join_paths` reject it (a segment containing the separator is an
 /// error), collapsing the entire augmented `PATH` to `None` — the bug this
-/// guards against, which left managed agents unable to find `buzz`. Returns
+/// guards against, which left managed agents unable to find `ambush`. Returns
 /// `None` only when no entries exist.
 pub(in crate::managed_agents) fn build_augmented_path(
     home: Option<PathBuf>,
@@ -120,10 +120,10 @@ pub(in crate::managed_agents) fn build_augmented_path(
     // This keeps tests/utility callers that intentionally pass no local context
     // from manufacturing a PATH out of ambient platform dirs alone.
     if has_local_context {
-        if let Some(managed_npm_bin) = crate::managed_agents::buzz_managed_npm_bin_dir() {
+        if let Some(managed_npm_bin) = crate::managed_agents::ambush_managed_npm_bin_dir() {
             managed.push(managed_npm_bin);
         }
-        if let Some(managed_node_bin) = crate::managed_agents::buzz_managed_node_bin_dir() {
+        if let Some(managed_node_bin) = crate::managed_agents::ambush_managed_node_bin_dir() {
             managed.push(managed_node_bin);
         }
     }
@@ -167,17 +167,17 @@ mod tests {
         // Regression: the shell PATH arrives as one colon-delimited string. It
         // must be split into segments before join_paths, or join_paths rejects
         // it and the whole augmented PATH collapses to None (managed agents then
-        // lose `buzz`).
+        // lose `ambush`).
         let result = build_augmented_path(
             Some(PathBuf::from("/home/agent")),
-            Some(PathBuf::from("/Applications/Buzz.app/Contents/MacOS")),
+            Some(PathBuf::from("/Applications/Ambush.app/Contents/MacOS")),
             Some("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin".to_string()),
             None,
         );
         let result = result.expect("path");
         assert!(result.starts_with("/home/agent/.local/bin:"), "{result}");
         assert!(
-            result.contains(":/Applications/Buzz.app/Contents/MacOS:"),
+            result.contains(":/Applications/Ambush.app/Contents/MacOS:"),
             "{result}"
         );
         assert!(
@@ -203,7 +203,7 @@ mod tests {
     fn nvm_bin_inserted_after_local_bin_before_exe_parent() {
         let result = build_augmented_path(
             Some(PathBuf::from("/home/user")),
-            Some(PathBuf::from("/Applications/Buzz.app/Contents/MacOS")),
+            Some(PathBuf::from("/Applications/Ambush.app/Contents/MacOS")),
             Some("/usr/bin:/bin".to_string()),
             Some(PathBuf::from("/home/user/.nvm/versions/node/v20.0.0/bin")),
         );
@@ -213,7 +213,7 @@ mod tests {
             .find("/home/user/.nvm/versions/node/v20.0.0/bin")
             .unwrap();
         let exe = result
-            .find("/Applications/Buzz.app/Contents/MacOS")
+            .find("/Applications/Ambush.app/Contents/MacOS")
             .unwrap();
         assert!(local < nvm && nvm < exe, "{result}");
         assert!(result.ends_with(":/usr/bin:/bin"), "{result}");
@@ -254,7 +254,7 @@ mod tests {
     }
 
     /// On Unix with no login-shell PATH, `build_augmented_path` must fall back to
-    /// the inherited process PATH — otherwise the child gets only Buzz-managed
+    /// the inherited process PATH — otherwise the child gets only Ambush-managed
     /// dirs and loses every system binary (`curl`, `sh`, `tar`).
     #[cfg(unix)]
     #[test]
@@ -441,11 +441,11 @@ mod compose_tests {
 
     #[test]
     fn managed_entries_appear_first() {
-        let managed = vec![p("/buzz/node/bin"), p("/buzz/npm/bin")];
+        let managed = vec![p("/ambush/node/bin"), p("/ambush/npm/bin")];
         let login = vec![p("/usr/local/bin"), p("/usr/bin")];
         let result = compose_path_entries(managed, login, vec![], false);
-        assert_eq!(result[0], p("/buzz/node/bin"), "managed[0] must be first");
-        assert_eq!(result[1], p("/buzz/npm/bin"), "managed[1] must be second");
+        assert_eq!(result[0], p("/ambush/node/bin"), "managed[0] must be first");
+        assert_eq!(result[1], p("/ambush/npm/bin"), "managed[1] must be second");
         assert_eq!(
             result[2],
             p("/usr/local/bin"),
@@ -466,10 +466,10 @@ mod compose_tests {
 
     #[test]
     fn inherited_appended_last_when_use_inherited_true() {
-        let managed = vec![p("/buzz/npm/bin")];
+        let managed = vec![p("/ambush/npm/bin")];
         let inherited = vec![p("C:/windows/node"), p("C:/windows/npm")];
         let result = compose_path_entries(managed, vec![], inherited.clone(), true);
-        assert_eq!(result[0], p("/buzz/npm/bin"), "managed must be first");
+        assert_eq!(result[0], p("/ambush/npm/bin"), "managed must be first");
         assert_eq!(
             &result[1..],
             &inherited[..],
@@ -481,7 +481,7 @@ mod compose_tests {
     /// entries, not None and not a phantom segment.
     #[test]
     fn windows_policy_on_empty_inherited_produces_managed_only() {
-        let managed = vec![p("/buzz/npm/bin")];
+        let managed = vec![p("/ambush/npm/bin")];
         let result = compose_path_entries(managed.clone(), vec![], vec![], true);
         assert_eq!(
             result, managed,
@@ -494,7 +494,7 @@ mod compose_tests {
     #[test]
     fn windows_policy_on_unset_inherited_path_produces_managed_only() {
         // Simulates std::env::var_os("PATH") returning None → empty vec.
-        let managed = vec![p("/buzz/npm/bin")];
+        let managed = vec![p("/ambush/npm/bin")];
         let inherited: Vec<PathBuf> = vec![]; // empty, as if PATH is unset
         let result = compose_path_entries(managed.clone(), vec![], inherited, true);
         assert_eq!(result, managed);
@@ -526,14 +526,14 @@ mod compose_tests {
     #[cfg(unix)]
     #[test]
     fn unix_use_inherited_false_output_unchanged() {
-        let managed = vec![p("/buzz/npm/bin")];
+        let managed = vec![p("/ambush/npm/bin")];
         let login = vec![p("/usr/local/bin"), p("/usr/bin"), p("/bin")];
         let inherited = vec![p("/proc/ambient/PATH")]; // would be real proc PATH on Unix
         let result = compose_path_entries(managed, login, inherited, false);
         assert_eq!(
             result,
             vec![
-                p("/buzz/npm/bin"),
+                p("/ambush/npm/bin"),
                 p("/usr/local/bin"),
                 p("/usr/bin"),
                 p("/bin")

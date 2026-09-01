@@ -173,7 +173,7 @@ class MessageContent extends HookConsumerWidget {
         (String channelId) {
           ref
               .read(pendingDeepLinkProvider.notifier)
-              .open(Uri(scheme: 'buzz', host: 'channel', path: channelId));
+              .open(Uri(scheme: 'ambush', host: 'channel', path: channelId));
         };
     final channelPresentationKey = [
       for (final entry
@@ -359,15 +359,15 @@ class MessageContent extends HookConsumerWidget {
 
     final baseStyle = fallbackStyle ?? linkStyle;
     final uri = Uri.tryParse(url);
-    final buzzLink = uri?.scheme == 'buzz'
-        ? parseBuzzDeepLink(uri!) ?? parseEntityDeepLink(uri)
+    final ambushLink = uri?.scheme == 'ambush'
+        ? parseAmbushDeepLink(uri!) ?? parseEntityDeepLink(uri)
         : null;
-    final isBuzzLink =
-        buzzLink is ChannelDeepLink ||
-        buzzLink is MessageDeepLink ||
-        buzzLink is EntityDeepLink;
-    final isCanonicalBuzzLabel = isBuzzLink && text == url;
-    final buzzPresentation = switch (buzzLink) {
+    final isAmbushLink =
+        ambushLink is ChannelDeepLink ||
+        ambushLink is MessageDeepLink ||
+        ambushLink is EntityDeepLink;
+    final isCanonicalAmbushLabel = isAmbushLink && text == url;
+    final ambushPresentation = switch (ambushLink) {
       ChannelDeepLink(:final channelId) => (
         icon: LucideIcons.hash,
         label:
@@ -410,7 +410,7 @@ class MessageContent extends HookConsumerWidget {
       decoration: TextDecoration.underline,
       decorationColor: context.colors.primary,
     );
-    final linkTextWidget = isCanonicalBuzzLabel
+    final linkTextWidget = isCanonicalAmbushLabel
         ? Text(
             text,
             style: baseStyle.copyWith(
@@ -420,20 +420,20 @@ class MessageContent extends HookConsumerWidget {
           )
         : Text.rich(TextSpan(style: authoredLinkStyle, children: [linkText]));
 
-    final renderedLink = isCanonicalBuzzLabel && buzzPresentation != null
+    final renderedLink = isCanonicalAmbushLabel && ambushPresentation != null
         ? _TokenPill(
-            key: ValueKey('buzz-link-chip:$url'),
-            icon: buzzPresentation.icon,
-            interactive: buzzPresentation.interactive,
-            semanticLabel: buzzPresentation.semanticLabel,
-            text: buzzPresentation.label,
+            key: ValueKey('ambush-link-chip:$url'),
+            icon: ambushPresentation.icon,
+            interactive: ambushPresentation.interactive,
+            semanticLabel: ambushPresentation.semanticLabel,
+            text: ambushPresentation.label,
             textStyle: baseStyle.copyWith(fontWeight: FontWeight.w600),
           )
         : linkTextWidget;
 
     // Mobile has no repo/PR/issue destination yet. Keep these presentation-only
     // instead of exposing a control whose tap cannot do anything.
-    if (buzzLink is EntityDeepLink) {
+    if (ambushLink is EntityDeepLink) {
       return IgnorePointer(child: renderedLink);
     }
 
@@ -446,8 +446,8 @@ class MessageContent extends HookConsumerWidget {
         // references so detail-page callers can suppress self-navigation.
         // Message and join links still need the top-level authenticated
         // dispatcher.
-        if (uri.scheme == 'buzz') {
-          final deepLink = parseBuzzDeepLink(uri);
+        if (uri.scheme == 'ambush') {
+          final deepLink = parseAmbushDeepLink(uri);
           if (deepLink case ChannelDeepLink(:final channelId)) {
             resolvedChannelTap(channelId);
           } else if (deepLink is MessageDeepLink ||

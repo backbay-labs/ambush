@@ -1,5 +1,5 @@
-import 'package:buzz/shared/emoji/emoji_data.dart';
-import 'package:buzz/shared/emoji/emoji_search.dart';
+import 'package:ambush/shared/emoji/emoji_data.dart';
+import 'package:ambush/shared/emoji/emoji_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 EmojiEntry _entry(

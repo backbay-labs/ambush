@@ -1,6 +1,6 @@
 //! Configurable transport-reconnect hook.
 //!
-//! When the build-time env var `BUZZ_BUILD_RELAY_RECONNECT_CMD` is set (internal
+//! When the build-time env var `AMBUSH_BUILD_RELAY_RECONNECT_CMD` is set (internal
 //! builds), this command runs an ordered sequence of subprocess steps followed by
 //! a readiness poll before the frontend fires the relay WebSocket reconnect.
 //!
@@ -16,12 +16,12 @@ include!("reconnect_hook_config.rs");
 /// copy and to skip escalation in OSS builds where the hook is a no-op.
 #[tauri::command]
 pub fn relay_reconnect_hook_configured() -> bool {
-    option_env!("BUZZ_DESKTOP_BUILD_RELAY_RECONNECT_CMD").is_some()
+    option_env!("AMBUSH_DESKTOP_BUILD_RELAY_RECONNECT_CMD").is_some()
 }
 
 #[tauri::command]
 pub async fn relay_reconnect_hook() -> Result<(), String> {
-    let Some(config_str) = option_env!("BUZZ_DESKTOP_BUILD_RELAY_RECONNECT_CMD") else {
+    let Some(config_str) = option_env!("AMBUSH_DESKTOP_BUILD_RELAY_RECONNECT_CMD") else {
         return Ok(()); // OSS build — no-op
     };
 

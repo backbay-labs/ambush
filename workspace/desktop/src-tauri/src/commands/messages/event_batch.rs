@@ -23,7 +23,7 @@ const GET_EVENT_KINDS: [u32; 15] = [
     40100,
     45001,
     45003,
-    buzz_core_pkg::kind::KIND_HUDDLE_STARTED,
+    ambush_core_pkg::kind::KIND_HUDDLE_STARTED,
 ];
 
 #[tauri::command]

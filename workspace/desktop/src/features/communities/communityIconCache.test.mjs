@@ -28,7 +28,7 @@ test("community icon cache caps entries and rejects oversized icons", () => {
 
 test("community icon cache accepts relay-sized icons above 64 KiB", () => {
   const values = new Map([
-    ["buzz-community-icons", JSON.stringify({ relay: "prior-icon" })],
+    ["ambush-community-icons", JSON.stringify({ relay: "prior-icon" })],
   ]);
   globalThis.localStorage = {
     getItem: (key) => values.get(key) ?? null,

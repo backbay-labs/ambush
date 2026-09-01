@@ -103,7 +103,7 @@ test("resolveRawRailLayout renders the rail beside the transcript in responsive 
 });
 
 // ---- observerEventScrollId ----
-// seq is process-local (buzz-acp's ObserverHandle) and resets to 1 on every
+// seq is process-local (ambush-acp's ObserverHandle) and resets to 1 on every
 // agent restart while timestamp keeps climbing, so seq alone is not unique
 // across an agent's combined observer history — pair it with timestamp,
 // the same identity mergeObserverEventWindows dedups on above.

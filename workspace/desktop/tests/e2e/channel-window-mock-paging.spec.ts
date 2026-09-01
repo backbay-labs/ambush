@@ -25,7 +25,7 @@ async function invokeWindow(
 ) {
   return page.evaluate(
     ([channelId, cursor, limitRows]) =>
-      (window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ as unknown as WindowInvoke)(
+      (window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ as unknown as WindowInvoke)(
         "get_channel_window",
         { channelId, cursor, limitRows },
       ),
@@ -45,8 +45,8 @@ test("mock-mode channel window pages parse with no dup or loss across page-1/pag
   await page.goto("/");
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      typeof window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function",
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ === "function",
   );
 
   // Seed SEED_COUNT top-level messages, strictly increasing created_at so their
@@ -55,7 +55,7 @@ test("mock-mode channel window pages parse with no dup or loss across page-1/pag
     ({ seedCount }) => {
       const base = 1_700_000_000;
       for (let index = 0; index < seedCount; index += 1) {
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "random",
           content: `paging ${index}`,
           createdAt: base + index,
@@ -106,12 +106,12 @@ test("mock-mode channel window includes summaries and the two-hop aux closure", 
   await page.goto("/");
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      typeof window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function",
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ === "function",
   );
 
   const seeded = await page.evaluate(() => {
-    const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
     if (!emit) throw new Error("mock emitter is not installed");
     const root = emit({ channelName: "random", content: "window root" });
     const reply = emit({

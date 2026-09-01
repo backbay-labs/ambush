@@ -1,15 +1,15 @@
 use super::*;
 
-/// Binary name fragments for all known agent/harness processes that Buzz
+/// Binary name fragments for all known agent/harness processes that Ambush
 /// may spawn. Used by `process_belongs_to_us()` and the orphan sweep to
 /// identify processes we should clean up. Both hyphenated and underscored
 /// variants are listed because macOS `proc_name()` and Linux `/proc/comm`
 /// may report either form depending on how the binary was built.
 pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
-    "buzz-acp",
-    "buzz_acp",
-    "buzz-agent",
-    "buzz_agent",
+    "ambush-acp",
+    "ambush_acp",
+    "ambush-agent",
+    "ambush_agent",
     "claude-agent-acp",
     "claude_agent_acp",
     "claude-code-acp",
@@ -17,17 +17,17 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "codex-acp",
     "codex_acp",
     "goose",
-    // buzz-dev-mcp's multicall personalities (rg, tree, buzz,
+    // ambush-dev-mcp's multicall personalities (rg, tree, ambush,
     // git-credential-nostr, git-sign-nostr) are short-lived per-tool-call
     // invocations — not listed here.
-    "buzz-dev-mcp",
-    "buzz_dev_mcp",
+    "ambush-dev-mcp",
+    "ambush_dev_mcp",
 ];
 
 /// Script interpreters that may host managed agent wrappers (e.g. npm shims).
 /// A process whose name matches here is NOT immediately claimed — it must also
-/// carry `BUZZ_MANAGED_AGENT` in its environment (checked by the caller via
-/// `process_has_buzz_marker()`). This avoids sweeping unrelated node processes.
+/// carry `AMBUSH_MANAGED_AGENT` in its environment (checked by the caller via
+/// `process_has_ambush_marker()`). This avoids sweeping unrelated node processes.
 pub(crate) const KNOWN_SCRIPT_INTERPRETERS: &[&str] = &["node"];
 
 /// Check if a process name matches any of our known agent binaries.
@@ -46,7 +46,7 @@ pub(super) fn name_matches_known_binary(name: &str) -> bool {
 
 /// Check if a process name is a known script interpreter that may be hosting
 /// a managed agent wrapper (e.g. `node` running an npm shim for `codex-acp`).
-/// Callers must additionally verify `BUZZ_MANAGED_AGENT` ownership.
+/// Callers must additionally verify `AMBUSH_MANAGED_AGENT` ownership.
 pub(super) fn name_matches_interpreter(name: &str) -> bool {
     KNOWN_SCRIPT_INTERPRETERS.contains(&name)
 }
@@ -87,7 +87,7 @@ pub(crate) fn process_belongs_to_us(pid: u32) -> bool {
     }
     let name = String::from_utf8_lossy(&buf[..len as usize]);
     // Fall through for script interpreters (e.g. `node` hosting an npm shim):
-    // the caller's `process_has_buzz_marker()` check decides true ownership.
+    // the caller's `process_has_ambush_marker()` check decides true ownership.
     name_matches_known_binary(&name) || name_matches_interpreter(&name)
 }
 
@@ -123,32 +123,32 @@ pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
     false
 }
 
-/// The value stamped into the `BUZZ_MANAGED_AGENT` env var of every agent we
+/// The value stamped into the `AMBUSH_MANAGED_AGENT` env var of every agent we
 /// spawn, identifying *which* desktop instance owns it. We use the app's bundle
-/// identifier (`xyz.block.buzz.app` for release, `xyz.block.buzz.app.dev`
+/// identifier (`com.backbay.ambush.app` for release, `com.backbay.ambush.app.dev`
 /// for `just dev`) because it is stable across restarts — a relaunched dev
 /// instance still recognizes its own previously-spawned agents as reclaimable,
 /// while never matching another instance's (e.g. a dev build never reaps a DMG
-/// build's agents, and vice versa). This is what lets two Buzzs coexist on
-/// one machine without one's cleanup nuking the other's agents.
+/// build's agents, and vice versa). This is what lets two Ambush installs
+/// coexist on one machine without one's cleanup nuking the other's agents.
 pub(crate) fn current_instance_id<R: tauri::Runtime>(app: &AppHandle<R>) -> String {
     app.config().identifier.clone()
 }
 
-/// Build the full `BUZZ_MANAGED_AGENT=<instance-id>` env entry we match
+/// Build the full `AMBUSH_MANAGED_AGENT=<instance-id>` env entry we match
 /// against when scanning processes. Kept here so the spawn stamp and the sweep
 /// matcher can never drift apart.
-pub(super) fn buzz_marker_entry(instance_id: &str) -> Vec<u8> {
-    format!("BUZZ_MANAGED_AGENT={instance_id}").into_bytes()
+pub(super) fn ambush_marker_entry(instance_id: &str) -> Vec<u8> {
+    format!("AMBUSH_MANAGED_AGENT={instance_id}").into_bytes()
 }
 
 /// Check if a running process is one of *our* managed agents: it must carry
-/// `BUZZ_MANAGED_AGENT=<instance_id>` in its environment, where `instance_id`
+/// `AMBUSH_MANAGED_AGENT=<instance_id>` in its environment, where `instance_id`
 /// is this desktop instance's id. A process stamped with a *different* instance
-/// id belongs to another live Buzz app and must never be reaped here.
+/// id belongs to another live Ambush app and must never be reaped here.
 #[cfg(target_os = "macos")]
-pub(crate) fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
-    let marker = buzz_marker_entry(instance_id);
+pub(crate) fn process_has_ambush_marker(pid: u32, instance_id: &str) -> bool {
+    let marker = ambush_marker_entry(instance_id);
     let Some(buf) = sweep::procargs2_buffer(pid) else {
         return false;
     };
@@ -191,8 +191,8 @@ pub(crate) fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-pub(crate) fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
-    let marker = buzz_marker_entry(instance_id);
+pub(crate) fn process_has_ambush_marker(pid: u32, instance_id: &str) -> bool {
+    let marker = ambush_marker_entry(instance_id);
     let Ok(data) = std::fs::read(format!("/proc/{pid}/environ")) else {
         return false;
     };
@@ -200,7 +200,7 @@ pub(crate) fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn process_has_buzz_marker(_pid: u32, _instance_id: &str) -> bool {
+pub(crate) fn process_has_ambush_marker(_pid: u32, _instance_id: &str) -> bool {
     false
 }
 
@@ -307,7 +307,7 @@ fn sigterm_then_sigkill(pids: &[i32]) {
 }
 
 /// Resolve orphan candidate PIDs to their actual process group IDs, dedupe,
-/// and signal the groups. An orphaned grandchild (e.g. `goose` or `buzz-dev-mcp`)
+/// and signal the groups. An orphaned grandchild (e.g. `goose` or `ambush-dev-mcp`)
 /// whose harness has exited retains the harness's PGID — signaling that PGID
 /// kills the entire orphaned subtree. Falls back to the candidate PID itself
 /// when PGID resolution fails (process may have exited between detection and
@@ -338,7 +338,7 @@ pub(super) fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
     });
     if pgids.is_empty() && candidate_groups > 0 {
         eprintln!(
-            "buzz-desktop: orphan sweep: skipped all {candidate_groups} candidate group(s) (live foreign group leader or candidate already exited); nothing signalled"
+            "ambush-desktop: orphan sweep: skipped all {candidate_groups} candidate group(s) (live foreign group leader or candidate already exited); nothing signalled"
         );
     }
     let unique: Vec<i32> = pgids.into_iter().collect();
@@ -372,7 +372,7 @@ pub(super) fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
     });
     if pgids.is_empty() && candidate_groups > 0 {
         eprintln!(
-            "buzz-desktop: orphan sweep: skipped all {candidate_groups} candidate group(s) (live foreign group leader or candidate already exited); nothing signalled"
+            "ambush-desktop: orphan sweep: skipped all {candidate_groups} candidate group(s) (live foreign group leader or candidate already exited); nothing signalled"
         );
     }
     let unique: Vec<i32> = pgids.into_iter().collect();
@@ -389,7 +389,7 @@ pub(crate) fn valid_agent_runtime_receipt(
         receipt,
         instance_id,
         process_is_running,
-        process_has_buzz_marker,
+        process_has_ambush_marker,
     )
 }
 
@@ -414,7 +414,7 @@ pub(crate) fn valid_agent_runtime_receipt_with(
         && receipt.desktop_instance_id == instance_id
         && is_running(receipt.pid)
         // Receipts are written by THIS instance at spawn time, so they are
-        // Buzz-owned by construction. Marker-only ownership: custom-harness
+        // Ambush-owned by construction. Marker-only ownership: custom-harness
         // binaries (not in KNOWN_AGENT_BINARIES) must not be rejected by a
         // name gate — see the sweep ownership rule in runtime/orphan_sweep.rs.
         && has_marker(receipt.pid, &receipt.desktop_instance_id)

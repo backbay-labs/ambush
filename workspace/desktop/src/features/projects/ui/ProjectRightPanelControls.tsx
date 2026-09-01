@@ -76,7 +76,7 @@ export function ProjectRightPanelControls({
   return (
     <div className="flex items-center gap-0.5">
       <Button
-        aria-label={terminalOpen ? "Hide Buzz Term" : "Open Buzz Term"}
+        aria-label={terminalOpen ? "Hide Ambush Term" : "Open Ambush Term"}
         aria-pressed={terminalOpen}
         className={cn(
           "h-7 w-7 text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -86,7 +86,7 @@ export function ProjectRightPanelControls({
         disabled={!terminalAvailable}
         onClick={toggleTerminalPanel}
         size="icon"
-        title="Buzz Term (⌘J)"
+        title="Ambush Term (⌘J)"
         type="button"
         variant="ghost"
       >

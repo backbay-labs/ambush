@@ -1,7 +1,7 @@
 //! Native system-tray menu for the desktop app.
 //!
 //! The webview owns the live agent-turn state. It sends the small display
-//! projection here so the native menu can remain useful while Buzz is hidden.
+//! projection here so the native menu can remain useful while Ambush is hidden.
 
 // Mouse back/forward (X1/X2 buttons and swipe) is also macOS-only native I/O;
 // group it here so both platform-layer init paths share one call site in lib.rs.
@@ -25,8 +25,8 @@ use tauri::{
     AppHandle, Emitter, Manager, Runtime,
 };
 
-const TRAY_ID: &str = "buzz-tray";
-const OPEN_BUZZ_ID: &str = "tray-open-buzz";
+const TRAY_ID: &str = "ambush-tray";
+const OPEN_AMBUSH_ID: &str = "tray-open-ambush";
 const NEW_CHANNEL_ID: &str = "tray-new-channel";
 const QUIT_ID: &str = "tray-quit";
 const OPEN_CHANNEL_PREFIX: &str = "tray-open-channel:";
@@ -40,7 +40,8 @@ static PREVIEW_STARTED_AT: OnceLock<Instant> = OnceLock::new();
 /// without connecting to a relay. It is deliberately unavailable in release
 /// builds and must be explicitly enabled when launching the debug app.
 fn preview_activities() -> Option<Vec<TrayAgentActivity>> {
-    if !cfg!(debug_assertions) || std::env::var("BUZZ_TRAY_MENU_DEMO").ok().as_deref() != Some("1")
+    if !cfg!(debug_assertions)
+        || std::env::var("AMBUSH_TRAY_MENU_DEMO").ok().as_deref() != Some("1")
     {
         return None;
     }
@@ -73,7 +74,8 @@ fn preview_activities() -> Option<Vec<TrayAgentActivity>> {
 }
 
 fn preview_recent_activities() -> Option<Vec<TrayAgentActivity>> {
-    if !cfg!(debug_assertions) || std::env::var("BUZZ_TRAY_MENU_DEMO").ok().as_deref() != Some("1")
+    if !cfg!(debug_assertions)
+        || std::env::var("AMBUSH_TRAY_MENU_DEMO").ok().as_deref() != Some("1")
     {
         return None;
     }
@@ -104,7 +106,7 @@ fn format_elapsed(elapsed: Duration) -> String {
     format!("{hours}h {minutes}m {seconds}s")
 }
 
-/// Builds the standalone Buzz bee as a transparent, macOS template image.
+/// Builds the standalone Ambush bee as a transparent, macOS template image.
 ///
 /// The app icon includes a rounded square, which is useful for the Dock but
 /// looks out of place beside the monochrome menu-bar icons. Keeping this
@@ -225,22 +227,22 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     if let Err(error) = window.unminimize() {
-        eprintln!("buzz-desktop: failed to restore main window from tray: {error}");
+        eprintln!("ambush-desktop: failed to restore main window from tray: {error}");
         return;
     }
     if let Err(error) = window.show() {
-        eprintln!("buzz-desktop: failed to show main window from tray: {error}");
+        eprintln!("ambush-desktop: failed to show main window from tray: {error}");
         return;
     }
     if let Err(error) = window.set_focus() {
-        eprintln!("buzz-desktop: failed to focus main window from tray: {error}");
+        eprintln!("ambush-desktop: failed to focus main window from tray: {error}");
     }
 }
 
 fn queue_tray_action<R: Runtime>(app: &AppHandle<R>, mut action: TrayAction) {
     let state = app.state::<TrayMenuState<R>>();
     let Ok(mut queue) = state.action_queue.lock() else {
-        eprintln!("buzz-desktop: tray action queue is unavailable");
+        eprintln!("ambush-desktop: tray action queue is unavailable");
         return;
     };
     if let TrayAction::OpenChannel {
@@ -254,7 +256,7 @@ fn queue_tray_action<R: Runtime>(app: &AppHandle<R>, mut action: TrayAction) {
     drop(queue);
 
     if let Err(error) = app.emit("tray-action-available", ()) {
-        eprintln!("buzz-desktop: failed to notify frontend of tray action: {error}");
+        eprintln!("ambush-desktop: failed to notify frontend of tray action: {error}");
     }
 }
 
@@ -335,8 +337,8 @@ fn build_menu<R: Runtime>(
     append_separator(app, &menu)?;
     menu.append(&MenuItem::with_id(
         app,
-        OPEN_BUZZ_ID,
-        "Open Buzz",
+        OPEN_AMBUSH_ID,
+        "Open Ambush",
         true,
         None::<&str>,
     )?)?;
@@ -344,7 +346,7 @@ fn build_menu<R: Runtime>(
     menu.append(&MenuItem::with_id(
         app,
         QUIT_ID,
-        "Quit Buzz",
+        "Quit Ambush",
         true,
         None::<&str>,
     )?)?;
@@ -446,7 +448,7 @@ fn apply_activity_presentation<R: Runtime>(
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
-        OPEN_BUZZ_ID => show_main_window(app),
+        OPEN_AMBUSH_ID => show_main_window(app),
         NEW_CHANNEL_ID => {
             show_main_window(app);
             queue_tray_action(app, TrayAction::NewChannel);
@@ -472,7 +474,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     }
 }
 
-/// Installs the persistent Buzz tray icon with the initial empty activity menu.
+/// Installs the persistent Ambush tray icon with the initial empty activity menu.
 pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let preview_activities = preview_activities();
     let preview_recent_activities = preview_recent_activities();
@@ -493,7 +495,7 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
     if let Err(error) = apply_activity_presentation(&tray, activities, recent_activities) {
-        eprintln!("buzz-desktop: failed to apply tray menu presentation: {error}");
+        eprintln!("ambush-desktop: failed to apply tray menu presentation: {error}");
     }
     mouse_nav::init(app);
     Ok(())
@@ -506,7 +508,7 @@ pub fn take_tray_actions<R: Runtime>(app: AppHandle<R>) -> Result<Vec<TrayAction
     let mut queue = state
         .action_queue
         .lock()
-        .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
+        .map_err(|_| "Ambush tray action queue is unavailable".to_string())?;
     Ok(std::mem::take(&mut queue.pending_actions))
 }
 
@@ -533,7 +535,7 @@ pub fn requeue_tray_actions<R: Runtime>(
     let mut queue = state
         .action_queue
         .lock()
-        .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
+        .map_err(|_| "Ambush tray action queue is unavailable".to_string())?;
     requeue_actions(&mut queue, actions);
     drop(queue);
     app.emit("tray-action-available", ())
@@ -548,7 +550,7 @@ pub fn clear_tray_agent_activity<R: Runtime>(app: AppHandle<R>) -> Result<(), St
     let mut queue = state
         .action_queue
         .lock()
-        .map_err(|_| "Buzz tray action queue is unavailable".to_string())?;
+        .map_err(|_| "Ambush tray action queue is unavailable".to_string())?;
     queue.community_generation = queue.community_generation.wrapping_add(1);
     queue
         .pending_actions
@@ -575,7 +577,7 @@ pub fn update_tray_agent_activity<R: Runtime>(
     let mut activity_items = state
         .activity_items
         .lock()
-        .map_err(|_| "Buzz tray menu state is unavailable".to_string())?;
+        .map_err(|_| "Ambush tray menu state is unavailable".to_string())?;
 
     if activity_items.len() == activities.len().saturating_add(recent_activities.len())
         && activity_items
@@ -595,7 +597,7 @@ pub fn update_tray_agent_activity<R: Runtime>(
         }
         let tray = app
             .tray_by_id(TRAY_ID)
-            .ok_or_else(|| "Buzz tray icon is not available".to_string())?;
+            .ok_or_else(|| "Ambush tray icon is not available".to_string())?;
         apply_activity_presentation(&tray, activities, recent_activities)?;
         return Ok(());
     }
@@ -604,7 +606,7 @@ pub fn update_tray_agent_activity<R: Runtime>(
         build_menu(&app, activities, recent_activities).map_err(|error| error.to_string())?;
     let tray = app
         .tray_by_id(TRAY_ID)
-        .ok_or_else(|| "Buzz tray icon is not available".to_string())?;
+        .ok_or_else(|| "Ambush tray icon is not available".to_string())?;
     tray.set_menu(Some(menu))
         .map_err(|error| error.to_string())?;
     apply_activity_presentation(&tray, activities, recent_activities)?;

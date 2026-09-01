@@ -14,7 +14,7 @@ done
 cp "$root/renovate.json" "$tmp/renovate.json"
 
 run_contract() {
-  BUZZ_RUST_CACHE_CONTRACT_ROOT="$tmp" "$root/scripts/test-rust-cache-contract.sh"
+  AMBUSH_RUST_CACHE_CONTRACT_ROOT="$tmp" "$root/scripts/test-rust-cache-contract.sh"
 }
 
 expect_failure() {

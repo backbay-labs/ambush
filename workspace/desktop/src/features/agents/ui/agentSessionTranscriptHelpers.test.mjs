@@ -26,8 +26,8 @@ test("parsePromptText returns the empty/Prompt fallback for whitespace-only inpu
 
 test("parsePromptText wraps header-less free text in a single Prompt section", () => {
   // Free text with no `[header]` becomes one "Prompt" section. Since no
-  // section is a "Buzz event", there is no event content to surface, so
-  // userText is empty and the title falls through to "Buzz event".
+  // section is a "Ambush event", there is no event content to surface, so
+  // userText is empty and the title falls through to "Ambush event".
   const result = parsePromptText("just some free text");
   assert.deepEqual(
     result.sections.map((s) => s.title),
@@ -35,7 +35,7 @@ test("parsePromptText wraps header-less free text in a single Prompt section", (
   );
   assert.equal(result.sections[0].body, "just some free text");
   assert.equal(result.userText, "");
-  assert.equal(result.userTitle, "Buzz event");
+  assert.equal(result.userTitle, "Ambush event");
   assert.equal(result.userPubkey, null);
   assert.equal(result.userEventId, null);
 });
@@ -45,7 +45,7 @@ test("parsePromptText extracts event id, content, hex pubkey, and a title-cased 
     "[System]",
     "system preamble here",
     "",
-    "[Buzz event: @mention]",
+    "[Ambush event: @mention]",
     `Event ID: ${HEX_UPPER}`,
     "Channel: demo",
     `From: Wes (hex: ${HEX})`,
@@ -63,13 +63,13 @@ test("parsePromptText extracts event id, content, hex pubkey, and a title-cased 
   // Both headers become sections.
   assert.deepEqual(
     result.sections.map((s) => s.title),
-    ["System", "Buzz event: @mention"],
+    ["System", "Ambush event: @mention"],
   );
 });
 
 test("parsePromptText preserves multiline event content in the user bubble text", () => {
   const text = [
-    "[Buzz event: @mention]",
+    "[Ambush event: @mention]",
     "Event ID: event-1",
     "Channel: agents",
     `From: tho (hex: ${HEX})`,
@@ -101,7 +101,7 @@ test("parsePromptText preserves multiline event content in the user bubble text"
 
 test("parsePromptText lowercases the extracted hex pubkey", () => {
   const text = [
-    "[Buzz event: dm]",
+    "[Ambush event: dm]",
     `From: Someone (hex: ${HEX_UPPER})`,
     "Content: hi",
   ].join("\n");
@@ -111,7 +111,7 @@ test("parsePromptText lowercases the extracted hex pubkey", () => {
 });
 
 test("parsePromptText yields a null pubkey when From has no hex", () => {
-  const text = ["[Buzz event: note]", "From: Someone", "Content: hi"].join(
+  const text = ["[Ambush event: note]", "From: Someone", "Content: hi"].join(
     "\n",
   );
 
@@ -121,10 +121,10 @@ test("parsePromptText yields a null pubkey when From has no hex", () => {
   assert.equal(result.userTitle, "Note");
 });
 
-test("parsePromptText defaults the title to 'Buzz event' when no kind is present", () => {
-  const text = ["[Buzz event]", "Content: x"].join("\n");
+test("parsePromptText defaults the title to 'Ambush event' when no kind is present", () => {
+  const text = ["[Ambush event]", "Content: x"].join("\n");
   const result = parsePromptText(text);
-  assert.equal(result.userTitle, "Buzz event");
+  assert.equal(result.userTitle, "Ambush event");
 });
 
 test("parsePromptText leading text before a header becomes a Prompt section", () => {
@@ -149,7 +149,7 @@ test("parsePromptText splits a legacy tagged standing prefix from the dynamic tu
     "[Context]",
     "Scope: channel",
     "",
-    "[Buzz event: @mention]",
+    "[Ambush event: @mention]",
     "Event ID: abc123",
     "From: Alice (hex: AABBCC)",
     "Content: ship it",
@@ -160,7 +160,7 @@ test("parsePromptText splits a legacy tagged standing prefix from the dynamic tu
   assert.equal(parsed.userText, "ship it");
   assert.deepEqual(
     parsed.sections.map((section) => section.title),
-    ["Base", "System", "Context", "Buzz event: @mention"],
+    ["Base", "System", "Context", "Ambush event: @mention"],
   );
 });
 
@@ -174,11 +174,11 @@ test("parsePromptText splits paired top-level turn sections and preserves inner 
     "[1] Alice (2026-08-25T12:00:00Z): prior message",
     "</thread-context>",
     "",
-    '<buzz-event type="@mention">',
+    '<ambush-event type="@mention">',
     "Event ID: abc123",
     "From: Alice (hex: AABBCC)",
     "Content: ship it",
-    "</buzz-event>",
+    "</ambush-event>",
   ].join("\n");
 
   const parsed = parsePromptText(text);
@@ -191,7 +191,7 @@ test("parsePromptText splits paired top-level turn sections and preserves inner 
       body: "[1] Alice (2026-08-25T12:00:00Z): prior message",
     },
     {
-      title: "Buzz event: @mention",
+      title: "Ambush event: @mention",
       body: "Event ID: abc123\nFrom: Alice (hex: AABBCC)\nContent: ship it",
     },
   ]);
@@ -230,9 +230,9 @@ test("parsePromptText falls back to the complete prompt for ambiguous turn tags"
     "<context>",
     "literal authored boundary: </context>",
     "</context>",
-    '<buzz-event type="dm">',
+    '<ambush-event type="dm">',
     "Content: hello",
-    "</buzz-event>",
+    "</ambush-event>",
   ].join("\n");
 
   const parsed = parsePromptText(text);
@@ -260,7 +260,7 @@ test("extractPromptText returns empty string when prompt is missing or not an ar
   assert.equal(extractPromptText({ params: { prompt: "nope" } }), "");
 });
 
-test("extractToolIdentity ignores Buzz tool names that only appear in file contents", () => {
+test("extractToolIdentity ignores Ambush tool names that only appear in file contents", () => {
   const identity = extractToolIdentity({
     sessionUpdate: "tool_call_update",
     toolCallId: "read-file-1",
@@ -271,18 +271,18 @@ test("extractToolIdentity ignores Buzz tool names that only appear in file conte
       path: "desktop/src/features/agents/ui/agentSessionToolCatalog.ts",
     },
     content: {
-      text: 'const BUZZ_READ_TOOLS = new Set(["get_feed", "get_event"]);',
+      text: 'const AMBUSH_READ_TOOLS = new Set(["get_feed", "get_event"]);',
     },
   });
 
   assert.deepEqual(identity, {
     title: "read_file",
     toolName: "read_file",
-    buzzToolName: null,
+    ambushToolName: null,
   });
 });
 
-test("extractToolIdentity still recognizes explicit Buzz tool fields", () => {
+test("extractToolIdentity still recognizes explicit Ambush tool fields", () => {
   const identity = extractToolIdentity({
     sessionUpdate: "tool_call",
     title: "Tool call",
@@ -293,7 +293,7 @@ test("extractToolIdentity still recognizes explicit Buzz tool fields", () => {
   assert.deepEqual(identity, {
     title: "Tool call",
     toolName: "get_feed",
-    buzzToolName: "get_feed",
+    ambushToolName: "get_feed",
   });
 });
 
@@ -431,13 +431,13 @@ test("parseSystemPromptSections splits current Base and Agent Instructions frami
 
 test("parseSystemPromptSections preserves a Windows workspace path", () => {
   const framed =
-    "[Base]\nbase text\n\n[Workspace]\nCurrent working directory: C:\\Users\\me\\buzz\n\n[Agent Instructions]\npersona text";
+    "[Base]\nbase text\n\n[Workspace]\nCurrent working directory: C:\\Users\\me\\ambush\n\n[Agent Instructions]\npersona text";
   const sections = parseSystemPromptSections(framed);
   assert.deepEqual(sections, [
     { title: "Base", body: "base text" },
     {
       title: "Workspace",
-      body: "Current working directory: C:\\Users\\me\\buzz",
+      body: "Current working directory: C:\\Users\\me\\ambush",
     },
     { title: "Agent Instructions", body: "persona text" },
   ]);
@@ -635,7 +635,7 @@ test("parseSystemPromptSections pins the full Base+System+Core+Canvas harness sh
     "[Channel Canvas]",
     "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
     "Last modified: 2026-07-11T10:00:00Z",
-    "Fetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+    "Fetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
   ].join("\n");
   const sections = parseSystemPromptSections(framed);
   assert.deepEqual(sections, [
@@ -644,7 +644,7 @@ test("parseSystemPromptSections pins the full Base+System+Core+Canvas harness sh
     { title: "Core Memory", body: "I am Duncan." },
     {
       title: "Channel Canvas",
-      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
     },
   ]);
 });
@@ -796,7 +796,7 @@ test("parseSystemPromptSections extracts Team Instructions with Core Memory and 
   // compose_prompt() produces the canonical delimiter; with_core() and with_canvas() append their frames.
   const framed = [
     "[Base]",
-    "You are a helpful AI assistant running in Buzz.",
+    "You are a helpful AI assistant running in Ambush.",
     "",
     "[System]",
     "You are Observer Agent. You coordinate multi-agent workflows.",
@@ -814,11 +814,14 @@ test("parseSystemPromptSections extracts Team Instructions with Core Memory and 
     "[Channel Canvas]",
     "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
     "Last modified: 2026-07-11T10:00:00Z",
-    "Fetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+    "Fetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
   ].join("\n");
   const sections = parseSystemPromptSections(framed);
   assert.deepEqual(sections, [
-    { title: "Base", body: "You are a helpful AI assistant running in Buzz." },
+    {
+      title: "Base",
+      body: "You are a helpful AI assistant running in Ambush.",
+    },
     {
       title: "System",
       body: "You are Observer Agent. You coordinate multi-agent workflows.",
@@ -833,7 +836,7 @@ test("parseSystemPromptSections extracts Team Instructions with Core Memory and 
     },
     {
       title: "Channel Canvas",
-      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
     },
   ]);
 });
@@ -994,7 +997,7 @@ test("parseSystemPromptSections (modern) pins full 5-section shape: Base+System+
   // Production shape from with_team() + with_core() + with_canvas(): all five sections present.
   const framed = [
     "[Base]",
-    "You are a helpful AI assistant running in Buzz.",
+    "You are a helpful AI assistant running in Ambush.",
     "",
     "[System]",
     "You are Observer Agent. You coordinate multi-agent workflows.",
@@ -1011,11 +1014,14 @@ test("parseSystemPromptSections (modern) pins full 5-section shape: Base+System+
     "[Channel Canvas]",
     "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
     "Last modified: 2026-07-11T10:00:00Z",
-    "Fetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+    "Fetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
   ].join("\n");
   const sections = parseSystemPromptSections(framed);
   assert.deepEqual(sections, [
-    { title: "Base", body: "You are a helpful AI assistant running in Buzz." },
+    {
+      title: "Base",
+      body: "You are a helpful AI assistant running in Ambush.",
+    },
     {
       title: "System",
       body: "You are Observer Agent. You coordinate multi-agent workflows.",
@@ -1030,7 +1036,7 @@ test("parseSystemPromptSections (modern) pins full 5-section shape: Base+System+
     },
     {
       title: "Channel Canvas",
-      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: ambush canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
     },
   ]);
 });

@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::managed_agents::{
-    build_buzz_agent_provider_defaults, default_agent_workdir, known_acp_runtime,
+    build_ambush_agent_provider_defaults, default_agent_workdir, known_acp_runtime,
     redact_env_values_in, AgentModelsResponse,
 };
 
@@ -38,8 +38,8 @@ pub(super) async fn run_agent_models_command(
         }
         cmd.arg("models")
             .arg("--json")
-            .env("BUZZ_ACP_AGENT_COMMAND", &agent_command)
-            .env("BUZZ_ACP_AGENT_ARGS", agent_args.join(","));
+            .env("AMBUSH_ACP_AGENT_COMMAND", &agent_command)
+            .env("AMBUSH_ACP_AGENT_ARGS", agent_args.join(","));
         if let Some(meta) = known_acp_runtime(&agent_command) {
             for (key, value) in meta.default_env {
                 if std::env::var(key).is_err() {
@@ -49,8 +49,8 @@ pub(super) async fn run_agent_models_command(
         }
         // Mirror runtime spawn: internal builds may bake provider/model
         // defaults. User-provided env below still wins.
-        build_buzz_agent_provider_defaults(&mut cmd);
-        // User env layering — written LAST so it overrides any Buzz-set env above.
+        build_ambush_agent_provider_defaults(&mut cmd);
+        // User env layering — written LAST so it overrides any Ambush-set env above.
         for (k, v) in &merged_env {
             cmd.env(k, v);
         }
@@ -59,7 +59,7 @@ pub(super) async fn run_agent_models_command(
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
-            .map_err(|e| format!("failed to spawn buzz-acp models: {e}"))
+            .map_err(|e| format!("failed to spawn ambush-acp models: {e}"))
     })
     .await
     .map_err(|e| format!("model discovery task failed: {e}"))?
@@ -72,7 +72,7 @@ pub(super) async fn run_agent_models_command(
         // a failing child process echoed back.
         let stderr_redacted = redact_env_values_in(stderr.as_ref(), &env_for_redaction);
         return Err(format!(
-            "buzz-acp models failed (exit {}): {stderr_redacted}",
+            "ambush-acp models failed (exit {}): {stderr_redacted}",
             output.status.code().unwrap_or(-1)
         ));
     }

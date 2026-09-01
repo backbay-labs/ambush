@@ -15,7 +15,7 @@ import {
 } from "@/shared/ui/tooltip";
 import { truncateInlineChipLabel } from "@/shared/ui/mentionChip";
 
-import { BuzzLinkChip } from "./BuzzLinkChip";
+import { AmbushLinkChip } from "./AmbushLinkChip";
 import { useInlineTooltipPosition } from "./useInlineTooltipPosition";
 import { useMessageLinkMetadata } from "./useMessageLinkMetadata";
 import type { MessageLinkPillProps } from "./types";
@@ -115,13 +115,13 @@ function MessageLinkMetadataTooltip({
         >
           <span
             className="line-clamp-3 [overflow-wrap:anywhere] whitespace-normal"
-            data-buzz-tooltip-metadata-content=""
+            data-ambush-tooltip-metadata-content=""
           >
             {content}
           </span>
           <span
             className="mt-1 block max-w-full truncate whitespace-nowrap text-2xs text-secondary-foreground/80"
-            data-buzz-tooltip-metadata-type=""
+            data-ambush-tooltip-metadata-type=""
           >
             {footer}
             {sender ? ` · ${sender}` : null}
@@ -189,7 +189,7 @@ function MessageLinkPillContents({
     const chipLabel = truncateInlineChipLabel(channelLabel);
     const isDeleted = metadata.state.kind === "deleted";
     const chip = (
-      <BuzzLinkChip
+      <AmbushLinkChip
         data-message-link=""
         data-message-link-state={isDeleted ? "deleted" : undefined}
         href={permalink}
@@ -204,8 +204,8 @@ function MessageLinkPillContents({
               : `Open message in channel ${channelLabel}`
         }
         className={cn(
-          metadata.state.kind === "unavailable" && "buzz-link-unavailable",
-          isDeleted && "buzz-link-deleted",
+          metadata.state.kind === "unavailable" && "ambush-link-unavailable",
+          isDeleted && "ambush-link-deleted",
         )}
         interactive={openable && interactive}
         onOpenLink={() => {
@@ -227,7 +227,7 @@ function MessageLinkPillContents({
         wrapping
       >
         {chipLabel}
-      </BuzzLinkChip>
+      </AmbushLinkChip>
     );
     return interactive ? (
       <MessageLinkMetadataTooltip footer={tooltipFooter} metadata={metadata}>

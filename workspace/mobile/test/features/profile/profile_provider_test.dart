@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:buzz/features/profile/profile_provider.dart';
-import 'package:buzz/shared/profile/user_cache_provider.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/features/profile/profile_provider.dart';
+import 'package:ambush/shared/profile/user_cache_provider.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -32,7 +32,7 @@ void main() {
         content: jsonEncode({
           'name': 'alice',
           'display_name': 'Alice',
-          'about': 'Building Buzz',
+          'about': 'Building Ambush',
           'picture': 'https://relay.example/alice.png',
           'nip05': 'alice@example.com',
           'custom': 'preserve-me',
@@ -58,7 +58,7 @@ void main() {
         jsonDecode(relaySession.published.single.content)
             as Map<String, dynamic>;
     expect(content['display_name'], 'Alice L');
-    expect(content['about'], 'Building Buzz');
+    expect(content['about'], 'Building Ambush');
     expect(content['picture'], 'https://relay.example/alice.png');
     expect(content['nip05'], 'alice@example.com');
     expect(content['custom'], 'preserve-me');
@@ -89,7 +89,7 @@ void main() {
         content: jsonEncode({
           'name': 'legacy-alice',
           'display_name': 'Alice',
-          'about': 'Building Buzz',
+          'about': 'Building Ambush',
         }),
         sig: 'sig',
       ),
@@ -103,7 +103,7 @@ void main() {
     final content =
         jsonDecode(relaySession.published.single.content)
             as Map<String, dynamic>;
-    expect(content, {'about': 'Building Buzz'});
+    expect(content, {'about': 'Building Ambush'});
     final profile = container.read(profileProvider).requireValue!;
     expect(profile.displayName, isNull);
     expect(profile.label, '${keys.public.substring(0, 8)}...');
@@ -542,7 +542,7 @@ void main() {
             onTimeout: () => throw StateError('setting Away did not resolve'),
           );
       expect(container.read(presenceProvider).value, 'away');
-      expect(prefs.getString('buzz_presence_preference_aabb'), 'away');
+      expect(prefs.getString('ambush_presence_preference_aabb'), 'away');
 
       container.dispose();
       container = _buildContainer(prefs);
@@ -566,7 +566,7 @@ void main() {
             onTimeout: () => throw StateError('setting Online did not resolve'),
           );
       expect(container.read(presenceProvider).value, 'online');
-      expect(prefs.getString('buzz_presence_preference_aabb'), 'auto');
+      expect(prefs.getString('ambush_presence_preference_aabb'), 'auto');
     },
   );
 }

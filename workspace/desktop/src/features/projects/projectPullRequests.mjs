@@ -150,7 +150,7 @@ function eventToPullRequestUpdate(event) {
 
 // Review requests and approvals are kind:1 comments labeled with a `t` tag —
 // NIP-34 has no dedicated review kinds, and labeled text notes stay readable
-// for any client (including `buzz` CLI users) that treats them as comments.
+// for any client (including `ambush` CLI users) that treats them as comments.
 export const PR_REVIEW_REQUEST_LABEL = "review-request";
 export const PR_APPROVAL_LABEL = "approval";
 export const PR_CHANGES_REQUESTED_LABEL = "changes-requested";
@@ -364,7 +364,7 @@ export function eventToProjectPullRequest(
     createdAt: pullRequest.created_at,
     repoAddress: getTag(pullRequest, "a") ?? null,
     channelId: getTag(pullRequest, "h") ?? null,
-    originAgentName: getTag(pullRequest, "buzz-origin-agent") ?? null,
+    originAgentName: getTag(pullRequest, "ambush-origin-agent") ?? null,
     labels: getAllTags(pullRequest, "t"),
     recipients: getAllTags(pullRequest, "p"),
     reviewers,

@@ -118,8 +118,8 @@ export function HuddleProfileControl({
   return (
     <div
       className="mb-2 flex min-w-0 items-center gap-2 rounded-xl border border-border/70 bg-background px-4 py-4 text-sidebar-foreground"
-      data-buzz-content-surface
-      data-buzz-content-unframed
+      data-ambush-content-surface
+      data-ambush-content-unframed
       data-testid="profile-huddle-control"
     >
       <Button

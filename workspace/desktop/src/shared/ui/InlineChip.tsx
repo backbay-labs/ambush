@@ -31,7 +31,7 @@ type InlineChipProps =
         as: "button";
       });
 
-/** Shared visual primitive for mention, channel, and Buzz permalink chips. */
+/** Shared visual primitive for mention, channel, and Ambush permalink chips. */
 export function InlineChip({
   as = "span",
   children,

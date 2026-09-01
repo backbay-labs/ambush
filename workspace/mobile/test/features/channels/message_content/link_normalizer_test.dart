@@ -1,10 +1,10 @@
-import 'package:buzz/features/channels/message_content/link_normalizer.dart';
+import 'package:ambush/features/channels/message_content/link_normalizer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  const url = 'buzz://message?channel=channel-1&id=message-1';
+  const url = 'ambush://message?channel=channel-1&id=message-1';
 
-  test('normalizes supported bare and autolinked Buzz URLs', () {
+  test('normalizes supported bare and autolinked Ambush URLs', () {
     expect(
       normalizeBareLinks('See $url and <$url>'),
       'See [$url]($url) and [$url]($url)',
@@ -86,13 +86,13 @@ void main() {
       );
     },
   );
-  test('normalizes every bare Buzz entity permalink family', () {
+  test('normalizes every bare Ambush entity permalink family', () {
     final owner = 'ab' * 32;
     final id = 'cd' * 32;
     final links = [
-      'buzz://repo?owner=$owner&d=buzz',
-      'buzz://pr?id=$id&owner=$owner&d=buzz',
-      'buzz://issue?id=$id&owner=$owner&d=buzz',
+      'ambush://repo?owner=$owner&d=ambush',
+      'ambush://pr?id=$id&owner=$owner&d=ambush',
+      'ambush://issue?id=$id&owner=$owner&d=ambush',
     ];
     for (final link in links) {
       expect(normalizeBareLinks('$link.'), '[$link]($link).');

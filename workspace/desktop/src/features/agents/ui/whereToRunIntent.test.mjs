@@ -74,7 +74,7 @@ const probeWithDefaults = {
   config_schema: {
     properties: {
       context: { type: "string", title: "Kubeconfig context" },
-      namespace: { type: "string", default: "buzz-agents-x1y2z3" },
+      namespace: { type: "string", default: "ambush-agents-x1y2z3" },
       inactivity_seconds: { type: "number", default: 1800 },
     },
     required: ["namespace"],
@@ -90,7 +90,7 @@ test("probe resolution prefills schema defaults on a fresh draft", () => {
   const next = applyProbeResult(unprobedDraft, probeWithDefaults);
   assert.equal(next.probedProvider, probeWithDefaults);
   assert.deepEqual(next.providerConfig, {
-    namespace: "buzz-agents-x1y2z3",
+    namespace: "ambush-agents-x1y2z3",
     inactivity_seconds: "1800",
   });
 });

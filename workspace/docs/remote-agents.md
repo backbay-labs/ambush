@@ -4,14 +4,14 @@
 
 ## Abstract
 
-This document specifies the protocol by which Buzz Desktop delegates the
+This document specifies the protocol by which Ambush Desktop delegates the
 execution of a managed agent to a **remote substrate** — any compute
 environment other than the local machine — through a **backend provider
 binary**, and specifies the lifecycle contract every provider and every
 remotely-run agent must satisfy. It covers three layers:
 
 1. **The provider protocol** — a zero-registration plugin contract between the
-   desktop and any executable named `buzz-backend-<id>`: discovery, the `info`
+   desktop and any executable named `ambush-backend-<id>`: discovery, the `info`
    and `deploy` operations, payload schema, and the security obligations on
    both sides of that boundary.
 2. **The remote lifecycle model** — how a remote agent is started, observed,
@@ -20,7 +20,7 @@ remotely-run agent must satisfy. It covers three layers:
    presence is the sole status signal; shutdown is a relay message; liveness
    bounds are enforced by the agent harness itself, not by the desktop.
 3. **The Kubernetes binding** — the first conforming provider,
-   `buzz-backend-kubernetes`, which realizes the contract as a bare Pod
+   `ambush-backend-kubernetes`, which realizes the contract as a bare Pod
    running the `sprig` image.
 
 We state five invariants — **identity fail-closed**, **no secrets in
@@ -29,8 +29,8 @@ configuration**, **presence-is-status**, **at-most-one-live-instance**, and
 rules.
 
 A scoping note that governs the whole document: the desktop is **one
-launcher among many**. What makes a process a live Buzz agent is a keypair,
-a NIP-OA auth tag, and a relay URL, handed as environment to the `buzz-acp`
+launcher among many**. What makes a process a live Ambush agent is a keypair,
+a NIP-OA auth tag, and a relay URL, handed as environment to the `ambush-acp`
 harness; anything that can set that environment and exec the harness — a
 bash script, a systemd unit, a CI job, or this document's provider protocol
 — is a conforming launcher. §Launchers states which obligations bind whom.
@@ -49,7 +49,7 @@ substrate, how their state is observed, and how their lifetime is bounded. It
 deliberately does **not** specify:
 
 - **Agent conversational behavior.** What the agent does with events is
-  governed by the ACP harness (`buzz-acp`) and the NIPs it implements
+  governed by the ACP harness (`ambush-acp`) and the NIPs it implements
   (NIP-OA, NIP-AE, NIP-AA, …), unchanged by where the harness runs.
 - **Malicious-provider containment.** A provider binary receives the agent's
   `nsec` by design — that is its job. The protocol *bounds the desktop's
@@ -70,9 +70,9 @@ deliberately does **not** specify:
 
 Five principals:
 
-- **Desktop** `D` — the Buzz Desktop app. Holds the agent's identity (nsec in
+- **Desktop** `D` — the Ambush Desktop app. Holds the agent's identity (nsec in
   the OS keyring), its configuration record, and the only UI. Trusted.
-- **Provider** `P` — an executable `buzz-backend-<id>` on `D`'s machine.
+- **Provider** `P` — an executable `ambush-backend-<id>` on `D`'s machine.
   Invoked one process per operation: JSON request on stdin, JSON response on
   stdout, exit code carrying one bit (zero = output trustworthy, nonzero =
   failure regardless of stdout — §Invocation). **Untrusted by `D`** for everything except
@@ -81,9 +81,9 @@ Five principals:
 - **Substrate** `S` — the remote compute environment `P` deploys into (a
   Kubernetes cluster for the binding in this document). Opaque to `D`;
   `D` never talks to `S`.
-- **Agent** `A` — a `buzz-acp` harness process (plus the ACP agent under it)
+- **Agent** `A` — a `ambush-acp` harness process (plus the ACP agent under it)
   running on `S`, holding the nsec it was given, connected to the relay.
-- **Relay** `R` — the Buzz relay. The *only* channel that connects `D` to a
+- **Relay** `R` — the Ambush relay. The *only* channel that connects `D` to a
   running `A`. Everything `D` knows about a live remote agent, it learns
   from `R`.
 
@@ -106,7 +106,7 @@ The defining constraint, stated as a design axiom:
 An agent's identity is a Nostr keypair. The **agent record** on `D` carries:
 `name`, `relay_url`, the nsec (keyring-hydrated), the NIP-OA `auth` tag
 attesting owner authorization, `agent_command`/`agent_args` (the ACP agent the
-harness spawns — `goose`, `claude-agent-acp`, `codex-acp`, `buzz-agent`, or
+harness spawns — `goose`, `claude-agent-acp`, `codex-acp`, `ambush-agent`, or
 any user-supplied command: this is the **configurable harness** requirement),
 effective `system_prompt`/`model`/`provider`, timeout and parallelism knobs,
 the `respond_to` gate, merged `env_vars`, and a `backend` discriminator:
@@ -119,15 +119,15 @@ That path is not the definition of a remote agent, and this section states
 the actual layering, because the obligations in this document do not all
 bind at the same layer. Three contracts, nested:
 
-1. **The agent/harness contract — binds every launcher.** A live Buzz agent
-   is a `buzz-acp` process holding a keypair, a NIP-OA auth tag (or resolved
+1. **The agent/harness contract — binds every launcher.** A live Ambush agent
+   is a `ambush-acp` process holding a keypair, a NIP-OA auth tag (or resolved
    owner pubkey), and a relay URL, delivered as environment. The relay
    authenticates the keypair and the auth tag — never the launcher. At this
    layer live: fail-closed identity (I1's property, enforced wherever the
    env is assembled), presence publication (I3), owner-verified `!shutdown`,
    and **intentional clean exit is terminal to automatic supervisor
-   restart** (I5). A bash script that exports `BUZZ_PRIVATE_KEY`,
-   `BUZZ_RELAY_URL`, `BUZZ_AUTH_TAG` and execs the harness is a conforming
+   restart** (I5). A bash script that exports `AMBUSH_PRIVATE_KEY`,
+   `AMBUSH_RELAY_URL`, `AMBUSH_AUTH_TAG` and execs the harness is a conforming
    launcher at this layer — today, with no code change.
 2. **The provider/deployer contract — binds provider-managed launches
    only.** The two operations (`info`/`deploy`), the reconciliation loop,
@@ -204,7 +204,7 @@ one.
   `backend_agent_id`) is bookkeeping, not liveness. Staleness bound: presence
   can be wrong for the window between an abnormal agent death (SIGKILL, node
   loss) and the relay's presence expiry — **180 seconds**
-  (`PRESENCE_TTL_SECS`, `buzz-pubsub/src/presence.rs:16`; the vision's
+  (`PRESENCE_TTL_SECS`, `ambush-pubsub/src/presence.rs:16`; the vision's
   "a bounded wrong dot, never an indefinite one"), the accepted
   cost of M1. The specific number is a relay-wide constant, not a
   remote-agent choice: #3783 raised it from 90s to keep a three-heartbeat
@@ -213,7 +213,7 @@ one.
   The Kubernetes binding minimizes the *avoidable* part of that window by
   sizing the termination grace period to the harness's full graceful-shutdown
   path (§K8s Grace). Two consequences the bound imposes: (a) the harness's
-  presence-suppression knob, `BUZZ_ACP_NO_PRESENCE`, MUST join
+  presence-suppression knob, `AMBUSH_ACP_NO_PRESENCE`, MUST join
   `RESERVED_ENV_KEYS` — locally the knob is cosmetic (the process and UI
   remain visible), but remotely M1 makes presence the *only* signal, so an
   unreserved user env var would convert "wrong for ≤180s" into "wrong
@@ -308,7 +308,7 @@ one.
 
 `D` scans, in order: the directory containing the desktop executable, every
 entry of `PATH`, and `~/.local/bin`, for executables named
-`buzz-backend-<id>`. The suffix after the prefix is the provider id and MUST
+`ambush-backend-<id>`. The suffix after the prefix is the provider id and MUST
 match `[a-z0-9][a-z0-9_-]*`. On Windows, an `.exe`/`.bat`/`.cmd` extension
 MUST be stripped before the id is derived (see §Known Defects — as of
 `28ae6cd21` it is not, so Windows providers probe but cannot deploy). First
@@ -322,7 +322,7 @@ deploy-time errors MUST be able to surface: the selected binary's full
 path, any shadowed candidates for the same id (later-PATH duplicates), and
 candidates rejected for malformed names. A deploy error that names which
 binary ran answers the first question a user with two copies of
-`buzz-backend-kubernetes` will ask. (At `28ae6cd21` discovery records only
+`ambush-backend-kubernetes` will ask. (At `28ae6cd21` discovery records only
 the winning path — a desktop change alongside Known Defect 3's.)
 
 **Resolution rule.** Every subsequent operation resolves the provider id
@@ -441,14 +441,14 @@ The agent payload (field list per
 | `launch` | **normative addition** (§Launch data): the desktop-resolved launch contract — `command` (name, not path), normalized `args`, layered `env`, overridable `policy_env`, and `owner_pubkey` |
 
 **Reserved-key rule (normative for providers).** `D` strips
-`BUZZ_PRIVATE_KEY`, `NOSTR_PRIVATE_KEY`, `BUZZ_AUTH_TAG`, `BUZZ_RELAY_URL`,
+`AMBUSH_PRIVATE_KEY`, `NOSTR_PRIVATE_KEY`, `AMBUSH_AUTH_TAG`, `AMBUSH_RELAY_URL`,
 and the other reserved keys from `env_vars` before merge. A provider MUST
 construct the agent environment's identity variables from the **top-level**
-payload fields (`private_key_nsec` → `BUZZ_PRIVATE_KEY`/`NOSTR_PRIVATE_KEY`,
-`auth_tag` → `BUZZ_AUTH_TAG`, `relay_url` → `BUZZ_RELAY_URL`); reading
+payload fields (`private_key_nsec` → `AMBUSH_PRIVATE_KEY`/`NOSTR_PRIVATE_KEY`,
+`auth_tag` → `AMBUSH_AUTH_TAG`, `relay_url` → `AMBUSH_RELAY_URL`); reading
 `env_vars` for them yields an identityless agent. A related hardening `D`
 performs is part of the contract's rationale: env keys are validated as
-POSIX-shaped names before merge, because a key like `BUZZ_AUTH_TAG=x`
+POSIX-shaped names before merge, because a key like `AMBUSH_AUTH_TAG=x`
 smuggled through `Command::env` would bypass the reserved-key strip
 entirely. A provider materializing `env_vars` into a substrate object
 (e.g. a Kubernetes Secret) MUST likewise never let a user-supplied key
@@ -486,12 +486,12 @@ spawn**, and the provider applies it mechanically.
                                 // (resolve_effective_harness_descriptor)
   "policy_env":   {str: str},   // overridable behavior defaults (tier 1, below):
                                 // runtime default_env (e.g. GOOSE_MODE=auto),
-                                // BUZZ_ACP_RELAY_OBSERVER, BUZZ_ACP_LAZY_POOL=true,
-                                // BUZZ_ACP_SESSION_TITLE (resolved),
-                                // BUZZ_ACP_TEAM_INSTRUCTIONS, BUZZ_ACP_MODEL,
+                                // AMBUSH_ACP_RELAY_OBSERVER, AMBUSH_ACP_LAZY_POOL=true,
+                                // AMBUSH_ACP_SESSION_TITLE (resolved),
+                                // AMBUSH_ACP_TEAM_INSTRUCTIONS, AMBUSH_ACP_MODEL,
                                 // MCP_HOOK_SERVERS=* (mcp_hooks runtimes only)
   "owner_pubkey": str | null    // resolved workspace owner (hex) — legacy
-                                // BUZZ_ACP_AGENT_OWNER fallback, non-secret
+                                // AMBUSH_ACP_AGENT_OWNER fallback, non-secret
 }
 ```
 
@@ -503,8 +503,8 @@ byte, and definition-provided `agent_args` are lost when the instance's own
 args are empty. `launch.env` is that descriptor's layered env, which is
 where per-runtime model/provider injection lives (`GOOSE_MODEL`/
 `GOOSE_PROVIDER` for goose; nothing for `provider_locked` runtimes like
-Claude; `BUZZ_AGENT_MODEL`/`BUZZ_AGENT_PROVIDER` for buzz-agent). A fixed
-`provider → BUZZ_AGENT_PROVIDER` mapping is wrong for three of the four
+Claude; `AMBUSH_AGENT_MODEL`/`AMBUSH_AGENT_PROVIDER` for ambush-agent). A fixed
+`provider → AMBUSH_AGENT_PROVIDER` mapping is wrong for three of the four
 built-in runtimes and is why this block exists.
 
 **What `policy_env` carries — and deliberately does not.** Its irreducible
@@ -512,10 +512,10 @@ wire fields are exactly three scalars plus the metadata-derived defaults —
 plus the four record-derived behavior knobs that would otherwise be
 mis-tiered (below):
 
-- `BUZZ_ACP_TEAM_INSTRUCTIONS` — the only truly non-reconstructible policy
+- `AMBUSH_ACP_TEAM_INSTRUCTIONS` — the only truly non-reconstructible policy
   value: `effective_team_instructions` (`spawn_hash.rs:41-52`) needs the
   desktop's `TeamRecord` store, which no pod can reach.
-- `BUZZ_ACP_SESSION_TITLE` — sent **resolved** (`resolve_session_title`,
+- `AMBUSH_ACP_SESSION_TITLE` — sent **resolved** (`resolve_session_title`,
   `runtime/metadata.rs:45`), not as its `display_name`/`name` inputs. The
   resolution strips control characters, and that property transfers: an
   interior NUL fails a local spawn at the env boundary, and would make the
@@ -531,22 +531,22 @@ mis-tiered (below):
   resolved local env" not a pure function of the record; serializing it
   verbatim would bake a host accident into the pod. Launch data MUST be
   computed from record + config alone.
-- `BUZZ_ACP_LAZY_POOL=true` — a **deliberate pick, not a transcription**:
+- `AMBUSH_ACP_LAZY_POOL=true` — a **deliberate pick, not a transcription**:
   the two local paths disagree (manual Start is eager, `runtime.rs:1001`;
   launch restore is lazy, `restore.rs:333`, precisely to avoid "N idle
   brains on every launch"). Remote pods take the lazy arm: an idle LLM pool
   in a cluster is billable waste with no user watching it warm up.
 - `MCP_HOOK_SERVERS=*` when the resolved runtime has `mcp_hooks`
-  (`runtime.rs:594-598`; buzz-agent only at `28ae6cd21`) — gates the
+  (`runtime.rs:594-598`; ambush-agent only at `28ae6cd21`) — gates the
   `_Stop`/`_PostCompact` hook tools.
-- `BUZZ_ACP_SYSTEM_PROMPT`, `BUZZ_ACP_IDLE_TIMEOUT`,
-  `BUZZ_ACP_MAX_TURN_DURATION`, `BUZZ_ACP_AGENTS` — resolved by the desktop
+- `AMBUSH_ACP_SYSTEM_PROMPT`, `AMBUSH_ACP_IDLE_TIMEOUT`,
+  `AMBUSH_ACP_MAX_TURN_DURATION`, `AMBUSH_ACP_AGENTS` — resolved by the desktop
   from the record's `system_prompt` / `idle_timeout_seconds` /
   `max_turn_duration_seconds` / `parallelism` (each omitted when null,
-  matching the local spawn's conditional emission). `BUZZ_ACP_AGENTS` is
+  matching the local spawn's conditional emission). `AMBUSH_ACP_AGENTS` is
   the **effective** parallelism: `min(record.parallelism, harness_cap)`
   where the cap is harness-specific (e.g. OpenClaw is capped at 5). These
-  are **tier-1 control-plane** keys: `BUZZ_ACP_AGENTS` is in
+  are **tier-1 control-plane** keys: `AMBUSH_ACP_AGENTS` is in
   `RESERVED_ENV_KEYS` (`env_vars.rs`) so the desktop-resolved effective
   value cannot be overridden by a definition env var; the others are
   tier-1 by local fact (written before the user env layer). A provider
@@ -555,11 +555,11 @@ mis-tiered (below):
   field silently defeating an override that works locally — which is why
   the provider MUST NOT remap them (§Entrypoint mapping table).
 
-`BUZZ_ACP_DEDUP` and `BUZZ_ACP_MULTIPLE_EVENT_HANDLING` are **deliberately
+`AMBUSH_ACP_DEDUP` and `AMBUSH_ACP_MULTIPLE_EVENT_HANDLING` are **deliberately
 unset**: the local spawn writes `queue`/`steer` (`runtime.rs:730-731`), and
 those are exactly the harness's clap defaults (`config.rs:344,356`) — a pod
 that omits both is behaviorally identical, and adding rows for them would
-imply a divergence that does not exist. `BUZZ_MANAGED_AGENT` is likewise
+imply a divergence that does not exist. `AMBUSH_MANAGED_AGENT` is likewise
 deliberately absent remotely: it brands local harness processes so the
 desktop's orphan sweep and instance reaper can prove ownership by scanning
 process env (`orphan_sweep.rs`, `instance_reaper.rs`) — there is no local
@@ -573,7 +573,7 @@ process to sweep.
    system prompt, model, idle timeout, etc. Locally the user env is written
    after them (`runtime.rs:860` and its comment). A policy-wins order here
    would make remote agents ignore overrides local agents honor.
-   **Exception — `BUZZ_ACP_AGENTS`:** this key IS reserved
+   **Exception — `AMBUSH_ACP_AGENTS`:** this key IS reserved
    (`env_vars.rs:RESERVED_ENV_KEYS`) so the desktop-controlled effective
    parallelism (applying any per-harness cap) cannot be bypassed by a
    user-supplied definition env var. The reserved-key strip removes any
@@ -585,10 +585,10 @@ process to sweep.
 3. **Authoritative** — unoverridable at every layer, written last and
    backed by the reserved-key strip: the identity variables from top-level
    payload fields (§Reserved-key rule), the respond-to gate values,
-   `BUZZ_ACP_AGENT_OWNER`, the inactivity bound, `BUZZ_ACP_MCP_COMMAND`,
-   and `BUZZ_MANAGED_AGENT_START_NONCE`. For the nonce, the provider MUST
+   `AMBUSH_ACP_AGENT_OWNER`, the inactivity bound, `AMBUSH_ACP_MCP_COMMAND`,
+   and `AMBUSH_MANAGED_AGENT_START_NONCE`. For the nonce, the provider MUST
    set it to the attempt's **generation token** (§K8s Secrets): the harness
-   stamps it into every observer lifecycle frame (`buzz-acp/lib.rs:1501`),
+   stamps it into every observer lifecycle frame (`ambush-acp/lib.rs:1501`),
    so the Secret generation and the lifecycle correlator become one
    identity instead of an empty string.
 
@@ -598,8 +598,8 @@ desktop's filesystem; forwarding them into a container is a guaranteed
 failure. The provider/image re-derives:
 
 - the harness and agent binaries: `launch.command` is a *name*, resolved
-  against the image's own `PATH` (`BUZZ_ACP_AGENT_COMMAND`), and
-  `BUZZ_ACP_MCP_COMMAND=buzz-dev-mcp` likewise;
+  against the image's own `PATH` (`AMBUSH_ACP_AGENT_COMMAND`), and
+  `AMBUSH_ACP_MCP_COMMAND=ambush-dev-mcp` likewise;
 - `CLAUDE_CODE_EXECUTABLE` — a `resolve_command()` host path
   (`configure_runtime_cli`, `runtime.rs:424-446`), same class as the
   command paths: image-local resolution or unset;
@@ -607,20 +607,20 @@ failure. The provider/image re-derives:
 - git credential/signing helper locations — the relay-URL *scoping* of the
   credential config is normative (never a global helper), the helper *path*
   is image-local (§Image);
-- `BUZZ_ACP_SETUP_PAYLOAD` is desktop-computed readiness state and MUST NOT
+- `AMBUSH_ACP_SETUP_PAYLOAD` is desktop-computed readiness state and MUST NOT
   appear in a remote pod.
 
 **Owner resolution (normative):** the provider MUST have either a non-null
-`auth_tag` (→ `BUZZ_AUTH_TAG`) or a non-null `launch.owner_pubkey`
-(→ `BUZZ_ACP_AGENT_OWNER`) before any mutation; if both are null it MUST
+`auth_tag` (→ `AMBUSH_AUTH_TAG`) or a non-null `launch.owner_pubkey`
+(→ `AMBUSH_ACP_AGENT_OWNER`) before any mutation; if both are null it MUST
 refuse the deploy. Without an owner the harness cannot match `!shutdown`
-(`buzz-acp/src/lib.rs: resolve_agent_owner`, main-loop owner check) and the
+(`ambush-acp/src/lib.rs: resolve_agent_owner`, main-loop owner check) and the
 agent answers its own stop command conversationally — §Stop would be
-describing a mechanism that does not work. `BUZZ_ACP_AGENT_OWNER` is a
+describing a mechanism that does not work. `AMBUSH_ACP_AGENT_OWNER` is a
 reserved key, so this value can only arrive as authoritative launch data,
 never through user env.
 
-**Buzz shared compute (relay-mesh) is non-deployable, and this is forced,
+**Ambush shared compute (relay-mesh) is non-deployable, and this is forced,
 not chosen.** The mesh rewrite resolves to an OpenAI-compatible transport at
 `http://127.0.0.1:9337/v1` (`relay_mesh.rs: RELAY_MESH_API_BASE_URL`) — a
 loopback proxy on the desktop. Serializing that policy into a pod points the
@@ -662,7 +662,7 @@ no-op'd against, deleted, GC'd, or have its Secret touched; the provider
 MUST either ignore it or fail with an explicit collision error. Only
 annotation-verified objects proceed.
 
-**Auto-repair is fenced to Buzz-authored, positively identified residue
+**Auto-repair is fenced to Ambush-authored, positively identified residue
 (normative).** The destructive rows below (delete residue, replace a
 never-started body, GC a Secret) are legitimate *only because* every object
 they touch carries positive **protocol ownership evidence** — and identity
@@ -671,7 +671,7 @@ full-pubkey annotation, and the create-intent fingerprint prove "matches
 our schema for this public identity"; all three are public, so any cluster
 writer can reproduce them on an object this provider never created. Every
 object this provider creates therefore also carries an explicit
-management marker — `app.kubernetes.io/managed-by: buzz-backend-kubernetes`
+management marker — `app.kubernetes.io/managed-by: ambush-backend-kubernetes`
 plus a binding schema-version label (§Pod shape) — and **no destructive
 repair or GC action fires unless the marker is present**, on top of the
 annotation check and the UID+`resourceVersion` fence every delete already
@@ -680,7 +680,7 @@ writer can forge metadata by definition, and an actor with write access to
 the namespace can already delete the pod outright — the marker's job is
 making *accidental* schema collisions and third-party objects fail closed,
 not defeating a hostile admin. The vision's rule that a never-started body
-is substrate-operator residue survives with one qualifier: *Buzz-authored*
+is substrate-operator residue survives with one qualifier: *Ambush-authored*
 create-state (a Secret our provider wrote, a pod carrying our verified
 annotations and marker) is the reconciler's to clear, because it is state
 the user cannot reasonably clear themselves; *substrate* wreckage —
@@ -807,7 +807,7 @@ the latter, not the former.
 
 **Create-intent fingerprint (normative).** The divergence discriminator
 in the never-started rows is a recorded annotation,
-`buzz.block.xyz/create-intent`, written at pod create — the same shape as
+`ambush.backbay.com/create-intent`, written at pod create — the same shape as
 the image-reference and pubkey annotations the pod already carries. Its
 value is an **unkeyed SHA-256** over a canonical serialization of the
 provider's **non-secret create-intent template**, computed *before* the
@@ -927,7 +927,7 @@ can yield two live instances in one scope.
 I5's enforcement point. A new harness knob:
 
 ```
---exit-after-inactivity <secs>   /   BUZZ_ACP_EXIT_AFTER_INACTIVITY
+--exit-after-inactivity <secs>   /   AMBUSH_ACP_EXIT_AFTER_INACTIVITY
 ```
 
 - **Default 0 = disabled.** The flag ships in the harness every *local*
@@ -950,17 +950,17 @@ I5's enforcement point. A new harness knob:
   which under `lazy_pool` starts false (`:1320`) and flips true only on a
   wake (`:2570`) — and wakes require pending work (`pool_lifecycle.rs:42`).
   A reaper riding that tick composes with the mandated
-  `BUZZ_ACP_LAZY_POOL=true` (§Launch data) into a deadlock in I5's single
+  `AMBUSH_ACP_LAZY_POOL=true` (§Launch data) into a deadlock in I5's single
   most important case: a never-mentioned lazy pod never runs the tick, so
   the idle agent the reaper exists to kill is exactly the one it can never
   evaluate. The reaper therefore runs on its own timer, independent of pool
   state (an idle-pool check needs no pool). Check granularity makes the
   effective bound `t ∈ [T, T+interval)`, immaterial at T=7200.
-- **Reserved keys**: `BUZZ_ACP_EXIT_AFTER_INACTIVITY` MUST join
+- **Reserved keys**: `AMBUSH_ACP_EXIT_AFTER_INACTIVITY` MUST join
   `RESERVED_ENV_KEYS` (`env_vars.rs`) when it lands — it is tier-3
   authoritative (§Launch data), and without reservation a user env var
   could disable the reaper and reopen unbounded lifetime through the front
-  door. `BUZZ_ACP_NO_PRESENCE` (`config.rs:378`) MUST join in the same
+  door. `AMBUSH_ACP_NO_PRESENCE` (`config.rs:378`) MUST join in the same
   change, for the same shape of reason at I3 instead of I5: unreserved, it
   lets user env silently defeat the 180s presence bound (I3). One knob
   guards "knows when to leave", the other "you can see that it left";
@@ -988,9 +988,9 @@ after both prerequisites, §Pod shape; the universal rule is I5's),
 harness exit completes the pod on every intentional path — turning
 agent-level I5 into substrate-level I5.
 
-## The Kubernetes Binding (`buzz-backend-kubernetes`)
+## The Kubernetes Binding (`ambush-backend-kubernetes`)
 
-The first conforming provider: a Rust crate in `block/buzz`, distributed as a
+The first conforming provider: a Rust crate in `backbay-labs/ambush`, distributed as a
 standalone binary. Everything above is the contract; this section is its
 realization.
 
@@ -998,8 +998,8 @@ realization.
 
 Standard kubeconfig resolution (`$KUBECONFIG` → `~/.kube/config`) via
 `kube-rs`. `provider_config` carries **`context`** and **`namespace`** only
-(I2: credentials never transit config). Because kubeconfigs at Block
-near-universally use `exec` credential plugins (`aws eks get-token`,
+(I2: credentials never transit config). Because kubeconfigs near-universally
+use `exec` credential plugins (`aws eks get-token`,
 `gke-gcloud-auth-plugin`) that resolve via PATH, and the provider inherits a
 Finder-launched desktop's minimal PATH, the provider MUST prepend
 `/opt/homebrew/bin`, `/usr/local/bin`, and `~/.local/bin` to its own PATH
@@ -1009,7 +1009,7 @@ plugin binary in the error rather than surfacing a kube-rs stack.
 ### Namespace {#k8s-namespace}
 
 One stable namespace per user-visible choice; the provider emits a freshly
-generated `buzz-agents-<rand6>` as the `namespace` field's schema *default*
+generated `ambush-agents-<rand6>` as the `namespace` field's schema *default*
 on every `info` call, so the UI prefills a visible, editable random name with
 zero UI changes ("random default" satisfied at the schema layer). If the
 namespace does not exist the provider attempts to create it; on RBAC denial
@@ -1018,10 +1018,10 @@ run — it MUST NOT fall back to `default`.
 
 ### Image
 
-`ghcr.io/block/buzz-sprig`: Alpine base + `bash` (required by the dev-MCP
+`ghcr.io/backbay-labs/ambush-sprig`: Alpine base + `bash` (required by the dev-MCP
 shell tool) + `git` + CA certificates + the static musl `sprig` multicall
-binary with its personality links (`buzz-acp`, `buzz-agent`, `buzz-dev-mcp`,
-`rg`, `tree`, `buzz`, `git-credential-nostr`, `git-sign-nostr`) + a baked
+binary with its personality links (`ambush-acp`, `ambush-agent`, `ambush-dev-mcp`,
+`rg`, `tree`, `ambush`, `git-credential-nostr`, `git-sign-nostr`) + a baked
 system gitconfig wiring the nostr signing and credential helpers. The baked
 credential-helper config MUST be scoped to the relay's git URL — mirroring
 the local spawn's `credential.<relay-url>/git.helper` scoping — never a
@@ -1035,7 +1035,7 @@ field, not a fatter default. Tagging follows the relay image's matrix —
 reference MUST be pinned by digest, not tag**: the provider bakes, at
 compile time, the multi-arch manifest digest of the image built from its
 own commit and defaults `image` to
-`ghcr.io/block/buzz-sprig@sha256:<that-digest>` — a `sha-<git-sha>` *tag*
+`ghcr.io/backbay-labs/ambush-sprig@sha256:<that-digest>` — a `sha-<git-sha>` *tag*
 is traceable but still movable (registry tags are mutable pointers;
 Kubernetes distinguishes movable tags from immutable digests for exactly
 this reason), and the object holding it runs with an nsec. The provider
@@ -1043,9 +1043,9 @@ records the reference it used in a pod annotation, and rejects `:latest`.
 User `image` overrides accept tag, digest, or full custom registry
 reference — visibly the user's trust decision, with the resolved image ID
 recorded in the same annotation for post-hoc attribution.
-**An image override MUST contain the runtime ABI** — the `buzz-acp`
+**An image override MUST contain the runtime ABI** — the `ambush-acp`
 entrypoint and everything §Entrypoint and launch ABI requires — not merely
-alternate-harness dependencies. A conforming custom image is "buzz-sprig
+alternate-harness dependencies. A conforming custom image is "ambush-sprig
 plus your tools", never "your tools instead".
 
 ### Entrypoint and launch ABI {#k8s-entrypoint}
@@ -1062,10 +1062,10 @@ nothing reaps children or forwards signals — so the entrypoint MUST end in
 #!/bin/bash
 set -e
 # nest scaffolding, if DECISION A lands, goes here
-exec buzz-acp   # exec, not a call — buzz-acp must be PID 1
+exec ambush-acp   # exec, not a call — ambush-acp must be PID 1
 ```
 
-`bash -c "setup && buzz-acp"` (no `exec`) is non-conforming: bash becomes
+`bash -c "setup && ambush-acp"` (no `exec`) is non-conforming: bash becomes
 PID 1, and a PID-1 bash with no trap never delivers SIGTERM to the harness
 (PID 1 receives kernel-level default-handler signal immunity), so the pod
 rides out the entire grace period and is SIGKILLed with presence still
@@ -1083,28 +1083,28 @@ individually:
 
 | source | env var |
 |---|---|
-| `relay_url` | `BUZZ_RELAY_URL` |
-| `private_key_nsec` | `BUZZ_PRIVATE_KEY` and `NOSTR_PRIVATE_KEY` (the git helpers read the latter) |
-| `auth_tag` | `BUZZ_AUTH_TAG` (omitted when null; then `launch.owner_pubkey` → `BUZZ_ACP_AGENT_OWNER` is REQUIRED — §Launch data owner rule) |
-| `launch.command` | `BUZZ_ACP_AGENT_COMMAND` — the *name*, resolved against the image's own PATH; never a forwarded host path |
-| `launch.args` | `BUZZ_ACP_AGENT_ARGS`, comma-joined |
+| `relay_url` | `AMBUSH_RELAY_URL` |
+| `private_key_nsec` | `AMBUSH_PRIVATE_KEY` and `NOSTR_PRIVATE_KEY` (the git helpers read the latter) |
+| `auth_tag` | `AMBUSH_AUTH_TAG` (omitted when null; then `launch.owner_pubkey` → `AMBUSH_ACP_AGENT_OWNER` is REQUIRED — §Launch data owner rule) |
+| `launch.command` | `AMBUSH_ACP_AGENT_COMMAND` — the *name*, resolved against the image's own PATH; never a forwarded host path |
+| `launch.args` | `AMBUSH_ACP_AGENT_ARGS`, comma-joined |
 | `launch.env`, `launch.policy_env` | verbatim, at their precedence tiers |
-| generation token (§K8s Secrets) | `BUZZ_MANAGED_AGENT_START_NONCE` — the lifecycle-frame correlator and the Secret generation are one identity (§Launch data tier 3) |
-| `system_prompt`, `idle_timeout_seconds`, `max_turn_duration_seconds`, `parallelism` | **not mapped by the provider** — the desktop resolves these into `launch.policy_env` (`BUZZ_ACP_SYSTEM_PROMPT`, `BUZZ_ACP_IDLE_TIMEOUT`, `BUZZ_ACP_MAX_TURN_DURATION`, `BUZZ_ACP_AGENTS`). `BUZZ_ACP_AGENTS` carries the **effective** parallelism (`min(record.parallelism, harness_cap)`), is reserved (`env_vars.rs:RESERVED_ENV_KEYS`), and cannot be overridden by user env. The remaining knobs are tier-1 by local fact (written before user env); a provider that mapped the top-level copies after `launch.env` would silently defeat local overrides. The top-level fields remain as display/bookkeeping inputs only |
+| generation token (§K8s Secrets) | `AMBUSH_MANAGED_AGENT_START_NONCE` — the lifecycle-frame correlator and the Secret generation are one identity (§Launch data tier 3) |
+| `system_prompt`, `idle_timeout_seconds`, `max_turn_duration_seconds`, `parallelism` | **not mapped by the provider** — the desktop resolves these into `launch.policy_env` (`AMBUSH_ACP_SYSTEM_PROMPT`, `AMBUSH_ACP_IDLE_TIMEOUT`, `AMBUSH_ACP_MAX_TURN_DURATION`, `AMBUSH_ACP_AGENTS`). `AMBUSH_ACP_AGENTS` carries the **effective** parallelism (`min(record.parallelism, harness_cap)`), is reserved (`env_vars.rs:RESERVED_ENV_KEYS`), and cannot be overridden by user env. The remaining knobs are tier-1 by local fact (written before user env); a provider that mapped the top-level copies after `launch.env` would silently defeat local overrides. The top-level fields remain as display/bookkeeping inputs only |
 | `turn_timeout_seconds` | not mapped — deprecated upstream and ignored; the local spawn also does not emit it |
-| `respond_to` | `BUZZ_ACP_RESPOND_TO` |
-| `respond_to_allowlist` | `BUZZ_ACP_RESPOND_TO_ALLOWLIST`, comma-joined |
-| — | `BUZZ_ACP_MCP_COMMAND=buzz-dev-mcp` (image-local; the dev-MCP requirement) |
-| `provider_config.inactivity_seconds` | `BUZZ_ACP_EXIT_AFTER_INACTIVITY` (schema default 7200; the I5 opt-in, §Auto-Stop — the config field and this env var are one knob, not two) |
+| `respond_to` | `AMBUSH_ACP_RESPOND_TO` |
+| `respond_to_allowlist` | `AMBUSH_ACP_RESPOND_TO_ALLOWLIST`, comma-joined |
+| — | `AMBUSH_ACP_MCP_COMMAND=ambush-dev-mcp` (image-local; the dev-MCP requirement) |
+| `provider_config.inactivity_seconds` | `AMBUSH_ACP_EXIT_AFTER_INACTIVITY` (schema default 7200; the I5 opt-in, §Auto-Stop — the config field and this env var are one knob, not two) |
 
 The top-level `model`/`provider` payload fields are display/bookkeeping
 inputs; the *environment* consequence of model and provider selection
-(per-runtime vars, `provider_locked` suppression, `BUZZ_ACP_MODEL`) arrives
+(per-runtime vars, `provider_locked` suppression, `AMBUSH_ACP_MODEL`) arrives
 resolved inside `launch.env`/`launch.policy_env`. A provider MUST NOT map
 `provider` to any env var itself — that mapping is per-runtime and lives in
 the desktop's resolver (§Launch data).
 
-**Encoding honesty note.** `BUZZ_ACP_AGENT_ARGS` is comma-delimited by the
+**Encoding honesty note.** `AMBUSH_ACP_AGENT_ARGS` is comma-delimited by the
 harness's CLI parser, and the desktop's *local* spawn performs the same
 comma-join — an argument containing a comma is unrepresentable in both
 paths. This is a harness interface limitation the binding inherits and
@@ -1159,28 +1159,28 @@ regardless of `HOME`.
     node loss surfacing as presence `offline` awaiting a fresh Start.
 - **Naming/labeling — the exact contract** (63-char label-value limit; a hex
   pubkey is 64 chars, one over):
-  - pod name: `buzz-agent-<first-12-hex-of-pubkey>` — also the returned
+  - pod name: `ambush-agent-<first-12-hex-of-pubkey>` — also the returned
     `agent_id`
-  - label `buzz.block.xyz/agent-pubkey: <first-32-hex>` — the selector key
+  - label `ambush.backbay.com/agent-pubkey: <first-32-hex>` — the selector key
     for reconciliation and GC. 128 bits is collision-*resistant*, not
     collision-free, which is why the annotation check below is normative,
     not decorative
-  - label `app.kubernetes.io/managed-by: buzz-backend-kubernetes` and label
-    `buzz.block.xyz/binding-version: <schema-version>` — the **management
+  - label `app.kubernetes.io/managed-by: ambush-backend-kubernetes` and label
+    `ambush.backbay.com/binding-version: <schema-version>` — the **management
     marker** (§Deploy State Machine auto-repair fence): present on every
     pod and Secret this provider creates, and **required before any
     destructive repair or GC action**. Identity labels/annotations prove
     identity; the marker asserts protocol ownership — without it, an object
     that merely matches our schema fails closed to the operator
-  - annotation `buzz.block.xyz/agent-pubkey-full: <full-64-hex>` —
+  - annotation `ambush.backbay.com/agent-pubkey-full: <full-64-hex>` —
     **load-bearing**: per §Deploy State Machine step 1, every label-selected
     object's annotation MUST equal the derived pubkey before the provider
     no-ops against it, deletes it, mutates its Secret, or returns its name
-  - annotation `buzz.block.xyz/create-intent: <sha256-of-intent-template>` — the
+  - annotation `ambush.backbay.com/create-intent: <sha256-of-intent-template>` — the
     recorded create intent (§Deploy State Machine, create-intent
     fingerprint), written at pod create; the divergence discriminator for
     never-started pods
-  - Secret name: `buzz-agent-<first-12-hex>-<gen>`, where `<gen>` is a random
+  - Secret name: `ambush-agent-<first-12-hex>-<gen>`, where `<gen>` is a random
     per-create-attempt **generation token** — unique, never reused, carrying
     the same labels (identity + management marker) and annotation. The
     pod's `envFrom` references this exact
@@ -1252,7 +1252,7 @@ payload fields per the reserved-key rule) plus `env_vars`; consumed via
 `envFrom`.
 
 **Secret creation is per-attempt, immutable, and uniquely named**
-(`buzz-agent-<first-12-hex>-<gen>`, §Pod shape). The rationale is a
+(`ambush-agent-<first-12-hex>-<gen>`, §Pod shape). The rationale is a
 concurrency race a deterministic shared Secret name cannot survive: two
 concurrent deploys carrying *different* payloads would both write the shared
 Secret, the loser's write could land last, and the winner's pod —
@@ -1384,7 +1384,7 @@ ephemeral-runner lesson: disposable generations still need durable
 diagnostics, forwarded off the pod by the cluster operator's stack. The
 binding's contribution is correlation, not transport: the pod carries the
 full-pubkey annotation, the generation token (doubling as
-`BUZZ_MANAGED_AGENT_START_NONCE`, so lifecycle frames and pod logs share a
+`AMBUSH_MANAGED_AGENT_START_NONCE`, so lifecycle frames and pod logs share a
 correlator), the provider version, and the resolved image reference
 (§Image) — enough to attribute any shipped log line to an exact identity,
 generation, and binary, with no secret in any of it. GC on next-deploy
@@ -1427,9 +1427,9 @@ is conforming iff:
    pubkey — refusing to launch rather than launching identityless (I1's
    property, enforced wherever the env is assembled).
 2. It does not suppress the harness's promises on a remote agent:
-   presence stays enabled (`BUZZ_ACP_NO_PRESENCE` never set — remotely,
+   presence stays enabled (`AMBUSH_ACP_NO_PRESENCE` never set — remotely,
    presence is the only signal, I3), and the inactivity knob
-   (`BUZZ_ACP_EXIT_AFTER_INACTIVITY`) carries the owner's *deliberate*
+   (`AMBUSH_ACP_EXIT_AFTER_INACTIVITY`) carries the owner's *deliberate*
    lifetime policy, never an accidental passthrough of user env (I5; the
    reserved-key rule is the provider path's realization of this).
 3. The substrate's **termination signal reaches the harness process**,
@@ -1606,10 +1606,10 @@ Desktop- and harness-side, discovered during this design:
    `agent_args` serialize as blank/empty — a different command line than the
    identical local agent; (c) no `owner_pubkey` — a null-`auth_tag` agent
    cannot match `!shutdown` (it *answers* it), stranding §Stop; (d) spawn
-   policy (`BUZZ_ACP_RELAY_OBSERVER`, runtime `default_env` such as
+   policy (`AMBUSH_ACP_RELAY_OBSERVER`, runtime `default_env` such as
    `GOOSE_MODE=auto`, team instructions, session title, lazy-pool selection)
    is absent — remote pods run different observer/approval semantics
-   (`BUZZ_ACP_DEDUP`/`BUZZ_ACP_MULTIPLE_EVENT_HANDLING` are *not* on this
+   (`AMBUSH_ACP_DEDUP`/`AMBUSH_ACP_MULTIPLE_EVENT_HANDLING` are *not* on this
    list: the local writes match the harness defaults, §Launch data); (e) a
    mesh-provider agent deploys pointed at a loopback URL that cannot exist
    in the pod instead of being refused. Until `deploy_payload_json` emits
@@ -1624,7 +1624,7 @@ Desktop- and harness-side, discovered during this design:
    Conformance: a provider that echoes a launch-only secret into an error
    must come back redacted.
 4. **The I5 reaper does not exist, and its natural home is a trap**
-   (harness code prerequisite). `BUZZ_ACP_EXIT_AFTER_INACTIVITY` appears
+   (harness code prerequisite). `AMBUSH_ACP_EXIT_AFTER_INACTIVITY` appears
    nowhere in the harness at `28ae6cd21`; §Auto-Stop is a design, not a
    description. Worse, the obvious attachment point — the existing 30s
    maintenance tick — is gated on `pool_ready` (`lib.rs:1743`), which under
@@ -1698,12 +1698,12 @@ Desktop- and harness-side, discovered during this design:
 | Mesh rewrite (why relay-mesh is non-deployable) | `desktop/src-tauri/src/managed_agents/relay_mesh.rs`; create-time rejection in `commands/agents.rs` (`normalize_relay_mesh`) |
 | Reserved-key strip | `desktop/src-tauri/src/managed_agents/env_vars.rs` (`RESERVED_ENV_KEYS`) |
 | Unconditional deploy on Start | `desktop/src-tauri/src/commands/agents.rs` (`start_managed_agent`) |
-| Presence publish / offline-on-exit | `crates/buzz-acp/src/lib.rs` (`publish_presence`, shutdown path) |
-| `!shutdown` owner check | `crates/buzz-acp/src/lib.rs` (main loop) |
-| Graceful shutdown path (budget enforcement *to be added* — Known Defect 7) | `crates/buzz-acp/src/lib.rs` (pool shutdown, then drain / reap / presence / relay close) |
-| Clean-exit exit-code contract | *to be added*: `crates/buzz-acp` distinguished exit codes + pinning test (Known Defect 6; gates `OnFailure`) |
-| Auto-stop flag | *to be added*: `crates/buzz-acp/src/config.rs` + a pool-independent timer (NOT the `pool_ready`-gated maintenance tick — Known Defect 4) + `RESERVED_ENV_KEYS` entry |
-| Kubernetes binding | *to be added*: `crates/buzz-backend-kubernetes` |
+| Presence publish / offline-on-exit | `crates/ambush-acp/src/lib.rs` (`publish_presence`, shutdown path) |
+| `!shutdown` owner check | `crates/ambush-acp/src/lib.rs` (main loop) |
+| Graceful shutdown path (budget enforcement *to be added* — Known Defect 7) | `crates/ambush-acp/src/lib.rs` (pool shutdown, then drain / reap / presence / relay close) |
+| Clean-exit exit-code contract | *to be added*: `crates/ambush-acp` distinguished exit codes + pinning test (Known Defect 6; gates `OnFailure`) |
+| Auto-stop flag | *to be added*: `crates/ambush-acp/src/config.rs` + a pool-independent timer (NOT the `pool_ready`-gated maintenance tick — Known Defect 4) + `RESERVED_ENV_KEYS` entry |
+| Kubernetes binding | *to be added*: `crates/ambush-backend-kubernetes` |
 | Sprig image | *to be added*: `Dockerfile.sprig` + workflow |
 
 ## Open Decisions
@@ -1738,7 +1738,7 @@ Marked `[DECISION]` inline; consolidated:
   (shared-compute agents are local-only until an in-image mesh client
   exists).
 - **G. Remote override semantics** — the spec keeps local semantics: user
-  env continues to beat Buzz behavior defaults remotely (three-tier
+  env continues to beat Ambush behavior defaults remotely (three-tier
   precedence, §Launch data), because the alternative is a quiet behavior
   fork between local and remote spawns of the same record. Flagged because
   it is a policy statement about what power users may do to remote pods.
@@ -1756,7 +1756,7 @@ Marked `[DECISION]` inline; consolidated:
   (§Deploy State Machine) lets a config *change* replace a never-started
   pod, closing the config wedge. Ruled on the vision-consistency half:
   Start-time auto-repair of never-started bodies is legitimate, **fenced
-  to Buzz-authored, positively identified residue** (§Deploy State Machine
+  to Ambush-authored, positively identified residue** (§Deploy State Machine
   auto-repair rule) — the vision's "never-started body is operator
   residue" line gains that qualifier rather than being waived. The
   remaining product question: does v1 owe users an explicit in-product
@@ -1767,7 +1767,7 @@ Marked `[DECISION]` inline; consolidated:
 
 ## Summary
 
-Remote agents extend Buzz's managed-agent model across a deliberately thin
+Remote agents extend Ambush's managed-agent model across a deliberately thin
 boundary: one untrusted binary, two JSON operations, and a relay. The
 desktop's obligations end at a well-formed, fail-closed deploy payload; the
 provider's obligations are convergence and honesty about state; the agent's

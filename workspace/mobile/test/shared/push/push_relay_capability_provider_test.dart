@@ -1,5 +1,5 @@
-import 'package:buzz/shared/push/dev_push_lease.dart';
-import 'package:buzz/shared/push/push_relay_capability_provider.dart';
+import 'package:ambush/shared/push/dev_push_lease.dart';
+import 'package:ambush/shared/push/push_relay_capability_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -8,7 +8,7 @@ void main() {
     () async {
       var requests = 0;
 
-      await startBuzzPushRegistrationIfCapable(
+      await startAmbushPushRegistrationIfCapable(
         _descriptor,
         startRegistration: () async {
           requests += 1;
@@ -24,7 +24,7 @@ void main() {
     () async {
       var requests = 0;
 
-      await startBuzzPushRegistrationIfCapable(
+      await startAmbushPushRegistrationIfCapable(
         null,
         startRegistration: () async {
           requests += 1;
@@ -40,13 +40,13 @@ void main() {
     StateError('relay unreachable'),
   ]) {
     test('$failure keeps capability inactive without registration', () async {
-      final descriptor = await discoverBuzzPushRelayCapability(
+      final descriptor = await discoverAmbushPushRelayCapability(
         'https://relay.example',
         fetchDescriptor: (_) async => throw failure,
       );
       var requests = 0;
 
-      await startBuzzPushRegistrationIfCapable(
+      await startAmbushPushRegistrationIfCapable(
         descriptor,
         startRegistration: () async {
           requests += 1;
@@ -59,7 +59,7 @@ void main() {
   }
 }
 
-const _descriptor = BuzzPushLeaseDescriptor(
+const _descriptor = AmbushPushLeaseDescriptor(
   origin: 'wss://relay.example',
   executorKeyId: 'relay-v1',
   executorPubkey:

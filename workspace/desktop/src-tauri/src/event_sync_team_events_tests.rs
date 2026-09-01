@@ -25,7 +25,7 @@ fn one_team() -> serde_json::Value {
 #[test]
 fn migrate_teams_writes_signed_retention_rows() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
 
     let base = tempfile::tempdir().unwrap();
     write_base_teams(base.path(), &one_team());
@@ -47,7 +47,7 @@ fn migrate_teams_writes_signed_retention_rows() {
 #[test]
 fn migrate_teams_skips_builtins() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
 
     let base = tempfile::tempdir().unwrap();
     write_base_teams(
@@ -89,7 +89,7 @@ fn migrate_teams_unchanged_second_run_is_noop() {
 #[test]
 fn migrate_teams_edited_team_re_retains_pending() {
     use crate::managed_agents::retention::{get_retained_event, mark_synced, open_retention_db};
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
 
     let base = tempfile::tempdir().unwrap();
     write_base_teams(base.path(), &one_team());
@@ -157,7 +157,7 @@ fn stale_inbound_head(
     created_at: i64,
 ) -> crate::managed_agents::retention::RetainedEvent {
     use crate::managed_agents::{team_events::build_team_event, TeamRecord};
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
     use nostr::JsonUtil;
 
     let record = TeamRecord {
@@ -208,7 +208,7 @@ fn reconcile_first_makes_stale_inbound_team_head_lose() {
     use crate::managed_agents::retention::{
         get_retained_event, open_retention_db, retain_inbound_event, InboundOutcome,
     };
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
 
     let keys = nostr::Keys::generate();
     let pubkey = keys.public_key().to_hex();

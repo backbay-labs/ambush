@@ -187,7 +187,7 @@ test("parses public and private-safe issue provenance", () => {
     issueEvent({
       tags: [
         ["a", REPO_ADDRESS],
-        ["buzz-origin-agent", "Builder"],
+        ["ambush-origin-agent", "Builder"],
       ],
     }),
   );

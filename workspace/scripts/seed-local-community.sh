@@ -19,9 +19,9 @@ fi
 
 export PGHOST="${PGHOST:-localhost}"
 export PGPORT="${PGPORT:-5432}"
-export PGUSER="${PGUSER:-buzz}"
-export PGPASSWORD="${PGPASSWORD:-buzz_dev}"
-export PGDATABASE="${PGDATABASE:-buzz}"
+export PGUSER="${PGUSER:-ambush}"
+export PGPASSWORD="${PGPASSWORD:-ambush_dev}"
+export PGDATABASE="${PGDATABASE:-ambush}"
 export RELAY_URL="${RELAY_URL:-ws://localhost:3000}"
 
 hosts_sql=$(python3 - <<'PY'
@@ -86,11 +86,11 @@ ON CONFLICT (lower(host)) DO NOTHING;
 
 if command -v psql >/dev/null 2>&1; then
   PGPASSWORD="${PGPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${PGDATABASE}" -v ON_ERROR_STOP=1 -c "${sql}"
-elif docker exec buzz-postgres psql --version >/dev/null 2>&1; then
-  docker exec -i -e PGPASSWORD="${PGPASSWORD}" buzz-postgres \
+elif docker exec ambush-postgres psql --version >/dev/null 2>&1; then
+  docker exec -i -e PGPASSWORD="${PGPASSWORD}" ambush-postgres \
     psql -U "${PGUSER}" -d "${PGDATABASE}" -v ON_ERROR_STOP=1 -c "${sql}"
 else
-  echo "error: neither psql nor buzz-postgres docker psql is available" >&2
+  echo "error: neither psql nor ambush-postgres docker psql is available" >&2
   exit 1
 fi
 

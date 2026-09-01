@@ -349,7 +349,7 @@ fn avatar_cap_rejects_before_appending_crossing_chunk() {
 
 #[test]
 fn save_rejects_plain_png_without_snapshot_chunk() {
-    // A plain PNG (no buzz_agent_snapshot chunk) must not be saveable as
+    // A plain PNG (no ambush_agent_snapshot chunk) must not be saveable as
     // a card. Exercise the same validation the command runs.
     let img = image::DynamicImage::new_rgba8(4, 4);
     let mut png = Vec::new();

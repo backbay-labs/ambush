@@ -16,7 +16,7 @@ grep -Fq 'actions/upload-artifact@' "$workflow"
 grep -Fq 'retention-days: 7' "$workflow"
 grep -Fq '"createUpdaterArtifacts": false' "$workflow"
 
-if grep -Eq 'contents: write|gh release|buzz-desktop-latest|latest\.json|TAURI_SIGNING_PRIVATE_KEY|verify-release-ref\.sh|refs/tags/' "$workflow"; then
+if grep -Eq 'contents: write|gh release|ambush-desktop-latest|latest\.json|TAURI_SIGNING_PRIVATE_KEY|verify-release-ref\.sh|refs/tags/' "$workflow"; then
   echo "signed canary workflow gained a release or publishing capability" >&2
   exit 1
 fi

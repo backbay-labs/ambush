@@ -86,7 +86,7 @@ async function seedTextScale(
   scale: number,
 ) {
   await page.addInitScript((value) => {
-    window.localStorage.setItem("buzz:text-scale", String(value));
+    window.localStorage.setItem("ambush:text-scale", String(value));
   }, scale);
 }
 

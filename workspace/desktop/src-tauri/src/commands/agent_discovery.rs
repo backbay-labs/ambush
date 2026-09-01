@@ -170,7 +170,7 @@ pub async fn save_custom_harness(
 /// Remove a user-defined harness definition from `<app-data>/custom_harnesses/`.
 ///
 /// Only `source: custom` harnesses may be deleted. Attempting to delete a
-/// built-in id (goose, claude, codex, buzz-agent) returns an error without
+/// built-in id (goose, claude, codex, ambush-agent) returns an error without
 /// touching the filesystem.
 #[tauri::command]
 pub async fn delete_custom_harness(id: String, app: tauri::AppHandle) -> Result<(), String> {
@@ -291,7 +291,7 @@ fn install_acp_runtime_blocking(
     // Phase 1: Install CLI if missing and commands are available.
     // Today every entry in `cli_install_commands` is a curl-pipe; npm-backed
     // adapter installs live in Phase 2 below where they are rewritten to a
-    // Buzz-private prefix before execution.
+    // Ambush-private prefix before execution.
     if let Some(cli) = runtime.underlying_cli {
         if crate::managed_agents::resolve_command(cli).is_none() {
             for cmd in runtime.cli_install_commands_for_os() {
@@ -599,12 +599,12 @@ async fn restart_single_agent_after_install(
     let runtime_keys = match stop_result {
         Ok(Ok(runtime_keys)) => runtime_keys,
         Ok(Err(e)) => {
-            eprintln!("buzz-desktop: install_acp_runtime: skipping restart of {pubkey}: {e}");
+            eprintln!("ambush-desktop: install_acp_runtime: skipping restart of {pubkey}: {e}");
             return InstallRestartOutcome::Skipped;
         }
         Err(e) => {
             eprintln!(
-                "buzz-desktop: install_acp_runtime: spawn_blocking failed for stop of {pubkey}: {e}"
+                "ambush-desktop: install_acp_runtime: spawn_blocking failed for stop of {pubkey}: {e}"
             );
             return InstallRestartOutcome::Skipped;
         }
@@ -617,17 +617,17 @@ async fn restart_single_agent_after_install(
     {
         Ok(_) => {
             eprintln!(
-                "buzz-desktop: install_acp_runtime: restarted setup-mode agent {pubkey} after install"
+                "ambush-desktop: install_acp_runtime: restarted setup-mode agent {pubkey} after install"
             );
             InstallRestartOutcome::Restarted
         }
         Err(e) => {
             eprintln!(
-                "buzz-desktop: install_acp_runtime: failed to start {pubkey} after install: {e}"
+                "ambush-desktop: install_acp_runtime: failed to start {pubkey} after install: {e}"
             );
             if let Err(save_err) = persist_last_error_on_install(app, pubkey, &e) {
                 eprintln!(
-                    "buzz-desktop: install_acp_runtime: failed to persist last_error for {pubkey}: {save_err}"
+                    "ambush-desktop: install_acp_runtime: failed to persist last_error for {pubkey}: {save_err}"
                 );
             }
             InstallRestartOutcome::FailedAfterStop
@@ -675,7 +675,7 @@ fn persist_last_error_on_install(
 /// the process environment is installed: a profile assigning PATH overwrites
 /// `cmd.env("PATH", …)` before the vendor command runs. `export PATH=` empties
 /// it outright; macOS `/etc/zprofile` runs `path_helper`, which reorders it and
-/// costs Buzz's managed Node/npm dirs their precedence. A positional rather than
+/// costs Ambush's managed Node/npm dirs their precedence. A positional rather than
 /// an interpolated body keeps entries containing spaces or quotes intact.
 ///
 /// The prelude is omitted where it would do harm:
@@ -710,19 +710,19 @@ fn install_shell_args(
         "-c".into(),
         format!("export PATH=\"$1\"; set -o pipefail; {command}").into(),
         // `$0` is the shell-name slot, so the PATH must be the second positional.
-        "buzz-install".into(),
+        "ambush-install".into(),
         path.to_os_string(),
     ]
 }
 
 /// Build a login-shell `Command` for `command` with hermit env vars stripped,
-/// Buzz-managed npm locations set, and the user's PATH set. This is the
+/// Ambush-managed npm locations set, and the user's PATH set. This is the
 /// single source of truth for
 /// the shell selection and environment cleanup shared by `run_install_command`
 /// and managed npm install path — keeping them in sync so the hermit-strip list
 /// can't drift between command execution paths.
 ///
-/// On Windows, resolves Git Bash via `resolve_bash_path` (skips `BUZZ_SHELL`
+/// On Windows, resolves Git Bash via `resolve_bash_path` (skips `AMBUSH_SHELL`
 /// since install commands require bash syntax). Returns `Err` when no shell
 /// can be found.
 fn install_shell_command(command: &str) -> Result<std::process::Command, String> {
@@ -737,7 +737,7 @@ fn install_shell_command(command: &str) -> Result<std::process::Command, String>
     // runtime/probe path so the two can never drift.  managed entries first
     // (Node/npm bins keep precedence); login-shell entries next; inherited
     // process PATH appended last when no login-shell PATH exists — the case
-    // where the composed PATH would otherwise be Buzz's managed Node dirs
+    // where the composed PATH would otherwise be Ambush's managed Node dirs
     // alone, with no `curl`/`sh`/`tar` for the vendor install pipes
     // (cmd.env("PATH", …) replaces rather than extends). On Windows that case
     // is the steady state: login_shell_path() always returns None there
@@ -751,8 +751,8 @@ fn install_shell_command(command: &str) -> Result<std::process::Command, String>
     let login_path = crate::managed_agents::login_shell_path();
     let had_login = login_path.is_some();
     let managed: Vec<std::path::PathBuf> = [
-        crate::managed_agents::buzz_managed_node_bin_dir(),
-        crate::managed_agents::buzz_managed_npm_bin_dir(),
+        crate::managed_agents::ambush_managed_node_bin_dir(),
+        crate::managed_agents::ambush_managed_npm_bin_dir(),
     ]
     .into_iter()
     .flatten()
@@ -802,8 +802,8 @@ fn install_shell_command(command: &str) -> Result<std::process::Command, String>
 /// Resolve the shell binary for install commands.
 ///
 /// Unix: `/bin/zsh` if present, else `/bin/bash`.
-/// Windows: Git Bash via `resolve_bash_path` — skips `BUZZ_SHELL` because install
-/// commands use bash-only `-l -c` syntax. A `BUZZ_SHELL=pwsh` user gets a green
+/// Windows: Git Bash via `resolve_bash_path` — skips `AMBUSH_SHELL` because install
+/// commands use bash-only `-l -c` syntax. A `AMBUSH_SHELL=pwsh` user gets a green
 /// Doctor prereq (their agents work) but installs use the Git Bash fallback chain.
 fn resolve_install_shell() -> Result<std::path::PathBuf, String> {
     #[cfg(not(windows))]
@@ -850,14 +850,14 @@ fn is_powershell_command(command: &str) -> bool {
 }
 
 /// Apply the shared npm env cleanup and managed-prefix setup to an install child.
-/// Strips hermit-managed vars and establishes the Buzz-managed npm prefix so adapters
+/// Strips hermit-managed vars and establishes the Ambush-managed npm prefix so adapters
 /// installed via either path (shell or native PowerShell) land in the same location.
 fn apply_npm_env(cmd: &mut std::process::Command) {
     cmd.env_remove("NPM_CONFIG_PREFIX");
     cmd.env_remove("NPM_CONFIG_CACHE");
     cmd.env_remove("COREPACK_HOME");
 
-    if let Some(prefix) = crate::managed_agents::buzz_managed_npm_prefix() {
+    if let Some(prefix) = crate::managed_agents::ambush_managed_npm_prefix() {
         cmd.env("NPM_CONFIG_PREFIX", &prefix);
         cmd.env("npm_config_prefix", &prefix);
         cmd.env("COREPACK_HOME", prefix.join("corepack"));
@@ -940,12 +940,12 @@ fn install_powershell_command(command: &str) -> std::process::Command {
 
     apply_npm_env(&mut cmd);
 
-    // Compose PATH: managed Buzz dirs first, then inherited process PATH.
+    // Compose PATH: managed Ambush dirs first, then inherited process PATH.
     // No login-shell path: login_shell_path() always returns None on Windows,
     // and we deliberately skip it here to avoid POSIX-shaped entries.
     let managed: Vec<std::path::PathBuf> = [
-        crate::managed_agents::buzz_managed_node_bin_dir(),
-        crate::managed_agents::buzz_managed_npm_bin_dir(),
+        crate::managed_agents::ambush_managed_node_bin_dir(),
+        crate::managed_agents::ambush_managed_npm_bin_dir(),
     ]
     .into_iter()
     .flatten()
@@ -1415,8 +1415,8 @@ mod tests {
     /// always fires. See `install_shell_args` for the full reasoning.
     #[test]
     fn test_install_shell_args_shape_per_platform() {
-        let composed = std::ffi::OsString::from("/buzz/node/bin:/usr/bin");
-        let windows_composed = std::ffi::OsString::from(r"C:\buzz\node;C:\Windows\system32");
+        let composed = std::ffi::OsString::from("/ambush/node/bin:/usr/bin");
+        let windows_composed = std::ffi::OsString::from(r"C:\ambush\node;C:\Windows\system32");
         let bare = ["-l", "-c", "set -o pipefail; echo hi"].map(std::ffi::OsString::from);
 
         assert_eq!(
@@ -1425,8 +1425,8 @@ mod tests {
                 "-l",
                 "-c",
                 "export PATH=\"$1\"; set -o pipefail; echo hi",
-                "buzz-install",
-                "/buzz/node/bin:/usr/bin",
+                "ambush-install",
+                "/ambush/node/bin:/usr/bin",
             ]
             .map(std::ffi::OsString::from),
             "Unix must re-export the composed PATH after login init"
@@ -1454,7 +1454,7 @@ mod tests {
         let home = tempfile::tempdir().expect("temp HOME");
         std::fs::write(home.path().join(".bash_profile"), "export PATH=\n")
             .expect("plant a hostile login profile");
-        let composed = std::ffi::OsString::from("/buzz/sentinel/bin:/usr/bin:/bin");
+        let composed = std::ffi::OsString::from("/ambush/sentinel/bin:/usr/bin:/bin");
 
         // `echo` is a shell builtin, so the child needs no PATH to report one.
         let out = std::process::Command::new("/bin/bash")
@@ -1471,7 +1471,7 @@ mod tests {
 
         let path = String::from_utf8_lossy(&out.stdout);
         assert!(
-            path.contains("/buzz/sentinel/bin"),
+            path.contains("/ambush/sentinel/bin"),
             "the composed PATH must survive login init; got: {path:?}"
         );
     }
@@ -1581,7 +1581,7 @@ mod tests {
             path_value.contains(sentinel),
             "install_shell_command PATH must include the inherited process PATH; got: {path_value}"
         );
-        // The sentinel must appear LAST — managed Buzz dirs must have precedence.
+        // The sentinel must appear LAST — managed Ambush dirs must have precedence.
         assert!(
             path_value.ends_with(sentinel),
             "inherited process PATH must be appended LAST so managed dirs keep precedence; got: {path_value}"
@@ -1602,13 +1602,13 @@ mod tests {
         );
     }
 
-    /// buzz-agent has no install commands on any platform.
+    /// ambush-agent has no install commands on any platform.
     #[test]
-    fn test_buzz_agent_has_no_install_commands() {
-        let buzz = crate::managed_agents::known_acp_runtime_exact("buzz-agent").unwrap();
+    fn test_ambush_agent_has_no_install_commands() {
+        let ambush = crate::managed_agents::known_acp_runtime_exact("ambush-agent").unwrap();
         assert!(
-            buzz.cli_install_commands_for_os().is_empty(),
-            "buzz-agent ships with the app — must never have install commands"
+            ambush.cli_install_commands_for_os().is_empty(),
+            "ambush-agent ships with the app — must never have install commands"
         );
     }
 
@@ -1714,7 +1714,7 @@ mod tests {
     #[test]
     fn test_powershell_command_argv_exact() {
         // Catalog format: body wrapped in one outer double-quote pair (Bash-layer serialization).
-        let body = "$ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'buzz-install-codex.ps1'; Invoke-RestMethod https://chatgpt.com/codex/install.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE";
+        let body = "$ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'ambush-install-codex.ps1'; Invoke-RestMethod https://chatgpt.com/codex/install.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE";
         let cmd = super::install_powershell_command(&format!(
             r#"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "{body}""#
         ));
@@ -1749,7 +1749,7 @@ mod tests {
     #[test]
     fn test_powershell_command_claude_catalog_dequoted() {
         let cmd = super::install_powershell_command(
-            r#"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'buzz-install-claude.ps1'; Invoke-RestMethod https://claude.ai/install.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE""#,
+            r#"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'ambush-install-claude.ps1'; Invoke-RestMethod https://claude.ai/install.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE""#,
         );
         assert_eq!(
             cmd.get_args()
@@ -1760,7 +1760,7 @@ mod tests {
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "$ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'buzz-install-claude.ps1'; Invoke-RestMethod https://claude.ai/install.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE",
+                "$ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'ambush-install-claude.ps1'; Invoke-RestMethod https://claude.ai/install.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE",
             ],
             "Claude catalog command must be dequoted correctly"
         );
@@ -1775,7 +1775,7 @@ mod tests {
     #[test]
     fn test_powershell_command_goose_catalog_dequoted() {
         let cmd = super::install_powershell_command(
-            r#"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$env:CONFIGURE='false'; $ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'buzz-install-goose.ps1'; Invoke-RestMethod https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE""#,
+            r#"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$env:CONFIGURE='false'; $ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'ambush-install-goose.ps1'; Invoke-RestMethod https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE""#,
         );
         assert_eq!(
             cmd.get_args()
@@ -1786,14 +1786,14 @@ mod tests {
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "$env:CONFIGURE='false'; $ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'buzz-install-goose.ps1'; Invoke-RestMethod https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE",
+                "$env:CONFIGURE='false'; $ErrorActionPreference='Stop'; $installer=Join-Path $env:TEMP 'ambush-install-goose.ps1'; Invoke-RestMethod https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 -OutFile $installer; & $installer; exit $LASTEXITCODE",
             ],
             "Goose catalog command must dequote with bare $env: (no backslash before $)"
         );
     }
 }
 
-/// Returns the Windows-only Git Bash prerequisite used by buzz-agent's shell MCP.
+/// Returns the Windows-only Git Bash prerequisite used by ambush-agent's shell MCP.
 /// `None` on other platforms keeps the shared Doctor surfaces platform-neutral.
 #[tauri::command]
 pub async fn discover_git_bash_prerequisite(

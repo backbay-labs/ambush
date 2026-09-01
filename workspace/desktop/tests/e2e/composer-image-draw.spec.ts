@@ -136,10 +136,10 @@ test("draw on an uploaded image, save replaces it, revert restores in place", as
 
   // The next mocked upload returns the annotated descriptor.
   await page.evaluate((edited) => {
-    window.__BUZZ_E2E__ = {
-      ...window.__BUZZ_E2E__,
+    window.__AMBUSH_E2E__ = {
+      ...window.__AMBUSH_E2E__,
       mock: {
-        ...window.__BUZZ_E2E__?.mock,
+        ...window.__AMBUSH_E2E__?.mock,
         uploadDescriptors: [edited],
       },
     };
@@ -158,8 +158,8 @@ test("draw on an uploaded image, save replaces it, revert restores in place", as
   const uploadCommandCount = await page.evaluate(
     () =>
       (
-        window as Window & { __BUZZ_E2E_COMMANDS__?: string[] }
-      ).__BUZZ_E2E_COMMANDS__?.filter(
+        window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] }
+      ).__AMBUSH_E2E_COMMANDS__?.filter(
         (command) => command === "upload_media_bytes",
       ).length ?? 0,
   );
@@ -211,10 +211,10 @@ test("spoiler marking survives drawing on the attachment", async ({ page }) => {
   await drawStrokeOnCanvas(page);
 
   await page.evaluate((edited) => {
-    window.__BUZZ_E2E__ = {
-      ...window.__BUZZ_E2E__,
+    window.__AMBUSH_E2E__ = {
+      ...window.__AMBUSH_E2E__,
       mock: {
-        ...window.__BUZZ_E2E__?.mock,
+        ...window.__AMBUSH_E2E__?.mock,
         uploadDescriptors: [edited],
       },
     };

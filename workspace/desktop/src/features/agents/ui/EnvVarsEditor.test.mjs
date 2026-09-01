@@ -467,18 +467,22 @@ test("inheritedRows_masked_secret_local_override_shows_masked_build_value", () =
 });
 
 test("inheritedRows_structured_keys_excluded_from_generic_rows", () => {
-  // BUZZ_AGENT_PROVIDER, BUZZ_AGENT_MODEL, BUZZ_AGENT_THINKING_EFFORT must
+  // AMBUSH_AGENT_PROVIDER, AMBUSH_AGENT_MODEL, AMBUSH_AGENT_THINKING_EFFORT must
   // be excluded from bakedGenericRows (they go to structured fields instead).
   // This mirrors the BAKED_STRUCTURED_KEYS filter in AgentDefaultsSettingsCard.
   const STRUCTURED = new Set([
-    "BUZZ_AGENT_PROVIDER",
-    "BUZZ_AGENT_MODEL",
-    "BUZZ_AGENT_THINKING_EFFORT",
+    "AMBUSH_AGENT_PROVIDER",
+    "AMBUSH_AGENT_MODEL",
+    "AMBUSH_AGENT_THINKING_EFFORT",
   ]);
   const allBaked = [
-    { key: "BUZZ_AGENT_PROVIDER", value: "databricks_v2", masked: false },
-    { key: "BUZZ_AGENT_MODEL", value: "goose-claude-opus-4-8", masked: false },
-    { key: "BUZZ_AGENT_THINKING_EFFORT", value: "medium", masked: false },
+    { key: "AMBUSH_AGENT_PROVIDER", value: "databricks_v2", masked: false },
+    {
+      key: "AMBUSH_AGENT_MODEL",
+      value: "goose-claude-opus-4-8",
+      masked: false,
+    },
+    { key: "AMBUSH_AGENT_THINKING_EFFORT", value: "medium", masked: false },
     {
       key: "DATABRICKS_HOST",
       value: "https://example.databricks.com/",
@@ -629,7 +633,7 @@ test("keyAnnotations_annotation_absent_for_non_matching_rows", () => {
 //
 // These tests exercise the exported buildRecord(nextRows, value, requiredKeys,
 // hiddenKeys) using the real implementation. hiddenKeys are structured-field
-// env vars (e.g. BUZZ_AGENT_MAX_ROUNDS) that are owned by first-class controls
+// env vars (e.g. AMBUSH_AGENT_MAX_ROUNDS) that are owned by first-class controls
 // outside the editor — they must survive onChange cycles even though they
 // never appear as generic rows.
 //
@@ -647,20 +651,20 @@ test("keyAnnotations_annotation_absent_for_non_matching_rows", () => {
 //      Inherit placeholder.
 
 test("buildRecord_hidden_tuning_key_unchanged_when_generic_row_edited", () => {
-  // Structured field set BUZZ_AGENT_MAX_ROUNDS to "50"; it lives in value
+  // Structured field set AMBUSH_AGENT_MAX_ROUNDS to "50"; it lives in value
   // as a hiddenKey. User then edits a generic env var via the row editor.
   // The tuning key must survive the buildRecord emit cycle unchanged.
-  const value = { BUZZ_AGENT_MAX_ROUNDS: "50", MY_VAR: "old" };
+  const value = { AMBUSH_AGENT_MAX_ROUNDS: "50", MY_VAR: "old" };
   const nextRows = [{ id: "r1", key: "MY_VAR", value: "new" }];
   const record = buildRecordUtil(
     nextRows,
     value,
     [],
-    ["BUZZ_AGENT_MAX_ROUNDS"],
+    ["AMBUSH_AGENT_MAX_ROUNDS"],
   );
 
   assert.equal(
-    record.BUZZ_AGENT_MAX_ROUNDS,
+    record.AMBUSH_AGENT_MAX_ROUNDS,
     "50",
     "hidden tuning key must survive when an unrelated generic row is edited",
   );
@@ -670,32 +674,32 @@ test("buildRecord_hidden_tuning_key_unchanged_when_generic_row_edited", () => {
 test("buildRecord_runtime_switch_new_hiddenKeys_then_generic_edit", () => {
   // Scenario 2: runtime switch then generic edit.
   //
-  // Before switch: agent is buzz-agent with BUZZ_AGENT_MAX_ROUNDS = "50" stored
+  // Before switch: agent is ambush-agent with AMBUSH_AGENT_MAX_ROUNDS = "50" stored
   // in value (set via the numeric tuning control). After switching to Goose,
-  // the buzz-agent key is no longer hidden — it becomes a visible generic row.
+  // the ambush-agent key is no longer hidden — it becomes a visible generic row.
   // The test verifies:
-  //   (a) After the switch, the old buzz-agent key appears as a generic row
+  //   (a) After the switch, the old ambush-agent key appears as a generic row
   //       (toRows with the new Goose hidden set projects it).
   //   (b) After a generic-row edit, buildRecord preserves BOTH the old-runtime
   //       key (now a generic row) and the new-runtime hidden key.
   //   (c) An unset new-runtime hidden key is not introduced.
 
   // Derive both descriptor sets from real runtime objects.
-  const buzzAgentRuntime = {
-    id: "buzz-agent",
-    label: "Buzz Agent",
+  const ambushAgentRuntime = {
+    id: "ambush-agent",
+    label: "Ambush Agent",
     avatarUrl: "",
     availability: "available",
-    command: "buzz-agent",
-    binaryPath: "buzz-agent",
+    command: "ambush-agent",
+    binaryPath: "ambush-agent",
     defaultArgs: [],
     mcpCommand: null,
-    modelEnvVar: "BUZZ_AGENT_MODEL",
-    providerEnvVar: "BUZZ_AGENT_PROVIDER",
-    thinkingEnvVar: "BUZZ_AGENT_THINKING_EFFORT",
-    maxTokensEnvVar: "BUZZ_AGENT_MAX_OUTPUT_TOKENS",
-    contextLimitEnvVar: "BUZZ_AGENT_CONTEXT_LIMIT",
-    maxRoundsEnvVar: "BUZZ_AGENT_MAX_ROUNDS",
+    modelEnvVar: "AMBUSH_AGENT_MODEL",
+    providerEnvVar: "AMBUSH_AGENT_PROVIDER",
+    thinkingEnvVar: "AMBUSH_AGENT_THINKING_EFFORT",
+    maxTokensEnvVar: "AMBUSH_AGENT_MAX_OUTPUT_TOKENS",
+    contextLimitEnvVar: "AMBUSH_AGENT_CONTEXT_LIMIT",
+    maxRoundsEnvVar: "AMBUSH_AGENT_MAX_ROUNDS",
     installHint: "",
     installInstructionsUrl: "",
     canAutoInstall: false,
@@ -728,39 +732,39 @@ test("buildRecord_runtime_switch_new_hiddenKeys_then_generic_edit", () => {
     loginHint: null,
   };
 
-  const buzzDescriptors = deriveNumericDescriptors(buzzAgentRuntime);
+  const ambushDescriptors = deriveNumericDescriptors(ambushAgentRuntime);
   const gooseDescriptors = deriveNumericDescriptors(gooseRuntime);
-  const buzzHiddenKeys = structuredEnvKeys(buzzDescriptors);
+  const ambushHiddenKeys = structuredEnvKeys(ambushDescriptors);
   const gooseHiddenKeys = structuredEnvKeys(gooseDescriptors);
 
-  // Sanity-check that BUZZ_AGENT_MAX_ROUNDS is hidden under buzz-agent but not
+  // Sanity-check that AMBUSH_AGENT_MAX_ROUNDS is hidden under ambush-agent but not
   // under Goose — that contrast is what makes it become a generic row.
   assert.ok(
-    buzzHiddenKeys.includes("BUZZ_AGENT_MAX_ROUNDS"),
-    "BUZZ_AGENT_MAX_ROUNDS must be hidden under buzz-agent descriptors",
+    ambushHiddenKeys.includes("AMBUSH_AGENT_MAX_ROUNDS"),
+    "AMBUSH_AGENT_MAX_ROUNDS must be hidden under ambush-agent descriptors",
   );
   assert.equal(
-    gooseHiddenKeys.includes("BUZZ_AGENT_MAX_ROUNDS"),
+    gooseHiddenKeys.includes("AMBUSH_AGENT_MAX_ROUNDS"),
     false,
-    "BUZZ_AGENT_MAX_ROUNDS must not be hidden under Goose descriptors",
+    "AMBUSH_AGENT_MAX_ROUNDS must not be hidden under Goose descriptors",
   );
 
-  // Pre-switch value: buzz-agent max-rounds was set, GOOSE_MAX_TOKENS was
+  // Pre-switch value: ambush-agent max-rounds was set, GOOSE_MAX_TOKENS was
   // already set (e.g. user configured it before switching back), plus a
   // generic user var. GOOSE_MAX_TOKENS is a hidden key under the Goose
   // descriptor set, so it must survive buildRecord() via hiddenKeys.
   const valueBeforeSwitch = {
-    BUZZ_AGENT_MAX_ROUNDS: "50",
+    AMBUSH_AGENT_MAX_ROUNDS: "50",
     GOOSE_MAX_TOKENS: "16384",
     USER_VAR: "original",
   };
 
   // After the switch to Goose, toRows is reproj with the new (Goose) hidden
-  // set. BUZZ_AGENT_MAX_ROUNDS is no longer hidden → appears as a generic row.
+  // set. AMBUSH_AGENT_MAX_ROUNDS is no longer hidden → appears as a generic row.
   // GOOSE_MAX_TOKENS IS hidden under Goose → must not appear in generic rows.
   const rowsAfterSwitch = toRows(valueBeforeSwitch, new Set(gooseHiddenKeys));
   assert.ok(
-    rowsAfterSwitch.some((r) => r.key === "BUZZ_AGENT_MAX_ROUNDS"),
+    rowsAfterSwitch.some((r) => r.key === "AMBUSH_AGENT_MAX_ROUNDS"),
     "old-runtime key must become a generic row after the switch",
   );
   assert.equal(
@@ -785,7 +789,7 @@ test("buildRecord_runtime_switch_new_hiddenKeys_then_generic_edit", () => {
   );
 
   assert.equal(
-    record.BUZZ_AGENT_MAX_ROUNDS,
+    record.AMBUSH_AGENT_MAX_ROUNDS,
     "50",
     "old-runtime key must survive as a generic row value after switch",
   );
@@ -805,24 +809,24 @@ test("buildRecord_runtime_switch_new_hiddenKeys_then_generic_edit", () => {
 test("filterBakedGenericRows_numeric_baked_key_excluded_and_placeholder_shown", () => {
   // Scenario 3: baked numeric key excluded via the real production helper.
   //
-  // The global baked env contains BUZZ_AGENT_MAX_OUTPUT_TOKENS = "4096"
+  // The global baked env contains AMBUSH_AGENT_MAX_OUTPUT_TOKENS = "4096"
   // (the baked value shipped with the agent). The production
   // filterBakedGenericRows path must exclude this key from the generic
   // baked-row display so it isn't editable twice, while the structured
   // numeric input shows the inherited placeholder via numericTuningPlaceholder.
-  const buzzAgentRuntime = {
-    id: "buzz-agent",
-    label: "Buzz Agent",
+  const ambushAgentRuntime = {
+    id: "ambush-agent",
+    label: "Ambush Agent",
     avatarUrl: "",
     availability: "available",
-    command: "buzz-agent",
-    binaryPath: "buzz-agent",
+    command: "ambush-agent",
+    binaryPath: "ambush-agent",
     defaultArgs: [],
     mcpCommand: null,
-    modelEnvVar: "BUZZ_AGENT_MODEL",
-    providerEnvVar: "BUZZ_AGENT_PROVIDER",
-    thinkingEnvVar: "BUZZ_AGENT_THINKING_EFFORT",
-    maxTokensEnvVar: "BUZZ_AGENT_MAX_OUTPUT_TOKENS",
+    modelEnvVar: "AMBUSH_AGENT_MODEL",
+    providerEnvVar: "AMBUSH_AGENT_PROVIDER",
+    thinkingEnvVar: "AMBUSH_AGENT_THINKING_EFFORT",
+    maxTokensEnvVar: "AMBUSH_AGENT_MAX_OUTPUT_TOKENS",
     contextLimitEnvVar: null,
     maxRoundsEnvVar: null,
     installHint: "",
@@ -834,18 +838,18 @@ test("filterBakedGenericRows_numeric_baked_key_excluded_and_placeholder_shown", 
     loginHint: null,
   };
 
-  const numericDescriptors = deriveNumericDescriptors(buzzAgentRuntime);
+  const numericDescriptors = deriveNumericDescriptors(ambushAgentRuntime);
   const numericStructuredKeys = structuredEnvKeys(numericDescriptors);
 
   assert.ok(
-    numericStructuredKeys.includes("BUZZ_AGENT_MAX_OUTPUT_TOKENS"),
+    numericStructuredKeys.includes("AMBUSH_AGENT_MAX_OUTPUT_TOKENS"),
     "numeric key must appear in structured keys via production helpers",
   );
 
-  // Simulate the baked env: BUZZ_AGENT_MAX_OUTPUT_TOKENS is baked, plus a
+  // Simulate the baked env: AMBUSH_AGENT_MAX_OUTPUT_TOKENS is baked, plus a
   // non-structured baked var.
   const bakedEnv = [
-    { key: "BUZZ_AGENT_MAX_OUTPUT_TOKENS", value: "4096" },
+    { key: "AMBUSH_AGENT_MAX_OUTPUT_TOKENS", value: "4096" },
     { key: "SOME_OTHER_BAKED_VAR", value: "hello" },
   ];
 
@@ -853,7 +857,7 @@ test("filterBakedGenericRows_numeric_baked_key_excluded_and_placeholder_shown", 
   const genericRows = filterBakedGenericRows(bakedEnv, numericStructuredKeys);
 
   assert.equal(
-    genericRows.some((r) => r.key === "BUZZ_AGENT_MAX_OUTPUT_TOKENS"),
+    genericRows.some((r) => r.key === "AMBUSH_AGENT_MAX_OUTPUT_TOKENS"),
     false,
     "baked numeric key must be excluded from generic baked rows",
   );
@@ -880,8 +884,8 @@ test("filterBakedGenericRows_numeric_baked_key_excluded_and_placeholder_shown", 
 test("buildRecord_clearing_structured_field_allows_placeholder_to_return", () => {
   // Scenario 4: clearing a structured override → placeholder returns.
   //
-  // Step 1: value has BUZZ_AGENT_MAX_ROUNDS = "50" (user set it via the
-  //         structured field). BUZZ_AGENT_MAX_ROUNDS is in hiddenKeys.
+  // Step 1: value has AMBUSH_AGENT_MAX_ROUNDS = "50" (user set it via the
+  //         structured field). AMBUSH_AGENT_MAX_ROUNDS is in hiddenKeys.
   // Step 2: user clears the structured field → onEnvVarChange(key, "")
   //         removes the key from value (value no longer contains it).
   // Step 3: after the clear, buildRecord must not reintroduce the key.
@@ -889,7 +893,7 @@ test("buildRecord_clearing_structured_field_allows_placeholder_to_return", () =>
   //         the (now-empty) inheritedEnvVars shows "Inherit (agent default)"
   //         — the numeric field's empty-state placeholder.
 
-  // After the clear, value no longer contains BUZZ_AGENT_MAX_ROUNDS.
+  // After the clear, value no longer contains AMBUSH_AGENT_MAX_ROUNDS.
   const valueAfterClear = { MY_VAR: "foo" };
   const nextRows = [{ id: "r1", key: "MY_VAR", value: "updated" }];
 
@@ -897,11 +901,11 @@ test("buildRecord_clearing_structured_field_allows_placeholder_to_return", () =>
     nextRows,
     valueAfterClear,
     [],
-    ["BUZZ_AGENT_MAX_ROUNDS"],
+    ["AMBUSH_AGENT_MAX_ROUNDS"],
   );
 
   assert.equal(
-    "BUZZ_AGENT_MAX_ROUNDS" in record,
+    "AMBUSH_AGENT_MAX_ROUNDS" in record,
     false,
     "cleared structured key must not be reintroduced by buildRecord",
   );

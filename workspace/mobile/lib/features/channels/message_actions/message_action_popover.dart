@@ -12,7 +12,7 @@ const _messageActionReactionSelection = '__reaction__';
 const _messageActionTransitionDuration = _reactionPopoverDuration;
 const _iosMessageActionTransitionDuration = Duration(milliseconds: 220);
 const _iosNativeMessageActionSurfaceChannel = MethodChannel(
-  'buzz/native_message_action_surface',
+  'ambush/native_message_action_surface',
 );
 
 bool _messageActionPresentationInFlight = false;
@@ -480,7 +480,7 @@ class _IosNativeMessageActionSurface extends HookWidget {
     useEffect(() {
       final id = viewId.value;
       if (id == null) return null;
-      final channel = MethodChannel('buzz/native_message_action_surface/$id');
+      final channel = MethodChannel('ambush/native_message_action_surface/$id');
       channel.setMethodCallHandler((call) async {
         if (call.method != 'selected' || call.arguments is! Map) return;
         final actionId = (call.arguments as Map)['id'];
@@ -491,7 +491,7 @@ class _IosNativeMessageActionSurface extends HookWidget {
 
     return UiKitView(
       key: const ValueKey('ios-native-message-action-surface'),
-      viewType: 'buzz/native_message_action_surface',
+      viewType: 'ambush/native_message_action_surface',
       creationParams: <String, Object>{
         'actions': [for (final action in actions) action.toPlatformArguments()],
         'surfaceColor': context.colors.surface.toARGB32(),

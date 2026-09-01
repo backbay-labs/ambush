@@ -102,7 +102,7 @@ function Reports({ authMode }: { authMode: AuthMode }) {
     <Page
       eyebrow="Moderation"
       title="Open reports"
-      description="Review reports across every Buzz community."
+      description="Review reports across every Ambush community."
     >
       <StateView resource={resource}>
         {(reports) =>
@@ -246,7 +246,7 @@ function FeedbackList({ authMode }: { authMode: AuthMode }) {
     <Page
       eyebrow="Product"
       title="Feedback"
-      description="Recent product feedback from across Buzz."
+      description="Recent product feedback from across Ambush."
     >
       <StateView resource={resource}>
         {(items) => {
@@ -829,7 +829,7 @@ function date(value: string) {
     : parsed.toLocaleString();
 }
 
-function BuzzMark() {
+function AmbushMark() {
   return (
     <svg viewBox="0 0 466 309" aria-hidden="true">
       <path d="M91.7 62.8a91.7 91.7 0 0 0 0 183.4H128V62.8H91.7Zm282.6 0H338v183.4h36.3a91.7 91.7 0 1 0 0-183.4Z" />
@@ -1006,10 +1006,10 @@ export function App() {
       <header className="app-header">
         <Link href="/reports" className="brand">
           <span className="brand-mark">
-            <BuzzMark />
+            <AmbushMark />
           </span>
           <span>
-            Buzz <b>Admin</b>
+            Ambush <b>Admin</b>
           </span>
         </Link>
         <nav>

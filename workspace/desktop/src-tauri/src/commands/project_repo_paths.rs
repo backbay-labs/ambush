@@ -149,7 +149,7 @@ pub(crate) fn default_repos_root_candidates() -> Vec<std::path::PathBuf> {
     candidates.extend(nest_dir().map(|path| path.join("REPOS")));
     candidates.extend(
         dirs::home_dir()
-            .map(|home| home.join(".buzz").join("REPOS"))
+            .map(|home| home.join(".ambush").join("REPOS"))
             .filter(|path| !candidates.iter().any(|candidate| candidate == path)),
     );
     candidates

@@ -28,7 +28,7 @@ import {
 // re-host that re-derives any seam independently fails here.
 
 const runtimes = [
-  { id: "buzz-agent", command: "buzz-agent-cmd", defaultArgs: [] },
+  { id: "ambush-agent", command: "ambush-agent-cmd", defaultArgs: [] },
   { id: "claude", command: "claude-cmd", defaultArgs: [] },
 ];
 
@@ -56,7 +56,7 @@ function prospectiveRuntimeIdFor({
   );
 }
 
-// A Claude-pinned agent linked to a buzz-agent/anthropic persona — the
+// A Claude-pinned agent linked to an ambush-agent/anthropic persona — the
 // inherit-transition scenario that exercises every seam at once.
 const pinnedAgent = {
   name: "test-agent",
@@ -69,7 +69,7 @@ const pinnedAgent = {
   envVars: {},
 };
 const persona = {
-  runtime: "buzz-agent",
+  runtime: "ambush-agent",
   provider: "anthropic",
   model: "claude-sonnet-4-5",
   envVars: { ANTHROPIC_API_KEY: "sk-persona" },
@@ -100,7 +100,7 @@ test("rehost_toggle_resolvesProspectiveRuntimeFromPersona_notOverride", () => {
   const { prospectiveRuntimeId } = inheritTransitionState();
   assert.equal(
     prospectiveRuntimeId,
-    "buzz-agent",
+    "ambush-agent",
     "inherit-toggle must resolve the prospective runtime from the linked persona, not the still-present Claude pin",
   );
 });

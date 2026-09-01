@@ -2,7 +2,7 @@
 
 ## Overview
 
-Buzz-agent supports lifecycle hooks — MCP tools that the agent calls at
+Ambush-agent supports lifecycle hooks — MCP tools that the agent calls at
 defined points in its execution loop. Any MCP server can participate by
 exposing tools with the `_` prefix. Hooks are invisible to the LLM, advisory
 to the agent, and operator-configured.
@@ -59,24 +59,24 @@ These constraints ensure a buggy or malicious hook cannot trap the agent.
 | Env Var | Default | Description |
 |---|---|---|
 | `MCP_HOOK_SERVERS` | (unset = no hooks) | Allowlist: `*` for all servers, or comma-separated names |
-| `BUZZ_AGENT_HOOK_TIMEOUT_MS` | 2500 | Per-hook call timeout in milliseconds |
-| `BUZZ_AGENT_STOP_MAX_REJECTIONS` | 3 | Per-prompt `_Stop` budget (0 = disable) |
+| `AMBUSH_AGENT_HOOK_TIMEOUT_MS` | 2500 | Per-hook call timeout in milliseconds |
+| `AMBUSH_AGENT_STOP_MAX_REJECTIONS` | 3 | Per-prompt `_Stop` budget (0 = disable) |
 
 Hooks are **off by default**. The operator must explicitly opt in via
 `MCP_HOOK_SERVERS`.
 
 ### Not a hook: the reply guard
 
-`buzz-agent` has one in-process objection at the `_Stop` gate that is **not** an
+`ambush-agent` has one in-process objection at the `_Stop` gate that is **not** an
 MCP hook and exposes no hook tool: the reply guard
-(`BUZZ_AGENT_REQUIRE_REPLY=1`), which reminds the model to publish when a turn is
-about to end with nothing posted to Buzz. There is no `_ReplyGuard` tool to
+(`AMBUSH_AGENT_REQUIRE_REPLY=1`), which reminds the model to publish when a turn is
+about to end with nothing posted to Ambush. There is no `_ReplyGuard` tool to
 implement and no server to allowlist — the env var and the recognition contract
 are documented in
-[crates/buzz-agent/README.md](../crates/buzz-agent/README.md#reply-guard).
+[crates/ambush-agent/README.md](../crates/ambush-agent/README.md#reply-guard).
 
 It is mentioned here only because it shares this lifecycle point and this
-budget: its reminders count against `BUZZ_AGENT_STOP_MAX_REJECTIONS` like any
+budget: its reminders count against `AMBUSH_AGENT_STOP_MAX_REJECTIONS` like any
 hook objection, and a round carrying both a hook objection and a reminder costs
 one rejection and delivers both texts. Setting the budget to 0 disables both.
 That the gate can carry in-process objections alongside hook output is

@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:buzz/shared/relay/mp4_fast_start.dart';
+import 'package:ambush/shared/relay/mp4_fast_start.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -10,7 +10,7 @@ void main() {
 
   setUp(() async {
     tempDirectory = await Directory.systemTemp.createTemp(
-      'buzz-faststart-test-',
+      'ambush-faststart-test-',
     );
   });
 

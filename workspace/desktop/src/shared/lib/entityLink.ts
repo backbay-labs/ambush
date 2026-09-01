@@ -1,24 +1,24 @@
 /**
- * `buzz://` deep links for Buzz-hosted git entities, mirroring
- * `features/messages/lib/messageLink.ts` for `buzz://message`.
+ * `ambush://` deep links for Ambush-hosted git entities, mirroring
+ * `features/messages/lib/messageLink.ts` for `ambush://message`.
  *
  * Formats:
- *   buzz://repo?owner=<owner-pubkey>&d=<repo-dtag>[&tab=<tab>][&commit=<git-hash>]
- *   buzz://project?owner=<owner-pubkey>&d=<project-dtag>[&tab=<tab>]
- *   buzz://pr?id=<event-id>&owner=<owner-pubkey>&d=<repo-dtag>
- *   buzz://issue?id=<event-id>&owner=<owner-pubkey>&d=<repo-dtag>
+ *   ambush://repo?owner=<owner-pubkey>&d=<repo-dtag>[&tab=<tab>][&commit=<git-hash>]
+ *   ambush://project?owner=<owner-pubkey>&d=<project-dtag>[&tab=<tab>]
+ *   ambush://pr?id=<event-id>&owner=<owner-pubkey>&d=<repo-dtag>
+ *   ambush://issue?id=<event-id>&owner=<owner-pubkey>&d=<repo-dtag>
  *
  * `owner` + `d` identify the NIP-34 repository coordinate
  * (`30617:<owner>:<d>`) or the NIP-MP project coordinate
  * (`30621:<owner>:<d>`); `id` is the kind 1618 / 1621 event id. The
  * optional `tab` on the coordinate links selects a workspace tab (the
  * pull-request list, issue list, …) instead of the default readme
- * overview. The CLI builder in `crates/buzz-cli/src/links.rs` emits the
+ * overview. The CLI builder in `crates/ambush-cli/src/links.rs` emits the
  * same format — the two must stay compatible (see the golden-format tests
  * on both sides).
  */
 
-const ENTITY_LINK_SCHEME = "buzz:";
+const ENTITY_LINK_SCHEME = "ambush:";
 
 /**
  * Workspace tabs addressable by a coordinate link. The default overview
@@ -99,14 +99,14 @@ function tabSuffix(tab: EntityLinkTab | undefined): string {
   return `&tab=${tab}`;
 }
 
-/** Build a `buzz://repo` link for a repository announcement (kind 30617). */
+/** Build a `ambush://repo` link for a repository announcement (kind 30617). */
 export function buildRepoLink(input: {
   owner: string;
   dtag: string;
   tab?: EntityLinkTab;
 }): string {
   checkCoordinate(input.owner, input.dtag);
-  return `buzz://repo?owner=${input.owner.toLowerCase()}&d=${input.dtag}${tabSuffix(input.tab)}`;
+  return `ambush://repo?owner=${input.owner.toLowerCase()}&d=${input.dtag}${tabSuffix(input.tab)}`;
 }
 
 /** Build a link to a specific commit in a repository. */
@@ -119,20 +119,20 @@ export function buildCommitLink(input: {
   if (!GIT_OBJECT_ID_RE.test(input.commitHash)) {
     throw new Error("entityLink: commit must be a 40- or 64-char hex hash");
   }
-  return `buzz://repo?owner=${input.owner.toLowerCase()}&d=${input.dtag}&tab=commits&commit=${input.commitHash.toLowerCase()}`;
+  return `ambush://repo?owner=${input.owner.toLowerCase()}&d=${input.dtag}&tab=commits&commit=${input.commitHash.toLowerCase()}`;
 }
 
-/** Build a `buzz://project` link for a project announcement (kind 30621). */
+/** Build a `ambush://project` link for a project announcement (kind 30621). */
 export function buildProjectLink(input: {
   owner: string;
   dtag: string;
   tab?: EntityLinkTab;
 }): string {
   checkCoordinate(input.owner, input.dtag);
-  return `buzz://project?owner=${input.owner.toLowerCase()}&d=${input.dtag}${tabSuffix(input.tab)}`;
+  return `ambush://project?owner=${input.owner.toLowerCase()}&d=${input.dtag}${tabSuffix(input.tab)}`;
 }
 
-/** Build a `buzz://pr` link for a pull request event (kind 1618). */
+/** Build a `ambush://pr` link for a pull request event (kind 1618). */
 export function buildPullRequestLink(input: {
   id: string;
   owner: string;
@@ -140,10 +140,10 @@ export function buildPullRequestLink(input: {
 }): string {
   checkEventId(input.id);
   checkCoordinate(input.owner, input.dtag);
-  return `buzz://pr?id=${input.id.toLowerCase()}&owner=${input.owner.toLowerCase()}&d=${input.dtag}`;
+  return `ambush://pr?id=${input.id.toLowerCase()}&owner=${input.owner.toLowerCase()}&d=${input.dtag}`;
 }
 
-/** Build a `buzz://issue` link for an issue event (kind 1621). */
+/** Build a `ambush://issue` link for an issue event (kind 1621). */
 export function buildIssueLink(input: {
   id: string;
   owner: string;
@@ -151,26 +151,26 @@ export function buildIssueLink(input: {
 }): string {
   checkEventId(input.id);
   checkCoordinate(input.owner, input.dtag);
-  return `buzz://issue?id=${input.id.toLowerCase()}&owner=${input.owner.toLowerCase()}&d=${input.dtag}`;
+  return `ambush://issue?id=${input.id.toLowerCase()}&owner=${input.owner.toLowerCase()}&d=${input.dtag}`;
 }
 
 /**
  * Cheap pre-check used by the markdown renderer and preview extraction
- * before parsing. `buzz://message` is intentionally excluded — it has its
+ * before parsing. `ambush://message` is intentionally excluded — it has its
  * own pill rendering path.
  */
 export function isEntityLink(href: string | undefined | null): boolean {
   if (!href) return false;
   return (
-    href.startsWith("buzz://pr?") ||
-    href.startsWith("buzz://issue?") ||
-    href.startsWith("buzz://repo?") ||
-    href.startsWith("buzz://project?")
+    href.startsWith("ambush://pr?") ||
+    href.startsWith("ambush://issue?") ||
+    href.startsWith("ambush://repo?") ||
+    href.startsWith("ambush://project?")
   );
 }
 
 /**
- * Parse a `buzz://pr|issue|repo?…` URL. Returns a discriminated result so
+ * Parse a `ambush://pr|issue|repo?…` URL. Returns a discriminated result so
  * callers can fall back to plain-link rendering without throwing. All
  * identifiers are validated; hex values are lowercase-normalized.
  *

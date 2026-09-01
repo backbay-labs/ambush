@@ -13,7 +13,7 @@ import '../../shared/emoji/emoji_data_provider.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/app_list.dart';
 import '../../shared/widgets/app_list_card.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import '../../shared/widgets/ios_glass_navigation_action.dart';
@@ -90,7 +90,7 @@ class ProfileEditPage extends HookConsumerWidget {
       required String hintText,
       required Future<void> Function(String value) onSave,
       bool multiline = false,
-    }) => showBuzzModalBottomSheet<void>(
+    }) => showAmbushModalBottomSheet<void>(
       context: context,
       title: title,
       isScrollControlled: true,
@@ -603,7 +603,7 @@ class _ProfileActionPill extends StatelessWidget {
             vertical: Grid.xxs,
           ),
           child: isBusy
-              ? const BuzzLoadingIndicator(
+              ? const AmbushLoadingIndicator(
                   size: 18,
                   semanticLabel: 'Saving profile photo',
                 )

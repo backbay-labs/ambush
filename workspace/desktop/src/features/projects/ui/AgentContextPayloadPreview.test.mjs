@@ -59,7 +59,7 @@ test("discloses the exact appended payload before send, adversarial metadata inc
       branch: "feat/evil",
       file: null,
       project: { name: hostile },
-      repository: { name: hostile, repoAddress: "30617:owner:buzz" },
+      repository: { name: hostile, repoAddress: "30617:owner:ambush" },
       source: "remote",
       workItems: [null, { id: "task-1", status: "Open", title: hostile }, null],
     }),

@@ -8,7 +8,7 @@ import {
 
 test("parseProjectDetailSearch keeps forge params and channel panel params", () => {
   const search = parseProjectDetailSearch({
-    repositoryId: "30617:owner:buzz",
+    repositoryId: "30617:owner:ambush",
     tab: "files",
     filePath: "src/main.ts",
     thread: "abc123",
@@ -17,7 +17,7 @@ test("parseProjectDetailSearch keeps forge params and channel panel params", () 
     extra: "dropped",
   });
 
-  assert.equal(search.repositoryId, "30617:owner:buzz");
+  assert.equal(search.repositoryId, "30617:owner:ambush");
   assert.equal(search.tab, "files");
   assert.equal(search.filePath, "src/main.ts");
   assert.equal(search.thread, "abc123");
@@ -51,7 +51,7 @@ test("wantsProjectRepositorySurface is true for repo, tab, or work-item params",
   assert.equal(
     wantsProjectRepositorySurface({
       projectId: "30621:owner:platform",
-      repositoryId: "30617:owner:buzz",
+      repositoryId: "30617:owner:ambush",
     }),
     true,
   );
@@ -74,7 +74,7 @@ test("wantsProjectRepositorySurface is true for repo, tab, or work-item params",
 test("wantsProjectRepositorySurface is true for a legacy kind:30617 project id", () => {
   assert.equal(
     wantsProjectRepositorySurface({
-      projectId: "30617:owner:buzz",
+      projectId: "30617:owner:ambush",
     }),
     true,
   );

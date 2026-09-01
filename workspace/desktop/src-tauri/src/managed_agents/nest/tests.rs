@@ -3,18 +3,18 @@ use super::*;
 #[test]
 fn nest_dir_is_under_home() {
     if let Some(dir) = nest_dir() {
-        // Accepts both .buzz (prod) and .buzz-dev (dev) depending on
+        // Accepts both .ambush (prod) and .ambush-dev (dev) depending on
         // whether init_nest_dir was called before this test ran.
         let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert!(
             name == NEST_DIR_PROD || name == NEST_DIR_DEV,
-            "nest_dir must end with .buzz or .buzz-dev, got {dir:?}"
+            "nest_dir must end with .ambush or .ambush-dev, got {dir:?}"
         );
     }
 }
 
 #[test]
-fn init_nest_dir_prod_sets_buzz() {
+fn init_nest_dir_prod_sets_ambush() {
     // init_nest_dir is idempotent (OnceLock) — once set, subsequent calls
     // are no-ops. We can only test the fallback path if the OnceLock is
     // unset, which is only true in a fresh process. Instead, verify that
@@ -24,21 +24,21 @@ fn init_nest_dir_prod_sets_buzz() {
         let name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert!(
             name == NEST_DIR_PROD || name == NEST_DIR_DEV,
-            "nest_dir suffix must be .buzz or .buzz-dev, got {d:?}"
+            "nest_dir suffix must be .ambush or .ambush-dev, got {d:?}"
         );
     }
 }
 
 #[test]
 fn nest_skill_contains_safe_mention_workflow() {
-    assert!(BUZZ_CLI_SKILL_MD.contains("--mention <hex-or-npub>"));
-    assert!(BUZZ_CLI_SKILL_MD.contains("every presentation-only name that should notify"));
-    assert!(BUZZ_CLI_SKILL_MD
+    assert!(AMBUSH_CLI_SKILL_MD.contains("--mention <hex-or-npub>"));
+    assert!(AMBUSH_CLI_SKILL_MD.contains("every presentation-only name that should notify"));
+    assert!(AMBUSH_CLI_SKILL_MD
         .contains("permits unresolved or ambiguous `@Name` text as presentation-only"));
-    assert!(BUZZ_CLI_SKILL_MD.contains("signed event's `mention_pubkeys`"));
-    assert!(BUZZ_CLI_SKILL_MD.contains("no follow-up verification command is needed"));
-    assert!(BUZZ_CLI_SKILL_MD.contains("Add membership separately only when authorized"));
-    assert!(BUZZ_CLI_SKILL_MD.contains("never changes membership automatically"));
+    assert!(AMBUSH_CLI_SKILL_MD.contains("signed event's `mention_pubkeys`"));
+    assert!(AMBUSH_CLI_SKILL_MD.contains("no follow-up verification command is needed"));
+    assert!(AMBUSH_CLI_SKILL_MD.contains("Add membership separately only when authorized"));
+    assert!(AMBUSH_CLI_SKILL_MD.contains("never changes membership automatically"));
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn nest_agents_template_separates_commit_attribution_claims() {
 #[test]
 fn ensure_nest_creates_all_dirs_and_agents_md() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
 
     ensure_nest_at(&root).unwrap();
 
@@ -97,7 +97,7 @@ fn ensure_nest_creates_all_dirs_and_agents_md() {
 #[test]
 fn ensure_nest_is_idempotent_and_preserves_custom_content() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
 
     // First call creates everything.
     ensure_nest_at(&root).unwrap();
@@ -126,7 +126,7 @@ fn ensure_nest_rejects_symlink_root() {
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("real_dir");
     fs::create_dir(&target).unwrap();
-    let link = tmp.path().join(".buzz");
+    let link = tmp.path().join(".ambush");
     std::os::unix::fs::symlink(&target, &link).unwrap();
 
     let result = ensure_nest_at(&link);
@@ -137,27 +137,27 @@ fn ensure_nest_rejects_symlink_root() {
 #[test]
 fn ensure_nest_creates_skill_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
 
     // Canonical location under .agents.
-    let skill = root.join(".agents/skills/buzz-cli/SKILL.md");
+    let skill = root.join(".agents/skills/ambush-cli/SKILL.md");
     assert!(skill.exists(), "SKILL.md should exist at .agents path");
     let content = fs::read_to_string(&skill).unwrap();
-    assert_eq!(content, BUZZ_CLI_SKILL_MD);
+    assert_eq!(content, AMBUSH_CLI_SKILL_MD);
 
     // On unix, harness-specific symlinks should resolve to the canonical dir.
     #[cfg(unix)]
     {
         for dir in [".goose/skills", ".claude/skills", ".codex/skills"] {
-            let link = root.join(dir).join("buzz-cli");
+            let link = root.join(dir).join("ambush-cli");
             assert!(
                 link.symlink_metadata().unwrap().file_type().is_symlink(),
-                "{dir}/buzz-cli should be a symlink"
+                "{dir}/ambush-cli should be a symlink"
             );
             assert!(
                 link.join("SKILL.md").exists(),
-                "symlink at {dir}/buzz-cli should resolve to dir with SKILL.md"
+                "symlink at {dir}/ambush-cli should resolve to dir with SKILL.md"
             );
         }
     }
@@ -166,10 +166,10 @@ fn ensure_nest_creates_skill_file() {
 #[test]
 fn ensure_nest_does_not_overwrite_skill_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
 
-    let skill = root.join(".agents/skills/buzz-cli/SKILL.md");
+    let skill = root.join(".agents/skills/ambush-cli/SKILL.md");
     fs::write(&skill, "custom skill content").unwrap();
 
     ensure_nest_at(&root).unwrap();
@@ -181,14 +181,14 @@ fn ensure_nest_does_not_overwrite_skill_file() {
 fn ensure_nest_skill_dir_has_700_permissions() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
     // Canonical path and all provider parent dirs should be locked down.
-    // Symlinks (e.g. .goose/skills/buzz-cli) are skipped by the chmod loop.
+    // Symlinks (e.g. .goose/skills/ambush-cli) are skipped by the chmod loop.
     for dir in [
         ".agents",
         ".agents/skills",
-        ".agents/skills/buzz-cli",
+        ".agents/skills/ambush-cli",
         ".goose",
         ".goose/skills",
         ".claude",
@@ -208,7 +208,7 @@ fn ensure_nest_skips_permissions_on_symlinked_child() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
 
     // First call creates the real nest.
     ensure_nest_at(&root).unwrap();
@@ -235,32 +235,32 @@ fn ensure_nest_skips_permissions_on_symlinked_child() {
 #[test]
 fn ensure_nest_migrates_old_skill_dir() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
 
     // Simulate a pre-migration install: real directory at old path.
     // Create the nest first to get all dirs, then simulate old layout.
     ensure_nest_at(&root).unwrap();
 
     // Remove the symlink and new skill dir, recreate old real dir.
-    let _ = fs::remove_file(root.join(".claude/skills/buzz-cli"));
-    let _ = fs::remove_dir_all(root.join(".agents/skills/buzz-cli"));
-    let old_skill_dir = root.join(".claude/skills/buzz-cli");
+    let _ = fs::remove_file(root.join(".claude/skills/ambush-cli"));
+    let _ = fs::remove_dir_all(root.join(".agents/skills/ambush-cli"));
+    let old_skill_dir = root.join(".claude/skills/ambush-cli");
     fs::create_dir_all(&old_skill_dir).unwrap();
     fs::write(old_skill_dir.join("SKILL.md"), "user edited skill").unwrap();
 
     // Delete version file to force refresh.
-    let _ = fs::remove_file(root.join(".agents/skills/buzz-cli/.skill-version"));
+    let _ = fs::remove_file(root.join(".agents/skills/ambush-cli/.skill-version"));
 
     // Re-run ensure_nest_at — should trigger migration in refresh_skill_md_if_stale.
     ensure_nest_at(&root).unwrap();
 
     // New canonical location exists with user's content preserved.
-    let new_skill = root.join(".agents/skills/buzz-cli/SKILL.md");
+    let new_skill = root.join(".agents/skills/ambush-cli/SKILL.md");
     assert!(new_skill.exists(), "SKILL.md should exist at new path");
     assert_eq!(fs::read_to_string(&new_skill).unwrap(), "user edited skill");
 
     // Old path is now a symlink, not a real directory.
-    let old_path = root.join(".claude/skills/buzz-cli");
+    let old_path = root.join(".claude/skills/ambush-cli");
     assert!(
         old_path
             .symlink_metadata()
@@ -275,23 +275,23 @@ fn ensure_nest_migrates_old_skill_dir() {
 #[test]
 fn ensure_skill_symlinks_are_idempotent() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
     // Second call should succeed without errors.
     ensure_nest_at(&root).unwrap();
     // All symlinks still valid and point to relative targets.
     for dir in [".goose/skills", ".claude/skills", ".codex/skills"] {
-        let link = root.join(dir).join("buzz-cli");
+        let link = root.join(dir).join("ambush-cli");
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
         assert!(
             link.join("SKILL.md").exists(),
-            "symlink at {dir}/buzz-cli should resolve to dir with SKILL.md"
+            "symlink at {dir}/ambush-cli should resolve to dir with SKILL.md"
         );
         let target = fs::read_link(&link).unwrap();
         assert_eq!(
             target.to_str().unwrap(),
             format!("../../{CANONICAL_SKILL_DIR}"),
-            "symlink at {dir}/buzz-cli should use relative target"
+            "symlink at {dir}/ambush-cli should use relative target"
         );
     }
 }
@@ -301,13 +301,13 @@ fn ensure_skill_symlinks_are_idempotent() {
 fn ensure_skill_symlinks_skips_existing_path_during_initial_pass() {
     // ensure_skill_symlinks skips any path where symlink_metadata succeeds.
     // However, refresh_skill_md_if_stale (called after ensure_skill_symlinks)
-    // migrates pre-existing real directories at .claude/skills/buzz-cli to
+    // migrates pre-existing real directories at .claude/skills/ambush-cli to
     // symlinks. This test verifies the end-to-end behavior: a pre-existing real
     // dir at the claude path is migrated to a symlink.
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     // Pre-create a real directory where a symlink would go.
-    let real_dir = root.join(".claude/skills/buzz-cli");
+    let real_dir = root.join(".claude/skills/ambush-cli");
     fs::create_dir_all(&real_dir).unwrap();
     // Place SKILL.md so migration preserves it.
     fs::write(real_dir.join("SKILL.md"), "custom skill content").unwrap();
@@ -321,10 +321,10 @@ fn ensure_skill_symlinks_skips_existing_path_during_initial_pass() {
             .unwrap()
             .file_type()
             .is_symlink(),
-        ".claude/skills/buzz-cli should be migrated to a symlink"
+        ".claude/skills/ambush-cli should be migrated to a symlink"
     );
     // The canonical path now holds the migrated content.
-    let canonical = root.join(".agents/skills/buzz-cli/SKILL.md");
+    let canonical = root.join(".agents/skills/ambush-cli/SKILL.md");
     assert_eq!(
         fs::read_to_string(&canonical).unwrap(),
         "custom skill content"
@@ -335,11 +335,11 @@ fn ensure_skill_symlinks_skips_existing_path_during_initial_pass() {
 #[test]
 fn ensure_skill_symlinks_skip_dangling_symlink() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     // Pre-create a dangling symlink where the .codex link would go.
     let codex_skills = root.join(".codex/skills");
     fs::create_dir_all(&codex_skills).unwrap();
-    let dangling = codex_skills.join("buzz-cli");
+    let dangling = codex_skills.join("ambush-cli");
     std::os::unix::fs::symlink("/nonexistent/target", &dangling).unwrap();
 
     ensure_nest_at(&root).unwrap();
@@ -357,13 +357,13 @@ fn ensure_skill_symlinks_skip_dangling_symlink() {
 }
 
 #[test]
-fn cli_link_name_prod_is_buzz() {
-    assert_eq!(cli_link_name(false), "buzz");
+fn cli_link_name_prod_is_ambush() {
+    assert_eq!(cli_link_name(false), "ambush");
 }
 
 #[test]
-fn cli_link_name_dev_is_buzz_dev() {
-    assert_eq!(cli_link_name(true), "buzz-dev");
+fn cli_link_name_dev_is_ambush_dev() {
+    assert_eq!(cli_link_name(true), "ambush-dev");
 }
 
 #[cfg(unix)]
@@ -372,16 +372,16 @@ fn ensure_cli_symlink_creates_symlink_prod() {
     let tmp = tempfile::tempdir().unwrap();
     let exe_parent = tmp.path().join("MacOS");
     fs::create_dir(&exe_parent).unwrap();
-    fs::write(exe_parent.join("buzz"), "binary").unwrap();
+    fs::write(exe_parent.join("ambush"), "binary").unwrap();
 
     let local_bin = tmp.path().join("local_bin");
     fs::create_dir_all(&local_bin).unwrap();
 
-    // Prod link name is "buzz"; simulate the symlink creation path.
+    // Prod link name is "ambush"; simulate the symlink creation path.
     let link = local_bin.join(cli_link_name(false));
-    std::os::unix::fs::symlink(exe_parent.join("buzz"), &link).unwrap();
+    std::os::unix::fs::symlink(exe_parent.join("ambush"), &link).unwrap();
     assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-    assert_eq!(fs::read_link(&link).unwrap(), exe_parent.join("buzz"));
+    assert_eq!(fs::read_link(&link).unwrap(), exe_parent.join("ambush"));
 }
 
 #[cfg(unix)]
@@ -390,20 +390,20 @@ fn ensure_cli_symlink_creates_symlink_dev() {
     let tmp = tempfile::tempdir().unwrap();
     let exe_parent = tmp.path().join("MacOS");
     fs::create_dir(&exe_parent).unwrap();
-    fs::write(exe_parent.join("buzz"), "binary").unwrap();
+    fs::write(exe_parent.join("ambush"), "binary").unwrap();
 
     let local_bin = tmp.path().join("local_bin");
     fs::create_dir_all(&local_bin).unwrap();
 
-    // Dev link must be "buzz-dev", never "buzz".
-    assert_eq!(cli_link_name(true), "buzz-dev");
+    // Dev link must be "ambush-dev", never "ambush".
+    assert_eq!(cli_link_name(true), "ambush-dev");
 
     let link = local_bin.join(cli_link_name(true));
-    std::os::unix::fs::symlink(exe_parent.join("buzz"), &link).unwrap();
+    std::os::unix::fs::symlink(exe_parent.join("ambush"), &link).unwrap();
     assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-    assert_eq!(fs::read_link(&link).unwrap(), exe_parent.join("buzz"));
+    assert_eq!(fs::read_link(&link).unwrap(), exe_parent.join("ambush"));
     // Prod link must not exist — the two builds don't touch each other.
-    assert!(!local_bin.join("buzz").exists());
+    assert!(!local_bin.join("ambush").exists());
 }
 
 #[cfg(unix)]
@@ -427,20 +427,20 @@ fn ensure_cli_symlink_does_not_clobber_regular_file_dev() {
     let local_bin = tmp.path().join("local_bin");
     fs::create_dir_all(&local_bin).unwrap();
     let link = local_bin.join(cli_link_name(true));
-    fs::write(&link, "user-installed buzz-dev binary").unwrap();
+    fs::write(&link, "user-installed ambush-dev binary").unwrap();
 
     // Regular files at the dev path are also preserved.
     assert!(link.symlink_metadata().unwrap().file_type().is_file());
     assert_eq!(
         fs::read_to_string(&link).unwrap(),
-        "user-installed buzz-dev binary"
+        "user-installed ambush-dev binary"
     );
 }
 
 #[test]
 fn refresh_agents_md_writes_version_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
     let version = fs::read_to_string(root.join(".nest-agents-version")).unwrap();
     assert_eq!(version.trim(), NEST_AGENTS_VERSION.to_string());
@@ -449,18 +449,18 @@ fn refresh_agents_md_writes_version_file() {
 #[test]
 fn refresh_agents_md_upgrades_attribution_and_preserves_owned_content() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
 
     let agents_md = root.join("AGENTS.md");
     fs::write(
         &agents_md,
-        "# Buzz Nest\n\n## Git Commit Identity\n\n\
+        "# Ambush Nest\n\n## Git Commit Identity\n\n\
          - **Human sign-off (required):** every commit MUST include a `Signed-off-by`.\n\n\
-         <!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\n\
+         <!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\n\
          ## Active Agents\n\n| Name | Persona | How to address |\n\
          |------|---------|----------------|\n| Kit | Builder | @Kit |\n\
-         <!-- END BUZZ MANAGED -->\n\n## Local Notes\n\nKeep me.\n",
+         <!-- END AMBUSH MANAGED -->\n\n## Local Notes\n\nKeep me.\n",
     )
     .unwrap();
     fs::write(root.join(".nest-agents-version"), "4\n").unwrap();
@@ -477,16 +477,17 @@ fn refresh_agents_md_upgrades_attribution_and_preserves_owned_content() {
 #[test]
 fn refresh_skill_md_writes_version_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
-    let version = fs::read_to_string(root.join(".agents/skills/buzz-cli/.skill-version")).unwrap();
+    let version =
+        fs::read_to_string(root.join(".agents/skills/ambush-cli/.skill-version")).unwrap();
     assert_eq!(version.trim(), NEST_SKILL_VERSION.to_string());
 }
 
 #[test]
 fn refresh_agents_md_preserves_managed_section() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
 
     // Simulate a managed section update.
@@ -506,7 +507,7 @@ fn refresh_agents_md_preserves_managed_section() {
     let content = fs::read_to_string(&agents_md).unwrap();
     // Static content should be refreshed (from template).
     assert!(
-        content.starts_with("# Buzz Nest"),
+        content.starts_with("# Ambush Nest"),
         "template header must be present"
     );
     // Managed section should be preserved.
@@ -521,7 +522,7 @@ fn refresh_agents_md_preserves_managed_section() {
 #[test]
 fn refresh_skips_when_version_current() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
 
     // Manually change AGENTS.md content after version file is written.
@@ -541,20 +542,20 @@ fn refresh_skips_when_version_current() {
 #[test]
 fn refresh_skill_overwrites_on_version_bump() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join(".buzz");
+    let root = tmp.path().join(".ambush");
     ensure_nest_at(&root).unwrap();
 
-    let skill_md = root.join(".agents/skills/buzz-cli/SKILL.md");
+    let skill_md = root.join(".agents/skills/ambush-cli/SKILL.md");
     fs::write(&skill_md, "stale skill content").unwrap();
 
     // Remove version file to simulate upgrade.
-    let _ = fs::remove_file(root.join(".agents/skills/buzz-cli/.skill-version"));
+    let _ = fs::remove_file(root.join(".agents/skills/ambush-cli/.skill-version"));
 
     ensure_nest_at(&root).unwrap();
 
     let content = fs::read_to_string(&skill_md).unwrap();
     assert_eq!(
-        content, BUZZ_CLI_SKILL_MD,
+        content, AMBUSH_CLI_SKILL_MD,
         "SKILL.md must be refreshed on version bump"
     );
 }

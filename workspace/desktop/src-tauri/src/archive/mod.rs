@@ -1,5 +1,5 @@
 //! Local-save archive — Tauri commands for archiving relay messages to a
-//! per-identity SQLite database in the Buzz nest.
+//! per-identity SQLite database in the Ambush nest.
 //!
 //! # Architecture
 //!
@@ -57,7 +57,7 @@ pub fn spawn_warm_init(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         use tauri::Manager;
         if let Err(error) = app.state::<AppState>().archive_db.warm_init().await {
-            eprintln!("buzz-desktop: archive DB init deferred: {error}");
+            eprintln!("ambush-desktop: archive DB init deferred: {error}");
         }
     });
 }

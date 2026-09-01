@@ -54,7 +54,7 @@ function ProjectInboxStatus({
   );
 }
 
-/** Resolves and renders the live Buzz Git object selected from Inbox. */
+/** Resolves and renders the live Ambush Git object selected from Inbox. */
 export function ProjectInboxDetail({
   isSinglePanelView = false,
   item,

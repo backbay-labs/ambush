@@ -4,8 +4,9 @@ import { type QueryStatus, useQueryClient } from "@tanstack/react-query";
 import { useIdentityQuery } from "@/shared/api/hooks";
 
 const MACHINE_ONBOARDING_COMPLETION_STORAGE_KEY =
-  "buzz-machine-onboarding-complete.v2";
-const LEGACY_ONBOARDING_COMPLETION_STORAGE_KEY = "buzz-onboarding-complete.v1";
+  "ambush-machine-onboarding-complete.v2";
+const LEGACY_ONBOARDING_COMPLETION_STORAGE_KEY =
+  "ambush-onboarding-complete.v1";
 
 type MachineOnboardingStage =
   | "blocking"

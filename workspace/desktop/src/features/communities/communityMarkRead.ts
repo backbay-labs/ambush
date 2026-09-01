@@ -12,8 +12,8 @@ import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota"
 // rather than flood the relay — the next regular client publish catches up.
 const OBSERVER_MAX_SLOTS = 8;
 
-const OBSERVER_CLIENT_ID_KEY_PREFIX = "buzz.nip-rs.observer-client-id";
-const OBSERVER_SLOT_ID_KEY_PREFIX = "buzz.nip-rs.observer-slot-id";
+const OBSERVER_CLIENT_ID_KEY_PREFIX = "ambush.nip-rs.observer-client-id";
+const OBSERVER_SLOT_ID_KEY_PREFIX = "ambush.nip-rs.observer-slot-id";
 
 type MarkReadRelay = {
   fetchEvents(filter: RelaySubscriptionFilter): Promise<RelayEvent[]>;

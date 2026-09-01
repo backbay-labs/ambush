@@ -9,7 +9,7 @@ fn sample_record(pubkey: &str, name: &str) -> ManagedAgentRecord {
             "pubkey": "{pubkey}",
             "name": "{name}",
             "relay_url": "wss://localhost:3000",
-            "acp_command": "buzz-acp",
+            "acp_command": "ambush-acp",
             "agent_command": "goose",
             "agent_args": [],
             "mcp_command": "",

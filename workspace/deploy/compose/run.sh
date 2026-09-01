@@ -5,10 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 COMPOSE_FILES=(-f compose.yml)
-if [[ "${BUZZ_COMPOSE_TLS:-false}" == "true" ]]; then
+if [[ "${AMBUSH_COMPOSE_TLS:-false}" == "true" ]]; then
   COMPOSE_FILES+=(-f compose.caddy.yml)
 fi
-if [[ "${BUZZ_COMPOSE_DEV:-false}" == "true" ]]; then
+if [[ "${AMBUSH_COMPOSE_DEV:-false}" == "true" ]]; then
   COMPOSE_FILES+=(-f compose.dev.yml)
 fi
 
@@ -39,11 +39,11 @@ backup_hint() {
   cat <<'MSG'
 Back up these before upgrades and on a regular schedule:
 
-- deploy/compose/.env, especially BUZZ_RELAY_PRIVATE_KEY, DB/Redis/S3 secrets, and BUZZ_GIT_HOOK_HMAC_SECRET
+- deploy/compose/.env, especially AMBUSH_RELAY_PRIVATE_KEY, DB/Redis/S3 secrets, and AMBUSH_GIT_HOOK_HMAC_SECRET
 - The owner private key if bootstrap generated one for RELAY_OWNER_PUBKEY
 - Postgres data (prefer pg_dump or a quiesced volume snapshot)
 - MinIO/S3 bucket contents for media and git objects
-- buzz-git-data volume (BUZZ_GIT_REPO_PATH=/data/git)
+- ambush-git-data volume (AMBUSH_GIT_REPO_PATH=/data/git)
 - Caddy data/config volumes if using compose.caddy.yml
 
 Keep Postgres + object/git state snapshots from the same maintenance window.
@@ -87,20 +87,20 @@ case "${1:-help}" in
     backup_hint
     ;;
   add-member)
-    docker compose exec relay /usr/local/bin/buzz-admin add-member --pubkey "${2:?Usage: ./run.sh add-member <npub-or-hex> [--role member|admin]}" "${@:3}"
+    docker compose exec relay /usr/local/bin/ambush-admin add-member --pubkey "${2:?Usage: ./run.sh add-member <npub-or-hex> [--role member|admin]}" "${@:3}"
     ;;
   remove-member)
-    docker compose exec relay /usr/local/bin/buzz-admin remove-member --pubkey "${2:?Usage: ./run.sh remove-member <npub-or-hex> [--role member|admin]}" "${@:3}"
+    docker compose exec relay /usr/local/bin/ambush-admin remove-member --pubkey "${2:?Usage: ./run.sh remove-member <npub-or-hex> [--role member|admin]}" "${@:3}"
     ;;
   list-members)
-    docker compose exec relay /usr/local/bin/buzz-admin list-members
+    docker compose exec relay /usr/local/bin/ambush-admin list-members
     ;;
   help|-h|--help)
     cat <<'MSG'
 Usage: ./run.sh <command>
 
 Commands:
-  start         Start Buzz with docker compose up -d --wait
+  start         Start Ambush with docker compose up -d --wait
   stop          Stop containers without deleting volumes
   restart       Recreate the relay after env/image changes
   pull          Pull configured images
@@ -121,8 +121,8 @@ Commands:
   roster event. Do not use parallel adds (e.g. xargs -P).
 
 Environment switches:
-  BUZZ_COMPOSE_TLS=true   Include compose.caddy.yml for automatic HTTPS
-  BUZZ_COMPOSE_DEV=true   Include compose.dev.yml for local admin ports/tools
+  AMBUSH_COMPOSE_TLS=true   Include compose.caddy.yml for automatic HTTPS
+  AMBUSH_COMPOSE_DEV=true   Include compose.dev.yml for local admin ports/tools
 MSG
     ;;
   *)

@@ -146,16 +146,16 @@ pub async fn spawn_media_proxy(http_client: reqwest::Client, app_handle: tauri::
         axum::serve(listener, app).await.ok();
     });
 
-    eprintln!("buzz-desktop: media proxy listening on 127.0.0.1:{port}");
+    eprintln!("ambush-desktop: media proxy listening on 127.0.0.1:{port}");
     port
 }
 
 /// Proxy media requests through the Rust backend so they traverse the VPN tunnel.
 ///
 /// WKWebView's networking stack bypasses the VPN tunnel, causing 403s from Cloudflare Access.
-/// This handler routes `buzz-media://localhost/{path}` through reqwest, which
+/// This handler routes `ambush-media://localhost/{path}` through reqwest, which
 /// runs in the Tauri process and goes through the VPN.
-pub async fn handle_buzz_media(
+pub async fn handle_ambush_media(
     app: &tauri::AppHandle,
     request: &http::Request<Vec<u8>>,
 ) -> http::Response<Vec<u8>> {

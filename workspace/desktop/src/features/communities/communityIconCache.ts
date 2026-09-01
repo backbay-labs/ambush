@@ -4,10 +4,10 @@
  * data-URLs (or http URLs) from the relay's NIP-11 `icon` field.
  */
 
-const ICON_CACHE_KEY = "buzz-community-icons";
+const ICON_CACHE_KEY = "ambush-community-icons";
 export const MAX_CACHED_COMMUNITY_ICONS = 32;
 // Keep aligned with MAX_WORKSPACE_ICON_DATA_URL_LEN in
-// crates/buzz-relay/src/handlers/relay_admin.rs.
+// crates/ambush-relay/src/handlers/relay_admin.rs.
 export const MAX_CACHED_COMMUNITY_ICON_LENGTH = 98_304;
 
 export function boundCommunityIconCache(

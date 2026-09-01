@@ -116,7 +116,7 @@ test("revert-fix: absent fetch with prior watermark blocks seed-publish via boot
   mock.method(relayClient, "publishEvent", () => Promise.resolve());
   const fw = makeFakeWindow();
   fw.localStorage.setItem(
-    `buzz-sync-watermark.v1:channel-stars:pk-stale:${RELAY_KEY}`,
+    `ambush-sync-watermark.v1:channel-stars:pk-stale:${RELAY_KEY}`,
     "1700000000",
   );
   const restore = installFakeWindow(fw);
@@ -125,7 +125,7 @@ test("revert-fix: absent fetch with prior watermark blocks seed-publish via boot
     assert.ok(
       Number(
         fw.localStorage.getItem(
-          `buzz-sync-watermark.v1:channel-stars:pk-stale:${RELAY_KEY}`,
+          `ambush-sync-watermark.v1:channel-stars:pk-stale:${RELAY_KEY}`,
         ) ?? "0",
       ) > 0,
     );
@@ -150,7 +150,7 @@ test("revert-fix: absent fetch with zero watermark seeds via bootstrap (first-sy
     const manager = new ChannelStarSyncManager("pk-fresh", RELAY);
     assert.equal(
       fw.localStorage.getItem(
-        `buzz-sync-watermark.v1:channel-stars:pk-fresh:${RELAY_KEY}`,
+        `ambush-sync-watermark.v1:channel-stars:pk-fresh:${RELAY_KEY}`,
       ),
       null,
     );
@@ -174,7 +174,7 @@ test("revert-fix: relay-A watermark does not suppress first-sync seed on relay-B
   mock.method(relayClient, "publishEvent", () => Promise.resolve());
   const fw = makeFakeWindow();
   fw.localStorage.setItem(
-    `buzz-sync-watermark.v1:channel-stars:pk-iso:${encodeURIComponent(relayA)}`,
+    `ambush-sync-watermark.v1:channel-stars:pk-iso:${encodeURIComponent(relayA)}`,
     "1700000100",
   );
   const restore = installFakeWindow(fw);
@@ -182,7 +182,7 @@ test("revert-fix: relay-A watermark does not suppress first-sync seed on relay-B
     const managerB = new ChannelStarSyncManager("pk-iso", relayB);
     assert.equal(
       fw.localStorage.getItem(
-        `buzz-sync-watermark.v1:channel-stars:pk-iso:${encodeURIComponent(relayB)}`,
+        `ambush-sync-watermark.v1:channel-stars:pk-iso:${encodeURIComponent(relayB)}`,
       ),
       null,
       "relay B watermark must be independent of relay A head",

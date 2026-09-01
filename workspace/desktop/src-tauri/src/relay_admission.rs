@@ -366,7 +366,7 @@ mod tests {
     /// Wait-then-sign ensures NIP-98 auth is fresh after an admission wait.
     ///
     /// The relay enforces NIP-98 freshness within ±60s (`TIMESTAMP_TOLERANCE_SECS`
-    /// in `buzz-auth`), while the gate honours hints up to `MAX_HINT_SECONDS`
+    /// in `ambush-auth`), while the gate honours hints up to `MAX_HINT_SECONDS`
     /// (300s). Signing BEFORE the wait produces a stale `created_at` that would
     /// be rejected on any active window >60s.
     ///

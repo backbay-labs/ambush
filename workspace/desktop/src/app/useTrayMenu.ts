@@ -30,7 +30,7 @@ type TrayAction =
 const MAX_RECENT_TRAY_ACTIVITIES = 5;
 
 /**
- * Keeps Buzz's native tray menu synchronized with active agent turns and
+ * Keeps Ambush's native tray menu synchronized with active agent turns and
  * forwards its navigation actions into the React app.
  */
 export function useTrayMenu({

@@ -33,10 +33,10 @@ import type { Channel, ManagedAgent, RelayEvent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useQueryClient } from "@tanstack/react-query";
 
-export const WELCOME_KICKOFF_OPENER_MARKER = "buzz-welcome-kickoff.opener.v1";
-export const WELCOME_KICKOFF_CLOSER_MARKER = "buzz-welcome-kickoff.closer.v1";
+export const WELCOME_KICKOFF_OPENER_MARKER = "ambush-welcome-kickoff.opener.v1";
+export const WELCOME_KICKOFF_CLOSER_MARKER = "ambush-welcome-kickoff.closer.v1";
 export const WELCOME_KICKOFF_PROVIDER_MARKER =
-  "buzz-welcome-kickoff.provider-required.v1";
+  "ambush-welcome-kickoff.provider-required.v1";
 
 const openerMarker = welcomeKickoffMarker(WELCOME_KICKOFF_OPENER_MARKER);
 const closerMarker = welcomeKickoffMarker(WELCOME_KICKOFF_CLOSER_MARKER);
@@ -179,10 +179,10 @@ export function buildWelcomeKickoffOpener(
   if (introTeammates.length === 0) {
     const teammateNames = formatAgentNames(allTeammates);
     const teammatePhrase = teammateNames ? ` with ${teammateNames}` : "";
-    return `${greeting} Welcome to Buzz. This is your private home base, and I'm here${teammatePhrase} to help you get oriented or work through something you're building.\n\n${WELCOME_KICKOFF_CTA}`;
+    return `${greeting} Welcome to Ambush. This is your private home base, and I'm here${teammatePhrase} to help you get oriented or work through something you're building.\n\n${WELCOME_KICKOFF_CTA}`;
   }
 
-  return `${greeting} Welcome to Buzz. This is your private home base, and we're here to help you get oriented or work through something you're building.\n\n${introNames}, introduce ${introTeammates.length === 1 ? "yourself" : "yourselves"} in a sentence or two — share what you're good at and when to bring you in. Don't start any work yet.`;
+  return `${greeting} Welcome to Ambush. This is your private home base, and we're here to help you get oriented or work through something you're building.\n\n${introNames}, introduce ${introTeammates.length === 1 ? "yourself" : "yourselves"} in a sentence or two — share what you're good at and when to bring you in. Don't start any work yet.`;
 }
 
 export function onlineWelcomeTeammates(
@@ -602,7 +602,7 @@ export function useWelcomeKickoff(
         }
         const openerAlreadySent = await markerExists(channelId, openerMarker);
 
-        // Start before publishing the mention. buzz-acp replays events from its
+        // Start before publishing the mention. ambush-acp replays events from its
         // startup watermark, so no separate subscription-ready wait is needed.
         // On resume, restart unresolved teammates but never replay the opener.
         const agentsToStart = openerAlreadySent

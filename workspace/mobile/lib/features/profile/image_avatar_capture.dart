@@ -13,7 +13,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/ios_glass_navigation_button.dart';
 import 'camera_disposal_barrier.dart';
 
@@ -434,7 +434,7 @@ class ImageAvatarCapture extends HookConsumerWidget {
                             )
                           : Center(
                               child: isInitializing.value
-                                  ? const BuzzLoadingIndicator(
+                                  ? const AmbushLoadingIndicator(
                                       semanticLabel: 'Starting camera',
                                     )
                                   : const Icon(LucideIcons.cameraOff, size: 32),

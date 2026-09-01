@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
-import 'package:buzz/shared/huddle/huddle_auth.dart';
-import 'package:buzz/shared/huddle/huddle_wire.dart';
+import 'package:ambush/shared/huddle/huddle_auth.dart';
+import 'package:ambush/shared/huddle/huddle_wire.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _privateKey =
@@ -99,7 +99,7 @@ void main() {
   group('HuddleAuthV2', () {
     test('uses the base relay URL and fixed v2 auth envelope', () {
       final parameters = HuddleConnectionParameters(
-        relayWebSocketUrl: 'wss://buzz.example',
+        relayWebSocketUrl: 'wss://ambush.example',
         nsec: _privateKey,
         parentChannelId: _parentChannelId,
         ephemeralChannelId: _ephemeralChannelId,
@@ -119,11 +119,11 @@ void main() {
       expect(auth['protocol_version'], 2);
       expect(auth['parent_channel_id'], _parentChannelId);
       expect(event['kind'], 22242);
-      expect(tags[0], ['relay', 'wss://buzz.example']);
+      expect(tags[0], ['relay', 'wss://ambush.example']);
       expect(tags[1], ['challenge', 'relay-challenge']);
       expect(
         parameters.audioWebSocketUri.toString(),
-        'wss://buzz.example/huddle/$_ephemeralChannelId/audio',
+        'wss://ambush.example/huddle/$_ephemeralChannelId/audio',
       );
       expect(
         tags.any((tag) => tag.length > 1 && tag[1].contains('/huddle/')),
@@ -134,7 +134,7 @@ void main() {
     test('rejects malformed channel IDs before opening a socket', () {
       expect(
         () => HuddleConnectionParameters(
-          relayWebSocketUrl: 'wss://buzz.example',
+          relayWebSocketUrl: 'wss://ambush.example',
           nsec: _privateKey,
           parentChannelId: 'not-a-channel',
           ephemeralChannelId: _ephemeralChannelId,

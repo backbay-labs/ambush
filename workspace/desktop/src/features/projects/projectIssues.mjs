@@ -204,7 +204,7 @@ export function eventToProjectIssue(
     createdAt: issue.created_at,
     repoAddress: getTag(issue, "a") ?? null,
     channelId: getTag(issue, "h") ?? null,
-    originAgentName: getTag(issue, "buzz-origin-agent") ?? null,
+    originAgentName: getTag(issue, "ambush-origin-agent") ?? null,
     labels,
     category: projectTaskCategoryFromLabels(labels),
     recipients: getAllTags(issue, "p"),

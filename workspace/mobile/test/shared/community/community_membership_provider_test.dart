@@ -1,5 +1,5 @@
-import 'package:buzz/shared/community/community_membership_provider.dart';
-import 'package:buzz/shared/relay/relay.dart';
+import 'package:ambush/shared/community/community_membership_provider.dart';
+import 'package:ambush/shared/relay/relay.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -10,7 +10,7 @@ void main() {
   const member =
       'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
 
-  test('parses Buzz and legacy membership tags with roles', () {
+  test('parses Ambush and legacy membership tags with roles', () {
     final snapshot = communityMembershipFromEvents([
       _event(
         createdAt: 2,

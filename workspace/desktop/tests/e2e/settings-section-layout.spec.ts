@@ -105,7 +105,7 @@ test("Profile sections keep visible cards and aligned actions", async ({
   ).toBeVisible();
   await expect(signOut.getByText("Sign out", { exact: true })).toHaveCount(1);
   await expect(
-    signOut.getByText("Sign out of Buzz", { exact: true }),
+    signOut.getByText("Sign out of Ambush", { exact: true }),
   ).toHaveCount(0);
 
   const profileInfo = page.getByTestId("profile-metadata-card");

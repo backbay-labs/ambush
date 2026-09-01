@@ -319,7 +319,7 @@ pub(super) fn commit_archive(
             // ciphertext or partial output.
             let stored_json =
                 if p.event.kind.as_u16() as u64 == super::KIND_AGENT_TURN_METRIC as u64 {
-                    match buzz_core_pkg::agent_turn_metric::decrypt_agent_turn_metric(
+                    match ambush_core_pkg::agent_turn_metric::decrypt_agent_turn_metric(
                         owner_keys, &p.event,
                     ) {
                         Ok(payload) => match serde_json::to_string(&payload) {
@@ -460,7 +460,7 @@ pub(super) fn commit_archive(
             // re-processes this frame (INSERT OR IGNORE on PK is a no-op if
             // the row is already present from a prior run).
             let channel_id_for_index: Option<String> =
-                buzz_core_pkg::observer::decrypt_observer_payload::<serde_json::Value>(
+                ambush_core_pkg::observer::decrypt_observer_payload::<serde_json::Value>(
                     owner_keys, &p.event,
                 )
                 .ok()

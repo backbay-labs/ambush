@@ -160,7 +160,7 @@ fn reconcile_inbound_persona_event_blocking<R: tauri::Runtime>(
         save_managed_agents, save_teams,
         team_events::team_content_from_event,
     };
-    use buzz_core_pkg::kind::{
+    use ambush_core_pkg::kind::{
         KIND_DELETION, KIND_MANAGED_AGENT, KIND_PERSONA, KIND_TEAM, KIND_TEAM_CATALOG,
     };
     use nostr::JsonUtil;
@@ -439,7 +439,7 @@ pub(crate) fn retain_inbound_catalog_witness(
     conn: &rusqlite::Connection,
     inbound: &crate::managed_agents::retention::RetainedEvent,
 ) -> Result<bool, String> {
-    use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
+    use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
     if inbound.kind != KIND_TEAM_CATALOG {
         return Ok(false);
     }
@@ -528,7 +528,7 @@ fn reconcile_inbound_tombstone<R: tauri::Runtime>(
         },
         save_managed_agents, save_teams,
     };
-    use buzz_core_pkg::kind::{
+    use ambush_core_pkg::kind::{
         KIND_DELETION, KIND_MANAGED_AGENT, KIND_PERSONA, KIND_TEAM, KIND_TEAM_CATALOG,
     };
     use nostr::JsonUtil;

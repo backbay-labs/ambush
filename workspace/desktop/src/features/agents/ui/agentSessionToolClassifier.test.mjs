@@ -3,20 +3,20 @@ import test from "node:test";
 
 import {
   classifyTool,
-  parseBuzzCliCommand,
+  parseAmbushCliCommand,
   tokenizeShellCommand,
 } from "./agentSessionToolClassifier.ts";
 
 test("tokenizeShellCommand preserves quoted strings and command separators", () => {
   assert.deepEqual(
     tokenizeShellCommand(
-      'echo "hello world" | buzz messages send --content - --channel agents; buzz feed get',
+      'echo "hello world" | ambush messages send --content - --channel agents; ambush feed get',
     ),
     [
       "echo",
       "hello world",
       "|",
-      "buzz",
+      "ambush",
       "messages",
       "send",
       "--content",
@@ -24,16 +24,16 @@ test("tokenizeShellCommand preserves quoted strings and command separators", () 
       "--channel",
       "agents",
       ";",
-      "buzz",
+      "ambush",
       "feed",
       "get",
     ],
   );
 });
 
-test("parseBuzzCliCommand returns null preview for echo-piped stdin sends", () => {
-  const descriptor = parseBuzzCliCommand(
-    'echo "Permission wired" | buzz messages send --channel agents --content -',
+test("parseAmbushCliCommand returns null preview for echo-piped stdin sends", () => {
+  const descriptor = parseAmbushCliCommand(
+    'echo "Permission wired" | ambush messages send --channel agents --content -',
   );
 
   assert.equal(descriptor?.renderClass, "message");
@@ -42,78 +42,78 @@ test("parseBuzzCliCommand returns null preview for echo-piped stdin sends", () =
   assert.equal(descriptor?.operation, "messages.send");
 });
 
-test("parseBuzzCliCommand returns null preview for printf-piped stdin sends", () => {
-  const descriptor = parseBuzzCliCommand(
-    "printf 'hello\\n\\nworld\\n' | buzz messages send --channel a6e0737c-4205-4bcc-9741-2aad800e613f --content -",
+test("parseAmbushCliCommand returns null preview for printf-piped stdin sends", () => {
+  const descriptor = parseAmbushCliCommand(
+    "printf 'hello\\n\\nworld\\n' | ambush messages send --channel a6e0737c-4205-4bcc-9741-2aad800e613f --content -",
   );
 
   assert.equal(descriptor?.renderClass, "message");
   assert.equal(descriptor?.preview, null);
 });
 
-test("parseBuzzCliCommand returns null preview for heredoc/cat stdin sends", () => {
-  const descriptor = parseBuzzCliCommand(
-    'buzz messages send --channel some-uuid --content "$(cat /tmp/file)"',
+test("parseAmbushCliCommand returns null preview for heredoc/cat stdin sends", () => {
+  const descriptor = parseAmbushCliCommand(
+    'ambush messages send --channel some-uuid --content "$(cat /tmp/file)"',
   );
 
   assert.equal(descriptor?.renderClass, "message");
   assert.equal(descriptor?.preview, null);
 });
 
-test("parseBuzzCliCommand returns null preview for --content with embedded command substitution", () => {
-  const descriptor = parseBuzzCliCommand(
-    'buzz messages send --channel some-uuid --content "prefix $(cat /tmp/f)"',
+test("parseAmbushCliCommand returns null preview for --content with embedded command substitution", () => {
+  const descriptor = parseAmbushCliCommand(
+    'ambush messages send --channel some-uuid --content "prefix $(cat /tmp/f)"',
   );
 
   assert.equal(descriptor?.renderClass, "message");
   assert.equal(descriptor?.preview, null);
 });
 
-test("parseBuzzCliCommand returns null preview for --content with a bare variable", () => {
-  const descriptor = parseBuzzCliCommand(
-    'buzz messages send --channel some-uuid --content "$MESSAGE"',
+test("parseAmbushCliCommand returns null preview for --content with a bare variable", () => {
+  const descriptor = parseAmbushCliCommand(
+    'ambush messages send --channel some-uuid --content "$MESSAGE"',
   );
 
   assert.equal(descriptor?.renderClass, "message");
   assert.equal(descriptor?.preview, null);
 });
 
-test("parseBuzzCliCommand returns null preview for --content with a prefixed variable", () => {
-  const descriptor = parseBuzzCliCommand(
-    'buzz messages send --channel some-uuid --content "prefix $MESSAGE"',
+test("parseAmbushCliCommand returns null preview for --content with a prefixed variable", () => {
+  const descriptor = parseAmbushCliCommand(
+    'ambush messages send --channel some-uuid --content "prefix $MESSAGE"',
   );
 
   assert.equal(descriptor?.renderClass, "message");
   assert.equal(descriptor?.preview, null);
 });
 
-test("parseBuzzCliCommand preserves inline --content for sends", () => {
-  const descriptor = parseBuzzCliCommand(
-    'buzz messages send --channel agents --content "Hello from inline"',
+test("parseAmbushCliCommand preserves inline --content for sends", () => {
+  const descriptor = parseAmbushCliCommand(
+    'ambush messages send --channel agents --content "Hello from inline"',
   );
 
   assert.equal(descriptor?.renderClass, "message");
   assert.equal(descriptor?.preview, "Hello from inline");
 });
 
-test("parseBuzzCliCommand preserves --content=inline for sends", () => {
-  const descriptor = parseBuzzCliCommand(
-    "buzz messages send --channel agents --content=Acknowledged",
+test("parseAmbushCliCommand preserves --content=inline for sends", () => {
+  const descriptor = parseAmbushCliCommand(
+    "ambush messages send --channel agents --content=Acknowledged",
   );
 
   assert.equal(descriptor?.renderClass, "message");
   assert.equal(descriptor?.preview, "Acknowledged");
 });
 
-test("parseBuzzCliCommand never surfaces --channel as preview for sends", () => {
+test("parseAmbushCliCommand never surfaces --channel as preview for sends", () => {
   const commands = [
-    "printf 'msg' | buzz messages send --channel my-uuid --content -",
-    'buzz messages send --channel my-uuid --content "$(cat /tmp/f)"',
-    "buzz messages send --channel my-uuid --content -",
+    "printf 'msg' | ambush messages send --channel my-uuid --content -",
+    'ambush messages send --channel my-uuid --content "$(cat /tmp/f)"',
+    "ambush messages send --channel my-uuid --content -",
   ];
 
   for (const cmd of commands) {
-    const descriptor = parseBuzzCliCommand(cmd);
+    const descriptor = parseAmbushCliCommand(cmd);
     assert.equal(descriptor?.renderClass, "message");
     assert.notEqual(
       descriptor?.preview,
@@ -127,7 +127,7 @@ test("classifyTool promotes load_skill to skill-read descriptors", () => {
   const descriptor = classifyTool({
     title: "load_skill",
     toolName: "load_skill",
-    buzzToolName: null,
+    ambushToolName: null,
     args: { name: "block-safe-github" },
     result: "# Safe GitHub usage at Block\n",
     isError: false,
@@ -147,7 +147,7 @@ test("classifyTool promotes supporting-file load_skill to skill-read file descri
   const descriptor = classifyTool({
     title: "load_skill",
     toolName: "load_skill",
-    buzzToolName: null,
+    ambushToolName: null,
     args: { name: "block-safe-github/references/foo.md" },
     result: "# Reference\n",
     isError: false,
@@ -158,27 +158,29 @@ test("classifyTool promotes supporting-file load_skill to skill-read file descri
   assert.equal(descriptor.groupKey, "skill:load-file");
 });
 
-test("classifyTool promotes buzz CLI shell commands to relay operations", () => {
+test("classifyTool promotes ambush CLI shell commands to relay operations", () => {
   const descriptor = classifyTool({
     title: "Shell",
     toolName: "dev__shell",
-    buzzToolName: null,
-    args: { command: "buzz channels get --channel buzz-agent-observability" },
+    ambushToolName: null,
+    args: {
+      command: "ambush channels get --channel ambush-agent-observability",
+    },
     result: "{}",
     isError: false,
   });
 
   assert.equal(descriptor.renderClass, "relay-op");
   assert.equal(descriptor.label, "Channels Get");
-  assert.equal(descriptor.preview, "buzz-agent-observability");
-  assert.equal(descriptor.groupKey, "buzz-cli:channels.get");
+  assert.equal(descriptor.preview, "ambush-agent-observability");
+  assert.equal(descriptor.groupKey, "ambush-cli:channels.get");
 });
 
 test("classifyTool falls back once to a generic descriptor", () => {
   const descriptor = classifyTool({
     title: "Mystery",
     toolName: "mcp__mystery",
-    buzzToolName: null,
+    ambushToolName: null,
     args: { path: "notes.md" },
     result: "",
     isError: false,

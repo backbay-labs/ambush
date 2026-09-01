@@ -123,7 +123,7 @@ class _AvatarImageContentState extends ConsumerState<AvatarImageContent> {
         onBytesLoaded: communityID == null
             ? null
             : (bytes) => unawaited(
-                cacheBuzzPushAvatarFromLoadedBytes(communityID, url, bytes),
+                cacheAmbushPushAvatarFromLoadedBytes(communityID, url, bytes),
               ),
         errorBuilder: (_, _, _) => centeredFallback,
       ),
@@ -144,7 +144,7 @@ class _AvatarImageContentState extends ConsumerState<AvatarImageContent> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || _scheduledPushAvatar != identity) return;
           unawaited(
-            cacheBuzzPushAvatarFromLoadedBytes(communityID, sourceURL, bytes),
+            cacheAmbushPushAvatarFromLoadedBytes(communityID, sourceURL, bytes),
           );
         });
       }

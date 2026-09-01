@@ -116,7 +116,7 @@ async fn verified_catalog_head(
     source: &TeamCatalogSource,
     event_id: &str,
 ) -> Result<TeamCatalogContent, String> {
-    use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
+    use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
 
     let filter = serde_json::json!({
         "kinds": [KIND_TEAM_CATALOG],
@@ -152,7 +152,7 @@ fn verified_head_content(
     source: &TeamCatalogSource,
     event_id: &str,
 ) -> Result<TeamCatalogContent, String> {
-    use buzz_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
+    use ambush_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
 
     // Verify the signature before trusting ANY field: `pubkey` and `content`
     // are attacker-controlled if it is not checked here.

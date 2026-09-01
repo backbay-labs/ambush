@@ -419,7 +419,7 @@ fn test_shared_tag_is_present_only_when_sharing() {
             .unwrap();
 
         assert_eq!(
-            buzz_core_pkg::kind::event_is_shared(&event),
+            ambush_core_pkg::kind::event_is_shared(&event),
             shared,
             "the relay read gate keys off this tag"
         );
@@ -890,7 +890,7 @@ fn test_tombstone_transaction_rolls_back_delete_when_insert_fails() {
         get_retained_event, open_retention_db, retain_event, scoped_retention_db_path,
         RetainedEvent,
     };
-    use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
+    use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
     use nostr::JsonUtil;
 
     let dir = tempfile::tempdir().unwrap();

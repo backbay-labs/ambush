@@ -1,0 +1,364 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApnsEnvironment {
+    Production,
+    Sandbox,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppProfileConfig {
+    pub app_attest_app_id: String,
+    pub apns_cert_path: PathBuf,
+    pub apns_topic: String,
+    pub apns_environment: ApnsEnvironment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyConfig {
+    pub id: String,
+    pub key: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub bind_addr: SocketAddr,
+    pub health_addr: SocketAddr,
+    pub public_delivery_url: url::Url,
+    pub max_grant_lifetime_seconds: i64,
+    pub max_installation_lifetime_seconds: i64,
+    pub endpoint_quota_window_seconds: i64,
+    pub endpoint_quota_max_deliveries: i64,
+    /// Server-owned dogfood application identity and APNs transport.
+    pub profile: AppProfileConfig,
+    pub database_url: String,
+    pub app_attest_root_cert_path: PathBuf,
+    /// Ordered current key first, followed by decrypt-only predecessors.
+    pub grant_keys: Vec<KeyConfig>,
+    /// Independent token-custody keyring. These keys MUST NOT be reused for
+    /// externally presented delivery capabilities.
+    pub token_keys: Vec<KeyConfig>,
+}
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("missing required environment variable {0}")]
+    Missing(&'static str),
+    #[error("invalid environment variable {0}")]
+    Invalid(&'static str),
+}
+fn parse_keyring(
+    e: &HashMap<String, String>,
+    variable: &'static str,
+) -> Result<Vec<KeyConfig>, ConfigError> {
+    let value = e
+        .get(variable)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or(ConfigError::Missing(variable))?;
+    let keys = value
+        .split(',')
+        .map(|entry| {
+            let (id, encoded) = entry
+                .split_once(':')
+                .filter(|(id, encoded)| !id.is_empty() && !encoded.is_empty())
+                .ok_or(ConfigError::Invalid(variable))?;
+            let key = STANDARD
+                .decode(encoded)
+                .map_err(|_| ConfigError::Invalid(variable))?;
+            if key.len() != 32 {
+                return Err(ConfigError::Invalid(variable));
+            }
+            Ok(KeyConfig {
+                id: id.to_owned(),
+                key,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if keys.is_empty() {
+        return Err(ConfigError::Invalid(variable));
+    }
+    Ok(keys)
+}
+
+fn parse_profile(e: &HashMap<String, String>) -> Result<AppProfileConfig, ConfigError> {
+    let app_id_key = "AMBUSH_PUSH_DOGFOOD_APP_ATTEST_APP_ID";
+    let cert_key = "AMBUSH_PUSH_DOGFOOD_APNS_CERT_PATH";
+    let topic_key = "AMBUSH_PUSH_DOGFOOD_APNS_TOPIC";
+    let environment_key = "AMBUSH_PUSH_DOGFOOD_APNS_ENVIRONMENT";
+    let required = |key: &'static str| {
+        e.get(key)
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or(ConfigError::Missing(key))
+    };
+    let app_attest_app_id = required(app_id_key)?.to_owned();
+    let apns_topic = required(topic_key)?.to_owned();
+    let apns_cert_path = PathBuf::from(required(cert_key)?);
+    let apns_environment = match e.get(environment_key).map(String::as_str) {
+        None | Some("production") => ApnsEnvironment::Production,
+        Some("sandbox") => ApnsEnvironment::Sandbox,
+        Some(_) => return Err(ConfigError::Invalid(environment_key)),
+    };
+    Ok(AppProfileConfig {
+        app_attest_app_id,
+        apns_cert_path,
+        apns_topic,
+        apns_environment,
+    })
+}
+
+impl Config {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_map(&std::env::vars().collect())
+    }
+    pub fn from_map(e: &HashMap<String, String>) -> Result<Self, ConfigError> {
+        fn req<'a>(
+            e: &'a HashMap<String, String>,
+            k: &'static str,
+        ) -> Result<&'a str, ConfigError> {
+            e.get(k)
+                .map(String::as_str)
+                .filter(|v| !v.is_empty())
+                .ok_or(ConfigError::Missing(k))
+        }
+        let grant_keys = parse_keyring(e, "AMBUSH_PUSH_GRANT_KEYS")?;
+        let token_keys = parse_keyring(e, "AMBUSH_PUSH_TOKEN_KEYS")?;
+        if grant_keys.iter().any(|grant| {
+            token_keys
+                .iter()
+                .any(|token| grant.id == token.id || grant.key == token.key)
+        }) {
+            return Err(ConfigError::Invalid("AMBUSH_PUSH_TOKEN_KEYS"));
+        }
+        let public_delivery_url = req(e, "AMBUSH_PUSH_PUBLIC_DELIVERY_URL")?
+            .parse::<url::Url>()
+            .map_err(|_| ConfigError::Invalid("AMBUSH_PUSH_PUBLIC_DELIVERY_URL"))?;
+        if public_delivery_url.scheme() != "https"
+            || public_delivery_url.host_str() != Some("push.ambush.xyz")
+            || public_delivery_url.port().is_some()
+            || public_delivery_url.path() != "/v1/deliveries/apns"
+            || public_delivery_url.query().is_some()
+            || public_delivery_url.fragment().is_some()
+            || !public_delivery_url.username().is_empty()
+            || public_delivery_url.password().is_some()
+        {
+            return Err(ConfigError::Invalid("AMBUSH_PUSH_PUBLIC_DELIVERY_URL"));
+        }
+        let max_grant_lifetime_seconds = req(e, "AMBUSH_PUSH_MAX_GRANT_LIFETIME_SECONDS")?
+            .parse::<i64>()
+            .ok()
+            .filter(|seconds| (1..=31_536_000).contains(seconds))
+            .ok_or(ConfigError::Invalid(
+                "AMBUSH_PUSH_MAX_GRANT_LIFETIME_SECONDS",
+            ))?;
+        let max_installation_lifetime_seconds = e
+            .get("AMBUSH_PUSH_MAX_INSTALLATION_LIFETIME_SECONDS")
+            .map(String::as_str)
+            .unwrap_or("7776000")
+            .parse::<i64>()
+            .ok()
+            .filter(|seconds| (1..=31_536_000).contains(seconds))
+            .ok_or(ConfigError::Invalid(
+                "AMBUSH_PUSH_MAX_INSTALLATION_LIFETIME_SECONDS",
+            ))?;
+        let bounded_positive = |key: &'static str, default: i64, max: i64| {
+            e.get(key)
+                .map(String::as_str)
+                .unwrap_or("")
+                .parse::<i64>()
+                .ok()
+                .or((!e.contains_key(key)).then_some(default))
+                .filter(|value| (1..=max).contains(value))
+                .ok_or(ConfigError::Invalid(key))
+        };
+        let endpoint_quota_window_seconds =
+            bounded_positive("AMBUSH_PUSH_ENDPOINT_QUOTA_WINDOW_SECONDS", 10, 86_400)?;
+        let endpoint_quota_max_deliveries =
+            bounded_positive("AMBUSH_PUSH_ENDPOINT_QUOTA_MAX_DELIVERIES", 10, 10_000)?;
+        let profile = parse_profile(e)?;
+        let bind_addr = e
+            .get("AMBUSH_PUSH_BIND_ADDR")
+            .map(String::as_str)
+            .unwrap_or("0.0.0.0:8080")
+            .parse::<SocketAddr>()
+            .map_err(|_| ConfigError::Invalid("AMBUSH_PUSH_BIND_ADDR"))?;
+        let health_addr = e
+            .get("AMBUSH_PUSH_HEALTH_ADDR")
+            .map(String::as_str)
+            .unwrap_or("0.0.0.0:8081")
+            .parse::<SocketAddr>()
+            .map_err(|_| ConfigError::Invalid("AMBUSH_PUSH_HEALTH_ADDR"))?;
+        Ok(Self {
+            bind_addr,
+            health_addr,
+            public_delivery_url,
+            max_grant_lifetime_seconds,
+            max_installation_lifetime_seconds,
+            endpoint_quota_window_seconds,
+            endpoint_quota_max_deliveries,
+            profile,
+            database_url: req(e, "DATABASE_URL")?.to_owned(),
+            app_attest_root_cert_path: req(e, "AMBUSH_PUSH_APP_ATTEST_ROOT_CERT_PATH")?.into(),
+            grant_keys,
+            token_keys,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn base() -> HashMap<String, String> {
+        HashMap::from([
+            (
+                "AMBUSH_PUSH_GRANT_KEYS".into(),
+                format!(
+                    "current:{},old:{}",
+                    STANDARD.encode([1; 32]),
+                    STANDARD.encode([2; 32])
+                ),
+            ),
+            (
+                "AMBUSH_PUSH_TOKEN_KEYS".into(),
+                format!(
+                    "current-token:{},old-token:{}",
+                    STANDARD.encode([3; 32]),
+                    STANDARD.encode([4; 32])
+                ),
+            ),
+            (
+                "AMBUSH_PUSH_PUBLIC_DELIVERY_URL".into(),
+                "https://push.ambush.xyz/v1/deliveries/apns".into(),
+            ),
+            (
+                "AMBUSH_PUSH_MAX_GRANT_LIFETIME_SECONDS".into(),
+                "2592000".into(),
+            ),
+            (
+                "DATABASE_URL".into(),
+                "postgres://ambush:test@localhost/ambush".into(), // sadscan:disable np.postgres.1
+            ),
+            (
+                "AMBUSH_PUSH_DOGFOOD_APP_ATTEST_APP_ID".into(),
+                "TEAM.com.backbay.ambush.dogfood.mobile".into(),
+            ),
+            (
+                "AMBUSH_PUSH_APP_ATTEST_ROOT_CERT_PATH".into(),
+                "/apple-root.pem".into(),
+            ),
+            (
+                "AMBUSH_PUSH_DOGFOOD_APNS_CERT_PATH".into(),
+                "/dogfood-identity.pem".into(),
+            ),
+            (
+                "AMBUSH_PUSH_DOGFOOD_APNS_TOPIC".into(),
+                "com.backbay.ambush.dogfood.mobile".into(),
+            ),
+            (
+                "AMBUSH_PUSH_DOGFOOD_APNS_ENVIRONMENT".into(),
+                "production".into(),
+            ),
+            ("AMBUSH_PUSH_BIND_ADDR".into(), "127.0.0.1:8080".into()),
+            ("AMBUSH_PUSH_HEALTH_ADDR".into(), "127.0.0.1:8081".into()),
+        ])
+    }
+
+    #[test]
+    fn dogfood_profile_requires_server_owned_identity_and_certificate() {
+        let config = Config::from_map(&base()).unwrap();
+        assert_eq!(
+            config.profile.apns_cert_path,
+            PathBuf::from("/dogfood-identity.pem")
+        );
+        assert_eq!(
+            config.profile.apns_topic,
+            "com.backbay.ambush.dogfood.mobile"
+        );
+
+        for variable in [
+            "AMBUSH_PUSH_DOGFOOD_APNS_CERT_PATH",
+            "AMBUSH_PUSH_DOGFOOD_APNS_TOPIC",
+            "AMBUSH_PUSH_DOGFOOD_APP_ATTEST_APP_ID",
+        ] {
+            let mut env = base();
+            env.remove(variable);
+            assert!(
+                matches!(Config::from_map(&env), Err(ConfigError::Missing(key)) if key == variable)
+            );
+        }
+    }
+
+    #[test]
+    fn keyrings_preserve_current_then_predecessor_order_and_are_independent() {
+        let config = Config::from_map(&base()).unwrap();
+        assert_eq!(config.grant_keys[0].id, "current");
+        assert_eq!(config.grant_keys[1].id, "old");
+        assert_eq!(config.token_keys[0].id, "current-token");
+        assert_eq!(config.token_keys[1].id, "old-token");
+        assert_ne!(config.grant_keys[0].key, config.token_keys[0].key);
+    }
+
+    #[test]
+    fn malformed_security_configuration_fails_startup() {
+        for (key, value) in [
+            (
+                "AMBUSH_PUSH_PUBLIC_DELIVERY_URL",
+                "http://push.example/v1/deliveries/apns",
+            ),
+            (
+                "AMBUSH_PUSH_PUBLIC_DELIVERY_URL",
+                "https://push.example/v1/deliveries/apns",
+            ),
+            ("AMBUSH_PUSH_DOGFOOD_APP_ATTEST_APP_ID", ""),
+            ("AMBUSH_PUSH_DOGFOOD_APNS_ENVIRONMENT", "staging"),
+            ("AMBUSH_PUSH_MAX_GRANT_LIFETIME_SECONDS", "0"),
+            ("AMBUSH_PUSH_MAX_GRANT_LIFETIME_SECONDS", "31536001"),
+            ("AMBUSH_PUSH_MAX_INSTALLATION_LIFETIME_SECONDS", "0"),
+        ] {
+            let mut env = base();
+            env.insert(key.into(), value.into());
+            assert!(Config::from_map(&env).is_err(), "accepted {key}={value}");
+        }
+    }
+
+    #[test]
+    fn cross_keyring_id_or_material_reuse_fails_startup() {
+        for token_keys in [
+            format!("current:{}", STANDARD.encode([9; 32])),
+            format!("other:{}", STANDARD.encode([1; 32])),
+        ] {
+            let mut env = base();
+            env.insert("AMBUSH_PUSH_TOKEN_KEYS".into(), token_keys);
+            assert!(Config::from_map(&env).is_err());
+        }
+    }
+
+    #[test]
+    fn listener_defaults_remain_public_when_addresses_are_absent() {
+        let mut env = base();
+        env.remove("AMBUSH_PUSH_BIND_ADDR");
+        env.remove("AMBUSH_PUSH_HEALTH_ADDR");
+
+        let config = Config::from_map(&env).unwrap();
+        assert_eq!(config.bind_addr, "0.0.0.0:8080".parse().unwrap());
+        assert_eq!(config.health_addr, "0.0.0.0:8081".parse().unwrap());
+    }
+
+    #[test]
+    fn malformed_or_empty_keyrings_fail_startup() {
+        for (variable, value) in [
+            ("AMBUSH_PUSH_GRANT_KEYS", ""),
+            ("AMBUSH_PUSH_GRANT_KEYS", "missing_separator"),
+            ("AMBUSH_PUSH_GRANT_KEYS", "id:bad-base64"),
+            ("AMBUSH_PUSH_TOKEN_KEYS", ""),
+            ("AMBUSH_PUSH_TOKEN_KEYS", "missing_separator"),
+            ("AMBUSH_PUSH_TOKEN_KEYS", "id:bad-base64"),
+        ] {
+            let mut env = base();
+            env.insert(variable.into(), value.into());
+            assert!(Config::from_map(&env).is_err());
+        }
+    }
+}

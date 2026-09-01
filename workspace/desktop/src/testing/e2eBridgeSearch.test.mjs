@@ -3,7 +3,7 @@
  *
  * The mock stands in for the relay in identity-less E2E runs, so its `since` /
  * `until` comparators must match the relay's inclusive NIP-01 bounds
- * (`crates/buzz-core/src/filter.rs` keeps `since <= created_at <= until`).
+ * (`crates/ambush-core/src/filter.rs` keeps `since <= created_at <= until`).
  * `before:YYYY-MM-DD` gets its exclusivity from `parseSearchOperators`, which
  * emits `localMidnight - 1`; a mock that also excluded its own bound would
  * drop the last second of the range that production returns.

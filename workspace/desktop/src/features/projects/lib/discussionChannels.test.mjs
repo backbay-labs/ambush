@@ -19,8 +19,8 @@ const BOB = "d".repeat(64);
 test("query builders emit the tokens FTS needs, nothing else", () => {
   assert.equal(entityDiscussionQuery(EVENT_ID), EVENT_ID);
   assert.equal(
-    repositoryDiscussionQuery({ owner: OWNER, dtag: "buzz-world" }),
-    `${OWNER} buzz-world`,
+    repositoryDiscussionQuery({ owner: OWNER, dtag: "ambush-world" }),
+    `${OWNER} ambush-world`,
   );
 });
 
@@ -141,7 +141,7 @@ test("formatNameList reads naturally at every size", () => {
 test("discussionSnippet strips entity links and coordinates", () => {
   assert.equal(
     discussionSnippet(
-      `Can someone review buzz://pr?id=${EVENT_ID}&owner=${OWNER}&d=buzz before Friday?`,
+      `Can someone review ambush://pr?id=${EVENT_ID}&owner=${OWNER}&d=ambush before Friday?`,
     ),
     "Can someone review before Friday?",
   );
@@ -150,7 +150,7 @@ test("discussionSnippet strips entity links and coordinates", () => {
     "Deploying tonight",
   );
   assert.equal(
-    discussionSnippet(`buzz://repo?owner=${OWNER}&d=buzz`),
+    discussionSnippet(`ambush://repo?owner=${OWNER}&d=ambush`),
     "Shared a link to this.",
   );
 });

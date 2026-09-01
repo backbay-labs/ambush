@@ -216,7 +216,7 @@ test("scope switch hydrates B's buffer from B's persisted bucket", async () => {
 test("mounting removes the orphaned legacy pubkey-only key", async () => {
   const ls = installFreshStorage();
   const pubkey = "pk-legacy";
-  const legacyKey = `buzz-thread-activity.v1:${pubkey}`;
+  const legacyKey = `ambush-thread-activity.v1:${pubkey}`;
   ls.setItem(legacyKey, JSON.stringify([{ id: "stale" }]));
 
   const itemsRef = { current: [] };

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use tauri::AppHandle;
 
-use super::agent_env::{build_buzz_agent_provider_defaults, idle_pool_sleep_env};
+use super::agent_env::{build_ambush_agent_provider_defaults, idle_pool_sleep_env};
 
 use crate::{
     managed_agents::{
@@ -37,11 +37,11 @@ pub(crate) use sweep::sweep_untracked_bundle_harnesses;
 mod process;
 #[cfg(test)]
 use process::{
-    buzz_marker_entry, name_matches_interpreter, name_matches_known_binary,
+    ambush_marker_entry, name_matches_interpreter, name_matches_known_binary,
     terminate_runtime_receipt_with, valid_agent_runtime_receipt_with,
 };
 pub(crate) use process::{
-    current_instance_id, process_belongs_to_us, process_has_buzz_marker, process_is_running,
+    current_instance_id, process_belongs_to_us, process_has_ambush_marker, process_is_running,
     terminate_process, terminate_untracked_pair_runtime, valid_agent_runtime_receipt,
 };
 
@@ -487,7 +487,7 @@ pub fn spawn_agent_child(
             Some(path) => Some(path),
             None => {
                 eprintln!(
-                    "buzz-desktop: mcp_command {effective_mcp_command:?} not found, skipping"
+                    "ambush-desktop: mcp_command {effective_mcp_command:?} not found, skipping"
                 );
                 None
             }
@@ -505,7 +505,7 @@ pub fn spawn_agent_child(
     // Augment PATH for DMG launches so child processes can find:
     //   - bundled CLI via ~/.local/bin symlink
     //   - nvm-managed node/npm (nvm initializes only in interactive shells)
-    //   - bundled sidecars (buzz, buzz-acp, etc.) via exe parent (Contents/MacOS/)
+    //   - bundled sidecars (ambush, ambush-acp, etc.) via exe parent (Contents/MacOS/)
     //   - runtimes (node, python, etc.) via login shell PATH
     let nvm_bin = dirs::home_dir()
         .as_deref()
@@ -530,22 +530,22 @@ pub fn spawn_agent_child(
         command.env("PATH", path);
     }
     command.env("RUST_LOG", child_rust_log_filter());
-    command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
-    command.env("BUZZ_RELAY_URL", &effective_relay_url);
-    command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
-    command.env("BUZZ_ACP_IDLE_POOL_SLEEP", idle_pool_sleep_env(lazy));
-    command.env("BUZZ_ACP_AGENT_COMMAND", &resolved_agent_command);
-    command.env("BUZZ_ACP_AGENT_ARGS", agent_args.join(","));
+    command.env("AMBUSH_PRIVATE_KEY", &record.private_key_nsec);
+    command.env("AMBUSH_RELAY_URL", &effective_relay_url);
+    command.env("AMBUSH_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
+    command.env("AMBUSH_ACP_IDLE_POOL_SLEEP", idle_pool_sleep_env(lazy));
+    command.env("AMBUSH_ACP_AGENT_COMMAND", &resolved_agent_command);
+    command.env("AMBUSH_ACP_AGENT_ARGS", agent_args.join(","));
     match &resolved_mcp_command {
         Some(mcp_cmd) => {
-            command.env("BUZZ_ACP_MCP_COMMAND", mcp_cmd);
+            command.env("AMBUSH_ACP_MCP_COMMAND", mcp_cmd);
         }
         None => {
-            command.env("BUZZ_ACP_MCP_COMMAND", "");
+            command.env("AMBUSH_ACP_MCP_COMMAND", "");
         }
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
-    // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
+    // Uses "*" because build_mcp_servers() hard-codes the server name to "ambush-mcp".
     let runtime_meta = known_acp_runtime(effective_command);
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
@@ -555,16 +555,16 @@ pub fn spawn_agent_child(
     //
     // Build the effective env the agent would have at start-time, run the
     // readiness predicate, and if anything is missing, serialize the payload
-    // into BUZZ_ACP_SETUP_PAYLOAD.  buzz-acp detects this env var on startup
+    // into AMBUSH_ACP_SETUP_PAYLOAD.  ambush-acp detects this env var on startup
     // and enters the minimal setup-listener mode instead of the agent pool.
     //
-    // SECURITY: BUZZ_ACP_SETUP_PAYLOAD is in RESERVED_ENV_KEYS so user env
+    // SECURITY: AMBUSH_ACP_SETUP_PAYLOAD is in RESERVED_ENV_KEYS so user env
     // cannot set it, but we also explicitly remove it after writing user env
     // to guard against the parent-process environment. We then set it only
     // when desktop has computed NotReady — the desktop is the sole readiness
-    // source and buzz-acp only transports the payload.
+    // source and ambush-acp only transports the payload.
     //
-    // The JSON format mirrors `setup_mode::SetupPayload` in buzz-acp:
+    // The JSON format mirrors `setup_mode::SetupPayload` in ambush-acp:
     //   { "agent_name": "...", "agent_pubkey": "...", "requirements": [{ "surface": "...", ... }] }
     //
     // `spawned_setup_mode` is captured outside the block so it can be stamped
@@ -634,7 +634,7 @@ pub fn spawn_agent_child(
                     Ok(json) => Some(json),
                     Err(e) => {
                         eprintln!(
-                            "buzz-desktop: failed to serialize setup payload for {}: {e}",
+                            "ambush-desktop: failed to serialize setup payload for {}: {e}",
                             record.name
                         );
                         None
@@ -648,7 +648,7 @@ pub fn spawn_agent_child(
 
         // Strip the key from the process-spawned command on every path.
         // Two independent guards protect the invariant:
-        //   1. BUZZ_ACP_SETUP_PAYLOAD is in RESERVED_ENV_KEYS, so
+        //   1. AMBUSH_ACP_SETUP_PAYLOAD is in RESERVED_ENV_KEYS, so
         //      merged_user_env() can never write it via saved/persona env.
         //   2. This env_remove() clears any ambient parent-process value
         //      inherited by std::process::Command before we conditionally
@@ -656,31 +656,31 @@ pub fn spawn_agent_child(
         // Note: merged_user_env() is written further below in this function;
         // ordering relative to that call is NOT what makes this safe — the
         // reserved-key strip (guard 1) handles user env regardless of order.
-        command.env_remove("BUZZ_ACP_SETUP_PAYLOAD");
+        command.env_remove("AMBUSH_ACP_SETUP_PAYLOAD");
 
         // Set the payload only when desktop computed NotReady.
         if let Some(json) = setup_payload_json {
-            command.env("BUZZ_ACP_SETUP_PAYLOAD", json);
+            command.env("AMBUSH_ACP_SETUP_PAYLOAD", json);
             eprintln!(
-                "buzz-desktop: agent {} not ready — spawning in setup-listener mode",
+                "ambush-desktop: agent {} not ready — spawning in setup-listener mode",
                 record.name
             );
         }
     }
-    // Emit BUZZ_ACP_IDLE_TIMEOUT only when explicitly set; the harness
+    // Emit AMBUSH_ACP_IDLE_TIMEOUT only when explicitly set; the harness
     // DEFAULT_IDLE_TIMEOUT_SECS is the single source of truth. The deprecated
-    // BUZZ_ACP_TURN_TIMEOUT pinned agents to a stale default (320s).
+    // AMBUSH_ACP_TURN_TIMEOUT pinned agents to a stale default (320s).
     if let Some(idle) = record.idle_timeout_seconds {
-        command.env("BUZZ_ACP_IDLE_TIMEOUT", idle.to_string());
+        command.env("AMBUSH_ACP_IDLE_TIMEOUT", idle.to_string());
     }
 
     if let Some(max_dur) = record.max_turn_duration_seconds {
-        command.env("BUZZ_ACP_MAX_TURN_DURATION", max_dur.to_string());
+        command.env("AMBUSH_ACP_MAX_TURN_DURATION", max_dur.to_string());
     }
     let acp_n = super::acp_agents_value(effective_command, record.parallelism);
-    command.env("BUZZ_ACP_AGENTS", acp_n);
-    command.env("BUZZ_ACP_MULTIPLE_EVENT_HANDLING", "steer");
-    command.env("BUZZ_ACP_DEDUP", "queue");
+    command.env("AMBUSH_ACP_AGENTS", acp_n);
+    command.env("AMBUSH_ACP_MULTIPLE_EVENT_HANDLING", "steer");
+    command.env("AMBUSH_ACP_DEDUP", "queue");
     if let Some(meta) = runtime_meta {
         for (key, value) in meta.default_env {
             if std::env::var(key).is_err() {
@@ -690,9 +690,9 @@ pub fn spawn_agent_child(
     }
     let team_instructions = super::spawn_snapshot::effective_team_instructions(record, &teams);
     if let Some(instructions) = &team_instructions {
-        command.env("BUZZ_ACP_TEAM_INSTRUCTIONS", instructions);
+        command.env("AMBUSH_ACP_TEAM_INSTRUCTIONS", instructions);
     } else {
-        command.env_remove("BUZZ_ACP_TEAM_INSTRUCTIONS");
+        command.env_remove("AMBUSH_ACP_TEAM_INSTRUCTIONS");
     }
 
     // Prompt, model, and provider all come from the single `effective_cfg`
@@ -712,15 +712,15 @@ pub fn spawn_agent_child(
     let effective_provider = effective_cfg.provider.value;
 
     if let Some(prompt) = &effective_prompt {
-        command.env("BUZZ_ACP_SYSTEM_PROMPT", prompt);
+        command.env("AMBUSH_ACP_SYSTEM_PROMPT", prompt);
     } else {
-        command.env_remove("BUZZ_ACP_SYSTEM_PROMPT");
+        command.env_remove("AMBUSH_ACP_SYSTEM_PROMPT");
     }
     // Shared compute stores `auto`, but the wire name is MeshLLM's virtual
     // `mesh` model. Translate here too, so the harness and the LLM client are
-    // told the same thing: `BUZZ_ACP_MODEL=auto` would name a model the mesh
-    // never advertises, leaving buzz-acp to warn and fall back on every new
-    // session while `BUZZ_AGENT_MODEL` said `mesh`.
+    // told the same thing: `AMBUSH_ACP_MODEL=auto` would name a model the mesh
+    // never advertises, leaving ambush-acp to warn and fall back on every new
+    // session while `AMBUSH_AGENT_MODEL` said `mesh`.
     #[cfg(feature = "mesh-llm")]
     let acp_model = match (&mesh_model_id, effective_model.as_deref()) {
         (Some(mesh_model_id), _) => Some(super::relay_mesh_wire_model(mesh_model_id).to_string()),
@@ -729,9 +729,9 @@ pub fn spawn_agent_child(
     #[cfg(not(feature = "mesh-llm"))]
     let acp_model = effective_model.as_deref().map(str::to_owned);
     if let Some(model) = acp_model.as_deref() {
-        command.env("BUZZ_ACP_MODEL", model);
+        command.env("AMBUSH_ACP_MODEL", model);
     } else {
-        command.env_remove("BUZZ_ACP_MODEL");
+        command.env_remove("AMBUSH_ACP_MODEL");
     }
     // Session title for the harness to pass out-of-band on `session/new`. The
     // adapter names the session after it; it never reaches the prompt, so this
@@ -742,7 +742,7 @@ pub fn spawn_agent_child(
         &mut command,
         resolve_session_title(record.display_name.as_deref(), &record.name),
     );
-    build_buzz_agent_provider_defaults(&mut command);
+    build_ambush_agent_provider_defaults(&mut command);
     if let Some(meta) = runtime_meta {
         for (key, value) in runtime_metadata_env_vars(
             meta.model_env_var,
@@ -754,14 +754,14 @@ pub fn spawn_agent_child(
             command.env(key, value);
         }
     }
-    command.env_remove("BUZZ_ACP_PRIVATE_KEY");
-    command.env_remove("BUZZ_ACP_API_TOKEN");
-    command.env_remove("BUZZ_API_TOKEN");
+    command.env_remove("AMBUSH_ACP_PRIVATE_KEY");
+    command.env_remove("AMBUSH_ACP_API_TOKEN");
+    command.env_remove("AMBUSH_API_TOKEN");
 
     if let Some(ref auth_tag) = record.auth_tag {
-        command.env("BUZZ_AUTH_TAG", auth_tag);
+        command.env("AMBUSH_AUTH_TAG", auth_tag);
     } else {
-        command.env_remove("BUZZ_AUTH_TAG");
+        command.env_remove("AMBUSH_AUTH_TAG");
     }
 
     // Inbound author gate: who is this agent allowed to respond to?
@@ -776,10 +776,10 @@ pub fn spawn_agent_child(
         command.env_remove(key);
     }
 
-    command.env("BUZZ_ACP_RELAY_OBSERVER", "true");
+    command.env("AMBUSH_ACP_RELAY_OBSERVER", "true");
 
-    // Git credential helper: NIP-98 auth for Buzz relay git via git-credential-nostr.
-    // Ephemeral GIT_CONFIG_COUNT env vars scoped to relay HTTP URL; NOSTR_PRIVATE_KEY mirrors BUZZ_PRIVATE_KEY.
+    // Git credential helper: NIP-98 auth for Ambush relay git via git-credential-nostr.
+    // Ephemeral GIT_CONFIG_COUNT env vars scoped to relay HTTP URL; NOSTR_PRIVATE_KEY mirrors AMBUSH_PRIVATE_KEY.
     if let Some(cred_helper) = resolve_command("git-credential-nostr") {
         let relay_http_url = crate::relay::relay_http_base_url(&effective_relay_url);
 
@@ -799,27 +799,27 @@ pub fn spawn_agent_child(
         command.env("GIT_CONFIG_VALUE_1", "true");
     } else {
         eprintln!(
-            "buzz-desktop: git-credential-nostr not found — agent {} will not have automatic Buzz git auth",
+            "ambush-desktop: git-credential-nostr not found — agent {} will not have automatic Ambush git auth",
             record.name,
         );
     }
 
     // User env (descriptor.env): fully-layered floor→runtime→definition→global→persona→agent,
-    // reserved-key filtered. Written last so user-explicit values win over Buzz-set env.
+    // reserved-key filtered. Written last so user-explicit values win over Ambush-set env.
     for (key, value) in &descriptor.env {
         command.env(key, value);
     }
 
     // B5: carry persisted effort; harness resolves thought_level configId at first session.
     // Written AFTER descriptor.env so the canonical persisted value wins over any
-    // user-supplied BUZZ_ACP_EFFORT_LEVEL entry, mirroring the A1 model-authority pattern
+    // user-supplied AMBUSH_ACP_EFFORT_LEVEL entry, mirroring the A1 model-authority pattern
     // (ANTHROPIC_MODEL is applied post-loop for the same reason). When effort_level is
     // None there is no canonical value to assert, so env passthrough stands — user env
     // legitimately seeds startup effort in that case.
     apply_effort_env(&mut command, record.effort_level.as_deref());
 
     // A1: for local claude agents, ANTHROPIC_MODEL is the single startup model authority.
-    // BUZZ_ACP_MODEL is removed (live ACP switches only; two authorities in the same env
+    // AMBUSH_ACP_MODEL is removed (live ACP switches only; two authorities in the same env
     // would be ambiguous).
     if record.backend == super::BackendKind::Local && runtime_meta.is_some_and(|r| r.id == "claude")
     {
@@ -827,7 +827,7 @@ pub fn spawn_agent_child(
     }
     configure_runtime_cli(&mut command, runtime_meta);
 
-    // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible
+    // Ambush shared compute is stored as a native provider; derive the OpenAI-compatible
     // transport at spawn time and scrub any unrelated ambient OpenAI key.
     // Gate on `mesh_model_id` (derived from `effective_cfg.relay_mesh_model_id()`
     // above) — not on `effective_provider` directly — so the mesh gate here
@@ -844,8 +844,8 @@ pub fn spawn_agent_child(
     // Stamp desktop ownership and an unpredictable harness-generation identity.
     let start_nonce = uuid::Uuid::new_v4().simple().to_string();
     command
-        .env("BUZZ_MANAGED_AGENT", current_instance_id(app))
-        .env("BUZZ_MANAGED_AGENT_START_NONCE", &start_nonce);
+        .env("AMBUSH_MANAGED_AGENT", current_instance_id(app))
+        .env("AMBUSH_MANAGED_AGENT_START_NONCE", &start_nonce);
 
     // Stamp the effective spawn config from the values that populated the
     // `Command` above, BEFORE spawning. Re-resolving after `spawn()` would let
@@ -872,7 +872,7 @@ pub fn spawn_agent_child(
         command.process_group(0);
     }
     // Windows: suppress the harness console window. Without this a bare
-    // terminal pops for buzz-acp.exe and lingers (the app itself sets
+    // terminal pops for ambush-acp.exe and lingers (the app itself sets
     // windows_subsystem="windows", but the spawned child does not inherit it).
     #[cfg(windows)]
     {
@@ -930,9 +930,9 @@ pub fn spawn_agent_child(
 
 fn child_rust_log_filter() -> String {
     match std::env::var("RUST_LOG") {
-        Ok(existing) if existing.contains("buzz_acp") => existing,
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing},buzz_acp=info"),
-        _ => "buzz_acp=info".to_string(),
+        Ok(existing) if existing.contains("ambush_acp") => existing,
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing},ambush_acp=info"),
+        _ => "ambush_acp=info".to_string(),
     }
 }
 

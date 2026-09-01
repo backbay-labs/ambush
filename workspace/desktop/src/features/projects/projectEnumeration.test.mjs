@@ -46,7 +46,7 @@ test("buildProjectHomeFromFetcher scopes startup lookup to the active channel", 
     tags: [
       ["d", "relay"],
       ["name", "Relay"],
-      ["buzz-channel", channelId],
+      ["ambush-channel", channelId],
       ["a", repositoryAddress],
     ],
   };
@@ -59,7 +59,7 @@ test("buildProjectHomeFromFetcher scopes startup lookup to the active channel", 
     tags: [
       ["d", "relay"],
       ["name", "Relay"],
-      ["buzz-channel", channelId],
+      ["ambush-channel", channelId],
     ],
   };
   const calls = [];
@@ -79,11 +79,11 @@ test("buildProjectHomeFromFetcher scopes startup lookup to the active channel", 
   assert.equal(project?.projectChannelId, channelId);
   assert.deepEqual(calls[0], {
     kinds: [30621],
-    extraFilter: { "#buzz-channel": [channelId] },
+    extraFilter: { "#ambush-channel": [channelId] },
   });
   assert.deepEqual(calls[1], {
     kinds: [30617],
-    extraFilter: { "#buzz-channel": [channelId] },
+    extraFilter: { "#ambush-channel": [channelId] },
   });
   assert.deepEqual(calls[2], {
     kinds: [5],

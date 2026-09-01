@@ -40,7 +40,7 @@ class StickyDateHeader extends StatelessWidget {
 
   const StickyDateHeader({required this.state, super.key});
 
-  static const _iosViewType = 'buzz/sticky_date_glass';
+  static const _iosViewType = 'ambush/sticky_date_glass';
   static const _minimumIosGlassHeight = 28.0;
 
   /// Height used by the surface and the next-day push-off calculation.

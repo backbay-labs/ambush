@@ -289,8 +289,8 @@ before(async () => {
 beforeEach(() => {
   ipc.reset();
   localStorage.clear();
-  localStorage.setItem("buzz-communities", JSON.stringify([COMMUNITY]));
-  localStorage.setItem("buzz-active-community-id", COMMUNITY.id);
+  localStorage.setItem("ambush-communities", JSON.stringify([COMMUNITY]));
+  localStorage.setItem("ambush-active-community-id", COMMUNITY.id);
 });
 
 afterEach(() => ipc.reset());
@@ -508,7 +508,7 @@ async function mountMarkdownReference(client, content, variant) {
 test("markdown message links resolve private destinations without a directory scan", async () => {
   const channelId = "private-markdown-channel";
   const messageId = "e".repeat(64);
-  const link = `buzz://message?channel=${channelId}&id=${messageId}`;
+  const link = `ambush://message?channel=${channelId}&id=${messageId}`;
   const renderPaths = [
     ["CommonMark autolink", `<${link}>`],
     ["bare message-link node", link],
@@ -534,7 +534,7 @@ test("markdown message links resolve private destinations without a directory sc
     );
     assert.notEqual(
       mounted.container.querySelector(
-        "span[data-message-link][data-buzz-link]",
+        "span[data-message-link][data-ambush-link]",
       ),
       null,
       `${path} private destination must render an inert message-link pill`,
@@ -547,18 +547,18 @@ test("markdown message links resolve private destinations without a directory sc
 test("authored-label channel and message links respect the private-destination gate", async () => {
   // Authored-label deep links must route through the same bounded detail
   // lookup + openable gate as the pill paths, regardless of parser family:
-  //   - buzz://channel/<uuid> and buzz://channel/<uuid>/<event-id> reach the
+  //   - ambush://channel/<uuid> and ambush://channel/<uuid>/<event-id> reach the
   //     gate via ChannelDeepLinkAnchor's authored branch, and
-  //   - the canonical buzz://message?channel=&id= form (produced by
+  //   - the canonical ambush://message?channel=&id= form (produced by
   //     buildMessageLink) reaches it via resolveMessageLinkRenderTarget's
   //     "label" branch.
   // A private channel must render inert on every route regardless of the
   // display text.
   const channelId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const messageId = "b".repeat(64);
-  const channelLink = `buzz://channel/${channelId}`;
-  const channelMessageLink = `buzz://channel/${channelId}/${messageId}`;
-  const canonicalMessageLink = `buzz://message?channel=${channelId}&id=${messageId}`;
+  const channelLink = `ambush://channel/${channelId}`;
+  const channelMessageLink = `ambush://channel/${channelId}/${messageId}`;
+  const canonicalMessageLink = `ambush://message?channel=${channelId}&id=${messageId}`;
   const renderPaths = [
     ["channel variant", `[private channel](${channelLink})`],
     [
@@ -587,7 +587,7 @@ test("authored-label channel and message links respect the private-destination g
       `${path} private destination must not render a clickable element`,
     );
     assert.notEqual(
-      mounted.container.querySelector("span[data-buzz-link]"),
+      mounted.container.querySelector("span[data-ambush-link]"),
       null,
       `${path} private destination must render an inert node`,
     );

@@ -9,10 +9,10 @@ class AppColors extends ThemeExtension<AppColors> {
   final Color huddleControlSurface;
   final Color onHuddleDrawer;
 
-  /// Gradient for the app's top section, non-null only under the Buzz themes.
+  /// Gradient for the app's top section, non-null only under the Ambush themes.
   /// Carried on the theme rather than read from a provider so any surface can
   /// opt in via `context.appColors.topSectionGradient` — see
-  /// `buzzTopSectionGradient`.
+  /// `ambushTopSectionGradient`.
   final Gradient? topSectionGradient;
 
   const AppColors({

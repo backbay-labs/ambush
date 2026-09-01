@@ -209,7 +209,7 @@ export function commitAuthorPubkeysFromPullRequests(
 }
 
 /**
- * Links aggregate Git author rows to Buzz identities through commit hashes
+ * Links aggregate Git author rows to Ambush identities through commit hashes
  * published in signed review events. Ambiguous author strings fail closed.
  */
 export function gitContributorPubkeysFromCommits(

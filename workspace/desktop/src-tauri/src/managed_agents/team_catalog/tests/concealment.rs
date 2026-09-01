@@ -2,7 +2,7 @@
 //!
 //! A member display name/prompt, name-pool entry, and the team instructions
 //! are copied verbatim into local stores and delivered to the ACP harness
-//! (`BUZZ_ACP_SYSTEM_PROMPT` / `BUZZ_ACP_TEAM_INSTRUCTIONS`). A signed, shared
+//! (`AMBUSH_ACP_SYSTEM_PROMPT` / `AMBUSH_ACP_TEAM_INSTRUCTIONS`). A signed, shared
 //! head could otherwise smuggle invisible or bidi-override characters into that
 //! executable configuration, making what runs differ from the reviewed text.
 //! `validate_team_catalog_content` is the single chokepoint both publish

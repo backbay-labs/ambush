@@ -3,7 +3,7 @@ import * as React from "react";
 import { resetPersistentAgentAudienceStore } from "./persistentAgentAudience";
 
 export const KEEP_MENTIONED_AGENTS_PINNED_STORAGE_KEY =
-  "buzz.messages.keepMentionedAgentsPinned";
+  "ambush.messages.keepMentionedAgentsPinned";
 export const DEFAULT_KEEP_MENTIONED_AGENTS_PINNED = false;
 
 const listeners = new Set<() => void>();

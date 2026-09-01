@@ -48,11 +48,11 @@ pub struct ProjectMergeRecoveryTerminalResult {
 }
 
 fn merge_recovery_ref(expected_commit: &str) -> String {
-    format!("refs/buzz/merge-recovery/{expected_commit}")
+    format!("refs/ambush/merge-recovery/{expected_commit}")
 }
 
 fn merge_recovery_target_ref(target_commit: &str) -> String {
-    format!("refs/buzz/merge-recovery-target/{target_commit}")
+    format!("refs/ambush/merge-recovery-target/{target_commit}")
 }
 
 #[cfg(target_os = "macos")]
@@ -115,7 +115,7 @@ pub async fn open_project_terminal(
     if let Some(clone_url) = clone_url.as_deref() {
         validate_local_clone_url_for_workspace(clone_url, &state)?;
     }
-    // Public GitHub clones stay anonymous; Buzz remotes use the workspace
+    // Public GitHub clones stay anonymous; Ambush remotes use the workspace
     // identity. Keep the result outside the blocking task so it borrows no
     // Tauri state.
     let auth = if let Some(clone_url) = clone_url.as_deref() {
@@ -274,11 +274,11 @@ mod tests {
         let commit = "a".repeat(40);
         assert_eq!(
             merge_recovery_ref(&commit),
-            format!("refs/buzz/merge-recovery/{commit}"),
+            format!("refs/ambush/merge-recovery/{commit}"),
         );
         assert_eq!(
             merge_recovery_target_ref(&commit),
-            format!("refs/buzz/merge-recovery-target/{commit}"),
+            format!("refs/ambush/merge-recovery-target/{commit}"),
         );
     }
 }

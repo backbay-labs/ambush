@@ -49,7 +49,7 @@ export function parseRateLimitHint(msg: string): number | null {
  * window. Non-positive or absent hints use the 10-second default; a 0s gate
  * would resolve immediately and swallow the signal.
  *
- * Note: buzz-acp uses a 5s no-hint default; desktop deliberately uses 10s here
+ * Note: ambush-acp uses a 5s no-hint default; desktop deliberately uses 10s here
  * for a wider back-off window on degraded connections.
  */
 export function activateRateLimit(retryInSeconds: number | null): void {

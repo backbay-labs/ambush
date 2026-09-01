@@ -22,7 +22,7 @@ test("first sync seeds non-empty local membership when remote is absent", async 
     const manager = new ProjectSidebarMembershipSyncManager("pubkey", RELAY);
     const result = await manager.bootstrap(
       store({
-        "30621:alice:buzz": { selected: true, updatedAt: 1 },
+        "30621:alice:ambush": { selected: true, updatedAt: 1 },
       }),
     );
 
@@ -45,7 +45,7 @@ test("failed fetch never seeds local membership", async () => {
     const manager = new ProjectSidebarMembershipSyncManager("pubkey", RELAY);
     const result = await manager.bootstrap(
       store({
-        "30621:alice:buzz": { selected: true, updatedAt: 1 },
+        "30621:alice:ambush": { selected: true, updatedAt: 1 },
       }),
     );
 
@@ -66,7 +66,7 @@ test("destroy cancels a pending membership publish", () => {
     const manager = new ProjectSidebarMembershipSyncManager("pubkey", RELAY);
     manager.publishMembership(
       store({
-        "30621:alice:buzz": { selected: true, updatedAt: 1 },
+        "30621:alice:ambush": { selected: true, updatedAt: 1 },
       }),
     );
     manager.destroy();

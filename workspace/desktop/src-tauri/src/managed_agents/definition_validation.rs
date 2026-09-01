@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn accepts_plain_multiline_instructions() {
         assert!(validate_agent_definition_text(
-            "Code Reviewer 🐝",
+            "Code Reviewer 🚀",
             "Review changes.\n\tCall out security risks."
         )
         .is_ok());
@@ -258,7 +258,7 @@ mod tests {
         )
         .is_err());
         assert!(validate_managed_agent_definition_text(
-            "Reviewer 🐝",
+            "Reviewer 🚀",
             None,
             Some("Review changes.\n\tCall out risks."),
         )

@@ -43,7 +43,7 @@ const TIMELINE_KINDS: [u32; 11] = [
     43004,
     43005,
     43006,
-    buzz_core_pkg::kind::KIND_HUDDLE_STARTED,
+    ambush_core_pkg::kind::KIND_HUDDLE_STARTED,
 ];
 
 #[tauri::command]
@@ -79,13 +79,13 @@ pub async fn get_feed(
             1,
             45001,
             45003,
-            buzz_core_pkg::kind::KIND_GIT_PULL_REQUEST,
-            buzz_core_pkg::kind::KIND_GIT_PR_UPDATE,
-            buzz_core_pkg::kind::KIND_GIT_ISSUE,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_OPEN,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_MERGED,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_CLOSED,
-            buzz_core_pkg::kind::KIND_GIT_STATUS_DRAFT,
+            ambush_core_pkg::kind::KIND_GIT_PULL_REQUEST,
+            ambush_core_pkg::kind::KIND_GIT_PR_UPDATE,
+            ambush_core_pkg::kind::KIND_GIT_ISSUE,
+            ambush_core_pkg::kind::KIND_GIT_STATUS_OPEN,
+            ambush_core_pkg::kind::KIND_GIT_STATUS_MERGED,
+            ambush_core_pkg::kind::KIND_GIT_STATUS_CLOSED,
+            ambush_core_pkg::kind::KIND_GIT_STATUS_DRAFT,
         ],
         "#p": [my_pubkey],
         "limit": cap,
@@ -447,8 +447,8 @@ pub async fn send_channel_message(
         expected_signer_pubkey.as_deref(),
         &signing_keys.public_key().to_hex(),
     )?;
-    let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
-    if sent_from_thread_tag.is_some() && kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE {
+    let kind_num = kind.unwrap_or(ambush_core_pkg::kind::KIND_STREAM_MESSAGE);
+    if sent_from_thread_tag.is_some() && kind_num != ambush_core_pkg::kind::KIND_STREAM_MESSAGE {
         return Err("sent-from-thread provenance requires a stream message".into());
     }
     if root_event_id.is_some() && parent_event_id.is_none() {
@@ -458,14 +458,14 @@ pub async fn send_channel_message(
     let mut resolved_root: Option<String> = None;
 
     let builder = match kind_num {
-        buzz_core_pkg::kind::KIND_FORUM_POST => events::build_forum_post(
+        ambush_core_pkg::kind::KIND_FORUM_POST => events::build_forum_post(
             channel_uuid,
             content.trim(),
             &mention_refs,
             &media,
             &mention_refs_only,
         )?,
-        buzz_core_pkg::kind::KIND_FORUM_COMMENT => {
+        ambush_core_pkg::kind::KIND_FORUM_COMMENT => {
             let parent_id = parent_event_id
                 .as_deref()
                 .ok_or("forum comment requires parent_event_id")?;
@@ -564,7 +564,7 @@ async fn find_managed_agent_channel_message_by_marker(
 
     for _ in 0..10 {
         let mut filter = serde_json::json!({
-            "kinds": [buzz_core_pkg::kind::KIND_STREAM_MESSAGE],
+            "kinds": [ambush_core_pkg::kind::KIND_STREAM_MESSAGE],
             "#h": [channel_id],
             "limit": 500,
         });
@@ -652,7 +652,7 @@ fn legacy_managed_agent_auth_tag(
         return Ok(None);
     }
 
-    buzz_sdk_pkg::nip_oa::compute_auth_tag(owner_keys, agent_pubkey, "")
+    ambush_sdk_pkg::nip_oa::compute_auth_tag(owner_keys, agent_pubkey, "")
         .map(Some)
         .map_err(|error| format!("failed to compute managed agent auth tag: {error}"))
 }
@@ -824,7 +824,7 @@ pub async fn add_reaction(
         // Custom-emoji reaction (NIP-30): kind:7 with `:shortcode:` content and
         // an `["emoji", shortcode, url]` tag. Delegates to the SDK builder so
         // shortcode normalization + validation match the relay exactly.
-        Some(url) => buzz_sdk_pkg::build_custom_emoji_reaction(target_eid, emoji.trim(), &url)
+        Some(url) => ambush_sdk_pkg::build_custom_emoji_reaction(target_eid, emoji.trim(), &url)
             .map_err(|e| format!("invalid custom emoji reaction: {e}"))?,
         None => events::build_reaction(target_eid, emoji.trim())?,
     };

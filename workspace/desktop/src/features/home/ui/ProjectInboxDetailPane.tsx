@@ -24,7 +24,7 @@ type ProjectInboxDetailPaneProps = {
   workItem: ProjectInboxWorkItem;
 };
 
-/** Renders a canonical Buzz Git work item with its existing project actions. */
+/** Renders a canonical Ambush Git work item with its existing project actions. */
 export function ProjectInboxDetailPane({
   isSinglePanelView = false,
   onBack,

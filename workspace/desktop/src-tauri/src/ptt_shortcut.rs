@@ -136,11 +136,11 @@ pub fn sync_registration(app: &tauri::AppHandle, hs: &HuddleState) {
 
     if want && !is_registered {
         if let Err(e) = manager.register(shortcut) {
-            eprintln!("buzz-desktop: failed to register PTT shortcut: {e}");
+            eprintln!("ambush-desktop: failed to register PTT shortcut: {e}");
         }
     } else if !want && is_registered {
         if let Err(e) = manager.unregister(shortcut) {
-            eprintln!("buzz-desktop: failed to unregister PTT shortcut: {e}");
+            eprintln!("ambush-desktop: failed to unregister PTT shortcut: {e}");
         }
     }
 }

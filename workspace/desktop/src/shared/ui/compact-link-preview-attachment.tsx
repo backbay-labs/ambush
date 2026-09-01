@@ -12,11 +12,11 @@ import {
   AttachmentTrigger,
 } from "@/shared/ui/attachment";
 import { LinkPreviewControls } from "@/shared/ui/link-preview-controls";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { AmbushMark } from "@/shared/ui/ambush-logo/AmbushMark";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 
 function getHostname(preview: ResolvedLinkPreview): string {
-  if (preview.href.startsWith("buzz://")) return preview.provider;
+  if (preview.href.startsWith("ambush://")) return preview.provider;
   try {
     return new URL(preview.href).hostname.replace(/^www\./, "");
   } catch {
@@ -76,10 +76,10 @@ export function CompactLinkPreviewAttachment({
   const showFallback =
     preview.imageState === "fallback" || Boolean(imageSrc && !showImage);
   const hostname = getHostname(preview);
-  const showBuzzMark =
-    preview.kind === "buzz-pull-request" ||
-    preview.kind === "buzz-issue" ||
-    preview.kind === "buzz-repository";
+  const showAmbushMark =
+    preview.kind === "ambush-pull-request" ||
+    preview.kind === "ambush-issue" ||
+    preview.kind === "ambush-repository";
 
   return (
     <div className={cn("relative w-96 max-w-full shrink-0", className)}>
@@ -135,13 +135,13 @@ export function CompactLinkPreviewAttachment({
             rel="noreferrer"
             target="_blank"
           >
-            {showBuzzMark ? (
+            {showAmbushMark ? (
               <span
                 aria-hidden="true"
                 className="flex size-3 shrink-0 items-center text-foreground/70"
-                data-link-preview-hostname-buzz-mark=""
+                data-link-preview-hostname-ambush-mark=""
               >
-                <BuzzMark className="h-auto w-full" />
+                <AmbushMark className="h-auto w-full" />
               </span>
             ) : preview.faviconDataUrl ? (
               <img

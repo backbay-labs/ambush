@@ -74,7 +74,7 @@ test("project home canvas fills project, repository, and channel values", () => 
   assert.match(content, /https:\/\/relay\.example\/git\/owner\/space-invaders/);
   assert.match(content, /11111111-1111-4111-8111-111111111111/);
   assert.equal(content.includes("{{"), false);
-  assert.match(content, /buzz issues status --issue <id>/);
-  assert.match(content, /buzz pr open --repo-owner/);
-  assert.match(content, /buzz canvas set .* --content -/);
+  assert.match(content, /ambush issues status --issue <id>/);
+  assert.match(content, /ambush pr open --repo-owner/);
+  assert.match(content, /ambush canvas set .* --content -/);
 });

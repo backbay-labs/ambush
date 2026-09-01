@@ -117,7 +117,7 @@ class MediaVideoViewerPage extends HookConsumerWidget {
           }
           final file = File(
             '${directory.path}${Platform.pathSeparator}'
-            'buzz-video-${DateTime.now().microsecondsSinceEpoch}'
+            'ambush-video-${DateTime.now().microsecondsSinceEpoch}'
             '${_videoFileExtension(uri)}',
           );
           videoFile.value = file;
@@ -360,7 +360,7 @@ class _VideoLoadingPoster extends StatelessWidget {
             _videoPlaceholder(context),
           const ColoredBox(color: Color.fromRGBO(0, 0, 0, 0.24)),
           const Center(
-            child: BuzzLoadingIndicator(
+            child: AmbushLoadingIndicator(
               size: 44,
               color: Colors.white,
               semanticLabel: 'Loading video',

@@ -38,7 +38,7 @@ encrypted to the owner.
 
 ## Event
 
-`kind:44200` is a regular event by Buzz convention (alongside 44100/44101):
+`kind:44200` is a regular event by Ambush convention (alongside 44100/44101):
 stored,
 append-only, never replaced. Each completed turn produces exactly one event.
 

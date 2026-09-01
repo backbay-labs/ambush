@@ -117,7 +117,7 @@ fn resolve_linked(
 const LEGACY_MESH_API_KEY_PLACEHOLDER: &str = "sprout-mesh-local";
 
 /// The provider key the preset wrote before #971 (`8c8312932`) renamed it to
-/// `BUZZ_AGENT_PROVIDER`. That commit changed source literals only — persisted
+/// `AMBUSH_AGENT_PROVIDER`. That commit changed source literals only — persisted
 /// `env_vars` keys were never migrated.
 const LEGACY_MESH_PROVIDER_ENV_KEY: &str = "SPROUT_AGENT_PROVIDER";
 
@@ -126,7 +126,7 @@ const LEGACY_MESH_PROVIDER_ENV_KEY: &str = "SPROUT_AGENT_PROVIDER";
 ///
 /// All three sentinels must match — the local base URL alone is not enough,
 /// since a user may point their own OpenAI-compatible provider at the same
-/// port. The placeholder API key is what makes this Buzz's own preset.
+/// port. The placeholder API key is what makes this Ambush's own preset.
 ///
 /// Two of those sentinels were renamed in the same Jun-11 window, in separate
 /// commits, with neither migrating persisted records: the provider env *key*
@@ -145,7 +145,7 @@ fn mesh_preset_env_model_id(env_vars: &BTreeMap<String, String>) -> Option<Strin
         return None;
     }
     let provider = env_vars
-        .get("BUZZ_AGENT_PROVIDER")
+        .get("AMBUSH_AGENT_PROVIDER")
         .or_else(|| env_vars.get(LEGACY_MESH_PROVIDER_ENV_KEY))?
         .trim();
     if provider != "openai" {

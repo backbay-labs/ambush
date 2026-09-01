@@ -48,7 +48,7 @@ final class StickyDateGlassHeaderPlatformView: NSObject, FlutterPlatformView {
     let arguments = args as? [String: Any]
     let text = arguments?["label"] as? String ?? ""
     channel = FlutterMethodChannel(
-      name: "buzz/sticky_date_glass/\(viewId)",
+      name: "ambush/sticky_date_glass/\(viewId)",
       binaryMessenger: messenger
     )
 

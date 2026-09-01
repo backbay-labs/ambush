@@ -73,6 +73,644 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "ambush-acp"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-persona",
+ "ambush-sdk",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "evalexpr",
+ "futures-util",
+ "hex",
+ "httparse",
+ "nix 0.31.3",
+ "nostr 0.44.7",
+ "reqwest 0.13.4",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-admin"
+version = "0.1.0"
+dependencies = [
+ "ambush-audit",
+ "ambush-auth",
+ "ambush-core",
+ "ambush-db",
+ "ambush-deletion",
+ "ambush-media",
+ "ambush-pubsub",
+ "ambush-search",
+ "ambush-workflow",
+ "anyhow",
+ "clap",
+ "deadpool-redis",
+ "hex",
+ "nostr 0.44.7",
+ "rustls",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-agent"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "dirs",
+ "getrandom 0.4.3",
+ "hex",
+ "nix 0.31.3",
+ "reqwest 0.13.4",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "webbrowser",
+]
+
+[[package]]
+name = "ambush-audit"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-datastore-tracing",
+ "chrono",
+ "futures-util",
+ "hex",
+ "metrics",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-auth"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "jsonwebtoken",
+ "nostr 0.44.7",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-backend-kubernetes"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "http",
+ "http-body-util",
+ "k8s-openapi",
+ "kube",
+ "nostr 0.44.7",
+ "rand 0.10.1",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "ambush-cli"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-persona",
+ "ambush-sdk",
+ "ambush-ws-client",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "clap",
+ "diffy",
+ "dirs",
+ "hex",
+ "infer",
+ "nostr 0.44.7",
+ "rand 0.10.1",
+ "reqwest 0.13.4",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-conformance"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "hmac 0.13.0",
+ "nostr 0.44.7",
+ "percent-encoding",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "ambush-datastore-tracing"
+version = "0.1.0"
+dependencies = [
+ "metrics",
+ "metrics-util",
+ "opentelemetry 0.32.0",
+ "opentelemetry_sdk 0.32.1",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ambush-db"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-datastore-tracing",
+ "chrono",
+ "hex",
+ "metrics",
+ "metrics-util",
+ "nostr 0.44.7",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-deletion"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-db",
+ "ambush-media",
+ "anyhow",
+ "chrono",
+ "clap",
+ "deadpool-redis",
+ "hex",
+ "redis",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-dev-mcp"
+version = "0.1.0"
+dependencies = [
+ "ambush-cli",
+ "ambush-core",
+ "base64 0.22.1",
+ "git-credential-nostr",
+ "git-sign-nostr",
+ "ignore",
+ "image",
+ "nix 0.31.3",
+ "nostr 0.44.7",
+ "reqwest 0.13.4",
+ "rmcp",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "ambush-media"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "axum",
+ "blurhash",
+ "bytes",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "image",
+ "imagesize",
+ "infer",
+ "mp4",
+ "nostr 0.44.7",
+ "quick-xml 0.38.4",
+ "rust-s3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ulid",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-pair-relay"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "parking_lot",
+ "secp256k1 0.31.1",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+]
+
+[[package]]
+name = "ambush-pairing-cli"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "clap",
+ "futures-util",
+ "hex",
+ "nostr 0.44.7",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "ambush-persona"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ambush-pubsub"
+version = "0.1.0"
+dependencies = [
+ "ambush-auth",
+ "ambush-core",
+ "chrono",
+ "deadpool-redis",
+ "futures-util",
+ "nostr 0.44.7",
+ "redis",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-push-gateway"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "appattest",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "byteorder",
+ "chrono",
+ "getrandom 0.4.3",
+ "hex",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "minicbor",
+ "nostr 0.44.7",
+ "proptest",
+ "rand 0.10.1",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-relay"
+version = "0.2.1"
+dependencies = [
+ "ambush-audit",
+ "ambush-auth",
+ "ambush-conformance",
+ "ambush-core",
+ "ambush-datastore-tracing",
+ "ambush-db",
+ "ambush-deletion",
+ "ambush-media",
+ "ambush-pubsub",
+ "ambush-relay-mesh",
+ "ambush-sdk",
+ "ambush-search",
+ "ambush-test-client",
+ "ambush-workflow",
+ "anyhow",
+ "async-compression",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "deadpool-redis",
+ "ed25519-dalek",
+ "flate2",
+ "futures",
+ "futures-util",
+ "hex",
+ "hmac 0.13.0",
+ "infer",
+ "mesh-llm-host-runtime",
+ "mesh-llm-sdk",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "metrics-util",
+ "moka",
+ "nostr 0.44.7",
+ "opentelemetry 0.32.0",
+ "opentelemetry-otlp 0.32.0",
+ "opentelemetry_sdk 0.32.1",
+ "postcard",
+ "pulldown-cmark",
+ "rand 0.10.1",
+ "redis",
+ "reqwest 0.13.4",
+ "rust-s3",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.0",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-relay-mesh"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "deadpool-redis",
+ "futures-util",
+ "hex",
+ "hmac 0.13.0",
+ "iroh",
+ "nostr 0.44.7",
+ "postcard",
+ "proptest",
+ "redis",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-sdk"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "nostr 0.44.7",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-search"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-datastore-tracing",
+ "metrics",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-test-client"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-media",
+ "ambush-sdk",
+ "ambush-ws-client",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "hex",
+ "nostr 0.44.7",
+ "rand 0.10.1",
+ "reqwest 0.13.4",
+ "rust-s3",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-voice"
+version = "0.1.0"
+dependencies = [
+ "atomic-write-file",
+ "hex",
+ "ort",
+ "ort-sys",
+ "rand 0.10.1",
+ "sentencepiece-model",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sherpa-onnx",
+ "symphonia",
+ "tempfile",
+ "tokenizers",
+]
+
+[[package]]
+name = "ambush-workflow"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "ambush-db",
+ "ambush-deletion",
+ "chrono",
+ "cron",
+ "dashmap",
+ "evalexpr",
+ "hex",
+ "moka",
+ "nostr 0.44.7",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-ws-client"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "nostr 0.44.7",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -826,644 +1464,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
-name = "buzz-acp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "buzz-core",
- "buzz-persona",
- "buzz-sdk",
- "chrono",
- "clap",
- "evalexpr",
- "futures-util",
- "hex",
- "httparse",
- "nix 0.31.3",
- "nostr 0.44.7",
- "reqwest 0.13.4",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tokio-util",
- "toml 1.1.2+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "buzz-admin"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "buzz-audit",
- "buzz-auth",
- "buzz-core",
- "buzz-db",
- "buzz-deletion",
- "buzz-media",
- "buzz-pubsub",
- "buzz-search",
- "buzz-workflow",
- "clap",
- "deadpool-redis",
- "hex",
- "nostr 0.44.7",
- "rustls",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "buzz-agent"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "dirs",
- "getrandom 0.4.3",
- "hex",
- "nix 0.31.3",
- "reqwest 0.13.4",
- "rmcp",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.11.0",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "webbrowser",
-]
-
-[[package]]
-name = "buzz-audit"
-version = "0.1.0"
-dependencies = [
- "buzz-core",
- "buzz-datastore-tracing",
- "chrono",
- "futures-util",
- "hex",
- "metrics",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "buzz-auth"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "buzz-core",
- "chrono",
- "hex",
- "jsonwebtoken",
- "nostr 0.44.7",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "buzz-backend-kubernetes"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "hex",
- "http",
- "http-body-util",
- "k8s-openapi",
- "kube",
- "nostr 0.44.7",
- "rand 0.10.1",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "buzz-cli"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "buzz-core",
- "buzz-persona",
- "buzz-sdk",
- "buzz-ws-client",
- "bytes",
- "chrono",
- "clap",
- "diffy",
- "dirs",
- "hex",
- "infer",
- "nostr 0.44.7",
- "rand 0.10.1",
- "reqwest 0.13.4",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "buzz-conformance"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "buzz-core"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "hex",
- "hmac 0.13.0",
- "nostr 0.44.7",
- "percent-encoding",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "thiserror 2.0.18",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "buzz-datastore-tracing"
-version = "0.1.0"
-dependencies = [
- "metrics",
- "metrics-util",
- "opentelemetry 0.32.0",
- "opentelemetry_sdk 0.32.1",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "tokio",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "buzz-db"
-version = "0.1.0"
-dependencies = [
- "buzz-core",
- "buzz-datastore-tracing",
- "chrono",
- "hex",
- "metrics",
- "metrics-util",
- "nostr 0.44.7",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "buzz-deletion"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "buzz-core",
- "buzz-db",
- "buzz-media",
- "chrono",
- "clap",
- "deadpool-redis",
- "hex",
- "redis",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
-name = "buzz-dev-mcp"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "buzz-cli",
- "buzz-core",
- "git-credential-nostr",
- "git-sign-nostr",
- "ignore",
- "image",
- "nix 0.31.3",
- "nostr 0.44.7",
- "reqwest 0.13.4",
- "rmcp",
- "rustls",
- "schemars",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "windows-sys 0.61.2",
- "zeroize",
-]
-
-[[package]]
-name = "buzz-media"
-version = "0.1.0"
-dependencies = [
- "axum",
- "blurhash",
- "buzz-core",
- "bytes",
- "chrono",
- "futures-core",
- "futures-util",
- "hex",
- "image",
- "imagesize",
- "infer",
- "mp4",
- "nostr 0.44.7",
- "quick-xml 0.38.4",
- "rust-s3",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "ulid",
- "uuid",
-]
-
-[[package]]
-name = "buzz-pair-relay"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "http-body-util",
- "hyper",
- "hyper-util",
- "parking_lot",
- "secp256k1 0.31.1",
- "serde_json",
- "sha2 0.11.0",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tokio-util",
-]
-
-[[package]]
-name = "buzz-pairing-cli"
-version = "0.1.0"
-dependencies = [
- "buzz-core",
- "clap",
- "futures-util",
- "hex",
- "nostr 0.44.7",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "url",
- "zeroize",
-]
-
-[[package]]
-name = "buzz-persona"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "buzz-pubsub"
-version = "0.1.0"
-dependencies = [
- "buzz-auth",
- "buzz-core",
- "chrono",
- "deadpool-redis",
- "futures-util",
- "nostr 0.44.7",
- "redis",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "buzz-push-gateway"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "appattest",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "byteorder",
- "chrono",
- "getrandom 0.4.3",
- "hex",
- "metrics",
- "metrics-exporter-prometheus",
- "minicbor",
- "nostr 0.44.7",
- "proptest",
- "rand 0.10.1",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "buzz-relay"
-version = "0.2.1"
-dependencies = [
- "anyhow",
- "async-compression",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "buzz-audit",
- "buzz-auth",
- "buzz-conformance",
- "buzz-core",
- "buzz-datastore-tracing",
- "buzz-db",
- "buzz-deletion",
- "buzz-media",
- "buzz-pubsub",
- "buzz-relay-mesh",
- "buzz-sdk",
- "buzz-search",
- "buzz-test-client",
- "buzz-workflow",
- "bytes",
- "chrono",
- "dashmap",
- "deadpool-redis",
- "ed25519-dalek",
- "flate2",
- "futures",
- "futures-util",
- "hex",
- "hmac 0.13.0",
- "infer",
- "mesh-llm-host-runtime",
- "mesh-llm-sdk",
- "metrics",
- "metrics-exporter-prometheus",
- "metrics-util",
- "moka",
- "nostr 0.44.7",
- "opentelemetry 0.32.0",
- "opentelemetry-otlp 0.32.0",
- "opentelemetry_sdk 0.32.1",
- "postcard",
- "pulldown-cmark",
- "rand 0.10.1",
- "redis",
- "reqwest 0.13.4",
- "rust-s3",
- "rustls",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.11.0",
- "sqlx",
- "subtle",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "buzz-relay-mesh"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "deadpool-redis",
- "futures-util",
- "hex",
- "hmac 0.13.0",
- "iroh",
- "nostr 0.44.7",
- "postcard",
- "proptest",
- "redis",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "buzz-sdk"
-version = "0.1.0"
-dependencies = [
- "buzz-core",
- "nostr 0.44.7",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "buzz-search"
-version = "0.1.0"
-dependencies = [
- "buzz-core",
- "buzz-datastore-tracing",
- "metrics",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "buzz-test-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "buzz-core",
- "buzz-media",
- "buzz-sdk",
- "buzz-ws-client",
- "chrono",
- "futures-util",
- "hex",
- "nostr 0.44.7",
- "rand 0.10.1",
- "reqwest 0.13.4",
- "rust-s3",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "buzz-voice"
-version = "0.1.0"
-dependencies = [
- "atomic-write-file",
- "hex",
- "ort",
- "ort-sys",
- "rand 0.10.1",
- "sentencepiece-model",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sherpa-onnx",
- "symphonia",
- "tempfile",
- "tokenizers",
-]
-
-[[package]]
-name = "buzz-workflow"
-version = "0.1.0"
-dependencies = [
- "buzz-core",
- "buzz-db",
- "buzz-deletion",
- "chrono",
- "cron",
- "dashmap",
- "evalexpr",
- "hex",
- "moka",
- "nostr 0.44.7",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "buzz-ws-client"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "nostr 0.44.7",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "by_address"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1899,8 +1899,8 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "countdown-bot"
 version = "0.1.0"
 dependencies = [
+ "ambush-sdk",
  "anyhow",
- "buzz-sdk",
  "futures-util",
  "nostr 0.44.7",
  "serde_json",
@@ -8980,9 +8980,9 @@ dependencies = [
 name = "sprig"
 version = "0.1.0"
 dependencies = [
- "buzz-acp",
- "buzz-agent",
- "buzz-dev-mcp",
+ "ambush-acp",
+ "ambush-agent",
+ "ambush-dev-mcp",
 ]
 
 [[package]]

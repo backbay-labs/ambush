@@ -1,19 +1,19 @@
-//! Preservation of Buzz snapshot tEXt chunks through the upload sanitizer.
+//! Preservation of Ambush snapshot tEXt chunks through the upload sanitizer.
 //!
 //! Split out of `media.rs` to keep that file under the desktop line-size
 //! limit. Agent/team sharing embeds a manifest in a PNG `tEXt` chunk
-//! (`buzz_agent_snapshot` / `buzz_team_snapshot`); the sanitizer's re-encode
+//! (`ambush_agent_snapshot` / `ambush_team_snapshot`); the sanitizer's re-encode
 //! would destroy it and the relay would previously reject it. These helpers
 //! extract the chunk before the re-encode and re-inject it afterwards. The
-//! relay allowlists exactly these keywords in `buzz-media::validation` — the
+//! relay allowlists exactly these keywords in `ambush-media::validation` — the
 //! two lists must stay in sync.
 
-/// tEXt keywords that carry Buzz snapshot manifests (`.agent.png` /
+/// tEXt keywords that carry Ambush snapshot manifests (`.agent.png` /
 /// `.team.png`). These chunks are the product payload of agent/team sharing —
 /// they must survive the metadata strip.
-const PNG_SNAPSHOT_KEYWORDS: [&[u8]; 2] = [b"buzz_agent_snapshot", b"buzz_team_snapshot"];
+const PNG_SNAPSHOT_KEYWORDS: [&[u8]; 2] = [b"ambush_agent_snapshot", b"ambush_team_snapshot"];
 
-/// Extract the raw bytes of the first Buzz snapshot tEXt chunk (length + type
+/// Extract the raw bytes of the first Ambush snapshot tEXt chunk (length + type
 /// + payload + CRC) from a PNG, or `None` when absent/not a PNG.
 ///
 /// Walks the chunk structure directly instead of decoding the image so a
@@ -87,7 +87,7 @@ mod tests {
     fn test_sanitizer_preserves_agent_snapshot_text_chunk() {
         // Build a real 2×2 PNG carrying an agent-snapshot manifest chunk plus
         // a mundane metadata chunk that must NOT survive.
-        for keyword in ["buzz_agent_snapshot", "buzz_team_snapshot"] {
+        for keyword in ["ambush_agent_snapshot", "ambush_team_snapshot"] {
             let manifest = "eyJmb3JtYXQiOiJidXp6LWFnZW50LXNuYXBzaG90In0=";
             let mut source = Vec::new();
             {
@@ -154,7 +154,7 @@ mod tests {
         };
 
         let snapshot = AgentSnapshot {
-            format: "buzz-agent-snapshot".to_string(),
+            format: "ambush-agent-snapshot".to_string(),
             version: 1,
             definition: AgentSnapshotDefinition {
                 name: "Tree Trunks".to_string(),
@@ -198,13 +198,13 @@ mod tests {
         let sanitized = sanitize_image_for_upload(exported, "image/png").unwrap();
 
         // Relay ingest path.
-        let relay_config = buzz_media_pkg::MediaConfig {
+        let relay_config = ambush_media_pkg::MediaConfig {
             s3_endpoint: String::new(),
             s3_access_key: String::new(),
             s3_secret_key: String::new(),
             s3_bucket: String::new(),
             s3_region: "us-east-1".to_string(),
-            s3_addressing_style: buzz_media_pkg::S3AddressingStyle::Path,
+            s3_addressing_style: ambush_media_pkg::S3AddressingStyle::Path,
             max_image_bytes: 50 * 1024 * 1024,
             max_gif_bytes: 10 * 1024 * 1024,
             max_video_bytes: 524_288_000,
@@ -215,7 +215,7 @@ mod tests {
             upload_port_header: None,
         };
         assert_eq!(
-            buzz_media_pkg::validation::validate_content(&sanitized, &relay_config)
+            ambush_media_pkg::validation::validate_content(&sanitized, &relay_config)
                 .expect("relay rejected a sanitized agent snapshot PNG"),
             "image/png"
         );

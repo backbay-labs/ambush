@@ -125,7 +125,7 @@ fn resolve_config_surface(
     claude_config_dir: Option<&std::path::Path>,
 ) -> RuntimeConfigSurface {
     // Linked instances are definition-authoritative: clear stale materialized
-    // model/provider/prompt so they can never masquerade as BuzzExplicit and
+    // model/provider/prompt so they can never masquerade as AmbushExplicit and
     // shadow definition values. Env var overrides are untouched.
     if record.persona_id.is_some() {
         record.system_prompt = None;
@@ -184,7 +184,7 @@ pub async fn get_runtime_file_config(
 /// Return the key names of all non-empty baked build env vars.
 ///
 /// Internal (Block) builds bake provider credentials and other env pairs into
-/// the binary at compile time via `BUZZ_BUILD_AGENT_ENV`. The backend readiness
+/// the binary at compile time via `AMBUSH_BUILD_AGENT_ENV`. The backend readiness
 /// gate already treats these keys as satisfying their requirements (Layer 1 of
 /// `resolve_effective_agent_env`). This command exposes the *key names only* —
 /// never the values — so the frontend dialogs can apply the same logic and avoid
@@ -220,7 +220,7 @@ pub struct BakedEnvEntry {
 /// Expose the baked build env to the frontend with values shown, but any
 /// key not in the safe-to-reveal allowlist has its value replaced by `••••••`.
 ///
-/// Provider and model arrive as `BUZZ_AGENT_PROVIDER` / `BUZZ_AGENT_MODEL`
+/// Provider and model arrive as `AMBUSH_AGENT_PROVIDER` / `AMBUSH_AGENT_MODEL`
 /// keys in `baked_build_env()` and are included in the returned list like any
 /// other key. Empty-value keys are filtered out (same as
 /// `get_baked_build_env_keys`).
@@ -539,7 +539,7 @@ fn parse_models(raw: Option<&serde_json::Value>) -> (Vec<AcpModelEntry>, Option<
 ///
 /// B5 (v4 direct-write): the panel's EffortPicker calls this directly to set the
 /// effort a spawn will apply at next session start. The value is stored on the
-/// record; at spawn `runtime.rs` injects it as `BUZZ_ACP_EFFORT_LEVEL` and the
+/// record; at spawn `runtime.rs` injects it as `AMBUSH_ACP_EFFORT_LEVEL` and the
 /// harness applies it via `session/set_config_option` against the adapter's
 /// advertised `thought_level` configId. Pass `None` to clear (adapter default).
 ///

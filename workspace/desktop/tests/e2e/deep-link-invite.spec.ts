@@ -9,7 +9,7 @@ import { seedActiveIdentity } from "../helpers/onboarding";
 
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 const COMMUNITY_ONBOARDING_PUBKEY = TEST_IDENTITIES.tyler.pubkey;
-const TRANSACTION_STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
+const TRANSACTION_STORAGE_KEY = "ambush-community-onboarding-transaction.v1";
 const COMMUNITY_RELAY_URL = "wss://hive.example.com";
 
 const PENDING_JOIN_LINK = {
@@ -29,7 +29,7 @@ const PENDING_CONNECT_LINK = {
 const PENDING_ADD_COMMUNITY_LINK = {
   id: "dl-add-community-1",
   kind: "add-community" as const,
-  relayUrl: "wss://acme.communities.buzz.xyz",
+  relayUrl: "wss://acme.communities.ambush.example.com",
   code: null,
   name: "Acme Team",
 };
@@ -37,7 +37,7 @@ const PENDING_ADD_COMMUNITY_LINK = {
 const SECOND_PENDING_ADD_COMMUNITY_LINK = {
   id: "dl-add-community-2",
   kind: "add-community" as const,
-  relayUrl: "wss://beta.communities.buzz.xyz",
+  relayUrl: "wss://beta.communities.ambush.example.com",
   code: null,
   name: "Beta Team",
 };
@@ -197,7 +197,7 @@ test("add-community deep link opens one editable prefill and acknowledges the qu
   await expect(communityInput).toHaveValue("");
 
   const acknowledgements = await page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+    (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
       (entry) => entry.command === "acknowledge_pending_community_deep_link",
     ),
   );
@@ -230,7 +230,7 @@ test("queued add-community links open and acknowledge one at a time", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
           .filter(
             (entry) =>
               entry.command === "acknowledge_pending_community_deep_link",
@@ -248,7 +248,7 @@ test("queued add-community links open and acknowledge one at a time", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
           .filter(
             (entry) =>
               entry.command === "acknowledge_pending_community_deep_link",
@@ -271,7 +271,7 @@ test("deleted public starter channels do not strand community onboarding", async
   await page.addInitScript(
     ({ pubkey, relayUrl, storageKey }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
@@ -302,7 +302,7 @@ test("deleted public starter channels do not strand community onboarding", async
   );
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Take me to Buzz" }).click();
+  await page.getByRole("button", { name: "Take me to Ambush" }).click();
 
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
   await expect(page).toHaveURL(/#\/channels\/[^/]+$/);
@@ -311,7 +311,7 @@ test("deleted public starter channels do not strand community onboarding", async
   expect(
     await page.evaluate(
       () =>
-        window.__BUZZ_E2E_COMMANDS__?.filter(
+        window.__AMBUSH_E2E_COMMANDS__?.filter(
           (command) => command === "ensure_starter_channels",
         ).length ?? 0,
     ),
@@ -326,7 +326,7 @@ test("required Welcome creation failure keeps community onboarding open", async 
   await page.addInitScript(
     ({ pubkey, relayUrl, storageKey }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
@@ -357,12 +357,12 @@ test("required Welcome creation failure keeps community onboarding open", async 
   );
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Take me to Buzz" }).click();
+  await page.getByRole("button", { name: "Take me to Ambush" }).click();
 
   await expect(page.getByTestId("community-onboarding-flow")).toBeVisible();
   await expect(page.getByText(`${welcomeError} Try again.`)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Take me to Buzz" }),
+    page.getByRole("button", { name: "Take me to Ambush" }),
   ).toBeEnabled();
   await expect(page.getByTestId("chat-title")).toHaveCount(0);
 });
@@ -377,7 +377,7 @@ test("persisted deep-link invite hands off to Joining after machine onboarding",
   await page.addInitScript(
     ({ pubkey, storageKey }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();

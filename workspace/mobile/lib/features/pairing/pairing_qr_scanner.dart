@@ -15,7 +15,7 @@ part 'pairing_qr_scanner/dynamic_island_portal.dart';
 part 'pairing_qr_scanner/fallback_scanner.dart';
 part 'pairing_qr_scanner/scanner_camera.dart';
 
-const _qrScannerPlatformChannel = MethodChannel('buzz/qr_scanner');
+const _qrScannerPlatformChannel = MethodChannel('ambush/qr_scanner');
 
 /// Returns whether the current iPhone should use the Dynamic Island scanner.
 ///

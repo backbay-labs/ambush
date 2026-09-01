@@ -9,11 +9,11 @@ async function waitForInvokeBridge(page: import("@playwright/test").Page) {
   await page.waitForFunction(
     () => {
       const w = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         __TAURI_INTERNALS__?: { invoke?: unknown };
       };
       return (
-        typeof w.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
+        typeof w.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
         typeof w.__TAURI_INTERNALS__?.invoke === "function"
       );
     },

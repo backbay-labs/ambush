@@ -17,12 +17,12 @@ type NostrBindPayload = {
 
 const VALID_REQUEST: NostrBindPayload = {
   action: "bind_nostr_identity",
-  audience: "buzz:nostr-identity",
+  audience: "ambush:nostr-identity",
   challengeId: "550e8400-e29b-41d4-a716-446655440000",
   expiresAt: "2099-01-01T00:00:00Z",
   nonce: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567",
   origin: "https://admin.example.com",
-  protocol: "buzz-nostr-identity",
+  protocol: "ambush-nostr-identity",
   returnMode: "clipboard",
   verificationCode: "123456",
   version: "1",
@@ -61,9 +61,9 @@ async function openNostrBind(
     () =>
       typeof (
         window as Window & {
-          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+          __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         }
-      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function",
+      ).__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ === "function",
   );
   await emitNostrBind(page, payload);
   await expect(page.getByTestId("nostr-bind-page")).toBeVisible();
@@ -88,12 +88,12 @@ async function signCommandPayloads(page: Page): Promise<unknown[]> {
     (
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+          __AMBUSH_E2E_COMMAND_LOG__?: Array<{
             command: string;
             payload: unknown;
           }>;
         }
-      ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+      ).__AMBUSH_E2E_COMMAND_LOG__ ?? []
     )
       .filter(({ command }) => command === "sign_nostr_identity_binding")
       .map(({ payload }) => payload),
@@ -104,7 +104,7 @@ async function installClipboardStub(page: Page, shouldFail: boolean) {
   await page.addInitScript(
     ({ fail }) => {
       const testWindow = window as Window & {
-        __BUZZ_E2E_CLIPBOARD_TEXT__?: string;
+        __AMBUSH_E2E_CLIPBOARD_TEXT__?: string;
       };
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
@@ -113,7 +113,7 @@ async function installClipboardStub(page: Page, shouldFail: boolean) {
             if (fail) {
               throw new Error("clipboard unavailable");
             }
-            testWindow.__BUZZ_E2E_CLIPBOARD_TEXT__ = text;
+            testWindow.__AMBUSH_E2E_CLIPBOARD_TEXT__ = text;
           },
         },
       });
@@ -125,17 +125,17 @@ async function installClipboardStub(page: Page, shouldFail: boolean) {
 async function installShakeCounter(page: Page) {
   await page.addInitScript(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E_CODE_SHAKE_CALLS__?: number;
+      __AMBUSH_E2E_CODE_SHAKE_CALLS__?: number;
     };
-    testWindow.__BUZZ_E2E_CODE_SHAKE_CALLS__ = 0;
+    testWindow.__AMBUSH_E2E_CODE_SHAKE_CALLS__ = 0;
     const originalAnimate = Element.prototype.animate;
     Element.prototype.animate = function animate(keyframes, options) {
       if (
         this instanceof HTMLElement &&
         this.dataset.testid === "nostr-bind-verification-code"
       ) {
-        testWindow.__BUZZ_E2E_CODE_SHAKE_CALLS__ =
-          (testWindow.__BUZZ_E2E_CODE_SHAKE_CALLS__ ?? 0) + 1;
+        testWindow.__AMBUSH_E2E_CODE_SHAKE_CALLS__ =
+          (testWindow.__AMBUSH_E2E_CODE_SHAKE_CALLS__ ?? 0) + 1;
       }
       return originalAnimate.call(this, keyframes, options);
     };
@@ -147,9 +147,9 @@ async function shakeCount(page: Page): Promise<number> {
     () =>
       (
         window as Window & {
-          __BUZZ_E2E_CODE_SHAKE_CALLS__?: number;
+          __AMBUSH_E2E_CODE_SHAKE_CALLS__?: number;
         }
-      ).__BUZZ_E2E_CODE_SHAKE_CALLS__ ?? 0,
+      ).__AMBUSH_E2E_CODE_SHAKE_CALLS__ ?? 0,
   );
 }
 
@@ -320,9 +320,9 @@ test("signs a valid request, shows the response, and copies it", async ({
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_CLIPBOARD_TEXT__?: string;
+              __AMBUSH_E2E_CLIPBOARD_TEXT__?: string;
             }
-          ).__BUZZ_E2E_CLIPBOARD_TEXT__,
+          ).__AMBUSH_E2E_CLIPBOARD_TEXT__,
       ),
     )
     .toBe(signedResponse);
@@ -338,7 +338,7 @@ test("returns a signed response in the callback fragment after consent", async (
   await installClipboardStub(page, false);
   await openNostrBind(page, {
     ...VALID_REQUEST,
-    callbackUrl: "https://admin.example.com/buzz?source=bind#stale",
+    callbackUrl: "https://admin.example.com/ambush?source=bind#stale",
     returnMode: "browser_fragment_v1",
   });
 
@@ -349,9 +349,9 @@ test("returns a signed response in the callback fragment after consent", async (
           (
             (
               window as Window & {
-                __BUZZ_E2E_COMMAND_LOG__?: Array<{ command: string }>;
+                __AMBUSH_E2E_COMMAND_LOG__?: Array<{ command: string }>;
               }
-            ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+            ).__AMBUSH_E2E_COMMAND_LOG__ ?? []
           ).filter(({ command }) => command === "plugin:opener|open_url")
             .length,
       ),
@@ -386,9 +386,9 @@ test("returns a signed response in the callback fragment after consent", async (
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_CLIPBOARD_TEXT__?: string;
+              __AMBUSH_E2E_CLIPBOARD_TEXT__?: string;
             }
-          ).__BUZZ_E2E_CLIPBOARD_TEXT__,
+          ).__AMBUSH_E2E_CLIPBOARD_TEXT__,
       ),
     )
     .toBe(await signedResponse.textContent());
@@ -397,21 +397,21 @@ test("returns a signed response in the callback fragment after consent", async (
     const command = (
       (
         window as Window & {
-          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+          __AMBUSH_E2E_COMMAND_LOG__?: Array<{
             command: string;
             payload: { url?: string };
           }>;
         }
-      ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+      ).__AMBUSH_E2E_COMMAND_LOG__ ?? []
     ).find(({ command }) => command === "plugin:opener|open_url");
     return command?.payload.url;
   });
   const callbackUrl = new URL(callback ?? "");
   expect(callbackUrl.origin).toBe("https://admin.example.com");
-  expect(callbackUrl.pathname).toBe("/buzz");
+  expect(callbackUrl.pathname).toBe("/ambush");
   expect(callbackUrl.search).toBe("?source=bind");
-  expect(callbackUrl.searchParams.has("buzz_bind")).toBe(false);
-  expect(callbackUrl.hash).toMatch(/^#buzz_bind=v1\.[A-Za-z0-9_-]+$/);
+  expect(callbackUrl.searchParams.has("ambush_bind")).toBe(false);
+  expect(callbackUrl.hash).toMatch(/^#ambush_bind=v1\.[A-Za-z0-9_-]+$/);
 });
 
 test("opens the manual fallback when returning to the browser fails", async ({
@@ -421,7 +421,7 @@ test("opens the manual fallback when returning to the browser fails", async ({
     page,
     {
       ...VALID_REQUEST,
-      callbackUrl: "https://admin.example.com/buzz",
+      callbackUrl: "https://admin.example.com/ambush",
       returnMode: "browser_fragment_v1",
     },
     { openerError: "browser unavailable" },
@@ -459,7 +459,7 @@ test("keeps the signed response available when clipboard access fails", async ({
   await expect(
     page
       .getByTestId("nostr-bind-manual-fallback-content")
-      .getByText("Buzz couldn't access the clipboard. Try again."),
+      .getByText("Ambush couldn't access the clipboard. Try again."),
   ).toBeVisible();
   await expect(page.getByTestId("nostr-bind-signed-response")).toContainText(
     "e2e-signed-nostr-binding",

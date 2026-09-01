@@ -2,10 +2,10 @@
 //!
 //! Mints a collectible trading-card PNG for an agent via one OpenAI Responses
 //! API call (designer model + native `image_generation` tool), then embeds the
-//! agent's `buzz_agent_snapshot` manifest through the existing snapshot
+//! agent's `ambush_agent_snapshot` manifest through the existing snapshot
 //! encoder so the card IS an importable `.agent.png`.
 //!
-//! Boundary rules (agreed with Wren, buzz-agent-trading-cards thread):
+//! Boundary rules (agreed with Wren, ambush-agent-trading-cards thread):
 //! - Snapshot construction/injection reuses `agent_snapshot.rs` — cards
 //!   inherit manifest-v1 behavior, exclusions, and size checks. No card-only
 //!   wire format exists.
@@ -48,7 +48,7 @@ use crate::{
     },
 };
 
-/// The Buzz card frame template — Tyler's gold-honeycomb base. Generation
+/// The Ambush card frame template — Tyler's gold-honeycomb base. Generation
 /// input only: it never participates in the snapshot manifest, PNG chunk,
 /// import decoder, or attachment validation. Embedded at compile time for
 /// deterministic packaging (see `card_template_decodes` test).
@@ -227,7 +227,7 @@ pub fn list_agent_cards(app: AppHandle) -> Result<Vec<ArchivedCardMeta>, String>
         let Ok(meta) = serde_json::from_str::<ArchivedCardMeta>(&content) else {
             // A malformed sidecar hides one card, never the archive.
             eprintln!(
-                "buzz-desktop: card-archive: skipping malformed sidecar {}",
+                "ambush-desktop: card-archive: skipping malformed sidecar {}",
                 path.display()
             );
             continue;
@@ -344,9 +344,9 @@ pub(crate) fn build_card_instructions(
         )
     };
     format!(
-        r#"You are designing one premium collectible trading card for the Buzz agent "{agent_name}".
+        r#"You are designing one premium collectible trading card for the Ambush agent "{agent_name}".
 
-Input image 1 is the official Buzz card frame template (gold honeycomb border, dark interior, name banner top, hex badge top-right, text box lower third). Input image 2 is the agent's avatar — study its exact art style: medium, pixel grid if any, palette, shading, background motifs.
+Input image 1 is the official Ambush card frame template (gold honeycomb border, dark interior, name banner top, hex badge top-right, text box lower third). Input image 2 is the agent's avatar — study its exact art style: medium, pixel grid if any, palette, shading, background motifs.
 
 Persona notes for the card copy:
 {persona_notes}
@@ -705,7 +705,7 @@ pub async fn mint_agent_card(
     if lock_keys.is_some() {
         let json_len =
             crate::managed_agents::agent_snapshot::encode_snapshot_json(&snapshot)?.len();
-        if json_len > buzz_core_pkg::engram::NIP44_PLAINTEXT_MAX {
+        if json_len > ambush_core_pkg::engram::NIP44_PLAINTEXT_MAX {
             let hint = if memory_level == MemoryLevel::None {
                 "Reduce the avatar size or mint an unlocked card."
             } else {
@@ -714,7 +714,7 @@ pub async fn mint_agent_card(
             return Err(format!(
                 "Agent manifest is too large to lock ({json_len} bytes; the encrypted \
                  format caps at {}). {hint}",
-                buzz_core_pkg::engram::NIP44_PLAINTEXT_MAX
+                ambush_core_pkg::engram::NIP44_PLAINTEXT_MAX
             ));
         }
     }
@@ -847,7 +847,7 @@ pub async fn mint_agent_card(
     // Archive best-effort: the mint is already paid for and verified, so a
     // failed archive write logs and continues — it never fails the mint.
     if let Err(e) = archive_minted_card(&app, &id, &display_name, &minted, &final_bytes) {
-        eprintln!("buzz-desktop: card-archive: failed to archive minted card: {e}");
+        eprintln!("ambush-desktop: card-archive: failed to archive minted card: {e}");
     }
 
     Ok(minted)

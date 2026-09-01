@@ -120,7 +120,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
 
   await page.addInitScript(() => {
@@ -146,7 +146,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await page.reload();
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
       Array.isArray(
         (window as unknown as { __INPUT_EVENTS__?: number[] }).__INPUT_EVENTS__,
       ),
@@ -178,11 +178,11 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await page.evaluate(
     ({ agentCount, typingIntervalMs, messageIntervalMs }) => {
       const w = window as unknown as {
-        __BUZZ_E2E_EMIT_MOCK_TYPING__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_TYPING__?: (input: {
           channelName: string;
           pubkey?: string;
         }) => unknown;
-        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
         }) => unknown;
@@ -194,7 +194,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       let tick = 0;
       const typingTimer = window.setInterval(() => {
         tick += 1;
-        w.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
+        w.__AMBUSH_E2E_EMIT_MOCK_TYPING__?.({
           channelName: "agents",
           pubkey: pubkeys[tick % pubkeys.length],
         });
@@ -202,7 +202,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       let messageIndex = 0;
       const messageTimer = window.setInterval(() => {
         messageIndex += 1;
-        w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "agents",
           content: `**Progress ${messageIndex}**\n\n- step done\n- \`cargo check\` ok`,
         });
@@ -239,7 +239,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await page.evaluate(
     ({ agentCount, bufferSize, channelId }) => {
       const w = window as unknown as {
-        __BUZZ_E2E_SEED_OBSERVER_EVENTS__?: (input: {
+        __AMBUSH_E2E_SEED_OBSERVER_EVENTS__?: (input: {
           agentPubkey: string;
           events: unknown[];
         }) => void;
@@ -265,7 +265,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
         seq: bufferSize,
       }));
       for (const agent of w.__OBS_AGENTS__) {
-        w.__BUZZ_E2E_SEED_OBSERVER_EVENTS__?.({
+        w.__AMBUSH_E2E_SEED_OBSERVER_EVENTS__?.({
           agentPubkey: agent.pubkey,
           events: Array.from({ length: bufferSize }, (_, seq) =>
             makeEvent(agent.pubkey, seq),
@@ -279,7 +279,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
         stormTick += 1;
         const agent = agents[stormTick % agents.length];
         agent.seq += 1;
-        w.__BUZZ_E2E_SEED_OBSERVER_EVENTS__?.({
+        w.__AMBUSH_E2E_SEED_OBSERVER_EVENTS__?.({
           agentPubkey: agent.pubkey,
           events: [makeEvent(agent.pubkey, agent.seq)],
         });
@@ -304,11 +304,11 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await page.evaluate(
     ({ agentCount, typingIntervalMs, messageIntervalMs }) => {
       const w = window as unknown as {
-        __BUZZ_E2E_EMIT_MOCK_TYPING__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_TYPING__?: (input: {
           channelName: string;
           pubkey?: string;
         }) => unknown;
-        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
         }) => unknown;
@@ -320,7 +320,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       let tick = 0;
       const typingTimer = window.setInterval(() => {
         tick += 1;
-        w.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
+        w.__AMBUSH_E2E_EMIT_MOCK_TYPING__?.({
           channelName: "agents",
           pubkey: pubkeys[tick % pubkeys.length],
         });
@@ -328,7 +328,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       let messageIndex = 0;
       const messageTimer = window.setInterval(() => {
         messageIndex += 1;
-        w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "agents",
           content: `**Progress ${messageIndex}**\n\n- step done\n- \`cargo check\` ok`,
         });
@@ -367,7 +367,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await page.evaluate(
     ({ rows }) => {
       const w = window as unknown as {
-        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
           createdAt?: number;
@@ -375,7 +375,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       };
       const base = Math.floor(Date.now() / 1000) - rows - 30;
       for (let index = 0; index < rows; index += 1) {
-        w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "agents",
           content: [
             `**Task ${index}** update from the build agent`,
@@ -396,7 +396,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await page.evaluate(
     ({ streamCount, prefillLines }) => {
       const w = window as unknown as {
-        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
           kind?: number;
@@ -406,7 +406,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       };
       w.__STREAM_TIMERS__ = [];
       for (let stream = 0; stream < streamCount; stream += 1) {
-        const target = w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        const target = w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "agents",
           content: "Working on it…",
         });
@@ -421,7 +421,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
         const streamTimer = window.setInterval(() => {
           line += 1;
           chunks.push(`const step${line} = await runStep(${line}); // live`);
-          w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+          w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
             channelName: "agents",
             content: `${chunks.join("\n")}\n\`\`\``,
             kind: 40003,
@@ -458,7 +458,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   // repeat with agents streaming replies into the thread.
   const rootId = await page.evaluate(() => {
     const w = window as unknown as {
-      __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+      __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
         channelName: string;
         content: string;
         parentEventId?: string;
@@ -466,14 +466,14 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       }) => { id: string };
     };
     const base = Math.floor(Date.now() / 1000) - 300;
-    const root = w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const root = w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "agents",
       content: "**Deploy thread** — agents report here",
       createdAt: base,
     });
     if (!root) return null;
     for (let index = 0; index < 68; index += 1) {
-      w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "agents",
         content: [
           `**Reply ${index}** from agent`,
@@ -510,7 +510,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
   await page.evaluate(
     ({ rootEventId }) => {
       const w = window as unknown as {
-        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
           parentEventId?: string;
@@ -524,7 +524,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
       let lastReplyId: string | null = null;
       const replyTimer = window.setInterval(() => {
         replyIndex += 1;
-        const reply = w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        const reply = w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "agents",
           content: `**Live reply ${replyIndex}**\n\n- working…`,
           parentEventId: rootEventId ?? undefined,
@@ -538,7 +538,7 @@ test("MEASURE: composer keystroke latency, quiet vs agent-busy channel", async (
         if (!lastReplyId) return;
         line += 1;
         chunks.push(`const s${line} = await step(${line});`);
-        w.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        w.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "agents",
           content: `${chunks.join("\n")}\n\`\`\``,
           kind: 40003,

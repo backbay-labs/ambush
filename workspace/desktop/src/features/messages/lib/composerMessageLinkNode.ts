@@ -34,13 +34,14 @@ export type ComposerMessageLinkAttributes = {
   href: string;
 };
 
-const BARE_BUZZ_LINK_AT_START =
-  /^buzz:\/\/(?:message\?|channel\/|(?:pr|issue|repo|project)\?)[^\s<>"')\]}*]+/i;
-const BUZZ_LINK_SUFFIX_AT_START =
+const AMBUSH_SCHEME_NAME = "ambush";
+const BARE_AMBUSH_LINK_AT_START =
+  /^ambush:\/\/(?:message\?|channel\/|(?:pr|issue|repo|project)\?)[^\s<>"')\]}*]+/i;
+const AMBUSH_LINK_SUFFIX_AT_START =
   /^:\/\/(?:message\?|channel\/|(?:pr|issue|repo|project)\?)[^\s<>"')\]}*]+/i;
 const TRAILING_PUNCTUATION = /[.,;:!?]+$/;
 
-function trimBareBuzzLink(value: string): string {
+function trimBareAmbushLink(value: string): string {
   let trimmed = value.replace(TRAILING_PUNCTUATION, "");
   while (/[)\]]$/.test(trimmed)) {
     const closing = trimmed.at(-1) ?? "";
@@ -106,7 +107,7 @@ export function resolveComposerMessageLinkAttributes(
   }
 }
 
-function unwrapExactBuzzLink(text: string): string | null {
+function unwrapExactAmbushLink(text: string): string | null {
   const href =
     text.startsWith("<") && text.endsWith(">") ? text.slice(1, -1) : text;
   if (!href || /\s/.test(href)) return null;
@@ -131,10 +132,10 @@ export function resolveExactLinkPaste(
   text: string,
   resolveChannelName: ComposerMessageLinkNodeOptions["resolveChannelName"],
 ): { href: string } | null {
-  const buzzHref = unwrapExactBuzzLink(text);
-  if (buzzHref) {
+  const ambushHref = unwrapExactAmbushLink(text);
+  if (ambushHref) {
     const attrs = resolveComposerMessageLinkAttributes(
-      buzzHref,
+      ambushHref,
       resolveChannelName,
     );
     return attrs ? { href: attrs.href } : null;
@@ -148,7 +149,7 @@ export function resolveExactLinkPaste(
  * Resolves a clipboard payload for the *selected text* branch of paste
  * handling, where this handler is the only one that runs.
  *
- * The exact Buzz/http matchers win first, so Buzz links keep their canonical
+ * The exact Ambush/http matchers win first, so Ambush links keep their canonical
  * form. Anything else falls back to linkify with `defaultProtocol: "http"` —
  * the same matcher TipTap's `linkOnPaste` used before the composer took sole
  * ownership of this branch, so `www.example.com`, `foo@example.com` and
@@ -264,16 +265,16 @@ export function createComposerLinkPasteHandler(
       }
     }
 
-    const buzzHref = unwrapExactBuzzLink(text);
-    const buzzLinkType =
+    const ambushHref = unwrapExactAmbushLink(text);
+    const ambushLinkType =
       view.state.schema.nodes[COMPOSER_MESSAGE_LINK_NODE_NAME];
-    if (buzzHref && buzzLinkType) {
+    if (ambushHref && ambushLinkType) {
       const attrs = resolveComposerMessageLinkAttributes(
-        buzzHref,
+        ambushHref,
         resolveChannelName,
       );
       if (attrs) {
-        replaceSelectionWithNode(view, buzzLinkType.create(attrs));
+        replaceSelectionWithNode(view, ambushLinkType.create(attrs));
         event.preventDefault();
         return true;
       }
@@ -296,32 +297,35 @@ export function registerComposerMessageLinkMarkdownIt(
   md: any,
   options: ComposerMessageLinkNodeOptions,
 ): void {
-  const ruleName = "buzz_composer_message_link";
-  const tokenType = "buzz_composer_message_link";
+  const ruleName = "ambush_composer_message_link";
+  const tokenType = "ambush_composer_message_link";
   if (md.renderer.rules[tokenType]) return;
 
   // biome-ignore lint/suspicious/noExplicitAny: markdown-it state/silent
   const rule = (state: any, silent: boolean): boolean => {
     const remaining = state.src.slice(state.pos);
-    const fullMatch = BARE_BUZZ_LINK_AT_START.exec(remaining);
-    const suffixMatch = BUZZ_LINK_SUFFIX_AT_START.exec(remaining);
+    const fullMatch = BARE_AMBUSH_LINK_AT_START.exec(remaining);
+    const suffixMatch = AMBUSH_LINK_SUFFIX_AT_START.exec(remaining);
     const resumesTextToken =
-      !fullMatch && suffixMatch && /buzz$/i.test(state.pending ?? "");
+      !fullMatch && suffixMatch && /ambush$/i.test(state.pending ?? "");
     const rawHref =
-      fullMatch?.[0] ?? (resumesTextToken ? `buzz${suffixMatch[0]}` : null);
+      fullMatch?.[0] ??
+      (resumesTextToken ? `${AMBUSH_SCHEME_NAME}${suffixMatch[0]}` : null);
     if (!rawHref) return false;
-    const href = trimBareBuzzLink(rawHref);
+    const href = trimBareAmbushLink(rawHref);
     const attrs = resolveComposerMessageLinkAttributes(
       href,
       options.resolveChannelName,
     );
     if (!attrs) return false;
     if (!silent) {
-      if (resumesTextToken) state.pending = state.pending.slice(0, -4);
+      if (resumesTextToken)
+        state.pending = state.pending.slice(0, -AMBUSH_SCHEME_NAME.length);
       const token = state.push(tokenType, "span", 0);
       token.meta = attrs;
     }
-    state.pos += href.length - (resumesTextToken ? 4 : 0);
+    state.pos +=
+      href.length - (resumesTextToken ? AMBUSH_SCHEME_NAME.length : 0);
     return true;
   };
 
@@ -330,7 +334,7 @@ export function registerComposerMessageLinkMarkdownIt(
   md.renderer.rules[tokenType] = (tokens: any[], index: number): string => {
     const attrs = tokens[index].meta as ComposerMessageLinkAttributes;
     const escapeHtml = md.utils.escapeHtml;
-    return `<span data-composer-buzz-link="" data-channel-name="${escapeHtml(attrs.channelName)}" data-href="${escapeHtml(attrs.href)}"></span>`;
+    return `<span data-composer-ambush-link="" data-channel-name="${escapeHtml(attrs.channelName)}" data-href="${escapeHtml(attrs.href)}"></span>`;
   };
 }
 
@@ -383,11 +387,11 @@ function composerLinkPresentation(
   const entity = parseEntityLink(href);
   if (!entity.ok) {
     return {
-      ariaLabel: "Buzz link",
+      ariaLabel: "Ambush link",
       channelName: "",
       dataAttributes: {},
       icon: "message",
-      label: "Buzz link",
+      label: "Ambush link",
     };
   }
 
@@ -403,7 +407,7 @@ function composerLinkPresentation(
           ? `Open project ${entity.value.dtag}`
           : `Open ${entity.value.type === "pr" ? "pull request" : "issue"} ${shortId} in repository ${entity.value.dtag}`,
     channelName: "",
-    dataAttributes: { "data-buzz-link-kind": entity.value.type },
+    dataAttributes: { "data-ambush-link-kind": entity.value.type },
     icon: entity.value.type,
     // Entity chips use only stable link-derived identity. Fetched metadata is
     // reserved for sent-message tooltips/cards, so every composer chip keeps the
@@ -475,7 +479,7 @@ export const ComposerMessageLinkNode =
 
     parseHTML() {
       return [
-        { tag: "span[data-composer-buzz-link]" },
+        { tag: "span[data-composer-ambush-link]" },
         { tag: "span[data-composer-message-link]" },
       ];
     },
@@ -497,9 +501,9 @@ export const ComposerMessageLinkNode =
         mergeAttributes(HTMLAttributes, {
           "aria-label": presentation.ariaLabel,
           class: `${MENTION_CHIP_BASE_CLASSES} ${WRAPPING_INLINE_CHIP_CLASSES} ${inlineChipIconClasses(presentation.icon)} cursor-text`,
-          "data-buzz-link": "",
+          "data-ambush-link": "",
           "data-channel-name": presentation.channelName,
-          "data-composer-buzz-link": "",
+          "data-composer-ambush-link": "",
           "data-href": href,
           ...presentation.dataAttributes,
           title: presentation.ariaLabel,

@@ -1,4 +1,4 @@
-import BuzzPushKit
+import AmbushPushKit
 import Foundation
 import Security
 import UserNotifications
@@ -6,17 +6,17 @@ import UserNotifications
 final class NotificationService: UNNotificationServiceExtension {
   private var contentHandler: ((UNNotificationContent) -> Void)?
   private var bestAttemptContent: UNMutableNotificationContent?
-  private let communicationPresenter = BuzzCommunicationNotificationPresenter()
-  private lazy var resolver: BuzzPushNotificationResolving = {
+  private let communicationPresenter = AmbushCommunicationNotificationPresenter()
+  private lazy var resolver: AmbushPushNotificationResolving = {
     let appGroupIdentifier =
       Bundle.main.object(
-        forInfoDictionaryKey: "BuzzAppGroupIdentifier"
+        forInfoDictionaryKey: "AmbushAppGroupIdentifier"
       ) as? String
     let keychainAccessGroup =
       Bundle.main.object(
-        forInfoDictionaryKey: "BuzzKeychainAccessGroup"
+        forInfoDictionaryKey: "AmbushKeychainAccessGroup"
       ) as? String
-    return BuzzPushNotificationResolver(
+    return AmbushPushNotificationResolver(
       session: .shared,
       loadCommunitiesData: {
         Self.loadPushSnapshotData(appGroupIdentifier: appGroupIdentifier)
@@ -44,7 +44,7 @@ final class NotificationService: UNNotificationServiceExtension {
     }
     bestAttemptContent = content
     var cleanUserInfo = content.userInfo
-    cleanUserInfo.removeValue(forKey: BuzzPushNavigationTarget.userInfoKey)
+    cleanUserInfo.removeValue(forKey: AmbushPushNavigationTarget.userInfoKey)
     content.userInfo = cleanUserInfo
 
     resolver.resolve { [weak self] resolution in
@@ -60,7 +60,7 @@ final class NotificationService: UNNotificationServiceExtension {
         }
         if let navigationTarget = resolution.navigationTarget {
           var userInfo = content.userInfo
-          userInfo[BuzzPushNavigationTarget.userInfoKey] = navigationTarget.userInfoValue
+          userInfo[AmbushPushNavigationTarget.userInfoKey] = navigationTarget.userInfoValue
           content.userInfo = userInfo
         }
         self.bestAttemptContent = content
@@ -94,7 +94,7 @@ final class NotificationService: UNNotificationServiceExtension {
   ) -> String? {
     var query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: "buzz.push.nse.signing",
+      kSecAttrService as String: "ambush.push.nse.signing",
       kSecAttrAccount as String: communityID,
       kSecReturnData as String: true,
       kSecMatchLimit as String: kSecMatchLimitOne,
@@ -111,9 +111,9 @@ final class NotificationService: UNNotificationServiceExtension {
 
   private static func loadPushSnapshotData(appGroupIdentifier: String?) -> Data? {
     loadAppGroupData(
-      fileName: BuzzPushPresentationCacheStore.fileName,
+      fileName: AmbushPushPresentationCacheStore.fileName,
       appGroupIdentifier: appGroupIdentifier,
-      maximumBytes: BuzzPushPresentationCacheStore.maximumSnapshotBytes
+      maximumBytes: AmbushPushPresentationCacheStore.maximumSnapshotBytes
     )
   }
 

@@ -8,16 +8,16 @@
  */
 
 const PURE_CACHE_KEY_PREFIXES = [
-  "buzz-channel-messages.v1:",
-  "buzz-channels.v1:",
-  "buzz-observed-unread.v1:",
-  "buzz-projects.v1:",
-  "buzz-sidebar-skeleton-shape.v1:",
-  "buzz-timeline-skeleton-shape.v1:",
-  "buzz-user-labels.v1:",
+  "ambush-channel-messages.v1:",
+  "ambush-channels.v1:",
+  "ambush-observed-unread.v1:",
+  "ambush-projects.v1:",
+  "ambush-sidebar-skeleton-shape.v1:",
+  "ambush-timeline-skeleton-shape.v1:",
+  "ambush-user-labels.v1:",
 ];
 
-const QUOTA_RECOVERY_MARKER_KEY = "buzz-local-storage-quota-recovery.v1";
+const QUOTA_RECOVERY_MARKER_KEY = "ambush-local-storage-quota-recovery.v1";
 
 // Keep disposable snapshots below 2 MiB, leaving roughly 3 MiB of WebKit's
 // observed ~5 MiB origin quota for identities, communities, preferences, and
@@ -133,7 +133,7 @@ function notifyStorageFull(): void {
     .then(({ toast }) => {
       toast.error("Local storage is full", {
         description:
-          "Buzz could not save some local data — read positions may not persist across restarts.",
+          "Ambush could not save some local data — read positions may not persist across restarts.",
       });
     })
     .catch(() => {});

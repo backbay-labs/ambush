@@ -44,7 +44,7 @@ const FOCUS_SCRIM_CLASS = "bg-background/75 dark:bg-background/80";
 const FOCUS_SCRIM_HOVER_CLASS =
   "hover:bg-background/65 dark:hover:bg-background/70";
 
-/** Arrive and settle. The iOS sheet curve, shared with `buzz-side-panel-enter`. */
+/** Arrive and settle. The iOS sheet curve, shared with `ambush-side-panel-enter`. */
 const ENTER_EASE = [0.32, 0.72, 0, 1] as const;
 
 /**

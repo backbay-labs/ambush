@@ -16,7 +16,7 @@ function makeTool(overrides = {}) {
     type: "tool",
     title: "view_image",
     toolName: "view_image",
-    buzzToolName: null,
+    ambushToolName: null,
     status: "completed",
     args: {},
     result: "",

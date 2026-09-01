@@ -15,7 +15,7 @@ import '../../shared/theme/theme_provider.dart';
 /// Persistence is namespaced by community (relay) and account pubkey, matching
 /// `ComposeDraftsNotifier` — reaction history is user behaviour and must not
 /// leak across an in-place community or account switch.
-const _recentEmojiPrefsKey = 'buzz.quick-reaction-emojis.v1';
+const _recentEmojiPrefsKey = 'ambush.quick-reaction-emojis.v1';
 
 /// Desktop's `DEFAULT_QUICK_REACTIONS`, plus one mobile-only slot that fits in
 /// the compact action sheet, used until the user has reacted enough to fill it.

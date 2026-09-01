@@ -5,7 +5,7 @@ import type {
 } from "@/shared/api/types";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
-const STORAGE_KEY_PREFIX = "buzz-user-labels.v1";
+const STORAGE_KEY_PREFIX = "ambush-user-labels.v1";
 const MAX_CACHED_LABELS = 1_000;
 
 type CachedUserLabel = {

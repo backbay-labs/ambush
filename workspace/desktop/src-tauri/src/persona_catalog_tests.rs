@@ -129,13 +129,13 @@ fn parser_rejects_malformed_and_invisible_definition_text() {
     }
     let visible = parse_agent(
         &json!({
-            "display_name": "Reviewer 🐝",
+            "display_name": "Reviewer 🚀",
             "system_prompt": "Review.\n\t||literal markdown||"
         })
         .to_string(),
     )
     .unwrap();
-    assert_eq!(visible.display_name, "Reviewer 🐝");
+    assert_eq!(visible.display_name, "Reviewer 🚀");
 }
 
 #[test]

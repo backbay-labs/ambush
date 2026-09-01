@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:buzz/shared/emoji/emoji_data.dart';
-import 'package:buzz/shared/emoji/emoji_data_provider.dart';
+import 'package:ambush/shared/emoji/emoji_data.dart';
+import 'package:ambush/shared/emoji/emoji_data_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Reads the committed asset straight off disk rather than through

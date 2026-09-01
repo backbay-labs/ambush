@@ -5,14 +5,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:buzz/features/pairing/pairing_page.dart';
-import 'package:buzz/features/pairing/pairing_provider.dart';
-import 'package:buzz/shared/community/community.dart';
-import 'package:buzz/shared/security/sensitive_action_authorizer.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/buzz_loading_indicator.dart';
-import 'package:buzz/shared/widgets/ios_glass_navigation_button.dart';
-import 'package:buzz/shared/widgets/tappable_flapping_bee.dart';
+import 'package:ambush/features/pairing/pairing_page.dart';
+import 'package:ambush/features/pairing/pairing_provider.dart';
+import 'package:ambush/shared/community/community.dart';
+import 'package:ambush/shared/security/sensitive_action_authorizer.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/ambush_loading_indicator.dart';
+import 'package:ambush/shared/widgets/ios_glass_navigation_button.dart';
+import 'package:ambush/shared/widgets/tappable_ambush_logo_motion.dart';
 
 import '../../helpers/widget_helpers.dart';
 
@@ -25,8 +25,8 @@ void main() {
         WidgetHelpers.testable(child: const PairingPage()),
       );
 
-      expect(find.byType(TappableFlappingBee), findsOneWidget);
-      expect(find.text('Welcome to Buzz'), findsOneWidget);
+      expect(find.byType(TappableAmbushLogoMotion), findsOneWidget);
+      expect(find.text('Welcome to Ambush'), findsOneWidget);
       expect(find.text('Scan a QR code'), findsOneWidget);
       expect(find.text('Use pairing code'), findsOneWidget);
       expect(find.text('Connect'), findsNothing);
@@ -102,7 +102,7 @@ void main() {
       expect(find.text('Confirm desktop code'), findsOneWidget);
       expect(
         find.text(
-          'Make sure the six-digit code matches on both devices. Your Buzz identity will transfer to this device. Only continue if you started this pairing from your desktop.',
+          'Make sure the six-digit code matches on both devices. Your Ambush identity will transfer to this device. Only continue if you started this pairing from your desktop.',
         ),
         findsOneWidget,
       );
@@ -149,7 +149,7 @@ void main() {
       );
 
       final nativeBack = tester.widget<UiKitView>(find.byType(UiKitView));
-      expect(nativeBack.viewType, 'buzz/navigation_glass');
+      expect(nativeBack.viewType, 'ambush/navigation_glass');
       expect(nativeBack.creationParams, containsPair('icon', 'back'));
       expect(
         nativeBack.creationParams,
@@ -243,7 +243,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.byType(BuzzLoadingIndicator), findsOneWidget);
+      expect(find.byType(AmbushLoadingIndicator), findsOneWidget);
       // Connect text should be replaced by spinner.
       expect(find.text('Connect'), findsNothing);
     });
@@ -424,7 +424,7 @@ void main() {
         ),
       );
 
-      expect(find.textContaining('full Buzz identity'), findsOneWidget);
+      expect(find.textContaining('full Ambush identity'), findsOneWidget);
       expect(find.textContaining('permanent access'), findsOneWidget);
       expect(find.textContaining('started this recovery'), findsOneWidget);
       expect(find.text('Codes match'), findsOneWidget);
@@ -446,7 +446,7 @@ void main() {
       expect(find.text('Confirm desktop code'), findsOneWidget);
       expect(
         find.text(
-          'Make sure the six-digit code matches on both devices. Your Buzz identity will transfer to this device. Only continue if you started this pairing from your desktop.',
+          'Make sure the six-digit code matches on both devices. Your Ambush identity will transfer to this device. Only continue if you started this pairing from your desktop.',
         ),
         findsOneWidget,
       );
@@ -620,7 +620,7 @@ void main() {
       expect(find.text('Confirm desktop code'), findsOneWidget);
       expect(find.textContaining('matches on both devices'), findsOneWidget);
       expect(
-        find.textContaining('Buzz identity will transfer'),
+        find.textContaining('Ambush identity will transfer'),
         findsOneWidget,
       );
       expect(find.text('Codes match'), findsOneWidget);

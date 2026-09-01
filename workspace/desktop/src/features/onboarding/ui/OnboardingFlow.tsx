@@ -500,7 +500,7 @@ export function OnboardingFlow({
   return (
     <>
       <div
-        className="buzz-onboarding-neutral-theme buzz-startup-shell flex items-start justify-center overflow-y-auto bg-background px-4 pb-28 pt-[106px] text-foreground"
+        className="ambush-onboarding-neutral-theme ambush-startup-shell flex items-start justify-center overflow-y-auto bg-background px-4 pb-28 pt-[106px] text-foreground"
         data-testid="onboarding-gate"
         data-system-color-scheme={systemColorScheme}
       >
@@ -577,9 +577,9 @@ export function OnboardingFlow({
                       </h1>
                       <p className="mt-5 text-sm leading-6 text-muted-foreground">
                         Your identity is no longer in the system keyring.
-                        Re-import your nsec to restore it — Buzz will restart to
-                        finish recovery. Or go back to start a new identity with
-                        a fresh key.
+                        Re-import your nsec to restore it — Ambush will restart
+                        to finish recovery. Or go back to start a new identity
+                        with a fresh key.
                       </p>
                     </>
                   ) : (
@@ -589,7 +589,7 @@ export function OnboardingFlow({
                       </h1>
                       <p className="mt-5 text-sm leading-6 text-muted-foreground">
                         Import your Nostr private key to use that identity with
-                        Buzz. If this key already has a profile on the relay,
+                        Ambush. If this key already has a profile on the relay,
                         your name and avatar are restored automatically.
                       </p>
                     </>

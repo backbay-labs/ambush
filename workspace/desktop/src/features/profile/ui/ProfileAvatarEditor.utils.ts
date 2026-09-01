@@ -71,8 +71,8 @@ const EMOJI_MART_SHADOW_CSS = `
   }
 
   #root {
-    --padding: var(--buzz-emoji-picker-padding, 16px);
-    --buzz-emoji-picker-search-control-height: 48px;
+    --padding: var(--ambush-emoji-picker-padding, 16px);
+    --ambush-emoji-picker-search-control-height: 48px;
     --sidebar-width: 0px;
     display: flex;
     flex-direction: column;
@@ -87,14 +87,14 @@ const EMOJI_MART_SHADOW_CSS = `
   #root::after {
     background: linear-gradient(
       to bottom,
-      rgba(var(--buzz-emoji-picker-rgb-background), 0),
-      rgba(var(--buzz-emoji-picker-rgb-background), 0.98)
+      rgba(var(--ambush-emoji-picker-rgb-background), 0),
+      rgba(var(--ambush-emoji-picker-rgb-background), 0.98)
     );
-    bottom: calc(var(--buzz-emoji-picker-nav-button-size, 40px) + 24px);
+    bottom: calc(var(--ambush-emoji-picker-nav-button-size, 40px) + 24px);
     content: "";
-    height: var(--buzz-emoji-picker-fade-height, 0px);
+    height: var(--ambush-emoji-picker-fade-height, 0px);
     left: 0;
-    opacity: var(--buzz-emoji-picker-fade-opacity, 0);
+    opacity: var(--ambush-emoji-picker-fade-opacity, 0);
     pointer-events: none;
     position: absolute;
     right: 0;
@@ -107,7 +107,7 @@ const EMOJI_MART_SHADOW_CSS = `
     overflow-y: auto;
     padding-left: var(--padding);
     padding-right: var(--padding);
-    padding-top: var(--buzz-emoji-picker-scroll-padding-top, 28px);
+    padding-top: var(--ambush-emoji-picker-scroll-padding-top, 28px);
     width: 100%;
   }
 
@@ -139,7 +139,7 @@ const EMOJI_MART_SHADOW_CSS = `
 
   .search input[type="search"] {
     border-radius: 12px;
-    height: var(--buzz-emoji-picker-search-control-height);
+    height: var(--ambush-emoji-picker-search-control-height);
     padding-bottom: 0;
     padding-top: 0;
   }
@@ -151,9 +151,9 @@ const EMOJI_MART_SHADOW_CSS = `
   .search + .flex {
     border-radius: 12px;
     flex: 0 0 auto;
-    height: var(--buzz-emoji-picker-search-control-height) !important;
+    height: var(--ambush-emoji-picker-search-control-height) !important;
     margin-left: 8px;
-    width: var(--buzz-emoji-picker-search-control-height) !important;
+    width: var(--ambush-emoji-picker-search-control-height) !important;
   }
 
   .skin-tone-button {
@@ -161,8 +161,8 @@ const EMOJI_MART_SHADOW_CSS = `
     border: 0 !important;
     border-radius: 8px;
     box-shadow: none !important;
-    height: calc(var(--buzz-emoji-picker-search-control-height) - 8px) !important;
-    width: calc(var(--buzz-emoji-picker-search-control-height) - 8px) !important;
+    height: calc(var(--ambush-emoji-picker-search-control-height) - 8px) !important;
+    width: calc(var(--ambush-emoji-picker-search-control-height) - 8px) !important;
   }
 
   .skin-tone-button[aria-selected] {
@@ -175,11 +175,11 @@ const EMOJI_MART_SHADOW_CSS = `
   }
 
   .category button:hover .background,
-  .category button[data-buzz-selected="true"] .background {
+  .category button[data-ambush-selected="true"] .background {
     background-color: rgba(var(--em-rgb-color), 0.14);
   }
 
-  .category button[data-buzz-selected="true"] .background {
+  .category button[data-ambush-selected="true"] .background {
     background-color: rgba(var(--em-rgb-color), 0.2);
   }
 
@@ -192,7 +192,7 @@ const EMOJI_MART_SHADOW_CSS = `
     display: flex;
     flex: 0 0 auto;
     justify-content: space-between;
-    padding: 8px var(--buzz-emoji-picker-nav-padding-x, 24px) 16px;
+    padding: 8px var(--ambush-emoji-picker-nav-padding-x, 24px) 16px;
   }
 
   #nav .bar {
@@ -209,14 +209,14 @@ const EMOJI_MART_SHADOW_CSS = `
     border-radius: 999px;
     color: rgba(var(--em-rgb-color), 0.58);
     display: flex;
-    flex: 0 0 var(--buzz-emoji-picker-nav-button-size, 40px);
-    height: var(--buzz-emoji-picker-nav-button-size, 40px);
+    flex: 0 0 var(--ambush-emoji-picker-nav-button-size, 40px);
+    height: var(--ambush-emoji-picker-nav-button-size, 40px);
     justify-content: center;
     transition:
       background-color var(--duration) var(--easing),
       color var(--duration) var(--easing),
       transform var(--duration) var(--easing);
-    width: var(--buzz-emoji-picker-nav-button-size, 40px);
+    width: var(--ambush-emoji-picker-nav-button-size, 40px);
   }
 
   #nav button:hover,
@@ -234,8 +234,8 @@ const EMOJI_MART_SHADOW_CSS = `
 
   #nav svg,
   #nav img {
-    height: var(--buzz-emoji-picker-category-icon-size, 24px);
-    width: var(--buzz-emoji-picker-category-icon-size, 24px);
+    height: var(--ambush-emoji-picker-category-icon-size, 24px);
+    width: var(--ambush-emoji-picker-category-icon-size, 24px);
   }
 `;
 
@@ -606,9 +606,9 @@ export function useEmojiMartStyles(
         return;
       }
 
-      if (!shadowRoot.querySelector("#buzz-emoji-mart-style")) {
+      if (!shadowRoot.querySelector("#ambush-emoji-mart-style")) {
         const style = document.createElement("style");
-        style.id = "buzz-emoji-mart-style";
+        style.id = "ambush-emoji-mart-style";
         style.textContent = EMOJI_MART_SHADOW_CSS;
         shadowRoot.appendChild(style);
       }
@@ -638,9 +638,9 @@ export function useEmojiMartThemeVars() {
       const input = hslToRgbString(styles.getPropertyValue("--input"));
 
       setThemeVars({
-        "--buzz-emoji-picker-rgb-background": muted ?? "54, 58, 79",
-        "--buzz-emoji-picker-rgb-color": foreground ?? "245, 247, 255",
-        "--buzz-emoji-picker-rgb-input": input ?? "47, 51, 68",
+        "--ambush-emoji-picker-rgb-background": muted ?? "54, 58, 79",
+        "--ambush-emoji-picker-rgb-color": foreground ?? "245, 247, 255",
+        "--ambush-emoji-picker-rgb-input": input ?? "47, 51, 68",
       } as React.CSSProperties);
     };
 

@@ -7,7 +7,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use buzz_core_pkg::kind::KIND_PERSONA;
+use ambush_core_pkg::kind::KIND_PERSONA;
 use nostr::Event;
 use regex::Regex;
 use serde::Serialize;

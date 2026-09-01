@@ -12,13 +12,13 @@ import { waitForAnimations } from "../helpers/animations";
 // still serializing to `:shortcode:` on send. The message timeline renders the
 // same shortcode as `img[data-custom-emoji]` via remarkCustomEmoji.
 //
-// The `:buzz:` shortcode lives in a member-authored kind:30030 set
-// (d=`buzz:custom-emoji`) served by the mock bridge from two distinct
+// The `:ambush:` shortcode lives in a member-authored kind:30030 set
+// (d=`ambush:custom-emoji`) served by the mock bridge from two distinct
 // pubkeys. `listCustomEmoji` reads every member's set over the relay WS and
 // unions them (deduped by shortcode+url) into the community palette — which is
 // live even in mock-bridge mode (the mock only intercepts Tauri commands), so
 // this spec uses the simpler mock-bridge setup like messaging.spec.ts.
-const SHORTCODE = "buzz";
+const SHORTCODE = "ambush";
 const MOCK_MEDIA_PROXY_PORT = 54321;
 
 async function waitForMockLiveSubscription(
@@ -31,11 +31,11 @@ async function waitForMockLiveSubscription(
         ({ ch }) =>
           (
             window as Window & {
-              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+              __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                 channelName: string;
               }) => boolean;
             }
-          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: ch }) ??
+          ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: ch }) ??
           false,
         { ch: channelName },
       ),
@@ -244,7 +244,7 @@ test("native emoji-only messages leave space below the author metadata", async (
 // `:react:` is a relay-hosted fixture emoji (URL on the relay origin matching
 // rewriteRelayUrl()'s /media/{64-hex}.{ext} pattern), and the mock bridge
 // answers get_media_proxy_port with port 54321 so the rewrite resolves to a
-// real 127.0.0.1 URL rather than the buzz-media:// fallback.
+// real 127.0.0.1 URL rather than the ambush-media:// fallback.
 
 const REACTION_SHORTCODE = "react";
 const SELECTED_ACTION_CLASS = /(^|\s)bg-secondary(\s|$)/;
@@ -276,7 +276,7 @@ async function quickReactionStorageContains(
   return page.evaluate((selectedEmoji) => {
     for (let index = 0; index < window.localStorage.length; index += 1) {
       const key = window.localStorage.key(index);
-      if (!key?.startsWith("buzz.quick-reaction-emojis.v1")) continue;
+      if (!key?.startsWith("ambush.quick-reaction-emojis.v1")) continue;
       if (window.localStorage.getItem(key)?.includes(selectedEmoji)) {
         return true;
       }
@@ -541,7 +541,7 @@ test("editing a message with a custom emoji shows the image, not the shortcode (
 
   // Open it for editing. The composer loads via setContent — the path the
   // markdown parse rule fixes. The known shortcode must render as the inline
-  // node, NOT as literal `:buzz:` text.
+  // node, NOT as literal `:ambush:` text.
   await openMessageEditor(page, "edit-bug1");
   await expect(input.locator("img[data-custom-emoji]")).toHaveCount(1);
   await expect(input.locator("img[data-custom-emoji]")).toHaveAttribute(
@@ -579,7 +579,7 @@ test("adding a custom emoji while editing keeps the image after save (Bug 2)", a
 
   // After the edit round-trips through edit_message → kind:40003 (with emoji
   // tags) → applyEditTagOverlay, the timeline must render the emoji as an
-  // <img>, not a bare `:buzz:`. The pre-fix edit path shipped no emoji tags,
+  // <img>, not a bare `:ambush:`. The pre-fix edit path shipped no emoji tags,
   // so this row would show literal text and fail here.
   await expect(
     row.locator(`img[data-custom-emoji][alt=":${SHORTCODE}:"]`),

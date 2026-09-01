@@ -1,13 +1,13 @@
 /**
- * "Discussed in" channel discovery for Buzz git entities.
+ * "Discussed in" channel discovery for Ambush git entities.
  *
  * Chat messages that reference a PR, issue, or repository do so only through
- * `buzz://` links in their *content* — they carry no entity tags (see
+ * `ambush://` links in their *content* — they carry no entity tags (see
  * `useMessageLinkPreviews.ts`). So discovery runs the relay's NIP-50
  * full-text search over message content and groups the hits by channel.
  *
  * Query construction leans on the FTS tokenizer: the relay ANDs every token
- * of the search text, and `buzz://` links tokenize into their query-param
+ * of the search text, and `ambush://` links tokenize into their query-param
  * values. A PR/issue link contains the entity's 64-hex event id (globally
  * unique token), and every repo/PR/issue link contains the repository
  * coordinate's `owner` pubkey and `d`-tag — so searching those tokens finds
@@ -31,7 +31,7 @@ export type DiscussionChannel = {
 /**
  * Search text matching messages that link a specific PR or issue: the event
  * id is a single 64-hex token unique to the entity, present in every
- * `buzz://pr|issue?id=…` link.
+ * `ambush://pr|issue?id=…` link.
  */
 export function entityDiscussionQuery(eventId: string): string {
   return eventId;
@@ -171,7 +171,7 @@ const SNIPPET_MAX_CHARS = 400;
  */
 export function discussionSnippet(content: string): string {
   const cleaned = content
-    .replace(/buzz:\/\/\S+/g, "")
+    .replace(/ambush:\/\/\S+/g, "")
     .replace(/\b\d{5}:[0-9a-f]{64}:\S+/gi, "")
     .replace(/\s+/g, " ")
     .trim();

@@ -15,7 +15,7 @@ export type PendingSnapshotImport = {
   snapshotKind: "agent" | "team";
 };
 
-const OPEN_SNAPSHOT_IMPORT_EVENT = "buzz:open-snapshot-import";
+const OPEN_SNAPSHOT_IMPORT_EVENT = "ambush:open-snapshot-import";
 
 let pendingImport: PendingSnapshotImport | null = null;
 

@@ -1,6 +1,6 @@
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
-const COMMUNITY_DESTINATIONS_KEY = "buzz-community-destinations";
+const COMMUNITY_DESTINATIONS_KEY = "ambush-community-destinations";
 let pendingCommunityRestoreId: string | null = null;
 
 export type CommunityDestination =

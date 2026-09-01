@@ -1,7 +1,7 @@
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";
-import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
+import { AmbushLogoMotion } from "@/shared/ui/ambush-logo/AmbushLogoMotion";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 
 /**
@@ -17,13 +17,13 @@ export function PendingInviteGate() {
 
   return (
     <div
-      className="buzz-onboarding-neutral-theme buzz-startup-shell fixed inset-0 z-50 flex items-center justify-center bg-background px-4 py-8 text-foreground"
+      className="ambush-onboarding-neutral-theme ambush-startup-shell fixed inset-0 z-50 flex items-center justify-center bg-background px-4 py-8 text-foreground"
       data-system-color-scheme={systemColorScheme}
       data-testid="pending-invite-gate"
     >
       <StartupWindowDragRegion />
       <div className="relative flex w-full max-w-[500px] flex-col items-center text-center">
-        <FlappingBee className="h-auto w-24" />
+        <AmbushLogoMotion className="h-auto w-24" />
         <h1 className="mt-6 text-3xl font-semibold tracking-tight">
           Opening community link
         </h1>

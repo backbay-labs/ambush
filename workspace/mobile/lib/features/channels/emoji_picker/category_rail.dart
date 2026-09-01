@@ -18,7 +18,7 @@ IconData _categoryIcon(String categoryId) => switch (categoryId) {
 /// 18px icon it holds.
 const _railHeight = 36.0;
 
-const _emojiSkinTonePrefsKey = 'buzz.emoji-picker.skin-tone.v1';
+const _emojiSkinTonePrefsKey = 'ambush.emoji-picker.skin-tone.v1';
 
 const _skinTones = [
   (label: 'Default', color: Color(0xFFFFC93A)),

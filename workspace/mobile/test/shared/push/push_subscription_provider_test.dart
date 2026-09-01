@@ -1,7 +1,7 @@
-import 'package:buzz/features/channels/channel.dart';
-import 'package:buzz/shared/community/community.dart';
-import 'package:buzz/shared/push/push_subscription.dart';
-import 'package:buzz/shared/push/push_subscription_provider.dart';
+import 'package:ambush/features/channels/channel.dart';
+import 'package:ambush/shared/community/community.dart';
+import 'package:ambush/shared/push/push_subscription.dart';
+import 'package:ambush/shared/push/push_subscription_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nostr/nostr.dart' as nostr;
 
@@ -14,7 +14,7 @@ void main() {
     'derives desired subscriptions from nsec, membership, and mute state',
     () {
       final nsec = nostr.Keys.generate().nsec;
-      final subscriptions = desiredBuzzPushSubscriptions(
+      final subscriptions = desiredAmbushPushSubscriptions(
         community: Community.create(
           name: 'Team',
           relayUrl: 'https://relay.example.com',
@@ -32,13 +32,16 @@ void main() {
       expect(subscriptions, hasLength(1));
       expect(subscriptions!.single.filter.pTags, hasLength(1));
       expect(subscriptions.single.ignore, hasLength(2));
-      expect(subscriptions.single.ignore.first.kinds, buzzPushRenderableKinds);
+      expect(
+        subscriptions.single.ignore.first.kinds,
+        ambushPushRenderableKinds,
+      );
       expect(subscriptions.single.ignore.last.hTags, [activeID]);
     },
   );
 
   test('returns no desired subscriptions without a signing identity', () {
-    final subscriptions = desiredBuzzPushSubscriptions(
+    final subscriptions = desiredAmbushPushSubscriptions(
       community: Community.create(
         name: 'Team',
         relayUrl: 'https://relay.example.com',

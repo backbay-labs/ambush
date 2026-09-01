@@ -126,12 +126,12 @@ test("resolveAgentReadiness_cli_skips_unavailable_runtimes", () => {
   assert.equal(result.ready, false);
 });
 
-test("resolveAgentReadiness_cli_ignores_buzz_agent_runtime", () => {
-  // buzz-agent with availability=available and logged_in must NOT trigger the CLI path.
+test("resolveAgentReadiness_cli_ignores_ambush_agent_runtime", () => {
+  // ambush-agent with availability=available and logged_in must NOT trigger the CLI path.
   const runtimes = [
     makeRuntime({
-      id: "buzz-agent",
-      label: "buzz-agent",
+      id: "ambush-agent",
+      label: "ambush-agent",
       authStatus: { status: "not_applicable" },
     }),
   ];
@@ -140,24 +140,24 @@ test("resolveAgentReadiness_cli_ignores_buzz_agent_runtime", () => {
 });
 
 // ---------------------------------------------------------------------------
-// buzz-agent path
+// ambush-agent path
 // ---------------------------------------------------------------------------
 
-test("resolveAgentReadiness_buzz_agent_ready_when_provider_model_and_key_set", () => {
+test("resolveAgentReadiness_ambush_agent_ready_when_provider_model_and_key_set", () => {
   // anthropic requires ANTHROPIC_API_KEY
   const result = resolveAgentReadiness(
-    [makeRuntime({ id: "buzz-agent", label: "Buzz Agent" })],
+    [makeRuntime({ id: "ambush-agent", label: "Ambush Agent" })],
     makeConfig({
-      preferred_runtime: "buzz-agent",
+      preferred_runtime: "ambush-agent",
       provider: "anthropic",
       model: "claude-3-5-sonnet-latest",
       env_vars: { ANTHROPIC_API_KEY: "sk-ant-test" },
     }),
   );
-  assert.deepEqual(result, { ready: true, reason: "buzz-agent" });
+  assert.deepEqual(result, { ready: true, reason: "ambush-agent" });
 });
 
-test("resolveAgentReadiness_buzz_agent_not_ready_when_missing_required_credential_key", () => {
+test("resolveAgentReadiness_ambush_agent_not_ready_when_missing_required_credential_key", () => {
   const config = makeConfig({
     provider: "anthropic",
     model: "claude-3-5-sonnet-latest",
@@ -167,7 +167,7 @@ test("resolveAgentReadiness_buzz_agent_not_ready_when_missing_required_credentia
   assert.equal(result.ready, false);
 });
 
-test("resolveAgentReadiness_buzz_agent_not_ready_when_provider_missing", () => {
+test("resolveAgentReadiness_ambush_agent_not_ready_when_provider_missing", () => {
   const config = makeConfig({
     provider: null,
     model: "claude-3-5-sonnet-latest",
@@ -177,7 +177,7 @@ test("resolveAgentReadiness_buzz_agent_not_ready_when_provider_missing", () => {
   assert.equal(result.ready, false);
 });
 
-test("resolveAgentReadiness_buzz_agent_not_ready_when_model_missing", () => {
+test("resolveAgentReadiness_ambush_agent_not_ready_when_model_missing", () => {
   const config = makeConfig({
     provider: "anthropic",
     model: null,
@@ -209,8 +209,8 @@ test("resolveAgentReadiness_welcome_readiness_uses_ready_cli_without_preference"
   });
 });
 
-test("resolveAgentReadiness_legacy_config_without_preference_uses_buzz_agent_fields", () => {
-  const runtimes = [makeRuntime({ id: "buzz-agent", label: "Buzz Agent" })];
+test("resolveAgentReadiness_legacy_config_without_preference_uses_ambush_agent_fields", () => {
+  const runtimes = [makeRuntime({ id: "ambush-agent", label: "Ambush Agent" })];
   const result = resolveAgentReadiness(
     runtimes,
     makeConfig({
@@ -220,7 +220,7 @@ test("resolveAgentReadiness_legacy_config_without_preference_uses_buzz_agent_fie
       env_vars: { ANTHROPIC_API_KEY: "sk-ant-test" },
     }),
   );
-  assert.deepEqual(result, { ready: true, reason: "buzz-agent" });
+  assert.deepEqual(result, { ready: true, reason: "ambush-agent" });
 });
 
 test("resolveAgentReadiness_legacy_config_does_not_treat_goose_binary_as_ready", () => {
@@ -236,10 +236,10 @@ test("resolveAgentReadiness_legacy_config_does_not_treat_goose_binary_as_ready",
 // Preferred runtime isolation
 // ---------------------------------------------------------------------------
 
-test("resolveAgentReadiness_preferred_goose_does_not_borrow_ready_buzz_agent_config", () => {
+test("resolveAgentReadiness_preferred_goose_does_not_borrow_ready_ambush_agent_config", () => {
   const runtimes = [
     makeRuntime({ id: "goose", label: "Goose" }),
-    makeRuntime({ id: "buzz-agent", label: "Buzz Agent" }),
+    makeRuntime({ id: "ambush-agent", label: "Ambush Agent" }),
   ];
   const result = resolveAgentReadiness(
     runtimes,

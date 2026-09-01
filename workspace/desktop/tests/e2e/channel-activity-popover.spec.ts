@@ -26,11 +26,11 @@ async function waitForMockLiveSubscription(page: Page, channelName: string) {
         (name) =>
           (
             window as Window & {
-              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+              __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                 channelName: string;
               }) => boolean;
             }
-          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: name,
           }) ?? false,
         channelName,
@@ -53,7 +53,7 @@ async function emitMockMessage(
     ({ body, parentEventId, pubkey, createdAt, mentionPubkeys }) =>
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
             parentEventId?: string;
@@ -62,7 +62,7 @@ async function emitMockMessage(
             mentionPubkeys?: string[];
           }) => MockMessageEvent;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: body,
         parentEventId,
@@ -87,14 +87,15 @@ async function emitMockMessage(
 async function pushMockInboxFeedItems(page: Page, items: MockInboxFeedItem[]) {
   await page.waitForFunction(
     () =>
-      typeof (window as Window & { __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: unknown })
-        .__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ === "function",
+      typeof (
+        window as Window & { __AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__?: unknown }
+      ).__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__ === "function",
   );
   await page.evaluate(
     ({ channelId, feedItems, senderPubkey }) => {
       const pushFeedItem = (
         window as Window & {
-          __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+          __AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
             category: "mention";
             channel_id: string;
             channel_name: string;
@@ -107,7 +108,7 @@ async function pushMockInboxFeedItems(page: Page, items: MockInboxFeedItem[]) {
             tags: string[][];
           }) => void;
         }
-      ).__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+      ).__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
       if (!pushFeedItem) {
         throw new Error("Mock feed injection helper is unavailable");
       }
@@ -139,7 +140,7 @@ async function getForcedUnreadSources(page: Page): Promise<string[]> {
   return page.evaluate(
     ({ channelId, pubkey }) => {
       const raw = window.localStorage.getItem(
-        `buzz-forced-unread.v1:${pubkey}`,
+        `ambush-forced-unread.v1:${pubkey}`,
       );
       if (!raw) return [];
       const entry = JSON.parse(raw)?.[channelId];
@@ -221,20 +222,21 @@ async function seedChannelActivity(
   if (includeAgent) {
     await page.waitForFunction(
       () =>
-        typeof (window as Window & { __BUZZ_E2E_SEED_ACTIVE_TURNS__?: unknown })
-          .__BUZZ_E2E_SEED_ACTIVE_TURNS__ === "function",
+        typeof (
+          window as Window & { __AMBUSH_E2E_SEED_ACTIVE_TURNS__?: unknown }
+        ).__AMBUSH_E2E_SEED_ACTIVE_TURNS__ === "function",
     );
     await page.evaluate(
       ({ agentPubkey, channelId }) => {
         (
           window as Window & {
-            __BUZZ_E2E_SEED_ACTIVE_TURNS__?: (input: {
+            __AMBUSH_E2E_SEED_ACTIVE_TURNS__?: (input: {
               agentPubkey: string;
               channelId: string;
               turnId: string;
             }) => void;
           }
-        ).__BUZZ_E2E_SEED_ACTIVE_TURNS__?.({
+        ).__AMBUSH_E2E_SEED_ACTIVE_TURNS__?.({
           agentPubkey,
           channelId,
           turnId: "channel-hover-preview",

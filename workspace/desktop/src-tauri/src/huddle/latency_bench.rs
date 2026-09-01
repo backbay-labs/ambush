@@ -19,7 +19,7 @@
 //!   t_first_audio  tts_active rising edge = first player.append accepted
 //!
 //! Run:
-//!   BUZZ_BENCH_WAV=<48k f32 mono wav> cargo test --release -p buzz-desktop \
+//!   AMBUSH_BENCH_WAV=<48k f32 mono wav> cargo test --release -p ambush-desktop \
 //!     --lib huddle::latency_bench -- --ignored --nocapture
 
 use std::sync::{
@@ -107,18 +107,18 @@ struct TurnResult {
 }
 
 #[test]
-#[ignore = "ad-hoc latency baseline; needs models in ~/.buzz/models and an audio output device"]
+#[ignore = "ad-hoc latency baseline; needs models in ~/.ambush/models and an audio output device"]
 fn baseline_stt_fake_llm_tts_first_audio() {
     let home = dirs::home_dir().expect("home");
-    let stt_dir = home.join(".buzz/models/parakeet-tdt-ctc-110m-en");
-    let tts_dir = home.join(".buzz/models/pocket-tts");
+    let stt_dir = home.join(".ambush/models/parakeet-tdt-ctc-110m-en");
+    let tts_dir = home.join(".ambush/models/pocket-tts");
     assert!(
         stt_dir.join("model.int8.onnx").exists(),
         "parakeet model missing"
     );
     assert!(tts_dir.join("bundle.json").exists(), "pocket model missing");
 
-    let wav_path = std::env::var("BUZZ_BENCH_WAV").expect("set BUZZ_BENCH_WAV");
+    let wav_path = std::env::var("AMBUSH_BENCH_WAV").expect("set AMBUSH_BENCH_WAV");
     let samples_48k = read_wav_f32_48k(&wav_path);
     let speech_end_sample = last_voiced_sample(&samples_48k, 0.015);
     let audio_dur_s = samples_48k.len() as f64 / 48_000.0;
@@ -127,7 +127,7 @@ fn baseline_stt_fake_llm_tts_first_audio() {
         "bench: utterance {wav_path}: {audio_dur_s:.2} s total, speech ends at {speech_end_s:.2} s"
     );
 
-    let llm_delay_ms: u64 = std::env::var("BUZZ_BENCH_LLM_MS")
+    let llm_delay_ms: u64 = std::env::var("AMBUSH_BENCH_LLM_MS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
@@ -176,7 +176,7 @@ fn baseline_stt_fake_llm_tts_first_audio() {
         ("reply_medium", "Got it. The relay deploy finished about two minutes ago and all checks passed."),
         ("reply_long", "Here's where things stand. The relay deploy finished cleanly and every health check is green. Two pods restarted during rollout, which is expected, and message latency is back to normal."),
     ];
-    let turns: usize = std::env::var("BUZZ_BENCH_TURNS")
+    let turns: usize = std::env::var("AMBUSH_BENCH_TURNS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(6);

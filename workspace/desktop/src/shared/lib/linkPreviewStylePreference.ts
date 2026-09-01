@@ -4,7 +4,7 @@ import * as React from "react";
 export type LinkPreviewStyle = "compact" | "rich";
 
 export const LINK_PREVIEW_STYLE_STORAGE_KEY =
-  "buzz.appearance.linkPreviewStyle";
+  "ambush.appearance.linkPreviewStyle";
 export const DEFAULT_LINK_PREVIEW_STYLE: LinkPreviewStyle = "compact";
 
 const listeners = new Set<() => void>();

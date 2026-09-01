@@ -32,7 +32,7 @@ RUN apk add --no-cache bash ca-certificates curl git \
 COPY --from=builder --chmod=0755 /build/target/sprig/sprig /usr/local/bin/sprig
 COPY --chmod=0755 scripts/sprig-entrypoint.sh /usr/local/bin/sprig-entrypoint
 RUN for name in \
-      buzz-acp buzz-agent buzz-dev-mcp rg tree buzz \
+      ambush-acp ambush-agent ambush-dev-mcp rg tree ambush \
       git-credential-nostr git-sign-nostr; do \
         ln -s sprig "/usr/local/bin/$name"; \
     done

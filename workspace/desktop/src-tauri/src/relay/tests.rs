@@ -554,14 +554,14 @@ fn parse_command_response_rejects_garbage() {
 /// and addressed to `agent_keys`.
 ///
 /// Uses `nostr_compat` (nostr 0.36) for the owner keys because
-/// `buzz_sdk_pkg::nip_oa::compute_auth_tag` expects nostr 0.36 types.
+/// `ambush_sdk_pkg::nip_oa::compute_auth_tag` expects nostr 0.36 types.
 /// The agent pubkey is bridged via hex encoding.
 fn make_valid_auth_tag(agent_keys: &nostr::Keys) -> String {
     let owner_keys = nostr::Keys::generate();
     let agent_pubkey_hex = agent_keys.public_key().to_hex();
     let agent_compat_pubkey =
         nostr::PublicKey::from_hex(&agent_pubkey_hex).expect("valid hex pubkey should parse");
-    buzz_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_compat_pubkey, "")
+    ambush_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_compat_pubkey, "")
         .expect("compute_auth_tag should not fail with distinct keys")
 }
 

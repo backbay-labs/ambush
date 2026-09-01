@@ -20,7 +20,7 @@ const CHANNEL = "general";
 const SHOT = "test-results/thread-head-stale-edit";
 
 type MockMessageWindow = Window & {
-  __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+  __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
     channelName: string;
     content: string;
     parentEventId?: string | null;
@@ -40,11 +40,11 @@ async function waitForMockLiveSubscription(
         (ch) =>
           (
             window as Window & {
-              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+              __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                 channelName: string;
               }) => boolean;
             }
-          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: ch }) ??
+          ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: ch }) ??
           false,
         channelName,
       ),
@@ -73,7 +73,7 @@ test("thread head reflects the channel-window edit even before thread aux loads"
   //    command signs with the active identity.
   const root = await page.evaluate(
     ({ channelName, content, pubkey }) =>
-      (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      (window as MockMessageWindow).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName,
         content,
         pubkey,
@@ -90,7 +90,7 @@ test("thread head reflects the channel-window edit even before thread aux loads"
 
   await page.evaluate(
     ({ channelName, rootId, content, pubkey, editKind }) =>
-      (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      (window as MockMessageWindow).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName,
         content,
         pubkey,
@@ -145,9 +145,9 @@ test("thread head reflects the channel-window edit even before thread aux loads"
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_THREAD_REPLIES_PENDING__?: () => number;
+              __AMBUSH_E2E_THREAD_REPLIES_PENDING__?: () => number;
             }
-          ).__BUZZ_E2E_THREAD_REPLIES_PENDING__?.() ?? 0,
+          ).__AMBUSH_E2E_THREAD_REPLIES_PENDING__?.() ?? 0,
       ),
     )
     .toBeGreaterThan(0);
@@ -160,9 +160,9 @@ test("thread head reflects the channel-window edit even before thread aux loads"
   await page.evaluate(() =>
     (
       window as Window & {
-        __BUZZ_E2E_RELEASE_THREAD_REPLIES__?: () => number;
+        __AMBUSH_E2E_RELEASE_THREAD_REPLIES__?: () => number;
       }
-    ).__BUZZ_E2E_RELEASE_THREAD_REPLIES__?.(),
+    ).__AMBUSH_E2E_RELEASE_THREAD_REPLIES__?.(),
   );
   await expect(headBody).toContainText("these PRs?");
   await expect(headBody).not.toContainText("these two PRs?");

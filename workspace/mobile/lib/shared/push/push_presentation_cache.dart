@@ -7,7 +7,7 @@ import 'package:nostr/nostr.dart' as nostr;
 
 import '../relay/nostr_models.dart';
 
-const _pushPresentationChannel = MethodChannel('buzz/push');
+const _pushPresentationChannel = MethodChannel('ambush/push');
 const _maximumAvatarSourceBytes = 512 * 1024;
 const _maximumAvatarPNGBytes = 64 * 1024;
 Future<void> _avatarEncodeTail = Future.value();
@@ -34,7 +34,7 @@ bool isVerifiedPushPresentationEvent(NostrEvent event) {
 }
 
 /// Exports raw verified kind-0 events. Native code verifies them again before storage.
-Future<void> cacheBuzzPushProfileEvents(
+Future<void> cacheAmbushPushProfileEvents(
   String communityID,
   Iterable<NostrEvent> events,
 ) async {
@@ -55,7 +55,7 @@ Future<void> cacheBuzzPushProfileEvents(
 }
 
 /// Exports verified channel metadata and membership for native authority checks.
-Future<void> cacheBuzzPushChannelEvents(
+Future<void> cacheAmbushPushChannelEvents(
   String? communityID,
   Iterable<NostrEvent> metadataEvents,
   Iterable<NostrEvent> membershipEvents,
@@ -143,7 +143,7 @@ bool _isNewerEvent(NostrEvent candidate, NostrEvent existing) =>
 ///
 /// This never starts network I/O. Oversized, malformed, or unsupported images
 /// are ignored, and notification delivery remains independent of the cache.
-Future<void> cacheBuzzPushAvatarFromLoadedBytes(
+Future<void> cacheAmbushPushAvatarFromLoadedBytes(
   String communityID,
   String sourceURL,
   Uint8List sourceBytes,

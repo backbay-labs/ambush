@@ -571,7 +571,7 @@ export function AgentCreationPreview({
         {activeTab === "emoji" ? (
           <div className="relative grid content-start gap-3">
             <div
-              className="buzz-emoji-mart relative z-0 h-[280px] overflow-hidden rounded-lg bg-muted"
+              className="ambush-emoji-mart relative z-0 h-[280px] overflow-hidden rounded-lg bg-muted"
               ref={emojiPickerContainerRef}
               style={emojiMartThemeVars}
             >
@@ -863,13 +863,13 @@ export function AgentCreationPreview({
                         className={cn(
                           "flex h-full w-full items-center justify-center leading-none",
                           isCompact ? "text-2xl" : "text-[4rem]",
-                          squishKey > 0 && "buzz-avatar-squish",
+                          squishKey > 0 && "ambush-avatar-squish",
                         )}
                         key={squishKey}
                         style={
                           {
-                            "--buzz-avatar-emoji-offset-x": "0px",
-                            "--buzz-avatar-emoji-offset-y": "0px",
+                            "--ambush-avatar-emoji-offset-x": "0px",
+                            "--ambush-avatar-emoji-offset-y": "0px",
                           } as React.CSSProperties
                         }
                       >
@@ -948,13 +948,13 @@ export function AgentCreationPreview({
                         className={cn(
                           "flex h-full w-full items-center justify-center leading-none",
                           isCompact ? "text-2xl" : "text-[4rem]",
-                          squishKey > 0 && "buzz-avatar-squish",
+                          squishKey > 0 && "ambush-avatar-squish",
                         )}
                         key={squishKey}
                         style={
                           {
-                            "--buzz-avatar-emoji-offset-x": "0px",
-                            "--buzz-avatar-emoji-offset-y": "0px",
+                            "--ambush-avatar-emoji-offset-x": "0px",
+                            "--ambush-avatar-emoji-offset-y": "0px",
                           } as React.CSSProperties
                         }
                       >

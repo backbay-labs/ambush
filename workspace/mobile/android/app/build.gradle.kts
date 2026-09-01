@@ -7,16 +7,16 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val uploadKeystorePath = providers.environmentVariable("BUZZ_ANDROID_UPLOAD_KEYSTORE_PATH").orNull
-val uploadKeystorePassword = providers.environmentVariable("BUZZ_ANDROID_UPLOAD_KEYSTORE_PASSWORD").orNull
-val uploadKeyAlias = providers.environmentVariable("BUZZ_ANDROID_UPLOAD_KEY_ALIAS").orNull
-val uploadKeyPassword = providers.environmentVariable("BUZZ_ANDROID_UPLOAD_KEY_PASSWORD").orNull
+val uploadKeystorePath = providers.environmentVariable("AMBUSH_ANDROID_UPLOAD_KEYSTORE_PATH").orNull
+val uploadKeystorePassword = providers.environmentVariable("AMBUSH_ANDROID_UPLOAD_KEYSTORE_PASSWORD").orNull
+val uploadKeyAlias = providers.environmentVariable("AMBUSH_ANDROID_UPLOAD_KEY_ALIAS").orNull
+val uploadKeyPassword = providers.environmentVariable("AMBUSH_ANDROID_UPLOAD_KEY_PASSWORD").orNull
 val uploadSigningValues =
     mapOf(
-        "BUZZ_ANDROID_UPLOAD_KEYSTORE_PATH" to uploadKeystorePath,
-        "BUZZ_ANDROID_UPLOAD_KEYSTORE_PASSWORD" to uploadKeystorePassword,
-        "BUZZ_ANDROID_UPLOAD_KEY_ALIAS" to uploadKeyAlias,
-        "BUZZ_ANDROID_UPLOAD_KEY_PASSWORD" to uploadKeyPassword,
+        "AMBUSH_ANDROID_UPLOAD_KEYSTORE_PATH" to uploadKeystorePath,
+        "AMBUSH_ANDROID_UPLOAD_KEYSTORE_PASSWORD" to uploadKeystorePassword,
+        "AMBUSH_ANDROID_UPLOAD_KEY_ALIAS" to uploadKeyAlias,
+        "AMBUSH_ANDROID_UPLOAD_KEY_PASSWORD" to uploadKeyPassword,
     )
 val missingUploadSigningValues = uploadSigningValues.filterValues { it.isNullOrBlank() }.keys
 val hasUploadSigning = missingUploadSigningValues.isEmpty()
@@ -81,23 +81,23 @@ if (
 //     pipeline that signs through the central APK Signer service (Cashkite,
 //     BOT-1234). No keystore material may be present in this mode.
 val releaseSigningMode =
-    providers.environmentVariable("BUZZ_ANDROID_RELEASE_SIGNING").orNull ?: "upload-keystore"
+    providers.environmentVariable("AMBUSH_ANDROID_RELEASE_SIGNING").orNull ?: "upload-keystore"
 val externalReleaseSigning = releaseSigningMode == "external"
 if (releaseSigningMode !in setOf("upload-keystore", "external")) {
     throw GradleException(
-        "BUZZ_ANDROID_RELEASE_SIGNING must be \"upload-keystore\" or \"external\", got: " +
+        "AMBUSH_ANDROID_RELEASE_SIGNING must be \"upload-keystore\" or \"external\", got: " +
             releaseSigningMode,
     )
 }
 if (externalReleaseSigning && uploadSigningValues.values.any { !it.isNullOrBlank() }) {
     throw GradleException(
-        "BUZZ_ANDROID_RELEASE_SIGNING=external must not be combined with " +
-            "BUZZ_ANDROID_UPLOAD_* credentials; unset one of them.",
+        "AMBUSH_ANDROID_RELEASE_SIGNING=external must not be combined with " +
+            "AMBUSH_ANDROID_UPLOAD_* credentials; unset one of them.",
     )
 }
 
 android {
-    namespace = "xyz.block.buzz.mobile"
+    namespace = "com.backbay.ambush.mobile"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -111,7 +111,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "xyz.block.buzz.mobile"
+        applicationId = "com.backbay.ambush.mobile"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -119,7 +119,7 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        resValue("string", "app_name", "Buzz")
+        resValue("string", "app_name", "Ambush")
     }
 
     signingConfigs {
@@ -143,7 +143,7 @@ android {
             val resolvedAppName =
                 debugAppName
                     ?: worktreeAppName
-                    ?: worktreeLabel?.let { "Buzz ($it)" }
+                    ?: worktreeLabel?.let { "Ambush ($it)" }
             if (resolvedAppName != null) {
                 resValue("string", "app_name", resolvedAppName)
             }
@@ -173,33 +173,33 @@ gradle.taskGraph.whenReady {
     if (buildsRelease && externalReleaseSigning) {
         // External signing: the unsigned bundle goes to the central APK
         // Signer. All keystore checks are intentionally skipped; the
-        // guard above already rejected any BUZZ_ANDROID_UPLOAD_* values.
+        // guard above already rejected any AMBUSH_ANDROID_UPLOAD_* values.
         return@whenReady
     }
     if (buildsRelease && !hasUploadSigning) {
         throw GradleException(
             "Release builds require Android upload signing credentials. Missing: " +
                 missingUploadSigningValues.sorted().joinToString(", ") +
-                ". For central APK Signer pipelines set BUZZ_ANDROID_RELEASE_SIGNING=external.",
+                ". For central APK Signer pipelines set AMBUSH_ANDROID_RELEASE_SIGNING=external.",
         )
     }
     if (buildsRelease) {
         val configuredKeystore = File(requireNotNull(uploadKeystorePath))
         if (!configuredKeystore.isAbsolute) {
             throw GradleException(
-                "BUZZ_ANDROID_UPLOAD_KEYSTORE_PATH must be absolute: $configuredKeystore",
+                "AMBUSH_ANDROID_UPLOAD_KEYSTORE_PATH must be absolute: $configuredKeystore",
             )
         }
         val keystore = file(configuredKeystore)
         val repositoryRoot = rootProject.projectDir.parentFile.parentFile.canonicalFile
         if (keystore.canonicalFile.toPath().startsWith(repositoryRoot.toPath())) {
             throw GradleException(
-                "BUZZ_ANDROID_UPLOAD_KEYSTORE_PATH must be outside the repository: $keystore",
+                "AMBUSH_ANDROID_UPLOAD_KEYSTORE_PATH must be outside the repository: $keystore",
             )
         }
         if (!keystore.isFile || !keystore.canRead()) {
             throw GradleException(
-                "BUZZ_ANDROID_UPLOAD_KEYSTORE_PATH is not a readable file: $keystore",
+                "AMBUSH_ANDROID_UPLOAD_KEYSTORE_PATH is not a readable file: $keystore",
             )
         }
     }

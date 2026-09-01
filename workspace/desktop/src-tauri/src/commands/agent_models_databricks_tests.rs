@@ -73,7 +73,11 @@ async fn databricks_interactive_auth_failure_records_a_cooldown() {
     let redaction = BTreeMap::new();
 
     let result = run_interactive_databricks_auth(
-        async { Err(buzz_agent_pkg::AgentError::LlmAuth("closed the tab".into())) },
+        async {
+            Err(ambush_agent_pkg::AgentError::LlmAuth(
+                "closed the tab".into(),
+            ))
+        },
         Duration::from_secs(150),
         &cooldowns,
         host,
@@ -95,7 +99,7 @@ async fn databricks_interactive_auth_timeout_records_cooldown_and_returns_timeou
     // An abandoned SSO tab: the flow never resolves. Under the paused clock the
     // injected timeout fires deterministically without real waiting.
     let result = run_interactive_databricks_auth(
-        std::future::pending::<Result<(), buzz_agent_pkg::AgentError>>(),
+        std::future::pending::<Result<(), ambush_agent_pkg::AgentError>>(),
         Duration::from_secs(150),
         &cooldowns,
         host,

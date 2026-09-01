@@ -6,9 +6,9 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
-import '../../shared/widgets/bee_refresh_indicator.dart';
+import '../../shared/widgets/ambush_refresh_indicator.dart';
 import '../channels/channel.dart';
 import '../channels/compose_bar.dart';
 import 'forum_models.dart';
@@ -68,7 +68,7 @@ class ForumPostsView extends HookConsumerWidget {
               loading: () => Padding(
                 padding: EdgeInsets.only(top: frostedAppBarHeight(context)),
                 child: const Center(
-                  child: BuzzLoadingIndicator(
+                  child: AmbushLoadingIndicator(
                     size: 44,
                     semanticLabel: 'Loading posts',
                   ),
@@ -93,7 +93,7 @@ class ForumPostsView extends HookConsumerWidget {
                     isArchived: channel.isArchived,
                   );
                 }
-                return BeeRefreshIndicator(
+                return AmbushRefreshIndicator(
                   onRefresh: () async {
                     ref.invalidate(forumPostsProvider(channel.id));
                     await ref.read(forumPostsProvider(channel.id).future);

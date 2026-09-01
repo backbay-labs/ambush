@@ -19,7 +19,9 @@ test("build + parse round-trips poster and gif URLs", () => {
 test("build encodes the gif URL so the fragment has no reserved chars", () => {
   const gif = "https://relay.example.com/media/bb.gif?x=1&y=2#frag";
   const url = buildAnimatedAvatarUrl(POSTER, gif);
-  const fragment = url.slice(url.indexOf("#buzz-anim=") + "#buzz-anim=".length);
+  const fragment = url.slice(
+    url.indexOf("#ambush-anim=") + "#ambush-anim=".length,
+  );
   assert.ok(!fragment.includes("#"), "fragment should not contain raw #");
   assert.ok(!fragment.includes("&"), "fragment should not contain raw &");
   assert.equal(parseAnimatedAvatarUrl(url)?.animationUrl, gif);
@@ -43,16 +45,16 @@ test("parse returns null for emoji data-url avatars", () => {
 });
 
 test("parse returns null when fragment marker has no poster prefix", () => {
-  assert.equal(parseAnimatedAvatarUrl(`#buzz-anim=${GIF}`), null);
+  assert.equal(parseAnimatedAvatarUrl(`#ambush-anim=${GIF}`), null);
 });
 
 test("parse returns null when gif part is empty", () => {
-  assert.equal(parseAnimatedAvatarUrl(`${POSTER}#buzz-anim=`), null);
+  assert.equal(parseAnimatedAvatarUrl(`${POSTER}#ambush-anim=`), null);
 });
 
 test("parse returns null when gif part is not an http(s) URL", () => {
   assert.equal(
-    parseAnimatedAvatarUrl(`${POSTER}#buzz-anim=javascript%3Aalert(1)`),
+    parseAnimatedAvatarUrl(`${POSTER}#ambush-anim=javascript%3Aalert(1)`),
     null,
   );
 });
@@ -60,14 +62,14 @@ test("parse returns null when gif part is not an http(s) URL", () => {
 test("parse returns null when poster part is not an http(s) URL", () => {
   assert.equal(
     parseAnimatedAvatarUrl(
-      `data:image/png;base64,xx#buzz-anim=${encodeURIComponent(GIF)}`,
+      `data:image/png;base64,xx#ambush-anim=${encodeURIComponent(GIF)}`,
     ),
     null,
   );
 });
 
 test("parse returns null on malformed percent-encoding", () => {
-  assert.equal(parseAnimatedAvatarUrl(`${POSTER}#buzz-anim=%E0%A4%A`), null);
+  assert.equal(parseAnimatedAvatarUrl(`${POSTER}#ambush-anim=%E0%A4%A`), null);
 });
 
 test("getAvatarSnapshotUrl strips animated avatars to their poster URL", () => {

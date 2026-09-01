@@ -13,7 +13,7 @@
  * writes fail-silently-with-a-warning, preserving the app's ability to start
  * and degrade to in-memory state instead of crashing to a blank screen.
  *
- * Issue contexts: block/buzz#5078.
+ * Issue contexts: block/ambush#5078.
  */
 
 // Keep the console noise down on repeated reads — one warn per (action, key)

@@ -8,7 +8,7 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use buzz_core_pkg::kind::{
+use ambush_core_pkg::kind::{
     KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_HUDDLE_STARTED, KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2,
 };

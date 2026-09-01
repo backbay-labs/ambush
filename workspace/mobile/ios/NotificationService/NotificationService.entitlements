@@ -4,11 +4,11 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>$(BUZZ_APP_GROUP_IDENTIFIER)</string>
+		<string>$(AMBUSH_APP_GROUP_IDENTIFIER)</string>
 	</array>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)$(BUZZ_KEYCHAIN_ACCESS_GROUP)</string>
+		<string>$(AppIdentifierPrefix)$(AMBUSH_KEYCHAIN_ACCESS_GROUP)</string>
 	</array>
 </dict>
 </plist>

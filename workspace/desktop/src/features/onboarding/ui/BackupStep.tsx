@@ -7,7 +7,7 @@ import type { IdentityStorage } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
 import { Button } from "@/shared/ui/button";
-import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
+import { AmbushWordmark } from "@/shared/ui/ambush-logo/AmbushWordmark";
 import { Card } from "@/shared/ui/card";
 import { Spinner } from "@/shared/ui/spinner";
 import {
@@ -160,10 +160,10 @@ export function BackupStep({
   );
   const storageDescription =
     identityStorage === "system-keyring"
-      ? "Buzz keeps your identity key in your system keychain. Your computer may ask for your password when Buzz needs to read the key."
+      ? "Ambush keeps your identity key in your system keychain. Your computer may ask for your password when Ambush needs to read the key."
       : identityStorage === "local-file"
-        ? "Your system keychain wasn’t available, so Buzz keeps your identity key in a private file on this device."
-        : "Buzz keeps your identity key protected on this device. Make a separate backup in case you lose access.";
+        ? "Your system keychain wasn’t available, so Ambush keeps your identity key in a private file on this device."
+        : "Ambush keeps your identity key protected on this device. Make a separate backup in case you lose access.";
   const storageTitle =
     identityStorage === "system-keyring"
       ? "Protected by your system keychain"
@@ -172,9 +172,9 @@ export function BackupStep({
         : "Protected in private device storage";
   const introStorageDescription =
     identityStorage === "system-keyring"
-      ? "Buzz keeps your identity key in your system keychain."
+      ? "Ambush keeps your identity key in your system keychain."
       : identityStorage === "local-file"
-        ? "Buzz keeps your identity key in a private file on this device because the system keychain wasn’t available."
+        ? "Ambush keeps your identity key in a private file on this device because the system keychain wasn’t available."
         : "Your identity key is protected on this device.";
 
   if (optionsExpanded) {
@@ -190,9 +190,9 @@ export function BackupStep({
             Backup options
           </h1>
           <p className="mt-5 text-sm leading-6 text-foreground/75">
-            Your identity key works like a password for your Buzz account. Keep
-            a copy somewhere safe. You can create a backup file and lock it with
-            a password you can remember.
+            Your identity key works like a password for your Ambush account.
+            Keep a copy somewhere safe. You can create a backup file and lock it
+            with a password you can remember.
           </p>
         </div>
 
@@ -333,7 +333,7 @@ export function BackupStep({
           className="flex w-full flex-1 items-center justify-center py-10"
           data-testid="backup-intro-logo"
         >
-          <FuzzyLogo
+          <AmbushWordmark
             ariaLabel="Creating your identity key"
             className="w-20! text-foreground"
             fuzz
@@ -395,7 +395,7 @@ export function BackupStep({
               </p>
             ) : null}
 
-            <p className="mx-auto mt-5 flex max-w-[440px] items-start justify-center gap-1.5 text-center text-xs leading-5 text-[var(--buzz-onboarding-backup-ink)]">
+            <p className="mx-auto mt-5 flex max-w-[440px] items-start justify-center gap-1.5 text-center text-xs leading-5 text-[var(--ambush-onboarding-backup-ink)]">
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 Never share your private key. Anyone with this key can

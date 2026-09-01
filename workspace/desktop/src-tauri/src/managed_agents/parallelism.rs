@@ -6,8 +6,8 @@
 // never clamped at persistence. The cap is applied only where the value
 // becomes a running worker-pool size:
 //
-//   * local spawn  — `BUZZ_ACP_AGENTS` in the child environment
-//   * remote deploy — `launch.policy_env["BUZZ_ACP_AGENTS"]` + legacy field
+//   * local spawn  — `AMBUSH_ACP_AGENTS` in the child environment
+//   * remote deploy — `launch.policy_env["AMBUSH_ACP_AGENTS"]` + legacy field
 //   * restart hash  — `SpawnConfigSnapshot` stores the effective value
 //   * display copy  — the UI derives effective for explanatory hints only
 //
@@ -16,7 +16,7 @@
 
 /// Maximum parallelism for the OpenClaw harness.
 ///
-/// Each buzz-acp worker spawned by the Desktop is a client of the single
+/// Each ambush-acp worker spawned by the Desktop is a client of the single
 /// shared OpenClaw Gateway daemon — running more than this number of workers
 /// is both resource-expensive and architecturally wrong per the OpenClaw
 /// design. Tyler's ruling: "try 5 and lower if needed."
@@ -45,12 +45,12 @@ pub fn effective_parallelism(command: &str, value: u32) -> u32 {
     }
 }
 
-/// Return the value to emit as `BUZZ_ACP_AGENTS` for a spawn command.
+/// Return the value to emit as `AMBUSH_ACP_AGENTS` for a spawn command.
 ///
 /// Pure helper extracted from `spawn_agent_child` so both the production path
 /// and tests can call it without spawning a process. The result is
 /// `effective_parallelism(effective_command, record_parallelism)` formatted as
-/// a decimal string ready for `command.env("BUZZ_ACP_AGENTS", …)`.
+/// a decimal string ready for `command.env("AMBUSH_ACP_AGENTS", …)`.
 ///
 /// `effective_command` must be the already-resolved harness command (override →
 /// runtime → persona runtime → default).
@@ -171,7 +171,7 @@ mod tests {
             Some(cap)
         );
         assert_eq!(super::harness_max_parallelism("goose"), None);
-        assert_eq!(super::harness_max_parallelism("buzz-agent"), None);
+        assert_eq!(super::harness_max_parallelism("ambush-agent"), None);
         assert_eq!(super::harness_max_parallelism(""), None);
 
         // effective_parallelism: openclaw clamps above cap, honors at/below; goose passes through.
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(super::effective_parallelism("openclaw", cap), cap);
         assert_eq!(super::effective_parallelism("openclaw", cap - 2), cap - 2);
         assert_eq!(super::effective_parallelism("goose", 99), 99);
-        assert_eq!(super::effective_parallelism("buzz-agent", 32), 32);
+        assert_eq!(super::effective_parallelism("ambush-agent", 32), 32);
     }
 
     // ── acp_agents_value: spawn-env seam ──────────────────────────────────────
@@ -187,13 +187,13 @@ mod tests {
     // Drives the pure helper extracted from spawn_agent_child.
     // Deleting or changing it breaks this test AND the production spawn env.
 
-    /// Legacy OpenClaw record (parallelism 10, above cap): BUZZ_ACP_AGENTS must be "5".
+    /// Legacy OpenClaw record (parallelism 10, above cap): AMBUSH_ACP_AGENTS must be "5".
     #[test]
     fn acp_agents_value_openclaw_above_cap_is_capped() {
         assert_eq!(
             super::acp_agents_value("openclaw", 10),
             "5",
-            "BUZZ_ACP_AGENTS for openclaw with parallelism 10 must be \"5\""
+            "AMBUSH_ACP_AGENTS for openclaw with parallelism 10 must be \"5\""
         );
         assert_eq!(super::acp_agents_value("goose", 10), "10");
     }

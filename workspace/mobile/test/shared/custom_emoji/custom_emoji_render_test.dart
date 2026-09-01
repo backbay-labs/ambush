@@ -1,5 +1,5 @@
-import 'package:buzz/shared/custom_emoji/custom_emoji.dart';
-import 'package:buzz/shared/custom_emoji/custom_emoji_render.dart';
+import 'package:ambush/shared/custom_emoji/custom_emoji.dart';
+import 'package:ambush/shared/custom_emoji/custom_emoji_render.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gpt_markdown/custom_widgets/markdown_config.dart';

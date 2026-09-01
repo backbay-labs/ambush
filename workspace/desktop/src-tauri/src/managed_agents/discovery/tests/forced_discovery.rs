@@ -102,7 +102,7 @@ fn forced_discovery_probes_auth_but_cheap_discovery_reuses_cached_status() {
 /// `claude` CLI must not be resolved by the cheap path (availability is never
 /// `Available`, auth stays `Unknown`) and no login shell is spawned. It does
 /// not pin the exact `NotInstalled` vs `CliMissing` variant, because a real
-/// Buzz-managed `claude-agent-acp` shim on the host resolves via a filesystem
+/// Ambush-managed `claude-agent-acp` shim on the host resolves via a filesystem
 /// stat (production-correct, never a spawn) and yields `CliMissing` — a genuine
 /// environment difference, not a regression.
 #[cfg(unix)]

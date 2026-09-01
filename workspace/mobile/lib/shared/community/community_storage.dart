@@ -5,16 +5,16 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'community.dart';
 
 class CommunityStorage {
-  static const _keyCommunities = 'buzz_communities';
-  static const _keyActiveId = 'buzz_active_community_id';
+  static const _keyCommunities = 'ambush_communities';
+  static const _keyActiveId = 'ambush_active_community_id';
 
   // Legacy keys for migration.
-  static const _legacyCommunities = 'buzz_workspaces';
-  static const _legacyActiveId = 'buzz_active_workspace_id';
-  static const _legacyRelayUrl = 'buzz_relay_url';
-  static const _legacyToken = 'buzz_token';
-  static const _legacyPubkey = 'buzz_pubkey';
-  static const _legacyNsec = 'buzz_nsec';
+  static const _legacyCommunities = 'ambush_workspaces';
+  static const _legacyActiveId = 'ambush_active_workspace_id';
+  static const _legacyRelayUrl = 'ambush_relay_url';
+  static const _legacyToken = 'ambush_token';
+  static const _legacyPubkey = 'ambush_pubkey';
+  static const _legacyNsec = 'ambush_nsec';
 
   final FlutterSecureStorage _secure;
 

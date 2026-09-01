@@ -81,7 +81,7 @@ export function relayKlipyCapability(
   const searchPath = info.gif?.search;
   const sharePath = info.gif?.share;
   if (
-    info.supported_extensions?.includes("buzz-gif") === true &&
+    info.supported_extensions?.includes("ambush-gif") === true &&
     info.gif?.provider === "klipy" &&
     safeRelayPath(searchPath) &&
     safeRelayPath(sharePath)
@@ -112,7 +112,7 @@ function firstCompleteAsset(
 /**
  * Normalize KLIPY's mixed media response to GIF-only results. The API can
  * interleave ad/content records without a file payload; those are intentionally
- * omitted until Buzz has an explicit third-party ad surface.
+ * omitted until Ambush has an explicit third-party ad surface.
  */
 export function normalizeKlipyGifs(items: KlipyRawGif[]): KlipyGif[] {
   const gifs: KlipyGif[] = [];
@@ -168,7 +168,7 @@ export function klipyGifFilename(gif: KlipyGif): string {
 /**
  * Represent a selected KLIPY GIF as externally hosted media. The empty hash
  * marks it as content-only media: the outgoing builder appends the image URL
- * to the message body but deliberately omits an imeta tag, since Buzz relays
+ * to the message body but deliberately omits an imeta tag, since Ambush relays
  * only accept verified local `/media/` entries in imeta.
  */
 export function klipyGifAttachment(gif: KlipyGif): ImetaMedia {

@@ -4,13 +4,13 @@ import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
 
 type MockMessageWindow = Window & {
-  __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+  __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
     channelName: string;
     content: string;
     parentEventId?: string | null;
     pubkey?: string;
   }) => { id: string } | undefined;
-  __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+  __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
     channelName: string;
   }) => boolean;
 };
@@ -30,8 +30,9 @@ async function waitForMockLiveSubscription(
         return (
           (
             window as MockMessageWindow
-          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: name }) ??
-          false
+          ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: name,
+          }) ?? false
         );
       }, channelName);
     })
@@ -52,7 +53,7 @@ test.describe("channel shared header backdrop", () => {
 
     const rootId = await page.evaluate(
       ({ channelName, pubkey }) =>
-        (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        (window as MockMessageWindow).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName,
           content: "Root message for shared header backdrop coverage.",
           pubkey,
@@ -63,7 +64,7 @@ test.describe("channel shared header backdrop", () => {
 
     await page.evaluate(
       ({ channelName, parentEventId, pubkey }) => {
-        (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        (window as MockMessageWindow).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName,
           content: "Reply that opens a split thread panel.",
           parentEventId,

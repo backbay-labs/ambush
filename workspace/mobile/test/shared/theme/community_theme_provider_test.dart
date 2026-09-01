@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:buzz/shared/crypto/nip44.dart';
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/shared/crypto/nip44.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:nostr/nostr.dart' as nostr;
@@ -310,7 +310,7 @@ class _ThemeRelaySession extends RelaySessionNotifier {
   Future<List<NostrEvent>> fetchHistory(
     NostrFilter filter, {
     Duration timeout = const Duration(seconds: 8),
-  }) async => historyFuture ?? [remoteEvent(theme: 'buzz', id: 'initial')];
+  }) async => historyFuture ?? [remoteEvent(theme: 'ambush', id: 'initial')];
 
   @override
   Future<void Function()> subscribe(

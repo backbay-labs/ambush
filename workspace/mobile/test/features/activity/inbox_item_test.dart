@@ -1,5 +1,5 @@
-import 'package:buzz/features/activity/feed_item.dart';
-import 'package:buzz/features/activity/inbox_item.dart';
+import 'package:ambush/features/activity/feed_item.dart';
+import 'package:ambush/features/activity/inbox_item.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 FeedItem item({

@@ -1,35 +1,35 @@
 [workspace]
 members = [
-    "crates/buzz-relay",
-    "crates/buzz-core",
-    "crates/buzz-conformance",
-    "crates/buzz-push-gateway",
-    "crates/buzz-db",
-    "crates/buzz-pubsub",
-    "crates/buzz-auth",
-    "crates/buzz-search",
-    "crates/buzz-audit",
-    "crates/buzz-acp",
-    "crates/buzz-agent",
+    "crates/ambush-relay",
+    "crates/ambush-core",
+    "crates/ambush-conformance",
+    "crates/ambush-push-gateway",
+    "crates/ambush-db",
+    "crates/ambush-pubsub",
+    "crates/ambush-auth",
+    "crates/ambush-search",
+    "crates/ambush-audit",
+    "crates/ambush-acp",
+    "crates/ambush-agent",
     "crates/sprig",
-    "crates/buzz-test-client",
-    "crates/buzz-ws-client",
-    "crates/buzz-admin",
-    "crates/buzz-deletion",
-    "crates/buzz-workflow",
-    "crates/buzz-media",
-    "crates/buzz-cli",
-    "crates/buzz-pairing-cli",
-    "crates/buzz-sdk",
-    "crates/buzz-persona",
+    "crates/ambush-test-client",
+    "crates/ambush-ws-client",
+    "crates/ambush-admin",
+    "crates/ambush-deletion",
+    "crates/ambush-workflow",
+    "crates/ambush-media",
+    "crates/ambush-cli",
+    "crates/ambush-pairing-cli",
+    "crates/ambush-sdk",
+    "crates/ambush-persona",
     "crates/git-credential-nostr",
     "crates/git-sign-nostr",
-    "crates/buzz-pair-relay",
-    "crates/buzz-relay-mesh",
-    "crates/buzz-dev-mcp",
-    "crates/buzz-voice",
-    "crates/buzz-backend-kubernetes",
-    "crates/buzz-datastore-tracing",
+    "crates/ambush-pair-relay",
+    "crates/ambush-relay-mesh",
+    "crates/ambush-dev-mcp",
+    "crates/ambush-voice",
+    "crates/ambush-backend-kubernetes",
+    "crates/ambush-datastore-tracing",
     "examples/countdown-bot",
 ]
 exclude = ["desktop/src-tauri"]
@@ -40,7 +40,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88.0"
 license = "Apache-2.0"
-repository = "https://github.com/block/sprout"
+repository = "https://github.com/backbay-labs/ambush"
 
 [workspace.dependencies]
 # Runtime
@@ -61,9 +61,9 @@ sqlx = { version = "0.9", features = [
 redis        = { version = "1.0", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
 
-# Kubernetes (buzz-backend-kubernetes provider). No `ring` feature here: the
+# Kubernetes (ambush-backend-kubernetes provider). No `ring` feature here: the
 # process-level CryptoProvider is installed explicitly at startup, matching
-# buzz-cli/buzz-acp/buzz-admin/buzz-relay/buzz-dev-mcp — see the comment on the
+# ambush-cli/ambush-acp/ambush-admin/ambush-relay/ambush-dev-mcp — see the comment on the
 # crate's own rustls dependency.
 kube = { version = "2.0", default-features = false, features = ["client", "rustls-tls"] }
 k8s-openapi = { version = "0.26", features = ["v1_31"] }
@@ -75,7 +75,7 @@ nostr = { version = "0.44", features = ["nip44", "nip98"] }
 serde       = { version = "1", features = ["derive"] }
 postcard    = { version = "1", default-features = false, features = ["use-std"] }
 
-# Inter-relay mesh transport (buzz-relay-mesh)
+# Inter-relay mesh transport (ambush-relay-mesh)
 iroh = { version = "1.0.0-rc.0", default-features = false, features = ["tls-ring"] }
 serde_json  = { version = "1", features = ["raw_value"] }
 serde_yaml  = "0.9"
@@ -131,25 +131,25 @@ url = "2"
 # Property-based testing (dev-only)
 proptest = "1"
 
-# MCP SDK (used by buzz-dev-mcp and buzz-agent)
+# MCP SDK (used by ambush-dev-mcp and ambush-agent)
 rmcp = { version = "1.1.0", features = ["server", "transport-io", "macros"] }
 schemars = { version = "1", default-features = false }
 
 # Internal crates
-buzz-core = { path = "crates/buzz-core" }
-buzz-conformance = { path = "crates/buzz-conformance" }
-buzz-db = { path = "crates/buzz-db" }
-buzz-deletion = { path = "crates/buzz-deletion" }
-buzz-auth = { path = "crates/buzz-auth" }
-buzz-pubsub = { path = "crates/buzz-pubsub" }
-buzz-search = { path = "crates/buzz-search" }
-buzz-audit = { path = "crates/buzz-audit" }
-buzz-workflow = { path = "crates/buzz-workflow" }
-buzz-media = { path = "crates/buzz-media" }
-buzz-sdk = { path = "crates/buzz-sdk" }
-buzz-ws-client = { path = "crates/buzz-ws-client" }
-buzz-relay-mesh = { path = "crates/buzz-relay-mesh" }
-buzz-datastore-tracing = { path = "crates/buzz-datastore-tracing" }
+ambush-core = { path = "crates/ambush-core" }
+ambush-conformance = { path = "crates/ambush-conformance" }
+ambush-db = { path = "crates/ambush-db" }
+ambush-deletion = { path = "crates/ambush-deletion" }
+ambush-auth = { path = "crates/ambush-auth" }
+ambush-pubsub = { path = "crates/ambush-pubsub" }
+ambush-search = { path = "crates/ambush-search" }
+ambush-audit = { path = "crates/ambush-audit" }
+ambush-workflow = { path = "crates/ambush-workflow" }
+ambush-media = { path = "crates/ambush-media" }
+ambush-sdk = { path = "crates/ambush-sdk" }
+ambush-ws-client = { path = "crates/ambush-ws-client" }
+ambush-relay-mesh = { path = "crates/ambush-relay-mesh" }
+ambush-datastore-tracing = { path = "crates/ambush-datastore-tracing" }
 
 # CI profile — builds the relay for desktop e2e. Dependencies keep full
 # release optimization (warm from main's cache; they carry the runtime hot

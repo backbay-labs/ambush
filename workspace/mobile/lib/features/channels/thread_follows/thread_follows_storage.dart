@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// SharedPreferences — following on one device intentionally does not sync.
 const threadFollowsMaxEntries = 500;
 
-String threadFollowsKey(String pubkey) => 'buzz-thread-follows.v1:$pubkey';
+String threadFollowsKey(String pubkey) => 'ambush-thread-follows.v1:$pubkey';
 
 class ThreadFollowEntry {
   final String rootId;

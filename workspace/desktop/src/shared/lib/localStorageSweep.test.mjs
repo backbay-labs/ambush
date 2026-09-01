@@ -43,9 +43,9 @@ test("sweeps stale whitelisted caches and keeps fresh or durable state", () => {
       [`${keyPrefix}fresh-${index}`, snapshot(now - maxAgeMs + 1)],
     ],
   );
-  entries.push(["buzz-communities", snapshot(0)]);
-  entries.push(["buzz-theme", snapshot(0)]);
-  entries.push(["buzz-self-profile.v1:offline", snapshot(0)]);
+  entries.push(["ambush-communities", snapshot(0)]);
+  entries.push(["ambush-theme", snapshot(0)]);
+  entries.push(["ambush-self-profile.v1:offline", snapshot(0)]);
   const localStorage = makeLocalStorage(entries);
   installWindow(localStorage);
 
@@ -67,10 +67,10 @@ test("sweeps stale whitelisted caches and keeps fresh or durable state", () => {
       true,
     );
   }
-  assert.equal(localStorage.getItem("buzz-communities"), snapshot(0));
-  assert.equal(localStorage.getItem("buzz-theme"), snapshot(0));
+  assert.equal(localStorage.getItem("ambush-communities"), snapshot(0));
+  assert.equal(localStorage.getItem("ambush-theme"), snapshot(0));
   assert.equal(
-    localStorage.getItem("buzz-self-profile.v1:offline"),
+    localStorage.getItem("ambush-self-profile.v1:offline"),
     snapshot(0),
   );
 });
@@ -79,7 +79,7 @@ test("uses the newest per-profile timestamp for user-label cache buckets", () =>
   const now = 100 * DAY_MS;
   const localStorage = makeLocalStorage([
     [
-      "buzz-user-labels.v1:all-stale",
+      "ambush-user-labels.v1:all-stale",
       JSON.stringify({
         profiles: {
           first: { updatedAt: now - 20 * DAY_MS },
@@ -88,7 +88,7 @@ test("uses the newest per-profile timestamp for user-label cache buckets", () =>
       }),
     ],
     [
-      "buzz-user-labels.v1:one-fresh",
+      "ambush-user-labels.v1:one-fresh",
       JSON.stringify({
         profiles: {
           stale: { updatedAt: now - 20 * DAY_MS },
@@ -100,15 +100,18 @@ test("uses the newest per-profile timestamp for user-label cache buckets", () =>
   installWindow(localStorage);
 
   assert.equal(sweepStaleLocalStorage(now), 1);
-  assert.equal(localStorage.getItem("buzz-user-labels.v1:all-stale"), null);
-  assert.notEqual(localStorage.getItem("buzz-user-labels.v1:one-fresh"), null);
+  assert.equal(localStorage.getItem("ambush-user-labels.v1:all-stale"), null);
+  assert.notEqual(
+    localStorage.getItem("ambush-user-labels.v1:one-fresh"),
+    null,
+  );
 });
 
 test("leaves malformed and timestamp-free cache entries untouched", () => {
   const localStorage = makeLocalStorage([
-    ["buzz-channel-messages.v1:malformed", "not json"],
-    ["buzz-channels.v1:no-timestamp", JSON.stringify({ payload: "cache" })],
-    ["buzz-observed-unread.v1:bad-timestamp", snapshot(Number.NaN)],
+    ["ambush-channel-messages.v1:malformed", "not json"],
+    ["ambush-channels.v1:no-timestamp", JSON.stringify({ payload: "cache" })],
+    ["ambush-observed-unread.v1:bad-timestamp", snapshot(Number.NaN)],
   ]);
   installWindow(localStorage);
 
@@ -178,7 +181,7 @@ test("fallback path: boot-floor setTimeout fires first, then per-slice setTimeou
 
   // Stale entry with updatedAt=0 (older than any 14-day TTL)
   const localStorage = makeLocalStorage([
-    ["buzz-channel-messages.v1:startup", snapshot(0)],
+    ["ambush-channel-messages.v1:startup", snapshot(0)],
   ]);
   installWindow(localStorage, {
     setInterval: () => 1,
@@ -192,7 +195,7 @@ test("fallback path: boot-floor setTimeout fires first, then per-slice setTimeou
     const [bootId, bootEntry] = [...timeouts.entries()][0];
     assert.equal(bootEntry.delay, BOOT_SWEEP_FLOOR_MS);
     assert.notEqual(
-      localStorage.getItem("buzz-channel-messages.v1:startup"),
+      localStorage.getItem("ambush-channel-messages.v1:startup"),
       null,
       "sweep must not run before boot floor",
     );
@@ -206,7 +209,7 @@ test("fallback path: boot-floor setTimeout fires first, then per-slice setTimeou
     const [, sliceEntry] = [...timeouts.entries()][0];
     assert.equal(sliceEntry.delay, SWEEP_FALLBACK_TIMER_MS);
     assert.notEqual(
-      localStorage.getItem("buzz-channel-messages.v1:startup"),
+      localStorage.getItem("ambush-channel-messages.v1:startup"),
       null,
       "sweep must not run before slice fires",
     );
@@ -214,7 +217,7 @@ test("fallback path: boot-floor setTimeout fires first, then per-slice setTimeou
     // Fire slice — stale entry removed.
     sliceEntry.callback();
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:startup"),
+      localStorage.getItem("ambush-channel-messages.v1:startup"),
       null,
       "stale entry removed after slice fires",
     );
@@ -249,7 +252,7 @@ test("scheduler: boot-floor gate, idle callback with SWEEP_IDLE_TIMEOUT_MS, hour
   const visibilityListeners = [];
 
   const localStorage = makeLocalStorage([
-    ["buzz-channel-messages.v1:stale", snapshot(now - 14 * DAY_MS)],
+    ["ambush-channel-messages.v1:stale", snapshot(now - 14 * DAY_MS)],
   ]);
   installWindow(localStorage, {
     requestIdleCallback(callback, options) {
@@ -281,7 +284,7 @@ test("scheduler: boot-floor gate, idle callback with SWEEP_IDLE_TIMEOUT_MS, hour
     assert.equal(idleCallbacks.size, 0, "no idle callback before boot floor");
     assert.equal(visibilityListeners.length, 0, "no visibilitychange listener");
     assert.notEqual(
-      localStorage.getItem("buzz-channel-messages.v1:stale"),
+      localStorage.getItem("ambush-channel-messages.v1:stale"),
       null,
       "sweep not run before boot floor",
     );
@@ -301,7 +304,7 @@ test("scheduler: boot-floor gate, idle callback with SWEEP_IDLE_TIMEOUT_MS, hour
     firstEntry.callback({ timeRemaining: () => 50 });
     idleCallbacks.delete(firstId);
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:stale"),
+      localStorage.getItem("ambush-channel-messages.v1:stale"),
       null,
       "stale entry removed after idle callback fires",
     );
@@ -313,7 +316,7 @@ test("scheduler: boot-floor gate, idle callback with SWEEP_IDLE_TIMEOUT_MS, hour
 
     // Hourly fires — schedules another idle callback sweep.
     localStorage.setItem(
-      "buzz-channel-messages.v1:interval",
+      "ambush-channel-messages.v1:interval",
       snapshot(now - 14 * DAY_MS),
     );
     intervalCallback();
@@ -325,14 +328,14 @@ test("scheduler: boot-floor gate, idle callback with SWEEP_IDLE_TIMEOUT_MS, hour
     const hourlyEntry = [...idleCallbacks.values()][0];
     hourlyEntry.callback({ timeRemaining: () => 50 });
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:interval"),
+      localStorage.getItem("ambush-channel-messages.v1:interval"),
       null,
       "hourly sweep removes stale entry",
     );
 
     // Visibility change does NOT trigger sweep — listener was never registered.
     localStorage.setItem(
-      "buzz-channel-messages.v1:vis",
+      "ambush-channel-messages.v1:vis",
       snapshot(now - 14 * DAY_MS),
     );
     assert.equal(
@@ -341,7 +344,7 @@ test("scheduler: boot-floor gate, idle callback with SWEEP_IDLE_TIMEOUT_MS, hour
       "visibilitychange listener absent",
     );
     assert.notEqual(
-      localStorage.getItem("buzz-channel-messages.v1:vis"),
+      localStorage.getItem("ambush-channel-messages.v1:vis"),
       null,
       "visibility change does not trigger sweep",
     );
@@ -371,7 +374,7 @@ test("chunked sweep: keys processed across multiple idle slices; stale entries r
   // Create more entries than SWEEP_CHUNK_ENTRY_BUDGET so multiple slices fire.
   const entryCount = SWEEP_CHUNK_ENTRY_BUDGET + 5;
   const entries = Array.from({ length: entryCount }, (_, i) => [
-    `buzz-channel-messages.v1:key-${i}`,
+    `ambush-channel-messages.v1:key-${i}`,
     snapshot(now - 14 * DAY_MS), // all stale
   ]);
   const localStorage = makeLocalStorage(entries);
@@ -444,8 +447,8 @@ test("chunked sweep: keys deleted between snapshot and slice are silently skippe
   const now = Date.now();
 
   const localStorage = makeLocalStorage([
-    ["buzz-channel-messages.v1:gone", snapshot(now - 14 * DAY_MS)],
-    ["buzz-channel-messages.v1:fresh", snapshot(now - DAY_MS)],
+    ["ambush-channel-messages.v1:gone", snapshot(now - 14 * DAY_MS)],
+    ["ambush-channel-messages.v1:fresh", snapshot(now - DAY_MS)],
   ]);
 
   installWindow(localStorage, {
@@ -464,7 +467,7 @@ test("chunked sweep: keys deleted between snapshot and slice are silently skippe
     assert.equal(idleCallbacks.length, 1);
 
     // Delete "gone" externally before the slice fires.
-    localStorage.store.delete("buzz-channel-messages.v1:gone");
+    localStorage.store.delete("ambush-channel-messages.v1:gone");
 
     // Slice processes — should not throw on missing key.
     assert.doesNotThrow(() => {
@@ -473,7 +476,7 @@ test("chunked sweep: keys deleted between snapshot and slice are silently skippe
 
     // "fresh" key untouched.
     assert.notEqual(
-      localStorage.getItem("buzz-channel-messages.v1:fresh"),
+      localStorage.getItem("ambush-channel-messages.v1:fresh"),
       null,
     );
   } finally {
@@ -511,8 +514,8 @@ test("chunked sweep: key rewritten fresh before batch removal is not removed", (
   // "target" will be rewritten fresh between slices; "other" stays stale.
   // Two entries force two slices when timeRemaining() === 0 (1 entry per slice).
   const localStorage = makeLocalStorage([
-    ["buzz-channel-messages.v1:target", staleValue],
-    ["buzz-channel-messages.v1:other", staleValue],
+    ["ambush-channel-messages.v1:target", staleValue],
+    ["ambush-channel-messages.v1:other", staleValue],
   ]);
 
   installWindow(localStorage, {
@@ -534,7 +537,7 @@ test("chunked sweep: key rewritten fresh before batch removal is not removed", (
     idleCallbacks[0]({ timeRemaining: () => 0 });
 
     // App rewrites "target" to a fresh value before slice 2 fires.
-    localStorage.setItem("buzz-channel-messages.v1:target", freshValue);
+    localStorage.setItem("ambush-channel-messages.v1:target", freshValue);
 
     assert.equal(idleCallbacks.length, 2, "second slice scheduled");
 
@@ -543,12 +546,12 @@ test("chunked sweep: key rewritten fresh before batch removal is not removed", (
     idleCallbacks[1]({ timeRemaining: () => 50 });
 
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:target"),
+      localStorage.getItem("ambush-channel-messages.v1:target"),
       freshValue,
       "key rewritten fresh before batch removal must not be removed",
     );
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:other"),
+      localStorage.getItem("ambush-channel-messages.v1:other"),
       null,
       "still-stale key must be removed",
     );
@@ -577,15 +580,15 @@ test("chunked sweep: getItem error on one key does not abort sweep; stale siblin
   const now = Date.now();
 
   const localStorage = makeLocalStorage([
-    ["buzz-channel-messages.v1:error-key", "value"],
-    ["buzz-channel-messages.v1:stale-key", snapshot(now - 14 * DAY_MS)],
-    ["buzz-channel-messages.v1:fresh-key", snapshot(now - DAY_MS)],
+    ["ambush-channel-messages.v1:error-key", "value"],
+    ["ambush-channel-messages.v1:stale-key", snapshot(now - 14 * DAY_MS)],
+    ["ambush-channel-messages.v1:fresh-key", snapshot(now - DAY_MS)],
   ]);
 
   // Override getItem so that reading "error-key" throws.
   const realGetItem = localStorage.getItem.bind(localStorage);
   localStorage.getItem = (key) => {
-    if (key === "buzz-channel-messages.v1:error-key") {
+    if (key === "ambush-channel-messages.v1:error-key") {
       throw new Error("storage error");
     }
     return realGetItem(key);
@@ -611,13 +614,13 @@ test("chunked sweep: getItem error on one key does not abort sweep; stale siblin
 
     // Stale key removed despite the per-key error on its sibling.
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:stale-key"),
+      localStorage.getItem("ambush-channel-messages.v1:stale-key"),
       null,
       "stale-key must be removed despite error on error-key",
     );
     // Fresh key untouched.
     assert.notEqual(
-      localStorage.getItem("buzz-channel-messages.v1:fresh-key"),
+      localStorage.getItem("ambush-channel-messages.v1:fresh-key"),
       null,
       "fresh-key must not be removed",
     );
@@ -657,7 +660,7 @@ test("fallback path: multiple slices when entries exceed SWEEP_CHUNK_ENTRY_BUDGE
   const now = Date.now();
   const entryCount = SWEEP_CHUNK_ENTRY_BUDGET + 5;
   const entries = Array.from({ length: entryCount }, (_, i) => [
-    `buzz-channel-messages.v1:key-${i}`,
+    `ambush-channel-messages.v1:key-${i}`,
     snapshot(now - 14 * DAY_MS), // all stale
   ]);
   const localStorage = makeLocalStorage(entries);
@@ -737,8 +740,8 @@ test("chunked sweep: large values deferred once on zero-budget slices then parse
   );
 
   const localStorage = makeLocalStorage([
-    ["buzz-channel-messages.v1:large-a", largeStaleValue],
-    ["buzz-channel-messages.v1:large-b", largeStaleValue],
+    ["ambush-channel-messages.v1:large-a", largeStaleValue],
+    ["ambush-channel-messages.v1:large-b", largeStaleValue],
   ]);
 
   installWindow(localStorage, {
@@ -759,7 +762,7 @@ test("chunked sweep: large values deferred once on zero-budget slices then parse
     // Slice 0 (zero budget): large-a is deferred (not yet parsed).
     idleCallbacks[0]({ timeRemaining: () => 0 });
     assert.notEqual(
-      localStorage.getItem("buzz-channel-messages.v1:large-a"),
+      localStorage.getItem("ambush-channel-messages.v1:large-a"),
       null,
       "large-a must not be removed after first slice (deferred)",
     );
@@ -779,12 +782,12 @@ test("chunked sweep: large values deferred once on zero-budget slices then parse
 
     // Both large stale entries must be removed after convergence.
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:large-a"),
+      localStorage.getItem("ambush-channel-messages.v1:large-a"),
       null,
       "large-a must be removed after convergence",
     );
     assert.equal(
-      localStorage.getItem("buzz-channel-messages.v1:large-b"),
+      localStorage.getItem("ambush-channel-messages.v1:large-b"),
       null,
       "large-b must be removed after convergence",
     );

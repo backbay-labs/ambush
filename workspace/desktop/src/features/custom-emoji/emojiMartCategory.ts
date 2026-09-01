@@ -11,7 +11,7 @@ export function buildCustomEmojiCategory(customEmoji: CustomEmoji[]) {
   if (customEmoji.length === 0) return undefined;
   return [
     {
-      id: "buzz-custom",
+      id: "ambush-custom",
       name: "Custom",
       emojis: customEmoji.map((e) => ({
         id: e.shortcode,

@@ -166,6 +166,243 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambush-agent"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "dirs",
+ "getrandom 0.4.3",
+ "hex",
+ "nix 0.31.3",
+ "reqwest 0.13.4",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.0",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "webbrowser",
+]
+
+[[package]]
+name = "ambush-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "hmac 0.13.0",
+ "nostr 0.44.7",
+ "percent-encoding",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "ambush-desktop"
+version = "0.5.20"
+dependencies = [
+ "ambush-agent",
+ "ambush-core",
+ "ambush-media",
+ "ambush-persona",
+ "ambush-sdk",
+ "ambush-terminal",
+ "ambush-voice",
+ "ambush-ws-client",
+ "anyhow",
+ "arboard",
+ "atomic-write-file",
+ "audioadapter-buffers",
+ "axum",
+ "base64 0.22.1",
+ "block2",
+ "bytes",
+ "bzip2 0.6.1",
+ "chrono",
+ "ctrlc",
+ "dirs",
+ "earshot",
+ "ed25519-dalek",
+ "flate2",
+ "futures-util",
+ "getrandom 0.2.17",
+ "hex",
+ "image",
+ "infer",
+ "iroh",
+ "keyring",
+ "libc",
+ "mesh-llm-client",
+ "mesh-llm-events",
+ "mesh-llm-host-runtime",
+ "mesh-llm-node",
+ "mesh-llm-sdk",
+ "mesh-llm-system",
+ "neteq",
+ "nostr 0.44.7",
+ "notify-rust",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-user-notifications",
+ "opus",
+ "percent-encoding",
+ "plist",
+ "png 0.18.1",
+ "portable-pty",
+ "regex",
+ "reqwest 0.13.4",
+ "rodio",
+ "rubato",
+ "rusqlite",
+ "rustls",
+ "security-framework 3.7.0",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.0",
+ "sherpa-onnx",
+ "strip-ansi-escapes",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tauri-plugin-window-state",
+ "tauri-utils",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+ "toml 0.8.2",
+ "tracing",
+ "url",
+ "user-idle",
+ "uuid",
+ "webkit2gtk",
+ "window-vibrancy",
+ "windows-sys 0.61.2",
+ "zeroize",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "ambush-media"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "axum",
+ "blurhash",
+ "bytes",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "image",
+ "imagesize",
+ "infer",
+ "mp4",
+ "nostr 0.44.7",
+ "quick-xml 0.38.4",
+ "rust-s3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ulid",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-persona"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ambush-sdk"
+version = "0.1.0"
+dependencies = [
+ "ambush-core",
+ "nostr 0.44.7",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "ambush-terminal"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "libc",
+ "parking_lot",
+ "portable-pty",
+]
+
+[[package]]
+name = "ambush-voice"
+version = "0.1.0"
+dependencies = [
+ "atomic-write-file",
+ "hex",
+ "ort",
+ "ort-sys",
+ "rand 0.10.2",
+ "sentencepiece-model",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sherpa-onnx",
+ "symphonia",
+ "tokenizers",
+]
+
+[[package]]
+name = "ambush-ws-client"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "nostr 0.44.7",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1031,243 +1268,6 @@ name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
-
-[[package]]
-name = "buzz-agent"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "dirs",
- "getrandom 0.4.3",
- "hex",
- "nix 0.31.3",
- "reqwest 0.13.4",
- "rmcp",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.11.0",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "webbrowser",
-]
-
-[[package]]
-name = "buzz-core"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "hex",
- "hmac 0.13.0",
- "nostr 0.44.7",
- "percent-encoding",
- "rand 0.10.2",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "thiserror 2.0.18",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "buzz-desktop"
-version = "0.5.20"
-dependencies = [
- "anyhow",
- "arboard",
- "atomic-write-file",
- "audioadapter-buffers",
- "axum",
- "base64 0.22.1",
- "block2",
- "buzz-agent",
- "buzz-core",
- "buzz-media",
- "buzz-persona",
- "buzz-sdk",
- "buzz-terminal",
- "buzz-voice",
- "buzz-ws-client",
- "bytes",
- "bzip2 0.6.1",
- "chrono",
- "ctrlc",
- "dirs",
- "earshot",
- "ed25519-dalek",
- "flate2",
- "futures-util",
- "getrandom 0.2.17",
- "hex",
- "image",
- "infer",
- "iroh",
- "keyring",
- "libc",
- "mesh-llm-client",
- "mesh-llm-events",
- "mesh-llm-host-runtime",
- "mesh-llm-node",
- "mesh-llm-sdk",
- "mesh-llm-system",
- "neteq",
- "nostr 0.44.7",
- "notify-rust",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-user-notifications",
- "opus",
- "percent-encoding",
- "plist",
- "png 0.18.1",
- "portable-pty",
- "regex",
- "reqwest 0.13.4",
- "rodio",
- "rubato",
- "rusqlite",
- "rustls",
- "security-framework 3.7.0",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.11.0",
- "sherpa-onnx",
- "strip-ansi-escapes",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-deep-link",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tauri-plugin-window-state",
- "tauri-utils",
- "tempfile",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tokio-util",
- "toml 0.8.2",
- "tracing",
- "url",
- "user-idle",
- "uuid",
- "webkit2gtk",
- "window-vibrancy",
- "windows-sys 0.61.2",
- "zeroize",
- "zip 8.6.0",
-]
-
-[[package]]
-name = "buzz-media"
-version = "0.1.0"
-dependencies = [
- "axum",
- "blurhash",
- "buzz-core",
- "bytes",
- "chrono",
- "futures-core",
- "futures-util",
- "hex",
- "image",
- "imagesize",
- "infer",
- "mp4",
- "nostr 0.44.7",
- "quick-xml 0.38.4",
- "rust-s3",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "ulid",
- "uuid",
-]
-
-[[package]]
-name = "buzz-persona"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "buzz-sdk"
-version = "0.1.0"
-dependencies = [
- "buzz-core",
- "nostr 0.44.7",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "buzz-terminal"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "libc",
- "parking_lot",
- "portable-pty",
-]
-
-[[package]]
-name = "buzz-voice"
-version = "0.1.0"
-dependencies = [
- "atomic-write-file",
- "hex",
- "ort",
- "ort-sys",
- "rand 0.10.2",
- "sentencepiece-model",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sherpa-onnx",
- "symphonia",
- "tokenizers",
-]
-
-[[package]]
-name = "buzz-ws-client"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "nostr 0.44.7",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tracing",
- "url",
-]
 
 [[package]]
 name = "by_address"

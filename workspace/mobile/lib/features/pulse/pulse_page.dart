@@ -6,7 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/filter_chip_bar.dart';
-import '../../shared/widgets/bee_refresh_indicator.dart';
+import '../../shared/widgets/ambush_refresh_indicator.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import 'agent_activity_card.dart';
@@ -100,7 +100,7 @@ class PulsePage extends HookConsumerWidget {
             ],
           ),
           Expanded(
-            child: BeeRefreshIndicator(
+            child: AmbushRefreshIndicator(
               onRefresh: () async => _refresh(ref, active.value, currentPubkey),
               child: _PulseBody(
                 tab: active.value,

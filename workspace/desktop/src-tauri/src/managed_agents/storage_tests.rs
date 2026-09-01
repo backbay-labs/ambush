@@ -131,7 +131,7 @@ fn record_with_pubkey_and_key(pubkey: &str, nsec: &str) -> ManagedAgentRecord {
             "name": "test-agent",
             "private_key_nsec": "{nsec}",
             "relay_url": "wss://localhost:3000",
-            "acp_command": "buzz-acp",
+            "acp_command": "ambush-acp",
             "agent_command": "goose",
             "agent_args": [],
             "mcp_command": "",
@@ -235,7 +235,7 @@ fn hydrate_leaves_key_empty_on_keyring_outage() {
 #[test]
 fn spawn_refused_when_private_key_empty() {
     // The spawn path MUST refuse a record left empty by an outage/absence
-    // before injecting an empty BUZZ_PRIVATE_KEY / NOSTR_PRIVATE_KEY — never
+    // before injecting an empty AMBUSH_PRIVATE_KEY / NOSTR_PRIVATE_KEY — never
     // launch an agent with no identity (Wes storage.rs:158).
     let record = record_with_key("");
     assert!(
@@ -389,10 +389,10 @@ fn meaningful_agent_error_from_log_does_not_promote_midline_auth_text() {
 
 #[test]
 fn strips_ansi_from_typical_tracing_line() {
-    let input = "\x1b[2m2026-05-27T15:16:32\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mbuzz_acp\x1b[0m\x1b[2m:\x1b[0m starting";
+    let input = "\x1b[2m2026-05-27T15:16:32\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mambush_acp\x1b[0m\x1b[2m:\x1b[0m starting";
     assert_eq!(
         strip_ansi_escapes::strip_str(input),
-        "2026-05-27T15:16:32  INFO buzz_acp: starting"
+        "2026-05-27T15:16:32  INFO ambush_acp: starting"
     );
 }
 
@@ -823,7 +823,7 @@ fn install_log_filename_rejects_ids_that_would_escape_the_logs_dir() {
 /// reject the ids it exists to serve.
 #[test]
 fn install_log_filename_accepts_ordinary_runtime_ids() {
-    for id in ["goose", "claude-code", "buzz_agent", "codex2"] {
+    for id in ["goose", "claude-code", "ambush_agent", "codex2"] {
         assert_eq!(
             super::install_log_filename(id).expect("id must be usable in a log filename"),
             format!("install-{id}.log")

@@ -1,4 +1,4 @@
-import 'package:buzz/shared/community/community_icon_provider.dart';
+import 'package:ambush/shared/community/community_icon_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart' as http;

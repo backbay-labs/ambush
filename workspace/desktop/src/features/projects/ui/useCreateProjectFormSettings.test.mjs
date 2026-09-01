@@ -4,11 +4,11 @@ import { test } from "node:test";
 import { buildCreateProjectAgents } from "./useCreateProjectFormSettings.ts";
 
 const runtime = {
-  id: "buzz-agent",
-  label: "Buzz Agent",
+  id: "ambush-agent",
+  label: "Ambush Agent",
   availability: "available",
-  command: "buzz-agent",
-  binaryPath: "/bin/buzz-agent",
+  command: "ambush-agent",
+  binaryPath: "/bin/ambush-agent",
 };
 
 function persona(id, displayName) {

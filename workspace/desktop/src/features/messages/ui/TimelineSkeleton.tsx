@@ -5,7 +5,7 @@ import { cn } from "@/shared/lib/cn";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 import { Skeleton } from "@/shared/ui/skeleton";
 
-const TIMELINE_SKELETON_CACHE_PREFIX = "buzz-timeline-skeleton-shape.v1";
+const TIMELINE_SKELETON_CACHE_PREFIX = "ambush-timeline-skeleton-shape.v1";
 const timelineSkeletonWidthClasses = [
   "w-10",
   "w-12",

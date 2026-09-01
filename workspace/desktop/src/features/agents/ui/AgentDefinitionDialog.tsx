@@ -548,13 +548,13 @@ export function AgentDefinitionDialog({
     modelFieldVisible,
     provider: effectiveProvider,
   });
-  // On internal Block builds, BUZZ_AGENT_PROVIDER is baked in and a boot
+  // On internal Block builds, AMBUSH_AGENT_PROVIDER is baked in and a boot
   // migration rewrites any persisted Databricks v1 values → v2. Hide the v1
   // option there so it is not offered for new selections. OSS builds have no
   // baked provider, so v1 remains visible.
   const hideProviderIds = React.useMemo(
     () =>
-      (bakedEnvKeys ?? []).includes("BUZZ_AGENT_PROVIDER")
+      (bakedEnvKeys ?? []).includes("AMBUSH_AGENT_PROVIDER")
         ? BLOCK_BUILD_HIDDEN_PROVIDER_IDS
         : new Set<string>(),
     [bakedEnvKeys],
@@ -701,11 +701,11 @@ export function AgentDefinitionDialog({
     setHasUserChanges(true);
     const nextProvider =
       nextValue === AUTO_PROVIDER_DROPDOWN_VALUE ? "" : nextValue;
-    if (nextProvider === "relay-mesh" && runtime !== "buzz-agent") {
-      handleRuntimeDropdownChange("buzz-agent");
+    if (nextProvider === "relay-mesh" && runtime !== "ambush-agent") {
+      handleRuntimeDropdownChange("ambush-agent");
     }
     const nextSelection = selectionOnProviderDropdownChange(selection, {
-      runtime: nextProvider === "relay-mesh" ? "buzz-agent" : runtime,
+      runtime: nextProvider === "relay-mesh" ? "ambush-agent" : runtime,
       nextValue,
       clearModelWhenApiKeyMissing: true,
     });

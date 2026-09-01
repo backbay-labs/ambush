@@ -2,7 +2,7 @@
  * Community custom emoji (NIP-30, per-user sets).
  *
  * Each member publishes their OWN kind:30030 parameterized-replaceable event,
- * signed as themselves, keyed by `(pubkey, 30030, "buzz:custom-emoji")`. The
+ * signed as themselves, keyed by `(pubkey, 30030, "ambush:custom-emoji")`. The
  * "community palette" shown in the picker/renderer is the client-side UNION of
  * every member's set, collapsed to one entry per shortcode (deterministic
  * winner) — a view computed on read, not stored state. Downstream identity is
@@ -26,7 +26,7 @@ import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 export const KIND_EMOJI_SET = 30030;
 
 /** d-tag for a member's own custom emoji set. */
-export const CUSTOM_EMOJI_SET_D_TAG = "buzz:custom-emoji";
+export const CUSTOM_EMOJI_SET_D_TAG = "ambush:custom-emoji";
 
 /**
  * Resolve the image URL for a reaction whose content is a custom-emoji

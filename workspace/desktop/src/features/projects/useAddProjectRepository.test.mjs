@@ -42,7 +42,7 @@ function makeDanglingLiveHead() {
     content: "",
     tags: [
       ["d", "platform"],
-      ["buzz-channel", ACCESS_CHANNEL],
+      ["ambush-channel", ACCESS_CHANNEL],
       ["a", EXISTING_ADDRESS],
       ["a", NEW_ADDRESS],
     ],
@@ -60,7 +60,7 @@ function makeRepositoryEvent(createdAt) {
     tags: [
       ["d", "mobile"],
       ["name", "Mobile"],
-      ["buzz-channel", ACCESS_CHANNEL],
+      ["ambush-channel", ACCESS_CHANNEL],
     ],
     sig: "0".repeat(128),
   };
@@ -146,7 +146,7 @@ test("a genuinely dominated write (no dangling member) still throws", async () =
     ...makeDanglingLiveHead(),
     tags: [
       ["d", "platform"],
-      ["buzz-channel", ACCESS_CHANNEL],
+      ["ambush-channel", ACCESS_CHANNEL],
       ["a", EXISTING_ADDRESS],
     ],
   };

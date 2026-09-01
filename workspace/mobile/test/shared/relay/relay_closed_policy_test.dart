@@ -1,4 +1,4 @@
-import 'package:buzz/shared/relay/relay.dart';
+import 'package:ambush/shared/relay/relay.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

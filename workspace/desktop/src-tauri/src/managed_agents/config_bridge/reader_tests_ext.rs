@@ -13,8 +13,8 @@ use super::*;
 #[test]
 fn numeric_context_limit_inherits_from_persona_env() {
     let record = test_record();
-    let runtime = buzz_agent_runtime();
-    let tiers = persona_env_tiers("BUZZ_AGENT_MAX_CONTEXT_TOKENS", "200000");
+    let runtime = ambush_agent_runtime();
+    let tiers = persona_env_tiers("AMBUSH_AGENT_MAX_CONTEXT_TOKENS", "200000");
 
     let surface = read_config_surface(&record, Some(runtime), None, &tiers, None);
 
@@ -27,17 +27,17 @@ fn numeric_context_limit_inherits_from_persona_env() {
 fn record_max_tokens_overrides_global_env_with_secondary() {
     let mut record = test_record();
     record.env_vars.insert(
-        "BUZZ_AGENT_MAX_OUTPUT_TOKENS".to_string(),
+        "AMBUSH_AGENT_MAX_OUTPUT_TOKENS".to_string(),
         "8192".to_string(),
     );
-    let runtime = buzz_agent_runtime();
-    let tiers = global_env_tiers("BUZZ_AGENT_MAX_OUTPUT_TOKENS", "16384");
+    let runtime = ambush_agent_runtime();
+    let tiers = global_env_tiers("AMBUSH_AGENT_MAX_OUTPUT_TOKENS", "16384");
 
     let surface = read_config_surface(&record, Some(runtime), None, &tiers, None);
 
     let field = surface.normalized.max_output_tokens.unwrap();
     assert_eq!(field.value.as_deref(), Some("8192"));
-    assert_eq!(field.origin, ConfigOrigin::BuzzExplicit);
+    assert_eq!(field.origin, ConfigOrigin::AmbushExplicit);
     // Global value is the overridden secondary.
     assert_eq!(field.overridden_value.as_deref(), Some("16384"));
     assert_eq!(field.overridden_origin, Some(ConfigOrigin::GlobalDefault));
@@ -45,7 +45,7 @@ fn record_max_tokens_overrides_global_env_with_secondary() {
 
 // ── Env-vs-structured collision tests (plan v3, Phase 2) ─────────────────────
 
-/// Collision test 1: persona structured prompt + global env BUZZ_ACP_SYSTEM_PROMPT
+/// Collision test 1: persona structured prompt + global env AMBUSH_ACP_SYSTEM_PROMPT
 /// → global env wins (env block sits entirely above structured).
 #[test]
 fn global_env_prompt_wins_over_persona_structured_prompt() {
@@ -55,7 +55,7 @@ fn global_env_prompt_wins_over_persona_structured_prompt() {
         global_env: {
             let mut m = BTreeMap::new();
             m.insert(
-                "BUZZ_ACP_SYSTEM_PROMPT".to_string(),
+                "AMBUSH_ACP_SYSTEM_PROMPT".to_string(),
                 "global-env-prompt".to_string(),
             );
             m
@@ -126,9 +126,9 @@ fn structured_fallback_intact_when_no_env_representation() {
 #[test]
 fn post_sanitization_empty_global_env_falls_through_to_persona_tier() {
     let record = test_record();
-    let runtime = buzz_agent_rt();
+    let runtime = ambush_agent_rt();
     // No global env (stripped); persona provides the valid fallback.
-    let tiers = persona_env_tiers("BUZZ_AGENT_THINKING_EFFORT", "medium");
+    let tiers = persona_env_tiers("AMBUSH_AGENT_THINKING_EFFORT", "medium");
 
     let surface = read_config_surface(&record, Some(runtime), None, &tiers, None);
 
@@ -144,15 +144,15 @@ fn post_sanitization_empty_global_env_falls_through_to_persona_tier() {
 // definition-less record with both structured and env prompt — env wins.
 
 /// Pass-3 clarification: record.system_prompt = A + record env
-/// BUZZ_ACP_SYSTEM_PROMPT = B → B wins as BuzzExplicit.
+/// AMBUSH_ACP_SYSTEM_PROMPT = B → B wins as AmbushExplicit.
 /// The env block sits above the struct block per v3 candidate-preparation
 /// contract; current reader semantics (struct before env) would be wrong.
 #[test]
-fn record_env_prompt_wins_over_record_struct_prompt_as_buzz_explicit() {
+fn record_env_prompt_wins_over_record_struct_prompt_as_ambush_explicit() {
     let mut record = test_record();
     record.system_prompt = Some("struct-prompt-A".to_string());
     record.env_vars.insert(
-        "BUZZ_ACP_SYSTEM_PROMPT".to_string(),
+        "AMBUSH_ACP_SYSTEM_PROMPT".to_string(),
         "env-prompt-B".to_string(),
     );
     let runtime = test_runtime();
@@ -161,10 +161,10 @@ fn record_env_prompt_wins_over_record_struct_prompt_as_buzz_explicit() {
 
     let prompt = surface.normalized.system_prompt.unwrap();
     assert_eq!(prompt.value.as_deref(), Some("env-prompt-B"));
-    assert_eq!(prompt.origin, ConfigOrigin::BuzzExplicit);
+    assert_eq!(prompt.origin, ConfigOrigin::AmbushExplicit);
     // Struct prompt is the secondary.
     assert_eq!(prompt.overridden_value.as_deref(), Some("struct-prompt-A"));
-    assert_eq!(prompt.overridden_origin, Some(ConfigOrigin::BuzzExplicit));
+    assert_eq!(prompt.overridden_origin, Some(ConfigOrigin::AmbushExplicit));
 }
 
 // ── Definition env tier tests (Layer 2b) ─────────────────────────────────────
@@ -259,24 +259,24 @@ fn reserved_key_absent_from_definition_env_falls_through() {
 
 // ── B4/B5 canonical effort_level tier tests ────────────────────────────────
 //
-// record.effort_level is the Buzz-canonical seeded value (the effort a spawn
+// record.effort_level is the Ambush-canonical seeded value (the effort a spawn
 // applies at next session start via `apply_effort_env`). It must surface as
-// BuzzExplicit and take precedence over the config-file tier, but not over a
+// AmbushExplicit and take precedence over the config-file tier, but not over a
 // record env var override.
 
-/// B4: record.effort_level surfaces as BuzzExplicit when no env var is set.
+/// B4: record.effort_level surfaces as AmbushExplicit when no env var is set.
 #[test]
-fn b4_canonical_effort_level_surfaces_as_buzz_explicit() {
+fn b4_canonical_effort_level_surfaces_as_ambush_explicit() {
     let mut record = test_record();
     record.effort_level = Some("high".to_string());
-    let runtime = buzz_agent_runtime();
+    let runtime = ambush_agent_runtime();
     let surface = read_config_surface(&record, Some(runtime), None, &no_tiers(), None);
     let effort = surface
         .normalized
         .thinking_effort
         .expect("effort must surface from canonical record tier");
     assert_eq!(effort.value.as_deref(), Some("high"));
-    assert_eq!(effort.origin, ConfigOrigin::BuzzExplicit);
+    assert_eq!(effort.origin, ConfigOrigin::AmbushExplicit);
 }
 
 /// B4: record.effort_level shadows the config-file tier.
@@ -285,14 +285,14 @@ fn b4_canonical_effort_level_shadows_file_tier() {
     let mut record = test_record();
     record.effort_level = Some("medium".to_string());
     // No env var set — the config-file tier would win if canonical were absent.
-    let runtime = buzz_agent_runtime();
+    let runtime = ambush_agent_runtime();
     let surface = read_config_surface(&record, Some(runtime), None, &no_tiers(), None);
     let effort = surface
         .normalized
         .thinking_effort
         .expect("canonical effort must shadow file tier");
     assert_eq!(effort.value.as_deref(), Some("medium"));
-    assert_eq!(effort.origin, ConfigOrigin::BuzzExplicit);
+    assert_eq!(effort.origin, ConfigOrigin::AmbushExplicit);
 }
 
 /// B4: a record env var override still wins over record.effort_level, which
@@ -301,17 +301,18 @@ fn b4_canonical_effort_level_shadows_file_tier() {
 fn b4_record_env_var_wins_over_canonical_effort_level() {
     let mut record = test_record();
     record.effort_level = Some("low".to_string());
-    record
-        .env_vars
-        .insert("BUZZ_AGENT_THINKING_EFFORT".to_string(), "high".to_string());
-    let runtime = buzz_agent_runtime();
+    record.env_vars.insert(
+        "AMBUSH_AGENT_THINKING_EFFORT".to_string(),
+        "high".to_string(),
+    );
+    let runtime = ambush_agent_runtime();
     let surface = read_config_surface(&record, Some(runtime), None, &no_tiers(), None);
     let effort = surface
         .normalized
         .thinking_effort
         .expect("env var must win over canonical effort");
     assert_eq!(effort.value.as_deref(), Some("high"));
-    assert_eq!(effort.origin, ConfigOrigin::BuzzExplicit);
+    assert_eq!(effort.origin, ConfigOrigin::AmbushExplicit);
     assert_eq!(effort.overridden_value.as_deref(), Some("low"));
 }
 
@@ -319,7 +320,7 @@ fn b4_record_env_var_wins_over_canonical_effort_level() {
 #[test]
 fn b4_none_canonical_effort_does_not_surface() {
     let record = test_record(); // effort_level defaults to None
-    let runtime = buzz_agent_runtime();
+    let runtime = ambush_agent_runtime();
     let surface = read_config_surface(&record, Some(runtime), None, &no_tiers(), None);
     assert!(
         surface.normalized.thinking_effort.is_none(),
@@ -395,7 +396,7 @@ fn claude_config_dir_none_falls_back_to_home_claude_json() {
 fn effort_option_selected_by_category_drives_all_facts() {
     let mut record = test_record();
     record.effort_level = Some("high".to_string());
-    let runtime = buzz_agent_rt();
+    let runtime = ambush_agent_rt();
     let cache = SessionConfigCache {
         config_options: vec![AcpConfigOptionEntry {
             config_id: "thinking-level".to_string(),
@@ -430,7 +431,7 @@ fn effort_option_selected_by_category_drives_all_facts() {
         .thinking_effort
         .expect("effort must surface with both configured and running facts");
     assert_eq!(effort.value.as_deref(), Some("high"));
-    assert_eq!(effort.origin, ConfigOrigin::BuzzExplicit);
+    assert_eq!(effort.origin, ConfigOrigin::AmbushExplicit);
     assert_eq!(effort.overridden_value.as_deref(), Some("default"));
     assert_eq!(
         effort.overridden_origin,

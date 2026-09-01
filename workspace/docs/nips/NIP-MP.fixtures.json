@@ -45,18 +45,18 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush"
           ],
           [
             "a",
-            "30617:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:buzz-infra"
+            "30617:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:ambush-infra"
           ],
           [
-            "buzz-channel",
+            "ambush-channel",
             "3580ca9b-47b4-4af9-b22a-1068778f26c6"
           ],
           [
-            "buzz-visibility",
+            "ambush-visibility",
             "listed"
           ]
         ]
@@ -95,10 +95,10 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush"
           ],
           [
-            "buzz-visibility",
+            "ambush-visibility",
             "unlisted"
           ]
         ]
@@ -389,11 +389,11 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush"
           ],
           [
             "a",
-            "30617:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:buzz"
+            "30617:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:ambush"
           ]
         ]
       }
@@ -401,7 +401,7 @@
     {
       "name": "valid_member_dtag_contains_colon",
       "expect": "accept",
-      "note": "Repo `d` segment contains a colon. The coordinate splits into at most three parts, so the third part is the repo `d` value verbatim \u2014 `buzz:infra` here. Splitting on every colon instead would make any repo with a colon in its `d` tag unaddressable by a project.",
+      "note": "Repo `d` segment contains a colon. The coordinate splits into at most three parts, so the third part is the repo `d` value verbatim \u2014 `ambush:infra` here. Splitting on every colon instead would make any repo with a colon in its `d` tag unaddressable by a project.",
       "template": {
         "kind": 30621,
         "content": "",
@@ -412,7 +412,7 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz:infra"
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush:infra"
           ]
         ]
       }
@@ -420,7 +420,7 @@
     {
       "name": "valid_uninterpreted_metadata_values",
       "expect": "accept",
-      "note": "`buzz-channel` is not a UUID and `buzz-visibility` is an unrecognized token. Ingest bounds metadata cardinality and length but does not interpret these values \u2014 matching how kind:30617 carries the same two tags. Client-side fallbacks for both are normative in the spec's Metadata interpretation section: an unresolvable channel renders the project without one, and an unrecognized visibility is treated as `listed`.",
+      "note": "`ambush-channel` is not a UUID and `ambush-visibility` is an unrecognized token. Ingest bounds metadata cardinality and length but does not interpret these values \u2014 matching how kind:30617 carries the same two tags. Client-side fallbacks for both are normative in the spec's Metadata interpretation section: an unresolvable channel renders the project without one, and an unrecognized visibility is treated as `listed`.",
       "template": {
         "kind": 30621,
         "content": "",
@@ -430,11 +430,11 @@
             "platform"
           ],
           [
-            "buzz-channel",
+            "ambush-channel",
             "not-a-uuid"
           ],
           [
-            "buzz-visibility",
+            "ambush-visibility",
             "chartreuse"
           ]
         ]
@@ -473,7 +473,7 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush",
             "wss://relay.example.com"
           ]
         ]
@@ -569,11 +569,11 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush"
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush"
           ]
         ]
       }
@@ -595,12 +595,12 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush",
             "wss://relay-one.example.com"
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush",
             "wss://relay-two.example.com"
           ]
         ]
@@ -1179,7 +1179,7 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz",
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush",
             "wss://relay.example.com",
             "unexpected"
           ]
@@ -1203,7 +1203,7 @@
           ],
           [
             "a",
-            "30618:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+            "30618:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush"
           ]
         ]
       }
@@ -1225,7 +1225,7 @@
           ],
           [
             "a",
-            "30617:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz:buzz"
+            "30617:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz:ambush"
           ]
         ]
       }
@@ -1247,7 +1247,7 @@
           ],
           [
             "a",
-            "30617:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:buzz"
+            "30617:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:ambush"
           ]
         ]
       }
@@ -1269,7 +1269,7 @@
           ],
           [
             "a",
-            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:buzz"
+            "30617:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:ambush"
           ]
         ]
       }
@@ -1347,7 +1347,7 @@
     {
       "name": "invalid_metadata_duplicate_channel",
       "expect": "reject",
-      "note": "Two `buzz-channel` tags. Which channel the project links to would be reader-dependent.",
+      "note": "Two `ambush-channel` tags. Which channel the project links to would be reader-dependent.",
       "reject_rules": [
         "metadata-cardinality"
       ],
@@ -1360,11 +1360,11 @@
             "platform"
           ],
           [
-            "buzz-channel",
+            "ambush-channel",
             "3580ca9b-47b4-4af9-b22a-1068778f26c6"
           ],
           [
-            "buzz-channel",
+            "ambush-channel",
             "00000000-0000-0000-0000-000000000000"
           ]
         ]
@@ -1417,7 +1417,7 @@
     {
       "name": "invalid_metadata_channel_too_long",
       "expect": "reject",
-      "note": "`buzz-channel` value exceeds 256 bytes. Paired with `invalid_metadata_visibility_too_long` so each bound is exercised by an event whose other metadata is valid \u2014 neither check can hide behind the other's rejection.",
+      "note": "`ambush-channel` value exceeds 256 bytes. Paired with `invalid_metadata_visibility_too_long` so each bound is exercised by an event whose other metadata is valid \u2014 neither check can hide behind the other's rejection.",
       "reject_rules": [
         "metadata-length"
       ],
@@ -1430,7 +1430,7 @@
             "platform"
           ],
           [
-            "buzz-channel",
+            "ambush-channel",
             "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
           ]
         ]
@@ -1439,7 +1439,7 @@
     {
       "name": "invalid_metadata_visibility_too_long",
       "expect": "reject",
-      "note": "`buzz-visibility` value exceeds 256 bytes. Ingest does not interpret the token, but it must still bound its length.",
+      "note": "`ambush-visibility` value exceeds 256 bytes. Ingest does not interpret the token, but it must still bound its length.",
       "reject_rules": [
         "metadata-length"
       ],
@@ -1452,7 +1452,7 @@
             "platform"
           ],
           [
-            "buzz-visibility",
+            "ambush-visibility",
             "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
           ]
         ]

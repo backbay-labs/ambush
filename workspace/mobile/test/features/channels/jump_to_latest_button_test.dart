@@ -1,7 +1,7 @@
-import 'package:buzz/features/channels/message_action_backdrop_state.dart';
-import 'package:buzz/features/channels/jump_to_latest_button.dart';
-import 'package:buzz/features/channels/jump_to_latest_switcher.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/features/channels/message_action_backdrop_state.dart';
+import 'package:ambush/features/channels/jump_to_latest_button.dart';
+import 'package:ambush/features/channels/jump_to_latest_switcher.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -45,7 +45,7 @@ void main() {
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    const channel = MethodChannel('buzz/jump_to_latest_glass/41');
+    const channel = MethodChannel('ambush/jump_to_latest_glass/41');
     final methodCalls = <MethodCall>[];
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
       call,
@@ -62,7 +62,7 @@ void main() {
       );
 
       final nativeView = tester.widget<UiKitView>(find.byType(UiKitView));
-      expect(nativeView.viewType, 'buzz/jump_to_latest_glass');
+      expect(nativeView.viewType, 'ambush/jump_to_latest_glass');
       expect(nativeView.creationParams, <String, Object>{
         'brightness': 'light',
       });

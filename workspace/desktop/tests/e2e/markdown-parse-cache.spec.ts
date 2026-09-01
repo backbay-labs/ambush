@@ -15,7 +15,7 @@ import { installMockBridge } from "../helpers/bridge";
  */
 
 async function parseCount(page: import("@playwright/test").Page) {
-  return page.evaluate(() => window.__BUZZ_E2E_MD_PARSE_COUNT__?.() ?? -1);
+  return page.evaluate(() => window.__AMBUSH_E2E_MD_PARSE_COUNT__?.() ?? -1);
 }
 
 async function settleChannel(
@@ -37,7 +37,7 @@ test("warm channel switches trigger zero fresh markdown parses", async ({
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_MD_PARSE_COUNT__ === "function",
+    () => typeof window.__AMBUSH_E2E_MD_PARSE_COUNT__ === "function",
   );
 
   // Cold visits populate the query caches and the markdown node cache.

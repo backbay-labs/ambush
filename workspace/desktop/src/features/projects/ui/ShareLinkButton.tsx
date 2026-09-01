@@ -6,7 +6,7 @@ import { writeTextToClipboard } from "@/shared/lib/clipboard";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 /**
- * Copies a `buzz://` share link for the surrounding entity. Renders nothing
+ * Copies a `ambush://` share link for the surrounding entity. Renders nothing
  * when `link` is null — see `lib/projectShareLinks` for when an entity has no
  * shareable coordinate.
  */

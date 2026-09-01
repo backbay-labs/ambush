@@ -1,5 +1,5 @@
-import 'package:buzz/features/invites/invite_join_provider.dart';
-import 'package:buzz/features/invites/invite_join_sheet.dart';
+import 'package:ambush/features/invites/invite_join_provider.dart';
+import 'package:ambush/features/invites/invite_join_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -67,7 +67,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text(fixture.label), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('buzz-sheet-drag-handle')),
+        find.byKey(const ValueKey('ambush-sheet-drag-handle')),
         findsNothing,
       );
       expect(find.byTooltip('Close sheet'), findsNothing);

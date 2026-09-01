@@ -41,11 +41,11 @@ const claudeRuntime = {
   mcpCommand: null,
 };
 
-const buzzAgentRuntime = {
+const ambushAgentRuntime = {
   ...gooseRuntime,
-  id: "buzz-agent",
-  label: "Buzz Agent",
-  command: "buzz-agent-cmd",
+  id: "ambush-agent",
+  label: "Ambush Agent",
+  command: "ambush-agent-cmd",
   mcpCommand: null,
 };
 
@@ -140,7 +140,7 @@ test("row 3: failed persona avatar upload never substitutes the runtime avatar",
 test("mapping carries the runtime and definition fields", async () => {
   const input = await buildInstanceInputForDefinition(persona(), gooseRuntime);
   assert.equal(input.name, "Test Agent");
-  assert.equal(input.acpCommand, "buzz-acp");
+  assert.equal(input.acpCommand, "ambush-acp");
   assert.equal(input.agentCommand, "goose-cmd");
   // B-5: agentArgs is intentionally empty at create time — spawn reads args
   // live from the definition on every start so definition edits take effect
@@ -168,7 +168,7 @@ test("no backend intent is byte-identical to the pre-intent mapping", async () =
     personaId: "p-1",
     systemPrompt: "prompt",
     avatarUrl: "https://example.com/a.png",
-    acpCommand: "buzz-acp",
+    acpCommand: "ambush-acp",
     agentCommand: "goose-cmd",
     agentArgs: [],
     mcpCommand: "goose-mcp",
@@ -181,16 +181,16 @@ test("no backend intent is byte-identical to the pre-intent mapping", async () =
   });
 });
 
-test("Buzz shared compute definition carries native provider and auto model", async () => {
+test("Ambush shared compute definition carries native provider and auto model", async () => {
   const input = await buildInstanceInputForDefinition(
     persona({
-      runtime: "buzz-agent",
+      runtime: "ambush-agent",
       provider: "relay-mesh",
       model: "auto",
     }),
-    { ...gooseRuntime, id: "buzz-agent", command: "buzz-agent" },
+    { ...gooseRuntime, id: "ambush-agent", command: "ambush-agent" },
   );
-  assert.equal(input.agentCommand, "buzz-agent");
+  assert.equal(input.agentCommand, "ambush-agent");
   assert.equal(input.provider, "relay-mesh");
   assert.equal(input.model, "auto");
   assert.equal(input.spawnAfterCreate, true);
@@ -298,22 +298,22 @@ test("row 6: unfetched query refetches instead of resolving empty", async () => 
   );
 });
 
-// ── item-13 regression: buzz-agent-first default runtime ─────────────────────
+// ── item-13 regression: ambush-agent-first default runtime ─────────────────────
 //
 // Before this fix, resolveStartRuntimeForDefinition used runtimes[0] (catalog
-// order: goose, claude, codex, buzz-agent), so an installed goose would beat
-// the bundled buzz-agent sidecar as the default for runtime-less personas.
-// The fix applies the preference order: buzz-agent → goose → first available.
+// order: goose, claude, codex, ambush-agent), so an installed goose would beat
+// the bundled ambush-agent sidecar as the default for runtime-less personas.
+// The fix applies the preference order: ambush-agent → goose → first available.
 
-test("item-13: goose+buzz-agent both available — persona with no runtime resolves buzz-agent", () => {
+test("item-13: goose+ambush-agent both available — persona with no runtime resolves ambush-agent", () => {
   const { runtime, warnings } = resolveStartRuntimeForDefinition(
     persona({ runtime: undefined }),
-    [gooseRuntime, claudeRuntime, buzzAgentRuntime],
+    [gooseRuntime, claudeRuntime, ambushAgentRuntime],
   );
   assert.equal(
     runtime.id,
-    "buzz-agent",
-    "buzz-agent must win over catalog-first goose for runtime-less personas",
+    "ambush-agent",
+    "ambush-agent must win over catalog-first goose for runtime-less personas",
   );
   assert.deepEqual(warnings, []);
 });

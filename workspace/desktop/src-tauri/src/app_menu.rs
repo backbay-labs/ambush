@@ -1,23 +1,23 @@
 //! The macOS application menu.
 //!
-//! Buzz never called `Builder::menu()`, so Tauri installed `Menu::default()`
+//! Ambush never called `Builder::menu()`, so Tauri installed `Menu::default()`
 //! for us (`tauri::app::Builder::build`, macOS arm). That default puts a
 //! `close_window` item in both the File and Window submenus, and muda gives
 //! that item a Cmd+W key equivalent bound to `performClose:`.
 //!
-//! That default cannot express Buzz's context-dependent behavior:
+//! That default cannot express Ambush's context-dependent behavior:
 //!
 //! 1. `CloseRequested` on the main window is intercepted in `lib.rs` and turned
-//!    into hide-to-tray. Cmd+W should take that path in normal Buzz mode.
+//!    into hide-to-tray. Cmd+W should take that path in normal Ambush mode.
 //! 2. macOS resolves a menu key equivalent before the webview receives any key
-//!    event, so Buzz Term could never bind Cmd+W to "close this terminal tab"
+//!    event, so Ambush Term could never bind Cmd+W to "close this terminal tab"
 //!    while the accelerator was claimed here.
 //!
 //! So this module builds the standard menu minus both `close_window` items.
 //! Everything else matches `Menu::default()` deliberately. The webview routes
-//! Cmd+W conditionally instead: Buzz Term consumes it in capture phase while
+//! Cmd+W conditionally instead: Ambush Term consumes it in capture phase while
 //! it owns input, and `useCloseWindowShortcut` closes the current window in
-//! normal Buzz mode.
+//! normal Ambush mode.
 
 #[cfg(target_os = "macos")]
 use tauri::menu::{
@@ -27,7 +27,7 @@ use tauri::menu::{
 use tauri::AppHandle;
 use tauri::{Builder, Runtime};
 
-/// Installs Buzz's menu, replacing the `Menu::default()` Tauri would otherwise
+/// Installs Ambush's menu, replacing the `Menu::default()` Tauri would otherwise
 /// auto-install. A no-op off macOS, where that default is never created and
 /// the Cmd+W accelerator does not exist.
 pub fn install<R: Runtime>(builder: Builder<R>) -> Builder<R> {

@@ -415,7 +415,7 @@ final class HuddleAudioEngine {
   private let diagnosticsEnabled: Bool
   private let audioEngine = AVAudioEngine()
   private let processingQueue = DispatchQueue(
-    label: "xyz.block.buzz.huddle.ios-media",
+    label: "com.backbay.ambush.huddle.ios-media",
     qos: .userInteractive
   )
   private let stateLock = NSLock()

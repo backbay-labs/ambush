@@ -26,9 +26,9 @@ test("model discovery status names missing OpenAI-compatible credentials", () =>
   assert.match(status?.message ?? "", /OpenAI models/);
 });
 
-test("Buzz shared compute names the empty state and next action", () => {
+test("Ambush shared compute names the empty state and next action", () => {
   const status = formatModelDiscoveryErrorStatus(
-    new Error("no Buzz shared compute serving members are available"),
+    new Error("no Ambush shared compute serving members are available"),
     "relay-mesh",
   );
 
@@ -37,9 +37,9 @@ test("Buzz shared compute names the empty state and next action", () => {
   assert.match(status?.message ?? "", /Settings > Compute/);
 });
 
-test("Buzz shared compute distinguishes relay lookup failures", () => {
+test("Ambush shared compute distinguishes relay lookup failures", () => {
   const status = formatModelDiscoveryErrorStatus(
-    new Error("Buzz shared compute model discovery failed: relay offline"),
+    new Error("Ambush shared compute model discovery failed: relay offline"),
     "relay-mesh",
   );
 
@@ -48,9 +48,9 @@ test("Buzz shared compute distinguishes relay lookup failures", () => {
   assert.match(status?.message ?? "", /relay connection/);
 });
 
-test("Buzz shared compute names a missing relay member roster", () => {
+test("Ambush shared compute names a missing relay member roster", () => {
   const status = formatModelDiscoveryErrorStatus(
-    new Error("Buzz shared compute is waiting for the current member roster"),
+    new Error("Ambush shared compute is waiting for the current member roster"),
     "relay-mesh",
   );
 
@@ -72,14 +72,14 @@ test("model discovery status stays quiet for missing Databricks defaults", () =>
 test("Databricks sign-in-required is a muted note pointing at the picker and CLI", () => {
   const status = formatModelDiscoveryErrorStatus(
     new Error(
-      "Databricks sign-in is required; save this agent, then open its model picker to sign in, or run `buzz-agent auth databricks`",
+      "Databricks sign-in is required; save this agent, then open its model picker to sign in, or run `ambush-agent auth databricks`",
     ),
     "databricks_v2",
   );
 
   assert.equal(status?.tone, "muted");
   assert.match(status?.message ?? "", /model picker/);
-  assert.match(status?.message ?? "", /buzz-agent auth databricks/);
+  assert.match(status?.message ?? "", /ambush-agent auth databricks/);
 });
 
 test("Databricks sign-in failure warns and points at the explicit retry", () => {
@@ -96,14 +96,14 @@ test("Databricks sign-in failure warns and points at the explicit retry", () => 
 test("Databricks sign-in timeout warns and points at the explicit retry", () => {
   const status = formatModelDiscoveryErrorStatus(
     new Error(
-      "Databricks sign-in timed out; open the model picker to retry, or run `buzz-agent auth databricks`",
+      "Databricks sign-in timed out; open the model picker to retry, or run `ambush-agent auth databricks`",
     ),
     "databricks_v2",
   );
 
   assert.equal(status?.tone, "warning");
   assert.match(status?.message ?? "", /didn't complete/);
-  assert.match(status?.message ?? "", /buzz-agent auth databricks/);
+  assert.match(status?.message ?? "", /ambush-agent auth databricks/);
 });
 
 test("other Databricks discovery failures fall through to the generic notice", () => {
@@ -117,11 +117,11 @@ test("other Databricks discovery failures fall through to the generic notice", (
 });
 
 test("auth-required errors name the agent and ask for sign-in", () => {
-  // Real shape from run_agent_models_command wrapping buzz-acp stderr when
+  // Real shape from run_agent_models_command wrapping ambush-acp stderr when
   // cursor-agent is signed out (spec ErrorCode::AuthRequired text).
   const status = formatModelDiscoveryErrorStatus(
     new Error(
-      "buzz-acp models failed (exit 1): agent communication failed: Agent reported error (code -32000): Authentication required",
+      "ambush-acp models failed (exit 1): agent communication failed: Agent reported error (code -32000): Authentication required",
     ),
     "",
     "Cursor",
@@ -148,7 +148,7 @@ test("non-auth -32000 errors do NOT get the sign-in copy", () => {
   // "Authentication required" text may route to the sign-in message.
   const status = formatModelDiscoveryErrorStatus(
     new Error(
-      "buzz-acp models failed (exit 1): Agent reported error (code -32000): model catalog fetch timed out",
+      "ambush-acp models failed (exit 1): Agent reported error (code -32000): model catalog fetch timed out",
     ),
     "anthropic",
     "Cursor",

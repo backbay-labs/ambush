@@ -19,10 +19,10 @@ test("builds and escapes supported text conditions", () => {
     buildConditionExpression({
       field: "trigger_text",
       operator: "contains",
-      value: 'deploy "buzz"\\path',
+      value: 'deploy "ambush"\\path',
       webhookField: "",
     }),
-    'str_contains(trigger_text, "deploy \\"buzz\\"\\\\path")',
+    'str_contains(trigger_text, "deploy \\"ambush\\"\\\\path")',
   );
 });
 

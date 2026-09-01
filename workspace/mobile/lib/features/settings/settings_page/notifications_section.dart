@@ -10,27 +10,27 @@ class _NotificationsSection extends ConsumerWidget {
     }
     final community = ref.watch(activeCommunityProvider).value;
     if (community == null) return const SizedBox.shrink();
-    final authorization = ref.watch(buzzPushAuthorizationStatusProvider);
+    final authorization = ref.watch(ambushPushAuthorizationStatusProvider);
     final status = authorization.value;
     final permissionUnavailable = authorization.hasError;
-    final permissionDenied = status == BuzzPushAuthorizationStatus.denied;
+    final permissionDenied = status == AmbushPushAuthorizationStatus.denied;
     final showSettingsRecovery =
         community.pushNotificationsEnabled &&
         (permissionDenied || permissionUnavailable);
     final subtitle = !community.pushNotificationsEnabled
         ? 'Off for this community'
         : switch (status) {
-            BuzzPushAuthorizationStatus.notDetermined =>
+            AmbushPushAuthorizationStatus.notDetermined =>
               'Waiting for iOS notification permission',
-            BuzzPushAuthorizationStatus.denied =>
-              'Enabled in Buzz, but disabled in iOS Settings',
-            BuzzPushAuthorizationStatus.authorized ||
-            BuzzPushAuthorizationStatus.provisional ||
-            BuzzPushAuthorizationStatus.ephemeral =>
+            AmbushPushAuthorizationStatus.denied =>
+              'Enabled in Ambush, but disabled in iOS Settings',
+            AmbushPushAuthorizationStatus.authorized ||
+            AmbushPushAuthorizationStatus.provisional ||
+            AmbushPushAuthorizationStatus.ephemeral =>
               'Receive message notifications from this community',
             null when authorization.isLoading =>
               'Checking iOS notification permission',
-            null => 'Enabled in Buzz; iOS permission status unavailable',
+            null => 'Enabled in Ambush; iOS permission status unavailable',
           };
 
     return AppListCard(
@@ -70,7 +70,7 @@ class _NotificationsSection extends ConsumerWidget {
             icon: LucideIcons.settings,
             title: 'Open iOS Notification Settings',
             onTap: () => unawaited(
-              ref.read(buzzPushNotificationSettingsOpenerProvider)(),
+              ref.read(ambushPushNotificationSettingsOpenerProvider)(),
             ),
           ),
       ],

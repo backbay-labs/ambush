@@ -1,6 +1,6 @@
 ---
 title: "NIP-PL — Push Leases (full normative draft)"
-tags: [nostr, nip, push-notifications, buzz, draft]
+tags: [nostr, nip, push-notifications, ambush, draft]
 status: draft
 created: 2026-07-02
 ---
@@ -130,7 +130,7 @@ On acceptance the executor returns `OK true` and commits the stored event, the e
 Each subscription `filter` is a NIP-01 filter object under these restrictions — a *restriction* of NIP-01, so the executor's existing matcher runs unchanged and all grammar work is sunk at write time:
 
 1. **Narrowing selector.** Each filter MUST contain at least one of: `#p` (self only), `#h` (1–`max_h` channels), or `authors` (1–`max_authors` pubkeys). Bare kinds-only, since-only, or empty filters MUST be rejected (`invalid: lease filter not narrowed`).
-2. **Exact values only.** Every `authors` and `#p` value MUST be exactly 64 lowercase hex characters (a full pubkey), and every `#e` value exactly 64 lowercase hex characters (a full event id); anything shorter, longer, or mixed-case is rejected (`invalid: non-exact match value`). This forecloses NIP-01 prefix matching from inside a lease. Each `#h` value MUST be a non-empty string of at most `max_string_len` bytes and MUST additionally satisfy the channel-identifier grammar the descriptor names in `h_grammar` (e.g. `"uuid-v4-lowercase"` for Buzz); an executor MUST reject values failing its advertised grammar.
+2. **Exact values only.** Every `authors` and `#p` value MUST be exactly 64 lowercase hex characters (a full pubkey), and every `#e` value exactly 64 lowercase hex characters (a full event id); anything shorter, longer, or mixed-case is rejected (`invalid: non-exact match value`). This forecloses NIP-01 prefix matching from inside a lease. Each `#h` value MUST be a non-empty string of at most `max_string_len` bytes and MUST additionally satisfy the channel-identifier grammar the descriptor names in `h_grammar` (e.g. `"uuid-v4-lowercase"` for Ambush); an executor MUST reject values failing its advertised grammar.
 3. **Self-scoped `#p`.** Every `#p` value MUST equal the lease author (`invalid: p-tag must be self`). A lease MUST NOT register a wake on another user's mentions — that is a surveillance primitive, and it would signal the existence of events the author may not read.
 4. **Bounded, allow-listed kinds.** Each filter MUST include `kinds` (1–`max_kinds` entries), each drawn from the executor's advertised `push_kinds` (`invalid: kind not push-eligible`). Ephemeral kinds (20000–29999), presence, typing, and relay-signed snapshot kinds MUST NOT be push-eligible.
 5. **No time-travel, no ids, no limit, no search.** `since`, `until`, `ids`, `limit`, and `search` MUST be rejected, not silently ignored. The lease's liveness window is its `expiration`; `ids` waking is nonsensical for future events.
@@ -155,7 +155,7 @@ Classes are strictly ordered: `silent` < `default` < `time_sensitive` < `urgent`
 
 The executor MUST restrict `urgent` to the descriptor-advertised allow-list of approval-request kinds whose eligibility is decidable from the public event envelope (`invalid: class not permitted for kind`). Urgent DMs are explicitly out of scope for v1: gift-wrapped DM content is opaque to the executor, so no privacy-safe urgency marker exists yet; a future revision may add one.
 
-`silent` remains a matching preference only. The public Buzz APNs profile sends the one fixed reconnect alert and does not expose relay-selected notification classes to the transport boundary.
+`silent` remains a matching preference only. The public Ambush APNs profile sends the one fixed reconnect alert and does not expose relay-selected notification classes to the transport boundary.
 
 Clients MUST NOT register any lease or subscription as a side effect of joining a channel or surface — absent explicit user opt-in the notifiable set is empty.
 
@@ -224,7 +224,7 @@ Common invariant, all transports: the application payload is a transport-owned r
 
 ### APNs
 
-The APNs application body is the exact UTF-8 byte constant `{"aps":{"alert":{"body":"Reconnect to your relay now"},"mutable-content":1}}`. It has no custom member, event identifier, unread count, or relay-supplied byte. The constant mutable-content flag lets the Buzz Notification Service Extension compute a local badge and, when separately authorized data is available, replace the generic text; the gateway does not carry that data. The gateway MUST send that exact body for every accepted APNs attempt; it MUST NOT serialize any relay request, endpoint grant, provider response, or generic JSON value into the body. `apns-topic`, environment, credentials, push type `alert`, and priority `10` come only from gateway configuration. `apns-id` is a canonical UUID and `apns-expiration` is bounded by the endpoint capability and a gateway-local ceiling.
+The APNs application body is the exact UTF-8 byte constant `{"aps":{"alert":{"body":"Reconnect to your relay now"},"mutable-content":1}}`. It has no custom member, event identifier, unread count, or relay-supplied byte. The constant mutable-content flag lets the Ambush Notification Service Extension compute a local badge and, when separately authorized data is available, replace the generic text; the gateway does not carry that data. The gateway MUST send that exact body for every accepted APNs attempt; it MUST NOT serialize any relay request, endpoint grant, provider response, or generic JSON value into the body. `apns-topic`, environment, credentials, push type `alert`, and priority `10` come only from gateway configuration. `apns-id` is a canonical UUID and `apns-expiration` is bounded by the endpoint capability and a gateway-local ceiling.
 
 ### FCM
 
@@ -258,14 +258,14 @@ A pubkey-only client cannot create, replace, or revoke a lease. If a platform en
 
 Implementations MUST NOT interpret this section as NIP-26 delegation. A future specification may define a narrowly scoped installation authorization for unattended endpoint rotation, but such a capability is neither required nor implied here.
 
-## Public APNs Gateway Profile (Buzz, normative)
+## Public APNs Gateway Profile (Ambush, normative)
 
-This section registers the public last-hop profile served at `https://push.buzz.xyz`. It is an optional profile of NIP-PL, but every requirement in this section is normative for implementations that use it. The gateway is stateful: it retains installation authority, encrypted APNs-token custody, relay delegations, replay reservations, and endpoint quotas. The relay remains the executor and retains lease acceptance, matching, tenant authorization, endpoint uniqueness, coalescing, durable jobs/retries, and lease-generation invalidation.
+This section registers the public last-hop profile served at `https://push.ambush.xyz`. It is an optional profile of NIP-PL, but every requirement in this section is normative for implementations that use it. The gateway is stateful: it retains installation authority, encrypted APNs-token custody, relay delegations, replay reservations, and endpoint quotas. The relay remains the executor and retains lease acceptance, matching, tenant authorization, endpoint uniqueness, coalescing, durable jobs/retries, and lease-generation invalidation.
 
 ### Registered values and lease mapping
 
-The registered `app_profile` value is `buzz-ios-dogfood`. It identifies the
-closed Buzz dogfood application identity, not an APNs transport environment.
+The registered `app_profile` value is `ambush-ios-dogfood`. It identifies the
+closed Ambush dogfood application identity, not an APNs transport environment.
 The canonical gateway owns its exact App Attest application identifier, APNs
 topic, certificate-backed connection pool, and APNs environment. Enrollment
 succeeds only when App Attest cryptographically verifies the configured
@@ -312,13 +312,13 @@ The challenge is single-use. Invalid input is `400 invalid_request`; deployment-
 Request members, in any request order:
 
 ```json
-{"v":1,"challenge_id":"<uuid>","challenge":"<challenge>","key_id":"<standard-base64>","attestation":"<standard-base64 CBOR>","app_profile":"buzz-ios-dogfood","endpoint":"<lowercase APNs-token hex>","endpoint_epoch":1,"expires_at":<unix-seconds>}
+{"v":1,"challenge_id":"<uuid>","challenge":"<challenge>","key_id":"<standard-base64>","attestation":"<standard-base64 CBOR>","app_profile":"ambush-ios-dogfood","endpoint":"<lowercase APNs-token hex>","endpoint_epoch":1,"expires_at":<unix-seconds>}
 ```
 
-`expires_at` MUST satisfy `now < expires_at <= now + configured_max_installation_lifetime`; the selected profile MUST be enabled. The exact transcript is domain `buzz.push.enroll.v1` followed by this ordered object:
+`expires_at` MUST satisfy `now < expires_at <= now + configured_max_installation_lifetime`; the selected profile MUST be enabled. The exact transcript is domain `ambush.push.enroll.v1` followed by this ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/installations","challenge_id":"<uuid>","challenge":"<challenge>","key_id":"<standard-base64>","app_profile":"<registered-profile>","endpoint":"<lowercase-hex>","endpoint_epoch":1,"expires_at":<unix-seconds>}
+{"v":1,"audience":"https://push.ambush.xyz/v1/installations","challenge_id":"<uuid>","challenge":"<challenge>","key_id":"<standard-base64>","app_profile":"<registered-profile>","endpoint":"<lowercase-hex>","endpoint_epoch":1,"expires_at":<unix-seconds>}
 ```
 
 The gateway verifies Apple's attestation chain, configured application identifier, production AAGUID, key identifier, and transcript. Apple documents no APNs-token-to-App-Attest-key binding; token provenance at enrollment is an explicit bootstrap assumption. It then stores only encrypted token custody plus its fingerprint. Success `201`:
@@ -339,10 +339,10 @@ Invalid attestation is `401 invalid_attestation`; a consumed/expired challenge o
 {"v":1,"challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<positive-integer>,"generation":<positive-integer>,"relay_pubkey":"<64-lowercase-hex>","not_before":<unix-seconds>,"expires_at":<unix-seconds>,"assertion":"<standard-base64 CBOR>"}
 ```
 
-`not_before <= now + 300`, `not_before < expires_at`, and `expires_at <= now + configured_max_grant_lifetime`. The endpoint epoch MUST equal the current installation epoch. For each `(installation_handle, relay_pubkey)`, generation MUST strictly increase. A successful delegation atomically extends the authenticated installation lifetime through at least the delegation's `expires_at`, allowing renewal without duplicate token enrollment. Transcript domain `buzz.push.delegate.v1`; ordered object:
+`not_before <= now + 300`, `not_before < expires_at`, and `expires_at <= now + configured_max_grant_lifetime`. The endpoint epoch MUST equal the current installation epoch. For each `(installation_handle, relay_pubkey)`, generation MUST strictly increase. A successful delegation atomically extends the authenticated installation lifetime through at least the delegation's `expires_at`, allowing renewal without duplicate token enrollment. Transcript domain `ambush.push.delegate.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/delegations","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"generation":<integer>,"relay_pubkey":"<hex>","not_before":<integer>,"expires_at":<integer>}
+{"v":1,"audience":"https://push.ambush.xyz/v1/delegations","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"generation":<integer>,"relay_pubkey":"<hex>","not_before":<integer>,"expires_at":<integer>}
 ```
 
 Success `201`: `{"endpoint_grant":"<opaque-capability>"}`. The sealed grant contains no APNs token. Grant-key rotation MUST retain decrypt-only predecessor keys through the maximum lifetime of grants they issued.
@@ -355,10 +355,10 @@ Success `201`: `{"endpoint_grant":"<opaque-capability>"}`. The sealed grant cont
 {"v":1,"challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<positive-integer>,"new_endpoint_epoch":<integer>,"endpoint":"<lowercase APNs-token hex>","assertion":"<standard-base64 CBOR>"}
 ```
 
-`new_endpoint_epoch` MUST equal `endpoint_epoch + 1` without overflow. Transcript domain `buzz.push.rotate-endpoint.v1`; ordered object:
+`new_endpoint_epoch` MUST equal `endpoint_epoch + 1` without overflow. Transcript domain `ambush.push.rotate-endpoint.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/installations/endpoint","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>,"endpoint":"<lowercase-hex>"}
+{"v":1,"audience":"https://push.ambush.xyz/v1/installations/endpoint","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>,"endpoint":"<lowercase-hex>"}
 ```
 
 A successful atomic rotation invalidates every grant sealed to the old epoch and returns `200 {"status":"rotated"}`.
@@ -371,10 +371,10 @@ A successful atomic rotation invalidates every grant sealed to the old epoch and
 {"v":1,"challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","relay_pubkey":"<64-lowercase-hex>","generation":<positive-integer>,"assertion":"<standard-base64 CBOR>"}
 ```
 
-Transcript domain `buzz.push.revoke-delegation.v1`; ordered object:
+Transcript domain `ambush.push.revoke-delegation.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/delegations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","relay_pubkey":"<hex>","generation":<integer>}
+{"v":1,"audience":"https://push.ambush.xyz/v1/delegations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","relay_pubkey":"<hex>","generation":<integer>}
 ```
 
 The generation identifies the current delegation generation. Success is `200 {"status":"revoked"}`.
@@ -385,17 +385,17 @@ The generation identifies the current delegation generation. Success is `200 {"s
 {"v":1,"challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<positive-integer>,"new_endpoint_epoch":<integer>,"assertion":"<standard-base64 CBOR>"}
 ```
 
-`new_endpoint_epoch` MUST equal `endpoint_epoch + 1` without overflow. Transcript domain `buzz.push.revoke-installation.v1`; ordered object:
+`new_endpoint_epoch` MUST equal `endpoint_epoch + 1` without overflow. Transcript domain `ambush.push.revoke-installation.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/installations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>}
+{"v":1,"audience":"https://push.ambush.xyz/v1/installations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>}
 ```
 
 Success is `200 {"status":"revoked"}`. The revocation atomically invalidates the installation and every delegation.
 
 ### Relay delivery
 
-`POST /v1/deliveries/apns` has the exact externally configured URL `https://push.buzz.xyz/v1/deliveries/apns`. Request:
+`POST /v1/deliveries/apns` has the exact externally configured URL `https://push.ambush.xyz/v1/deliveries/apns`. Request:
 
 ```json
 {"v":1,"endpoint_grant":"<opaque-capability>","request_id":"<uuid>","expires_at":<unix-seconds>}
@@ -419,9 +419,9 @@ Responses:
 
 The gateway performs one APNs request, except that an APNs expired-provider-token response permits one credential refresh and one retry. The application body is always the exact constant registered in the APNs transport profile above; no request or grant field enters it.
 
-## Implementation Notes (Buzz, non-normative)
+## Implementation Notes (Ambush, non-normative)
 
-Per `RESEARCH/PUSH_RELAY_INTEGRATION.md` (pinned SHA `88c089d`): the lease matcher hooks the generic post-storage dispatch seam (`buzz-relay/src/handlers/event.rs:245 dispatch_persistent_event`), not `handle_side_effects`; Redis pub/sub is community-scoped routing precedent but not the durable offline-matching source; `event_mentions` is a ready indexed primitive for self-`#p` and needs-action subscriptions but is **not** authorization — private-channel wakes re-check same-community visibility at match/send time. Known footgun: some internal producers bypass `dispatch_persistent_event`; implementation must centralize durable dispatch or add push dispatch at each internal publish path.
+Per `RESEARCH/PUSH_RELAY_INTEGRATION.md` (pinned SHA `88c089d`): the lease matcher hooks the generic post-storage dispatch seam (`ambush-relay/src/handlers/event.rs:245 dispatch_persistent_event`), not `handle_side_effects`; Redis pub/sub is community-scoped routing precedent but not the durable offline-matching source; `event_mentions` is a ready indexed primitive for self-`#p` and needs-action subscriptions but is **not** authorization — private-channel wakes re-check same-community visibility at match/send time. Known footgun: some internal producers bypass `dispatch_persistent_event`; implementation must centralize durable dispatch or add push dispatch at each internal publish path.
 
 ## Privacy Considerations
 
@@ -449,4 +449,4 @@ Zombie leases (e.g. `#h` after leaving a channel) are neutralized by match-time 
 - NIP-11 `supported_extensions`: contains `"nip-pl"` pre-numbering; descriptor object `push` as specified in Executor Discovery
 - Classes: `silent`, `default`, `time_sensitive`, `urgent`
 - `h_grammar` values: `"uuid-v4-lowercase"` (initial entry; origins may register additional grammars with this NIP)
-- Public APNs gateway profile: base URL `https://push.buzz.xyz`; app profile `buzz-ios-dogfood`; wire version `1`
+- Public APNs gateway profile: base URL `https://push.ambush.xyz`; app profile `ambush-ios-dogfood`; wire version `1`

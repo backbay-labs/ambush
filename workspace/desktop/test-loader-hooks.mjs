@@ -56,21 +56,21 @@ function resolveSourcePath(basePath) {
 const stubModules = new Map([
   [
     "emoji-mart",
-    "export const init = (...args) => globalThis.__BUZZ_TEST_EMOJI_MART_INIT__?.(...args);\n" +
+    "export const init = (...args) => globalThis.__AMBUSH_TEST_EMOJI_MART_INIT__?.(...args);\n" +
       "export const SearchIndex = { search: async () => [] };\n" +
       "export default {};\n",
   ],
   ["@emoji-mart/react", "export default function Picker() { return null; }\n"],
 ]);
 
-const STUB_URL_PREFIX = "buzz-test-stub:";
+const STUB_URL_PREFIX = "ambush-test-stub:";
 
 // Vite resolves asset imports (`./logo.png`, `./logo.png?inline`) to a URL or
 // base64 string at bundle time; node's ESM resolver has no such loader and
 // throws on the query suffix. Serve an inert string so components that embed
 // assets stay unit-testable.
 const ASSET_SPECIFIER = /\.(?:png|jpe?g|gif|svg|webp|avif|ico)(?:\?[^/]*)?$/;
-const ASSET_URL_PREFIX = "buzz-test-asset:";
+const ASSET_URL_PREFIX = "ambush-test-asset:";
 
 export function resolve(specifier, context, nextResolve) {
   if (ASSET_SPECIFIER.test(specifier)) {

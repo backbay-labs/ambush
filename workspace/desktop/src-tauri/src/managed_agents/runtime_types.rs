@@ -19,7 +19,7 @@ impl ManagedAgentRuntimeKey {
         }
         Ok(Self {
             pubkey: pubkey.to_ascii_lowercase(),
-            relay_url: buzz_core_pkg::relay::normalize_relay_url(relay_url)
+            relay_url: ambush_core_pkg::relay::normalize_relay_url(relay_url)
                 .map_err(|error| error.to_string())?,
         })
     }

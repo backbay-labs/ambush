@@ -73,7 +73,7 @@ export function removeForcedUnreadSource(
     : undefined;
 }
 
-const STORAGE_PREFIX = "buzz-forced-unread.v1";
+const STORAGE_PREFIX = "ambush-forced-unread.v1";
 export const MAX_FORCED_UNREAD_ENTRIES = 500;
 const storageKey = (pubkey: string) => `${STORAGE_PREFIX}:${pubkey}`;
 

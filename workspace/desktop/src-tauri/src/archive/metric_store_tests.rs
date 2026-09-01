@@ -746,7 +746,7 @@ fn insert_and_load_cache_read_tokens_null_when_absent() {
 #[test]
 fn m3_insert_and_load_round_trips_cache_write_and_pricing() {
     let conn = in_memory();
-    let json = r#"{"harness":"buzz-agent","model":"claude-opus-4-5","channelId":null,"sessionId":"s1","turnId":null,"turnSeq":1,"timestamp":"2026-07-01T00:00:00Z","turn":{"inputTokens":200,"outputTokens":50,"totalTokens":250,"costUsd":0.02,"cacheReadTokens":120,"cacheWriteTokens":30},"cumulative":{"inputTokens":600,"outputTokens":150,"totalTokens":750,"costUsd":0.06,"cacheReadTokens":360,"cacheWriteTokens":90},"deltaReliable":true,"stopReason":"end_turn","pricingIdentity":{"authority":"api.anthropic.com","model":"claude-opus-4-5"}}"#;
+    let json = r#"{"harness":"ambush-agent","model":"claude-opus-4-5","channelId":null,"sessionId":"s1","turnId":null,"turnSeq":1,"timestamp":"2026-07-01T00:00:00Z","turn":{"inputTokens":200,"outputTokens":50,"totalTokens":250,"costUsd":0.02,"cacheReadTokens":120,"cacheWriteTokens":30},"cumulative":{"inputTokens":600,"outputTokens":150,"totalTokens":750,"costUsd":0.06,"cacheReadTokens":360,"cacheWriteTokens":90},"deltaReliable":true,"stopReason":"end_turn","pricingIdentity":{"authority":"api.anthropic.com","model":"claude-opus-4-5"}}"#;
     insert_archived_event(
         &conn,
         "id",

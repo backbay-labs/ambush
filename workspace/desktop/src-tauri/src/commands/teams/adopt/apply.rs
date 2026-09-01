@@ -215,7 +215,7 @@ pub(super) fn commit_and_enqueue(
     // needs signable owner keys — the same precondition every retain path has.
     match resolve_scope() {
         Ok(scope) => enqueue_adoption_retention(&scope, &plan.retain_personas, &plan.team),
-        Err(e) => eprintln!("buzz-desktop: adopt-retain scope unavailable: {e}"),
+        Err(e) => eprintln!("ambush-desktop: adopt-retain scope unavailable: {e}"),
     }
 
     Ok(AddTeamFromCatalogResult {
@@ -236,11 +236,11 @@ pub(super) fn enqueue_adoption_retention(
 ) {
     for persona in retain_personas {
         if let Err(e) = crate::commands::personas::retain_persona_pending_at(scope, persona) {
-            eprintln!("buzz-desktop: adopt persona-retain: {e}");
+            eprintln!("ambush-desktop: adopt persona-retain: {e}");
         }
     }
     if let Err(e) = crate::commands::teams::retain_team_pending_at(scope, team) {
-        eprintln!("buzz-desktop: adopt team-retain: {e}");
+        eprintln!("ambush-desktop: adopt team-retain: {e}");
     }
 }
 

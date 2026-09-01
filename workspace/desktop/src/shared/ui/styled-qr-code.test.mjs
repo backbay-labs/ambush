@@ -46,9 +46,9 @@ test("adds the row-based reveal motion when requested", () => {
     }),
   );
 
-  assert.match(html, /class="buzz-qr-cell-reveal"/);
+  assert.match(html, /class="ambush-qr-cell-reveal"/);
   assert.match(html, /data-qr-cell-row="0"/);
-  assert.match(html, /--buzz-qr-reveal-delay:0ms/);
+  assert.match(html, /--ambush-qr-reveal-delay:0ms/);
   assert.match(html, /data-qr-cell-row="56"/);
-  assert.match(html, /--buzz-qr-reveal-delay:189ms/);
+  assert.match(html, /--ambush-qr-reveal-delay:189ms/);
 });

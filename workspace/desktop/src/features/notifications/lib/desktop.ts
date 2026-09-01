@@ -41,15 +41,15 @@ type DesktopNotificationPayload = {
   title: string;
 };
 
-const DESKTOP_NOTIFICATION_ACTION_EVENT = "buzz:desktop-notification-action";
+const DESKTOP_NOTIFICATION_ACTION_EVENT = "ambush:desktop-notification-action";
 
 type DesktopNotificationOptions = NotificationOptions & {
   extra?: Record<string, unknown>;
 };
 
 type TestWindow = Window & {
-  __BUZZ_E2E_APP_BADGE_COUNT__?: number;
-  __BUZZ_E2E_APP_BADGE_STATE__?: AppBadgeState["kind"];
+  __AMBUSH_E2E_APP_BADGE_COUNT__?: number;
+  __AMBUSH_E2E_APP_BADGE_STATE__?: AppBadgeState["kind"];
 };
 
 function hasNotificationApi() {
@@ -64,7 +64,7 @@ function notificationExtra(
   }
 
   return {
-    buzzNotificationTarget: target,
+    ambushNotificationTarget: target,
   };
 }
 
@@ -219,7 +219,7 @@ export async function listenForDesktopNotificationActions(
       try {
         pluginListener = await onAction((notification) => {
           const target = parseNotificationTarget(
-            notification.extra?.buzzNotificationTarget,
+            notification.extra?.ambushNotificationTarget,
           );
           if (!target) {
             return;
@@ -282,7 +282,7 @@ export async function listenForDesktopNotificationActions(
     }
 
     if (usesMacActivationQueue) {
-      // Belt and suspenders for block/buzz#3509: the Rust delegate queues the
+      // Belt and suspenders for block/ambush#3509: the Rust delegate queues the
       // target before emitting, so a lost emit strands the activation with
       // nothing re-draining it. macOS always foregrounds the app on a
       // notification click, and WebKit delivers the resulting focus and
@@ -319,9 +319,9 @@ export async function listenForDesktopNotificationActions(
 export async function setDesktopAppBadge(state: AppBadgeState): Promise<void> {
   if (typeof window !== "undefined") {
     const testWindow = window as TestWindow;
-    testWindow.__BUZZ_E2E_APP_BADGE_COUNT__ =
+    testWindow.__AMBUSH_E2E_APP_BADGE_COUNT__ =
       state.kind === "count" ? state.count : 0;
-    testWindow.__BUZZ_E2E_APP_BADGE_STATE__ = state.kind;
+    testWindow.__AMBUSH_E2E_APP_BADGE_STATE__ = state.kind;
   }
 
   if (!isTauri()) {
@@ -364,7 +364,7 @@ export async function requestDockBounce(): Promise<void> {
  * How long the window-reveal invoke chain may run before callers proceed
  * without it. macOS already foregrounds the app when a notification is
  * clicked, so a reveal that never settles must not gate click-through
- * routing (block/buzz#3509).
+ * routing (block/ambush#3509).
  */
 const REVEAL_WINDOW_TIMEOUT_MS = 1_500;
 
@@ -443,7 +443,7 @@ export async function sendDesktopNotification(
     }
   }
 
-  // block/buzz#5081 — WebKit throws `NotificationError` from the constructor
+  // block/ambush#5081 — WebKit throws `NotificationError` from the constructor
   // when the notification backend becomes temporarily unavailable. Callers
   // discard the returned promise without a rejection handler, so an
   // un-guarded throw becomes an unhandled rejection. Treat constructor failure

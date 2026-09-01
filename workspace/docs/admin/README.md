@@ -1,16 +1,16 @@
 # Deployment moderation dashboard
 
-Buzz can expose a private, deployment-wide moderation dashboard from the existing
+Ambush can expose a private, deployment-wide moderation dashboard from the existing
 relay process. It shows open moderation reports and recent product feedback.
 
-Configure `BUZZ_ADMIN_HOST` to activate the dashboard. A private ingress limits
+Configure `AMBUSH_ADMIN_HOST` to activate the dashboard. A private ingress limits
 access to the operator VPN or approved source IPs.
 
 Required configuration:
 
 ```text
-BUZZ_ADMIN_HOST=admin.example.com
-BUZZ_ADMIN_WEB_DIR=/srv/buzz/admin-web
+AMBUSH_ADMIN_HOST=admin.example.com
+AMBUSH_ADMIN_WEB_DIR=/srv/ambush/admin-web
 ```
 
 Plus one of the authentication modes below.
@@ -18,16 +18,16 @@ Plus one of the authentication modes below.
 ## Authentication
 
 The admin API requires explicit authentication configuration. Setting only
-`BUZZ_ADMIN_HOST` activates the dashboard in the default `nip98` mode. Configure
-the mode with `BUZZ_ADMIN_AUTH`, which accepts `nip98` (default when unset) or
+`AMBUSH_ADMIN_HOST` activates the dashboard in the default `nip98` mode. Configure
+the mode with `AMBUSH_ADMIN_AUTH`, which accepts `nip98` (default when unset) or
 `disabled`.
 
-`BUZZ_ADMIN_TOKEN` is no longer recognised: token authentication was removed.
+`AMBUSH_ADMIN_TOKEN` is no longer recognised: token authentication was removed.
 Setting it is ignored with a startup warning, so a stale token variable cannot
 silently run a deployment on a removed auth path — remove it from the environment
 and use `nip98` (or `disabled` behind a network boundary).
 
-### NIP-98 mode (`BUZZ_ADMIN_AUTH=nip98`, default)
+### NIP-98 mode (`AMBUSH_ADMIN_AUTH=nip98`, default)
 
 Every `/api/admin/v1` request must carry a NIP-98 HTTP Auth header containing a
 signed kind-27235 event. The signer's pubkey is resolved against a two-tier
@@ -35,7 +35,7 @@ principal model — **Operator** or **Moderator** — that grants capabilities
 accordingly.
 
 ```text
-BUZZ_ADMIN_AUTH=nip98
+AMBUSH_ADMIN_AUTH=nip98
 RELAY_OPERATOR_PUBKEYS=<64-char hex pubkey>[,<64-char hex pubkey>...]
 ```
 
@@ -50,7 +50,7 @@ RELAY_OPERATOR_PUBKEYS=<64-char hex pubkey>[,<64-char hex pubkey>...]
 
 #### Auto-discovery via NIP-11
 
-When `BUZZ_ADMIN_HOST` is set, the relay advertises the admin API origin in its
+When `AMBUSH_ADMIN_HOST` is set, the relay advertises the admin API origin in its
 NIP-11 relay-information document under an optional `admin_api` field:
 
 ```json
@@ -151,14 +151,14 @@ then demote or delete the outgoing one. Config-backed operators are unaffected �
 while any config operator or owner fallback is effective, the DB roster may be
 emptied freely because config still guarantees an operator.
 
-### Disabled mode (`BUZZ_ADMIN_AUTH=disabled`)
+### Disabled mode (`AMBUSH_ADMIN_AUTH=disabled`)
 
 Operators whose admin API is already protected at the network layer — for
 example by a corporate VPN such as WARP+Okta — can disable request
 authentication entirely:
 
 ```text
-BUZZ_ADMIN_AUTH=disabled
+AMBUSH_ADMIN_AUTH=disabled
 ```
 
 Only the exact value `disabled` is accepted.
@@ -166,7 +166,7 @@ Only the exact value `disabled` is accepted.
 In this mode the relay logs a `WARN` on every startup:
 
 ```
-BUZZ_ADMIN_AUTH=disabled — the admin API is unauthenticated; the operator has
+AMBUSH_ADMIN_AUTH=disabled — the admin API is unauthenticated; the operator has
 asserted that access is controlled at the network layer
 ```
 
@@ -183,24 +183,24 @@ proxy-injected shared secret or signed identity header for additional assurance.
 
 ### Mode selection and error behaviour
 
-`BUZZ_ADMIN_AUTH` accepts exactly `nip98` or `disabled`. Any other non-empty
-value is a startup error (typo-proofing). `BUZZ_ADMIN_TOKEN` is no longer
+`AMBUSH_ADMIN_AUTH` accepts exactly `nip98` or `disabled`. Any other non-empty
+value is a startup error (typo-proofing). `AMBUSH_ADMIN_TOKEN` is no longer
 recognised and its presence is ignored with a startup warning regardless of the
 other variables:
 
 | Combination | Result |
 |---|---|
-| `BUZZ_ADMIN_TOKEN` set (with or without `BUZZ_ADMIN_HOST`) | warn + ignore |
-| `BUZZ_ADMIN_AUTH=nip98` with a malformed `RELAY_OWNER_PUBKEY` | startup error |
-| `BUZZ_ADMIN_AUTH` junk value | startup error |
-| `BUZZ_ADMIN_AUTH` without `BUZZ_ADMIN_HOST` | warn + ignore |
+| `AMBUSH_ADMIN_TOKEN` set (with or without `AMBUSH_ADMIN_HOST`) | warn + ignore |
+| `AMBUSH_ADMIN_AUTH=nip98` with a malformed `RELAY_OWNER_PUBKEY` | startup error |
+| `AMBUSH_ADMIN_AUTH` junk value | startup error |
+| `AMBUSH_ADMIN_AUTH` without `AMBUSH_ADMIN_HOST` | warn + ignore |
 
 ## Content Security Policy
 
 Every admin-host response that carries the dashboard itself — the SPA document
 on each admin route, the hashed `/assets/*` bundle, and admin-host `404`s — is
 served with a Content Security Policy response header, `ADMIN_CSP` in
-`crates/buzz-relay/src/router.rs`:
+`crates/ambush-relay/src/router.rs`:
 
 ```text
 default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
@@ -230,32 +230,32 @@ relay path.
 
 ## Operator migration
 
-**Upgrading from a pre-auth release (Buzz prior to the introduction of this
-`BUZZ_ADMIN_HOST` requirement):** any deployed relay with `BUZZ_ADMIN_HOST` set
-boots in `nip98` mode after upgrade unless `BUZZ_ADMIN_AUTH=disabled` is set.
+**Upgrading from a pre-auth release (Ambush prior to the introduction of this
+`AMBUSH_ADMIN_HOST` requirement):** any deployed relay with `AMBUSH_ADMIN_HOST` set
+boots in `nip98` mode after upgrade unless `AMBUSH_ADMIN_AUTH=disabled` is set.
 Choose the mode that fits your deployment:
 
-- **Nostr principal model (default):** set `BUZZ_ADMIN_AUTH=nip98` (or leave it
+- **Nostr principal model (default):** set `AMBUSH_ADMIN_AUTH=nip98` (or leave it
   unset) and populate `RELAY_OPERATOR_PUBKEYS` with at least one operator pubkey
   (or rely on owner fallback if `RELAY_OWNER_PUBKEY` is already set) in your
   deploy config, then roll the new version. In a single config rollout, both set
-  `BUZZ_ADMIN_AUTH=nip98` and add the operator pubkey(s) — never split these
+  `AMBUSH_ADMIN_AUTH=nip98` and add the operator pubkey(s) — never split these
   across separate rollouts, as a mode-flip without operators configured leaves
   no-one able to authenticate.
-- **Network-layer mode (e.g. Block's `bb-public` behind WARP+Okta):** set
-  `BUZZ_ADMIN_AUTH=disabled` in your deploy config, then roll the new version.
+- **Network-layer mode (e.g. a private ingress behind an SSO proxy):** set
+  `AMBUSH_ADMIN_AUTH=disabled` in your deploy config, then roll the new version.
 
 **Upgrading from a token-mode release:** token authentication was removed.
-Remove `BUZZ_ADMIN_TOKEN` from the environment — leaving it set is ignored with
+Remove `AMBUSH_ADMIN_TOKEN` from the environment — leaving it set is ignored with
 a startup warning — and adopt `nip98` (populate `RELAY_OPERATOR_PUBKEYS`) or
 `disabled` before rolling the new version.
 
-**Upgrading from the previous `BUZZ_ADMIN_INSECURE_NO_AUTH=true` variable:**
-replace it with `BUZZ_ADMIN_AUTH=disabled`. Behavior is identical; the old
+**Upgrading from the previous `AMBUSH_ADMIN_INSECURE_NO_AUTH=true` variable:**
+replace it with `AMBUSH_ADMIN_AUTH=disabled`. Behavior is identical; the old
 variable is no longer recognised.
 
-Relays without `BUZZ_ADMIN_HOST` are completely unaffected, except that a
-lingering `BUZZ_ADMIN_TOKEN` now logs a startup warning and must be removed.
+Relays without `AMBUSH_ADMIN_HOST` are completely unaffected, except that a
+lingering `AMBUSH_ADMIN_TOKEN` now logs a startup warning and must be removed.
 
 Any non-browser client of `/api/admin/v1` (monitoring probes, scripts, cron
 jobs) must sign each request with a NIP-98 `Authorization: Nostr` header after
@@ -267,7 +267,7 @@ rolling.
 ## Local development
 
 For local review, run `just admin-seed` before `just admin`. `just admin`
-defaults to `BUZZ_ADMIN_AUTH=disabled`, so the dashboard renders without a
+defaults to `AMBUSH_ADMIN_AUTH=disabled`, so the dashboard renders without a
 credential. The seed command also uploads real image and diagnostic fixtures to
 local MinIO. Feedback search and filters run over the bounded browser result
 set. The feedback **status** control (`new`/`reviewed`/`archived`) is

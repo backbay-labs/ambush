@@ -12,7 +12,7 @@
  * candidate evidence that the relay query structurally cannot recover.
  *
  * Design constraints:
- *  - Storage key: "buzz-observed-unread.v1:<normalizedRelayUrl>:<normalizedPubkey>"
+ *  - Storage key: "ambush-observed-unread.v1:<normalizedRelayUrl>:<normalizedPubkey>"
  *    (relay-scoped to prevent cross-community leakage, matching threadActivityStorage).
  *  - Registered in PURE_CACHE_KEY_PREFIXES so the 2 MiB LRU eviction budget applies.
  *  - Payload includes `updatedAt` (ms timestamp) for LRU ordering across scopes.
@@ -33,7 +33,7 @@ import {
   type ObservedUnreadEvent,
 } from "@/features/channels/unreadChannelCounts";
 
-export const OBSERVED_UNREAD_STORAGE_PREFIX = "buzz-observed-unread.v1";
+export const OBSERVED_UNREAD_STORAGE_PREFIX = "ambush-observed-unread.v1";
 
 // Per-channel cap: matches CATCH_UP_LIMIT in useUnreadChannels.ts.
 const PER_CHANNEL_CAP = 1000;

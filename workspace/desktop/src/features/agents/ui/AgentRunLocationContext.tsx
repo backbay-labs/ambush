@@ -18,7 +18,7 @@ import type { AgentRunLocation } from "../lib/agentAccessWarning";
  *
  * The default is `null` — unknown. Never provide a guessed value; the copy
  * falls back to the local wording, which is correct for any owner who has not
- * installed a `buzz-backend-*` provider.
+ * installed a `ambush-backend-*` provider.
  */
 const AgentRunLocationContext = React.createContext<AgentRunLocation | null>(
   null,

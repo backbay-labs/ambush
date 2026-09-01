@@ -75,7 +75,7 @@ test.describe("observer archive policy — Settings toggle", () => {
         window.localStorage.setItem(storageKey, "0");
       },
       {
-        storageKey: `buzz:observer-archive-default-seeded:${MOCK_PUBKEY}`,
+        storageKey: `ambush:observer-archive-default-seeded:${MOCK_PUBKEY}`,
       },
     );
 
@@ -163,8 +163,8 @@ test.describe("observer archive policy — reconciliation gate", () => {
     const readCommands = () =>
       page.evaluate(
         () =>
-          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-            .__BUZZ_E2E_COMMANDS__ ?? [],
+          (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+            .__AMBUSH_E2E_COMMANDS__ ?? [],
       );
 
     await expect
@@ -202,12 +202,12 @@ test.describe("observer archive policy — reconciliation gate", () => {
       () =>
         (
           window as Window & {
-            __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
+            __AMBUSH_E2E_COMMAND_PAYLOADS__?: Array<{
               command: string;
               payload: unknown;
             }>;
           }
-        ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [],
+        ).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [],
     );
     const announcedAt = payloads.findIndex(
       (entry) => entry.command === "announce_archive_sync_epoch",
@@ -248,12 +248,12 @@ test.describe("observer archive policy — reconciliation gate", () => {
           page.evaluate(async (ownerPubkey) => {
             const invoke = (
               window as Window & {
-                __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+                __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
                   command: string,
                   payload?: unknown,
                 ) => Promise<unknown>;
               }
-            ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+            ).__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
             if (!invoke) return false;
             const rows = (await invoke("list_save_subscriptions")) as Array<{
               scope_type: string;
@@ -273,8 +273,8 @@ test.describe("observer archive policy — reconciliation gate", () => {
 
     const commands = await page.evaluate(
       () =>
-        (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-          .__BUZZ_E2E_COMMANDS__ ?? [],
+        (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+          .__AMBUSH_E2E_COMMANDS__ ?? [],
     );
     expect(commands).toContain("merge_save_subscription_kinds");
   });

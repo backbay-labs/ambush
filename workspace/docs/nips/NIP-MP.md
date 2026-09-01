@@ -16,15 +16,15 @@ A project is metadata only. Its signer gains no authority over any member reposi
 
 ## Motivation
 
-Buzz renders one card per `kind:30617`, so "the platform" — a relay, a desktop app, and a mobile app — appears as three unrelated repositories. Real work spans repositories; the model does not.
+Ambush renders one card per `kind:30617`, so "the platform" — a relay, a desktop app, and a mobile app — appears as three unrelated repositories. Real work spans repositories; the model does not.
 
-[VISION_PROJECTS.md](../../VISION_PROJECTS.md) sets the bar as "standard kinds as substrate, custom kinds only where genuinely novel," and every other forge concept in Buzz clears it: repositories, patches, issues, statuses, and ref state are all standard NIP-34 kinds. Multi-repository grouping is the one semantic that cannot be:
+[VISION_PROJECTS.md](../../VISION_PROJECTS.md) sets the bar as "standard kinds as substrate, custom kinds only where genuinely novel," and every other forge concept in Ambush clears it: repositories, patches, issues, statuses, and ref state are all standard NIP-34 kinds. Multi-repository grouping is the one semantic that cannot be:
 
 - **Per-repository tags cannot express cross-owner grouping.** If membership lived in each `kind:30617`, a project spanning Alice's and Bob's repositories would require *both* Alice and Bob to publish a tag naming the group. Alice cannot enroll Bob's repository; she cannot sign for his key. Grouping would be possible only within a single owner's repositories, and would break the moment a repository changed hands or a fork joined.
 - **Project-level metadata has no owner.** A project name, description, and linked channel describe the *group*, not any one repository. Scattered across per-repository tags they have no single writer, no replacement semantics, and no deletion story: removing a repository from the group means editing an event you may not control.
 - **Existing list kinds do not fit.** NIP-51 sets (`kind:30004` curation sets and friends) are private-or-public user bookmarks over arbitrary content, not a shared, named, addressable container for a forge collection with its own channel binding and visibility. Overloading a curation set would make every project indistinguishable from a user's reading list.
 
-One custom kind, held by one signer, with all group state in one replaceable event, resolves all three. The cost is bounded and stated plainly: `kind:30621` is Buzz-specific, so a third-party NIP-34 client sees the member repositories individually and ignores the grouping. Nothing degrades — the repositories remain standard, portable `kind:30617` events, discoverable and renderable exactly as before.
+One custom kind, held by one signer, with all group state in one replaceable event, resolves all three. The cost is bounded and stated plainly: `kind:30621` is Ambush-specific, so a third-party NIP-34 client sees the member repositories individually and ignores the grouping. Nothing degrades — the repositories remain standard, portable `kind:30617` events, discoverable and renderable exactly as before.
 
 ## Non-Goals
 
@@ -61,9 +61,9 @@ This document uses MUST, MUST NOT, SHOULD, SHOULD NOT, MAY, and RECOMMENDED as d
 |----------|---------|--------|
 | Upstream nostr NIPs event-kind table (`nostr-protocol/nips` `README.md`, at commit `6d2979b3f503a8539c983efbcdcf901bbcf9ed23`) | `30610`–`30629` | Only `30617` and `30618` are assigned. `30621` is unassigned. |
 | nostrbook.dev kind registry (`https://nostrbook.dev/kinds/<n>`) | `30617`, `30618`, `30620`, `30621`, `30622` | `30617` and `30618` documented (HTTP 200). `30620`, `30621`, `30622` all HTTP 404 — no entry. |
-| This repository (`crates/buzz-core/src/kind.rs`) | full range | `30620` is `KIND_WORKFLOW_DEF`, `30622` is `KIND_DM_VISIBILITY` (NIP-DV). `30621` is the one free number between them. |
+| This repository (`crates/ambush-core/src/kind.rs`) | full range | `30620` is `KIND_WORKFLOW_DEF`, `30622` is `KIND_DM_VISIBILITY` (NIP-DV). `30621` is the one free number between them. |
 
-Both external registries are advisory, not authoritative allocators: neither reserves numbers, and an unregistered kind may still be in use by an unpublished client. A future upstream assignment of `30621` would be a collision Buzz absorbs the same way it already does for its other custom kinds — the number is Buzz-specific, and interoperability rests on the member `kind:30617` events, which remain standard.
+Both external registries are advisory, not authoritative allocators: neither reserves numbers, and an unregistered kind may still be in use by an unpublished client. A future upstream assignment of `30621` would be a collision Ambush absorbs the same way it already does for its other custom kinds — the number is Ambush-specific, and interoperability rests on the member `kind:30617` events, which remain standard.
 
 ## Event Format
 
@@ -76,10 +76,10 @@ Both external registries are advisory, not authoritative allocators: neither res
     ["d", "platform"],
     ["name", "Platform"],
     ["description", "Relay, desktop, and mobile for the platform team."],
-    ["a", "30617:<owner-a-pubkey-hex>:buzz"],
-    ["a", "30617:<owner-b-pubkey-hex>:buzz-infra"],
-    ["buzz-channel", "<channel-uuid>"],
-    ["buzz-visibility", "listed"]
+    ["a", "30617:<owner-a-pubkey-hex>:ambush"],
+    ["a", "30617:<owner-b-pubkey-hex>:ambush-infra"],
+    ["ambush-channel", "<channel-uuid>"],
+    ["ambush-visibility", "listed"]
   ]
 }
 ```
@@ -90,8 +90,8 @@ Both external registries are advisory, not authoritative allocators: neither res
 | `name` | 0 or 1 | Human-readable display name. Clients fall back to `d` when absent. |
 | `description` | 0 or 1 | Free text describing the project. |
 | `a` | 0 to 64 | One member repository coordinate each. Order is not significant. |
-| `buzz-channel` | 0 or 1 | UUID of the channel this project's discussion lives in. Metadata only — see [Authority](#authority). At most 256 bytes. |
-| `buzz-visibility` | 0 or 1 | `listed` (default) or `unlisted`. Feeds [listing eligibility](#listing-eligibility). At most 256 bytes. |
+| `ambush-channel` | 0 or 1 | UUID of the channel this project's discussion lives in. Metadata only — see [Authority](#authority). At most 256 bytes. |
+| `ambush-visibility` | 0 or 1 | `listed` (default) or `unlisted`. Feeds [listing eligibility](#listing-eligibility). At most 256 bytes. |
 
 `content` carries no meaning. Writers SHOULD emit the empty string. Readers and relays MUST ignore whatever it holds: a non-empty `content` is not a rejection cause, and no consumer may parse semantics from it. Reserving it costs nothing and keeps a future writer that fills it from invalidating its events for today's readers.
 
@@ -99,11 +99,11 @@ Unrecognized tags MUST be ignored rather than rejected, so a newer writer can ad
 
 ### Metadata interpretation
 
-Ingest bounds metadata cardinality and length; it interprets no metadata value. `buzz-channel` and `buzz-visibility` are opaque strings to a relay, exactly as they are on `kind:30617`. Interpretation is a client concern, and every client MUST resolve it the same way:
+Ingest bounds metadata cardinality and length; it interprets no metadata value. `ambush-channel` and `ambush-visibility` are opaque strings to a relay, exactly as they are on `kind:30617`. Interpretation is a client concern, and every client MUST resolve it the same way:
 
 - `name` absent → clients display the `d` value.
-- `buzz-visibility` absent or holding any value other than `listed` or `unlisted` → treated as `listed`. An unrecognized token MUST NOT hide a project: a typo in a metadata field is not a privacy signal, and treating it as one would make a project vanish for reasons its author cannot see.
-- `buzz-channel` absent, or naming a channel the viewer cannot resolve or read → the project renders without a channel link. It MUST NOT be dropped from the collection, and the unresolvable value MUST NOT be surfaced as a broken link.
+- `ambush-visibility` absent or holding any value other than `listed` or `unlisted` → treated as `listed`. An unrecognized token MUST NOT hide a project: a typo in a metadata field is not a privacy signal, and treating it as one would make a project vanish for reasons its author cannot see.
+- `ambush-channel` absent, or naming a channel the viewer cannot resolve or read → the project renders without a channel link. It MUST NOT be dropped from the collection, and the unresolvable value MUST NOT be surfaced as a broken link.
 
 ### Member coordinates
 
@@ -119,7 +119,7 @@ A member `a` tag coordinate MUST be exactly `30617:<owner>:<repo-d>` where:
 
 Parsing splits on the first two colons only; everything after the second colon is `<repo-d>`. A repository whose `d` tag contains a colon is therefore addressable. Splitting on every colon would make such a repository permanently unaddressable by any project.
 
-Buzz-hosted repositories cannot currently produce such a coordinate: their `d` values are validated as `[a-zA-Z0-9._-]{1,64}` (`crates/buzz-relay/src/handlers/side_effects.rs`, `crates/buzz-sdk/src/builders.rs`). The tolerance is for the repositories this NIP does not control — NIP-34 announcements from other clients, and any future relaxation of Buzz's own rule — and it matches how Buzz already parses coordinates in NIP-09 deletion handling, so a project coordinate and a deletion coordinate can never disagree about where a repository's `d` value begins.
+Ambush-hosted repositories cannot currently produce such a coordinate: their `d` values are validated as `[a-zA-Z0-9._-]{1,64}` (`crates/ambush-relay/src/handlers/side_effects.rs`, `crates/ambush-sdk/src/builders.rs`). The tolerance is for the repositories this NIP does not control — NIP-34 announcements from other clients, and any future relaxation of Ambush's own rule — and it matches how Ambush already parses coordinates in NIP-09 deletion handling, so a project coordinate and a deletion coordinate can never disagree about where a repository's `d` value begins.
 
 Coordinate identity is the whole string. Two members sharing a `<repo-d>` under different owners — the NIP-34 fork case — are distinct members, not duplicates.
 
@@ -136,7 +136,7 @@ The project signer's authority begins and ends at the container.
 
 Clients MUST preserve each member repository's own owner provenance in the UI. A repository rendered inside a project must not appear to be owned or governed by the project signer.
 
-`buzz-channel` on a project is **metadata only**. Git push policy reads the `buzz-channel` of the repository's own `kind:30617` (`crates/buzz-relay/src/api/git/policy.rs`); a project neither overrides that binding nor supplies one to a member that lacks it. A project's channel binding therefore cannot widen or narrow push access to anything.
+`ambush-channel` on a project is **metadata only**. Git push policy reads the `ambush-channel` of the repository's own `kind:30617` (`crates/ambush-relay/src/api/git/policy.rs`); a project neither overrides that binding nor supplies one to a member that lacks it. A project's channel binding therefore cannot widen or narrow push access to anything.
 
 ### Editing model
 
@@ -158,7 +158,7 @@ A repository may be a member of any number of projects. It renders inside each (
 
 Deleting a project (NIP-09 `kind:5` naming the project coordinate) deletes the `kind:30621` only. Member repositories are untouched — their `kind:30617` events, refs, channels, and protections all survive, and each falls back to an implicit card unless another listing-eligible project claims it.
 
-**Who may delete.** The project signer always may. On the Buzz relay, so may the signer's registered NIP-OA owner: `validate_standard_deletion_event` resolves the deletion's effective author and accepts it when that actor is the target pubkey's registered owner (`crates/buzz-relay/src/handlers/side_effects.rs`). This is a **Buzz relay extension to NIP-09**, applied uniformly to every kind rather than specially to projects — it is what lets a human clean up events published by an agent they own. Vanilla NIP-09 relays accept only the signer, so a project deleted through the owner path on Buzz will still be live on a relay that lacks the extension.
+**Who may delete.** The project signer always may. On the Ambush relay, so may the signer's registered NIP-OA owner: `validate_standard_deletion_event` resolves the deletion's effective author and accepts it when that actor is the target pubkey's registered owner (`crates/ambush-relay/src/handlers/side_effects.rs`). This is a **Ambush relay extension to NIP-09**, applied uniformly to every kind rather than specially to projects — it is what lets a human clean up events published by an agent they own. Vanilla NIP-09 relays accept only the signer, so a project deleted through the owner path on Ambush will still be live on a relay that lacks the extension.
 
 Replacement admits no such widening: it is signer-only on every relay, because NIP-01 keys the coordinate on the pubkey itself rather than on a permission check.
 
@@ -171,32 +171,32 @@ There is no cascade, in either direction. Deleting a member repository does not 
 A relay accepting `kind:30621` MUST validate the envelope at ingest. The rule names below are the identifiers the shared fixtures use.
 
 1. **`d-cardinality`** — exactly one `d` tag. Zero or several is rejected. Under NIP-01 a missing `d` is treated as empty, which collapses every such event into the `(pubkey, 30621, "")` slot where unrelated projects silently overwrite each other; several `d` tags make the address reader-dependent.
-2. **`d-empty`** — the `d` value is non-empty. Same collapse hazard. Its length is bounded by the relay's existing generic `d`-tag limit (`buzz_db::event::D_TAG_MAX_LEN`, 1024 bytes); this NIP adds no second bound.
-3. **`member-cap`** — at most 64 member `a` tags, counting **every** `a` tag rather than distinct coordinates. Counting distinct coordinates would leave parse volume bounded only by the relay frame limit (512 KiB by default, `crates/buzz-relay/src/config.rs`), since a duplicate-heavy event could carry thousands of tags naming one coordinate. The cap is inclusive: 64 is accepted, 65 is not.
+2. **`d-empty`** — the `d` value is non-empty. Same collapse hazard. Its length is bounded by the relay's existing generic `d`-tag limit (`ambush_db::event::D_TAG_MAX_LEN`, 1024 bytes); this NIP adds no second bound.
+3. **`member-cap`** — at most 64 member `a` tags, counting **every** `a` tag rather than distinct coordinates. Counting distinct coordinates would leave parse volume bounded only by the relay frame limit (512 KiB by default, `crates/ambush-relay/src/config.rs`), since a duplicate-heavy event could carry thousands of tags naming one coordinate. The cap is inclusive: 64 is accepted, 65 is not.
 4. **`member-tag-arity`** — every member `a` tag has exactly two or three elements, per NIP-01's `a` tag grammar. A one-element tag names no coordinate; a fourth element has no defined meaning, and ignoring it would let a writer park unbounded unvalidated data in a position no consumer reads. This is a separate rule from the next one because the failure is different: the tag's shape is wrong, not the coordinate it holds.
 5. **`member-coordinate-malformed`** — every member `a` tag's coordinate (element 1) parses per [Member coordinates](#member-coordinates). The relay hint in element 3 is not parsed and MUST NOT be a rejection cause by its content.
 6. **`member-duplicate`** — no two member `a` tags hold the same coordinate, compared as exact strings on the canonical form. Comparison is on the coordinate alone, so two tags naming one coordinate with different relay hints are duplicates.
-7. **`metadata-cardinality`** — at most one each of `name`, `description`, `buzz-channel`, `buzz-visibility`. Duplicates would make the effective value reader-dependent.
-8. **`metadata-length`** — `name` at most 256 bytes; `description` at most 2048 bytes; `buzz-channel` at most 256 bytes; `buzz-visibility` at most 256 bytes. The two `buzz-` bounds are generous by design: neither value has a semantic length, and the bound exists only so an unbounded string cannot ride into storage on a tag ingest does not interpret.
+7. **`metadata-cardinality`** — at most one each of `name`, `description`, `ambush-channel`, `ambush-visibility`. Duplicates would make the effective value reader-dependent.
+8. **`metadata-length`** — `name` at most 256 bytes; `description` at most 2048 bytes; `ambush-channel` at most 256 bytes; `ambush-visibility` at most 256 bytes. The two `ambush-` bounds are generous by design: neither value has a semantic length, and the bound exists only so an unbounded string cannot ride into storage on a tag ingest does not interpret.
 
 Rules 3 through 6 are evaluated in that order, so an oversized tag list is refused on count before any per-tag parse or set proportional to it is built.
 
-The Buzz validator enforces all eight rules. The shared fixtures in [`NIP-MP.fixtures.json`](NIP-MP.fixtures.json) are wired as its test oracle: the relay's unit test suite runs every case against `validate_project_envelope` and asserts each `expect` outcome.
+The Ambush validator enforces all eight rules. The shared fixtures in [`NIP-MP.fixtures.json`](NIP-MP.fixtures.json) are wired as its test oracle: the relay's unit test suite runs every case against `validate_project_envelope` and asserts each `expect` outcome.
 
 **Duplicates are rejected, never normalized.** A relay cannot dedupe tags inside a signed event: rewriting the tag array changes the event id and invalidates the signature. The choices are reject, or accept and require every present and future consumer to apply a first-wins interpretation rule. Rejecting keeps every stored head canonical and spares all consumers a defensive parse.
 
 **No membership authorization.** The relay MUST NOT check whether the signer owns, maintains, or has any relationship to a member repository. Referencing another owner's repository is legal and is the point of the kind. Because membership grants nothing ([Authority](#authority)), there is nothing to authorize.
 
-**Routing.** `kind:30621` is global-only, like every other NIP-34 kind in Buzz: it is addressed by `(pubkey, kind, d)` and is never channel-scoped. A stray `h` tag MUST NOT scope it to a channel — the `buzz-channel` tag is a metadata reference, not a routing directive.
+**Routing.** `kind:30621` is global-only, like every other NIP-34 kind in Ambush: it is addressed by `(pubkey, kind, d)` and is never channel-scoped. A stray `h` tag MUST NOT scope it to a channel — the `ambush-channel` tag is a metadata reference, not a routing directive.
 
 **Scope.** Writes require the `repos:write` scope, matching `kind:30617` and `kind:30618`. A project is repository metadata; a client authorized to announce repositories is authorized to group them.
 
 **Replacement** follows NIP-01 with no special cases: newest `created_at` wins per `(pubkey, 30621, d)`, and one pubkey can never overwrite another's coordinate.
 
-**Deletion** follows NIP-09 with two Buzz-wide behaviors that are not project-specific:
+**Deletion** follows NIP-09 with two Ambush-wide behaviors that are not project-specific:
 
 - A `kind:5` naming the coordinate deletes it when signed by the project signer **or** by that signer's registered NIP-OA owner ([Deletion](#deletion)).
-- The deletion applies only to versions whose `created_at` is at or before the deletion's own, per NIP-09. A delayed or replayed tombstone signed before the current head MUST NOT remove it; the relay MUST compare timestamps at the coordinate (`soft_delete_by_coordinate`, `crates/buzz-db/src/event.rs`, whose inclusive `created_at <= <deletion>` bound is introduced alongside this specification in [#3171](https://github.com/block/buzz/pull/3171)).
+- The deletion applies only to versions whose `created_at` is at or before the deletion's own, per NIP-09. A delayed or replayed tombstone signed before the current head MUST NOT remove it; the relay MUST compare timestamps at the coordinate (`soft_delete_by_coordinate`, `crates/ambush-db/src/event.rs`, whose inclusive `created_at <= <deletion>` bound is introduced alongside this specification in [#3171](https://github.com/backbay-labs/ambush/pull/3171)).
 
 ## Client Behavior
 
@@ -204,7 +204,7 @@ The Buzz validator enforces all eight rules. The shared fixtures in [`NIP-MP.fix
 
 A project is **listing eligible** for a client when that client is currently rendering it in its project collection. A project is not listing eligible when:
 
-- its `buzz-visibility` is `unlisted`, or
+- its `ambush-visibility` is `unlisted`, or
 - the viewer has hidden it locally, or
 - it has been deleted, or its latest head is otherwise not being rendered.
 
@@ -214,7 +214,7 @@ Only listing-eligible projects claim members. This keeps visibility deterministi
 
 A project **claims** a member — suppressing that repository's implicit card, per step 3 of the fold — only when the project is listing eligible *and* its signer is authorized by the member repository itself: the signer is the repository's owner (the pubkey in the member coordinate), or is listed in a `maintainers` tag on the repository's own live `kind:30617`.
 
-Authority is therefore read from the member repository's *content*, not merely its existence: a client that has resolved only a coordinate, and not the head it names, cannot yet decide whether a project claims it. `maintainers` is the standard NIP-34 multi-value tag; Buzz's own announcement builder does not emit it today, so in practice every current claim reduces to signer-is-owner, and the `maintainers` clause is what keeps a co-maintained repository working the day that changes.
+Authority is therefore read from the member repository's *content*, not merely its existence: a client that has resolved only a coordinate, and not the head it names, cannot yet decide whether a project claims it. `maintainers` is the standard NIP-34 multi-value tag; Ambush's own announcement builder does not emit it today, so in practice every current claim reduces to signer-is-owner, and the `maintainers` clause is what keeps a co-maintained repository working the day that changes.
 
 Without this rule, membership would carry exactly the authority [Authority](#authority) says it does not. Anyone may publish a project naming anyone's repository, so an unauthorized project that suppressed implicit cards would let a stranger pull someone else's repository out of the collection and into a container the owner never consented to — a signed assertion silently becoming control over another owner's discovery surface.
 
@@ -266,7 +266,7 @@ Step 1's "to exhaustion" describes the target result, not a single algorithm: wh
 
 A relay satisfying any proper subset of these conditions does not provide the guarantee. Absent the guarantee, a client MUST mark the collection possibly incomplete regardless of any response sizes; the modes below serve to reduce silent loss rather than eliminate it. `limit` below means the effective page limit.
 
-**Mode 1 — composite cursor (exhaustive under the relay contract).** On a relay that exposes a keyset cursor over `(created_at, event id)`, a client MUST page by it. As an example of the cursor mechanics, Buzz implements the keyset as `created_at < until OR (created_at = until AND id > before_id)` (`crates/buzz-db/src/event.rs:48-52`), resolving the sort to `(created_at DESC, id ASC)`. Buzz exposes this cursor on its authenticated HTTP bridge endpoint (`crates/buzz-relay/src/api/bridge.rs`); it is not available on the NIP-01 websocket REQ path, where `before_id` is silently discarded — `protocol.rs` deserializes each REQ filter into a standard `nostr::Filter`, whose deserializer drops unknown fields, so a client sending `before_id` on a REQ receives no error and falls back to `until`-only paging without knowing it. A NIP-01 websocket client reading `kind:30621` from Buzz is therefore in mode 2, not mode 1; mode selection requires evaluating the relay contract per transport. Within the relay contract, the uniqueness of the `(created_at, id)` pair means each page resumes exactly where the last ended with no skips or re-reads, and a short page is an unambiguous end signal. Cursor uniqueness adds tie-safety; it does not substitute for the relay contract — a relay that post-filters after limiting can return an empty page under this cursor while older matching events remain beyond the candidate window.
+**Mode 1 — composite cursor (exhaustive under the relay contract).** On a relay that exposes a keyset cursor over `(created_at, event id)`, a client MUST page by it. As an example of the cursor mechanics, Ambush implements the keyset as `created_at < until OR (created_at = until AND id > before_id)` (`crates/ambush-db/src/event.rs:48-52`), resolving the sort to `(created_at DESC, id ASC)`. Ambush exposes this cursor on its authenticated HTTP bridge endpoint (`crates/ambush-relay/src/api/bridge.rs`); it is not available on the NIP-01 websocket REQ path, where `before_id` is silently discarded — `protocol.rs` deserializes each REQ filter into a standard `nostr::Filter`, whose deserializer drops unknown fields, so a client sending `before_id` on a REQ receives no error and falls back to `until`-only paging without knowing it. A NIP-01 websocket client reading `kind:30621` from Ambush is therefore in mode 2, not mode 1; mode selection requires evaluating the relay contract per transport. Within the relay contract, the uniqueness of the `(created_at, id)` pair means each page resumes exactly where the last ended with no skips or re-reads, and a short page is an unambiguous end signal. Cursor uniqueness adds tie-safety; it does not substitute for the relay contract — a relay that post-filters after limiting can return an empty page under this cursor while older matching events remain beyond the candidate window.
 
 **Mode 2 — `until` only (boundary-bucket drain; exhaustive only under the relay contract).** A vanilla NIP-01 filter offers no id tiebreak, so the only cursor is `until`. Neither naive step is safe: `until = oldest_seen_created_at - 1` skips every unread event in that second, and `until = oldest_seen_created_at` re-requests the whole bucket, which never advances once one `created_at` bucket exceeds the relay's page size. A mode-2 client MUST therefore drain the boundary second explicitly before stepping past it.
 
@@ -287,7 +287,7 @@ Enumeration is therefore exhaustive when the relay satisfies the contract above 
 
 Step 1's exhaustive enumeration is a correctness floor, not a scaling strategy: it says a client MUST NOT silently truncate its collection, because a repository absent from the list is indistinguishable from one that does not exist. It is not a mandate to hold the relay's entire repository set in memory on every load.
 
-At Buzz's current scale (hundreds of repositories per community) exhaustive enumeration is the whole story. Past that, the way out is a narrower question — a server-side collection query, a scoped or searched subset, or resolving a project's members on demand — not a fixed client-side `limit`. Any such surface MUST report its own truncation so a client can say "showing N of M" rather than quietly presenting a partial collection as complete.
+At Ambush's current scale (hundreds of repositories per community) exhaustive enumeration is the whole story. Past that, the way out is a narrower question — a server-side collection query, a scoped or searched subset, or resolving a project's members on demand — not a fixed client-side `limit`. Any such surface MUST report its own truncation so a client can say "showing N of M" rather than quietly presenting a partial collection as complete.
 
 ### Route resolution
 
@@ -324,8 +324,8 @@ Its cases are **semantic, not signed envelopes**. A repository or project is nam
 ## Relation to Other NIPs
 
 - **NIP-34**: Supplies the member repositories. Members are `kind:30617` announcements referenced by coordinate; a NIP-34 client that does not know `kind:30621` still discovers and renders each repository normally.
-- **NIP-01**: Supplies the addressable-event class, the `a` tag grammar, addressing, replacement, and the owner-only editing model. Owner-only editing is not enforcement code in Buzz — it is what NIP-01 replacement already means.
-- **NIP-09**: Supplies container deletion, which deletes the container only. Buzz extends it in two ways that are not project-specific: an agent's registered NIP-OA owner may also delete, and a tombstone applies only at or before its own `created_at` ([Deletion](#deletion)).
-- **NIP-29**: Supplies the channel a project's `buzz-channel` names. The reference is metadata; project state is never channel-scoped.
+- **NIP-01**: Supplies the addressable-event class, the `a` tag grammar, addressing, replacement, and the owner-only editing model. Owner-only editing is not enforcement code in Ambush — it is what NIP-01 replacement already means.
+- **NIP-09**: Supplies container deletion, which deletes the container only. Ambush extends it in two ways that are not project-specific: an agent's registered NIP-OA owner may also delete, and a tombstone applies only at or before its own `created_at` ([Deletion](#deletion)).
+- **NIP-29**: Supplies the channel a project's `ambush-channel` names. The reference is metadata; project state is never channel-scoped.
 - **NIP-51**: The closest existing precedent — a signed, addressable list referencing content the author need not own. Not reused because a project is a shared named forge container with its own channel binding and visibility, not a user's private-or-public bookmark set.
 - **NIP-OA**: Consulted for container deletion only — an agent's registered owner may delete the agent's project ([Deletion](#deletion)). Push access is unaffected: agents inherit repository push access from their owner through the repository's own protections, and a project is never consulted.

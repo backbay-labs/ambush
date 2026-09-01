@@ -31,7 +31,7 @@ class RelayBusScalingTests(unittest.TestCase):
         community = "00000000-0000-0000-0000-000000000001"
         self.assertEqual(
             harness.scoped_global_channel(community),
-            "buzz:00000000-0000-0000-0000-000000000001:global",
+            "ambush:00000000-0000-0000-0000-000000000001:global",
         )
 
     def test_model_default_proves_sixty_four_x_reduction_for_one_two_four_pods(self) -> None:

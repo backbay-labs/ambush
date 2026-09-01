@@ -3,7 +3,7 @@ import * as React from "react";
 /** Device-level type scale applied throughout the desktop interface. */
 export type FontSize = "smaller" | "default" | "larger";
 
-export const FONT_SIZE_STORAGE_KEY = "buzz.appearance.fontSize";
+export const FONT_SIZE_STORAGE_KEY = "ambush.appearance.fontSize";
 export const DEFAULT_FONT_SIZE: FontSize = "default";
 
 /**

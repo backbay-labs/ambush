@@ -6,7 +6,7 @@ import {
 } from "@/features/communities/communityStorage";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 
-const QUICK_REACTION_STORAGE_KEY = "buzz.quick-reaction-emojis.v1";
+const QUICK_REACTION_STORAGE_KEY = "ambush.quick-reaction-emojis.v1";
 const DEFAULT_QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉"] as const;
 const MAX_STORED_REACTIONS = 24;
 const sessionQuickReactionEmojis = new Map<string, string[]>();

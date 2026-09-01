@@ -19,7 +19,7 @@ permissions:
 jobs:
   build:
     name: Build Linux canary
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'backbay-labs/ambush'
     runs-on: ubuntu-latest
     container: ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
     timeout-minutes: 60
@@ -147,7 +147,7 @@ jobs:
         run: echo "id=$(scripts/desktop-native-toolchain-id.sh linux)" >> "$GITHUB_OUTPUT"
 
       # Compute this after cargo update so the key describes the graph that is
-      # actually compiled. The helper normalizes only Buzz Desktop's release
+      # actually compiled. The helper normalizes only Ambush Desktop's release
       # version, allowing a canary to warm an otherwise identical tag build.
       - name: Compute exact release cache key
         id: rust_cache_key
@@ -186,7 +186,7 @@ jobs:
 
       - name: Build sidecars
         run: |
-          cargo build --release -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          cargo build --release -p ambush-acp -p ambush-agent -p ambush-backend-kubernetes -p ambush-dev-mcp -p git-credential-nostr -p ambush-cli
           ./scripts/bundle-sidecars.sh
 
       - name: Build Linux Tauri app
@@ -257,7 +257,7 @@ jobs:
       - name: Upload Linux canary packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: buzz-linux-canary-${{ github.sha }}
+          name: ambush-linux-canary-${{ github.sha }}
           path: |
             ${{ steps.artifacts.outputs.deb }}
             ${{ steps.artifacts.outputs.appimage }}

@@ -364,7 +364,7 @@ export type ManagedAgent = {
   autoRestartOnConfigChange: boolean;
   backend: ManagedAgentBackend;
   backendAgentId: string | null;
-  /** Who the agent should respond to. Maps to `buzz-acp --respond-to`. */
+  /** Who the agent should respond to. Maps to `ambush-acp --respond-to`. */
   respondTo: RespondToMode;
   /**
    * Normalized 64-char lowercase hex pubkeys. Used only when `respondTo` is
@@ -373,7 +373,7 @@ export type ManagedAgent = {
   respondToAllowlist: string[];
 };
 
-/** Inbound author gate mode. Mirrors buzz-acp's --respond-to CLI flag. */
+/** Inbound author gate mode. Mirrors ambush-acp's --respond-to CLI flag. */
 export type RespondToMode = "owner-only" | "allowlist" | "anyone";
 
 export type BackendProviderCandidate = {
@@ -463,7 +463,7 @@ export type ControlResultFrame = {
   modelId?: string;
   /** Opaque per-pick id echoed from the request; correlates late frames. */
   requestId?: string;
-  /** Buzz channel UUID from the observer envelope; disambiguates channels. */
+  /** Ambush channel UUID from the observer envelope; disambiguates channels. */
   channelId?: string | null;
 };
 
@@ -588,7 +588,7 @@ export type AgentModelInfo = {
 
 // ── Config bridge types ──────────────────────────────────────────────────────
 export type ConfigOrigin =
-  | "buzzExplicit"
+  | "ambushExplicit"
   | "acpNativeRead"
   | "acpConfigOption"
   | "envVar"
@@ -710,7 +710,7 @@ export type AgentPersona = {
   systemPrompt: string;
   /** Preferred ACP runtime ID (e.g. "goose", "claude"). */
   runtime: string | null;
-  /** Opaque, harness-specific model identifier string. Buzz stores and passes through without interpretation. */
+  /** Opaque, harness-specific model identifier string. Ambush stores and passes through without interpretation. */
   model: string | null;
   /** LLM inference provider (e.g. "databricks", "anthropic"). Injected as the runtime's provider env var at spawn time. */
   provider: string | null;

@@ -3,12 +3,12 @@
 # With a bare `[workspace]` and no `members`, `cargo test/check --workspace`
 # expands to a set that excludes this crate, and its gates pass green-and-empty
 # over a real defect. Verified: Sami Arm A/D, Dawn `.scratch/armA`.
-members = ["crates/buzz-terminal"]
+members = ["crates/ambush-terminal"]
 
 [package]
-name = "buzz-desktop"
+name = "ambush-desktop"
 version = "0.5.20"
-description = "Buzz desktop app"
+description = "Ambush desktop app"
 authors = ["you"]
 edition = "2021"
 
@@ -18,7 +18,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "buzz_lib"
+name = "ambush_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
@@ -102,13 +102,13 @@ percent-encoding = "2"
 reqwest = { version = "0.13", features = ["json", "query", "stream", "blocking"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 url = "2"
-buzz_core_pkg = { package = "buzz-core", path = "../../crates/buzz-core" }
-buzz_persona_pkg = { package = "buzz-persona", path = "../../crates/buzz-persona" }
-buzz_sdk_pkg = { package = "buzz-sdk", path = "../../crates/buzz-sdk" }
-buzz_agent_pkg = { package = "buzz-agent", path = "../../crates/buzz-agent" }
-buzz_voice_pkg = { package = "buzz-voice", path = "../../crates/buzz-voice" }
-buzz_terminal = { package = "buzz-terminal", path = "crates/buzz-terminal" }
-buzz_ws_client_pkg = { package = "buzz-ws-client", path = "../../crates/buzz-ws-client" }
+ambush_core_pkg = { package = "ambush-core", path = "../../crates/ambush-core" }
+ambush_persona_pkg = { package = "ambush-persona", path = "../../crates/ambush-persona" }
+ambush_sdk_pkg = { package = "ambush-sdk", path = "../../crates/ambush-sdk" }
+ambush_agent_pkg = { package = "ambush-agent", path = "../../crates/ambush-agent" }
+ambush_voice_pkg = { package = "ambush-voice", path = "../../crates/ambush-voice" }
+ambush_terminal = { package = "ambush-terminal", path = "crates/ambush-terminal" }
+ambush_ws_client_pkg = { package = "ambush-ws-client", path = "../../crates/ambush-ws-client" }
 portable-pty = "0.9"
 iroh = { version = "1.0.2", optional = true }
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", tag = "v0.75.1", package = "mesh-llm-sdk", default-features = false, features = ["client", "serving"], optional = true }
@@ -156,4 +156,4 @@ tauri-utils = "2"
 tokio = { version = "1", features = ["test-util"] }
 # The relay's media validation, so the snapshot-sharing tests can prove the
 # full export → sanitize → relay-accept → import contract end to end.
-buzz_media_pkg = { package = "buzz-media", path = "../../crates/buzz-media" }
+ambush_media_pkg = { package = "ambush-media", path = "../../crates/ambush-media" }

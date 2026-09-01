@@ -28,7 +28,7 @@ The feed's job is to surface verb, object, and outcome immediately, and to push 
 
 Every item resolves to one of twelve presentation classes, organized by how often they are read and how much consequence they carry:
 
-**The spine — read constantly.** Message (the agent's voice), Buzz relay op (acting on the platform), File-edit (the actual code work), Shell command (the agent's hands), and Tool status & turn lifecycle (the heartbeat). If these are unclear, the feed has failed.
+**The spine — read constantly.** Message (the agent's voice), Ambush relay op (acting on the platform), File-edit (the actual code work), Shell command (the agent's hands), and Tool status & turn lifecycle (the heartbeat). If these are unclear, the feed has failed.
 
 **High-value context — consulted to judge correctness.** Thought (reasoning, on tap), Plan/Todo (the roadmap and progress bar), Permission (the control gate), and Error (the stop sign).
 
@@ -38,7 +38,7 @@ These are not a wish list. They are the complete taxonomy: every event the agent
 
 ## Design Principles
 
-- **Semantics over transport.** Render *what the agent did*, not *which API it used*. A message sent through an MCP tool and the same message sent through a shell `buzz` command render as the identical card. How the agent reached the relay is plumbing; what it did is the contract.
+- **Semantics over transport.** Render *what the agent did*, not *which API it used*. A message sent through an MCP tool and the same message sent through a shell `ambush` command render as the identical card. How the agent reached the relay is plumbing; what it did is the contract.
 
 - **Outcome-first.** Lead with success, failure, or result. The reader decides in under a second whether to expand. The raw dump is the fallback, never the headline.
 
@@ -60,6 +60,6 @@ These are not a wish list. They are the complete taxonomy: every event the agent
 
 The feed's real job is to **earn delegation.** Visible progress, visible consent, and visible outcomes compound: each turn you watch go well makes you trust the agent with a larger one. Deciding what *not* to show — suppressing heartbeats and internal chatter — is as much a feature as deciding what to show, because suppression is what makes the signal legible.
 
-A feed built this way is protocol-honest at its base: any compliant agent's messages, thoughts, tool calls, and turns become first-class items regardless of which tools it runs. The Buzz-specific richness — semantic relay cards, the buzz-CLI parser, diff rendering — is a layer of enrichment on top, not a requirement underneath. Non-Buzz agents get a correct, legible feed; Buzz agents get a native one.
+A feed built this way is protocol-honest at its base: any compliant agent's messages, thoughts, tool calls, and turns become first-class items regardless of which tools it runs. The Ambush-specific richness — semantic relay cards, the ambush-CLI parser, diff rendering — is a layer of enrichment on top, not a requirement underneath. Non-Ambush agents get a correct, legible feed; Ambush agents get a native one.
 
 Two altitudes of the same truth. Polished for judgment, raw for debugging. The window stays a window.

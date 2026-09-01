@@ -1,9 +1,9 @@
-import BuzzPushKit
+import AmbushPushKit
 import Foundation
 import Security
 import UserNotifications
 
-final class BuzzOneShotCompletion {
+final class AmbushOneShotCompletion {
   private let lock = NSLock()
   private var completion: (() -> Void)?
 
@@ -20,19 +20,19 @@ final class BuzzOneShotCompletion {
   }
 }
 
-enum BuzzPushNotificationResponseCoordinator {
+enum AmbushPushNotificationResponseCoordinator {
   static func handle(
     actionIdentifier: String,
     userInfo: [AnyHashable: Any],
-    onTarget: (BuzzPushNavigationTarget) -> Void,
+    onTarget: (AmbushPushNavigationTarget) -> Void,
     forwardToFlutter: (@escaping () -> Void) -> Void,
     completion: @escaping () -> Void
   ) {
-    let completionGate = BuzzOneShotCompletion(completion)
+    let completionGate = AmbushOneShotCompletion(completion)
     defer { completionGate.call() }
 
     if actionIdentifier == UNNotificationDefaultActionIdentifier,
-      let target = BuzzPushNavigationTarget.decodeIfPresent(from: userInfo)
+      let target = AmbushPushNavigationTarget.decodeIfPresent(from: userInfo)
     {
       onTarget(target)
     }
@@ -40,8 +40,8 @@ enum BuzzPushNotificationResponseCoordinator {
   }
 }
 
-enum BuzzPushKeychain {
-  static let service = "buzz.push.nse.signing"
+enum AmbushPushKeychain {
+  static let service = "ambush.push.nse.signing"
 
   static func replace(signingKeys: [String: String], accessGroup: String?) throws {
     var query = baseQuery(accessGroup: accessGroup)

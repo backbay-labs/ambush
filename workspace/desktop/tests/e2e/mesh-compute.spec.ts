@@ -4,12 +4,12 @@ import { installMockBridge } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 
 type E2eWindow = Window & {
-  __BUZZ_E2E_COMMANDS__?: string[];
-  __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
+  __AMBUSH_E2E_COMMANDS__?: string[];
+  __AMBUSH_E2E_COMMAND_PAYLOADS__?: Array<{
     command: string;
     payload: { request?: { mode?: string; modelId?: string } } | null;
   }>;
-  __BUZZ_E2E_SET_MESH__?: (mesh: {
+  __AMBUSH_E2E_SET_MESH__?: (mesh: {
     nodeState?: "off" | "running";
     nodeMode?: "serve" | "client" | null;
   }) => void;
@@ -47,7 +47,7 @@ test("Share compute chooses a model before sharing", async ({ page }) => {
   ).toBeVisible();
   await expect(model).toBeVisible();
   await expect(card).toContainText(
-    "Buzz downloads remote models when sharing starts",
+    "Ambush downloads remote models when sharing starts",
   );
   await expect(toggle).toBeChecked();
   await expect(
@@ -55,13 +55,13 @@ test("Share compute chooses a model before sharing", async ({ page }) => {
   ).toContainText("SmolLM2 135M with relay members");
   await expect
     .poll(() =>
-      page.evaluate(() => (window as E2eWindow).__BUZZ_E2E_COMMANDS__ ?? []),
+      page.evaluate(() => (window as E2eWindow).__AMBUSH_E2E_COMMANDS__ ?? []),
     )
     .toContain("mesh_start_node");
   await expect
     .poll(() =>
       page.evaluate(
-        () => (window as E2eWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [],
+        () => (window as E2eWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [],
       ),
     )
     .toContainEqual({
@@ -83,7 +83,7 @@ test("Share compute chooses a model before sharing", async ({ page }) => {
   await expect(model).toBeVisible();
   await expect
     .poll(() =>
-      page.evaluate(() => (window as E2eWindow).__BUZZ_E2E_COMMANDS__ ?? []),
+      page.evaluate(() => (window as E2eWindow).__AMBUSH_E2E_COMMANDS__ ?? []),
     )
     .toContain("mesh_stop_node");
 });
@@ -99,17 +99,17 @@ test("a consuming client can switch to sharing its saved local model", async ({
   // client with one serve start (never a stop command).
   const localModel = "hf://demo/local-small-model:Q4_K_M";
   await page.addInitScript((model) => {
-    window.localStorage.setItem("buzz.mesh-compute.share.model.v1", model);
+    window.localStorage.setItem("ambush.mesh-compute.share.model.v1", model);
   }, localModel);
   await installMockBridge(page);
   await page.goto("/");
   // The mesh seed hook is installed when the mock bridge boots; calling it
   // before then silently no-ops (optional chaining) and the seed is lost.
   await page.waitForFunction(
-    () => typeof (window as E2eWindow).__BUZZ_E2E_SET_MESH__ === "function",
+    () => typeof (window as E2eWindow).__AMBUSH_E2E_SET_MESH__ === "function",
   );
   await page.evaluate(() => {
-    (window as E2eWindow).__BUZZ_E2E_SET_MESH__?.({
+    (window as E2eWindow).__AMBUSH_E2E_SET_MESH__?.({
       nodeState: "running",
       nodeMode: "client",
     });
@@ -121,7 +121,7 @@ test("a consuming client can switch to sharing its saved local model", async ({
   await expect(card).toContainText(
     "This machine is currently using another member's shared compute",
   );
-  await expect(card).toContainText("Buzz may briefly restart");
+  await expect(card).toContainText("Ambush may briefly restart");
   await expect(toggle).not.toBeChecked();
   await expect(
     page.getByTestId("mesh-share-compute-options-motion"),
@@ -136,8 +136,8 @@ test("a consuming client can switch to sharing its saved local model", async ({
   await expect(toggle).toBeChecked();
 
   const commands = await page.evaluate(() => ({
-    names: (window as E2eWindow).__BUZZ_E2E_COMMANDS__ ?? [],
-    payloads: (window as E2eWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [],
+    names: (window as E2eWindow).__AMBUSH_E2E_COMMANDS__ ?? [],
+    payloads: (window as E2eWindow).__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [],
   }));
   expect(commands.names).not.toContain("mesh_stop_node");
   expect(commands.payloads).toContainEqual({

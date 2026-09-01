@@ -25,7 +25,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Buzz authentication complete</title>
+  <title>Ambush authentication complete</title>
   <style>
     :root {
       color-scheme: light;
@@ -117,7 +117,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 </head>
 <body>
   <main>
-    <svg class="bee" viewBox="0 0 466 309" role="img" aria-label="Buzz">
+    <svg class="bee" viewBox="0 0 466 309" role="img" aria-label="Ambush">
       <defs>
         <mask id="bee-mask">
           <rect width="466" height="309" fill="black"/>
@@ -134,7 +134,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
     </svg>
     <div class="eyebrow">Authentication complete</div>
     <h1>You&rsquo;re signed in.</h1>
-    <p>You can close this window and return to Buzz.</p>
+    <p>You can close this window and return to Ambush.</p>
   </main>
 </body>
 </html>"#;
@@ -219,7 +219,7 @@ fn login_url(return_to: &str) -> Result<Url, String> {
     login_url
         .query_pairs_mut()
         .append_pair("type", "cli")
-        .append_pair("product", "buzz")
+        .append_pair("product", "ambush")
         .append_pair("returnTo", return_to);
     Ok(login_url)
 }
@@ -472,7 +472,7 @@ pub(crate) async fn get_builderlab_nostr_identity(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/nostr-identities/current",
+        "/v1/ambush/nostr-identities/current",
         serde_json::json!({}),
     )
     .await
@@ -487,7 +487,7 @@ pub(crate) async fn bind_builderlab_nostr_identity(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/nostr-identities/challenge",
+        "/v1/ambush/nostr-identities/challenge",
         serde_json::json!({ "origin": BUILDERLAB_ORIGIN }),
     )
     .await?;
@@ -513,7 +513,7 @@ pub(crate) async fn bind_builderlab_nostr_identity(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/nostr-identities/verify",
+        "/v1/ambush/nostr-identities/verify",
         serde_json::json!({
             "challenge_id": challenge.challenge_id,
             "nonce": challenge.nonce,
@@ -532,7 +532,7 @@ pub(crate) async fn delete_builderlab_nostr_identity(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/nostr-identities/delete",
+        "/v1/ambush/nostr-identities/delete",
         serde_json::json!({}),
     )
     .await
@@ -547,7 +547,7 @@ pub(crate) async fn list_builderlab_communities(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/communities/list",
+        "/v1/ambush/communities/list",
         serde_json::json!({}),
     )
     .await
@@ -563,7 +563,7 @@ pub(crate) async fn check_builderlab_community_name(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/communities/availability",
+        "/v1/ambush/communities/availability",
         serde_json::json!({ "name": name }),
     )
     .await
@@ -579,7 +579,7 @@ pub(crate) async fn create_builderlab_community(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/communities",
+        "/v1/ambush/communities",
         serde_json::json!({ "name": name }),
     )
     .await
@@ -595,7 +595,7 @@ pub(crate) async fn archive_builderlab_community(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/communities/archive",
+        "/v1/ambush/communities/archive",
         serde_json::json!({ "community_id": community_id }),
     )
     .await
@@ -611,7 +611,7 @@ pub(crate) async fn unarchive_builderlab_community(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/communities/unarchive",
+        "/v1/ambush/communities/unarchive",
         serde_json::json!({ "community_id": community_id }),
     )
     .await
@@ -631,7 +631,7 @@ pub(crate) async fn transfer_builderlab_community(
         &app_state.http_client,
         &session,
         reqwest::Method::POST,
-        "/v1/buzz/communities/transfer",
+        "/v1/ambush/communities/transfer",
         serde_json::json!({
             "communityId": community_id,
             "transfereeNpub": transferee_npub,
@@ -645,14 +645,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auth_complete_page_uses_buzz_brand() {
+    fn auth_complete_page_uses_ambush_brand() {
         for expected in [
-            "<title>Buzz authentication complete</title>",
+            "<title>Ambush authentication complete</title>",
             "#d7d72e",
             "#231e1e",
             "#d7e7f6",
-            "aria-label=\"Buzz\"",
-            "return to Buzz",
+            "aria-label=\"Ambush\"",
+            "return to Ambush",
         ] {
             assert!(
                 AUTH_COMPLETE_HTML.contains(expected),
@@ -677,7 +677,7 @@ mod tests {
         let query: HashMap<_, _> = login.query_pairs().into_owned().collect();
 
         assert_eq!(query.get("type").map(String::as_str), Some("cli"));
-        assert_eq!(query.get("product").map(String::as_str), Some("buzz"));
+        assert_eq!(query.get("product").map(String::as_str), Some("ambush"));
         assert_eq!(
             query.get("returnTo").map(String::as_str),
             Some("http://127.0.0.1:1234/callback/nonce")

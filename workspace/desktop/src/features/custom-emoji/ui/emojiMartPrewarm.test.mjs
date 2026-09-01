@@ -24,7 +24,7 @@ globalThis.window = {
     return 1;
   },
 };
-globalThis.__BUZZ_TEST_EMOJI_MART_INIT__ = (...args) => initCalls.push(args);
+globalThis.__AMBUSH_TEST_EMOJI_MART_INIT__ = (...args) => initCalls.push(args);
 
 const { emojiMartData } = await import("./emojiMartPrewarm.ts");
 

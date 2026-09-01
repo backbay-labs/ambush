@@ -8,7 +8,7 @@ import * as React from "react";
  * intentionally not reset on community switch. Defaults off to keep the feed
  * compact.
  */
-const STORAGE_KEY = "buzz:show-transcript-timestamps";
+const STORAGE_KEY = "ambush:show-transcript-timestamps";
 
 const listeners = new Set<() => void>();
 

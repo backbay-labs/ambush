@@ -17,7 +17,7 @@ TEXT_SIZE="${2:-14}"
 
 [[ -f "$DMG_PATH" ]] || { echo "Missing DMG: $DMG_PATH" >&2; exit 1; }
 
-WORK_DIR="$(mktemp -d -t buzz-dmg-text-size)"
+WORK_DIR="$(mktemp -d -t ambush-dmg-text-size)"
 MOUNT_POINT="$WORK_DIR/mount"
 RW_DMG="$WORK_DIR/work.dmg"
 OUT_DMG="$WORK_DIR/output.dmg"

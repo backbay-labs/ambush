@@ -521,7 +521,7 @@ function UserProfilePopoverBody({
                 {showHumanProfileActions ? (
                   <Button
                     aria-label="Wave"
-                    className="buzz-wave-hover-trigger shrink-0 px-3 transition-transform duration-100 ease-out motion-reduce:transition-none motion-safe:active:scale-[0.97]"
+                    className="ambush-wave-hover-trigger shrink-0 px-3 transition-transform duration-100 ease-out motion-reduce:transition-none motion-safe:active:scale-[0.97]"
                     data-testid={`user-profile-popover-wave-${pubkey}`}
                     disabled={pendingAction !== null || isOpeningDm}
                     onClick={() => {
@@ -539,7 +539,7 @@ function UserProfilePopoverBody({
                     ) : (
                       <span
                         aria-hidden="true"
-                        className="buzz-wave-hand text-sm leading-none"
+                        className="ambush-wave-hand text-sm leading-none"
                       >
                         👋
                       </span>

@@ -15,7 +15,7 @@ import '../../shared/emoji/emoji_search.dart';
 import '../../shared/emoji/native_emoji_glyph.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/ios_native_segmented_control.dart';
 import '../../shared/widgets/ios_glass_navigation_button.dart';
@@ -292,7 +292,7 @@ class ProfileAvatarEditor extends HookConsumerWidget {
                     shape: BoxShape.circle,
                   ),
                   child: const Center(
-                    child: BuzzLoadingIndicator(
+                    child: AmbushLoadingIndicator(
                       semanticLabel: 'Preparing photo',
                     ),
                   ),

@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:buzz/shared/relay/animated_image_sanitizer.dart';
+import 'package:ambush/shared/relay/animated_image_sanitizer.dart';
 
 void main() {
   test('strips APNG metadata without changing animation chunks', () {

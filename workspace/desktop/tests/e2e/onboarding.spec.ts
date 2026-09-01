@@ -35,18 +35,18 @@ async function setRelayConnectionState(
     () =>
       typeof (
         window as Window & {
-          __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+          __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
         }
-      ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
+      ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
   );
   await page.evaluate((nextState) => {
     const testWindow = window as Window & {
-      __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (
+      __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: (
         state: RelayConnectionState,
       ) => void;
     };
     const setConnectionState =
-      testWindow.__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__;
+      testWindow.__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__;
     if (!setConnectionState) {
       throw new Error("Mock relay connection state helper is not installed.");
     }
@@ -60,9 +60,9 @@ async function setRelayConnectionState(
   }, state);
 }
 
-const HOME_SEEN_STORAGE_KEY_PREFIX = "buzz-home-feed-seen.v1:";
+const HOME_SEEN_STORAGE_KEY_PREFIX = "ambush-home-feed-seen.v1:";
 const COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY =
-  "buzz-community-onboarding-transaction.v1";
+  "ambush-community-onboarding-transaction.v1";
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
@@ -91,7 +91,7 @@ async function seedOnboardingCompletion(page: Page, pubkey: string) {
       window.localStorage.setItem(storageKey, "true");
     },
     {
-      storageKey: `buzz-onboarding-complete.v1:${pubkey}`,
+      storageKey: `ambush-onboarding-complete.v1:${pubkey}`,
     },
   );
 }
@@ -101,7 +101,7 @@ async function seedCommunityProfileStage(page: Page, id: string) {
   await page.addInitScript(
     ({ pubkey, transactionId, transactionStorageKey }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
@@ -485,7 +485,7 @@ async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
 async function getMockChannels(page: Page) {
   return page.evaluate(async () => {
     const bridgeWindow = window as Window & {
-      __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+      __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
         command: string,
         payload?: Record<string, unknown>,
       ) => Promise<unknown>;
@@ -497,7 +497,7 @@ async function getMockChannels(page: Page) {
       };
     };
     const invoke =
-      bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
+      bridgeWindow.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ ??
       bridgeWindow.__TAURI_INTERNALS__?.invoke;
 
     if (!invoke) {
@@ -527,7 +527,7 @@ async function invokeMockCommand<T>(
   return page.evaluate(
     async ({ command, payload }) => {
       const bridgeWindow = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
@@ -539,7 +539,7 @@ async function invokeMockCommand<T>(
         };
       };
       const invoke =
-        bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
+        bridgeWindow.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ ??
         bridgeWindow.__TAURI_INTERNALS__?.invoke;
 
       if (!invoke) {
@@ -555,17 +555,17 @@ async function invokeMockCommand<T>(
 async function seedCurrentAvatar(page: Page, avatarUrl: string) {
   await page.waitForFunction(() => {
     const bridgeWindow = window as Window & {
-      __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+      __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: unknown;
       __TAURI_INTERNALS__?: { invoke?: unknown };
     };
     return (
-      typeof bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
+      typeof bridgeWindow.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
       typeof bridgeWindow.__TAURI_INTERNALS__?.invoke === "function"
     );
   });
   await invokeMockCommand(page, "update_profile", { avatarUrl });
   await page.evaluate(() => {
-    window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
+    window.__AMBUSH_E2E_COMMAND_PAYLOADS__ = [];
   });
 }
 
@@ -714,7 +714,7 @@ test("fresh existing-identity path leads with private-key recovery", async ({
     page.getByRole("heading", { name: "Enter your private key" }),
   ).toBeVisible();
   await expect(
-    page.getByText("Paste your private key to sign in to Buzz."),
+    page.getByText("Paste your private key to sign in to Ambush."),
   ).toBeVisible();
   await expect(page.getByTestId("nostr-import-card")).toBeVisible();
   await expect(page.getByTestId("nostr-import-file-button")).toHaveText(
@@ -787,7 +787,7 @@ test("fresh existing-identity path leads with private-key recovery", async ({
   const phoneDialog = page.getByTestId("phone-recovery-dialog");
   await expect(phoneDialog).toBeVisible();
   await expect(
-    phoneDialog.getByRole("heading", { name: "Use your Buzz identity" }),
+    phoneDialog.getByRole("heading", { name: "Use your Ambush identity" }),
   ).toBeVisible();
   await expect(phoneDialog.getByTestId("identity-recovery-qr")).toBeVisible();
   await expect(page.getByTestId("nostr-import-card")).toBeVisible();
@@ -1037,7 +1037,7 @@ test("non-local runtime override keeps community selection without release flag"
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1052,7 +1052,7 @@ test("non-local runtime override keeps community selection without release flag"
     page.getByRole("button", { name: /Join a community/ }),
   ).toBeVisible();
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("buzz-communities")))
+    .poll(() => page.evaluate(() => localStorage.getItem("ambush-communities")))
     .toBeNull();
 });
 
@@ -1062,7 +1062,7 @@ test("non-local default auto-connects when the release flag is enabled", async (
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1078,14 +1078,14 @@ test("non-local default auto-connects when the release flag is enabled", async (
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const raw = window.localStorage.getItem("buzz-communities");
+        const raw = window.localStorage.getItem("ambush-communities");
         const communities = raw
           ? (JSON.parse(raw) as Array<{ id: string; relayUrl: string }>)
           : [];
         return {
           activeMatchesCommunity:
             communities.length === 1 &&
-            window.localStorage.getItem("buzz-active-community-id") ===
+            window.localStorage.getItem("ambush-active-community-id") ===
               communities[0]?.id,
           relayUrl: communities[0]?.relayUrl ?? null,
         };
@@ -1103,7 +1103,7 @@ test("first-community choices route join, create, owner, and member intents", as
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1173,7 +1173,7 @@ test("first-community owner can connect an existing hosted community", async ({
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1189,7 +1189,7 @@ test("first-community owner can connect an existing hosted community", async ({
         {
           id: "owned-community",
           name: "North Star",
-          normalized_host: "north-star.communities.buzz.xyz",
+          normalized_host: "north-star.communities.ambush.example.com",
         },
       ],
     },
@@ -1210,17 +1210,21 @@ test("first-community owner can connect an existing hosted community", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
+        window.localStorage.getItem(
+          "ambush-community-onboarding-transaction.v1",
+        ),
       ),
     )
     .toContain('"source":"first-community"');
   await expect
     .poll(() =>
       page.evaluate(() =>
-        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
+        window.localStorage.getItem(
+          "ambush-community-onboarding-transaction.v1",
+        ),
       ),
     )
-    .toContain("wss://north-star.communities.buzz.xyz");
+    .toContain("wss://north-star.communities.ambush.example.com");
   await page.getByTestId("community-profile-back").click();
   await expect(
     page.getByRole("heading", { name: "Choose a community" }),
@@ -1232,7 +1236,9 @@ test("first-community owner can connect an existing hosted community", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
+        window.localStorage.getItem(
+          "ambush-community-onboarding-transaction.v1",
+        ),
       ),
     )
     .toBeNull();
@@ -1244,7 +1250,7 @@ test("first-community owner can create and connect a hosted community", async ({
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1262,7 +1268,7 @@ test("first-community owner can create and connect a hosted community", async ({
   await page.getByTestId("community-choice-create").click();
   await page.getByRole("button", { name: "Sign in to continue" }).click();
   await expect(
-    page.getByRole("heading", { name: "Finish connecting Buzz" }),
+    page.getByRole("heading", { name: "Finish connecting Ambush" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Connect and continue" }).click();
   const createSurface = page.getByTestId("hosted-community-create-surface");
@@ -1306,10 +1312,12 @@ test("first-community owner can create and connect a hosted community", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
+        window.localStorage.getItem(
+          "ambush-community-onboarding-transaction.v1",
+        ),
       ),
     )
-    .toContain("wss://bee-lab.communities.buzz.xyz");
+    .toContain("wss://bee-lab.communities.ambush.example.com");
 });
 
 test("hosted community address line stays within the card for a long name", async ({
@@ -1318,7 +1326,7 @@ test("hosted community address line stays within the card for a long name", asyn
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1338,7 +1346,7 @@ test("hosted community address line stays within the card for a long name", asyn
   await page.getByTestId("community-choice-create").click();
   await page.getByRole("button", { name: "Sign in to continue" }).click();
   await expect(
-    page.getByRole("heading", { name: "Finish connecting Buzz" }),
+    page.getByRole("heading", { name: "Finish connecting Ambush" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Connect and continue" }).click();
 
@@ -1379,7 +1387,7 @@ test("first-community reports a created community without a relay address", asyn
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1420,7 +1428,7 @@ test("first-community X cancels a pending sign-in", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1446,7 +1454,7 @@ test("first-community X cancels a pending sign-in", async ({ page }) => {
     page.getByRole("button", { name: /Create a community/ }),
   ).toBeVisible();
   await expect
-    .poll(() => page.evaluate(() => window.__BUZZ_E2E_COMMANDS__ ?? []))
+    .poll(() => page.evaluate(() => window.__AMBUSH_E2E_COMMANDS__ ?? []))
     .toEqual(expect.arrayContaining(["cancel_builderlab_login"]));
 });
 
@@ -1456,7 +1464,7 @@ test("first-community owner can replace a mismatched account identity", async ({
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1480,7 +1488,7 @@ test("first-community owner can replace a mismatched account identity", async ({
   await page.getByTestId("community-choice-create").click();
   await expect(
     page.getByRole("heading", {
-      name: "This account uses a different Buzz identity",
+      name: "This account uses a different Ambush identity",
     }),
   ).toBeVisible();
   await page
@@ -1490,7 +1498,7 @@ test("first-community owner can replace a mismatched account identity", async ({
     page.getByRole("textbox", { name: "Community name" }),
   ).toBeVisible();
   await expect
-    .poll(() => page.evaluate(() => window.__BUZZ_E2E_COMMANDS__ ?? []))
+    .poll(() => page.evaluate(() => window.__AMBUSH_E2E_COMMANDS__ ?? []))
     .toEqual(
       expect.arrayContaining([
         "delete_builderlab_nostr_identity",
@@ -1505,7 +1513,7 @@ test("first-community explains when the local identity belongs to another accoun
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1533,11 +1541,11 @@ test("first-community explains when the local identity belongs to another accoun
     .click();
   await expect(
     page.getByText(
-      "This device's Buzz identity belongs to a different Builderlab account and can't be moved from here. Sign out, then sign in with the account that already owns this identity.",
+      "This device's Ambush identity belongs to a different Builderlab account and can't be moved from here. Sign out, then sign in with the account that already owns this identity.",
     ),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Finish connecting Buzz" }),
+    page.getByRole("heading", { name: "Finish connecting Ambush" }),
   ).toBeVisible();
 });
 
@@ -1547,7 +1555,7 @@ test("back clears Builderlab auth before returning to first-community choices", 
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1580,7 +1588,7 @@ test("first-community shows the scenario cards for localhost", async ({
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1631,12 +1639,12 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(
     page
       .getByTestId("welcome-setup")
-      .locator(".buzz-onboarding-transition-line"),
+      .locator(".ambush-onboarding-transition-line"),
   ).toHaveAttribute("data-onboarding-direction", "forward");
   await expect(
     page
       .getByTestId("welcome-setup")
-      .locator(".buzz-onboarding-transition-line"),
+      .locator(".ambush-onboarding-transition-line"),
   ).toHaveAttribute("data-onboarding-effect", "line-slide");
   const joinBack = page.getByTestId("welcome-join-back");
   await expect(joinBack).toBeVisible();
@@ -1644,7 +1652,7 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(
     page
       .getByTestId("welcome-setup")
-      .locator(".buzz-onboarding-transition-line"),
+      .locator(".ambush-onboarding-transition-line"),
   ).toHaveAttribute("data-onboarding-direction", "backward");
 
   await page.getByTestId("welcome-setup-back").click();
@@ -1664,7 +1672,7 @@ test("first-community direct join reaches profile", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1678,7 +1686,7 @@ test("first-community direct join reaches profile", async ({ page }) => {
   await page.getByRole("button", { name: /Join a community/ }).click();
   await page
     .getByTestId("invite-redeem-input")
-    .fill("wss://onboarding.communities.buzz.xyz");
+    .fill("wss://onboarding.communities.ambush.example.com");
   await page.getByTestId("invite-redeem-submit").click();
 
   await expect(
@@ -1689,7 +1697,8 @@ test("first-community direct join reaches profile", async ({ page }) => {
   await expect
     .poll(() =>
       page.evaluate((transactionStorageKey) => {
-        const communitiesRaw = window.localStorage.getItem("buzz-communities");
+        const communitiesRaw =
+          window.localStorage.getItem("ambush-communities");
         const transactionRaw = window.localStorage.getItem(
           transactionStorageKey,
         );
@@ -1717,7 +1726,7 @@ test("community onboarding reuses an existing relay profile", async ({
   await page.addInitScript(
     ({ pubkey, transactionStorageKey }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
@@ -1727,7 +1736,7 @@ test("community onboarding reuses an existing relay profile", async ({
           id: "txn-existing-profile",
           source: "add-community",
           stage: "profile",
-          relayUrl: "wss://onboarding.communities.buzz.xyz",
+          relayUrl: "wss://onboarding.communities.ambush.example.com",
           communityName: "Onboarding",
           communityId: "e2e-default-community",
           createdAt: timestamp,
@@ -1744,7 +1753,7 @@ test("community onboarding reuses an existing relay profile", async ({
     page,
     { profileHasEvent: true },
     {
-      relayWsUrl: "wss://onboarding.communities.buzz.xyz",
+      relayWsUrl: "wss://onboarding.communities.ambush.example.com",
       skipOnboardingSeed: true,
     },
   );
@@ -1755,8 +1764,8 @@ test("community onboarding reuses an existing relay profile", async ({
       page.evaluate(
         () =>
           (
-            window as Window & { __BUZZ_E2E_COMMANDS__?: string[] }
-          ).__BUZZ_E2E_COMMANDS__?.filter(
+            window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] }
+          ).__AMBUSH_E2E_COMMANDS__?.filter(
             (command) => command === "get_profile",
           ).length ?? 0,
       ),
@@ -1768,7 +1777,7 @@ test("community onboarding reuses an existing relay profile", async ({
   await expect(
     page
       .getByTestId("community-onboarding-flow")
-      .locator(".buzz-onboarding-transition-line"),
+      .locator(".ambush-onboarding-transition-line"),
   ).toHaveAttribute("data-onboarding-direction", "forward");
   await expect(
     page.getByRole("heading", { name: "Build your profile" }),
@@ -1780,7 +1789,7 @@ test("community onboarding reuses an existing relay profile", async ({
   await expect(
     page
       .getByTestId("community-onboarding-flow")
-      .locator(".buzz-onboarding-transition-line"),
+      .locator(".ambush-onboarding-transition-line"),
   ).toHaveAttribute("data-onboarding-direction", "backward");
 });
 
@@ -1790,7 +1799,7 @@ test("first-community direct join cancel returns to request access", async ({
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      `ambush-machine-onboarding-complete.v2:${pubkey}`,
       "true",
     );
   }, BLANK_TYLER_IDENTITY.pubkey);
@@ -1808,7 +1817,7 @@ test("first-community direct join cancel returns to request access", async ({
   await page.getByRole("button", { name: /Join a community/ }).click();
   await page
     .getByTestId("invite-redeem-input")
-    .fill("wss://onboarding.communities.buzz.xyz");
+    .fill("wss://onboarding.communities.ambush.example.com");
   await page.getByTestId("invite-redeem-submit").click();
   await expect(page.getByText("Connecting securely…")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
@@ -1822,7 +1831,7 @@ test("first-community direct join cancel returns to request access", async ({
     .poll(() =>
       page.evaluate(
         (storageKey) => ({
-          communities: window.localStorage.getItem("buzz-communities"),
+          communities: window.localStorage.getItem("ambush-communities"),
           transaction: window.localStorage.getItem(storageKey),
         }),
         COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY,
@@ -1838,12 +1847,12 @@ test("canceling a join to an existing inactive community preserves it", async ({
   await page.addInitScript(
     ({ pubkey, relayUrl }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
       window.localStorage.setItem(
-        "buzz-communities",
+        "ambush-communities",
         JSON.stringify([
           {
             id: "active-community",
@@ -1860,13 +1869,13 @@ test("canceling a join to an existing inactive community preserves it", async ({
         ]),
       );
       window.localStorage.setItem(
-        "buzz-active-community-id",
+        "ambush-active-community-id",
         "active-community",
       );
     },
     {
       pubkey: BLANK_TYLER_IDENTITY.pubkey,
-      relayUrl: "wss://onboarding.communities.buzz.xyz",
+      relayUrl: "wss://onboarding.communities.ambush.example.com",
     },
   );
   await installMockBridge(
@@ -1888,7 +1897,7 @@ test("canceling a join to an existing inactive community preserves it", async ({
         id: "existing-community-join",
         source: "add-community",
         stage: "connecting",
-        relayUrl: "wss://onboarding.communities.buzz.xyz",
+        relayUrl: "wss://onboarding.communities.ambush.example.com",
         communityName: "Existing",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -1903,7 +1912,7 @@ test("canceling a join to an existing inactive community preserves it", async ({
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const raw = window.localStorage.getItem("buzz-communities");
+        const raw = window.localStorage.getItem("ambush-communities");
         return raw
           ? (JSON.parse(raw) as Array<{ id: string }>).map(({ id }) => id)
           : [];
@@ -1919,7 +1928,7 @@ test("connected first-community profile keeps Back bottom-left and balances the 
   await page.addInitScript(
     ({ pubkey, transactionStorageKey }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
@@ -2248,7 +2257,7 @@ test("connected first-community profile keeps Back bottom-left and balances the 
   await page.getByRole("tab", { name: "Emoji" }).click();
   await selectFirstEmojiFromPicker(page);
   const liveEmoji = page.getByTestId("community-avatar-live-preview-emoji");
-  await expect(liveEmoji).toHaveClass(/buzz-avatar-squish/);
+  await expect(liveEmoji).toHaveClass(/ambush-avatar-squish/);
   await expect(
     page.getByTestId("community-avatar-live-preview-panel"),
   ).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
@@ -2372,7 +2381,7 @@ test("name-only community profile save preserves an existing avatar", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])
           .filter(
             ({ command }) =>
               command === "update_profile" ||
@@ -2491,7 +2500,7 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])
           .filter(
             ({ command }) =>
               command === "update_profile" ||
@@ -2507,7 +2516,7 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])
           .filter(
             ({ command }) =>
               command === "update_profile" ||
@@ -2571,7 +2580,7 @@ test("a pending avatar never becomes durable if propagation fails after onboardi
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])
           .filter(
             ({ command }) =>
               command === "update_profile" ||
@@ -2638,7 +2647,7 @@ test("a pending avatar becomes durable after onboarding unmounts once ready", as
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])
           .filter(
             ({ command }) =>
               command === "update_profile" ||
@@ -2653,7 +2662,7 @@ test("a pending avatar becomes durable after onboarding unmounts once ready", as
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])
           .filter(
             ({ command }) =>
               command === "update_profile" ||
@@ -2710,7 +2719,7 @@ test("a failed pending replacement leaves the confirmed avatar untouched", async
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])
           .filter(
             ({ command }) =>
               command === "update_profile" ||
@@ -2733,11 +2742,11 @@ test("replacing a pending upload disposes its verifier and local preview", async
   await seedCommunityProfileStage(page, "txn-avatar-replacement");
   await page.addInitScript(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E_REVOKED_OBJECT_URLS__?: string[];
+      __AMBUSH_E2E_REVOKED_OBJECT_URLS__?: string[];
     };
     const revokedUrls: string[] = [];
     const revokeObjectUrl = URL.revokeObjectURL.bind(URL);
-    testWindow.__BUZZ_E2E_REVOKED_OBJECT_URLS__ = revokedUrls;
+    testWindow.__AMBUSH_E2E_REVOKED_OBJECT_URLS__ = revokedUrls;
     URL.revokeObjectURL = (url) => {
       revokedUrls.push(url);
       revokeObjectUrl(url);
@@ -2786,9 +2795,9 @@ test("replacing a pending upload disposes its verifier and local preview", async
     .poll(() =>
       page.evaluate(() => {
         const testWindow = window as Window & {
-          __BUZZ_E2E_REVOKED_OBJECT_URLS__?: string[];
+          __AMBUSH_E2E_REVOKED_OBJECT_URLS__?: string[];
         };
-        return testWindow.__BUZZ_E2E_REVOKED_OBJECT_URLS__ ?? [];
+        return testWindow.__AMBUSH_E2E_REVOKED_OBJECT_URLS__ ?? [];
       }),
     )
     .toContain(supersededPreviewUrl);
@@ -2806,7 +2815,7 @@ test("membership denial on community profile save offers recovery", async ({
   await page.addInitScript(
     ({ pubkey, transactionStorageKey }) => {
       window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        `ambush-machine-onboarding-complete.v2:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
@@ -2935,7 +2944,7 @@ test("no-event profile cached then reloaded still sees onboarding", async ({
   // Seed a stale v1 cache entry WITHOUT hasProfileEvent (simulating a cache
   // written by the old code path or a no-event fallback). updatedAt > 0 so
   // the seed is eligible, but hasProfileEvent is absent → conservative false.
-  const SELF_PROFILE_CACHE_KEY = `buzz-self-profile.v1:ws://localhost:3000:${TEST_IDENTITIES.tyler.pubkey}`;
+  const SELF_PROFILE_CACHE_KEY = `ambush-self-profile.v1:ws://localhost:3000:${TEST_IDENTITIES.tyler.pubkey}`;
   await page.addInitScript(
     ({ key, cache }) => {
       window.localStorage.setItem(key, JSON.stringify(cache));
@@ -3043,10 +3052,10 @@ test("failed avatar saves can continue without saving the avatar", async ({
     .fill("https://example.com/morty.png");
   await page.evaluate(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E__?: { mock?: { profileUpdateError?: string } };
+      __AMBUSH_E2E__?: { mock?: { profileUpdateError?: string } };
     };
-    if (testWindow.__BUZZ_E2E__?.mock) {
-      testWindow.__BUZZ_E2E__.mock.profileUpdateError =
+    if (testWindow.__AMBUSH_E2E__?.mock) {
+      testWindow.__AMBUSH_E2E__.mock.profileUpdateError =
         "Temporary avatar sync failure.";
     }
   });
@@ -3166,7 +3175,7 @@ test("first-run onboarding keeps the shell hidden and lands on private Welcome a
 async function commandCount(page: Page, command: string) {
   return page.evaluate(
     (target) =>
-      window.__BUZZ_E2E_COMMANDS__?.filter((entry) => entry === target)
+      window.__AMBUSH_E2E_COMMANDS__?.filter((entry) => entry === target)
         .length ?? 0,
     command,
   );
@@ -3218,7 +3227,7 @@ test("first-run onboarding posts the live Fizz kickoff", async ({ page }) => {
   // Greeted by the name typed above — the @mention pill also files the opener
   // into the new user's Inbox mentions feed.
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi Morty QA, I'm Fizz. Welcome to Buzz.",
+    "Hi Morty QA, I'm Fizz. Welcome to Ambush.",
   );
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Honey and Pollen, introduce yourselves",
@@ -3242,7 +3251,7 @@ test("first-run onboarding lands before Welcome team bootstrap completes", async
   await expectPrivateWelcomeLanding(page);
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi Morty QA, I'm Fizz. Welcome to Buzz.",
+    "Hi Morty QA, I'm Fizz. Welcome to Ambush.",
   );
   await page.waitForTimeout(1_500);
   expect(await commandCount(page, "create_managed_agent")).toBe(3);
@@ -3610,9 +3619,9 @@ test("membership denial can import a different invited key", async ({
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_COMMANDS__?: string[];
+              __AMBUSH_E2E_COMMANDS__?: string[];
             }
-          ).__BUZZ_E2E_COMMANDS__?.includes("plugin:websocket|disconnect") ??
+          ).__AMBUSH_E2E_COMMANDS__?.includes("plugin:websocket|disconnect") ??
           false,
       ),
     )
@@ -3646,10 +3655,12 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // flush polling exceed the default budget.
   test.slow();
   const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
-  const DRAFT_STORE_KEY_PREFIX = "buzz-drafts.v2";
+  const DRAFT_STORE_KEY_PREFIX = "ambush-drafts.v2";
   // Mirrors the bridge's DEFAULT_RELAY_WS_URL and useDrafts'
   // canonicalizeRelayScope (scheme://host, no trailing slash).
-  const relayScope = (process.env.BUZZ_E2E_RELAY_URL ?? "http://localhost:3000")
+  const relayScope = (
+    process.env.AMBUSH_E2E_RELAY_URL ?? "http://localhost:3000"
+  )
     .replace(/^http/, "ws")
     .replace(/\/+$/, "");
   const tylerDraftStoreKey = `${DRAFT_STORE_KEY_PREFIX}:${relayScope}:${TEST_IDENTITIES.tyler.pubkey}`;
@@ -3700,12 +3711,12 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // capture the client instance so its replacement is provable.
   await page.evaluate(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E_QUERY_CLIENT__?: {
+      __AMBUSH_E2E_QUERY_CLIENT__?: {
         setQueryData: (key: unknown[], data: unknown) => void;
       };
-      __BUZZ_E2E_PREVIOUS_QUERY_CLIENT__?: unknown;
+      __AMBUSH_E2E_PREVIOUS_QUERY_CLIENT__?: unknown;
     };
-    const client = testWindow.__BUZZ_E2E_QUERY_CLIENT__;
+    const client = testWindow.__AMBUSH_E2E_QUERY_CLIENT__;
     if (!client) {
       throw new Error("community query client seam is not installed");
     }
@@ -3715,7 +3726,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
       ["e2e-identity-boundary-probe"],
       [{ id: "tyler-cached-project" }],
     );
-    testWindow.__BUZZ_E2E_PREVIOUS_QUERY_CLIENT__ = client;
+    testWindow.__AMBUSH_E2E_PREVIOUS_QUERY_CLIENT__ = client;
   });
 
   // Import alice (B) through the in-app denied-membership key swap.
@@ -3737,14 +3748,14 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
     .poll(() =>
       page.evaluate(() => {
         const testWindow = window as Window & {
-          __BUZZ_E2E_QUERY_CLIENT__?: {
+          __AMBUSH_E2E_QUERY_CLIENT__?: {
             getQueryData: (key: unknown[]) => unknown;
           };
-          __BUZZ_E2E_PREVIOUS_QUERY_CLIENT__?: unknown;
+          __AMBUSH_E2E_PREVIOUS_QUERY_CLIENT__?: unknown;
         };
-        const client = testWindow.__BUZZ_E2E_QUERY_CLIENT__;
+        const client = testWindow.__AMBUSH_E2E_QUERY_CLIENT__;
         if (!client) return "client-missing";
-        if (client === testWindow.__BUZZ_E2E_PREVIOUS_QUERY_CLIENT__) {
+        if (client === testWindow.__AMBUSH_E2E_PREVIOUS_QUERY_CLIENT__) {
           return "client-retained";
         }
         return client.getQueryData(["e2e-identity-boundary-probe"]) ===
@@ -3955,7 +3966,7 @@ test("membership denied shows all four affordances and change-community edits no
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const raw = window.localStorage.getItem("buzz-communities");
+        const raw = window.localStorage.getItem("ambush-communities");
         const communities = raw
           ? (JSON.parse(raw) as Array<{ relayUrl?: string }>)
           : [];
@@ -4034,7 +4045,7 @@ test("denied on relay A then paste relay B invite URL switches community to B", 
 
   // Record the initial relay URL (relay A).
   const initialRelayUrl = await page.evaluate(() => {
-    const raw = window.localStorage.getItem("buzz-communities");
+    const raw = window.localStorage.getItem("ambush-communities");
     const communities = raw
       ? (JSON.parse(raw) as Array<{ relayUrl?: string }>)
       : [];
@@ -4106,7 +4117,7 @@ test("denied on relay A then paste relay B invite URL switches community to B", 
   await expect(page.getByText("I am 18 years of age or older.")).toBeVisible();
   await page.getByLabel("I am 18 years of age or older.").check();
   await page
-    .getByLabel("I agree to the Buzz Terms of Service and Privacy Policy.")
+    .getByLabel("I agree to the Ambush Terms of Service and Privacy Policy.")
     .check();
   await page.getByTestId("invite-redeem-submit").click();
 
@@ -4115,9 +4126,9 @@ test("denied on relay A then paste relay B invite URL switches community to B", 
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const raw = window.localStorage.getItem("buzz-communities");
+        const raw = window.localStorage.getItem("ambush-communities");
         const activeCommunityId = window.localStorage.getItem(
-          "buzz-active-community-id",
+          "ambush-active-community-id",
         );
         const communities = raw
           ? (JSON.parse(raw) as Array<{ id?: string; relayUrl?: string }>)

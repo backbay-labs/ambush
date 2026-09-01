@@ -1,5 +1,5 @@
 /**
- * Community icon, Buzz extension to NIP-43 + standard NIP-11 `icon`.
+ * Community icon, Ambush extension to NIP-43 + standard NIP-11 `icon`.
  *
  * An admin/owner publishes a kind:9033 command carrying the icon in an
  * `["icon", value]` tag; the relay validates the sender's relay role and
@@ -15,7 +15,7 @@
 import { relayClient } from "@/shared/api/relayClient";
 import { invokeTauri, signRelayEvent } from "@/shared/api/tauri";
 
-/** Buzz: admin command to set the community profile (icon). */
+/** Ambush: admin command to set the community profile (icon). */
 export const KIND_SET_COMMUNITY_PROFILE = 9033;
 
 /**

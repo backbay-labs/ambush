@@ -58,8 +58,8 @@ grep -q 'test-release-ref-contract\.sh' "$repo_root/.github/workflows/ci.yml"
 "$repo_root/scripts/test-desktop-release-cache-workflow.sh"
 auto_tag="$repo_root/.github/workflows/auto-tag-on-release-pr-merge.yml"
 grep -q 'actions/create-github-app-token@' "$auto_tag"
-grep -q 'client-id:.*vars\.BUZZ_RELEASE_TAGGER_CLIENT_ID' "$auto_tag"
-grep -q 'private-key:.*secrets\.BUZZ_RELEASE_TAGGER_PRIVATE_KEY' "$auto_tag"
+grep -q 'client-id:.*vars\.AMBUSH_RELEASE_TAGGER_CLIENT_ID' "$auto_tag"
+grep -q 'private-key:.*secrets\.AMBUSH_RELEASE_TAGGER_PRIVATE_KEY' "$auto_tag"
 grep -q 'permission-contents: write' "$auto_tag"
 grep -q 'GH_TOKEN:.*steps\.release-tagger\.outputs\.token' "$auto_tag"
 grep -Fq 'git/refs' "$auto_tag"
@@ -76,9 +76,9 @@ grep -Fq 'GH_TOKEN: ${{ github.token }}' "$candidate_workflow" || {
   exit 1
 }
 grep -Fq 'reviewed candidate' "$repo_root/scripts/prepare-desktop-release.sh"
-grep -Fq 'gh pr list --repo block/buzz' "$repo_root/scripts/prepare-desktop-release.sh"
-grep -Fq 'gh pr edit --repo block/buzz' "$repo_root/scripts/prepare-desktop-release.sh"
-grep -Fq 'gh pr create --repo block/buzz' "$repo_root/scripts/prepare-desktop-release.sh"
+grep -Fq 'gh pr list --repo backbay-labs/ambush' "$repo_root/scripts/prepare-desktop-release.sh"
+grep -Fq 'gh pr edit --repo backbay-labs/ambush' "$repo_root/scripts/prepare-desktop-release.sh"
+grep -Fq 'gh pr create --repo backbay-labs/ambush' "$repo_root/scripts/prepare-desktop-release.sh"
 if grep -Fq 'current `main`' "$repo_root/scripts/prepare-desktop-release.sh"; then
   echo "desktop release PR body contains executable command substitution" >&2
   exit 1

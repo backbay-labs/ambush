@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn fetch_boundary_team_png_filename_with_json_bytes_rejected() {
-        let bytes = br#"{"format":"buzz-team-snapshot","version":1}"#;
+        let bytes = br#"{"format":"ambush-team-snapshot","version":1}"#;
         let kind = snapshot_kind_for_filename("review.team.png").unwrap();
         let error = ensure_bytes_match_kind(bytes, kind).unwrap_err();
         assert!(error.contains(".team.png") && error.contains("not a PNG"));
@@ -752,7 +752,7 @@ mod tests {
         // Construct JSON bytes directly: level=none but entries non-empty.
         // encode_snapshot_json does not guard against this, so we can produce it.
         let raw = serde_json::json!({
-            "format": "buzz-agent-snapshot",
+            "format": "ambush-agent-snapshot",
             "version": 1,
             "definition": { "name": "test" },
             "profile": { "displayName": "Test" },

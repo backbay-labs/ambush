@@ -7,7 +7,7 @@ import {
 } from "./projectBranchErrors.ts";
 
 test("recognizes the relay's stable denial token", () => {
-  // Body produced by the relay push policy (buzz-core
+  // Body produced by the relay push policy (ambush-core
   // GIT_NO_CHANNEL_BINDING_BODY), as it arrives wrapped in git stderr.
   assert.ok(
     isNoChannelBindingError(
@@ -30,7 +30,7 @@ test("maps binding denials to remediation copy", () => {
     new Error("remote: no_channel_binding: repository has no channel binding"),
     "Failed to create branch.",
   );
-  assert.ok(message.includes("buzz repos bind"));
+  assert.ok(message.includes("ambush repos bind"));
 });
 
 test("passes through other errors and falls back for non-errors", () => {

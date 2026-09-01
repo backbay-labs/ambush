@@ -2,7 +2,7 @@
  * Share links for the Projects read models.
  *
  * Every builder returns `null` instead of throwing when the entity cannot be
- * addressed by a `buzz://` link — addressable d-tags accept a wider charset
+ * addressed by a `ambush://` link — addressable d-tags accept a wider charset
  * (and 1024 bytes) than the link format's `[a-zA-Z0-9._-]{1,64}`, and issues
  * and pull requests loaded outside a repository have no coordinate at all.
  * Callers hide the share affordance on `null` rather than copying a link that
@@ -67,7 +67,7 @@ function repositoryCoordinate(
 /**
  * Map a workspace tab id (`WorkspaceTabs` vocabulary) onto the link format's
  * tab value. The overview tab is the link's default and PR-detail sub-tabs
- * have their own `buzz://pr` links, so both map to `undefined` (no tab).
+ * have their own `ambush://pr` links, so both map to `undefined` (no tab).
  */
 export function shareTabForWorkspaceTab(
   workspaceTab: string,
@@ -93,7 +93,7 @@ export function workspaceTabForShareTab(tab: EntityLinkTab): string {
 
 /**
  * Link to a project. Legacy (implicit) projects are backed by a repository
- * announcement rather than a kind:30621 event, so they share as `buzz://repo`
+ * announcement rather than a kind:30621 event, so they share as `ambush://repo`
  * — which resolves to the same project route on the receiving side.
  */
 export function projectShareLink(

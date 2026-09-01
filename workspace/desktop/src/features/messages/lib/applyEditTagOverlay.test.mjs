@@ -130,7 +130,7 @@ test("edit mention snapshot replaces original references, including removals", (
     ["mention", "original-mention"],
   ];
   const replacement = applyEditTagOverlay(original, [
-    ["buzz:mention-snapshot"],
+    ["ambush:mention-snapshot"],
     ["mention", "replacement-mention"],
   ]);
   assert.deepEqual(
@@ -138,18 +138,18 @@ test("edit mention snapshot replaces original references, including removals", (
     [["mention", "replacement-mention"]],
   );
   assert.deepEqual(
-    replacement.filter((tag) => tag[0] === "buzz:mention-snapshot"),
-    [["buzz:mention-snapshot"]],
+    replacement.filter((tag) => tag[0] === "ambush:mention-snapshot"),
+    [["ambush:mention-snapshot"]],
   );
 
-  const removed = applyEditTagOverlay(original, [["buzz:mention-snapshot"]]);
+  const removed = applyEditTagOverlay(original, [["ambush:mention-snapshot"]]);
   assert.deepEqual(
     removed.filter((tag) => tag[0] === "mention"),
     [],
   );
   assert.deepEqual(
-    removed.filter((tag) => tag[0] === "buzz:mention-snapshot"),
-    [["buzz:mention-snapshot"]],
+    removed.filter((tag) => tag[0] === "ambush:mention-snapshot"),
+    [["ambush:mention-snapshot"]],
   );
 });
 
@@ -160,7 +160,7 @@ test("edit mention snapshots preserve the original agent-address state", () => {
     ["mention", "old-authored-mention"],
   ];
   const out = applyEditTagOverlay(original, [
-    ["buzz:mention-snapshot"],
+    ["ambush:mention-snapshot"],
     ["mention", "addressed-agent", "agent-address"],
     ["mention", "new-authored-mention"],
   ]);

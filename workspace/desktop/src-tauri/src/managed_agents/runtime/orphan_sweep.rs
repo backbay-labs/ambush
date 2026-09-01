@@ -34,9 +34,9 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
                 return false;
             }
             // Receipt/PID-file entries were written by this instance at spawn
-            // time — they are Buzz-owned by construction; no name gate needed.
+            // time — they are Ambush-owned by construction; no name gate needed.
             // Kill live processes; dead ones fall through to receipt cleanup.
-            (process_is_running(*pid) && process_has_buzz_marker(*pid, &instance_id))
+            (process_is_running(*pid) && process_has_ambush_marker(*pid, &instance_id))
                 || !process_is_running(*pid)
         })
         .map(|pid| pid as i32)
@@ -51,7 +51,7 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
         if skip_pids.contains(pid) {
             continue;
         }
-        if !process_is_running(*pid) || !process_has_buzz_marker(*pid, &instance_id) {
+        if !process_is_running(*pid) || !process_has_ambush_marker(*pid, &instance_id) {
             super::super::remove_agent_pid_file(app, pubkey);
         }
     }
@@ -59,7 +59,8 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
         if skip_pids.contains(&receipt.pid) {
             continue;
         }
-        if !process_is_running(receipt.pid) || !process_has_buzz_marker(receipt.pid, &instance_id) {
+        if !process_is_running(receipt.pid) || !process_has_ambush_marker(receipt.pid, &instance_id)
+        {
             super::super::remove_agent_runtime_receipt(app, &receipt.key);
         }
     }
@@ -109,21 +110,21 @@ pub(super) const PROC_PIDTBSDINFO: libc::c_int = 3;
 
 // ── Sweep ownership rule ──────────────────────────────────────────────────────
 //
-// The `BUZZ_MANAGED_AGENT` env marker is the SOLE authoritative ownership
+// The `AMBUSH_MANAGED_AGENT` env marker is the SOLE authoritative ownership
 // proof for sweep/receipt decisions. Do NOT name-gate via
 // `process_belongs_to_us` here — custom harnesses use arbitrary binary names
 // and a name-gated predicate would silently leak their orphans (the old Linux
 // AND-gate bug). `process_belongs_to_us` remains in use only as a cheap
 // pre-check on paths that already know the binary (see runtime/stop.rs).
-// On Windows no `/proc`-based sweep runs, so `process_has_buzz_marker`
+// On Windows no `/proc`-based sweep runs, so `process_has_ambush_marker`
 // always returns `false`.
 
 /// Enumerate all processes on the system owned by the current user and kill any
-/// agent binary stamped with *this* instance's `BUZZ_MANAGED_AGENT` marker
+/// agent binary stamped with *this* instance's `AMBUSH_MANAGED_AGENT` marker
 /// (`instance_id`) that isn't in `skip_pids`. This catches orphans that escaped
 /// PID-file-based cleanup (e.g. agent workers spawned with their own process
 /// group whose parent harness already exited and had its PID file removed),
-/// while leaving another live Buzz instance's agents untouched.
+/// while leaving another live Ambush instance's agents untouched.
 #[cfg(target_os = "macos")]
 pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32]) {
     let my_uid = unsafe { libc::getuid() };
@@ -161,8 +162,8 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
             continue;
         }
         // Custom harnesses don't match KNOWN_AGENT_BINARIES by name; the
-        // BUZZ_MANAGED_AGENT env marker is the authoritative ownership proof.
-        if !process_has_buzz_marker(upid, instance_id) {
+        // AMBUSH_MANAGED_AGENT env marker is the authoritative ownership proof.
+        if !process_has_ambush_marker(upid, instance_id) {
             continue;
         }
         // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.
@@ -174,7 +175,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
     if !orphans.is_empty() {
         eprintln!(
-            "buzz-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            "ambush-desktop: system sweep found {} orphaned agent process(es), cleaning up",
             orphans.len()
         );
         resolve_pgids_and_kill(&orphans);
@@ -215,7 +216,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
         }
         // Same ownership rule as macOS: the marker is the authoritative gate.
         // Fixes custom-harness orphan cleanup on Linux.
-        if !process_has_buzz_marker(upid, instance_id) {
+        if !process_has_ambush_marker(upid, instance_id) {
             continue;
         }
         // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.
@@ -227,7 +228,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
     if !orphans.is_empty() {
         eprintln!(
-            "buzz-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            "ambush-desktop: system sweep found {} orphaned agent process(es), cleaning up",
             orphans.len()
         );
         resolve_pgids_and_kill(&orphans);
@@ -257,7 +258,7 @@ pub(crate) fn sweep_system_agent_processes_with_grace(
         .collect();
     if !confirmed.is_empty() {
         eprintln!(
-            "buzz-desktop: periodic sweep confirmed {} orphaned agent process(es), cleaning up",
+            "ambush-desktop: periodic sweep confirmed {} orphaned agent process(es), cleaning up",
             confirmed.len()
         );
         resolve_pgids_and_kill(&confirmed);
@@ -317,8 +318,8 @@ pub(crate) fn collect_same_instance_orphans(
             continue;
         }
         // Custom harnesses don't match KNOWN_AGENT_BINARIES by name; the
-        // BUZZ_MANAGED_AGENT env marker is the authoritative ownership proof.
-        if !process_has_buzz_marker(upid, instance_id) {
+        // AMBUSH_MANAGED_AGENT env marker is the authoritative ownership proof.
+        if !process_has_ambush_marker(upid, instance_id) {
             continue;
         }
         // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.
@@ -366,7 +367,7 @@ pub(crate) fn collect_same_instance_orphans(
         }
         // Same ownership rule as macOS: the marker is the authoritative gate.
         // Fixes custom-harness orphan cleanup on Linux.
-        if !process_has_buzz_marker(upid, instance_id) {
+        if !process_has_ambush_marker(upid, instance_id) {
             continue;
         }
         // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.

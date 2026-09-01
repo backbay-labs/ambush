@@ -1,17 +1,17 @@
 import 'dart:async';
 
-import 'package:buzz/shared/community/community.dart';
-import 'package:buzz/shared/deeplink/deep_link.dart';
-import 'package:buzz/shared/push/push_bridge.dart';
-import 'package:buzz/shared/relay/relay_provider.dart';
-import 'package:buzz/shared/relay/app_lifecycle_provider.dart';
+import 'package:ambush/shared/community/community.dart';
+import 'package:ambush/shared/deeplink/deep_link.dart';
+import 'package:ambush/shared/push/push_bridge.dart';
+import 'package:ambush/shared/relay/relay_provider.dart';
+import 'package:ambush/shared/relay/app_lifecycle_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-const _channel = MethodChannel('buzz/push');
+const _channel = MethodChannel('ambush/push');
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -23,7 +23,7 @@ void main() {
     pushEndpointGrantError.value = null;
     pushCommunitySnapshotError.value = null;
     pendingPushNotificationLink.value = null;
-    installBuzzPushMethodHandler();
+    installAmbushPushMethodHandler();
   });
 
   tearDown(() {
@@ -56,7 +56,7 @@ void main() {
             return null;
           });
 
-      await startBuzzPushRegistration();
+      await startAmbushPushRegistration();
     },
   );
 
@@ -69,8 +69,8 @@ void main() {
         });
 
     expect(
-      await readBuzzPushAuthorizationStatus(),
-      BuzzPushAuthorizationStatus.denied,
+      await readAmbushPushAuthorizationStatus(),
+      AmbushPushAuthorizationStatus.denied,
     );
   });
 
@@ -82,18 +82,18 @@ void main() {
           return true;
         });
 
-    expect(await openBuzzPushNotificationSettings(), isTrue);
+    expect(await openAmbushPushNotificationSettings(), isTrue);
   });
 
   test('refreshes not-determined permission to denied on resume', () async {
     final statuses = [
-      BuzzPushAuthorizationStatus.notDetermined,
-      BuzzPushAuthorizationStatus.denied,
+      AmbushPushAuthorizationStatus.notDetermined,
+      AmbushPushAuthorizationStatus.denied,
     ];
     final container = ProviderContainer(
       overrides: [
         appLifecycleProvider.overrideWith(_TestAppLifecycleNotifier.new),
-        buzzPushAuthorizationStatusReaderProvider.overrideWithValue(
+        ambushPushAuthorizationStatusReaderProvider.overrideWithValue(
           () async => statuses.removeAt(0),
         ),
       ],
@@ -101,26 +101,29 @@ void main() {
     addTearDown(container.dispose);
 
     expect(
-      await container.read(buzzPushAuthorizationStatusProvider.future),
-      BuzzPushAuthorizationStatus.notDetermined,
+      await container.read(ambushPushAuthorizationStatusProvider.future),
+      AmbushPushAuthorizationStatus.notDetermined,
     );
     final lifecycle =
         container.read(appLifecycleProvider.notifier)
             as _TestAppLifecycleNotifier;
     lifecycle.setState(AppLifecycleState.paused);
     lifecycle.setState(AppLifecycleState.resumed);
-    await _waitForAuthorization(container, BuzzPushAuthorizationStatus.denied);
+    await _waitForAuthorization(
+      container,
+      AmbushPushAuthorizationStatus.denied,
+    );
   });
 
   test('refreshes externally revoked permission on resume', () async {
     final statuses = [
-      BuzzPushAuthorizationStatus.authorized,
-      BuzzPushAuthorizationStatus.denied,
+      AmbushPushAuthorizationStatus.authorized,
+      AmbushPushAuthorizationStatus.denied,
     ];
     final container = ProviderContainer(
       overrides: [
         appLifecycleProvider.overrideWith(_TestAppLifecycleNotifier.new),
-        buzzPushAuthorizationStatusReaderProvider.overrideWithValue(
+        ambushPushAuthorizationStatusReaderProvider.overrideWithValue(
           () async => statuses.removeAt(0),
         ),
       ],
@@ -128,15 +131,18 @@ void main() {
     addTearDown(container.dispose);
 
     expect(
-      await container.read(buzzPushAuthorizationStatusProvider.future),
-      BuzzPushAuthorizationStatus.authorized,
+      await container.read(ambushPushAuthorizationStatusProvider.future),
+      AmbushPushAuthorizationStatus.authorized,
     );
     final lifecycle =
         container.read(appLifecycleProvider.notifier)
             as _TestAppLifecycleNotifier;
     lifecycle.setState(AppLifecycleState.paused);
     lifecycle.setState(AppLifecycleState.resumed);
-    await _waitForAuthorization(container, BuzzPushAuthorizationStatus.denied);
+    await _waitForAuthorization(
+      container,
+      AmbushPushAuthorizationStatus.denied,
+    );
   });
 
   test('reads and exposes persisted endpoint grants on iOS', () async {
@@ -148,7 +154,7 @@ void main() {
       return [_grantMap('opaque-grant')];
     });
 
-    final grants = await readBuzzPushEndpointGrants();
+    final grants = await readAmbushPushEndpointGrants();
 
     expect(grants, hasLength(1));
     expect(grants.single.relayOrigin, 'wss://relay.example');
@@ -156,7 +162,7 @@ void main() {
     expect(grants.single.installationId, 'c' * 32);
     expect(grants.single.endpointGrant, 'opaque-grant');
     expect(grants.single.endpointHash, 'b' * 64);
-    expect(grants.single.appProfile, 'buzz-ios-dogfood');
+    expect(grants.single.appProfile, 'ambush-ios-dogfood');
     expect(grants.single.endpointEpoch, 1);
     expect(grants.single.generation, 1);
     expect(grants.single.expiresAt, 1752624000);
@@ -189,11 +195,11 @@ void main() {
         fail('Unexpected method ${call.method}');
       });
 
-      final firstGrant = await enrollBuzzPush(
+      final firstGrant = await enrollAmbushPush(
         'wss://relay.example/',
         'https://gateway-one.example/',
       );
-      final secondGrant = await enrollBuzzPush(
+      final secondGrant = await enrollAmbushPush(
         'wss://relay.example/',
         'https://gateway-two.example/',
         communitiesForSnapshotRefresh: [
@@ -248,8 +254,8 @@ void main() {
 
   test('development push gateway matches the compiled configuration', () {
     const expectedGateway = String.fromEnvironment(
-      'BUZZ_PUSH_GATEWAY_URL',
-      defaultValue: 'https://push.buzz.xyz',
+      'AMBUSH_PUSH_GATEWAY_URL',
+      defaultValue: 'https://push.ambush.xyz',
     );
     expect(Env.pushGatewayUrl, expectedGateway);
   });
@@ -371,7 +377,7 @@ void main() {
           };
         });
 
-    await syncPendingBuzzPushNotificationResponse();
+    await syncPendingAmbushPushNotificationResponse();
 
     expect(
       pendingPushNotificationLink.value,
@@ -393,10 +399,11 @@ class _TestAppLifecycleNotifier extends AppLifecycleNotifier {
 
 Future<void> _waitForAuthorization(
   ProviderContainer container,
-  BuzzPushAuthorizationStatus expected,
+  AmbushPushAuthorizationStatus expected,
 ) async {
   for (var attempt = 0; attempt < 20; attempt++) {
-    if (container.read(buzzPushAuthorizationStatusProvider).value == expected) {
+    if (container.read(ambushPushAuthorizationStatusProvider).value ==
+        expected) {
       return;
     }
     await Future<void>.delayed(Duration.zero);
@@ -410,7 +417,7 @@ Map<String, Object> _grantMap(String endpointGrant) => {
   'installationId': 'c' * 32,
   'endpointGrant': endpointGrant,
   'endpointHash': 'b' * 64,
-  'appProfile': 'buzz-ios-dogfood',
+  'appProfile': 'ambush-ios-dogfood',
   'endpointEpoch': 1,
   'generation': 1,
   'expiresAt': 1752624000,

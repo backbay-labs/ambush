@@ -1,10 +1,10 @@
-# 🛡️ Buzz Moderation — Your community, your rules
+# 🛡️ Ambush Moderation — Your community, your rules
 
 > Someone spams #general at midnight. A member taps **Report** — a category, an optional note, done. The report doesn't appear in anyone's feed; it lands in a queue only the community's owners and admins can see. In the morning an admin opens the queue, finds three reports against the same account, deletes the messages, and times the account out for a day. The room sees an honest marker where the spam was. The author gets a message explaining why. The reporter gets a message saying it was handled. Nobody else saw anything.
 
-A Buzz community is a trust group with its own rules, and rules only matter if the people who own the room can enforce them. Buzz moderation gives community owners and admins the full loop: members report, the community's own owners and admins see and act, the relay enforces, and everyone affected hears the truth about what happened. The relay provides the mechanics — queue, authority, enforcement, audit, notices. The community provides the judgment. Buzz doesn't decide what your rules are; it makes sure you can actually have them.
+An Ambush community is a trust group with its own rules, and rules only matter if the people who own the room can enforce them. Ambush moderation gives community owners and admins the full loop: members report, the community's own owners and admins see and act, the relay enforces, and everyone affected hears the truth about what happened. The relay provides the mechanics — queue, authority, enforcement, audit, notices. The community provides the judgment. Ambush doesn't decide what your rules are; it makes sure you can actually have them.
 
-Most of the nostr ecosystem treats moderation as **admission policy** — allow lists, block lists, a hook that rejects an event at the door. Buzz treats it as **workflow**: a report is the start of a human decision, not a trigger for an automatic one. That difference is the whole design.
+Most of the nostr ecosystem treats moderation as **admission policy** — allow lists, block lists, a hook that rejects an event at the door. Ambush treats it as **workflow**: a report is the start of a human decision, not a trigger for an automatic one. That difference is the whole design.
 
 ---
 
@@ -46,7 +46,7 @@ This document is about the first layer. The second has its own lane.
 
 - **The important decisions are audited.** Bans, timeouts, report dismissals, escalations, and report resolutions write durable audit rows — who, what, whom, why, when — with the decision recorded separately from its enforcement, so the trail never claims something happened that didn't. Message removals also leave visible tombstones for the room. The full report record (including reporter identity and notes) stays moderator-only; the public sees only the sanitized reason.
 
-- **The wire uses nostr where nostr has the right primitive.** Reports are NIP-56. Group roles and membership actions are NIP-29. Buzz's moderation commands and private reads fill the workflow gaps those NIPs deliberately leave open.
+- **The wire uses nostr where nostr has the right primitive.** Reports are NIP-56. Group roles and membership actions are NIP-29. Ambush's moderation commands and private reads fill the workflow gaps those NIPs deliberately leave open.
 
 ---
 
@@ -68,4 +68,4 @@ A community you can't moderate isn't yours — it just has your name on it. The 
 
 ---
 
-*Buzz 🐝 — your community, your rules.*
+*Ambush — your community, your rules.*

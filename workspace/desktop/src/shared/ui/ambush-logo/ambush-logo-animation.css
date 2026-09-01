@@ -1,0 +1,88 @@
+.ambush-logo {
+  display: grid;
+  place-items: center;
+  inline-size: fit-content;
+}
+
+.ambush-logo--screen {
+  min-block-size: 100vh;
+  inline-size: 100%;
+  overflow: hidden;
+}
+
+.ambush-logo--background {
+  background-color: #d7d72e;
+  background-image: radial-gradient(
+    circle,
+    rgba(35, 30, 30, 0.16) 1.2px,
+    transparent 1.3px
+  );
+  background-position: 0 0;
+  background-size: 37px 37px;
+}
+
+.ambush-logo__mark {
+  display: block;
+  inline-size: min(466px, calc(100vw - 32px));
+  block-size: auto;
+  overflow: visible;
+}
+
+.ambush-logo--compact {
+  inline-size: 1.5rem;
+}
+
+.ambush-logo--compact .ambush-logo__mark {
+  inline-size: 100%;
+  block-size: auto;
+  max-inline-size: 100%;
+}
+
+.ambush-logo__ink {
+  fill: currentColor;
+}
+
+@keyframes ambush-logo-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ambush-logo--pulse .ambush-logo__mark {
+  animation: ambush-logo-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes ambush-logo-scale-pulse {
+  0%,
+  100% {
+    transform: scale(0.94);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+.ambush-logo--scale-pulse .ambush-logo__mark {
+  animation: ambush-logo-scale-pulse 1.8s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-logo animate {
+    display: none;
+  }
+
+  .ambush-logo--pulse .ambush-logo__mark {
+    animation: none;
+    opacity: 0.8;
+  }
+
+  .ambush-logo--scale-pulse .ambush-logo__mark {
+    animation: none;
+    transform: none;
+  }
+}

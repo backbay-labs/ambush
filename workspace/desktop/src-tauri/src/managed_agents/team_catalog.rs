@@ -14,8 +14,8 @@
 //! paths are structurally absent below, so no future `AgentDefinition` field
 //! can leak by being forgotten.
 
+use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
 use image::ImageDecoder;
 use nostr::{EventBuilder, Kind, Tag};
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ pub const TEAM_CATALOG_SCHEMA_VERSION: u32 = 1;
 // A 30178 event amplifies N member definitions into ONE event, so bounds that
 // are immaterial for a single kind:30175 persona become load-bearing here. The
 // relay's ingest ceiling is 256 KiB (`MAX_EVENT_CONTENT_BYTES`,
-// `crates/buzz-relay/src/handlers/ingest.rs`), and an over-ceiling event is
+// `crates/ambush-relay/src/handlers/ingest.rs`), and an over-ceiling event is
 // rejected AFTER being signed and durably enqueued — a permanently stuck
 // pending row with no user-visible cause. Every bound below is enforced BEFORE
 // the event is built, so the failure surfaces synchronously at share time.
@@ -220,7 +220,7 @@ fn sanitized_respond_to(record: &AgentDefinition) -> Option<String> {
 pub fn member_key_for(record: &AgentDefinition) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"buzz:team-catalog:member-key:v1\0");
+    hasher.update(b"ambush:team-catalog:member-key:v1\0");
     hasher.update(record.id.as_bytes());
     hex::encode(hasher.finalize())
 }
@@ -493,7 +493,7 @@ fn validate_member(member: &TeamCatalogMember) -> Result<(), String> {
     // invariant the persona catalog enforces at its own parse boundary
     // (`persona_catalog::parse_agent`): a member display name and prompt are
     // copied verbatim into a local persona and delivered to the ACP harness
-    // (`BUZZ_ACP_SYSTEM_PROMPT`), so invisible/bidi controls could make what
+    // (`AMBUSH_ACP_SYSTEM_PROMPT`), so invisible/bidi controls could make what
     // executes differ from the reviewed text. `validate_agent_definition_text`
     // applies the display-name rule (no layout controls) and the prompt rule
     // (layout controls allowed) in one call.
@@ -643,7 +643,7 @@ pub fn validate_team_catalog_content(content: &TeamCatalogContent) -> Result<(),
             "the team instructions",
         )?;
         // Team instructions reach the ACP harness verbatim
-        // (`BUZZ_ACP_TEAM_INSTRUCTIONS`), so they are executable-definition
+        // (`AMBUSH_ACP_TEAM_INSTRUCTIONS`), so they are executable-definition
         // text under the same concealment contract as a member prompt. Layout
         // controls are allowed because instructions are multiline by nature.
         validate_visible_text(instructions, "the team instructions", true)?;

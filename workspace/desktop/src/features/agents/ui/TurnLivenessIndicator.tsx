@@ -1,7 +1,7 @@
 import { motion, useReducedMotion } from "motion/react";
 
 import { cn } from "@/shared/lib/cn";
-import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
+import { AmbushWordmark } from "@/shared/ui/ambush-logo/AmbushWordmark";
 import { useTranscriptAnimationEnabled } from "./transcriptAnimationPreference";
 
 const MARKS = ["first", "second", "third"] as const;
@@ -28,7 +28,7 @@ export function TurnLivenessIndicator({
         data-testid="turn-liveness-indicator"
         role="status"
       >
-        <FuzzyLogo
+        <AmbushWordmark
           ariaLabel="Agent turn in progress"
           className="text-foreground"
           fuzz={fuzz}
@@ -61,7 +61,7 @@ export function TurnLivenessIndicator({
             times: [0, 0.3, 0.7, 1],
           }}
         >
-          <FuzzyLogo
+          <AmbushWordmark
             ariaLabel=""
             className="w-5! text-foreground"
             fuzz={fuzz}

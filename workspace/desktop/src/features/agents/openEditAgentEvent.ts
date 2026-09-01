@@ -11,7 +11,7 @@
  * Context to ensure the panel is visible before the event fires.
  */
 
-const OPEN_EDIT_AGENT_EVENT = "buzz:open-edit-agent";
+const OPEN_EDIT_AGENT_EVENT = "ambush:open-edit-agent";
 
 /**
  * Optional focus target for the Edit Agent dialog.

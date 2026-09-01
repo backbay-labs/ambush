@@ -10,7 +10,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  BUZZ_TEST_POSTGRES_PASSWORD: buzz_dev
+  AMBUSH_TEST_POSTGRES_PASSWORD: ambush_dev
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
 jobs:
@@ -343,7 +343,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
-            target/ci/buzz-relay
+            target/ci/ambush-relay
             target/ci/git-credential-nostr
             target/ci/backend-integration-tests.tar.zst
           key: relay-artifacts-${{ runner.os }}-${{ hashFiles('crates/**', 'migrations/**', 'Dockerfile', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.github/workflows/ci.yml') }}
@@ -373,12 +373,12 @@ jobs:
         env:
           RUSTC_WRAPPER: sccache
         run: |
-          cargo build --profile ci -p buzz-relay -p git-credential-nostr
+          cargo build --profile ci -p ambush-relay -p git-credential-nostr
           cargo nextest archive \
             --cargo-profile ci \
-            -p buzz-db \
-            -p buzz-relay \
-            -p buzz-test-client \
+            -p ambush-db \
+            -p ambush-relay \
+            -p ambush-test-client \
             --lib \
             --test e2e_event_reminder \
             --archive-file target/ci/backend-integration-tests.tar.zst
@@ -389,7 +389,7 @@ jobs:
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
-            target/ci/buzz-relay
+            target/ci/ambush-relay
             target/ci/git-credential-nostr
             target/ci/backend-integration-tests.tar.zst
           key: relay-artifacts-${{ runner.os }}-${{ hashFiles('crates/**', 'migrations/**', 'Dockerfile', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.github/workflows/ci.yml') }}
@@ -398,7 +398,7 @@ jobs:
         with:
           name: desktop-e2e-relay
           path: |
-            target/ci/buzz-relay
+            target/ci/ambush-relay
             target/ci/git-credential-nostr
             target/ci/backend-integration-tests.tar.zst
           if-no-files-found: error
@@ -481,9 +481,9 @@ jobs:
             docker logs "${container}" || true
             return 1
           }
-          wait_healthy "Postgres" "buzz-postgres"
-          wait_healthy "Redis" "buzz-redis"
-          wait_healthy "MinIO" "buzz-minio"
+          wait_healthy "Postgres" "ambush-postgres"
+          wait_healthy "Redis" "ambush-redis"
+          wait_healthy "MinIO" "ambush-minio"
       - name: Download relay binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -496,54 +496,54 @@ jobs:
         # exits permanently on an unmapped host, so the 'localhost:3000'
         # community MUST exist before the relay starts — the retry loop only
         # handles late-seeded channels, not a late-seeded community. The relay
-        # migrates at boot via BUZZ_AUTO_MIGRATE, but that's too late for the
+        # migrates at boot via AMBUSH_AUTO_MIGRATE, but that's too late for the
         # pre-boot seed, so apply the schema here first (then drop AUTO_MIGRATE
         # below). lower(host) is the unique index → ON CONFLICT target. psql
-        # isn't on PATH in hermit → exec into the buzz-postgres container.
+        # isn't on PATH in hermit → exec into the ambush-postgres container.
         env:
           PGHOST: localhost
           PGPORT: "5432"
-          PGUSER: buzz
-          PGPASSWORD: buzz_dev
-          PGDATABASE: buzz
+          PGUSER: ambush
+          PGPASSWORD: ambush_dev
+          PGDATABASE: ambush
           # Use the already-running docker postgres for desired-state planning instead of
           # downloading an embedded Postgres from Maven Central (transient-fetch flake source).
           PGSCHEMA_PLAN_HOST: localhost
           PGSCHEMA_PLAN_PORT: "5432"
-          PGSCHEMA_PLAN_DB: buzz
-          PGSCHEMA_PLAN_USER: buzz
-          PGSCHEMA_PLAN_PASSWORD: buzz_dev
+          PGSCHEMA_PLAN_DB: ambush
+          PGSCHEMA_PLAN_USER: ambush
+          PGSCHEMA_PLAN_PASSWORD: ambush_dev
         run: |
           ./bin/pgschema apply --file schema/schema.sql --auto-approve
-          docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
-            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/reconcile-schema-after-pgschema.sql
-          docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
-            psql -U buzz -d buzz -qtA -c "
+          docker exec -i -e PGPASSWORD=ambush_dev ambush-postgres \
+            psql -U ambush -d ambush -v ON_ERROR_STOP=1 < scripts/reconcile-schema-after-pgschema.sql
+          docker exec -e PGPASSWORD=ambush_dev ambush-postgres \
+            psql -U ambush -d ambush -qtA -c "
           INSERT INTO communities (id, host)
           VALUES ('00000000-0000-4000-8000-00000000c0de', 'localhost:3000')
           ON CONFLICT (lower(host)) DO NOTHING
           ;"
       - name: Start relay
         run: |
-          chmod +x ./target/ci/buzz-relay
+          chmod +x ./target/ci/ambush-relay
           nohup env \
-            DATABASE_URL="postgres://buzz:${BUZZ_TEST_POSTGRES_PASSWORD}@localhost:5432/buzz" \
+            DATABASE_URL="postgres://ambush:${AMBUSH_TEST_POSTGRES_PASSWORD}@localhost:5432/ambush" \
             REDIS_URL=redis://localhost:6379 \
             RELAY_URL=ws://localhost:3000 \
-            BUZZ_BIND_ADDR=0.0.0.0:3000 \
-            BUZZ_RELAY_PRIVATE_KEY="$(openssl rand -hex 32)" \
-            BUZZ_REQUIRE_AUTH_TOKEN=false \
-            BUZZ_RECONCILE_CHANNELS=true \
-            BUZZ_RATE_LIMIT_HUMAN_MESSAGES_PER_MIN=100000 \
-            BUZZ_RATE_LIMIT_HUMAN_API_CALLS_PER_MIN=100000 \
-            BUZZ_RATE_LIMIT_HUMAN_WS_EVENTS_PER_SEC=10000 \
-            BUZZ_GIT_PROBE_WRITERS=8 \
+            AMBUSH_BIND_ADDR=0.0.0.0:3000 \
+            AMBUSH_RELAY_PRIVATE_KEY="$(openssl rand -hex 32)" \
+            AMBUSH_REQUIRE_AUTH_TOKEN=false \
+            AMBUSH_RECONCILE_CHANNELS=true \
+            AMBUSH_RATE_LIMIT_HUMAN_MESSAGES_PER_MIN=100000 \
+            AMBUSH_RATE_LIMIT_HUMAN_API_CALLS_PER_MIN=100000 \
+            AMBUSH_RATE_LIMIT_HUMAN_WS_EVENTS_PER_SEC=10000 \
+            AMBUSH_GIT_PROBE_WRITERS=8 \
             SPROUT_REMINDER_SCHEDULER_INTERVAL_SECS=1 \
-            ./target/ci/buzz-relay > /tmp/buzz-relay.log 2>&1 &
-          echo $! > /tmp/buzz-relay.pid
+            ./target/ci/ambush-relay > /tmp/ambush-relay.log 2>&1 &
+          echo $! > /tmp/ambush-relay.pid
           for attempt in $(seq 1 60); do
-            if ! kill -0 "$(cat /tmp/buzz-relay.pid)" 2>/dev/null; then
-              cat /tmp/buzz-relay.log
+            if ! kill -0 "$(cat /tmp/ambush-relay.pid)" 2>/dev/null; then
+              cat /tmp/ambush-relay.log
               exit 1
             fi
             status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/_readiness || true)
@@ -552,7 +552,7 @@ jobs:
             fi
             sleep 1
           done
-          cat /tmp/buzz-relay.log
+          cat /tmp/ambush-relay.log
           exit 1
       - name: Seed desktop e2e data
         run: bash scripts/setup-desktop-test-data.sh
@@ -571,7 +571,7 @@ jobs:
             desktop/playwright-report
             desktop/playwright-report.json
             desktop/test-results
-            /tmp/buzz-relay.log
+            /tmp/ambush-relay.log
           if-no-files-found: ignore
           retention-days: 7
       - name: Save pnpm store cache
@@ -642,9 +642,9 @@ jobs:
             docker logs "${container}" || true
             return 1
           }
-          wait_healthy "Postgres" "buzz-postgres"
-          wait_healthy "Redis" "buzz-redis"
-          wait_healthy "MinIO" "buzz-minio"
+          wait_healthy "Postgres" "ambush-postgres"
+          wait_healthy "Redis" "ambush-redis"
+          wait_healthy "MinIO" "ambush-minio"
       - name: Download relay artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -657,29 +657,29 @@ jobs:
         # unmapped host (no retry, unlike the channel reconciler), so the
         # 'localhost:3000' community MUST exist before the relay starts — seeding
         # after boot leaves the scheduler dead. The relay migrates at boot via
-        # BUZZ_AUTO_MIGRATE, but that's too late for the pre-boot seed, so apply
+        # AMBUSH_AUTO_MIGRATE, but that's too late for the pre-boot seed, so apply
         # the schema here first (then drop AUTO_MIGRATE below). lower(host) is the
         # unique index → ON CONFLICT target. psql isn't on PATH in hermit → exec
-        # into the buzz-postgres container.
+        # into the ambush-postgres container.
         env:
           PGHOST: localhost
           PGPORT: "5432"
-          PGUSER: buzz
-          PGPASSWORD: buzz_dev
-          PGDATABASE: buzz
+          PGUSER: ambush
+          PGPASSWORD: ambush_dev
+          PGDATABASE: ambush
           # Use the already-running docker postgres for desired-state planning instead of
           # downloading an embedded Postgres from Maven Central (transient-fetch flake source).
           PGSCHEMA_PLAN_HOST: localhost
           PGSCHEMA_PLAN_PORT: "5432"
-          PGSCHEMA_PLAN_DB: buzz
-          PGSCHEMA_PLAN_USER: buzz
-          PGSCHEMA_PLAN_PASSWORD: buzz_dev
+          PGSCHEMA_PLAN_DB: ambush
+          PGSCHEMA_PLAN_USER: ambush
+          PGSCHEMA_PLAN_PASSWORD: ambush_dev
         run: |
           ./bin/pgschema apply --file schema/schema.sql --auto-approve
-          docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
-            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/reconcile-schema-after-pgschema.sql
-          docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
-            psql -U buzz -d buzz -qtA -c "
+          docker exec -i -e PGPASSWORD=ambush_dev ambush-postgres \
+            psql -U ambush -d ambush -v ON_ERROR_STOP=1 < scripts/reconcile-schema-after-pgschema.sql
+          docker exec -e PGPASSWORD=ambush_dev ambush-postgres \
+            psql -U ambush -d ambush -qtA -c "
           INSERT INTO communities (id, host)
           VALUES ('00000000-0000-4000-8000-00000000c0de', 'localhost:3000')
           ON CONFLICT (lower(host)) DO NOTHING
@@ -689,44 +689,44 @@ jobs:
         # replaceable-event store seam. These tests require real Postgres and
         # are ignored by the infrastructure-free unit-test job.
         run: |
-          filter='package(buzz-db) and test(/tests::(parameterized_|concurrent_parameterized_)/)'
+          filter='package(ambush-db) and test(/tests::(parameterized_|concurrent_parameterized_)/)'
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
             -E "${filter}" \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
-          TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
+          TEST_DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Database pressure observability PostgreSQL tests
         # Explicit pool acquisition and advisory-lock metrics require real
         # Postgres and are ignored by the infrastructure-free unit-test job.
         run: |
-          filter='package(buzz-db) and test(/observability::tests::(pool_acquire_records_success_timeout_and_error_with_wait_time|advisory_lock_records_success_contention_timeout_and_error)/)'
+          filter='package(ambush-db) and test(/observability::tests::(pool_acquire_records_success_timeout_and_error_with_wait_time|advisory_lock_records_success_contention_timeout_and_error)/)'
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
             -E "${filter}" \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
-          TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
+          TEST_DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Start relay
         run: |
-          chmod +x ./target/ci/buzz-relay
+          chmod +x ./target/ci/ambush-relay
           nohup env \
-            DATABASE_URL="postgres://buzz:${BUZZ_TEST_POSTGRES_PASSWORD}@localhost:5432/buzz" \
+            DATABASE_URL="postgres://ambush:${AMBUSH_TEST_POSTGRES_PASSWORD}@localhost:5432/ambush" \
             REDIS_URL=redis://localhost:6379 \
             RELAY_URL=ws://localhost:3000 \
-            BUZZ_BIND_ADDR=0.0.0.0:3000 \
-            BUZZ_RELAY_PRIVATE_KEY="$(openssl rand -hex 32)" \
-            BUZZ_REQUIRE_AUTH_TOKEN=false \
-            BUZZ_RECONCILE_CHANNELS=true \
-            BUZZ_GIT_PROBE_WRITERS=8 \
+            AMBUSH_BIND_ADDR=0.0.0.0:3000 \
+            AMBUSH_RELAY_PRIVATE_KEY="$(openssl rand -hex 32)" \
+            AMBUSH_REQUIRE_AUTH_TOKEN=false \
+            AMBUSH_RECONCILE_CHANNELS=true \
+            AMBUSH_GIT_PROBE_WRITERS=8 \
             SPROUT_REMINDER_SCHEDULER_INTERVAL_SECS=1 \
-            ./target/ci/buzz-relay > /tmp/buzz-relay.log 2>&1 &
-          echo $! > /tmp/buzz-relay.pid
+            ./target/ci/ambush-relay > /tmp/ambush-relay.log 2>&1 &
+          echo $! > /tmp/ambush-relay.pid
           for attempt in $(seq 1 60); do
-            if ! kill -0 "$(cat /tmp/buzz-relay.pid)" 2>/dev/null; then
-              cat /tmp/buzz-relay.log
+            if ! kill -0 "$(cat /tmp/ambush-relay.pid)" 2>/dev/null; then
+              cat /tmp/ambush-relay.log
               exit 1
             fi
             status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/_readiness || true)
@@ -735,16 +735,16 @@ jobs:
             fi
             sleep 1
           done
-          cat /tmp/buzz-relay.log
+          cat /tmp/ambush-relay.log
           exit 1
       - name: Invite security tests
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
-            -E '(package(buzz-db) and test(/relay_invite::tests/)) or (package(buzz-relay) and test(/api::invites::tests/))' \
+            -E '(package(ambush-db) and test(/relay_invite::tests/)) or (package(ambush-relay) and test(/api::invites::tests/))' \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Workspace profile (kind:9033) gate tests
         # Call-site integration for the 9033 authorization gate: open relay
         # rosterless/steward transitions and the closed-relay admin/owner rule,
@@ -753,15 +753,15 @@ jobs:
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
-            -E 'package(buzz-relay) and test(/handlers::relay_admin::tests/)' \
+            -E 'package(ambush-relay) and test(/handlers::relay_admin::tests/)' \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: NIP-ER reminder e2e
         # Feature e2e for NIP-ER (Event Reminders, kind:30300): write-path
         # validation, author-only read filtering, and scheduler delivery against
         # a live relay. The schema-drift / migration-version guarantee is owned
-        # by the buzz-db migration.rs unit tests, not this suite.
+        # by the ambush-db migration.rs unit tests, not this suite.
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
@@ -776,10 +776,10 @@ jobs:
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
-            -E 'package(buzz-db) and test(coordinate_delete_spares_head_newer_than_the_deletion)' \
+            -E 'package(ambush-db) and test(coordinate_delete_spares_head_newer_than_the_deletion)' \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Admin API nip98 read-write attribution test
         # The only real HTTP → nip98 operator principal → mutation → cross-table
         # attribution coverage: an authenticated operator's dismiss attributes
@@ -791,10 +791,10 @@ jobs:
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
-            -E 'package(buzz-relay) and test(=api::admin::tests::nip98_operator_dismiss_succeeds_attributed_to_operator)' \
+            -E 'package(ambush-relay) and test(=api::admin::tests::nip98_operator_dismiss_succeeds_attributed_to_operator)' \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Admin API unrostered-signer replay invariant
         # The only causal proof that a validly-signing but unrostered key cannot
         # consume NIP-98 replay slots: it asserts principal resolution fails
@@ -808,20 +808,20 @@ jobs:
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
-            -E 'package(buzz-relay) and test(=api::admin::tests::nip98_mode_unrostered_signer_does_not_consume_a_replay_slot)'
+            -E 'package(ambush-relay) and test(=api::admin::tests::nip98_mode_unrostered_signer_does_not_consume_a_replay_slot)'
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Admin API roster-audit / timeout / canonicalization security tests
         # Security-review fixes for the roster admin API, all #[ignore]d in the
         # default suite (they need Postgres) and selected by no other job:
-        #  - buzz-db relay_operators::tests: audit pre-image trail, per-target
+        #  - ambush-db relay_operators::tests: audit pre-image trail, per-target
         #    lock serialization, insertion-time audit ordering, and
         #    audit-failure rollback coupling.
-        #  - buzz-db relay_operators::tests last-operator invariant: sole DB
+        #  - ambush-db relay_operators::tests last-operator invariant: sole DB
         #    operator cannot self-demote or self-delete to zero, config presence
         #    lifts the guard, and concurrent cross-target deletes racing to zero
         #    leave exactly one operator (roster-wide advisory lock).
-        #  - buzz-relay api::admin: NIP-98 staffing writes attributed audit rows,
+        #  - ambush-relay api::admin: NIP-98 staffing writes attributed audit rows,
         #    adversarial expirationSecs rejected at the resolve route, mixed-case
         #    staffing normalizes to one canonical row.
         #
@@ -833,10 +833,10 @@ jobs:
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
             --test-threads=1 \
-            -E '(package(buzz-db) and test(=relay_operators::tests::roster_mutations_write_pre_image_audit_rows)) or (package(buzz-db) and test(=relay_operators::tests::concurrent_upserts_serialize_and_record_true_pre_image)) or (package(buzz-db) and test(=relay_operators::tests::audit_order_follows_seq_under_backward_clock)) or (package(buzz-db) and test(=relay_operators::tests::audit_insert_failure_rolls_back_roster_mutation)) or (package(buzz-db) and test(=relay_operators::tests::demoting_sole_db_operator_without_config_is_rejected)) or (package(buzz-db) and test(=relay_operators::tests::deleting_sole_db_operator_without_config_is_rejected)) or (package(buzz-db) and test(=relay_operators::tests::config_present_allows_deleting_last_db_operator)) or (package(buzz-db) and test(=relay_operators::tests::concurrent_deletes_racing_to_zero_leave_one_operator)) or (package(buzz-relay) and test(=api::admin::tests::nip98_staffing_put_and_delete_write_attributed_audit_rows)) or (package(buzz-relay) and test(=api::admin::tests::resolve_route_rejects_adversarial_expiration_and_leaves_report_open)) or (package(buzz-relay) and test(=api::admin::tests::mixed_case_non_config_staffing_normalizes_to_one_row))' \
+            -E '(package(ambush-db) and test(=relay_operators::tests::roster_mutations_write_pre_image_audit_rows)) or (package(ambush-db) and test(=relay_operators::tests::concurrent_upserts_serialize_and_record_true_pre_image)) or (package(ambush-db) and test(=relay_operators::tests::audit_order_follows_seq_under_backward_clock)) or (package(ambush-db) and test(=relay_operators::tests::audit_insert_failure_rolls_back_roster_mutation)) or (package(ambush-db) and test(=relay_operators::tests::demoting_sole_db_operator_without_config_is_rejected)) or (package(ambush-db) and test(=relay_operators::tests::deleting_sole_db_operator_without_config_is_rejected)) or (package(ambush-db) and test(=relay_operators::tests::config_present_allows_deleting_last_db_operator)) or (package(ambush-db) and test(=relay_operators::tests::concurrent_deletes_racing_to_zero_leave_one_operator)) or (package(ambush-relay) and test(=api::admin::tests::nip98_staffing_put_and_delete_write_attributed_audit_rows)) or (package(ambush-relay) and test(=api::admin::tests::resolve_route_rejects_adversarial_expiration_and_leaves_report_open)) or (package(ambush-relay) and test(=api::admin::tests::mixed_case_non_config_staffing_normalizes_to_one_row))' \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Admin API escalation-scoping tests
         # Escalation scoping for the moderation queue, all #[ignore]d (they need
         # Postgres) and selected by no other job:
@@ -847,16 +847,16 @@ jobs:
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
-            -E '(package(buzz-relay) and test(=api::admin::tests::reports_default_lists_escalated_only)) or (package(buzz-relay) and test(=api::admin::tests::reports_scope_all_lists_every_status)) or (package(buzz-relay) and test(=api::admin::tests::reports_explicit_status_filter_overrides_default)) or (package(buzz-db) and test(=moderation::tests::illegal_report_auto_escalates_at_ingest)) or (package(buzz-db) and test(=moderation::tests::non_illegal_report_lands_open_at_ingest)) or (package(buzz-db) and test(=relay_admin_actions::tests::auto_escalated_report_reopens_like_an_admin_escalated_one))' \
+            -E '(package(ambush-relay) and test(=api::admin::tests::reports_default_lists_escalated_only)) or (package(ambush-relay) and test(=api::admin::tests::reports_scope_all_lists_every_status)) or (package(ambush-relay) and test(=api::admin::tests::reports_explicit_status_filter_overrides_default)) or (package(ambush-db) and test(=moderation::tests::illegal_report_auto_escalates_at_ingest)) or (package(ambush-db) and test(=moderation::tests::non_illegal_report_lands_open_at_ingest)) or (package(ambush-db) and test(=relay_admin_actions::tests::auto_escalated_report_reopens_like_an_admin_escalated_one))' \
             --run-ignored ignored-only
         env:
-          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          DATABASE_URL: postgres://ambush:${{ env.AMBUSH_TEST_POSTGRES_PASSWORD }}@localhost:5432/ambush
       - name: Upload relay log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: backend-integration-relay-log
-          path: /tmp/buzz-relay.log
+          path: /tmp/ambush-relay.log
           if-no-files-found: ignore
 
   relay-e2e:
@@ -882,13 +882,13 @@ jobs:
           path: target/ci
       - name: Start relay
         run: |
-          chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
+          chmod +x ./target/ci/ambush-relay ./target/ci/git-credential-nostr
           ./scripts/start-relay-for-tests.sh --no-build
       - name: Relay E2E tests
         run: |
-          cargo test -p buzz-test-client --test e2e_persona --test e2e_team_catalog --test e2e_nostr_interop --test e2e_project -- --ignored --nocapture
-          cargo test -p buzz-test-client --test e2e_relay invite -- --ignored --nocapture
-          cargo test -p buzz-test-client --test e2e_relay nip43_membership_snapshots_are_rejected -- --ignored --nocapture
+          cargo test -p ambush-test-client --test e2e_persona --test e2e_team_catalog --test e2e_nostr_interop --test e2e_project -- --ignored --nocapture
+          cargo test -p ambush-test-client --test e2e_relay invite -- --ignored --nocapture
+          cargo test -p ambush-test-client --test e2e_relay nip43_membership_snapshots_are_rejected -- --ignored --nocapture
         env:
           RELAY_URL: ws://localhost:3000
           GIT_CREDENTIAL_NOSTR_BIN: ${{ github.workspace }}/target/ci/git-credential-nostr
@@ -901,7 +901,7 @@ jobs:
         # --no-fail-fast: without it cargo stops after the first failing binary,
         # so one broken case hides every later binary's result.
         run: |
-          cargo test -p buzz-test-client --no-fail-fast --test e2e_media --test e2e_media_extended --test e2e_media_video -- --ignored --nocapture
+          cargo test -p ambush-test-client --no-fail-fast --test e2e_media --test e2e_media_extended --test e2e_media_video -- --ignored --nocapture
         env:
           RELAY_URL: ws://localhost:3000
           RELAY_HTTP_URL: http://localhost:3000
@@ -910,7 +910,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: relay-e2e-artifacts
-          path: /tmp/buzz-relay.log
+          path: /tmp/ambush-relay.log
           if-no-files-found: ignore
 
   web:
@@ -1016,11 +1016,11 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Build
-        run: swift build --package-path mobile/ios/BuzzPushKit
+        run: swift build --package-path mobile/ios/AmbushPushKit
       - name: Build release
-        run: swift build -c release --package-path mobile/ios/BuzzPushKit
+        run: swift build -c release --package-path mobile/ios/AmbushPushKit
       - name: Test
-        run: swift test --package-path mobile/ios/BuzzPushKit
+        run: swift test --package-path mobile/ios/AmbushPushKit
   security:
     name: Security
     runs-on: ubuntu-latest
@@ -1088,10 +1088,10 @@ jobs:
           CARGO_CMD: ${{ github.event_name == 'pull_request' && 'check' || 'build' }}
         run: |
           cross "$CARGO_CMD" --release --target "$TARGET" \
-            -p buzz-relay \
-            -p buzz-acp \
-            -p buzz-agent \
-            -p buzz-dev-mcp \
+            -p ambush-relay \
+            -p ambush-acp \
+            -p ambush-agent \
+            -p ambush-dev-mcp \
             -p git-credential-nostr \
             -p git-sign-nostr
 
@@ -1129,19 +1129,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p desktop/src-tauri/binaries
-          for bin in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+          for bin in ambush-acp ambush-agent ambush-dev-mcp git-credential-nostr ambush; do
             touch "desktop/src-tauri/binaries/${bin}-${TARGET}.exe"
           done
       - name: Clippy (workspace)
         run: cargo clippy --workspace --all-targets --target $env:TARGET -- -D warnings
       - name: Check (workspace)
         run: cargo check --workspace --all-targets --target $env:TARGET
-      - name: Test (buzz-dev-mcp)
-        # The Windows-only bash resolver lives in buzz-dev-mcp; its unit tests
+      - name: Test (ambush-dev-mcp)
+        # The Windows-only bash resolver lives in ambush-dev-mcp; its unit tests
         # only gate if this crate is tested ON Windows.
         # Serial: windows_resolver_tests mutate process-global env
-        # (BUZZ_SHELL/GIT_BASH/SystemRoot) that SharedState::new reads.
-        run: cargo test -p buzz-dev-mcp --target $env:TARGET -- --test-threads=1
+        # (AMBUSH_SHELL/GIT_BASH/SystemRoot) that SharedState::new reads.
+        run: cargo test -p ambush-dev-mcp --target $env:TARGET -- --test-threads=1
       # Smoke-test the new host-prereq contract: Git for Windows (which provides
       # bash) is available on the runner, a shell command round-trips, and bash
       # does NOT resolve from System32 (so WSL's launcher is never picked up).
@@ -1201,12 +1201,12 @@ jobs:
         run: |
           TARGET=$(rustc -vV | sed -n 's|host: ||p')
           mkdir -p desktop/src-tauri/binaries
-          touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
-          touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
-          touch "desktop/src-tauri/binaries/buzz-backend-kubernetes-$TARGET"
-          touch "desktop/src-tauri/binaries/buzz-dev-mcp-$TARGET"
+          touch "desktop/src-tauri/binaries/ambush-acp-$TARGET"
+          touch "desktop/src-tauri/binaries/ambush-agent-$TARGET"
+          touch "desktop/src-tauri/binaries/ambush-backend-kubernetes-$TARGET"
+          touch "desktop/src-tauri/binaries/ambush-dev-mcp-$TARGET"
           touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
-          touch "desktop/src-tauri/binaries/buzz-$TARGET"
+          touch "desktop/src-tauri/binaries/ambush-$TARGET"
       # Mesh rev is derived from Cargo.lock so a dependency bump needs no
       # lockstep edit here; the cache key tracks it automatically.
       - name: Resolve mesh-llm rev

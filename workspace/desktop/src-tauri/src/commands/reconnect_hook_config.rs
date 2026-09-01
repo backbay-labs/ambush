@@ -7,7 +7,7 @@
 // Keep this file dependency-free: only `serde` derives, no crate-internal
 // imports. Both consumers have `serde` available.
 
-/// Typed config carried by the build-time env var `BUZZ_BUILD_RELAY_RECONNECT_CMD`.
+/// Typed config carried by the build-time env var `AMBUSH_BUILD_RELAY_RECONNECT_CMD`.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)] // build.rs only constructs it for validation

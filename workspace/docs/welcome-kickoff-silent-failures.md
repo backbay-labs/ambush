@@ -5,7 +5,7 @@ Context: the Welcome-channel kickoff choreography
 opener, teammates introduce themselves in-thread, and Fizz posts a closer.
 
 The file name says "silent-failures" for link stability (referenced from
-[PR #2066](https://github.com/block/buzz/pull/2066) and
+[PR #2066](https://github.com/backbay-labs/ambush/pull/2066) and
 `useWelcomeKickoffStage.ts`); the scope is all kickoff failure paths.
 
 ## The one bug behind all of it
@@ -60,8 +60,8 @@ prompt fix in §2 and the closer fix in §1 are the same change in two places.
 | 2 | Loop hardening | `base_prompt.md` | **✅ landed, this branch** |
 | 3 | Thread replies don't render live | `hooks.ts` / thread cache | **separate PR** — app-wide, not kickoff ([§4](#4-thread-replies-dont-render-live-separate-pr)) |
 | 4 | Silent paths — surface a cause in the UI | `useWelcomeKickoff` + stage | later ([§3](#3-too-quiet-silent-paths)) |
-| 5 | Loop circuit breaker | `buzz-acp` | backlog ([§2](#2-too-loud-runaway-reply-loop-fixed)) |
-| 6 | `!cancel` unreachable from any surface | `buzz-acp` + CLI | backlog ([§5](#5-backlog)) |
+| 5 | Loop circuit breaker | `ambush-acp` | backlog ([§2](#2-too-loud-runaway-reply-loop-fixed)) |
+| 6 | `!cancel` unreachable from any surface | `ambush-acp` + CLI | backlog ([§5](#5-backlog)) |
 
 ---
 
@@ -168,7 +168,7 @@ were complying exactly. The loop was *correct* behavior given the prompt.
 
 ### Root cause
 
-Two rules in `crates/buzz-acp/src/base_prompt.md` composed into a perpetual
+Two rules in `crates/ambush-acp/src/base_prompt.md` composed into a perpetual
 motion machine:
 
 1. *"**Every turn that processes a user message MUST publish a reply.** […] A
@@ -300,7 +300,7 @@ All hard-coded client-side; only teammate intro replies are LLM-generated.
 | 2 | Happy-path opener | Team online | Fizz (`opener.v1`) |
 | 3 | Degraded opener ("I'm here with Honey and Pollen…") | Fizz online, zero teammates online within 60s | Fizz (opener + closer markers) |
 | 4 | Closer variants (clean / failed / slow) | 3s beat after intros resolve, **or the 120s intro backstop** — see [§1](#1-wrong-story-the-closer-speaks-on-a-timer) | Fizz (`closer.v1`) |
-| 5 | Setup-mode nudge ("here's what you still need to configure") | Agent spawns but requirements check fails (e.g. missing API key) | The agent process itself (buzz-acp setup-listener mode) |
+| 5 | Setup-mode nudge ("here's what you still need to configure") | Agent spawns but requirements check fails (e.g. missing API key) | The agent process itself (ambush-acp setup-listener mode) |
 
 ### Constraints for the fix
 
@@ -417,7 +417,7 @@ The unit test passes only because it attaches the `p` tag independently of
 content — a shape no product path can produce.
 
 Options: relax the matcher to accept a leading `@Name` before the command, or
-add a mention flag to `buzz messages send`. First confirm these were ever
+add a mention flag to `ambush messages send`. First confirm these were ever
 intended for anything but hand-crafted/test use.
 
 Even fixed, `!cancel` cancels **one turn, one agent, one channel**, and the
@@ -485,9 +485,9 @@ covers this one team, so it complements rather than replaces §2.
 
 - **Rate-limiting incident.** One Welcome agent produced a 42KB log of
   "rate-limited: quota exceeded" retries within seconds (2026-07-17, remote
-  relay `onboarding.communities.buzz.xyz`). A tight retry loop against a quota
+  relay `onboarding.communities.ambush.example.com`). A tight retry loop against a quota
   makes every other send in the session fail too — including the kickoff's, one
-  of the §3 silent paths. Worth a separate look at buzz-acp publish backoff.
+  of the §3 silent paths. Worth a separate look at ambush-acp publish backoff.
   Originally suspected to be the §2 loop burning quota; with §2 fixed, if this
   recurs it is an independent retry bug.
 - **Why Codex and not Claude Code.** Ruled out: prompt content (identical across

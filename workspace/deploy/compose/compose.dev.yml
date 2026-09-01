@@ -14,7 +14,7 @@ services:
 
   adminer:
     image: adminer:latest
-    container_name: buzz-adminer
+    container_name: ambush-adminer
     depends_on:
       postgres:
         condition: service_healthy
@@ -24,23 +24,23 @@ services:
       - "${ADMINER_PORT:-8082}:8080"
     restart: unless-stopped
     networks:
-      - buzz-net
+      - ambush-net
 
   prometheus:
     image: prom/prometheus:latest
-    container_name: buzz-prometheus
+    container_name: ambush-prometheus
     volumes:
       - ../../prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - buzz-prometheus-data:/prometheus
+      - ambush-prometheus-data:/prometheus
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
-      - buzz-net
+      - ambush-net
 
 volumes:
-  buzz-prometheus-data:
+  ambush-prometheus-data:
     labels:
-      com.buzz.volume: prometheus
+      com.backbay.ambush.volume: prometheus

@@ -16,7 +16,7 @@ import type { Channel } from "@/shared/api/types";
 import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
-const STORAGE_KEY_PREFIX = "buzz-channels.v1";
+const STORAGE_KEY_PREFIX = "ambush-channels.v1";
 
 export type ChannelSnapshot = {
   channels: Channel[];

@@ -1,6 +1,6 @@
 import { normalizeRelayUrl } from "@/shared/lib/normalizeRelayUrl";
 
-const STORAGE_KEY_PREFIX = "buzz-channel-sections.v1";
+const STORAGE_KEY_PREFIX = "ambush-channel-sections.v1";
 export const MAX_CHANNEL_SECTIONS = 100;
 export const MAX_CHANNEL_SECTION_ASSIGNMENTS = 1_000;
 

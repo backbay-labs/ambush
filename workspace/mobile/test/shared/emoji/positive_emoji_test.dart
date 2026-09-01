@@ -1,4 +1,4 @@
-import 'package:buzz/shared/emoji/positive_emoji.dart';
+import 'package:ambush/shared/emoji/positive_emoji.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -1,4 +1,4 @@
-# Buzz
+# Ambush
 
 Desktop chat shell with:
 

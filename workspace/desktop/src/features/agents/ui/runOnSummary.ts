@@ -98,7 +98,7 @@ function displayValue(value: unknown): string {
 
 /**
  * Preferred display order, traced from the Kubernetes provider schema
- * (crates/buzz-backend-kubernetes/src/config.rs): locate the deployment
+ * (crates/ambush-backend-kubernetes/src/config.rs): locate the deployment
  * first (context → namespace), then what runs (image), then the
  * request/limit pairs kept adjacent, then lifecycle/identity. Keys not
  * listed here (other providers, future fields) spill over alphabetically

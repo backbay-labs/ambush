@@ -18,12 +18,12 @@ async function waitForMockLiveSubscription(
           return (
             (
               window as Window & {
-                __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                   channelName: string;
                   kind?: number;
                 }) => boolean;
               }
-            ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
               channelName: currentChannelName,
               kind: k,
             }) ?? false
@@ -38,12 +38,12 @@ async function waitForMockLiveSubscription(
 async function getBadgeState(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     const w = window as Window & {
-      __BUZZ_E2E_APP_BADGE_STATE__?: string;
-      __BUZZ_E2E_APP_BADGE_COUNT__?: number;
+      __AMBUSH_E2E_APP_BADGE_STATE__?: string;
+      __AMBUSH_E2E_APP_BADGE_COUNT__?: number;
     };
     return {
-      state: w.__BUZZ_E2E_APP_BADGE_STATE__ ?? "none",
-      count: w.__BUZZ_E2E_APP_BADGE_COUNT__ ?? 0,
+      state: w.__AMBUSH_E2E_APP_BADGE_STATE__ ?? "none",
+      count: w.__AMBUSH_E2E_APP_BADGE_COUNT__ ?? 0,
     };
   });
 }
@@ -154,7 +154,7 @@ test("direct-message rows become prominent only when unread", async ({
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "buzz-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-dark");
   });
   await page.goto("/");
   const directMessage = page.getByTestId("channel-alice-tyler");
@@ -167,7 +167,7 @@ test("direct-message rows become prominent only when unread", async ({
   await expect(directMessage).toHaveCSS("opacity", "1");
   await expect(label).toHaveCSS("opacity", "0.8");
   await page.evaluate((pubkey) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "alice-tyler",
       content: "An unread direct message",
       kind: 40002,
@@ -205,7 +205,7 @@ test("light mode reserves full opacity for unread text and avatars", async ({
   );
 
   await page.evaluate((pubkey) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "alice-tyler",
       content: "An unread direct message in light mode",
       kind: 40002,
@@ -224,7 +224,7 @@ test("dark mode keeps selected labels regular and channel-level unread labels bo
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "buzz-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-dark");
   });
   await page.goto("/");
 
@@ -251,7 +251,7 @@ test("dark mode keeps selected labels regular and channel-level unread labels bo
   );
   await waitForMockLiveSubscription(page, "random");
   await page.evaluate((pubkey) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "random",
       content: "A dark-mode channel-level unread message",
       kind: 40002,
@@ -307,7 +307,7 @@ test("offscreen top-level unread shows the primary sidebar arrow", async ({
 
   await page.evaluate(
     ({ pubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "A regular channel message",
         kind: 40002,
@@ -347,7 +347,7 @@ test("offscreen unread DM shows the primary sidebar arrow", async ({
   await expect(page.getByTestId("channel-alice-tyler")).not.toBeInViewport();
 
   await page.evaluate((pubkey) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "alice-tyler",
       content: "An unread direct message",
       kind: 40002,
@@ -371,7 +371,7 @@ test("regular message bolds inactive channel without numeric badge", async ({
 
   await page.evaluate(
     ({ pubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "Regular message, no mention",
         kind: 40002,
@@ -409,8 +409,8 @@ test("top-level @mention shows an accent-colored numeric badge on its channel", 
   // slack-ochin maps the generic destructive pair to white-on-white, so it
   // doubles as an adversarial theme: the badge still renders the accent.
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "slack-ochin");
-    window.localStorage.setItem("buzz-accent-color", "#22c55e");
+    window.localStorage.setItem("ambush-theme", "slack-ochin");
+    window.localStorage.setItem("ambush-accent-color", "#22c55e");
   });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -424,7 +424,7 @@ test("top-level @mention shows an accent-colored numeric badge on its channel", 
         "Hey @tyler check this out",
         "One more for @tyler",
       ]) {
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "random",
           content,
           kind: 40002,
@@ -506,7 +506,7 @@ test("@mention inside a thread shows the numeric badge and keeps hover-to-previe
   const baselineBadge = await getSettledBadgeState(page);
 
   const rootEventId = await page.evaluate(() => {
-    const root = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const root = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "random",
       content: "Thread root from someone else",
       kind: 40002,
@@ -517,7 +517,7 @@ test("@mention inside a thread shows the numeric badge and keeps hover-to-previe
 
   await page.evaluate(
     ({ parentEventId, pubkey, mentionPubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "In-thread ping for @tyler",
         kind: 40002,
@@ -557,7 +557,7 @@ test("numeric badge increments for DM message", async ({ page }) => {
   const baselineBadge = await getSettledBadgeState(page);
 
   await page.evaluate((pubkey) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "alice-tyler",
       content: "Hey, got a minute?",
       pubkey,
@@ -579,7 +579,7 @@ test("interested thread reply shows the channel preview dot without incrementing
   const baselineHomeBadge = await getSidebarHomeBadgeText(page);
 
   const rootEventId = await page.evaluate(() => {
-    const root = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const root = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "random",
       content: "Conversation I started",
       kind: 40002,
@@ -590,7 +590,7 @@ test("interested thread reply shows the channel preview dot without incrementing
 
   await page.evaluate(
     ({ parentEventId, pubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "Thread reply to a followed conversation",
         kind: 40002,
@@ -620,7 +620,7 @@ test("broadcast reply shows a numeric channel badge without a thread dot", async
 
   await page.evaluate(
     ({ pubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "Broadcast reply to the channel",
         kind: 40002,
@@ -660,7 +660,7 @@ test("mark-as-read via context menu clears channel unread indicator", async ({
 
   await page.evaluate(
     ({ pubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "Message to be marked read",
         kind: 40002,
@@ -717,7 +717,7 @@ test("marking a message unread bolds its channel after leaving", async ({
 
   const message = await page.evaluate(
     ({ pubkey }) =>
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "Keep this channel message unread",
         kind: 40002,
@@ -776,12 +776,12 @@ test("remote read-state rollback is ignored while local mark-unread still increm
         return (
           (
             window as Window & {
-              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+              __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                 channelName: string;
                 kind?: number;
               }) => boolean;
             }
-          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: "general",
             kind: 30078,
           }) ?? false
@@ -801,14 +801,14 @@ test("remote read-state rollback is ignored while local mark-unread still increm
     ({ clientId, slotId, channelId, ts }) => {
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_READ_STATE__?: (input: {
             clientId: string;
             contexts: Record<string, number>;
             createdAt: number;
             slotId: string;
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_READ_STATE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_READ_STATE__?.({
         clientId,
         slotId,
         contexts: { [channelId]: ts },
@@ -829,14 +829,14 @@ test("remote read-state rollback is ignored while local mark-unread still increm
     ({ clientId, slotId, channelId, ts, createdAt }) => {
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_READ_STATE__?: (input: {
             clientId: string;
             contexts: Record<string, number>;
             createdAt: number;
             slotId: string;
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_READ_STATE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_READ_STATE__?.({
         clientId,
         slotId,
         contexts: { [channelId]: ts },
@@ -870,14 +870,14 @@ test("remote read-state rollback is ignored while local mark-unread still increm
     ({ clientId, slotId, channelId, ts, createdAt }) => {
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_READ_STATE__?: (input: {
             clientId: string;
             contexts: Record<string, number>;
             createdAt: number;
             slotId: string;
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_READ_STATE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_READ_STATE__?.({
         clientId,
         slotId,
         contexts: { [channelId]: ts },

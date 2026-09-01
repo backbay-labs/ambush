@@ -35,7 +35,7 @@ export function isCloseWindowShortcut(
 
 /**
  * Restores the standard macOS Cmd+W behavior without reclaiming the native
- * menu accelerator. Buzz Term handles the chord first in capture phase while
+ * menu accelerator. Ambush Term handles the chord first in capture phase while
  * it owns input; otherwise this bubble-phase listener closes the current
  * window. The main window's Rust close handler turns that into hide-to-tray.
  */

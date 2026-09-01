@@ -835,7 +835,7 @@ export function EncryptedBackupCreator({
       >
         <AlertDialogContent
           className={cn(
-            variant === "spotlight" && "buzz-onboarding-security-theme",
+            variant === "spotlight" && "ambush-onboarding-security-theme",
           )}
           data-testid="backup-change-password-dialog"
           surface={variant === "spotlight" ? "textured" : "default"}

@@ -12,7 +12,7 @@ use mesh_llm_node::models::{default_huggingface_cache_dir, scan_installed_models
 use mesh_llm_system::hardware;
 use mesh_llm_system::vram::{format_rated_capacity, rated_capacity_gb};
 
-/// Buzz-curated tier picks. These are the models we know survive the agent
+/// Ambush-curated tier picks. These are the models we know survive the agent
 /// harness on shared compute — deliberately non-reasoning instruction models,
 /// so agents stay snappy instead of burning hidden reasoning tokens.
 ///
@@ -24,22 +24,22 @@ const CURATED_LARGE_ALIAS: &str = "gemma-4-26B-A4B-it-UD-Q4_K_M";
 const CURATED_LARGE_SIZE: &str = "17GB";
 const CURATED_LARGE_FILE: &str = "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf";
 const CURATED_LARGE_DESCRIPTION: &str =
-    "Gemma 4 26B MoE (4B active) — Buzz default for 64GB+ machines";
+    "Gemma 4 26B MoE (4B active) — Ambush default for 64GB+ machines";
 const CURATED_SMALL: &str = "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M";
 const CURATED_SMALL_ALIAS: &str = "Gemma-4-E4B-it-Q4_K_M";
 /// Rated-capacity boundary between the two curated tiers, in GB (marketing
 /// capacity — a "64GB" Mac rates as 64 even though usable AI memory is less).
 const CURATED_LARGE_MIN_RATED_GB: u64 = 64;
 
-/// The Buzz-curated recommendation for a machine's rated memory capacity.
-fn buzz_recommended_model(rated_gb: Option<u64>) -> &'static str {
+/// The Ambush-curated recommendation for a machine's rated memory capacity.
+fn ambush_recommended_model(rated_gb: Option<u64>) -> &'static str {
     match rated_gb {
         Some(gb) if gb >= CURATED_LARGE_MIN_RATED_GB => CURATED_LARGE,
         _ => CURATED_SMALL,
     }
 }
 
-/// Convert Buzz's pre-0.74 curated package aliases into the canonical model
+/// Convert Ambush's pre-0.74 curated package aliases into the canonical model
 /// ids advertised and accepted by Mesh's OpenAI ingress.
 pub(crate) fn canonical_curated_model_id(model_id: &str) -> &str {
     match model_id.trim() {
@@ -93,7 +93,7 @@ pub struct MeshCatalogEntry {
     pub fit: ModelFit,
     pub installed: bool,
     pub recommended: bool,
-    /// Buzz-curated pick — known to survive the agent harness. Curated
+    /// Ambush-curated pick — known to survive the agent harness. Curated
     /// entries render above the fold; everything else is "advanced".
     pub curated: bool,
 }
@@ -172,7 +172,7 @@ fn build_catalog(
         })
         .collect();
 
-    // The compiled MODEL_CATALOG does not know the Buzz large pick; it
+    // The compiled MODEL_CATALOG does not know the Ambush large pick; it
     // resolves through mesh-llm's remote catalog at download time. Synthesize
     // its entry so the picker can offer it.
     if !entries.iter().any(|e| e.name == CURATED_LARGE) {
@@ -190,7 +190,7 @@ fn build_catalog(
         });
     }
 
-    let recommended = Some(buzz_recommended_model(rated_capacity_gb(vram_bytes)).to_string());
+    let recommended = Some(ambush_recommended_model(rated_capacity_gb(vram_bytes)).to_string());
     for entry in &mut entries {
         entry.recommended = recommended.as_deref() == Some(entry.name.as_str());
         // Both curated tiers are always offered: the recommended one for this
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn recommendation_follows_buzz_curated_tiers() {
+    fn recommendation_follows_ambush_curated_tiers() {
         assert_eq!(CURATED_SMALL, "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M");
         assert_eq!(CURATED_LARGE, "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M");
         // 64GB+ rated machines get the large curated pick.

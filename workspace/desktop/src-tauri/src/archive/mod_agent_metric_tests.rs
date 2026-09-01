@@ -11,7 +11,7 @@ use super::*;
 // ── Kind-44200 agent-turn-metric archive tests ───────────────────────────
 
 fn make_turn_metric_event(owner_keys: &Keys, agent_keys: &Keys) -> Event {
-    use buzz_core_pkg::agent_turn_metric::{
+    use ambush_core_pkg::agent_turn_metric::{
         encrypt_agent_turn_metric, AgentTurnMetricPayload, TokenCounts,
     };
     let owner_pk = owner_keys.public_key().to_hex();

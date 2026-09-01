@@ -6,10 +6,10 @@
 //! single socket — a second socket per feature would multiply relay connection
 //! slots and duplicate the NIP-42 handshake for no benefit.
 //!
-//! Built on `buzz-ws-client`, which owns the wire format and the NIP-42
+//! Built on `ambush-ws-client`, which owns the wire format and the NIP-42
 //! handshake. That crate is request/response shaped (one caller, `next_event`
 //! off a buffer); the session lifecycle lives here instead of being pushed down
-//! into it, because `buzz-cli` and `buzz-test-client` consume that crate and do
+//! into it, because `ambush-cli` and `ambush-test-client` consume that crate and do
 //! not want subscription bookkeeping.
 //!
 //! # Caller contract
@@ -24,7 +24,7 @@ use std::{
     time::Duration,
 };
 
-use buzz_ws_client_pkg::{NostrWsConnection, RelayMessage};
+use ambush_ws_client_pkg::{NostrWsConnection, RelayMessage};
 use nostr::{Event, Keys};
 use tokio::{
     sync::{mpsc, oneshot, Mutex},
@@ -363,7 +363,7 @@ impl RelaySession {
         let violations = self.state.lock().await.replace_desired(subscriptions);
         for id in violations {
             eprintln!(
-                "buzz-desktop: native_relay_client: subscription {id} changed filter under a \
+                "ambush-desktop: native_relay_client: subscription {id} changed filter under a \
                  reused id; ids must be derived from their filter"
             );
         }
@@ -438,7 +438,7 @@ async fn run_session(
                 run_connection(conn, &session, &mut wake_rx).await;
             }
             Err(error) => {
-                eprintln!("buzz-desktop: native_relay_client: connect failed: {error}");
+                eprintln!("ambush-desktop: native_relay_client: connect failed: {error}");
             }
         }
 
@@ -610,7 +610,7 @@ async fn run_connection(
                         let retry = retries.entry(subscription_id.clone()).or_default();
                         retry.schedule(&message);
                         eprintln!(
-                            "buzz-desktop: native_relay_client: relay closed {subscription_id}: {message}"
+                            "ambush-desktop: native_relay_client: relay closed {subscription_id}: {message}"
                         );
                     }
                     Ok(RelayMessage::Eose { subscription_id }) => {
@@ -653,7 +653,7 @@ async fn run_connection(
                     Ok(_) => {}
                     Err(error) => {
                         if !is_read_timeout(&error) {
-                            eprintln!("buzz-desktop: native_relay_client: read failed: {error}");
+                            eprintln!("ambush-desktop: native_relay_client: read failed: {error}");
                             return;
                         }
                     }
@@ -856,8 +856,8 @@ fn parse_retry_in_seconds(message: &str) -> Option<u64> {
 /// A lapsed read is an idle relay, not a failure. Distinguished by variant
 /// rather than by message text so a reworded error cannot turn every idle
 /// period into a reconnect storm.
-fn is_read_timeout(error: &buzz_ws_client_pkg::WsClientError) -> bool {
-    matches!(error, buzz_ws_client_pkg::WsClientError::Timeout)
+fn is_read_timeout(error: &ambush_ws_client_pkg::WsClientError) -> bool {
+    matches!(error, ambush_ws_client_pkg::WsClientError::Timeout)
 }
 
 #[cfg(test)]
@@ -882,18 +882,18 @@ mod relay_backed_tests {
     /// reading of that code, which is exactly the claim a real relay can check
     /// and I cannot.
     ///
-    /// `#[ignore]`d because it needs a relay on `BUZZ_TEST_RELAY_URL`. Run:
+    /// `#[ignore]`d because it needs a relay on `AMBUSH_TEST_RELAY_URL`. Run:
     ///
     /// ```text
     /// ./scripts/start-isolated-test-relay.sh          # ws://localhost:3030
-    /// BUZZ_TEST_RELAY_URL=ws://localhost:3030 \
-    ///   cargo test -p buzz-desktop -- --ignored archive_sync_session
+    /// AMBUSH_TEST_RELAY_URL=ws://localhost:3030 \
+    ///   cargo test -p ambush-desktop -- --ignored archive_sync_session
     /// ```
     #[tokio::test]
-    #[ignore = "requires a local relay (set BUZZ_TEST_RELAY_URL)"]
+    #[ignore = "requires a local relay (set AMBUSH_TEST_RELAY_URL)"]
     async fn archive_sync_session_receives_live_events_from_a_real_relay() {
-        let Ok(relay_url) = std::env::var("BUZZ_TEST_RELAY_URL") else {
-            panic!("set BUZZ_TEST_RELAY_URL to a running relay");
+        let Ok(relay_url) = std::env::var("AMBUSH_TEST_RELAY_URL") else {
+            panic!("set AMBUSH_TEST_RELAY_URL to a running relay");
         };
 
         let owner = Keys::generate();

@@ -23,7 +23,7 @@ class _RemindersList extends ConsumerWidget {
 
     if (remindersAsync.isLoading && reminders.isEmpty) {
       return const Center(
-        child: BuzzLoadingIndicator(
+        child: AmbushLoadingIndicator(
           size: 44,
           semanticLabel: 'Loading reminders',
         ),
@@ -38,7 +38,7 @@ class _RemindersList extends ConsumerWidget {
     }
 
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    return BeeRefreshIndicator(
+    return AmbushRefreshIndicator(
       onRefresh: onRefresh,
       child: ListView.builder(
         controller: scrollController,

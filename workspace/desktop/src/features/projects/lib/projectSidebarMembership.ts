@@ -1,6 +1,7 @@
-const PROJECT_SIDEBAR_MEMBERSHIP_PREFIX = "buzz.sidebar.projects.membership.v1";
+const PROJECT_SIDEBAR_MEMBERSHIP_PREFIX =
+  "ambush.sidebar.projects.membership.v1";
 export const PROJECT_SIDEBAR_MEMBERSHIP_EVENT =
-  "buzz:project-sidebar-membership-change";
+  "ambush:project-sidebar-membership-change";
 
 /** Detail carried by {@link PROJECT_SIDEBAR_MEMBERSHIP_EVENT}: the computed
  * membership for one relay/pubkey scope. Listeners may consume this instead of

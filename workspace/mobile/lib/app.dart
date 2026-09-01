@@ -34,7 +34,7 @@ import 'shared/push/push_relay_capability_provider.dart';
 import 'shared/relay/relay.dart';
 import 'shared/read_state/read_state_provider.dart';
 import 'shared/theme/theme.dart';
-import 'shared/widgets/buzz_loading_indicator.dart';
+import 'shared/widgets/ambush_loading_indicator.dart';
 
 const _starterChannelNamespace = '3ce33bea-8f09-5f1b-9c85-8a7d2659e6b0';
 
@@ -310,11 +310,11 @@ class App extends HookConsumerWidget {
     // Derive the gradient from the themes that produced each color scheme.
     // This keeps fallbacks and pinned brightness changes aligned with the
     // rendered palette rather than the raw persisted selection.
-    final buzzLightGradient = buzzTopSectionGradient(
+    final ambushLightGradient = ambushTopSectionGradient(
       resolved.lightTheme?.name ?? '',
       lightScheme.brightness,
     );
-    final buzzDarkGradient = buzzTopSectionGradient(
+    final ambushDarkGradient = ambushTopSectionGradient(
       resolved.darkTheme?.name ?? '',
       darkScheme.brightness,
     );
@@ -335,7 +335,7 @@ class App extends HookConsumerWidget {
       hasUnreadInbox = ref.watch(_unreadInboxItemCountProvider) > 0;
     }
 
-    // Start listening for buzz:// links immediately (even pre-auth) so a
+    // Start listening for ambush:// links immediately (even pre-auth) so a
     // cold-start link survives until the authenticated UI can dispatch it.
     ref.watch(pendingDeepLinkProvider);
 
@@ -359,14 +359,14 @@ class App extends HookConsumerWidget {
 
     return MaterialApp(
       navigatorKey: _mobileRootNavigatorKey,
-      title: 'Buzz',
+      title: 'Ambush',
       theme: AppTheme.light(
         colorScheme: lightScheme,
-        topSectionGradient: buzzLightGradient,
+        topSectionGradient: ambushLightGradient,
       ),
       darkTheme: AppTheme.dark(
         colorScheme: darkScheme,
-        topSectionGradient: buzzDarkGradient,
+        topSectionGradient: ambushDarkGradient,
       ),
       themeMode: effectiveMode,
       // Above the navigator, so a burst keeps playing over a pushed thread page
@@ -423,7 +423,10 @@ class _SplashScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return const Scaffold(
       body: Center(
-        child: BuzzLoadingIndicator(size: 56, semanticLabel: 'Starting Buzz'),
+        child: AmbushLoadingIndicator(
+          size: 56,
+          semanticLabel: 'Starting Ambush',
+        ),
       ),
     );
   }

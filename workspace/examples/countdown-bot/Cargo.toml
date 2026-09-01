@@ -9,7 +9,7 @@ anyhow = "1"
 futures-util = { workspace = true }
 nostr = { workspace = true }
 serde_json = { workspace = true }
-buzz-sdk = { path = "../../crates/buzz-sdk" }
+ambush-sdk = { path = "../../crates/ambush-sdk" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }
 tokio-tungstenite = { workspace = true }
 url = { workspace = true }

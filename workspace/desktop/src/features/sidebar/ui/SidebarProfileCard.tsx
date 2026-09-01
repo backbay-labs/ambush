@@ -17,6 +17,7 @@ import { useMyRelayMembershipLookupQuery } from "@/features/community-members/ho
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
 import type { PresenceStatus, Profile, UserStatus } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { getInitials } from "@/shared/lib/initials";
 
 type SidebarProfileCardProps = {
   activeCommunity: Community | null;
@@ -86,13 +87,15 @@ export function SidebarProfileCard({
   const readonlyCommunityLabel = (
     <span
       className="flex min-w-0 cursor-pointer items-center gap-1 text-xs leading-snug text-sidebar-foreground/70"
-      data-buzz-sidebar-secondary
+      data-ambush-sidebar-secondary
     >
       <span
         aria-hidden="true"
         className="flex w-3.5 shrink-0 items-center justify-center text-2xs"
       >
-        <span className="-translate-y-px leading-normal">🐝</span>
+        <span className="-translate-y-px leading-normal">
+          {getInitials(communityLabel)}
+        </span>
       </span>
       <span className="truncate">{communityLabel}</span>
     </span>
@@ -208,7 +211,7 @@ export function SidebarProfileCard({
                   "flex w-full min-w-0 items-center truncate rounded-sm text-left text-xs leading-snug text-sidebar-foreground/70 outline-hidden transition-opacity duration-150 focus:outline-none focus-visible:outline-none group-hover/profile-card:opacity-0",
                   profilePopoverOpen && "opacity-100",
                 )}
-                data-buzz-sidebar-secondary
+                data-ambush-sidebar-secondary
                 data-testid="sidebar-profile-user-status"
                 onClick={(event) => {
                   event.stopPropagation();
@@ -229,7 +232,7 @@ export function SidebarProfileCard({
                   "pointer-events-none absolute inset-0 flex min-w-0 items-center text-xs leading-snug text-sidebar-foreground/70 opacity-0 transition-opacity duration-150 group-hover/profile-card:opacity-100",
                   profilePopoverOpen && "opacity-0",
                 )}
-                data-buzz-sidebar-secondary
+                data-ambush-sidebar-secondary
               >
                 {readonlyCommunityLabel}
               </div>

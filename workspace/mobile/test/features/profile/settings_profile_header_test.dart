@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:buzz/features/profile/profile_provider.dart';
-import 'package:buzz/features/profile/settings_profile_header.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/features/profile/user_status.dart';
-import 'package:buzz/features/profile/user_status_provider.dart';
-import 'package:buzz/shared/custom_emoji/custom_emoji_provider.dart';
-import 'package:buzz/shared/relay/media_auth.dart';
-import 'package:buzz/shared/relay/media_image.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/masked_avatar_badge.dart';
+import 'package:ambush/features/profile/profile_provider.dart';
+import 'package:ambush/features/profile/settings_profile_header.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/features/profile/user_status.dart';
+import 'package:ambush/features/profile/user_status_provider.dart';
+import 'package:ambush/shared/custom_emoji/custom_emoji_provider.dart';
+import 'package:ambush/shared/relay/media_auth.dart';
+import 'package:ambush/shared/relay/media_image.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/masked_avatar_badge.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -72,7 +72,7 @@ void main() {
     const posterUrl = 'https://relay.example/media/poster.png';
     const animationUrl = 'https://relay.example/media/animation.png';
     final profileUrl =
-        '$posterUrl#buzz-anim=${Uri.encodeComponent(animationUrl)}';
+        '$posterUrl#ambush-anim=${Uri.encodeComponent(animationUrl)}';
     final animationResponse = Completer<http.Response>();
     final client = http_testing.MockClient(
       (request) => request.url.toString() == animationUrl
@@ -174,7 +174,7 @@ void main() {
     const posterUrl = 'https://relay.example/media/poster.png';
     const animationUrl = 'https://relay.example/media/animation.png';
     final profileUrl =
-        '$posterUrl#buzz-anim=${Uri.encodeComponent(animationUrl)}';
+        '$posterUrl#ambush-anim=${Uri.encodeComponent(animationUrl)}';
     final posterResponse = Completer<http.Response>();
     final animationResponse = Completer<http.Response>();
     final client = http_testing.MockClient(

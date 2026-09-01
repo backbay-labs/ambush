@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:buzz/features/channels/channel.dart';
-import 'package:buzz/features/channels/channel_sort/channel_sort_storage.dart';
+import 'package:ambush/features/channels/channel.dart';
+import 'package:ambush/features/channels/channel_sort/channel_sort_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

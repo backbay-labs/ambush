@@ -43,7 +43,7 @@ test("saves independent Home and channel destinations by community", () => {
 
 test("ignores malformed stored destinations", () => {
   const storage = createMemoryStorage({
-    "buzz-community-destinations": JSON.stringify({
+    "ambush-community-destinations": JSON.stringify({
       valid: { kind: "channel", channelId: "general" },
       emptyChannel: { kind: "channel", channelId: "" },
       unknown: { kind: "settings" },
@@ -62,7 +62,7 @@ test("ignores malformed stored destinations", () => {
 
 test("recovers from invalid JSON", () => {
   const storage = createMemoryStorage({
-    "buzz-community-destinations": "not-json",
+    "ambush-community-destinations": "not-json",
   });
 
   assert.equal(loadCommunityDestination("alpha", storage), null);

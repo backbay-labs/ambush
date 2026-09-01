@@ -5,16 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:nostr/nostr.dart' as nostr;
-import 'package:buzz/features/pairing/pairing_crypto.dart';
-import 'package:buzz/features/pairing/pairing_provider.dart';
-import 'package:buzz/features/pairing/pairing_socket.dart';
-import 'package:buzz/shared/auth/auth.dart';
-import 'package:buzz/shared/crypto/ecdh.dart';
-import 'package:buzz/shared/crypto/nip44.dart';
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/security/sensitive_action_authorizer.dart';
+import 'package:ambush/features/pairing/pairing_crypto.dart';
+import 'package:ambush/features/pairing/pairing_provider.dart';
+import 'package:ambush/features/pairing/pairing_socket.dart';
+import 'package:ambush/shared/auth/auth.dart';
+import 'package:ambush/shared/crypto/ecdh.dart';
+import 'package:ambush/shared/crypto/nip44.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/security/sensitive_action_authorizer.dart';
 
-/// Tests for [PairingNotifier]'s legacy `buzz://` payload parsing and
+/// Tests for [PairingNotifier]'s legacy `ambush://` payload parsing and
 /// SSRF-prevention validation.
 ///
 /// The pairing flow used to validate by calling `GET /api/users/me/profile`
@@ -25,7 +25,7 @@ import 'package:buzz/shared/security/sensitive_action_authorizer.dart';
 ///
 /// What we still cover here:
 ///   - Initial state.
-///   - Parsing every documented payload format (raw base64, `buzz://`
+///   - Parsing every documented payload format (raw base64, `ambush://`
 ///     prefix, whitespace).
 ///   - Failure modes that return BEFORE any network call: invalid base64,
 ///     wrong shape (non-object, missing fields, missing nsec), and SSRF
@@ -70,7 +70,7 @@ void main() {
         const code =
             'nostrpair://62287897da61e3fa294b4570575f7db8bea147d6631150f2e4656714c645fb1e'
             '?secret=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
-            '&relay=wss%3A%2F%2Fpairing.buzz.xyz&v=1';
+            '&relay=wss%3A%2F%2Fpairing.ambush.example.com&v=1';
 
         await container.read(pairingProvider.notifier).pair(code);
 
@@ -96,10 +96,10 @@ void main() {
       expect(fakeAuth.lastCommunity, isNull);
     });
 
-    test('accepts buzz scheme prefix', () async {
+    test('accepts ambush scheme prefix', () async {
       container = createContainer();
 
-      final code = 'buzz://${_encodePairingCode()}';
+      final code = 'ambush://${_encodePairingCode()}';
       await container.read(pairingProvider.notifier).pair(code);
 
       final state = container.read(pairingProvider);
@@ -206,7 +206,7 @@ void main() {
         pairingCode =
             'nostrpair://${source.public}'
             '?secret=$sessionSecretHex'
-            '&relay=wss%3A%2F%2Fpairing.buzz.xyz&v=1';
+            '&relay=wss%3A%2F%2Fpairing.ambush.example.com&v=1';
         validation = Completer<void>();
         importAuth = FakeAuthNotifier();
         authorizer = _FakeSensitiveActionAuthorizer();
@@ -393,7 +393,7 @@ void main() {
         recoveryCode =
             'nostrpair://${source.public}'
             '?secret=$sessionSecretHex'
-            '&relay=wss%3A%2F%2Fpairing.buzz.xyz&v=1&mode=recover';
+            '&relay=wss%3A%2F%2Fpairing.ambush.example.com&v=1&mode=recover';
         authorizer = _FakeSensitiveActionAuthorizer();
         now = DateTime.utc(2026, 8, 6);
         notifier = PairingNotifier(

@@ -172,7 +172,7 @@ export function useCommunityInit(
 
           // Internal builds explicitly opt into treating their reviewed default
           // relay as the first community. Public builds retain community
-          // selection even when BUZZ_RELAY_URL is overridden at runtime.
+          // selection even when AMBUSH_RELAY_URL is overridden at runtime.
           if (
             !suppressAutoConnect &&
             (isSharedIdentity ||

@@ -1,11 +1,11 @@
-import 'package:buzz/shared/community/community.dart';
+import 'package:ambush/shared/community/community.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('existing records default to device authentication', () {
     final community = Community.fromJson({
       'id': 'one',
-      'name': 'Buzz',
+      'name': 'Ambush',
       'relayUrl': 'https://relay.test',
       'addedAt': '2026-08-05T00:00:00.000Z',
     });
@@ -35,7 +35,7 @@ void main() {
   test('community settings round trip', () {
     final community = Community(
       id: 'one',
-      name: 'Buzz',
+      name: 'Ambush',
       relayUrl: 'https://relay.test',
       sensitiveActionPolicy: SensitiveActionPolicy.enabled,
       pushLeaseInstallationId: 'a' * 32,
@@ -53,7 +53,7 @@ void main() {
     expect(
       () => Community.fromJson({
         'id': 'one',
-        'name': 'Buzz',
+        'name': 'Ambush',
         'relayUrl': 'https://relay.test',
         'pushLeaseInstallationId': 'not-canonical',
         'addedAt': '2026-08-05T00:00:00.000Z',

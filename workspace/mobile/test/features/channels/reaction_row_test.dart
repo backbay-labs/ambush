@@ -1,10 +1,10 @@
-import 'package:buzz/features/channels/reaction_row.dart';
-import 'package:buzz/features/channels/timeline_message.dart';
-import 'package:buzz/shared/emoji/emoji_burst.dart';
-import 'package:buzz/shared/emoji/emoji_data.dart';
-import 'package:buzz/shared/emoji/emoji_data_provider.dart';
-import 'package:buzz/shared/profile/user_cache_provider.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
+import 'package:ambush/features/channels/reaction_row.dart';
+import 'package:ambush/features/channels/timeline_message.dart';
+import 'package:ambush/shared/emoji/emoji_burst.dart';
+import 'package:ambush/shared/emoji/emoji_data.dart';
+import 'package:ambush/shared/emoji/emoji_data_provider.dart';
+import 'package:ambush/shared/profile/user_cache_provider.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';

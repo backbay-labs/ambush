@@ -235,7 +235,7 @@ mod tests {
         assert!(
             get_retained_event(
                 &open_retention_db(&db_path).unwrap(),
-                buzz_core_pkg::kind::KIND_PERSONA,
+                ambush_core_pkg::kind::KIND_PERSONA,
                 &owner,
                 "catalog-reviewer"
             )
@@ -270,7 +270,7 @@ mod tests {
         assert!(
             get_retained_event(
                 &open_retention_db(&db_path).unwrap(),
-                buzz_core_pkg::kind::KIND_PERSONA,
+                ambush_core_pkg::kind::KIND_PERSONA,
                 &owner,
                 "catalog-reviewer"
             )
@@ -298,7 +298,7 @@ mod tests {
         assert!(
             !get_retained_event(
                 &open_retention_db(&db_path).unwrap(),
-                buzz_core_pkg::kind::KIND_PERSONA,
+                ambush_core_pkg::kind::KIND_PERSONA,
                 &owner,
                 "catalog-reviewer"
             )
@@ -335,7 +335,7 @@ mod tests {
         assert!(
             !get_retained_event(
                 &open_retention_db(&db_path).unwrap(),
-                buzz_core_pkg::kind::KIND_PERSONA,
+                ambush_core_pkg::kind::KIND_PERSONA,
                 &owner,
                 "catalog-reviewer"
             )
@@ -368,7 +368,7 @@ mod tests {
         assert!(
             get_retained_event(
                 &open_retention_db(&db_path).unwrap(),
-                buzz_core_pkg::kind::KIND_PERSONA,
+                ambush_core_pkg::kind::KIND_PERSONA,
                 &owner,
                 "catalog-reviewer"
             )

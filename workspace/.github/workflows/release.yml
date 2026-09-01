@@ -14,7 +14,7 @@ jobs:
   # create the release objects all four platform jobs upload into.
   setup:
     name: Setup
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'backbay-labs/ambush'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -51,7 +51,7 @@ jobs:
 
   release:
     name: Release
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'backbay-labs/ambush'
     runs-on: macos-latest
     needs: setup
     timeout-minutes: 60
@@ -86,12 +86,12 @@ jobs:
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
 
       - name: Build sidecars
         run: |
-          cargo build --release -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          cargo build --release -p ambush-acp -p ambush-agent -p ambush-backend-kubernetes -p ambush-dev-mcp -p git-credential-nostr -p ambush-cli
           ./scripts/bundle-sidecars.sh
 
       # Mesh rev derived from Cargo.lock (no lockstep edit on dep bump); cache key tracks it.
@@ -137,8 +137,8 @@ jobs:
       - name: Build unsigned Tauri app
         run: cd desktop && pnpm tauri build --verbose --no-sign --features mesh-llm --config src-tauri/tauri.release.conf.json
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -177,7 +177,7 @@ jobs:
           codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
           unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
           entitlements-plist-path: ${{ runner.temp }}/entitlements.plist
-          artifact-name: buzz-${{ github.sha }}-${{ github.run_id }}-arm64
+          artifact-name: ambush-${{ github.sha }}-${{ github.run_id }}-arm64
 
       - name: Replace DMG and rebuild updater archive
         env:
@@ -198,30 +198,30 @@ jobs:
           EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract"
           rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
           ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
-          rm -rf "${APP_DIR}/Buzz.app"
-          cp -R "${EXTRACT_DIR}/Buzz.app" "${APP_DIR}/Buzz.app"
+          rm -rf "${APP_DIR}/Ambush.app"
+          cp -R "${EXTRACT_DIR}/Ambush.app" "${APP_DIR}/Ambush.app"
 
           # Rebuild the updater archive from the signed .app and re-sign it with the Tauri updater key.
-          rm -f "${APP_DIR}/Buzz.app.tar.gz" "${APP_DIR}/Buzz.app.tar.gz.sig"
-          (cd "$APP_DIR" && tar -czf Buzz.app.tar.gz Buzz.app)
-          TARBALL_ABS="$(pwd)/${APP_DIR}/Buzz.app.tar.gz"
+          rm -f "${APP_DIR}/Ambush.app.tar.gz" "${APP_DIR}/Ambush.app.tar.gz.sig"
+          (cd "$APP_DIR" && tar -czf Ambush.app.tar.gz Ambush.app)
+          TARBALL_ABS="$(pwd)/${APP_DIR}/Ambush.app.tar.gz"
           (cd desktop && pnpm tauri signer sign "$TARBALL_ABS")
 
       - name: Verify code signature
         run: |
           codesign --verify --deep --strict --verbose=2 \
-            desktop/src-tauri/target/release/bundle/macos/Buzz.app
+            desktop/src-tauri/target/release/bundle/macos/Ambush.app
           spctl --assess --type execute --verbose=4 \
-            desktop/src-tauri/target/release/bundle/macos/Buzz.app
+            desktop/src-tauri/target/release/bundle/macos/Ambush.app
           desktop/scripts/verify-macos-entitlements.sh \
-            desktop/src-tauri/target/release/bundle/macos/Buzz.app
+            desktop/src-tauri/target/release/bundle/macos/Ambush.app
 
       - name: Locate build artifacts
         id: artifacts
         run: |
           BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
 
-          # Find the DMG (Tauri names it Buzz_<version>_<arch>.dmg)
+          # Find the DMG (Tauri names it Ambush_<version>_<arch>.dmg)
           DMG=$(find "$BUNDLE_DIR/dmg" -name '*.dmg' -type f | head -1)
           if [[ -z "$DMG" ]]; then
             echo "::error::No DMG found in $BUNDLE_DIR/dmg"
@@ -237,7 +237,7 @@ jobs:
             echo "::error::Updater archive or signature not found in $BUNDLE_DIR/macos"
             exit 1
           fi
-          RENAMED="$(dirname "$ARCHIVE")/Buzz_${VERSION}_aarch64.app.tar.gz"
+          RENAMED="$(dirname "$ARCHIVE")/Ambush_${VERSION}_aarch64.app.tar.gz"
           mv "$ARCHIVE" "$RENAMED"
           mv "$SIG" "${RENAMED}.sig"
           ARCHIVE="$RENAMED"
@@ -264,7 +264,7 @@ jobs:
 
   release-macos-x64:
     name: Release macOS (Intel)
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'backbay-labs/ambush'
     runs-on: macos-latest
     needs: setup
     timeout-minutes: 60
@@ -303,19 +303,19 @@ jobs:
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
 
       - name: Build sidecars
         run: |
-          cargo build --release --target "$TARGET" -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          cargo build --release --target "$TARGET" -p ambush-acp -p ambush-agent -p ambush-backend-kubernetes -p ambush-dev-mcp -p git-credential-nostr -p ambush-cli
           ./scripts/bundle-sidecars.sh "$TARGET"
 
       - name: Build unsigned Tauri app
         run: cd desktop && pnpm tauri build --verbose --no-sign --target "$TARGET" --config src-tauri/tauri.release.conf.json
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -351,7 +351,7 @@ jobs:
           codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
           unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
           entitlements-plist-path: ${{ runner.temp }}/entitlements.plist
-          artifact-name: buzz-${{ github.sha }}-${{ github.run_id }}-x64
+          artifact-name: ambush-${{ github.sha }}-${{ github.run_id }}-x64
 
       - name: Replace DMG and rebuild updater archive
         env:
@@ -371,18 +371,18 @@ jobs:
           EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract-x64"
           rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
           ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
-          rm -rf "${APP_DIR}/Buzz.app"
-          cp -R "${EXTRACT_DIR}/Buzz.app" "${APP_DIR}/Buzz.app"
+          rm -rf "${APP_DIR}/Ambush.app"
+          cp -R "${EXTRACT_DIR}/Ambush.app" "${APP_DIR}/Ambush.app"
 
           # Rebuild the updater archive from the signed .app and re-sign with the Tauri updater key.
-          rm -f "${APP_DIR}/Buzz.app.tar.gz" "${APP_DIR}/Buzz.app.tar.gz.sig"
-          (cd "$APP_DIR" && tar -czf Buzz.app.tar.gz Buzz.app)
-          TARBALL_ABS="$(pwd)/${APP_DIR}/Buzz.app.tar.gz"
+          rm -f "${APP_DIR}/Ambush.app.tar.gz" "${APP_DIR}/Ambush.app.tar.gz.sig"
+          (cd "$APP_DIR" && tar -czf Ambush.app.tar.gz Ambush.app)
+          TARBALL_ABS="$(pwd)/${APP_DIR}/Ambush.app.tar.gz"
           (cd desktop && pnpm tauri signer sign "$TARBALL_ABS")
 
       - name: Verify code signature
         run: |
-          APP_DIR="desktop/src-tauri/target/${TARGET}/release/bundle/macos/Buzz.app"
+          APP_DIR="desktop/src-tauri/target/${TARGET}/release/bundle/macos/Ambush.app"
           codesign --verify --deep --strict --verbose=2 "$APP_DIR"
           spctl --assess --type execute --verbose=4 "$APP_DIR"
           desktop/scripts/verify-macos-entitlements.sh "$APP_DIR"
@@ -398,7 +398,7 @@ jobs:
             echo "::error::Updater archive or signature not found in $BUNDLE_DIR/macos"
             exit 1
           fi
-          RENAMED="$(dirname "$ARCHIVE")/Buzz_${VERSION}_x64.app.tar.gz"
+          RENAMED="$(dirname "$ARCHIVE")/Ambush_${VERSION}_x64.app.tar.gz"
           mv "$ARCHIVE" "$RENAMED"
           mv "$SIG" "${RENAMED}.sig"
           ARCHIVE="$RENAMED"
@@ -425,7 +425,7 @@ jobs:
 
   release-linux:
     name: Release Linux
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'backbay-labs/ambush'
     runs-on: ubuntu-latest
     # Digest-pinned like the SHA-pinned actions below; Renovate keeps it fresh.
     container: ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
@@ -563,20 +563,20 @@ jobs:
 
       - name: Build sidecars
         run: |
-          cargo build --release -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          cargo build --release -p ambush-acp -p ambush-agent -p ambush-backend-kubernetes -p ambush-dev-mcp -p git-credential-nostr -p ambush-cli
           ./scripts/bundle-sidecars.sh
 
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
 
       - name: Build Linux Tauri app
         run: cd desktop && pnpm tauri build --verbose --ci --bundles deb,appimage --features mesh-llm --config src-tauri/tauri.release.conf.json
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -706,21 +706,21 @@ jobs:
         shell: bash
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
 
       - name: Build sidecars
         shell: bash
         run: |
-          cargo build --release --target "$TARGET" -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          cargo build --release --target "$TARGET" -p ambush-acp -p ambush-agent -p ambush-dev-mcp -p git-credential-nostr -p ambush-cli
           ./scripts/bundle-sidecars.sh "$TARGET"
 
       - name: Build Windows NSIS installer (unsigned)
         shell: bash
         run: cd desktop && pnpm tauri build --verbose --target "$TARGET" --bundles nsis --config src-tauri/tauri.release.conf.json
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+          AMBUSH_UPDATER_PUBLIC_KEY: ${{ secrets.AMBUSH_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          AMBUSH_UPDATER_ENDPOINT: https://github.com/backbay-labs/ambush/releases/download/ambush-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -888,7 +888,7 @@ jobs:
           ARCHIVE_WIN: ${{ needs.release-windows.outputs.archive_name }}
         run: |
           set -euo pipefail
-          BASE="https://github.com/block/buzz/releases/download/desktop-v${VERSION}"
+          BASE="https://github.com/backbay-labs/ambush/releases/download/desktop-v${VERSION}"
           TRIPLES=()
 
           add_triple() {
@@ -932,7 +932,7 @@ jobs:
             gh release create "desktop-v${VERSION}" \
               --draft \
               --target "${{ needs.setup.outputs.source_sha }}" \
-              --title "Buzz Desktop v${VERSION}" \
+              --title "Ambush Desktop v${VERSION}" \
               --notes-file "$NOTES_FILE" \
               "${PRERELEASE_FLAGS[@]}"
           fi

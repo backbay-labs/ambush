@@ -15,11 +15,11 @@ async function waitForMockLiveSubscription(
         ({ ch }) =>
           (
             window as Window & {
-              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+              __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                 channelName: string;
               }) => boolean;
             }
-          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: ch }) ??
+          ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: ch }) ??
           false,
         { ch: channelName },
       ),
@@ -37,7 +37,7 @@ async function emitMockReply(
     ({ ch, msg, parent, pubkey }) =>
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
             parentEventId?: string | null;
@@ -45,7 +45,7 @@ async function emitMockReply(
             createdAt?: number;
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: ch,
         content: msg,
         parentEventId: parent,
@@ -144,7 +144,9 @@ test.describe("thread pane on ultrawide monitors", () => {
       Math.round(element.getBoundingClientRect().width),
     );
     const storedWidth = await page.evaluate(() =>
-      Number(window.sessionStorage.getItem("buzz.desktop.thread-panel-width")),
+      Number(
+        window.sessionStorage.getItem("ambush.desktop.thread-panel-width"),
+      ),
     );
     const mainWidth = await page
       .getByTestId("channel-drop-zone")

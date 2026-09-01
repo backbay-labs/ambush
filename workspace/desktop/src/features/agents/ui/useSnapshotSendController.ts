@@ -1,7 +1,7 @@
 /**
  * useSnapshotSendController
  *
- * Payload-agnostic upload → send controller for sharing a snapshot to a Buzz
+ * Payload-agnostic upload → send controller for sharing a snapshot to an Ambush
  * DM. The caller supplies an encode function and an async destination resolver;
  * the controller guards destination creation plus prepare → encode → upload →
  * send, with fail-closed eligibility checks at both action boundaries.

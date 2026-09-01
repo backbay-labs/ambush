@@ -9,7 +9,7 @@ import { installMockBridge } from "../helpers/bridge";
 //
 // NIP-CW §Top-level Classification: a depth-1 reply carrying `["broadcast","1"]`
 // is a channel-window row — it belongs on the timeline as well as in its thread.
-// The relay serves it as a row (`buzz-db/src/thread.rs`: "top-level rows =
+// The relay serves it as a row (`ambush-db/src/thread.rs`: "top-level rows =
 // depth 0, missing metadata, or broadcast depth-1 replies").
 //
 // The client's live-append path drops it from the WINDOW STORE. `appendMessage`
@@ -43,7 +43,7 @@ async function waitForMockLiveSubscription(
     .poll(() =>
       page.evaluate(
         (ch) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: ch,
           }) ?? false,
         channelName,
@@ -63,7 +63,7 @@ async function emit(
 ) {
   const event = await page.evaluate(
     (payload) =>
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: payload.channel,
         content: payload.content,
         parentEventId: payload.parentEventId,
@@ -84,7 +84,7 @@ async function emit(
 
 async function liveOverlayContents(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
-    const qc = window.__BUZZ_E2E_QUERY_CLIENT__ as unknown as {
+    const qc = window.__AMBUSH_E2E_QUERY_CLIENT__ as unknown as {
       getQueriesData: (f: unknown) => Array<[readonly unknown[], unknown]>;
     };
     const win = qc
@@ -103,7 +103,7 @@ test("a live broadcast depth-1 reply enters the authoritative channel window sto
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
 
   // Seed a top-level root into the cold window before opening the channel, so

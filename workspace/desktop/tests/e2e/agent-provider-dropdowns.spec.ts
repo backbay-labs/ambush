@@ -5,14 +5,14 @@
  *
  *  01 – Global agent config provider select renders both Databricks v1 and v2
  *       options (they are always shown on OSS builds; the mock bridge returns an
- *       empty baked env, simulating an OSS install with no BUZZ_AGENT_PROVIDER).
+ *       empty baked env, simulating an OSS install with no AMBUSH_AGENT_PROVIDER).
  *
  *  02 – Effort dropdown shows "Default (medium)" instead of bare "Inherit" when
  *       no effort is baked and the provider uses a known default effort level.
  *       (provider unset → effortDefault = "medium" → inheritFallbackLabel fires)
  *
  *  03 – Edit dialog for a definition with runtime null auto-seeds the app-default
- *       runtime (buzz-agent) and model discovery runs → model combobox is non-empty.
+ *       runtime (ambush-agent) and model discovery runs → model combobox is non-empty.
  *       Previously, the seeding effect bailed in edit mode, leaving the runtime
  *       empty and the model dropdown silently blank.
  */
@@ -59,7 +59,7 @@ test.describe("agent provider dropdown screenshots", () => {
   // Shot 01: OSS provider dropdown includes both Databricks v1 and v2.
   //
   // The mock bridge returns get_baked_build_env_keys = [] (OSS), so no
-  // BUZZ_AGENT_PROVIDER is baked and hideProviderIds is empty → v1 appears.
+  // AMBUSH_AGENT_PROVIDER is baked and hideProviderIds is empty → v1 appears.
   test("01-provider-dropdown-oss", async ({ page }) => {
     await installMockBridge(page);
     await openAiDefaultsSettings(page);
@@ -138,7 +138,7 @@ test.describe("agent provider dropdown screenshots", () => {
   });
 
   // Shot 03: Edit dialog for a definition with null runtime auto-seeds the
-  // default runtime (buzz-agent via getDefaultPersonaRuntime) and model
+  // default runtime (ambush-agent via getDefaultPersonaRuntime) and model
   // discovery runs, producing a non-empty model combobox.
   //
   // Previously the seeding effect bailed in edit mode ("id" in initialValues),
@@ -177,7 +177,7 @@ test.describe("agent provider dropdown screenshots", () => {
     await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
 
     // Regression: the runtime trigger must not be empty — the auto-seed effect
-    // must have run and selected the app default (buzz-agent in the mock catalog).
+    // must have run and selected the app default (ambush-agent in the mock catalog).
     const runtimeTrigger = dialog.locator("#persona-runtime");
     await expect(runtimeTrigger).toBeVisible({ timeout: 8_000 });
     await expect(runtimeTrigger).not.toContainText("No preference", {

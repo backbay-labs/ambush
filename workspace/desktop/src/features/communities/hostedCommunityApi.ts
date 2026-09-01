@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export const HOSTED_COMMUNITY_SUFFIX = "communities.buzz.xyz";
+export const HOSTED_COMMUNITY_SUFFIX = "communities.ambush.xyz";
 export const HOSTED_COMMUNITY_LIMIT = 5;
 export const VALID_HOSTED_COMMUNITY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -66,18 +66,19 @@ export function hostedCommunityErrorMessage(
   fallback: string,
 ) {
   const messages: Record<string, string> = {
-    missing_mapping: "Connect your Buzz identity before creating a community.",
+    missing_mapping:
+      "Connect your Ambush identity before creating a community.",
     invalid_name: "Use lowercase letters, numbers, and hyphens.",
-    taken: "That Buzz address is already taken.",
+    taken: "That Ambush address is already taken.",
     limit_reached: `You've reached the limit of ${HOSTED_COMMUNITY_LIMIT} hosted communities.`,
     relay_unavailable: "Community provisioning is temporarily unavailable.",
     identity_already_bound:
-      "This Builderlab account is connected to another Buzz identity.",
+      "This Builderlab account is connected to another Ambush identity.",
     pubkey_already_bound:
-      "This Buzz identity is connected to another Builderlab account.",
+      "This Ambush identity is connected to another Builderlab account.",
     not_owner: "Only the community owner can do that.",
     transferee_not_registered:
-      "That person needs a connected Buzz identity before you can transfer ownership to them.",
+      "That person needs a connected Ambush identity before you can transfer ownership to them.",
   };
   const message = messages[error?.code ?? ""] ?? error?.message ?? fallback;
   return correlationId
@@ -120,7 +121,7 @@ export async function loadHostedCommunityAccount(): Promise<HostedCommunityAccou
       hostedCommunityErrorMessage(
         identityResponse.error,
         identityResponse.correlation_id,
-        "Could not load the connected Buzz identity.",
+        "Could not load the connected Ambush identity.",
       ),
     );
   }

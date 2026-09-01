@@ -23,9 +23,9 @@ async function driveConnectionState(
   await page.evaluate((s) => {
     const setter = (
       window as Window & {
-        __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (state: string) => void;
+        __AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__?: (state: string) => void;
       }
-    ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__;
+    ).__AMBUSH_E2E_SET_RELAY_CONNECTION_STATE__;
     if (!setter) throw new Error("E2E relay state setter not installed.");
     setter(s);
   }, state);

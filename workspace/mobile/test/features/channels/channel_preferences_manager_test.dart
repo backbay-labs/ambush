@@ -1,5 +1,5 @@
-import 'package:buzz/features/channels/channel_mutes/channel_mutes_manager.dart';
-import 'package:buzz/features/channels/channel_stars/channel_stars_manager.dart';
+import 'package:ambush/features/channels/channel_mutes/channel_mutes_manager.dart';
+import 'package:ambush/features/channels/channel_stars/channel_stars_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nostr/nostr.dart' as nostr;
 import 'package:shared_preferences/shared_preferences.dart';

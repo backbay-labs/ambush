@@ -1,7 +1,7 @@
-/// Parsing for `buzz://` deep links.
+/// Parsing for `ambush://` deep links.
 ///
 /// Mirrors the desktop handler in `desktop/src-tauri/src/deep_link.rs`:
-/// `buzz://message?channel=<uuid>&id=<hex>[&thread=<hex>]` references a
+/// `ambush://message?channel=<uuid>&id=<hex>[&thread=<hex>]` references a
 /// message (optionally inside a thread) in a channel. Required params that
 /// are missing or empty make the link invalid — the caller never sees a
 /// half-formed target.
@@ -10,16 +10,16 @@ library;
 import '../relay/relay_validation.dart';
 
 /// A parsed deep link supported by the app.
-sealed class BuzzDeepLink {
-  const BuzzDeepLink();
+sealed class AmbushDeepLink {
+  const AmbushDeepLink();
 }
 
 /// A parsed relay invite link.
 ///
 /// Canonical share links are `https://<relay>/invite/<code>`. The custom
-/// `buzz://join?relay=<ws(s)://relay>&code=<code>` form is only an installed-app
+/// `ambush://join?relay=<ws(s)://relay>&code=<code>` form is only an installed-app
 /// handoff from the web landing page.
-class InviteDeepLink extends BuzzDeepLink {
+class InviteDeepLink extends AmbushDeepLink {
   /// Relay URL normalized to the websocket scheme used by the app.
   final String relayUrl;
 
@@ -52,8 +52,8 @@ class InviteDeepLink extends BuzzDeepLink {
 
 /// A parsed channel-only deep link.
 ///
-/// Canonical form: `buzz://channel/<channel-uuid>`.
-class ChannelDeepLink extends BuzzDeepLink {
+/// Canonical form: `ambush://channel/<channel-uuid>`.
+class ChannelDeepLink extends AmbushDeepLink {
   /// Channel UUID from the sole path segment.
   final String channelId;
 
@@ -70,8 +70,8 @@ class ChannelDeepLink extends BuzzDeepLink {
   String toString() => 'ChannelDeepLink(channel: $channelId)';
 }
 
-/// A parsed `buzz://message` deep link.
-class MessageDeepLink extends BuzzDeepLink {
+/// A parsed `ambush://message` deep link.
+class MessageDeepLink extends AmbushDeepLink {
   /// Local community identifier for notification-originated links.
   /// Canonical shared links omit this because community IDs are device-local.
   final String? communityId;
@@ -110,11 +110,11 @@ class MessageDeepLink extends BuzzDeepLink {
       'thread: $threadRootId)';
 }
 
-/// Build a canonical `buzz://message` link for a channel message.
+/// Build a canonical `ambush://message` link for a channel message.
 ///
 /// Mirrors `desktop/src/features/messages/lib/messageLink.ts` so links copied
 /// or shared from mobile round-trip through every client's parser:
-/// `buzz://message?channel=<uuid>&id=<eventId>[&thread=<rootId>]`.
+/// `ambush://message?channel=<uuid>&id=<eventId>[&thread=<rootId>]`.
 ///
 /// An empty [threadRootId] is treated as "no thread" so callers can pass
 /// through a nullable thread reference without extra checks.
@@ -136,19 +136,19 @@ String buildMessageLink({
     if (threadRootId != null && threadRootId.isNotEmpty) 'thread': threadRootId,
   };
   return Uri(
-    scheme: 'buzz',
+    scheme: 'ambush',
     host: 'message',
     queryParameters: params,
   ).toString();
 }
 
-/// Parse a canonical `buzz://channel/<channel-uuid>` URI.
+/// Parse a canonical `ambush://channel/<channel-uuid>` URI.
 ///
 /// The channel ID must be the URI's sole non-empty path segment. Query
 /// parameters and fragments are rejected so malformed or ambiguous links never
 /// become navigation targets.
 ChannelDeepLink? parseChannelDeepLink(Uri uri) {
-  if (uri.scheme != 'buzz' || uri.host != 'channel') return null;
+  if (uri.scheme != 'ambush' || uri.host != 'channel') return null;
   if (uri.hasQuery ||
       uri.hasFragment ||
       uri.userInfo.isNotEmpty ||
@@ -168,13 +168,13 @@ ChannelDeepLink? parseChannelDeepLink(Uri uri) {
   return ChannelDeepLink(channelId: channelId.toLowerCase());
 }
 
-/// Parse a `buzz://message?…` URI into a [MessageDeepLink].
+/// Parse a `ambush://message?…` URI into a [MessageDeepLink].
 ///
 /// Returns `null` unless the URI exactly matches the canonical message-link
 /// shape: no path, fragment, credentials, duplicate or unknown parameters; a
 /// UUID channel; and 64-character hexadecimal message/thread event IDs.
 MessageDeepLink? parseMessageDeepLink(Uri uri) {
-  if (uri.scheme != 'buzz' || uri.host != 'message') return null;
+  if (uri.scheme != 'ambush' || uri.host != 'message') return null;
   if (uri.path.isNotEmpty ||
       uri.hasFragment ||
       uri.userInfo.isNotEmpty ||
@@ -211,13 +211,13 @@ MessageDeepLink? parseMessageDeepLink(Uri uri) {
   );
 }
 
-/// Parse canonical HTTPS invite links and `buzz://join` app handoffs.
+/// Parse canonical HTTPS invite links and `ambush://join` app handoffs.
 ///
 /// Accepted forms:
 /// - `https://<relay>/invite/<code>` -> `wss://<relay>` + code
 /// - `http://localhost/invite/<code>` -> `ws://localhost` + code in debug builds
-/// - `buzz://join?relay=<wss://relay>&code=<code>` -> relay + code
-/// - `buzz://join?relay=<ws://localhost>&code=<code>` -> local relay in debug
+/// - `ambush://join?relay=<wss://relay>&code=<code>` -> relay + code
+/// - `ambush://join?relay=<ws://localhost>&code=<code>` -> local relay in debug
 ///
 /// Rejects credentials, fragments, missing params, nested relay credentials, and
 /// non-invite paths so scanners do not accidentally treat arbitrary URLs as
@@ -225,7 +225,7 @@ MessageDeepLink? parseMessageDeepLink(Uri uri) {
 InviteDeepLink? parseInviteDeepLink(Uri uri) {
   if (uri.hasFragment || uri.userInfo.isNotEmpty) return null;
 
-  if (uri.scheme == 'buzz') {
+  if (uri.scheme == 'ambush') {
     if (uri.host != 'join') return null;
     final relay = uri.queryParameters['relay'];
     final code = uri.queryParameters['code'];
@@ -290,14 +290,14 @@ InviteDeepLink? parseInviteDeepLink(Uri uri) {
   return null;
 }
 
-/// Parse any supported Buzz deep link.
-BuzzDeepLink? parseBuzzDeepLink(Uri uri) =>
+/// Parse any supported Ambush deep link.
+AmbushDeepLink? parseAmbushDeepLink(Uri uri) =>
     parseInviteDeepLink(uri) ??
     parseChannelDeepLink(uri) ??
     parseMessageDeepLink(uri);
 
-/// A validated Buzz repository, pull request, or issue permalink.
-class EntityDeepLink extends BuzzDeepLink {
+/// A validated Ambush repository, pull request, or issue permalink.
+class EntityDeepLink extends AmbushDeepLink {
   final String type;
   final String owner;
   final String repository;
@@ -311,9 +311,9 @@ class EntityDeepLink extends BuzzDeepLink {
   });
 }
 
-/// Parse canonical `buzz://repo|pr|issue` permalinks for inline presentation.
+/// Parse canonical `ambush://repo|pr|issue` permalinks for inline presentation.
 EntityDeepLink? parseEntityDeepLink(Uri uri) {
-  if (uri.scheme != 'buzz' || !{'repo', 'pr', 'issue'}.contains(uri.host)) {
+  if (uri.scheme != 'ambush' || !{'repo', 'pr', 'issue'}.contains(uri.host)) {
     return null;
   }
   if (uri.path.isNotEmpty ||

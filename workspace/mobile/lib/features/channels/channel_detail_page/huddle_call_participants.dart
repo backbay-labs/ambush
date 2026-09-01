@@ -191,7 +191,7 @@ class _HuddleLoadingBee extends HookWidget {
       label: 'Joining Huddle',
       liveRegion: true,
       child: ExcludeSemantics(
-        child: FlappingBee(
+        child: AmbushLogoMotion(
           key: const ValueKey('huddle-loading-bee'),
           width: 60,
           color: context.colors.primary,

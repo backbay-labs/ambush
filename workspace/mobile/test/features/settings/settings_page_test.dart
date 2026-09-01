@@ -1,12 +1,12 @@
-import 'package:buzz/features/settings/settings_page.dart';
-import 'package:buzz/shared/community/community_membership_provider.dart';
-import 'package:buzz/shared/community/community.dart';
-import 'package:buzz/shared/community/community_provider.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/push/push_bridge.dart';
-import 'package:buzz/shared/relay/app_lifecycle_provider.dart';
-import 'package:buzz/shared/widgets/app_list.dart';
-import 'package:buzz/shared/widgets/app_list_card.dart';
+import 'package:ambush/features/settings/settings_page.dart';
+import 'package:ambush/shared/community/community_membership_provider.dart';
+import 'package:ambush/shared/community/community.dart';
+import 'package:ambush/shared/community/community_provider.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/push/push_bridge.dart';
+import 'package:ambush/shared/relay/app_lifecycle_provider.dart';
+import 'package:ambush/shared/widgets/app_list.dart';
+import 'package:ambush/shared/widgets/app_list_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,8 +32,8 @@ void main() {
           savedPrefsProvider.overrideWithValue(prefs),
           activeCommunityProvider.overrideWith((ref) async => community),
           appLifecycleProvider.overrideWith(_SettingsLifecycleNotifier.new),
-          buzzPushAuthorizationStatusReaderProvider.overrideWithValue(
-            () async => BuzzPushAuthorizationStatus.authorized,
+          ambushPushAuthorizationStatusReaderProvider.overrideWithValue(
+            () async => AmbushPushAuthorizationStatus.authorized,
           ),
         ],
         child: MaterialApp(
@@ -75,10 +75,10 @@ void main() {
           savedPrefsProvider.overrideWithValue(prefs),
           activeCommunityProvider.overrideWith((ref) async => community),
           appLifecycleProvider.overrideWith(_SettingsLifecycleNotifier.new),
-          buzzPushAuthorizationStatusReaderProvider.overrideWithValue(
-            () async => BuzzPushAuthorizationStatus.denied,
+          ambushPushAuthorizationStatusReaderProvider.overrideWithValue(
+            () async => AmbushPushAuthorizationStatus.denied,
           ),
-          buzzPushNotificationSettingsOpenerProvider.overrideWithValue(
+          ambushPushNotificationSettingsOpenerProvider.overrideWithValue(
             () async {
               openSettingsCalls += 1;
               return true;
@@ -99,7 +99,7 @@ void main() {
 
     expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
     expect(
-      find.text('Enabled in Buzz, but disabled in iOS Settings'),
+      find.text('Enabled in Ambush, but disabled in iOS Settings'),
       findsOneWidget,
     );
     await tester.tap(
@@ -128,7 +128,7 @@ void main() {
           savedPrefsProvider.overrideWithValue(prefs),
           activeCommunityProvider.overrideWith((ref) async => community),
           appLifecycleProvider.overrideWith(_SettingsLifecycleNotifier.new),
-          buzzPushAuthorizationStatusReaderProvider.overrideWithValue(
+          ambushPushAuthorizationStatusReaderProvider.overrideWithValue(
             () async => throw StateError('authorization unavailable'),
           ),
         ],
@@ -145,7 +145,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Enabled in Buzz; iOS permission status unavailable'),
+      find.text('Enabled in Ambush; iOS permission status unavailable'),
       findsOneWidget,
     );
     expect(
@@ -329,9 +329,9 @@ void main() {
       (view) =>
           (view.creationParams as Map<Object?, Object?>?)?['label'] == 'Edit',
     );
-    expect(nativeClose.viewType, 'buzz/navigation_glass');
+    expect(nativeClose.viewType, 'ambush/navigation_glass');
     expect(nativeClose.creationParams, containsPair('icon', 'close'));
-    expect(nativeEdit.viewType, 'buzz/navigation_glass');
+    expect(nativeEdit.viewType, 'ambush/navigation_glass');
     expect(nativeEdit.creationParams, containsPair('controlWidth', 56.0));
     expect(find.byTooltip('Close settings'), findsOneWidget);
     debugDefaultTargetPlatformOverride = null;

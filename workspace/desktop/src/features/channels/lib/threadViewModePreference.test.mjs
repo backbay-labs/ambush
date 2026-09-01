@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const KEY = "buzz.channels.threadViewMode";
+const KEY = "ambush.channels.threadViewMode";
 let importSequence = 0;
 
 async function withStorage(storage, run) {

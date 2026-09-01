@@ -62,7 +62,7 @@ pub(in crate::commands) fn propagate_membership_best_effort(
         Ok(())
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: team-membership-propagate: {e}");
+        eprintln!("ambush-desktop: team-membership-propagate: {e}");
     }
 }
 
@@ -262,7 +262,7 @@ pub(super) fn retain_team_pending(app: &AppHandle, state: &AppState, team: &Team
         retain_team_pending_at(&scope, team)
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: team-retain: {e}");
+        eprintln!("ambush-desktop: team-retain: {e}");
     }
 }
 
@@ -279,7 +279,7 @@ pub(super) fn retain_team_pending_at(
         retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
         team_events::build_team_event,
     };
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
     use nostr::JsonUtil;
 
     let conn = open_retention_db(&scope.db_path)?;
@@ -327,7 +327,7 @@ fn tombstone_team_pending(app: &AppHandle, state: &AppState, d_tag: &str) {
         tombstone_team_at(&scope.db_path, &scope.owner_keys, d_tag)
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: team-tombstone: {e}");
+        eprintln!("ambush-desktop: team-tombstone: {e}");
     }
 }
 
@@ -347,7 +347,7 @@ pub(crate) fn tombstone_team_at(
         },
         team_events::build_team_delete,
     };
-    use buzz_core_pkg::kind::KIND_TEAM;
+    use ambush_core_pkg::kind::KIND_TEAM;
     use nostr::JsonUtil;
 
     const KIND_DELETE: u32 = 5;

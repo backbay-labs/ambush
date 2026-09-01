@@ -32,7 +32,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::commands::NATIVE_NOTIFICATION_ACTIVATED_EVENT;
 
-const TARGET_USER_INFO_KEY: &str = "buzzNotificationTarget";
+const TARGET_USER_INFO_KEY: &str = "ambushNotificationTarget";
 const MAX_PENDING_ACTIVATIONS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -64,7 +64,7 @@ define_class!(
     // Sync. Apple does not guarantee a queue for notification delegate calls;
     // both Tauri operations used by the callbacks are thread-safe.
     #[unsafe(super(NSObject))]
-    #[name = "BuzzNotificationCenterDelegate"]
+    #[name = "AmbushNotificationCenterDelegate"]
     #[thread_kind = AnyThread]
     #[ivars = NotificationDelegateIvars]
     struct NotificationDelegate;
@@ -101,14 +101,14 @@ define_class!(
                         .emit(NATIVE_NOTIFICATION_ACTIVATED_EVENT, ())
                     {
                         eprintln!(
-                            "buzz-desktop: failed to emit macOS notification activation: {error}"
+                            "ambush-desktop: failed to emit macOS notification activation: {error}"
                         );
                     }
                 }
             }
 
             // Apple requires this for every response, including dismissals and
-            // malformed notifications that Buzz intentionally ignores.
+            // malformed notifications that Ambush intentionally ignores.
             completion_handler.call(());
         }
     }
@@ -129,7 +129,7 @@ pub(crate) fn init(app: &AppHandle) -> tauri::Result<()> {
         // objc2 cannot turn that exception into a Rust error, so do not call
         // into the framework at all in this environment.
         eprintln!(
-            "buzz-desktop: macOS notifications disabled because the process is not running from an app bundle"
+            "ambush-desktop: macOS notifications disabled because the process is not running from an app bundle"
         );
         return Ok(());
     }
@@ -152,7 +152,7 @@ fn ensure_bundled_application() -> Result<(), String> {
         Ok(())
     } else {
         Err(
-            "macOS notifications are unavailable when Buzz is not running from an app bundle"
+            "macOS notifications are unavailable when Ambush is not running from an app bundle"
                 .to_string(),
         )
     }
@@ -275,7 +275,7 @@ pub(crate) async fn show(
 fn queue_activation(target: serde_json::Value) {
     let queue = PENDING_ACTIVATIONS.get_or_init(Default::default);
     let Ok(mut queue) = queue.lock() else {
-        eprintln!("buzz-desktop: macOS notification activation queue is unavailable");
+        eprintln!("ambush-desktop: macOS notification activation queue is unavailable");
         return;
     };
     if queue.len() == MAX_PENDING_ACTIVATIONS {
@@ -365,20 +365,20 @@ mod tests {
     #[test]
     fn requires_the_executable_to_use_the_app_bundle_layout() {
         assert!(is_application_bundle_layout(
-            Path::new("/Applications/Buzz.app"),
-            Path::new("/Applications/Buzz.app/Contents/MacOS/buzz-desktop"),
+            Path::new("/Applications/Ambush.app"),
+            Path::new("/Applications/Ambush.app/Contents/MacOS/ambush-desktop"),
         ));
         assert!(!is_application_bundle_layout(
             Path::new("/tmp/Fake.app"),
-            Path::new("/tmp/Fake.app/buzz-desktop"),
+            Path::new("/tmp/Fake.app/ambush-desktop"),
         ));
         assert!(!is_application_bundle_layout(
-            Path::new("/Users/developer/buzz/desktop/src-tauri/target/debug"),
-            Path::new("/Users/developer/buzz/desktop/src-tauri/target/debug/buzz-desktop"),
+            Path::new("/Users/developer/ambush/desktop/src-tauri/target/debug"),
+            Path::new("/Users/developer/ambush/desktop/src-tauri/target/debug/ambush-desktop"),
         ));
         assert!(!is_application_bundle_layout(
-            Path::new("/Applications/Buzz.app"),
-            Path::new("/Applications/Other.app/Contents/MacOS/buzz-desktop"),
+            Path::new("/Applications/Ambush.app"),
+            Path::new("/Applications/Other.app/Contents/MacOS/ambush-desktop"),
         ));
     }
 

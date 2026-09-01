@@ -10,19 +10,19 @@ Workspace Profile
 
 ## Abstract
 
-This NIP defines how a relay-scoped workspace icon is set and read. An admin or owner sets it once with a user-signed command (`kind:9033`, accepted only from relay admins/owners); the relay stores it as per-relay state and serves it in the standard `icon` field of its NIP-11 relay information document, where every client — member or not, Buzz or third-party — reads it.
+This NIP defines how a relay-scoped workspace icon is set and read. An admin or owner sets it once with a user-signed command (`kind:9033`, accepted only from relay admins/owners); the relay stores it as per-relay state and serves it in the standard `icon` field of its NIP-11 relay information document, where every client — member or not, Ambush or third-party — reads it.
 
 The write path mirrors NIP-43's admin command shape (`kind:9030`–`9032`): user intent is validated against the relay's access-control state, then the relay updates derived state. The read path is plain NIP-11 — no new event kind is needed to consume the icon.
 
 ## Motivation
 
-In Buzz the relay *is* the workspace ([VISION.md](../../VISION.md)). A client connected to several relays needs a way to tell them apart that every member sees identically — initials derived from a locally-configured workspace name differ per device and say nothing about the workspace itself.
+In Ambush the relay *is* the workspace ([VISION.md](../../VISION.md)). A client connected to several relays needs a way to tell them apart that every member sees identically — initials derived from a locally-configured workspace name differ per device and say nothing about the workspace itself.
 
-Upstream Nostr already standardizes the *read* side of this: NIP-11 defines a first-class `icon` field on the relay information document, fetched with an unauthenticated `GET` + `Accept: application/nostr+json`. This NIP adopts that read path unchanged, so any NIP-11-aware client renders the workspace icon with zero Buzz-specific code.
+Upstream Nostr already standardizes the *read* side of this: NIP-11 defines a first-class `icon` field on the relay information document, fetched with an unauthenticated `GET` + `Accept: application/nostr+json`. This NIP adopts that read path unchanged, so any NIP-11-aware client renders the workspace icon with zero Ambush-specific code.
 
 What upstream does not provide is an in-protocol, role-gated **write** path suited to this deployment model:
 
-- **NIP-86 (Relay Management API)** defines a `changerelayicon` method, but it is a separate JSON-RPC/HTTP surface with its own auth model, distinct from the NIP-42/NIP-43 role state Buzz relays already enforce. Buzz's admin surface is Nostr events (kinds 9030–9032); the icon write follows the same shape rather than introducing a second management protocol for one field.
+- **NIP-86 (Relay Management API)** defines a `changerelayicon` method, but it is a separate JSON-RPC/HTTP surface with its own auth model, distinct from the NIP-42/NIP-43 role state Ambush relays already enforce. Ambush's admin surface is Nostr events (kinds 9030–9032); the icon write follows the same shape rather than introducing a second management protocol for one field.
 - **NIP-29 group metadata** (`kind:39000` `picture`) is per-group state; the workspace icon is per-relay.
 
 Hence one added command kind (`9033`), validated exactly like the neighboring 9030–9032 membership commands, feeding the standard NIP-11 `icon`.
@@ -89,6 +89,6 @@ Icon values are rendered as images by every member's client, so the relay MUST v
 
 ## Relation to Other NIPs
 
-- **NIP-11 (Relay Information Document)**: Supplies the standard `icon` field and the unauthenticated read path this NIP feeds. Buzz adds nothing to the read side.
+- **NIP-11 (Relay Information Document)**: Supplies the standard `icon` field and the unauthenticated read path this NIP feeds. Ambush adds nothing to the read side.
 - **NIP-43 (Relay Access Metadata and Requests)**: Supplies the role state (`admin` / `owner`) that authorizes `kind:9033`, and the admin-command shape (`9030`–`9032`) it extends.
 - **NIP-86 (Relay Management API)**: Standardizes `changerelayicon` over a separate JSON-RPC management surface; this NIP achieves the same mutation in-protocol, gated by the NIP-43 role state the relay already enforces (see §Motivation).

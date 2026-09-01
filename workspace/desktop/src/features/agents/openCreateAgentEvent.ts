@@ -1,4 +1,4 @@
-const OPEN_CREATE_AGENT_EVENT = "buzz:open-create-agent";
+const OPEN_CREATE_AGENT_EVENT = "ambush:open-create-agent";
 
 export type OpenCreateAgentOptions = {
   channelId?: string;

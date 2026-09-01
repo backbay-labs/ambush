@@ -65,7 +65,7 @@ CommunityMemberRole _communityMemberRole(String? value) => switch (value) {
 
 /// Parses the current kind:13534 membership snapshot.
 ///
-/// Buzz emits `["member", pubkey, role]`. Older NIP-29-compatible relays may
+/// Ambush emits `["member", pubkey, role]`. Older NIP-29-compatible relays may
 /// use `["p", pubkey, relay, role]`, so mobile accepts both forms just like
 /// desktop does.
 @visibleForTesting

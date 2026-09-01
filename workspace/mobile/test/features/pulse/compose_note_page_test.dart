@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:buzz/shared/profile/user_cache_provider.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/features/pulse/compose_note_page.dart';
-import 'package:buzz/features/pulse/pulse_models.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/shared/profile/user_cache_provider.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/features/pulse/compose_note_page.dart';
+import 'package:ambush/features/pulse/pulse_models.dart';
+import 'package:ambush/shared/theme/theme.dart';
 
 class _FakeUserCacheNotifier extends UserCacheNotifier {
   final Map<String, UserProfile> _users;
@@ -146,7 +146,7 @@ void main() {
       id: 'note2',
       pubkey: 'alice_pk',
       createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000 - 60,
-      content: '#buzz\n![image](https://example.com/big.png)',
+      content: '#ambush\n![image](https://example.com/big.png)',
       tags: const [
         [
           'imeta',

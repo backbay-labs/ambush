@@ -6,12 +6,12 @@ async function seedLongThread(page: import("@playwright/test").Page) {
   await expect
     .poll(() =>
       page.evaluate(
-        () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+        () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
       ),
     )
     .toBe(true);
   return page.evaluate(() => {
-    const root = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const root = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "general",
       content: "Focus mode integration thread",
       createdAt: 1_700_900_000,
@@ -19,7 +19,7 @@ async function seedLongThread(page: import("@playwright/test").Page) {
     if (!root) throw new Error("Failed to seed focus thread root");
 
     for (let index = 0; index < 48; index += 1) {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: `Focus reply ${index}: this deliberately wraps across several lines so changing the thread measure causes real layout reflow.`,
         parentEventId: root.id,
@@ -161,7 +161,7 @@ test("focus and split preserve reading context and interaction ownership", async
 }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.addInitScript(() => {
-    localStorage.setItem("buzz.channels.threadViewMode", "focus");
+    localStorage.setItem("ambush.channels.threadViewMode", "focus");
   });
   await installMockBridge(page, {
     managedAgents: [

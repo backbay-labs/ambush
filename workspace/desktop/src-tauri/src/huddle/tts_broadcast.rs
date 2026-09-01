@@ -109,7 +109,7 @@ impl TtsAudioPublisher {
         };
         if let Err(error) = self.tx.try_send(packet) {
             eprintln!(
-                "buzz-desktop: tts broadcast status=dropped reason=publisher_backpressure error={error}"
+                "ambush-desktop: tts broadcast status=dropped reason=publisher_backpressure error={error}"
             );
         }
     }

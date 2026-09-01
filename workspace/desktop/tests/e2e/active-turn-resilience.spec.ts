@@ -27,8 +27,8 @@ type SeedInput = {
 async function waitForBridge(page: import("@playwright/test").Page) {
   await page.waitForFunction(
     () =>
-      typeof (window as Window & { __BUZZ_E2E_SEED_ACTIVE_TURNS__?: unknown })
-        .__BUZZ_E2E_SEED_ACTIVE_TURNS__ === "function",
+      typeof (window as Window & { __AMBUSH_E2E_SEED_ACTIVE_TURNS__?: unknown })
+        .__AMBUSH_E2E_SEED_ACTIVE_TURNS__ === "function",
     null,
     { timeout: 10_000 },
   );
@@ -49,13 +49,13 @@ async function seedTurns(
 ) {
   await page.evaluate((seeds) => {
     const win = window as Window & {
-      __BUZZ_E2E_SEED_ACTIVE_TURNS__?: (input: {
+      __AMBUSH_E2E_SEED_ACTIVE_TURNS__?: (input: {
         agentPubkey: string;
         channelId: string;
         turnId: string;
       }) => void;
     };
-    for (const seed of seeds) win.__BUZZ_E2E_SEED_ACTIVE_TURNS__?.(seed);
+    for (const seed of seeds) win.__AMBUSH_E2E_SEED_ACTIVE_TURNS__?.(seed);
   }, turns);
 }
 

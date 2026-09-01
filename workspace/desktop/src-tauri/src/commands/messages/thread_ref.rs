@@ -57,7 +57,7 @@ pub(super) async fn resolve_thread_ref(
 
     let filters = [serde_json::json!({
         "ids": [parent_event_id],
-        "kinds": [9, 40002, 45001, 45003, buzz_core_pkg::kind::KIND_HUDDLE_STARTED],
+        "kinds": [9, 40002, 45001, 45003, ambush_core_pkg::kind::KIND_HUDDLE_STARTED],
         "limit": 1
     })];
     let evs = match keys {

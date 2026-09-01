@@ -12,7 +12,7 @@ const ASSIGNMENT_PAGE_LIMIT = 500;
 
 /**
  * The relay clamps every REQ page to this many rows regardless of the
- * requested `limit` (`DEFAULT_MAX_PAGE_LIMIT` in `crates/buzz-db/src/event.rs`).
+ * requested `limit` (`DEFAULT_MAX_PAGE_LIMIT` in `crates/ambush-db/src/event.rs`).
  * A single second denser than this is unreachable through NIP-01 pagination,
  * so the loop below reports it as an error instead of silently dropping
  * operations.
@@ -46,7 +46,7 @@ function isAssignmentOperation(event: RelayEvent): boolean {
  *
  * The filter deliberately carries ONLY constraints the relay pushes into SQL
  * before applying `LIMIT`: kinds, `#e`, `until`, `limit` (see
- * `filter_fully_pushable` in `crates/buzz-relay/src/handlers/req.rs`). Tag
+ * `filter_fully_pushable` in `crates/ambush-relay/src/handlers/req.rs`). Tag
  * filters like `#t`/`#a` are post-filtered in Rust AFTER the SQL `LIMIT`, so
  * including them would make a short page meaningless — the newest N candidate
  * rows could all be post-filtered away while older matches remain, and the

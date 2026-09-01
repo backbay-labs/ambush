@@ -2,12 +2,12 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:buzz/features/channels/camera_capture_cleanup.dart';
+import 'package:ambush/features/channels/camera_capture_cleanup.dart';
 
 void main() {
   test('deletes the inline camera file after upload succeeds', () async {
     final file = File(
-      '${Directory.systemTemp.path}/buzz-camera-${DateTime.now().microsecondsSinceEpoch}.jpg',
+      '${Directory.systemTemp.path}/ambush-camera-${DateTime.now().microsecondsSinceEpoch}.jpg',
     );
     await file.writeAsBytes([1, 2, 3]);
 
@@ -18,7 +18,7 @@ void main() {
 
   test('deletes the inline camera file when upload fails', () async {
     final file = File(
-      '${Directory.systemTemp.path}/buzz-camera-${DateTime.now().microsecondsSinceEpoch}.jpg',
+      '${Directory.systemTemp.path}/ambush-camera-${DateTime.now().microsecondsSinceEpoch}.jpg',
     );
     await file.writeAsBytes([1, 2, 3]);
 
@@ -36,8 +36,8 @@ void main() {
   test('deletes every native picker file after processing', () async {
     final suffix = DateTime.now().microsecondsSinceEpoch;
     final files = [
-      File('${Directory.systemTemp.path}/buzz-photo-$suffix-1.jpg'),
-      File('${Directory.systemTemp.path}/buzz-photo-$suffix-2.jpg'),
+      File('${Directory.systemTemp.path}/ambush-photo-$suffix-1.jpg'),
+      File('${Directory.systemTemp.path}/ambush-photo-$suffix-2.jpg'),
     ];
     for (final file in files) {
       await file.writeAsBytes([1, 2, 3]);
@@ -54,7 +54,7 @@ void main() {
 
   test('retains a composer-owned copy before native cleanup', () async {
     final source = File(
-      '${Directory.systemTemp.path}/buzz-native-${DateTime.now().microsecondsSinceEpoch}.png',
+      '${Directory.systemTemp.path}/ambush-native-${DateTime.now().microsecondsSinceEpoch}.png',
     );
     await source.writeAsBytes([4, 5, 6]);
     late XFile retained;

@@ -16,7 +16,7 @@ test("ownership changes on completed chord, never key-down or repeat", () => {
     type: "chord-down",
     repeat: false,
   });
-  assert.equal(down.state.owner, "buzz");
+  assert.equal(down.state.owner, "ambush");
   assert.equal(down.toggled, false);
   assert.equal(
     reduceHandoff(down.state, { type: "chord-up" }).state.owner,

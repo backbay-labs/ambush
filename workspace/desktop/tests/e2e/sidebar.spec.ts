@@ -3,9 +3,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 
-const SIDEBAR_WIDTH_STORAGE_KEY = "buzz-sidebar-width";
+const SIDEBAR_WIDTH_STORAGE_KEY = "ambush-sidebar-width";
 const COMMUNITY_ONBOARDING_STORAGE_KEY =
-  "buzz-community-onboarding-transaction.v1";
+  "ambush-community-onboarding-transaction.v1";
 const DEFAULT_SIDEBAR_WIDTH = 300;
 
 test.beforeEach(async ({ page }) => {
@@ -27,7 +27,7 @@ async function storedSidebarWidth(page: Page) {
 
 async function loadTheme(page: Page, theme: string) {
   await page.addInitScript((selectedTheme) => {
-    window.localStorage.setItem("buzz-theme", selectedTheme);
+    window.localStorage.setItem("ambush-theme", selectedTheme);
   }, theme);
   await installMockBridge(page);
   await page.goto("/");
@@ -251,7 +251,7 @@ test("automatically shows community join requirements near the community URL", a
 
   const ageConfirmation = page.getByLabel("I am 18 years of age or older.");
   const agreementConfirmation = page.getByLabel(
-    "I agree to the Buzz Terms of Service and Privacy Policy.",
+    "I agree to the Ambush Terms of Service and Privacy Policy.",
   );
   await expect(ageConfirmation).toBeVisible();
   await expect(agreementConfirmation).toBeVisible();
@@ -426,7 +426,7 @@ test("channel owner can delete from the context menu", async ({ page }) => {
   await expect(page.getByTestId("stream-list")).not.toContainText("general");
 });
 
-for (const theme of ["buzz", "github-light", "catppuccin-mocha"]) {
+for (const theme of ["ambush", "github-light", "catppuccin-mocha"]) {
   test(`uses the continuous sidebar surface in ${theme}`, async ({ page }) => {
     await loadTheme(page, theme);
 
@@ -504,7 +504,7 @@ for (const theme of ["buzz", "github-light", "catppuccin-mocha"]) {
   });
 }
 
-test("aligns the sidebar search with the channel title outside the Buzz theme", async ({
+test("aligns the sidebar search with the channel title outside the Ambush theme", async ({
   page,
 }) => {
   await loadTheme(page, "github-light");
@@ -513,7 +513,7 @@ test("aligns the sidebar search with the channel title outside the Buzz theme", 
   const root = page.locator("html");
   const search = page.getByTestId("open-search");
   const channelTitle = page.getByTestId("chat-title");
-  await expect(root).not.toHaveAttribute("data-buzz-sidebar", "");
+  await expect(root).not.toHaveAttribute("data-ambush-sidebar", "");
   await expect(search).toBeVisible();
   await expect(channelTitle).toHaveText("general");
 
@@ -538,7 +538,7 @@ test("keeps only search pinned while primary navigation scrolls", async ({
 
   const search = page.getByTestId("open-search");
   const primaryMenu = page.getByTestId("sidebar-primary-menu");
-  const sidebarScroller = page.locator(".buzz-sidebar-scrollbar");
+  const sidebarScroller = page.locator(".ambush-sidebar-scrollbar");
   const [initialSearchBox, initialMenuBox] = await Promise.all([
     search.boundingBox(),
     primaryMenu.boundingBox(),
@@ -685,13 +685,13 @@ test("shows a sidebar update card when an update is ready", async ({
 
   await page.evaluate(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E__?: { mock?: { updateAvailable?: boolean } };
+      __AMBUSH_E2E__?: { mock?: { updateAvailable?: boolean } };
     };
 
-    testWindow.__BUZZ_E2E__ = {
-      ...(testWindow.__BUZZ_E2E__ ?? {}),
+    testWindow.__AMBUSH_E2E__ = {
+      ...(testWindow.__AMBUSH_E2E__ ?? {}),
       mock: {
-        ...(testWindow.__BUZZ_E2E__?.mock ?? {}),
+        ...(testWindow.__AMBUSH_E2E__?.mock ?? {}),
         restartDelayMs: 500,
         updateAvailable: true,
       },
@@ -711,9 +711,9 @@ test("shows a sidebar update card when an update is ready", async ({
         const commands =
           (
             window as Window & {
-              __BUZZ_E2E_COMMANDS__?: string[];
+              __AMBUSH_E2E_COMMANDS__?: string[];
             }
-          ).__BUZZ_E2E_COMMANDS__ ?? [];
+          ).__AMBUSH_E2E_COMMANDS__ ?? [];
         return (
           commands.includes("plugin:updater|install") ||
           commands.includes("plugin:process|restart")
@@ -739,9 +739,9 @@ test("shows a sidebar update card when an update is ready", async ({
         () =>
           (
             window as Window & {
-              __BUZZ_E2E_COMMANDS__?: string[];
+              __AMBUSH_E2E_COMMANDS__?: string[];
             }
-          ).__BUZZ_E2E_COMMANDS__ ?? [],
+          ).__AMBUSH_E2E_COMMANDS__ ?? [],
       ),
     )
     .toEqual(
@@ -756,9 +756,9 @@ test("shows a sidebar update card when an update is ready", async ({
     () =>
       (
         window as Window & {
-          __BUZZ_E2E_COMMANDS__?: string[];
+          __AMBUSH_E2E_COMMANDS__?: string[];
         }
-      ).__BUZZ_E2E_COMMANDS__ ?? [],
+      ).__AMBUSH_E2E_COMMANDS__ ?? [],
   );
   expect(commands.indexOf("plugin:updater|download")).toBeLessThan(
     commands.indexOf("plugin:updater|install"),
@@ -780,13 +780,13 @@ test("reflects an install started from the header update button on the sidebar c
 
   await page.evaluate(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E__?: { mock?: { updateAvailable?: boolean } };
+      __AMBUSH_E2E__?: { mock?: { updateAvailable?: boolean } };
     };
 
-    testWindow.__BUZZ_E2E__ = {
-      ...(testWindow.__BUZZ_E2E__ ?? {}),
+    testWindow.__AMBUSH_E2E__ = {
+      ...(testWindow.__AMBUSH_E2E__ ?? {}),
       mock: {
-        ...(testWindow.__BUZZ_E2E__?.mock ?? {}),
+        ...(testWindow.__AMBUSH_E2E__?.mock ?? {}),
         restartDelayMs: 500,
         updateAvailable: true,
       },
@@ -832,14 +832,14 @@ test("shows manual-required update card and never auto-downloads on non-AppImage
   // live (mirrors the ready-card test pattern).
   await page.evaluate(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E__?: {
+      __AMBUSH_E2E__?: {
         mock?: { updateAvailable?: boolean; autoUpdateSupported?: boolean };
       };
     };
-    testWindow.__BUZZ_E2E__ = {
-      ...(testWindow.__BUZZ_E2E__ ?? {}),
+    testWindow.__AMBUSH_E2E__ = {
+      ...(testWindow.__AMBUSH_E2E__ ?? {}),
       mock: {
-        ...(testWindow.__BUZZ_E2E__?.mock ?? {}),
+        ...(testWindow.__AMBUSH_E2E__?.mock ?? {}),
         updateAvailable: true,
         autoUpdateSupported: false,
       },
@@ -871,9 +871,9 @@ test("shows manual-required update card and never auto-downloads on non-AppImage
     () =>
       (
         window as Window & {
-          __BUZZ_E2E_COMMANDS__?: string[];
+          __AMBUSH_E2E_COMMANDS__?: string[];
         }
-      ).__BUZZ_E2E_COMMANDS__ ?? [],
+      ).__AMBUSH_E2E_COMMANDS__ ?? [],
   );
   expect(commands).not.toContain("plugin:updater|download");
   expect(commands).not.toContain("plugin:updater|install");

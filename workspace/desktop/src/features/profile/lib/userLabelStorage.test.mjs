@@ -31,7 +31,7 @@ test("reads cached labels as safe stale profile summaries", async () => {
   assert.equal(typeof subject.readCachedUserLabels, "function");
   installLocalStorage();
   window.localStorage.setItem(
-    "buzz-user-labels.v1:wss://relay.example",
+    "ambush-user-labels.v1:wss://relay.example",
     JSON.stringify({
       version: 1,
       updatedAt: 100,
@@ -68,7 +68,7 @@ test("keeps previous full profiles ahead of persisted label placeholders", async
   assert.equal(typeof subject.resolveUserLabelPlaceholderData, "function");
   installLocalStorage();
   window.localStorage.setItem(
-    "buzz-user-labels.v1:wss://relay.example",
+    "ambush-user-labels.v1:wss://relay.example",
     JSON.stringify({
       version: 1,
       profiles: {
@@ -214,7 +214,7 @@ test("ignores malformed cache payloads", async () => {
   assert.equal(typeof subject.readCachedUserLabels, "function");
   installLocalStorage();
   window.localStorage.setItem(
-    "buzz-user-labels.v1:wss://relay.example",
+    "ambush-user-labels.v1:wss://relay.example",
     JSON.stringify({ version: 1, profiles: { abc: { displayName: 42 } } }),
   );
 

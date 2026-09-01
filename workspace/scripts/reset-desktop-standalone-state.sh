@@ -5,11 +5,11 @@ set -euo pipefail
 instance_id="${1:-}"
 keyring_service="${2:-}"
 
-if [[ "$instance_id" != "xyz.block.buzz.app.dev" && "$instance_id" != xyz.block.buzz.app.dev.* ]]; then
+if [[ "$instance_id" != "com.backbay.ambush.app.dev" && "$instance_id" != com.backbay.ambush.app.dev.* ]]; then
     echo "reset-desktop-standalone-state: refusing non-dev bundle identifier: $instance_id" >&2
     exit 1
 fi
-if [[ "$keyring_service" != "buzz-desktop-dev" && "$keyring_service" != buzz-desktop-dev.* ]]; then
+if [[ "$keyring_service" != "ambush-desktop-dev" && "$keyring_service" != ambush-desktop-dev.* ]]; then
     echo "reset-desktop-standalone-state: refusing non-dev keyring service: $keyring_service" >&2
     exit 1
 fi
@@ -22,7 +22,7 @@ remove_path() {
     fi
 }
 
-case "${BUZZ_TEST_PLATFORM:-$(uname -s)}" in
+case "${AMBUSH_TEST_PLATFORM:-$(uname -s)}" in
     Darwin)
         remove_path "$HOME/Library/Application Support/$instance_id"
         remove_path "$HOME/Library/Caches/$instance_id"

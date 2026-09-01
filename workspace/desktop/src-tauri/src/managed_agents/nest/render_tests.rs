@@ -173,7 +173,7 @@ fn test_render_keeps_agent_with_legacy_foreign_relay_pin() {
     let personas = vec![make_persona("p1", "Builder")];
     let here = make_agent("Local", Some("p1"));
     let mut elsewhere = make_agent("Foreign", Some("p1"));
-    elsewhere.relay_url = "wss://defunct.communities.buzz.xyz".to_string();
+    elsewhere.relay_url = "wss://defunct.communities.ambush.example.com".to_string();
 
     let output = render_dynamic_section(&personas, &[here, elsewhere], &HashSet::new(), TEST_RELAY);
 
@@ -207,15 +207,15 @@ fn test_upsert_managed_section_with_markers() {
     let file = tmp.path().join("AGENTS.md");
     fs::write(
             &file,
-            "# Header\n\nsome content\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nold section\n<!-- END BUZZ MANAGED -->\n\nafter\n",
+            "# Header\n\nsome content\n\n<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\nold section\n<!-- END AMBUSH MANAGED -->\n\nafter\n",
         )
         .unwrap();
 
     upsert_managed_section(&file, "new section").unwrap();
 
     let result = fs::read_to_string(&file).unwrap();
-    assert!(result.contains("<!-- BEGIN BUZZ MANAGED"));
-    assert!(result.contains("<!-- END BUZZ MANAGED -->"));
+    assert!(result.contains("<!-- BEGIN AMBUSH MANAGED"));
+    assert!(result.contains("<!-- END AMBUSH MANAGED -->"));
     assert!(result.contains("new section"));
     assert!(!result.contains("old section"));
     assert!(result.contains("# Header"));
@@ -234,10 +234,10 @@ fn test_upsert_managed_section_without_markers() {
     let result = fs::read_to_string(&file).unwrap();
     assert!(result.contains("# Header"));
     assert!(result.contains("existing content"));
-    assert!(result.contains("<!-- BEGIN BUZZ MANAGED"));
-    assert!(result.contains("<!-- END BUZZ MANAGED -->"));
+    assert!(result.contains("<!-- BEGIN AMBUSH MANAGED"));
+    assert!(result.contains("<!-- END AMBUSH MANAGED -->"));
     assert!(result.contains("injected section"));
-    let begin_pos = result.find("<!-- BEGIN BUZZ MANAGED").unwrap();
+    let begin_pos = result.find("<!-- BEGIN AMBUSH MANAGED").unwrap();
     let header_pos = result.find("# Header").unwrap();
     assert!(
         header_pos < begin_pos,
@@ -277,7 +277,7 @@ fn test_upsert_end_before_begin() {
     let file = tmp.path().join("AGENTS.md");
     fs::write(
             &file,
-            "# Header\n\n<!-- END BUZZ MANAGED -->\nsome middle content\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nold section\n",
+            "# Header\n\n<!-- END AMBUSH MANAGED -->\nsome middle content\n<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\nold section\n",
         )
         .unwrap();
 
@@ -324,7 +324,7 @@ fn test_upsert_begin_only_no_end() {
     let file = tmp.path().join("AGENTS.md");
     fs::write(
             &file,
-            "# Header\n\nsome content\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\norphaned section without end marker\n",
+            "# Header\n\nsome content\n\n<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\norphaned section without end marker\n",
         )
         .unwrap();
 
@@ -365,7 +365,7 @@ fn test_upsert_duplicate_markers() {
     let file = tmp.path().join("AGENTS.md");
     fs::write(
             &file,
-            "# Header\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nfirst block\n<!-- END BUZZ MANAGED -->\n\nbetween blocks\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nsecond block\n<!-- END BUZZ MANAGED -->\n",
+            "# Header\n\n<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\nfirst block\n<!-- END AMBUSH MANAGED -->\n\nbetween blocks\n\n<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\nsecond block\n<!-- END AMBUSH MANAGED -->\n",
         )
         .unwrap();
 
@@ -398,7 +398,7 @@ fn test_upsert_marker_in_code_block() {
     // Indented by 4 spaces — not at column 0, so should NOT match as a real marker.
     fs::write(
         &file,
-        "# Header\n\n    <!-- BEGIN BUZZ MANAGED — some indented marker -->\n\nReal content here\n",
+        "# Header\n\n    <!-- BEGIN AMBUSH MANAGED — some indented marker -->\n\nReal content here\n",
     )
     .unwrap();
 
@@ -407,7 +407,7 @@ fn test_upsert_marker_in_code_block() {
     let result = fs::read_to_string(&file).unwrap();
 
     assert!(
-        result.contains("    <!-- BEGIN BUZZ MANAGED — some indented marker -->"),
+        result.contains("    <!-- BEGIN AMBUSH MANAGED — some indented marker -->"),
         "indented marker inside code block must be preserved verbatim"
     );
     assert!(
@@ -421,7 +421,7 @@ fn test_upsert_marker_in_code_block() {
 
     // The real markers appended at the end must be at line-start (column 0).
     let begin_pos = result
-        .find("<!-- BEGIN BUZZ MANAGED — regenerated")
+        .find("<!-- BEGIN AMBUSH MANAGED — regenerated")
         .expect("regenerated BEGIN marker must be present");
     assert!(
         begin_pos == 0 || result.as_bytes()[begin_pos - 1] == b'\n',
@@ -486,7 +486,7 @@ fn test_upsert_idempotent() {
     let file = tmp.path().join("AGENTS.md");
     fs::write(
             &file,
-            "# Header\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nexisting section\n<!-- END BUZZ MANAGED -->\n",
+            "# Header\n\n<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\nexisting section\n<!-- END AMBUSH MANAGED -->\n",
         )
         .unwrap();
 
@@ -507,7 +507,7 @@ fn agents_md_with_markers(dir: &Path) -> PathBuf {
     let file = dir.join("AGENTS.md");
     fs::write(
         &file,
-        "# Header\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\n\n<!-- END BUZZ MANAGED -->\n",
+        "# Header\n\n<!-- BEGIN AMBUSH MANAGED — regenerated automatically, do not edit below -->\n\n<!-- END AMBUSH MANAGED -->\n",
     )
     .unwrap();
     file

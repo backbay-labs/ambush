@@ -103,7 +103,7 @@ test("mobile pairing starts on demand and reveals the QR code", async ({
   expect(
     await page.evaluate(
       () =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           (entry) => entry.command === "start_pairing",
         ).length,
     ),
@@ -150,23 +150,23 @@ test("mobile pairing starts on demand and reveals the QR code", async ({
   await expect(qrCode).toHaveAttribute("data-qr-matrix-size", "57");
   await expect(qrCode.locator("[data-qr-finder-pattern]")).toHaveCount(3);
   expect(await qrCode.locator("circle").count()).toBeGreaterThan(100);
-  expect(await qrCode.locator(".buzz-qr-cell-reveal").count()).toBeGreaterThan(
-    100,
-  );
-  await expect(qrCode.locator(".buzz-qr-cell-reveal").first()).toHaveCSS(
+  expect(
+    await qrCode.locator(".ambush-qr-cell-reveal").count(),
+  ).toBeGreaterThan(100);
+  await expect(qrCode.locator(".ambush-qr-cell-reveal").first()).toHaveCSS(
     "animation-name",
-    "buzz-qr-cell-reveal",
+    "ambush-qr-cell-reveal",
   );
-  await expect(qrCode.locator(".buzz-qr-cell-reveal").first()).toHaveCSS(
+  await expect(qrCode.locator(".ambush-qr-cell-reveal").first()).toHaveCSS(
     "animation-duration",
     "0.058s",
   );
-  await expect(qrCode.locator(".buzz-qr-cell-reveal").first()).toHaveCSS(
+  await expect(qrCode.locator(".ambush-qr-cell-reveal").first()).toHaveCSS(
     "animation-timing-function",
     "linear",
   );
   await expect(
-    qrCode.locator('[data-qr-cell-row="56"].buzz-qr-cell-reveal').first(),
+    qrCode.locator('[data-qr-cell-row="56"].ambush-qr-cell-reveal').first(),
   ).toHaveCSS("animation-delay", "0.189s");
   await expect(copyButton).toHaveCSS("animation-name", "enter");
   await expect(copyButton).toHaveCSS("animation-duration", "0.25s");
@@ -217,7 +217,7 @@ test("mobile pairing starts on demand and reveals the QR code", async ({
   expect(
     await page.evaluate(
       () =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           (entry) => entry.command === "start_pairing",
         ).length,
     ),

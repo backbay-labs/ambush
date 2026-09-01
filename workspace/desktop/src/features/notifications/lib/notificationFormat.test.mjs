@@ -125,7 +125,7 @@ test("approval and needs-action titles match the home-feed conventions", () => {
     }),
     {
       title: "Needs Action",
-      body: "Something in Buzz needs your attention.",
+      body: "Something in Ambush needs your attention.",
     },
   );
 });
@@ -135,7 +135,7 @@ test("senderNameFromSummary prefers displayName, then NIP-05, never a pubkey", (
     senderNameFromSummary({
       displayName: "Taylor",
       avatarUrl: null,
-      nip05Handle: "taylor@buzz.example",
+      nip05Handle: "taylor@ambush.example",
       ownerPubkey: null,
     }),
     "Taylor",
@@ -144,10 +144,10 @@ test("senderNameFromSummary prefers displayName, then NIP-05, never a pubkey", (
     senderNameFromSummary({
       displayName: "  ",
       avatarUrl: null,
-      nip05Handle: "taylor@buzz.example",
+      nip05Handle: "taylor@ambush.example",
       ownerPubkey: null,
     }),
-    "taylor@buzz.example",
+    "taylor@ambush.example",
   );
   assert.equal(
     senderNameFromSummary({

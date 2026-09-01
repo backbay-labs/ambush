@@ -6,7 +6,7 @@ import { installMockBridge } from "../helpers/bridge";
 // loading gate keeps the flapping bee up as an overlay above the already
 // mounted app for a minimum visible duration, then fades out. E2E runs skip
 // the hold by default (it would slow every spec's boot and block pointer
-// actionability); this spec opts back in via __BUZZ_E2E__.bootSplashHoldMs.
+// actionability); this spec opts back in via __AMBUSH_E2E__.bootSplashHoldMs.
 
 test("boot splash overlay holds with a flapping bee, then dismisses", async ({
   page,
@@ -16,10 +16,10 @@ test("boot splash overlay holds with a flapping bee, then dismisses", async ({
   // script and can extend the config it assigns.
   await page.addInitScript(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E__?: { bootSplashHoldMs?: number };
+      __AMBUSH_E2E__?: { bootSplashHoldMs?: number };
     };
-    testWindow.__BUZZ_E2E__ = {
-      ...(testWindow.__BUZZ_E2E__ ?? {}),
+    testWindow.__AMBUSH_E2E__ = {
+      ...(testWindow.__AMBUSH_E2E__ ?? {}),
       bootSplashHoldMs: 1_500,
     };
   });

@@ -18,7 +18,7 @@ class IosNativeSkinToneControl extends HookWidget {
   });
 
   /// The registered iOS platform-view identifier.
-  static const viewType = 'buzz/native_skin_tone_control';
+  static const viewType = 'ambush/native_skin_tone_control';
 
   /// The selected skin-tone index.
   final int value;

@@ -67,7 +67,7 @@ type BackupTestFlowProps = {
   onVerified?: () => void;
 };
 
-const BURST_EMOJIS = ["🎉", "✨", "🐝", "🍯", "🔑", "💛"] as const;
+const BURST_EMOJIS = ["🎉", "✨", "🔑", "💛"] as const;
 const BURST_PARTICLE_COUNT = 18;
 const VERIFICATION_CONNECTOR_DOTS = [
   "verification-dot-1",
@@ -458,7 +458,7 @@ export function BackupTestFlow({
               </p>
               <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
                 {result.matchesCurrentIdentity
-                  ? "It restores your current Buzz identity."
+                  ? "It restores your current Ambush identity."
                   : "It restores a different identity than the one signed in here."}
               </p>
               <div className="mt-3 flex justify-center">

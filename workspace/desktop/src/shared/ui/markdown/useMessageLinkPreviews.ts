@@ -13,7 +13,7 @@ import type { ResolvedLinkPreview } from "@/shared/lib/useResolvedLinkPreviews";
  * External URLs render exclusively from sender-authored
  * `["link-preview","snapshot",…]` tags (`parseLinkPreviewSnapshots`) — the
  * privacy model shipped in the rich-link-previews work: recipients never
- * contact external sites. Buzz-native entity links render as inline links or
+ * contact external sites. Ambush-native entity links render as inline links or
  * chips with relay-backed metadata tooltips, not as standalone cards.
  */
 export function mergeMessageLinkPreviews(

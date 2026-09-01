@@ -4,8 +4,8 @@
  * # Why the roster snapshot is the source of truth, not the kind:8000 delta
  *
  * The relay emits a kind:8000 "member-added" delta on the invite-claim and
- * relay-admin paths, but `buzz-admin add-member` deliberately emits none
- * (`crates/buzz-admin/src/main.rs:6-13`), and kind:8000 fan-out is pod-local
+ * relay-admin paths, but `ambush-admin add-member` deliberately emits none
+ * (`crates/ambush-admin/src/main.rs:6-13`), and kind:8000 fan-out is pod-local
  * (`fan_out_event_to_local_subscribers` never calls `publish_event`, unlike
  * `dispatch_persistent_event_inner`). The kind:13534 membership snapshot is the
  * only signal that covers every join path *and* propagates across pods, so it
@@ -25,7 +25,7 @@
 
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
-const JOIN_ALERT_STORAGE_PREFIX = "buzz-community-join-seen.v1";
+const JOIN_ALERT_STORAGE_PREFIX = "ambush-community-join-seen.v1";
 
 /**
  * Cap on *departed* pubkeys retained per community.
@@ -34,7 +34,7 @@ const JOIN_ALERT_STORAGE_PREFIX = "buzz-community-join-seen.v1";
  * again, the ledger no longer recognizes it, and it is alerted as a fresh join
  * — on every snapshot, forever. So the cap bounds only the tail of keys that
  * have left, and the ledger's real ceiling is the roster the relay can deliver
- * (a kind:13534 snapshot larger than `BUZZ_MAX_FRAME_BYTES` never arrives).
+ * (a kind:13534 snapshot larger than `AMBUSH_MAX_FRAME_BYTES` never arrives).
  */
 export const JOIN_ALERT_DEPARTED_MAX_ITEMS = 5_000;
 

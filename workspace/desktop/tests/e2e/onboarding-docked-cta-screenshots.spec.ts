@@ -94,7 +94,7 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   const optionPanels = page.getByTestId("backup-option-panel");
   await expect(optionPanels).toHaveCount(3);
   await expect(
-    page.getByTestId("backup-options").locator(".buzz-card-textured"),
+    page.getByTestId("backup-options").locator(".ambush-card-textured"),
   ).toHaveCount(0);
   await expect(optionPanels.first()).toHaveCSS("padding-left", "24px");
   const titleTops = await optionPanels
@@ -110,7 +110,7 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   await expect(page.getByTestId("onboarding-page-download")).toBeVisible();
   const passwordPanel = page.getByTestId("backup-password-panel");
   await expect(passwordPanel).toBeVisible();
-  await expect(passwordPanel).not.toHaveClass(/buzz-card-textured/);
+  await expect(passwordPanel).not.toHaveClass(/ambush-card-textured/);
   await expect(passwordPanel).toHaveCSS("padding-left", "24px");
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/02d-backup-password.png` });
@@ -118,7 +118,7 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   await page.getByTestId("backup-passphrase-generate").click();
   const generatorPopover = page.getByRole("dialog");
   await expect(generatorPopover).toBeVisible();
-  await expect(generatorPopover).not.toHaveClass(/buzz-card-textured/);
+  await expect(generatorPopover).not.toHaveClass(/ambush-card-textured/);
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/02e-backup-generator.png` });
   await page.keyboard.press("Escape");

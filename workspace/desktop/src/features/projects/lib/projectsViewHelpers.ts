@@ -15,7 +15,7 @@ export type ProjectsRepositoryScope =
   | "accessible"
   | "mine"
   | "local"
-  | "buzz"
+  | "ambush"
   | "linked";
 export type ProjectsWorkItemScope = "all" | "mine" | "assigned";
 export type ProjectsFilter =
@@ -54,13 +54,13 @@ export function nextRepositoryEntryLimit(current: number, total: number) {
   return Math.min(current + REPOSITORY_ENTRY_PAGE_SIZE, total);
 }
 
-const PROJECTS_VIEW_MODE_STORAGE_KEY = "buzz.projects.viewMode";
-const PROJECTS_FILTER_STORAGE_KEY = "buzz.projects.filter";
-const PROJECTS_REPOSITORY_SCOPE_STORAGE_KEY = "buzz.projects.repositoryScope";
+const PROJECTS_VIEW_MODE_STORAGE_KEY = "ambush.projects.viewMode";
+const PROJECTS_FILTER_STORAGE_KEY = "ambush.projects.filter";
+const PROJECTS_REPOSITORY_SCOPE_STORAGE_KEY = "ambush.projects.repositoryScope";
 const PROJECTS_PULL_REQUEST_SCOPE_STORAGE_KEY =
-  "buzz.projects.pullRequestScope";
-const PROJECTS_ISSUE_SCOPE_STORAGE_KEY = "buzz.projects.issueScope";
-const PROJECTS_SORT_STORAGE_KEY = "buzz.projects.sort";
+  "ambush.projects.pullRequestScope";
+const PROJECTS_ISSUE_SCOPE_STORAGE_KEY = "ambush.projects.issueScope";
+const PROJECTS_SORT_STORAGE_KEY = "ambush.projects.sort";
 
 export function readStoredViewMode(): ProjectsViewMode | null {
   try {
@@ -117,7 +117,7 @@ export function readStoredRepositoryScope(): ProjectsRepositoryScope {
       value === "accessible" ||
       value === "mine" ||
       value === "local" ||
-      value === "buzz" ||
+      value === "ambush" ||
       value === "linked"
     ) {
       return value;
@@ -427,7 +427,7 @@ export type RepositoryAccessInput = {
 
 /**
  * Whether the viewer can actually read a repository's git data. The relay
- * gates git reads on membership in the repository's bound `buzz-channel`,
+ * gates git reads on membership in the repository's bound `ambush-channel`,
  * so a repository is considered accessible when the viewer owns it (owners
  * can repair a missing binding), has a local checkout, the code is hosted
  * externally (no relay ACL applies), or the viewer is a member of the bound

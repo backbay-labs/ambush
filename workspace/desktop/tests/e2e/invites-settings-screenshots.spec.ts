@@ -201,7 +201,7 @@ test("owner can add multiple admins directly by npub from live Invites UI", asyn
       page.evaluate(
         ({ targetPubkeys, role }) =>
           targetPubkeys.every((targetPubkey) =>
-            (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some((entry) => {
+            (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).some((entry) => {
               if (entry.command !== "plugin:websocket|send") return false;
               const wireMessage = (
                 entry.payload as {

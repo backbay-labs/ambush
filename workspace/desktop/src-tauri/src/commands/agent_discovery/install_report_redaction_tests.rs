@@ -18,16 +18,16 @@ fn test_log_redacts_secrets_before_writing() {
 }
 
 /// The environment's own secrets are scrubbed too, by *name* rather than shape.
-/// An install inherits Buzz's environment and installers echo it back — npm
+/// An install inherits Ambush's environment and installers echo it back — npm
 /// prints its resolved config on an auth failure — and a token with no
 /// recognizable prefix would otherwise reach the file verbatim.
 #[test]
 fn test_log_redacts_an_environment_secret_with_no_recognizable_prefix() {
     let secret = "0e8f31c5a4b7d296e5f1a";
     // Set before the reporter is built: the snapshot is taken at construction.
-    std::env::set_var("BUZZ_TEST_REGISTRY_TOKEN", secret);
+    std::env::set_var("AMBUSH_TEST_REGISTRY_TOKEN", secret);
     let h = harness();
-    std::env::remove_var("BUZZ_TEST_REGISTRY_TOKEN");
+    std::env::remove_var("AMBUSH_TEST_REGISTRY_TOKEN");
 
     h.reporter.record_attempt(
         1,

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 mod coordinator;
 pub(crate) use coordinator::{publish_current_status_once, publish_stopped_status_once_at};
-pub use coordinator::{start_coordinator, MeshCoordinator, KIND_BUZZ_MESH_MEMBER_STATUS};
+pub use coordinator::{start_coordinator, MeshCoordinator, KIND_AMBUSH_MESH_MEMBER_STATUS};
 
 mod discovery;
 pub use discovery::{
@@ -44,9 +44,9 @@ use std::time::Duration;
 
 const DEFAULT_MESH_API_PORT: u16 = 9337;
 const DEFAULT_MESH_CONSOLE_PORT: u16 = 3131;
-const MESH_STATUS_KIND: u64 = KIND_BUZZ_MESH_MEMBER_STATUS as u64;
-const MESH_API_PORT_ENV: &str = "BUZZ_MESH_API_PORT";
-const MESH_CONSOLE_PORT_ENV: &str = "BUZZ_MESH_CONSOLE_PORT";
+const MESH_STATUS_KIND: u64 = KIND_AMBUSH_MESH_MEMBER_STATUS as u64;
+const MESH_API_PORT_ENV: &str = "AMBUSH_MESH_API_PORT";
+const MESH_CONSOLE_PORT_ENV: &str = "AMBUSH_MESH_CONSOLE_PORT";
 /// Iroh relay tunneling for symmetric-NAT peers. Unset/empty/"1"/"default" =
 /// enabled with the SDK's default iroh relays (the default — members connect
 /// regardless of NAT). "0" = disabled (direct QUIC only, for
@@ -55,15 +55,15 @@ const MESH_CONSOLE_PORT_ENV: &str = "BUZZ_MESH_CONSOLE_PORT";
 /// only) and are transport-only; mesh presence is NEVER published to public
 /// Nostr relays regardless of this setting (`publish` is hardcoded false and
 /// the Nostr relay list stays empty).
-const MESH_IROH_RELAYS_ENV: &str = "BUZZ_MESH_IROH_RELAYS";
+const MESH_IROH_RELAYS_ENV: &str = "AMBUSH_MESH_IROH_RELAYS";
 /// First model load can include a multi-GB download plus Metal warmup; the
 /// SDK default (30s) times out long before that. Matches mesh-console.
 const MESH_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 /// The pinned SDK defines startup readiness as the management API on `:3131`.
-/// Buzz defines client readiness by the OpenAI ingress agents consume on
+/// Ambush defines client readiness by the OpenAI ingress agents consume on
 /// `:9337`, so it supervises client startup independently and gives the SDK a
 /// long management deadline. A live ingress is therefore not torn down merely
-/// because the optional management API is delayed; Buzz's ingress watchdog is
+/// because the optional management API is delayed; Ambush's ingress watchdog is
 /// responsible for aborting and re-arming genuinely dead attempts.
 const MESH_CLIENT_MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(365 * 24 * 60 * 60);
 /// Bound explicit and watchdog-driven shutdowns. `EmbeddedNodeHandle::stop`
@@ -88,13 +88,13 @@ pub struct MeshServeTarget {
     pub model_id: String,
     pub model_name: Option<String>,
     pub endpoint_addr: String,
-    /// Buzz member that signed the discovery note containing this target.
+    /// Ambush member that signed the discovery note containing this target.
     /// Populated after signature/membership validation; never trusted from the
     /// note payload itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reporter_pubkey: Option<String>,
-    /// Per-runtime MeshLLM owner identity verified by the signed Buzz status.
-    /// Distinguishes two devices logged into the same Buzz member account.
+    /// Per-runtime MeshLLM owner identity verified by the signed Ambush status.
+    /// Distinguishes two devices logged into the same Ambush member account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
     pub node_name: Option<String>,
@@ -197,7 +197,7 @@ pub struct StartMeshNodeRequest {
     pub max_vram_gb: Option<u64>,
     #[serde(default)]
     pub join_token: Option<String>,
-    /// Stable, relay-scoped mesh name injected by the Buzz backend. It is not
+    /// Stable, relay-scoped mesh name injected by the Ambush backend. It is not
     /// accepted from the frontend and contains no relay address.
     #[serde(default, skip_deserializing)]
     pub mesh_name: Option<String>,
@@ -261,7 +261,7 @@ static MESH_RUNTIME_ID_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 
 enum DesktopMeshHandle {
     /// The pinned SDK does not return its handle until `:3131/api/status` is
-    /// available. Keep that wait off the agent-save path while Buzz supervises
+    /// available. Keep that wait off the agent-save path while Ambush supervises
     /// the real `:9337` ingress independently.
     Starting {
         task: tokio::task::JoinHandle<anyhow::Result<EmbeddedNodeHandle>>,
@@ -391,7 +391,7 @@ impl DesktopMeshRuntime {
                 }
                 // Admission: present our owner attestation, and when a member
                 // roster was resolved, admit only those owners. Membership in
-                // the Buzz relay is the source of the roster; possession of a
+                // the Ambush relay is the source of the roster; possession of a
                 // dial pointer or relay reachability admits nobody.
                 let identity = ensure_owner_identity()?;
                 builder = builder.owner_key(identity.keystore_path.clone());
@@ -504,7 +504,7 @@ impl DesktopMeshRuntime {
                 for token in queued_join_tokens {
                     if let Err(error) = ready.join_token(token).await {
                         eprintln!(
-                            "buzz-mesh: failed to apply a dial request queued during startup: {error:#}"
+                            "ambush-mesh: failed to apply a dial request queued during startup: {error:#}"
                         );
                     }
                 }
@@ -732,7 +732,7 @@ impl DesktopMeshRuntime {
             }
             DesktopMeshHandle::Starting { task, .. } => {
                 // The pinned SDK has not exposed its shutdown handle yet.
-                // Abort only the Buzz-side waiter; normal callers never replace
+                // Abort only the Ambush-side waiter; normal callers never replace
                 // a pending runtime, and app shutdown/restart then terminates
                 // the process-owned embedded thread. Recovery requests that
                 // controlled restart instead of racing a second runtime.
@@ -845,7 +845,7 @@ pub fn models_from_status_payload(payload: Option<&serde_json::Value>) -> Vec<Me
     let mut out = Vec::new();
     if let Some(payload) = payload {
         // The SDK's raw status uses `hosted_models` plus ready entries under
-        // `runtime.models`. Buzz-authored status reports use `models`. Do not
+        // `runtime.models`. Ambush-authored status reports use `models`. Do not
         // use `serving_models`: MeshLLM fills it with the requested model while
         // the runtime is still in standby, before inference is available.
         for key in ["models", "hosted_models"] {

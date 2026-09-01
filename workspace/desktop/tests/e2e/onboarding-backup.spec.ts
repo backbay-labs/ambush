@@ -33,8 +33,8 @@ async function openPasswordBackup(page: import("@playwright/test").Page) {
 async function invokedCommands(page: import("@playwright/test").Page) {
   return page.evaluate(
     () =>
-      (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-        .__BUZZ_E2E_COMMANDS__ ?? [],
+      (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+        .__AMBUSH_E2E_COMMANDS__ ?? [],
   );
 }
 
@@ -149,7 +149,7 @@ test("download happy path: generated password, encrypt, native save, Next", asyn
   await expect(page.getByTestId("backup-return-to-onboarding")).toBeVisible();
   const passwordPanel = page.getByTestId("backup-password-panel");
   await expect(passwordPanel).toBeVisible();
-  await expect(passwordPanel).not.toHaveClass(/buzz-card-textured/);
+  await expect(passwordPanel).not.toHaveClass(/ambush-card-textured/);
   await expect(passwordPanel).toHaveCSS("padding-left", "24px");
 
   // The inset refresh icon opens the generator popover and immediately
@@ -158,7 +158,7 @@ test("download happy path: generated password, encrypt, native save, Next", asyn
   await expect(input).toHaveValue("mock horse battery");
   const generatorPopover = page.getByRole("dialog");
   await expect(generatorPopover).toBeVisible();
-  await expect(generatorPopover).not.toHaveClass(/buzz-card-textured/);
+  await expect(generatorPopover).not.toHaveClass(/ambush-card-textured/);
 
   // Popover controls regenerate in place: word count (slider) and separator.
   await page.getByTestId("backup-passphrase-words").focus();

@@ -132,7 +132,7 @@ test("acknowledgment persists but resets when the same-relay link reopens", () =
 
 test("malformed persisted state is ignored and can be cleared", () => {
   const storage = createMemoryStorage({
-    "buzz-community-onboarding-transaction.v1": '{"stage":"profile"}',
+    "ambush-community-onboarding-transaction.v1": '{"stage":"profile"}',
   });
   assert.equal(loadCommunityOnboardingTransaction(storage), null);
   clearCommunityOnboardingTransaction(storage);
@@ -144,11 +144,11 @@ test("completion is scoped by relay and pubkey and preserves legacy gate", () =>
   markCommunityOnboardingComplete("pubkey", "wss://relay.example", storage);
   assert.equal(
     storage.getItem(
-      "buzz-community-onboarding-complete.v1:wss%3A%2F%2Frelay.example:pubkey",
+      "ambush-community-onboarding-complete.v1:wss%3A%2F%2Frelay.example:pubkey",
     ),
     "true",
   );
-  assert.equal(storage.getItem("buzz-onboarding-complete.v1:pubkey"), "true");
+  assert.equal(storage.getItem("ambush-onboarding-complete.v1:pubkey"), "true");
 });
 
 // ── shouldSkipCommunityOnboarding ────────────────────────────────────────────

@@ -1,7 +1,7 @@
 {
   "owner": "71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224",
   "eventId": "c3b589fa5713ba25bad6dc095e2de00a4ac8f50050fdea00fc6444e603be1dd1",
-  "dtag": "buzz-world",
+  "dtag": "ambush-world",
   "tabs": [
     "files",
     "commits",
@@ -11,12 +11,12 @@
     "channels"
   ],
   "links": {
-    "pullRequest": "buzz://pr?id=c3b589fa5713ba25bad6dc095e2de00a4ac8f50050fdea00fc6444e603be1dd1&owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=buzz-world",
-    "issue": "buzz://issue?id=c3b589fa5713ba25bad6dc095e2de00a4ac8f50050fdea00fc6444e603be1dd1&owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=buzz-world",
-    "commit": "buzz://repo?owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=buzz-world&tab=commits&commit=c3b589fa5713ba25bad6dc095e2de00a4ac8f50050fdea00fc6444e603be1dd1",
-    "repository": "buzz://repo?owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=buzz-world",
-    "project": "buzz://project?owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=buzz-world"
+    "pullRequest": "ambush://pr?id=c3b589fa5713ba25bad6dc095e2de00a4ac8f50050fdea00fc6444e603be1dd1&owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=ambush-world",
+    "issue": "ambush://issue?id=c3b589fa5713ba25bad6dc095e2de00a4ac8f50050fdea00fc6444e603be1dd1&owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=ambush-world",
+    "commit": "ambush://repo?owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=ambush-world&tab=commits&commit=c3b589fa5713ba25bad6dc095e2de00a4ac8f50050fdea00fc6444e603be1dd1",
+    "repository": "ambush://repo?owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=ambush-world",
+    "project": "ambush://project?owner=71d67180ba17e749ee825fc8819c9c6ee7003617e1c126504f9b658070ab9224&d=ambush-world"
   },
-  "validDtags": ["buzz-world", "a", "a.b_c-d"],
+  "validDtags": ["ambush-world", "a", "a.b_c-d"],
   "invalidDtags": ["", ".hidden", "a..b", "has space", "sl/ash"]
 }

@@ -11,7 +11,7 @@ const READ_DELAY_MS = 600;
 const SNAPSHOT_FRAME_DELAY_MS = 3_000;
 
 function snapshotKey(relayUrl: string, ownerPubkey = OWNER_PUBKEY) {
-  return `buzz-channels.v1:${relayUrl}:${ownerPubkey.toLowerCase()}`;
+  return `ambush-channels.v1:${relayUrl}:${ownerPubkey.toLowerCase()}`;
 }
 
 function makeSnapshotChannel(index: number, prefix = "snapshot") {
@@ -38,9 +38,9 @@ function makeSnapshotChannel(index: number, prefix = "snapshot") {
 const FULL_SNAPSHOT = Array.from({ length: 14 }, (_, index) =>
   makeSnapshotChannel(index),
 );
-const SNAPSHOT_DIAGNOSTIC_MARK = "buzz:sidebar:snapshot-diagnostic";
-const FULL_SIDEBAR_PAINT_MARK = "buzz:sidebar:full-list-painted";
-const BOOT_TO_FULL_SIDEBAR_MEASURE = "buzz:sidebar:boot-to-full-list-painted";
+const SNAPSHOT_DIAGNOSTIC_MARK = "ambush:sidebar:snapshot-diagnostic";
+const FULL_SIDEBAR_PAINT_MARK = "ambush:sidebar:full-list-painted";
+const BOOT_TO_FULL_SIDEBAR_MEASURE = "ambush:sidebar:boot-to-full-list-painted";
 
 function snapshotIntegrity(
   ownerPubkey: string,
@@ -144,11 +144,11 @@ async function seedCommunities(page: Page, communityPubkey = OWNER_PUBKEY) {
         },
       ];
       window.localStorage.setItem(
-        "buzz-communities",
+        "ambush-communities",
         JSON.stringify(communities),
       );
       window.localStorage.setItem(
-        "buzz-active-community-id",
+        "ambush-active-community-id",
         communities[0].id,
       );
     },
@@ -158,7 +158,7 @@ async function seedCommunities(page: Page, communityPubkey = OWNER_PUBKEY) {
 
 async function getChannelsPayloads(page: Page) {
   return page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+    (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
       .filter((entry) => entry.command === "get_channels")
       .map((entry) => entry.payload as { knownHash?: unknown }),
   );
@@ -166,7 +166,7 @@ async function getChannelsPayloads(page: Page) {
 
 async function mutateDisplayedChannels(page: Page, channelName: string) {
   await page.evaluate((name) => {
-    const queryClient = window.__BUZZ_E2E_QUERY_CLIENT__ as
+    const queryClient = window.__AMBUSH_E2E_QUERY_CLIENT__ as
       | {
           setQueryData: (
             queryKey: readonly string[],
@@ -207,10 +207,10 @@ async function readPersistedSnapshot(page: Page) {
 async function trackSnapshotRows(page: Page) {
   await page.addInitScript(() => {
     const testWindow = window as Window & {
-      __BUZZ_E2E_SNAPSHOT_ROWS_SEEN__?: string[];
+      __AMBUSH_E2E_SNAPSHOT_ROWS_SEEN__?: string[];
     };
     const seen: string[] = [];
-    testWindow.__BUZZ_E2E_SNAPSHOT_ROWS_SEEN__ = seen;
+    testWindow.__AMBUSH_E2E_SNAPSHOT_ROWS_SEEN__ = seen;
     const record = (node: Node) => {
       if (!(node instanceof Element)) return;
       const rows = node.matches('[data-channel-id^="snapshot-"]')
@@ -234,9 +234,9 @@ async function getTrackedSnapshotRows(page: Page) {
     () =>
       (
         window as Window & {
-          __BUZZ_E2E_SNAPSHOT_ROWS_SEEN__?: string[];
+          __AMBUSH_E2E_SNAPSHOT_ROWS_SEEN__?: string[];
         }
-      ).__BUZZ_E2E_SNAPSHOT_ROWS_SEEN__ ?? [],
+      ).__AMBUSH_E2E_SNAPSHOT_ROWS_SEEN__ ?? [],
   );
 }
 

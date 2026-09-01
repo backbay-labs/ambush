@@ -16,7 +16,7 @@ use crate::managed_agents::retention::{
 };
 use crate::managed_agents::team_catalog::build_team_catalog_event;
 use crate::managed_agents::{AgentDefinition, TeamRecord};
-use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
+use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
 use nostr::JsonUtil;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

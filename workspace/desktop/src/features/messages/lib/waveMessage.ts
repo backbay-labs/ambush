@@ -1,4 +1,4 @@
-export const WAVE_MESSAGE_MARKER = "<!-- buzz:wave:v1 -->";
+export const WAVE_MESSAGE_MARKER = "<!-- ambush:wave:v1 -->";
 
 export type WaveMessageContent = {
   fallbackText: string;

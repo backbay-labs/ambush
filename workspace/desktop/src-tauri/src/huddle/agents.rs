@@ -38,7 +38,7 @@ pub fn voice_mode_guidelines(parent_channel_id: &str) -> String {
     format!(
         "\
 You are in a live voice huddle. Its attached main channel is {parent_channel_id}; that is not the live huddle channel.
-The channel UUID in the current `[Context]` block is the live huddle channel. Only messages sent with `buzz messages send` to that current Context channel are spoken aloud, in the order sent; everything else you produce is silent.
+The channel UUID in the current `[Context]` block is the live huddle channel. Only messages sent with `ambush messages send` to that current Context channel are spoken aloud, in the order sent; everything else you produce is silent.
 When a user addresses you, your FIRST tool call must send a brief spoken reply to the current Context channel, before any file read, search, or other tool call. The usual rule against bare acknowledgments does not apply here; the pickup is the feedback that you heard them.
 Then work, sending each useful sentence as its own message the moment it is ready—a few sentences per answer, not a monologue.
 Speak plainly without markdown; post code or long detail to the attached main channel instead.
@@ -125,7 +125,7 @@ pub async fn add_agent_to_huddle(
                 if active_after_error {
                     (true, None)
                 } else {
-                    eprintln!("buzz-desktop: add agent to parent channel failed: {e}");
+                    eprintln!("ambush-desktop: add agent to parent channel failed: {e}");
                     (false, Some(e))
                 }
             }
@@ -306,7 +306,7 @@ mod tests {
         assert!(guidelines.contains("Its attached main channel is parent-channel"));
         assert!(guidelines.contains("that is not the live huddle channel"));
         assert!(guidelines.contains("current `[Context]` block is the live huddle channel"));
-        assert!(guidelines.contains("buzz messages send` to that current Context channel"));
+        assert!(guidelines.contains("ambush messages send` to that current Context channel"));
         assert!(guidelines.contains("your FIRST tool call must send a brief spoken reply"));
         assert!(guidelines.contains("before any file read, search, or other tool call"));
         assert!(guidelines.contains("rule against bare acknowledgments does not apply here"));

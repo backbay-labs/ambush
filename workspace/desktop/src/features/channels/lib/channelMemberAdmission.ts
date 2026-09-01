@@ -1,6 +1,6 @@
 /**
  * Client mirror of the relay's kind:9000 authority for adding *another*
- * identity to a channel (`validate_admin_event` + `buzz_db::channel::add_member`):
+ * identity to a channel (`validate_admin_event` + `ambush_db::channel::add_member`):
  *
  * - DMs: nobody — membership is fixed at creation.
  * - Open channels: anyone, member or not.

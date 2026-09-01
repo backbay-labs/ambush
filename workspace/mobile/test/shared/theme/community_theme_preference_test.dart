@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,7 +25,7 @@ void main() {
     for (final payload in [
       {
         'version': 2,
-        'theme': 'buzz',
+        'theme': 'ambush',
         'accent': '#3b82f6',
         'followSystem': true,
       },
@@ -37,7 +37,7 @@ void main() {
       },
       {
         'version': 1,
-        'theme': 'buzz',
+        'theme': 'ambush',
         'accent': '#000000',
         'followSystem': true,
       },
@@ -54,7 +54,7 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     final storage = CommunityThemeStorage(prefs);
     const a = CommunityThemePreference(
-      theme: 'buzz',
+      theme: 'ambush',
       accent: '#3b82f6',
       followSystem: true,
     );
@@ -101,9 +101,9 @@ void main() {
 
   test('legacy accent indexes migrate without inventing wire values', () async {
     SharedPreferences.setMockInitialValues({
-      'buzz_theme_mode': 'dark',
-      'buzz_color_scheme': 'dracula',
-      'buzz_accent_color': 8,
+      'ambush_theme_mode': 'dark',
+      'ambush_color_scheme': 'dracula',
+      'ambush_accent_color': 8,
     });
     final prefs = await SharedPreferences.getInstance();
     final preference = CommunityThemeStorage(prefs).legacyPreference();

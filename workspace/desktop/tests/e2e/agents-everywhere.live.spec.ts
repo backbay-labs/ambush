@@ -6,10 +6,10 @@ import { expect, test } from "@playwright/test";
 import { TwoRelayHarness, type RelaySpec } from "./helpers/twoRelayHarness";
 
 const exec = promisify(execFile);
-const enabled = process.env.BUZZ_E2E_AGENTS_EVERYWHERE === "1";
-const relayBin = process.env.BUZZ_E2E_RELAY_BIN;
-const cliBin = process.env.BUZZ_E2E_CLI_BIN;
-const adminBin = process.env.BUZZ_E2E_ADMIN_BIN;
+const enabled = process.env.AMBUSH_E2E_AGENTS_EVERYWHERE === "1";
+const relayBin = process.env.AMBUSH_E2E_RELAY_BIN;
+const cliBin = process.env.AMBUSH_E2E_CLI_BIN;
+const adminBin = process.env.AMBUSH_E2E_ADMIN_BIN;
 
 function required(name: string, value: string | undefined): string {
   if (!value) throw new Error(`${name} is required for the live gate`);
@@ -23,7 +23,7 @@ async function run(
 ): Promise<string> {
   const { stdout } = await exec(binary, args, {
     cwd: "..",
-    env: { ...process.env, BUZZ_AUTH_TAG: "", ...env },
+    env: { ...process.env, AMBUSH_AUTH_TAG: "", ...env },
   });
   return stdout;
 }
@@ -84,7 +84,7 @@ async function eventually<T>(fn: () => Promise<T | undefined>): Promise<T> {
 }
 
 test.describe("agents everywhere live two-relay gate", () => {
-  test.skip(!enabled, "set BUZZ_E2E_AGENTS_EVERYWHERE=1 to run live gate");
+  test.skip(!enabled, "set AMBUSH_E2E_AGENTS_EVERYWHERE=1 to run live gate");
 
   test("same agent listens and wakes independently in two communities", async () => {
     test.setTimeout(90_000);
@@ -98,10 +98,10 @@ test.describe("agents everywhere live two-relay gate", () => {
           metrics: portBase + 20_000,
         },
         databaseUrl: required(
-          "BUZZ_E2E_DATABASE_URL",
-          process.env.BUZZ_E2E_DATABASE_URL,
+          "AMBUSH_E2E_DATABASE_URL",
+          process.env.AMBUSH_E2E_DATABASE_URL,
         ),
-        redisUrl: process.env.BUZZ_E2E_REDIS_A ?? "redis://127.0.0.1:6379/11",
+        redisUrl: process.env.AMBUSH_E2E_REDIS_A ?? "redis://127.0.0.1:6379/11",
       },
       {
         name: "relay-b",
@@ -111,21 +111,23 @@ test.describe("agents everywhere live two-relay gate", () => {
           metrics: portBase + 20_001,
         },
         databaseUrl: required(
-          "BUZZ_E2E_DATABASE_URL",
-          process.env.BUZZ_E2E_DATABASE_URL,
+          "AMBUSH_E2E_DATABASE_URL",
+          process.env.AMBUSH_E2E_DATABASE_URL,
         ),
-        redisUrl: process.env.BUZZ_E2E_REDIS_B ?? "redis://127.0.0.1:6379/12",
+        redisUrl: process.env.AMBUSH_E2E_REDIS_B ?? "redis://127.0.0.1:6379/12",
       },
     ];
     const harness = await TwoRelayHarness.create(specs);
     try {
-      await harness.startRelays(required("BUZZ_E2E_RELAY_BIN", relayBin));
-      const senderOutput = await run(required("BUZZ_E2E_ADMIN_BIN", adminBin), [
-        "generate-key",
-      ]);
-      const agentOutput = await run(required("BUZZ_E2E_ADMIN_BIN", adminBin), [
-        "generate-key",
-      ]);
+      await harness.startRelays(required("AMBUSH_E2E_RELAY_BIN", relayBin));
+      const senderOutput = await run(
+        required("AMBUSH_E2E_ADMIN_BIN", adminBin),
+        ["generate-key"],
+      );
+      const agentOutput = await run(
+        required("AMBUSH_E2E_ADMIN_BIN", adminBin),
+        ["generate-key"],
+      );
       const senderKey = keyField(senderOutput, "Secret key");
       const agentKey = keyField(agentOutput, "Secret key");
       const agentPubkey = keyField(agentOutput, "Public key");
@@ -134,12 +136,12 @@ test.describe("agents everywhere live two-relay gate", () => {
       for (const relay of specs) {
         const relayHttp = `http://127.0.0.1:${relay.ports.main}`;
         const senderEnv = {
-          BUZZ_RELAY_URL: relayHttp,
-          BUZZ_PRIVATE_KEY: senderKey,
+          AMBUSH_RELAY_URL: relayHttp,
+          AMBUSH_PRIVATE_KEY: senderKey,
         };
         const created = JSON.parse(
           await run(
-            required("BUZZ_E2E_CLI_BIN", cliBin),
+            required("AMBUSH_E2E_CLI_BIN", cliBin),
             [
               "channels",
               "create",
@@ -154,7 +156,7 @@ test.describe("agents everywhere live two-relay gate", () => {
           ),
         );
         await run(
-          required("BUZZ_E2E_CLI_BIN", cliBin),
+          required("AMBUSH_E2E_CLI_BIN", cliBin),
           [
             "channels",
             "add-member",
@@ -168,9 +170,9 @@ test.describe("agents everywhere live two-relay gate", () => {
           senderEnv,
         );
         await run(
-          required("BUZZ_E2E_CLI_BIN", cliBin),
+          required("AMBUSH_E2E_CLI_BIN", cliBin),
           ["users", "set-profile", "--name", "AgentsEverywhereProbe"],
-          { BUZZ_RELAY_URL: relayHttp, BUZZ_PRIVATE_KEY: agentKey },
+          { AMBUSH_RELAY_URL: relayHttp, AMBUSH_PRIVATE_KEY: agentKey },
         );
         channels.push({ relay, id: created.channel_id });
       }
@@ -182,7 +184,7 @@ test.describe("agents everywhere live two-relay gate", () => {
             `acp-${relay.name}`,
             `ws://127.0.0.1:${relay.ports.main}`,
             agentKey,
-            { BUZZ_ACP_RESPOND_TO: "anyone", BUZZ_ACP_NO_MEMORY: "true" },
+            { AMBUSH_ACP_RESPOND_TO: "anyone", AMBUSH_ACP_NO_MEMORY: "true" },
           ),
         );
       }
@@ -210,7 +212,7 @@ test.describe("agents everywhere live two-relay gate", () => {
       for (const { relay, id } of channels) {
         const relayHttp = `http://127.0.0.1:${relay.ports.main}`;
         await run(
-          required("BUZZ_E2E_CLI_BIN", cliBin),
+          required("AMBUSH_E2E_CLI_BIN", cliBin),
           [
             "messages",
             "send",
@@ -219,13 +221,13 @@ test.describe("agents everywhere live two-relay gate", () => {
             "--content",
             `@AgentsEverywhereProbe AE-ID:${relay.name}`,
           ],
-          { BUZZ_RELAY_URL: relayHttp, BUZZ_PRIVATE_KEY: senderKey },
+          { AMBUSH_RELAY_URL: relayHttp, AMBUSH_PRIVATE_KEY: senderKey },
         );
         const messages = await eventually(async () => {
           const output = await run(
-            required("BUZZ_E2E_CLI_BIN", cliBin),
+            required("AMBUSH_E2E_CLI_BIN", cliBin),
             ["messages", "get", "--channel", id, "--limit", "20"],
-            { BUZZ_RELAY_URL: relayHttp, BUZZ_PRIVATE_KEY: senderKey },
+            { AMBUSH_RELAY_URL: relayHttp, AMBUSH_PRIVATE_KEY: senderKey },
           );
           const rows = JSON.parse(output) as Array<{ content?: string }>;
           return rows.some((row) => row.content === `AE-ACK:${relay.name}`)

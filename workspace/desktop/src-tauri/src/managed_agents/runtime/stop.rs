@@ -4,7 +4,7 @@ use tauri::AppHandle;
 
 use super::{
     append_log_marker, current_instance_id, now_iso, process_belongs_to_us,
-    process_has_buzz_marker, process_is_running, terminate_process, ManagedAgentPairRuntime,
+    process_has_ambush_marker, process_is_running, terminate_process, ManagedAgentPairRuntime,
     ManagedAgentRecord, ManagedAgentRuntimeKey,
 };
 
@@ -78,7 +78,7 @@ fn stop_managed_agent_pair<R: tauri::Runtime>(
             ),
         ) {
             eprintln!(
-                "buzz-desktop: failed to append stop marker for {} on {}: {error}",
+                "ambush-desktop: failed to append stop marker for {} on {}: {error}",
                 record.pubkey, key.relay_url
             );
         }
@@ -101,7 +101,7 @@ fn stop_legacy_scalar_pid<R: tauri::Runtime>(
     if let Some(pid) = record.runtime_pid.take() {
         if process_is_running(pid)
             && process_belongs_to_us(pid)
-            && process_has_buzz_marker(pid, &current_instance_id(app))
+            && process_has_ambush_marker(pid, &current_instance_id(app))
         {
             terminate_process(pid)?;
         }

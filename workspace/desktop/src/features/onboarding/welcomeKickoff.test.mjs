@@ -367,7 +367,7 @@ test("closer classification sees replies that arrive during the final beat", asy
   const opener = relayEvent({
     id: "opener",
     pubkey: fizz.pubkey,
-    tags: [["client", "buzz-welcome-kickoff.opener.v1"]],
+    tags: [["client", "ambush-welcome-kickoff.opener.v1"]],
   });
   const events = [opener];
 
@@ -413,7 +413,7 @@ function introReply(id, pubkey, openerId) {
 const kickoffOpener = relayEvent({
   id: "opener",
   pubkey: fizz.pubkey,
-  tags: [["client", "buzz-welcome-kickoff.opener.v1"]],
+  tags: [["client", "ambush-welcome-kickoff.opener.v1"]],
 });
 
 // The bug this branch fixes: teammate intros are thread replies, which the

@@ -4,14 +4,14 @@ import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
-const BUZZ_REPO_ADDRESS = `30617:${DEFAULT_MOCK_PUBKEY}:buzz`;
+const AMBUSH_REPO_ADDRESS = `30617:${DEFAULT_MOCK_PUBKEY}:ambush`;
 
-test("Buzz Git pull request renders and stays actionable in Inbox", async ({
+test("Ambush Git pull request renders and stays actionable in Inbox", async ({
   page,
 }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem(
-      "buzz-feature-overrides-v1",
+      "ambush-feature-overrides-v1",
       JSON.stringify({ projects: true }),
     );
   });
@@ -22,7 +22,7 @@ test("Buzz Git pull request renders and stays actionable in Inbox", async ({
   await page.getByTestId("open-projects-view").click();
   await page.getByRole("button", { name: "Repositories", exact: true }).click();
   const repositoryCardBody = page
-    .getByTestId("repository-card-buzz")
+    .getByTestId("repository-card-ambush")
     .getByTestId("projects-grid-card-body");
   const repositoryCardBodyBounds = await repositoryCardBody.boundingBox();
   expect(repositoryCardBodyBounds).not.toBeNull();
@@ -49,7 +49,7 @@ test("Buzz Git pull request renders and stays actionable in Inbox", async ({
   await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await page.evaluate(
     ({ author, id, repoAddress, viewer }) => {
-      window.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?.({
+      window.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__?.({
         id,
         kind: 1618,
         pubkey: author,
@@ -69,7 +69,7 @@ test("Buzz Git pull request renders and stays actionable in Inbox", async ({
     {
       author: TEST_IDENTITIES.alice.pubkey,
       id: pullRequestId as string,
-      repoAddress: BUZZ_REPO_ADDRESS,
+      repoAddress: AMBUSH_REPO_ADDRESS,
       viewer: DEFAULT_MOCK_PUBKEY,
     },
   );

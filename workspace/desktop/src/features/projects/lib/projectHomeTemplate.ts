@@ -26,22 +26,22 @@ Everything about this project—decisions, tasks, code review, and releases—ha
 
 | Action | Command |
 | --- | --- |
-| Inspect the repository | \`buzz repos get --owner {{REPO_OWNER_HEX}} --id {{REPO_SLUG}}\` |
-| Create a task | \`buzz issues create --channel {{CHANNEL_UUID}} --title "..." --content -\` |
-| Claim or assign a task | \`buzz issues assign --issue <id> --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --assignee <hex>\` |
-| Track task state | \`buzz issues status --issue <id> --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --status open|resolved|closed|draft\` |
-| Open a review | \`buzz pr open --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --subject "..." --body-file - --commit <tip> --clone {{REPO_CLONE_URL}} --branch-name <branch> --channel {{CHANNEL_UUID}}\` |
-| Update a review | \`buzz pr update --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --pr <id> --pr-author <hex> --commit <tip> --clone {{REPO_CLONE_URL}}\` |
-| Mark a review merged or closed | \`buzz pr status --pr <id> --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --status merged|closed\` |
-| Share files or artifacts | \`buzz upload file --file <path>\` |
-| Update this living document | \`buzz canvas set --channel {{CHANNEL_UUID}} --content -\` |
+| Inspect the repository | \`ambush repos get --owner {{REPO_OWNER_HEX}} --id {{REPO_SLUG}}\` |
+| Create a task | \`ambush issues create --channel {{CHANNEL_UUID}} --title "..." --content -\` |
+| Claim or assign a task | \`ambush issues assign --issue <id> --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --assignee <hex>\` |
+| Track task state | \`ambush issues status --issue <id> --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --status open|resolved|closed|draft\` |
+| Open a review | \`ambush pr open --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --subject "..." --body-file - --commit <tip> --clone {{REPO_CLONE_URL}} --branch-name <branch> --channel {{CHANNEL_UUID}}\` |
+| Update a review | \`ambush pr update --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --pr <id> --pr-author <hex> --commit <tip> --clone {{REPO_CLONE_URL}}\` |
+| Mark a review merged or closed | \`ambush pr status --pr <id> --repo-owner {{REPO_OWNER_HEX}} --repo-id {{REPO_SLUG}} --status merged|closed\` |
+| Share files or artifacts | \`ambush upload file --file <path>\` |
+| Update this living document | \`ambush canvas set --channel {{CHANNEL_UUID}} --content -\` |
 
 ## Workflow
 
 1. **Pick up:** Find or create an issue, self-assign it, and post a one-line “picked up” message in the channel.
 2. **Build:** Clone or reuse a checkout under \`REPOS/\`. Work on a branch, never the default branch. Follow the repository's configured commit and sign-off policy.
 3. **Verify:** Run the fullest relevant test suite before calling anything done.
-4. **Ship:** Open a review and post the returned Buzz link verbatim so it renders as a card. Mark the issue resolved when merged.
+4. **Ship:** Open a review and post the returned Ambush link verbatim so it renders as a card. Mark the issue resolved when merged.
 5. **Report:** @mention whoever delegated the work in the message that delivers the result or blocker—not in acknowledgements.
 
 ## Norms

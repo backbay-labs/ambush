@@ -63,12 +63,12 @@ export function WaveMessageAttachment({
 
   return (
     <Attachment
-      className="buzz-wave-hover-trigger mt-1 max-w-md"
+      className="ambush-wave-hover-trigger mt-1 max-w-md"
       data-testid="message-wave-attachment"
       size="default"
     >
       <AttachmentMedia aria-hidden="true" className="text-lg">
-        <span className="buzz-wave-hand">👋</span>
+        <span className="ambush-wave-hand">👋</span>
       </AttachmentMedia>
       <AttachmentContent>
         <AttachmentTitle>

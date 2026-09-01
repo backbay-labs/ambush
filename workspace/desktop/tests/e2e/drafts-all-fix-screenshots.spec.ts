@@ -9,7 +9,7 @@ const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 const MOCK_IDENTITY_PUBKEY = "deadbeef".repeat(8);
 
 type MockFeedWindow = Window & {
-  __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: Record<string, unknown>) => void;
+  __AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__?: (item: Record<string, unknown>) => void;
 };
 
 test.use({ viewport: { width: 1280, height: 720 } });
@@ -41,21 +41,21 @@ test("Inbox All hides drafts while the Drafts filter keeps them", async ({
     {
       channelId: GENERAL_CHANNEL_ID,
       draftStorageKey: draftKey,
-      draftStoreKey: `buzz-drafts.v2:ws://localhost:3000:${MOCK_IDENTITY_PUBKEY}`,
+      draftStoreKey: `ambush-drafts.v2:ws://localhost:3000:${MOCK_IDENTITY_PUBKEY}`,
     },
   );
   await installMockBridge(page);
   await page.goto("/");
   await page.waitForFunction(() => {
     const win = window as MockFeedWindow;
-    return typeof win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ === "function";
+    return typeof win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__ === "function";
   });
 
   const messageId = "drafts-all-fix-message";
   await page.evaluate(
     ({ channelId, currentPubkey, messageId: id, senderPubkey }) => {
       const pushFeedItem = (window as MockFeedWindow)
-        .__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        .__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
       if (!pushFeedItem) throw new Error("Mock feed helper is not installed.");
       pushFeedItem({
         category: "mention",

@@ -432,10 +432,10 @@ export function useRichTextEditor({
           // fires and partially links it. No ordering trick removes a second
           // handler — the only fix is not to register it.
           linkOnPaste: false,
-          // Allow Buzz message links through TipTap's URL sanitiser.
+          // Allow Ambush message links through TipTap's URL sanitiser.
           // http(s) and mailto are accepted by default; non-listed protocols are
           // stripped on paste/typed input.
-          protocols: ["buzz"],
+          protocols: ["ambush"],
           HTMLAttributes: {
             class: "text-primary underline underline-offset-4 cursor-text",
           },

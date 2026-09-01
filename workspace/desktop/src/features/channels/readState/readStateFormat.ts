@@ -62,15 +62,15 @@ export function isMsgContextKey(value: string): value is `msg:${string}` {
 }
 
 export function localReadStateKey(pubkey: string): string {
-  return `buzz.channel-read-state.v2:${pubkey}`;
+  return `ambush.channel-read-state.v2:${pubkey}`;
 }
 
 export function localPublishableContextKey(pubkey: string): string {
-  return `buzz.channel-read-state.publishable.v1:${pubkey}`;
+  return `ambush.channel-read-state.publishable.v1:${pubkey}`;
 }
 
 export function localSourceCreatedAtKey(pubkey: string): string {
-  return `buzz.channel-read-state.source-created-at.v1:${pubkey}`;
+  return `ambush.channel-read-state.source-created-at.v1:${pubkey}`;
 }
 
 export function isPlainRecord(
@@ -116,7 +116,7 @@ export function isValidReadStateDTag(
 }
 
 export function localExtraSlotIdsKey(pubkey: string): string {
-  return `buzz.nip-rs.extra-slot-ids:${pubkey}`;
+  return `ambush.nip-rs.extra-slot-ids:${pubkey}`;
 }
 
 export function localIsoToUnixSeconds(value: unknown): number | null {

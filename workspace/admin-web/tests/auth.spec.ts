@@ -59,8 +59,8 @@ test("nip98 mode: attachments are fetched with a signed credential and rendered 
   const id = "feedback-with-attachments";
   const imageHash = "a".repeat(64);
   const fileHash = "b".repeat(64);
-  const imageUrl = `https://design.buzz.xyz/media/${imageHash}.png`;
-  const fileUrl = `https://design.buzz.xyz/media/${fileHash}.txt`;
+  const imageUrl = `https://design.ambush.example.com/media/${imageHash}.png`;
+  const fileUrl = `https://design.ambush.example.com/media/${fileHash}.txt`;
   await seedNip98(page);
 
   const attachmentRequests: { path: string; authorization?: string }[] = [];
@@ -77,7 +77,7 @@ test("nip98 mode: attachments are fetched with a signed credential and rendered 
       body: JSON.stringify({
         id,
         communityId: "one",
-        communityHost: "design.buzz.xyz",
+        communityHost: "design.ambush.example.com",
         eventId: "31".repeat(32),
         submitterPubkey: "21".repeat(32),
         category: "bug",
@@ -151,7 +151,7 @@ const FILE_HASH = "b".repeat(64);
 /// probe to `/reports` returns 200 so the SPA runs in disabled mode: these
 /// tests exercise object-URL lifecycle, not authentication.
 async function routeFeedbackDetail(page: Page) {
-  const host = "design.buzz.xyz";
+  const host = "design.ambush.example.com";
   await page.route(`**/api/admin/v1/reports**`, (route) =>
     route.fulfill({ contentType: "application/json", body: "[]" }),
   );

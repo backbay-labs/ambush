@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-// nostr 0.36 alias — required for cross-version bridging with buzz-sdk.
+// nostr 0.36 alias — required for cross-version bridging with ambush-sdk.
 
 use crate::app_state::AppState;
 
@@ -37,8 +37,8 @@ fn configured_env_var(name: &str) -> Option<String> {
 }
 
 pub fn relay_ws_url() -> String {
-    configured_env_var("BUZZ_RELAY_URL")
-        .or_else(|| option_env!("BUZZ_DESKTOP_BUILD_RELAY_URL").map(str::to_string))
+    configured_env_var("AMBUSH_RELAY_URL")
+        .or_else(|| option_env!("AMBUSH_DESKTOP_BUILD_RELAY_URL").map(str::to_string))
         .unwrap_or_else(|| DEFAULT_RELAY_WS_URL.to_string())
 }
 
@@ -104,11 +104,11 @@ pub use scope::{
 };
 
 pub fn relay_api_base_url() -> String {
-    if let Some(base) = configured_env_var("BUZZ_RELAY_HTTP") {
+    if let Some(base) = configured_env_var("AMBUSH_RELAY_HTTP") {
         return base.trim_end_matches('/').to_string();
     }
 
-    if let Some(base) = option_env!("BUZZ_DESKTOP_BUILD_RELAY_HTTP") {
+    if let Some(base) = option_env!("AMBUSH_DESKTOP_BUILD_RELAY_HTTP") {
         return base.trim().trim_end_matches('/').to_string();
     }
 
@@ -450,7 +450,7 @@ async fn send_query_request(
 
 /// Parse a command-event OK message of the form `"response:<json>"`.
 ///
-/// Buzz's command kinds (e.g. 41010, 30620, 46020) acknowledge writes via
+/// Ambush's command kinds (e.g. 41010, 30620, 46020) acknowledge writes via
 /// relay OK messages whose payload is a `response:`-prefixed JSON document.
 /// This helper strips the prefix and deserializes the remainder as `T`.
 pub fn parse_command_response<T: DeserializeOwned>(message: &str) -> Result<T, String> {
@@ -470,7 +470,7 @@ pub fn parse_command_response<T: DeserializeOwned>(message: &str) -> Result<T, S
 /// This is a pure function (no I/O) extracted from `sync_managed_agent_profile` so that
 /// the event-building and auth-tag-injection logic can be unit tested without HTTP calls.
 ///
-/// `buzz-sdk` uses `nostr 0.36` while the desktop crate uses `nostr 0.37`. Cross-version
+/// `ambush-sdk` uses `nostr 0.36` while the desktop crate uses `nostr 0.37`. Cross-version
 /// bridging is done via hex-encoded public keys and raw tag slices — both versions share the
 /// same wire format.
 fn build_profile_event(
@@ -488,11 +488,11 @@ fn build_profile_event(
             .map_err(|e| format!("failed to convert agent pubkey for auth verification: {e}"))?;
 
         // Verify Schnorr signature before injecting into profile event.
-        buzz_sdk_pkg::nip_oa::verify_auth_tag(tag_json, &compat_pubkey)
+        ambush_sdk_pkg::nip_oa::verify_auth_tag(tag_json, &compat_pubkey)
             .map_err(|e| format!("auth tag verification failed for profile event: {e}"))?;
 
         // parse_auth_tag returns a nostr 0.36 Tag; bridge to nostr 0.37 via raw slice.
-        let compat_tag = buzz_sdk_pkg::nip_oa::parse_auth_tag(tag_json)
+        let compat_tag = ambush_sdk_pkg::nip_oa::parse_auth_tag(tag_json)
             .map_err(|e| format!("failed to parse verified auth tag: {e}"))?;
         let tag = nostr::Tag::parse(compat_tag.as_slice())
             .map_err(|e| format!("failed to convert auth tag to nostr 0.37: {e}"))?;

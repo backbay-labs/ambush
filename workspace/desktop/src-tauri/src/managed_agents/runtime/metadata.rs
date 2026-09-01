@@ -26,10 +26,10 @@ pub(crate) fn runtime_metadata_env_vars<'a>(
 
 /// Env var carrying the session title to the harness. Shared with
 /// `spawn_snapshot` so the restart badge records the same key the spawn writes.
-pub(crate) const SESSION_TITLE_ENV_VAR: &str = "BUZZ_ACP_SESSION_TITLE";
+pub(crate) const SESSION_TITLE_ENV_VAR: &str = "AMBUSH_ACP_SESSION_TITLE";
 /// Stable agent display name forwarded to the ACP tool surface for git
 /// attribution and private-conversation provenance.
-pub(crate) const DISPLAY_NAME_ENV_VAR: &str = "BUZZ_ACP_DISPLAY_NAME";
+pub(crate) const DISPLAY_NAME_ENV_VAR: &str = "AMBUSH_ACP_DISPLAY_NAME";
 
 /// Apply the shared stable agent name to both session display metadata and
 /// git attribution, clearing both keys when no usable name is available.
@@ -58,7 +58,7 @@ pub(crate) fn apply_agent_display_env(command: &mut std::process::Command, title
 ///
 /// The harness still owns whitespace collapsing, the length cap, and channel
 /// qualification — see `sanitize_session_title` and `compose_session_title` in
-/// `buzz-acp`.
+/// `ambush-acp`.
 pub(crate) fn resolve_session_title(display_name: Option<&str>, name: &str) -> Option<String> {
     [display_name, Some(name)]
         .into_iter()

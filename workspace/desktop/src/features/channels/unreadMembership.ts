@@ -3,11 +3,11 @@ import type { ObservedUnreadMembershipSeed } from "@/shared/api/tauriObservedUnr
 import { makeRootIdStore } from "@/features/channels/unreadRootIdStore";
 
 export const participationStore = makeRootIdStore(
-  "buzz-thread-participation.v1",
+  "ambush-thread-participation.v1",
 );
-export const authoredStore = makeRootIdStore("buzz-thread-authored.v1");
-export const mentionedStore = makeRootIdStore("buzz-thread-mentioned.v1");
-export const mutedStore = makeRootIdStore("buzz-thread-muted.v1");
+export const authoredStore = makeRootIdStore("ambush-thread-authored.v1");
+export const mentionedStore = makeRootIdStore("ambush-thread-mentioned.v1");
+export const mutedStore = makeRootIdStore("ambush-thread-muted.v1");
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 

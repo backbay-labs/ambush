@@ -386,7 +386,7 @@ export function RepoDetailPage() {
       {/* Sidebar */}
       <aside className="hidden w-72 shrink-0 border-l border-black/10 pl-8 dark:border-white/10 lg:block">
         <div className="space-y-6">
-          {/* Open in Buzz */}
+          {/* Open in Ambush */}
           <ConnectButton className="w-full" />
 
           {/* People */}

@@ -23,9 +23,10 @@ const DM_CHANNEL_ID = "f48efb06-0c93-5025-aac9-2e646bb6bfa8";
 
 // Mock bridge default pubkey — must match DEFAULT_MOCK_PUBKEY in bridge.ts.
 const MOCK_PUBKEY = "deadbeef".repeat(8);
-const DRAFT_STORE_KEY = `buzz-drafts.v1:${MOCK_PUBKEY}`;
-const FONT_SIZE_STORAGE_KEY = "buzz.appearance.fontSize";
-const CONVERSATION_DENSITY_STORAGE_KEY = "buzz.appearance.conversationDensity";
+const DRAFT_STORE_KEY = `ambush-drafts.v1:${MOCK_PUBKEY}`;
+const FONT_SIZE_STORAGE_KEY = "ambush.appearance.fontSize";
+const CONVERSATION_DENSITY_STORAGE_KEY =
+  "ambush.appearance.conversationDensity";
 
 // Fixed timestamps so draft ordering renders deterministically.
 const DRAFT_CREATED_AT_1 = "2026-07-01T10:00:00.000Z";
@@ -85,7 +86,7 @@ async function applyConversationPreferences(
 }
 
 type MockFeedWindow = Window & {
-  __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+  __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
     channelName: string;
     content: string;
     createdAt?: number;
@@ -100,7 +101,7 @@ type MockFeedWindow = Window & {
     pubkey: string;
     tags: string[][];
   };
-  __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+  __AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
     category: "mention" | "needs_action" | "activity" | "agent_activity";
     channel_id: string | null;
     channel_name: string;
@@ -122,14 +123,14 @@ type MockFeedWindow = Window & {
 async function patchCommunityPubkey(page: import("@playwright/test").Page) {
   await page.addInitScript(
     ({ pubkey }) => {
-      const raw = window.localStorage.getItem("buzz-communities");
+      const raw = window.localStorage.getItem("ambush-communities");
       const communities = raw
         ? (JSON.parse(raw) as Array<Record<string, unknown>>)
         : [];
       if (communities[0]) {
         communities[0].pubkey = pubkey;
         window.localStorage.setItem(
-          "buzz-communities",
+          "ambush-communities",
           JSON.stringify(communities),
         );
       }
@@ -188,8 +189,8 @@ async function waitForMockFeedHelpers(page: import("@playwright/test").Page) {
   await page.waitForFunction(() => {
     const win = window as MockFeedWindow;
     return (
-      typeof win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      typeof win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ === "function"
+      typeof win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__ === "function"
     );
   });
 }
@@ -268,8 +269,8 @@ test.describe("inbox refactor screenshots", () => {
     await page.evaluate(
       ({ channelId, createdAt, ids, senderPubkey }) => {
         const win = window as MockFeedWindow;
-        const emitMessage = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const pushFeedItem = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emitMessage = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const pushFeedItem = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emitMessage || !pushFeedItem) {
           throw new Error("Mock bridge helpers are not installed.");
         }
@@ -342,8 +343,8 @@ test.describe("inbox refactor screenshots", () => {
     await page.evaluate(
       ({ agentPubkeys, channelId, currentPubkey, ids }) => {
         const win = window as MockFeedWindow;
-        const emitMessage = win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
-        const pushFeedItem = win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        const emitMessage = win.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
+        const pushFeedItem = win.__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
         if (!emitMessage || !pushFeedItem) {
           throw new Error("Mock bridge helpers are not installed.");
         }

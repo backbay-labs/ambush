@@ -24,7 +24,7 @@ pub struct AcpAuthMethod {
     pub method_type: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
-    /// Full terminal command advertised by the adapter. Buzz never guesses
+    /// Full terminal command advertised by the adapter. Ambush never guesses
     /// vendor login commands; when present, this argv is the source of truth.
     #[serde(default)]
     pub command: Vec<String>,
@@ -68,9 +68,9 @@ pub async fn connect_acp_runtime(
 }
 
 fn discover_acp_auth_methods_blocking(runtime_id: &str) -> Result<AcpAuthMethodsResult, String> {
-    let output = run_buzz_acp_auth_command(runtime_id, ["auth-methods", "--json"])?;
+    let output = run_ambush_acp_auth_command(runtime_id, ["auth-methods", "--json"])?;
     if !output.status.success() {
-        return Err(command_error("buzz-acp auth-methods", &output));
+        return Err(command_error("ambush-acp auth-methods", &output));
     }
 
     serde_json::from_slice::<AcpAuthMethodsResult>(&output.stdout)
@@ -96,18 +96,18 @@ fn connect_acp_runtime_blocking(
         return Ok(ConnectAcpRuntimeResult { launched: true });
     }
 
-    let output = run_buzz_acp_auth_command(
+    let output = run_ambush_acp_auth_command(
         &request.runtime_id,
         ["authenticate", "--method-id", request.method_id.as_str()],
     )?;
     if !output.status.success() {
-        return Err(command_error("buzz-acp authenticate", &output));
+        return Err(command_error("ambush-acp authenticate", &output));
     }
 
     Ok(ConnectAcpRuntimeResult { launched: true })
 }
 
-fn run_buzz_acp_auth_command<const N: usize>(
+fn run_ambush_acp_auth_command<const N: usize>(
     runtime_id: &str,
     args: [&str; N],
 ) -> Result<std::process::Output, String> {
@@ -120,14 +120,14 @@ fn run_buzz_acp_auth_command<const N: usize>(
         .ok_or_else(|| format!("{} ACP adapter is not installed", runtime.label))?;
 
     let acp_path = std::env::current_exe()
-        .map(|path| path.with_file_name(format!("buzz-acp{}", std::env::consts::EXE_SUFFIX)))
+        .map(|path| path.with_file_name(format!("ambush-acp{}", std::env::consts::EXE_SUFFIX)))
         .ok()
         .filter(|path| path.exists())
-        .or_else(|| resolve_command("buzz-acp"))
-        .ok_or_else(|| "buzz-acp helper not found".to_string())?;
+        .or_else(|| resolve_command("ambush-acp"))
+        .ok_or_else(|| "ambush-acp helper not found".to_string())?;
 
     let augmented_path = auth_command_path();
-    run_buzz_acp_auth_command_with_paths(
+    run_ambush_acp_auth_command_with_paths(
         &acp_path,
         adapter_command.0,
         &adapter_command.1,
@@ -136,14 +136,14 @@ fn run_buzz_acp_auth_command<const N: usize>(
     )
 }
 
-/// PATH for the buzz-acp auth helper child process.
+/// PATH for the ambush-acp auth helper child process.
 ///
 /// Uses the augmented agent PATH so `#!/usr/bin/env node` adapter shims
-/// resolve the Buzz-managed Node runtime — the same PATH normal agent
+/// resolve the Ambush-managed Node runtime — the same PATH normal agent
 /// launches and readiness probes use.
 ///
 /// On Windows, `login_shell_path()` is intentionally `None`, so the augmented
-/// PATH contains only Buzz-managed directories and the exe parent. Buzz does
+/// PATH contains only Ambush-managed directories and the exe parent. Ambush does
 /// not ship a managed Node runtime on Windows, and npm `.cmd` adapters need
 /// the user's normal PATH to find `node` (and often `claude`/`codex`), so the
 /// inherited process PATH is appended there instead of being replaced.
@@ -173,7 +173,7 @@ fn append_inherited_path(augmented: Option<String>, inherited: Option<String>) -
         .or(Some(augmented))
 }
 
-fn run_buzz_acp_auth_command_with_paths<const N: usize>(
+fn run_ambush_acp_auth_command_with_paths<const N: usize>(
     acp_path: &Path,
     adapter_name: &str,
     adapter_path: &Path,
@@ -184,8 +184,8 @@ fn run_buzz_acp_auth_command_with_paths<const N: usize>(
     let mut command = Command::new(acp_path);
     command
         .args(args)
-        .env("BUZZ_ACP_AGENT_COMMAND", adapter_path.as_os_str())
-        .env("BUZZ_ACP_AGENT_ARGS", agent_args.join(","))
+        .env("AMBUSH_ACP_AGENT_COMMAND", adapter_path.as_os_str())
+        .env("AMBUSH_ACP_AGENT_ARGS", agent_args.join(","))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(workdir) = default_agent_workdir() {
@@ -198,7 +198,7 @@ fn run_buzz_acp_auth_command_with_paths<const N: usize>(
 
     command
         .output()
-        .map_err(|error| format!("failed to run buzz-acp auth helper: {error}"))
+        .map_err(|error| format!("failed to run ambush-acp auth helper: {error}"))
 }
 
 fn command_error(label: &str, output: &std::process::Output) -> String {
@@ -363,7 +363,7 @@ fn spawn_without_stdio(mut command: Command) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn launch_visible_terminal(argv: &[String]) -> Result<(), String> {
     let mut script = tempfile::Builder::new()
-        .prefix("buzz-auth-")
+        .prefix("ambush-auth-")
         .suffix(".command")
         .tempfile()
         .map_err(|error| format!("failed to create terminal login script: {error}"))?;
@@ -462,18 +462,18 @@ fn shell_escape(arg: &str) -> String {
 mod tests {
     use super::{
         adapter_terminal_argv, append_inherited_path, is_claude_subscription_login,
-        run_buzz_acp_auth_command_with_paths, shell_escape, shell_join, uses_terminal_auth,
+        run_ambush_acp_auth_command_with_paths, shell_escape, shell_join, uses_terminal_auth,
         windows_terminal_args, AcpAuthMethod,
     };
 
-    /// Windows regression: the augmented PATH there holds only Buzz-managed
+    /// Windows regression: the augmented PATH there holds only Ambush-managed
     /// dirs and the exe parent (no login-shell PATH, no managed Node), so the
     /// user's inherited PATH must be appended for npm `.cmd` adapters to find
     /// `node`/`claude`/`codex`.
     #[test]
     fn append_inherited_path_appends_after_augmented() {
         let sep = if cfg!(windows) { ';' } else { ':' };
-        let augmented = format!("{0}buzz-bin{1}{0}exe-dir", std::path::MAIN_SEPARATOR, sep);
+        let augmented = format!("{0}ambush-bin{1}{0}exe-dir", std::path::MAIN_SEPARATOR, sep);
         let inherited = format!(
             "{0}user-bin{1}{0}system-bin",
             std::path::MAIN_SEPARATOR,
@@ -527,16 +527,17 @@ mod tests {
         fs::set_permissions(&adapter_path, fs::Permissions::from_mode(0o755))
             .expect("chmod adapter");
 
-        let acp_path = temp.path().join("buzz-acp");
-        fs::write(&acp_path, "#!/bin/sh\nexec \"$BUZZ_ACP_AGENT_COMMAND\"\n")
-            .expect("write buzz-acp");
-        fs::set_permissions(&acp_path, fs::Permissions::from_mode(0o755)).expect("chmod buzz-acp");
+        let acp_path = temp.path().join("ambush-acp");
+        fs::write(&acp_path, "#!/bin/sh\nexec \"$AMBUSH_ACP_AGENT_COMMAND\"\n")
+            .expect("write ambush-acp");
+        fs::set_permissions(&acp_path, fs::Permissions::from_mode(0o755))
+            .expect("chmod ambush-acp");
 
         let augmented_path = std::env::join_paths([interpreter_dir.as_path()])
             .expect("join augmented PATH")
             .to_string_lossy()
             .into_owned();
-        let output = run_buzz_acp_auth_command_with_paths(
+        let output = run_ambush_acp_auth_command_with_paths(
             &acp_path,
             "claude-agent-acp",
             &adapter_path,
@@ -664,7 +665,7 @@ mod tests {
             method_type: Some("terminal".into()),
             args: vec!["should-not".into(), "be-used".into()],
             command: vec![
-                "definitely-not-on-path-buzz-test".into(),
+                "definitely-not-on-path-ambush-test".into(),
                 "auth".into(),
                 "login".into(),
             ],
@@ -673,7 +674,7 @@ mod tests {
         assert_eq!(
             adapter_terminal_argv("Claude Code", &method, "claude-agent-acp").unwrap(),
             vec![
-                "definitely-not-on-path-buzz-test".to_string(),
+                "definitely-not-on-path-ambush-test".to_string(),
                 "auth".to_string(),
                 "login".to_string()
             ]
@@ -721,9 +722,9 @@ mod tests {
             meta: None,
         };
         assert_eq!(
-            adapter_terminal_argv("Claude Code", &method, "definitely-not-on-path-buzz-test")
+            adapter_terminal_argv("Claude Code", &method, "definitely-not-on-path-ambush-test")
                 .unwrap(),
-            vec!["definitely-not-on-path-buzz-test".to_string()]
+            vec!["definitely-not-on-path-ambush-test".to_string()]
         );
     }
 }

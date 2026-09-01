@@ -20,7 +20,7 @@ async function waitForMockLiveSubscription(
     .poll(() =>
       page.evaluate(
         ({ kind, name }) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: name,
             kind,
           }) ?? false,
@@ -42,7 +42,7 @@ async function setHuddleSnapshot(
     async ({ nextMembers, nextTranscriptionEnabled }) => {
       const setSnapshot = (
         window as Window & {
-          __BUZZ_E2E_SET_MOCK_HUDDLE_SNAPSHOT__?: (input: {
+          __AMBUSH_E2E_SET_MOCK_HUDDLE_SNAPSHOT__?: (input: {
             members: Array<{
               pubkey: string;
               role: "member" | "bot";
@@ -50,7 +50,7 @@ async function setHuddleSnapshot(
             transcriptionEnabled: boolean;
           }) => Promise<void>;
         }
-      ).__BUZZ_E2E_SET_MOCK_HUDDLE_SNAPSHOT__;
+      ).__AMBUSH_E2E_SET_MOCK_HUDDLE_SNAPSHOT__;
       if (!setSnapshot) {
         throw new Error("Mock huddle snapshot control is not installed.");
       }
@@ -108,7 +108,7 @@ async function installFakeHuddleMicrophone(
 
 test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "buzz-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-dark");
   });
   await installMockBridge(page, {
     huddle: {
@@ -124,7 +124,7 @@ test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
 
   await page.goto("/");
 
-  const gradientUnderlay = page.locator(".buzz-theme-gradient-underlay");
+  const gradientUnderlay = page.locator(".ambush-theme-gradient-underlay");
   const openGradient = await gradientUnderlay.evaluate(
     (element) => getComputedStyle(element).backgroundImage,
   );
@@ -134,16 +134,18 @@ test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
     name: "Stop transcript",
   });
   await expect(transcriptButton).toBeVisible();
-  const huddleShell = page.locator(".buzz-huddle-shell");
+  const huddleShell = page.locator(".ambush-huddle-shell");
   await expect(huddleShell).toHaveAttribute("data-huddle-open", "true");
-  const huddleBackdrop = page.locator(".buzz-huddle-drawer-backdrop");
-  await expect(huddleBackdrop).toHaveClass(/buzz-huddle-drawer-backdrop-open/);
+  const huddleBackdrop = page.locator(".ambush-huddle-drawer-backdrop");
+  await expect(huddleBackdrop).toHaveClass(
+    /ambush-huddle-drawer-backdrop-open/,
+  );
   const [huddleBackdropColor, huddleDrawerColor] = await Promise.all([
     huddleBackdrop.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
     ),
     page
-      .locator(".buzz-huddle-drawer")
+      .locator(".ambush-huddle-drawer")
       .first()
       .evaluate((element) => getComputedStyle(element).backgroundColor),
   ]);
@@ -152,7 +154,7 @@ test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
     .poll(() =>
       huddleBackdrop.evaluate((element) => {
         const shell = element.parentElement;
-        const appSurface = shell?.querySelector(".buzz-huddle-app-surface");
+        const appSurface = shell?.querySelector(".ambush-huddle-app-surface");
         if (!appSurface) return false;
         const backdropStyle = getComputedStyle(element);
         const appStyle = getComputedStyle(appSurface);
@@ -183,7 +185,7 @@ test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "open_huddle_window",
           ).length,
       ),
@@ -192,7 +194,7 @@ test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
   const huddleControl = page.getByTestId("profile-huddle-control");
   await expect(huddleControl).toBeVisible();
   const mainContentSurface = page.locator(
-    "[data-buzz-content-surface]:not([data-buzz-content-unframed])",
+    "[data-ambush-content-surface]:not([data-ambush-content-unframed])",
   );
   await expect(mainContentSurface).toBeVisible();
   const [mainContentColor, huddleCardColor] = await Promise.all([
@@ -237,7 +239,7 @@ test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "open_huddle_window",
           ).length,
       ),
@@ -248,13 +250,13 @@ test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "leave_huddle",
           ).length,
       ),
     )
     .toBe(1);
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "false",
   );
@@ -268,8 +270,8 @@ test("floats the in-app huddle tray over the glass background", async ({
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "buzz-dark");
-    window.localStorage.setItem("buzz-glass-background", "true");
+    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-glass-background", "true");
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
     Object.defineProperty(navigator, "platform", {
       configurable: true,
@@ -291,10 +293,12 @@ test("floats the in-app huddle tray over the glass background", async ({
   await page.goto("/");
 
   const root = page.locator("html");
-  const shell = page.locator('.buzz-huddle-shell[data-huddle-window="false"]');
-  const slot = shell.locator(".buzz-huddle-drawer-slot");
-  const drawer = slot.locator(":scope > .buzz-huddle-drawer");
-  const backdrop = shell.locator(".buzz-huddle-drawer-backdrop");
+  const shell = page.locator(
+    '.ambush-huddle-shell[data-huddle-window="false"]',
+  );
+  const slot = shell.locator(".ambush-huddle-drawer-slot");
+  const drawer = slot.locator(":scope > .ambush-huddle-drawer");
+  const backdrop = shell.locator(".ambush-huddle-drawer-backdrop");
   const transcriptButton = drawer.getByRole("button", {
     name: "Stop transcript",
   });
@@ -339,8 +343,8 @@ test("keeps the popped-out huddle dock full-width over glass", async ({
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("buzz-theme", "buzz-dark");
-    window.localStorage.setItem("buzz-glass-background", "true");
+    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-glass-background", "true");
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
     Object.defineProperty(navigator, "platform", {
       configurable: true,
@@ -363,9 +367,9 @@ test("keeps the popped-out huddle dock full-width over glass", async ({
   await page.goto("/");
 
   const root = page.locator("html");
-  const shell = page.locator('.buzz-huddle-shell[data-huddle-window="true"]');
-  const slot = shell.locator(".buzz-huddle-drawer-slot");
-  const drawer = slot.locator(":scope > .buzz-huddle-drawer");
+  const shell = page.locator('.ambush-huddle-shell[data-huddle-window="true"]');
+  const slot = shell.locator(".ambush-huddle-drawer-slot");
+  const drawer = slot.locator(":scope > .ambush-huddle-drawer");
 
   await expect(root).toHaveAttribute("data-glass-background", "");
   await expect(shell).toHaveAttribute("data-huddle-open", "true");
@@ -422,16 +426,16 @@ test("shows speaker identity on every huddle chat message", async ({
   expect(transcriptTopGap).toBe(16);
   await waitForMockLiveSubscription(page, "huddle");
   await page.evaluate(() => {
-    const threadRoot = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const threadRoot = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "huddle",
       content: "First huddle message",
     });
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "huddle",
       content: "Second huddle message",
     });
     if (!threadRoot) throw new Error("Failed to create Huddle thread root.");
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "huddle",
       content: "Agent response flattened into the huddle chat",
       parentEventId: threadRoot.id,
@@ -468,7 +472,7 @@ test("ignores persisted community onboarding in the huddle room", async ({
   };
   await page.addInitScript((transaction) => {
     window.localStorage.setItem(
-      "buzz-community-onboarding-transaction.v1",
+      "ambush-community-onboarding-transaction.v1",
       JSON.stringify(transaction),
     );
   }, persistedTransaction);
@@ -497,7 +501,7 @@ test("ignores persisted community onboarding in the huddle room", async ({
       .poll(() =>
         page.evaluate(() => {
           const raw = window.localStorage.getItem(
-            "buzz-community-onboarding-transaction.v1",
+            "ambush-community-onboarding-transaction.v1",
           );
           return raw ? JSON.parse(raw) : null;
         }),
@@ -506,7 +510,7 @@ test("ignores persisted community onboarding in the huddle room", async ({
     await expect
       .poll(() =>
         page.evaluate(() =>
-          JSON.parse(window.localStorage.getItem("buzz-communities") ?? "[]"),
+          JSON.parse(window.localStorage.getItem("ambush-communities") ?? "[]"),
         ),
       )
       .not.toContainEqual(
@@ -549,7 +553,7 @@ test("keeps main-app shortcuts from navigating the huddle room", async ({
   }
 
   await page.evaluate(async (channelId) => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("deep-link-message", {
+    await window.__AMBUSH_E2E_EMIT_TAURI_EVENT__?.("deep-link-message", {
       channelId,
       messageId: "mock-general-welcome",
       threadRootId: null,
@@ -565,12 +569,12 @@ test("keeps main-app shortcuts from navigating the huddle room", async ({
     relayUrl: "wss://other.example",
   };
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("deep-link-connect", null);
+    await window.__AMBUSH_E2E_EMIT_TAURI_EVENT__?.("deep-link-connect", null);
   });
   await expect
     .poll(() =>
       page.evaluate(async () =>
-        window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+        window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
           "take_pending_community_deep_link",
         ),
       ),
@@ -596,7 +600,7 @@ test("speaks the first eligible agent reply with its participant identity", asyn
   await waitForMockLiveSubscription(page, "huddle");
 
   await page.evaluate((agentPubkey) => {
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "huddle",
       content: "This first reply should be spoken.",
       pubkey: agentPubkey,
@@ -607,7 +611,7 @@ test("speaks the first eligible agent reply with its participant identity", asyn
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).find(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).find(
             (entry) => entry.command === "speak_agent_message",
           )?.payload,
       ),
@@ -641,11 +645,11 @@ test("animates the responding agent with the shared speaker ring", async ({
 
   const agentAvatar = page
     .getByTestId("huddle-participant-strip")
-    .locator(".buzz-huddle-speaking-avatar")
+    .locator(".ambush-huddle-speaking-avatar")
     .nth(1);
   await expect(agentAvatar).toBeVisible();
   await page.evaluate(async (pubkey) => {
-    await window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
+    await window.__AMBUSH_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
       pubkey,
       level: 0.8,
     });
@@ -653,13 +657,13 @@ test("animates the responding agent with the shared speaker ring", async ({
   await expect
     .poll(() =>
       agentAvatar.evaluate((element) =>
-        element.style.getPropertyValue("--buzz-huddle-speaker-opacity"),
+        element.style.getPropertyValue("--ambush-huddle-speaker-opacity"),
       ),
     )
     .toBe("0.890");
 
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
+    await window.__AMBUSH_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
       pubkey: null,
       level: 0,
     });
@@ -667,7 +671,7 @@ test("animates the responding agent with the shared speaker ring", async ({
   await expect
     .poll(() =>
       agentAvatar.evaluate((element) =>
-        element.style.getPropertyValue("--buzz-huddle-speaker-opacity"),
+        element.style.getPropertyValue("--ambush-huddle-speaker-opacity"),
       ),
     )
     .toBe("0");
@@ -709,7 +713,7 @@ test("stops the speaking agent from the huddle controls", async ({ page }) => {
     .nth(1);
   const agentAvatar = page
     .getByTestId("huddle-participant-strip")
-    .locator(".buzz-huddle-speaking-avatar")
+    .locator(".ambush-huddle-speaking-avatar")
     .nth(1);
   const labelSlots = page.getByTestId("huddle-participant-label-slot");
   await expect(agentAvatar).toBeVisible();
@@ -723,7 +727,7 @@ test("stops the speaking agent from the huddle controls", async ({ page }) => {
   expect(humanLabelBox?.height).toBe(idleAgentLabelBox?.height);
   expect(humanLabelBox?.width).toBe(idleAgentLabelBox?.width);
   await page.evaluate(async (pubkey) => {
-    await window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
+    await window.__AMBUSH_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
       pubkey,
       level: 0.8,
     });
@@ -731,7 +735,7 @@ test("stops the speaking agent from the huddle controls", async ({ page }) => {
   await expect
     .poll(() =>
       agentAvatar.evaluate((element) =>
-        element.style.getPropertyValue("--buzz-huddle-speaker-opacity"),
+        element.style.getPropertyValue("--ambush-huddle-speaker-opacity"),
       ),
     )
     .toBe("0.890");
@@ -748,7 +752,7 @@ test("stops the speaking agent from the huddle controls", async ({ page }) => {
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
             (entry) => entry.command === "interrupt_huddle_speech",
           )?.payload ?? null,
       ),
@@ -784,7 +788,7 @@ test("assigns distinct agent voices and exposes compact per-agent controls", asy
   await expect
     .poll(async () => {
       const state = (await page.evaluate(() =>
-        window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_huddle_state"),
+        window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.("get_huddle_state"),
       )) as {
         agent_voice_settings: Record<
           string,
@@ -800,7 +804,7 @@ test("assigns distinct agent voices and exposes compact per-agent controls", asy
       },
     });
   const assignedVoices = await page.evaluate(async () => {
-    const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+    const state = (await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
       "get_huddle_state",
     )) as {
       agent_voice_settings: Record<string, { voice_key: string }>;
@@ -839,7 +843,7 @@ test("assigns distinct agent voices and exposes compact per-agent controls", asy
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const updates = (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        const updates = (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           (entry) => entry.command === "set_huddle_agent_voice",
         );
         return updates.at(-1)?.payload ?? null;
@@ -871,7 +875,7 @@ test("adds channel-mentioned agents to the live huddle roster", async ({
   await expect(participantTiles).toHaveCount(2);
   const result = await page.evaluate(
     async ({ channelId, pubkey }) =>
-      window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+      window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
         "sync_agents_to_active_huddle",
         {
           channelId,
@@ -933,7 +937,7 @@ test("does not enroll available agents when sending an ordinary message", async 
   expect(
     await page.evaluate(
       () =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           (entry) => entry.command === "sync_agents_to_active_huddle",
         ).length,
     ),
@@ -984,17 +988,17 @@ test("returns the companion transcript to the same channel in the main app", asy
   });
   await page.goto("/");
 
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "true",
   );
   await page.evaluate(() => {
-    const threadRoot = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    const threadRoot = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "huddle",
       content: "Transcript written while the companion is open",
     });
     if (!threadRoot) throw new Error("Failed to create Huddle thread root.");
-    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "huddle",
       content: "Agent reply preserved across the Huddle handoff",
       parentEventId: threadRoot.id,
@@ -1005,12 +1009,12 @@ test("returns the companion transcript to the same channel in the main app", asy
   await page
     .getByRole("button", { name: "Open huddle in a new window" })
     .click();
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "false",
   );
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
+    await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
   });
 
   await expect(page).toHaveURL(
@@ -1051,12 +1055,12 @@ test("returns to the parent channel when leaving a huddle channel in view", asyn
   });
   await page.goto("/");
 
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "true",
   );
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
+    await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
   });
   await expect(page).toHaveURL(
     new RegExp(`/channels/${HUDDLE_CHANNEL_ID.replaceAll("-", "\\-")}`),
@@ -1140,7 +1144,7 @@ test("removes an agent from its menu without showing an extra participant contro
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).some(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).some(
           (entry) => entry.command === "remove_agent_from_huddle",
         ),
       ),
@@ -1170,7 +1174,7 @@ test("keeps a newer huddle event over a delayed hydration snapshot", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).some(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).some(
           (entry) => entry.command === "get_huddle_state",
         ),
       ),
@@ -1218,23 +1222,23 @@ test("keeps a starting huddle in the drawer after its companion closes", async (
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "open_huddle_window",
           ).length,
       ),
     )
     .toBe(1);
   const ephemeralChannelId = await page.evaluate(async () => {
-    const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+    const state = (await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
       "get_huddle_state",
     )) as { ephemeral_channel_id: string };
     return state.ephemeral_channel_id;
   });
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
+    await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
   });
 
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "true",
   );
@@ -1244,7 +1248,7 @@ test("keeps a starting huddle in the drawer after its companion closes", async (
   await expect
     .poll(() =>
       page.evaluate(async () => {
-        const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+        const state = (await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
           "get_huddle_state",
         )) as { phase: string };
         return state.phase;
@@ -1255,13 +1259,13 @@ test("keeps a starting huddle in the drawer after its companion closes", async (
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "open_huddle_window",
           ).length,
       ),
     )
     .toBe(1);
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "true",
   );
@@ -1304,7 +1308,7 @@ test("starts muted with Push to Talk while preserving manual microphone control"
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
             (entry) => entry.command === "set_huddle_manual_mic_unmuted",
           )?.payload,
       ),
@@ -1319,7 +1323,7 @@ test("starts muted with Push to Talk while preserving manual microphone control"
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
             (entry) => entry.command === "set_huddle_manual_mic_unmuted",
           )?.payload,
       ),
@@ -1332,7 +1336,7 @@ test("starts muted with Push to Talk while preserving manual microphone control"
   );
 
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
+    await window.__AMBUSH_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
   });
   await expect(muteButton).toBeVisible();
   await muteButton.click();
@@ -1340,7 +1344,7 @@ test("starts muted with Push to Talk while preserving manual microphone control"
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
             (entry) => entry.command === "set_huddle_manual_mic_unmuted",
           )?.payload,
       ),
@@ -1348,24 +1352,24 @@ test("starts muted with Push to Talk while preserving manual microphone control"
     .toEqual({ enabled: false });
 
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", false);
+    await window.__AMBUSH_E2E_EMIT_TAURI_EVENT__?.("ptt-state", false);
   });
   await expect(unmuteButton).toBeVisible();
 
   await page.getByRole("button", { name: "Audio settings" }).click();
   await page.getByRole("button", { name: "Turn off Push to Talk" }).click();
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
+    await window.__AMBUSH_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
   });
   await expect(unmuteButton).toBeVisible();
   await page.getByRole("button", { name: "Turn on Push to Talk" }).click();
   await expect(unmuteButton).toBeVisible();
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
+    await window.__AMBUSH_E2E_EMIT_TAURI_EVENT__?.("ptt-state", true);
   });
   await expect(muteButton).toBeVisible();
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_EMIT_TAURI_EVENT__?.("ptt-state", false);
+    await window.__AMBUSH_E2E_EMIT_TAURI_EVENT__?.("ptt-state", false);
   });
   await expect(unmuteButton).toBeVisible();
 
@@ -1375,7 +1379,7 @@ test("starts muted with Push to Talk while preserving manual microphone control"
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
             (entry) => entry.command === "set_huddle_manual_mic_unmuted",
           )?.payload,
       ),
@@ -1411,7 +1415,7 @@ test("toggles the current channel huddle with Control+Shift+Space", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "start_huddle",
           ).length,
       ),
@@ -1420,7 +1424,7 @@ test("toggles the current channel huddle with Control+Shift+Space", async ({
   await expect
     .poll(() =>
       page.evaluate(async () => {
-        const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+        const state = (await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
           "get_huddle_state",
         )) as { phase: string };
         return state.phase;
@@ -1433,7 +1437,7 @@ test("toggles the current channel huddle with Control+Shift+Space", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "leave_huddle",
           ).length,
       ),
@@ -1456,7 +1460,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
     .poll(() =>
       page.evaluate(
         (pubkey) =>
-          window.__BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?.({
+          window.__AMBUSH_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?.({
             ownerPubkey: pubkey,
             kind: 44100,
           }) ?? false,
@@ -1466,7 +1470,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
     .toBe(true);
   const channelReadsBeforeStart = await page.evaluate(
     () =>
-      (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+      (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
         (entry) => entry.command === "get_channels",
       ).length,
   );
@@ -1479,7 +1483,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).find(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).find(
             (entry) => entry.command === "start_huddle",
           )?.payload,
       ),
@@ -1492,28 +1496,28 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "open_huddle_window",
           ).length,
       ),
     )
     .toBe(1);
   const startingState = await page.evaluate(async () =>
-    window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_huddle_state"),
+    window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.("get_huddle_state"),
   );
   expect(startingState).toMatchObject({ phase: "creating" });
   await expect
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "get_channels",
           ).length,
       ),
     )
     .toBeGreaterThan(channelReadsBeforeStart);
   const pendingEphemeralChannelId = await page.evaluate(async () => {
-    const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+    const state = (await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
       "get_huddle_state",
     )) as { ephemeral_channel_id: string };
     return state.ephemeral_channel_id;
@@ -1521,7 +1525,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
   await expect(
     page.locator(`[data-channel-id="${pendingEphemeralChannelId}"]`),
   ).toHaveCount(0);
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "false",
   );
@@ -1529,20 +1533,20 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
     .poll(() =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "open_huddle_window",
           ).length,
       ),
     )
     .toBe(1);
   await expect(page.getByTestId("profile-huddle-control")).toBeVisible();
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "false",
   );
 
   const ephemeralChannelId = await page.evaluate(async () => {
-    const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+    const state = (await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.(
       "get_huddle_state",
     )) as { ephemeral_channel_id: string };
     return state.ephemeral_channel_id;
@@ -1552,9 +1556,9 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
   );
   await expect(huddleSidebarChannel).toHaveCount(0);
   await page.evaluate(async () => {
-    await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
+    await window.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
   });
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "true",
   );
@@ -1568,7 +1572,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
     .getByRole("button", { name: "Open huddle in a new window" })
     .click();
   await expect(huddleSidebarChannel).toHaveCount(0);
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "false",
   );
@@ -1576,7 +1580,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
 
   await page.getByRole("button", { name: "Leave huddle" }).click();
   await expect(huddleSidebarChannel).toHaveCount(0);
-  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+  await expect(page.locator(".ambush-huddle-shell")).toHaveAttribute(
     "data-huddle-open",
     "false",
   );
@@ -1585,7 +1589,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
   const lifecycleCreatedAt = Math.floor(Date.now() / 1000);
   await page.evaluate(
     ({ createdAt, ephemeralChannelId, kind }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "alice-tyler",
         content: JSON.stringify({ ephemeral_channel_id: ephemeralChannelId }),
         createdAt,
@@ -1603,7 +1607,7 @@ test("starts an agent DM huddle and hides its backing channel after it ends", as
   await waitForMockLiveSubscription(page, "alice-tyler", KIND_HUDDLE_ENDED);
   await page.evaluate(
     ({ createdAt, ephemeralChannelId, kind }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "alice-tyler",
         content: JSON.stringify({ ephemeral_channel_id: ephemeralChannelId }),
         createdAt,
@@ -1706,7 +1710,7 @@ test("starts an available stopped agent before adding it to the huddle", async (
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
           .filter(
             (entry) =>
               entry.command === "start_managed_agent" ||
@@ -1748,7 +1752,7 @@ test("stops an agent started solely for a failed huddle add", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
           .filter((entry) =>
             [
               "start_managed_agent",
@@ -1796,7 +1800,7 @@ test("does not deploy a provider agent when its huddle add fails", async ({
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? [])
           .filter((entry) =>
             [
               "start_managed_agent",

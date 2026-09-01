@@ -61,8 +61,8 @@ beforeEach(() => {
 
 test("migrates the legacy selected-address array", () => {
   const parsed = parseProjectSidebarMembershipPayload([
-    "30621:alice:buzz",
-    "30621:alice:buzz",
+    "30621:alice:ambush",
+    "30621:alice:ambush",
     "",
     42,
   ]);
@@ -70,7 +70,7 @@ test("migrates the legacy selected-address array", () => {
   assert.deepEqual(parsed, {
     version: 1,
     projects: {
-      "30621:alice:buzz": { selected: true, updatedAt: 0 },
+      "30621:alice:ambush": { selected: true, updatedAt: 0 },
     },
   });
 });
@@ -94,10 +94,10 @@ test("merge preserves independent selections from two clients", () => {
 test("newer removal wins over an older selection", () => {
   const merged = mergeProjectSidebarMembershipStores(
     store({
-      "30621:alice:buzz": { selected: true, updatedAt: 100 },
+      "30621:alice:ambush": { selected: true, updatedAt: 100 },
     }),
     store({
-      "30621:alice:buzz": { selected: false, updatedAt: 200 },
+      "30621:alice:ambush": { selected: false, updatedAt: 200 },
     }),
   );
 
@@ -106,10 +106,10 @@ test("newer removal wins over an older selection", () => {
 
 test("equal-timestamp conflicts converge with removal winning", () => {
   const selected = store({
-    "30621:alice:buzz": { selected: true, updatedAt: 100 },
+    "30621:alice:ambush": { selected: true, updatedAt: 100 },
   });
   const removed = store({
-    "30621:alice:buzz": { selected: false, updatedAt: 100 },
+    "30621:alice:ambush": { selected: false, updatedAt: 100 },
   });
 
   assert.deepEqual(

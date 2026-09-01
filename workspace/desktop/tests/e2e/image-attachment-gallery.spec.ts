@@ -22,11 +22,11 @@ async function waitForMockLiveSubscription(page: Page, channelName: string) {
         return (
           (
             window as Window & {
-              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+              __AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                 channelName: string;
               }) => boolean;
             }
-          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          ).__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: name,
           }) ?? false
         );
@@ -46,7 +46,7 @@ async function emitMockMessage(
     ({ body, createdAt: timestamp, parent, tags }) => {
       const event = (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
             createdAt?: number;
@@ -54,7 +54,7 @@ async function emitMockMessage(
             extraTags?: string[][];
           }) => { id?: string } | undefined;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: body,
         createdAt: timestamp,
@@ -524,7 +524,7 @@ test("thread gallery includes only currently rendered media", async ({
 test("preview-first galleries retain Markdown image actions", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/6705";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/6705";
   await installMockBridge(page, {
     uploadDescriptors: [
       {
@@ -546,7 +546,7 @@ test("preview-first galleries retain Markdown image actions", async ({
     }),
   );
   await page.addInitScript(() => {
-    localStorage.setItem("buzz.appearance.linkPreviewStyle", "rich");
+    localStorage.setItem("ambush.appearance.linkPreviewStyle", "rich");
   });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -606,8 +606,8 @@ test("preview-first galleries retain Markdown image actions", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-            .__BUZZ_E2E_COMMANDS__ ?? [],
+          (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+            .__AMBUSH_E2E_COMMANDS__ ?? [],
       ),
     )
     .toContain("download_image");
@@ -618,8 +618,8 @@ test("preview-first galleries retain Markdown image actions", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-            .__BUZZ_E2E_COMMANDS__ ?? [],
+          (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+            .__AMBUSH_E2E_COMMANDS__ ?? [],
       ),
     )
     .toContain("copy_image_to_clipboard");
@@ -669,13 +669,13 @@ test("hidden spoiler images are excluded from gallery navigation until revealed"
     ({ content, extraTags }) => {
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
             extraTags?: string[][];
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content,
         extraTags,
@@ -718,7 +718,7 @@ test("hidden spoiler images are excluded from gallery navigation until revealed"
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 
-  const spoiler = row.locator(".buzz-spoiler[data-spoiler]").first();
+  const spoiler = row.locator(".ambush-spoiler[data-spoiler]").first();
   await expect(spoiler).toHaveAttribute("data-revealed", "false");
   await spoiler.click();
   await expect(spoiler).toHaveAttribute("data-revealed", "true");
@@ -760,13 +760,13 @@ test("message images load a thumbnail before requesting the original", async ({
     ({ content, extraTags }) => {
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
             extraTags: string[][];
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content,
         extraTags,
@@ -824,12 +824,12 @@ test("gallery items without imeta dimensions keep their thumbnail aspect ratio",
     ({ content }) => {
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content,
       });
@@ -879,9 +879,9 @@ test("forum markdown images use the markdown root as their gallery scope", async
         return (
           typeof (
             window as Window & {
-              __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: unknown;
+              __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: unknown;
             }
-          ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function"
+          ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function"
         );
       });
     })
@@ -891,13 +891,13 @@ test("forum markdown images use the markdown root as their gallery scope", async
     ({ content }) => {
       const event = (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
             kind: number;
           }) => { id: string };
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "watercooler",
         content,
         kind: 45001,
@@ -972,12 +972,12 @@ test("multi-image mosaics keep a fixed width and grow by rows", async ({
   await page.evaluate((imageUrls) => {
     const emit = (
       window as Window & {
-        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+        __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
         }) => unknown;
       }
-    ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
 
     for (const count of [2, 4, 5]) {
       emit?.({
@@ -1027,12 +1027,12 @@ test("image mosaic screenshot", async ({ page }) => {
     ({ portraitUrl, secondUrl, wideUrl }) => {
       (
         window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __AMBUSH_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
           }) => unknown;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      ).__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: [
           "Weekend photo dump",
@@ -1185,8 +1185,8 @@ test("right-click image shows Copy image and invokes copy command", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-            .__BUZZ_E2E_COMMANDS__ ?? [],
+          (window as Window & { __AMBUSH_E2E_COMMANDS__?: string[] })
+            .__AMBUSH_E2E_COMMANDS__ ?? [],
       ),
     )
     .toContain("copy_image_to_clipboard");

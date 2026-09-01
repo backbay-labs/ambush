@@ -26,7 +26,7 @@ import {
 } from "./lib/sound";
 import type { NotificationSettings } from "./hooks";
 
-const HOME_FEED_SEEN_STORAGE_KEY = "buzz-home-feed-seen.v1";
+const HOME_FEED_SEEN_STORAGE_KEY = "ambush-home-feed-seen.v1";
 const HOME_FEED_SEEN_MAX_ITEMS = 500;
 
 function homeFeedSeenStorageKey(pubkey: string) {

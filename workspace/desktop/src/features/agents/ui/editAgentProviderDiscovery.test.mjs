@@ -21,11 +21,11 @@ import {
 // usePersonaModelDiscovery (keyed on provider), so the model dropdown updates
 // without saving. These tests guard the visibility predicate.
 
-test("editAgent_providerFieldVisible_forBuzzAgent", () => {
+test("editAgent_providerFieldVisible_forAmbushAgent", () => {
   assert.equal(
-    runtimeSupportsLlmProviderSelection("buzz-agent"),
+    runtimeSupportsLlmProviderSelection("ambush-agent"),
     true,
-    "buzz-agent runtime must expose the provider picker",
+    "ambush-agent runtime must expose the provider picker",
   );
 });
 
@@ -67,7 +67,7 @@ test("editAgent_providerFieldHidden_forBlankRuntime", () => {
 
 test("editAgent_providerOptions_includesDatabricksV2AndV1OnOSS", () => {
   // OSS builds: no hideProviderIds → both v1 and v2 appear.
-  const options = getPersonaProviderOptions("", "buzz-agent");
+  const options = getPersonaProviderOptions("", "ambush-agent");
   const ids = options.map((o) => o.id);
   assert.ok(ids.includes("databricks_v2"), "databricks_v2 must be present");
   assert.ok(
@@ -80,7 +80,7 @@ test("editAgent_providerOptions_hidesDatabricksV1OnInternalBuild", () => {
   // Internal Block builds: pass hideProviderIds to suppress v1.
   const options = getPersonaProviderOptions(
     "",
-    "buzz-agent",
+    "ambush-agent",
     "",
     new Set(["databricks"]),
   );
@@ -100,7 +100,7 @@ test("editAgent_providerOptions_includesDatabricksV1AsCurrentEvenWhenHidden", ()
   // current value even when hideProviderIds hides it from fresh selection.
   const options = getPersonaProviderOptions(
     "databricks",
-    "buzz-agent",
+    "ambush-agent",
     "",
     new Set(["databricks"]),
   );
@@ -112,7 +112,7 @@ test("editAgent_providerOptions_includesDatabricksV1AsCurrentEvenWhenHidden", ()
 });
 
 test("editAgent_providerOptions_includesDefaultEntry", () => {
-  const options = getPersonaProviderOptions("", "buzz-agent");
+  const options = getPersonaProviderOptions("", "ambush-agent");
   // The first entry is the default (empty id) — clearing back to runtime default.
   assert.equal(
     options[0].id,
@@ -122,7 +122,7 @@ test("editAgent_providerOptions_includesDefaultEntry", () => {
 });
 
 test("editAgent_providerOptions_includesCurrentIfCustom", () => {
-  const options = getPersonaProviderOptions("my-custom-llm", "buzz-agent");
+  const options = getPersonaProviderOptions("my-custom-llm", "ambush-agent");
   const ids = options.map((o) => o.id);
   assert.ok(
     ids.includes("my-custom-llm"),
@@ -198,13 +198,13 @@ test("editAgent_modelFallback_selectNotDisabledLogic", () => {
 
 // ── Finding 2 fix: runtime switch enables provider picker ───────────────────
 //
-// Switching to buzz-agent runtime (which supports LLM provider selection)
+// Switching to ambush-agent runtime (which supports LLM provider selection)
 // must make the provider field visible, enabling live discovery.
 
-test("editAgent_runtimeSwitch_toBuzzAgentEnablesProvider", () => {
-  // Simulate: user switches from "claude" to "buzz-agent"
+test("editAgent_runtimeSwitch_toAmbushAgentEnablesProvider", () => {
+  // Simulate: user switches from "claude" to "ambush-agent"
   const previousRuntime = "claude";
-  const nextRuntime = "buzz-agent";
+  const nextRuntime = "ambush-agent";
   const previousSupportsProvider =
     runtimeSupportsLlmProviderSelection(previousRuntime);
   const nextSupportsProvider = runtimeSupportsLlmProviderSelection(nextRuntime);
@@ -216,13 +216,13 @@ test("editAgent_runtimeSwitch_toBuzzAgentEnablesProvider", () => {
   assert.equal(
     nextSupportsProvider,
     true,
-    "buzz-agent MUST support provider selection",
+    "ambush-agent MUST support provider selection",
   );
   // The provider field visibility transitions false → true on runtime change.
   assert.equal(
     !previousSupportsProvider && nextSupportsProvider,
     true,
-    "switching from claude to buzz-agent must make provider field visible",
+    "switching from claude to ambush-agent must make provider field visible",
   );
 });
 
@@ -261,7 +261,7 @@ test("editAgent_providerFieldHidden_forLockedRuntimeEvenWithSavedProvider", () =
 // runtime had a model that's not valid for the next runtime.
 
 test("editAgent_modelClearedOnRuntimeChange", () => {
-  const previousRuntime = "buzz-agent";
+  const previousRuntime = "ambush-agent";
   const nextRuntime = "claude";
   assert.equal(
     shouldClearModelForRuntimeChange(previousRuntime, nextRuntime),
@@ -271,7 +271,7 @@ test("editAgent_modelClearedOnRuntimeChange", () => {
 });
 
 test("editAgent_modelNotClearedWhenRuntimeUnchanged", () => {
-  const runtime = "buzz-agent";
+  const runtime = "ambush-agent";
   assert.equal(
     shouldClearModelForRuntimeChange(runtime, runtime),
     false,
@@ -289,9 +289,9 @@ test("editAgent_modelNotClearedWhenRuntimeUnchanged", () => {
 test("editAgent_catalogArrival_rederivesRuntimeIdWhenNotTouched", () => {
   // Simulate: open effect runs with empty runtimes → selectedRuntimeId = "custom".
   // Then catalog arrives with the saved agent's runtime.
-  const agentCommand = "/usr/local/bin/buzz-agent";
+  const agentCommand = "/usr/local/bin/ambush-agent";
   const catalog = [
-    { id: "buzz-agent", command: agentCommand, defaultArgs: [] },
+    { id: "ambush-agent", command: agentCommand, defaultArgs: [] },
     { id: "claude", command: "/usr/local/bin/claude", defaultArgs: [] },
   ];
   const runtimeTouched = false; // user has not selected a runtime
@@ -309,7 +309,7 @@ test("editAgent_catalogArrival_rederivesRuntimeIdWhenNotTouched", () => {
 
   assert.equal(
     selectedRuntimeId,
-    "buzz-agent",
+    "ambush-agent",
     "catalog-arrival effect must update selectedRuntimeId from 'custom' to the matched runtime",
   );
 });
@@ -317,9 +317,9 @@ test("editAgent_catalogArrival_rederivesRuntimeIdWhenNotTouched", () => {
 test("editAgent_catalogArrival_doesNotOverwriteUserSelection", () => {
   // Simulate: user has already picked a runtime (runtimeTouched = true).
   // The catalog-arrival effect must not overwrite the user's choice.
-  const agentCommand = "/usr/local/bin/buzz-agent";
+  const agentCommand = "/usr/local/bin/ambush-agent";
   const catalog = [
-    { id: "buzz-agent", command: agentCommand, defaultArgs: [] },
+    { id: "ambush-agent", command: agentCommand, defaultArgs: [] },
   ];
   const runtimeTouched = true; // user already picked goose
 
@@ -342,9 +342,9 @@ test("editAgent_catalogArrival_doesNotOverwriteUserSelection", () => {
 
 test("editAgent_noOpSavePreservesProvider_whenCatalogLate", () => {
   // Simulate the provider persistence logic when catalog arrived late.
-  // If the catalog-arrival effect correctly sets selectedRuntimeId = "buzz-agent",
+  // If the catalog-arrival effect correctly sets selectedRuntimeId = "ambush-agent",
   // then llmProviderFieldVisible = true and the provider is preserved on save.
-  const selectedRuntimeId = "buzz-agent"; // correctly derived after catalog arrival
+  const selectedRuntimeId = "ambush-agent"; // correctly derived after catalog arrival
   const savedProvider = "databricks_v2";
   const normalizedProvider = savedProvider;
 
@@ -368,7 +368,7 @@ test("editAgent_noOpSavePreservesProvider_whenCatalogLate", () => {
   assert.equal(
     llmProviderFieldVisible,
     true,
-    "provider field must be visible once catalog derives buzz-agent runtime",
+    "provider field must be visible once catalog derives ambush-agent runtime",
   );
   assert.equal(
     providerUpdate,
@@ -388,10 +388,10 @@ test("editAgent_runtimeDropdown_pinsHarnessWhenConcreteCatalogRuntimeSelected", 
   let inheritHarness = true; // starts inherited
 
   // The fixed handler sets inheritHarness=false when a catalog runtime is picked.
-  const _nextRuntimeId = "buzz-agent";
+  const _nextRuntimeId = "ambush-agent";
   const catalogRuntime = {
-    id: "buzz-agent",
-    command: "/usr/local/bin/buzz-agent",
+    id: "ambush-agent",
+    command: "/usr/local/bin/ambush-agent",
     defaultArgs: [],
   };
   if (catalogRuntime.command) {
@@ -449,11 +449,11 @@ test("editAgent_runtimeDropdown_keepsInheritWhenCatalogEntryHasNoCommand", () =>
   let inheritHarness = true; // inherited Claude agent
 
   const NO_RUNTIME_DROPDOWN_VALUE = "__none__";
-  const nextValue = "buzz-agent"; // catalog entry, but adapter missing
+  const nextValue = "ambush-agent"; // catalog entry, but adapter missing
   const nextRuntimeId =
     nextValue === NO_RUNTIME_DROPDOWN_VALUE ? "" : nextValue;
   const resolvedRuntimeId = nextRuntimeId || "custom";
-  const nextRuntime = { id: "buzz-agent", command: null, defaultArgs: [] };
+  const nextRuntime = { id: "ambush-agent", command: null, defaultArgs: [] };
 
   // Mirror the guarded handler: only pin when a command can be supplied.
   const isCustomCommand = resolvedRuntimeId === "custom";
@@ -552,9 +552,9 @@ test("editAgent_missingRequiredEnvKey_blocksSaveViaValidity", () => {
     acpCommand: "",
     respondTo: "all",
     respondToAllowlistLength: 0,
-    selectedRuntimeId: "buzz-agent",
+    selectedRuntimeId: "ambush-agent",
     inheritHarness: false,
-    agentCommand: "buzz-agent",
+    agentCommand: "ambush-agent",
     requiredEnvKeyMissing: false,
   };
 
@@ -633,12 +633,12 @@ test("editAgent_inheritedAgentRuntimeSwitch_producesConsistentCommandProviderPai
   // Bad path before fix: inheritHarness stays true, so agentCommandUpdate is
   // undefined (agent still inherits Claude), but provider="databricks_v2" persists.
   //
-  // After fix: selecting buzz-agent sets inheritHarness=false, so agentCommandUpdate
-  // resolves to the buzz-agent command, and provider persists consistently.
+  // After fix: selecting ambush-agent sets inheritHarness=false, so agentCommandUpdate
+  // resolves to the ambush-agent command, and provider persists consistently.
 
   // Initial state: inherited Claude agent
   const inheritHarness = false; // after fix: pinned by runtime switch
-  const selectedRuntimeCommand = "/usr/local/bin/buzz-agent";
+  const selectedRuntimeCommand = "/usr/local/bin/ambush-agent";
   const agentOriginalCommand = ""; // was inheriting, no command
   const agentCommandOverride = null;
 
@@ -651,7 +651,7 @@ test("editAgent_inheritedAgentRuntimeSwitch_producesConsistentCommandProviderPai
       ? selectedRuntimeCommand.trim()
       : undefined;
 
-  const selectedRuntimeId = "buzz-agent";
+  const selectedRuntimeId = "ambush-agent";
   const llmProviderFieldVisible =
     runtimeSupportsLlmProviderSelection(selectedRuntimeId);
   const chosenProvider = "databricks_v2";
@@ -670,7 +670,7 @@ test("editAgent_inheritedAgentRuntimeSwitch_producesConsistentCommandProviderPai
 
   assert.equal(
     agentCommandUpdate,
-    "/usr/local/bin/buzz-agent",
+    "/usr/local/bin/ambush-agent",
     "after runtime pin, agentCommandUpdate must be the concrete runtime command",
   );
   assert.equal(
@@ -753,30 +753,34 @@ function computeProviderUpdate({ capability, savedProvider, currentProvider }) {
 
 test("editAgent_inheritCheckboxRoundTrip_doesNotPersistProviderOnInheritedRuntime", () => {
   // Simulate: inherited Claude agent (agentCommandOverride == null)
-  // → user picks buzz-agent (inheritHarness→false, selectedRuntimeId='buzz-agent')
+  // → user picks ambush-agent (inheritHarness→false, selectedRuntimeId='ambush-agent')
   // → user picks databricks_v2
-  // → user RE-CHECKS inherit (inheritHarness→true, selectedRuntimeId STAYS 'buzz-agent')
+  // → user RE-CHECKS inherit (inheritHarness→true, selectedRuntimeId STAYS 'ambush-agent')
   // → save: effective runtime is inherited (Claude), provider must NOT be persisted.
 
   const inheritHarness = true; // re-checked before save
   const agentCommand = "/usr/local/bin/claude"; // original Claude command
   const runtimes = [
     { id: "claude", command: "/usr/local/bin/claude", defaultArgs: [] },
-    { id: "buzz-agent", command: "/usr/local/bin/buzz-agent", defaultArgs: [] },
+    {
+      id: "ambush-agent",
+      command: "/usr/local/bin/ambush-agent",
+      defaultArgs: [],
+    },
   ];
-  const selectedRuntimeId = "buzz-agent"; // dropdown state (stale after re-check)
+  const selectedRuntimeId = "ambush-agent"; // dropdown state (stale after re-check)
   const selectedRuntime = runtimes.find((r) => r.id === selectedRuntimeId);
   const savedProvider = null; // was null on open (inherited Claude had no provider)
-  const chosenProvider = "databricks_v2"; // chosen while dropdown was buzz-agent
+  const chosenProvider = "databricks_v2"; // chosen while dropdown was ambush-agent
 
-  // llmProviderFieldVisible is driven by the live dropdown (buzz-agent → true).
+  // llmProviderFieldVisible is driven by the live dropdown (ambush-agent → true).
   // This is the UX visibility — unchanged by the fix.
   const llmProviderFieldVisible =
     runtimeSupportsLlmProviderSelection(selectedRuntimeId);
   assert.equal(
     llmProviderFieldVisible,
     true,
-    "provider field is visible (dropdown shows buzz-agent) — this is the UX state",
+    "provider field is visible (dropdown shows ambush-agent) — this is the UX state",
   );
 
   // llmProviderCanPersistAtSubmit keys on the EFFECTIVE runtime.
@@ -815,7 +819,7 @@ test("editAgent_inheritCheckboxRoundTrip_doesNotPersistProviderOnInheritedRuntim
 });
 
 test("editAgent_inheritCheckboxRoundTrip_clearsStaleSavedProviderWhenRevertingToInherit", () => {
-  // Variant: agent previously had a provider saved (e.g. was pinned to buzz-agent
+  // Variant: agent previously had a provider saved (e.g. was pinned to ambush-agent
   // with databricks_v2). User opens edit, re-checks inherit (inherited runtime is
   // Claude) → provider must be cleared (sent as null).
 
@@ -823,9 +827,13 @@ test("editAgent_inheritCheckboxRoundTrip_clearsStaleSavedProviderWhenRevertingTo
   const agentCommand = "/usr/local/bin/claude"; // inherited Claude command
   const runtimes = [
     { id: "claude", command: "/usr/local/bin/claude", defaultArgs: [] },
-    { id: "buzz-agent", command: "/usr/local/bin/buzz-agent", defaultArgs: [] },
+    {
+      id: "ambush-agent",
+      command: "/usr/local/bin/ambush-agent",
+      defaultArgs: [],
+    },
   ];
-  const selectedRuntimeId = "buzz-agent"; // dropdown state
+  const selectedRuntimeId = "ambush-agent"; // dropdown state
   const selectedRuntime = runtimes.find((r) => r.id === selectedRuntimeId);
   const savedProvider = "databricks_v2"; // was saved on open (pre-existing provider)
   const chosenProvider = "databricks_v2"; // unchanged from saved
@@ -860,38 +868,42 @@ test("editAgent_inheritCheckboxRoundTrip_clearsStaleSavedProviderWhenRevertingTo
 //                  on a name-only / no-op save ────────────────────────────────
 //
 // An agent with agentCommandOverride==null (inheritHarness=true) but whose
-// persona's runtime is buzz-agent/Goose legitimately carries a provider
+// persona's runtime is ambush-agent/Goose legitimately carries a provider
 // snapshot (ManagedAgentRecord.provider). A no-op or name-only save must
 // preserve that snapshot — not clear it. The fix derives the effective runtime
 // from agent.agentCommand in the catalog rather than using !inheritHarness as
 // a blanket not-provider-capable proxy.
 
-test("editAgent_inheritedBuzzAgentProvider_preservedOnNameOnlySave", () => {
-  // Inherited buzz-agent persona with databricks_v2 snapshot.
+test("editAgent_inheritedAmbushAgentProvider_preservedOnNameOnlySave", () => {
+  // Inherited ambush-agent persona with databricks_v2 snapshot.
   // User makes a name-only edit (never touches runtime or provider).
-  // The catalog-arrival effect correctly derived selectedRuntimeId="buzz-agent".
+  // The catalog-arrival effect correctly derived selectedRuntimeId="ambush-agent".
 
   const inheritHarness = true; // agentCommandOverride == null → inheriting
-  const agentCommand = "/usr/local/bin/buzz-agent"; // inherited buzz-agent command
+  const agentCommand = "/usr/local/bin/ambush-agent"; // inherited ambush-agent command
   const runtimes = [
-    { id: "buzz-agent", command: "/usr/local/bin/buzz-agent", defaultArgs: [] },
+    {
+      id: "ambush-agent",
+      command: "/usr/local/bin/ambush-agent",
+      defaultArgs: [],
+    },
     { id: "claude", command: "/usr/local/bin/claude", defaultArgs: [] },
   ];
-  const selectedRuntimeId = "buzz-agent"; // correctly derived by catalog-arrival effect
+  const selectedRuntimeId = "ambush-agent"; // correctly derived by catalog-arrival effect
   const selectedRuntime = runtimes.find((r) => r.id === selectedRuntimeId);
   const savedProvider = "databricks_v2"; // valid provider snapshot
   const currentProvider = "databricks_v2"; // unchanged by user
 
-  // llmProviderFieldVisible (UX) is true since dropdown shows buzz-agent.
+  // llmProviderFieldVisible (UX) is true since dropdown shows ambush-agent.
   const llmProviderFieldVisible =
     runtimeSupportsLlmProviderSelection(selectedRuntimeId);
   assert.equal(
     llmProviderFieldVisible,
     true,
-    "provider field must be visible for inherited buzz-agent",
+    "provider field must be visible for inherited ambush-agent",
   );
 
-  // The effective runtime for submit: inherited → match agentCommand in catalog → buzz-agent.
+  // The effective runtime for submit: inherited → match agentCommand in catalog → ambush-agent.
   const llmProviderCanPersistAtSubmit = computeCanPersistAtSubmit({
     inheritHarness,
     agentCommand,
@@ -902,7 +914,7 @@ test("editAgent_inheritedBuzzAgentProvider_preservedOnNameOnlySave", () => {
   assert.equal(
     llmProviderCanPersistAtSubmit,
     true,
-    "inherited buzz-agent runtime IS provider-capable — provider must be persistable",
+    "inherited ambush-agent runtime IS provider-capable — provider must be persistable",
   );
 
   // Submit logic: provider unchanged → omit (no-op).
@@ -920,19 +932,23 @@ test("editAgent_inheritedBuzzAgentProvider_preservedOnNameOnlySave", () => {
   assert.equal(
     providerUpdate,
     undefined,
-    "name-only save on inherited buzz-agent must omit provider (not send null to clear it)",
+    "name-only save on inherited ambush-agent must omit provider (not send null to clear it)",
   );
 });
 
-test("editAgent_inheritedBuzzAgentProvider_clearsWhenUserSwitchesToInheritedClaude", () => {
-  // An agent inheriting buzz-agent with databricks_v2, but the persona was
+test("editAgent_inheritedAmbushAgentProvider_clearsWhenUserSwitchesToInheritedClaude", () => {
+  // An agent inheriting ambush-agent with databricks_v2, but the persona was
   // changed to Claude (agentCommand now resolves to Claude). On save, the
   // provider must be cleared (not preserved for a non-capable runtime).
 
   const inheritHarness = true; // still inheriting
   const agentCommand = "/usr/local/bin/claude"; // persona now runs Claude
   const runtimes = [
-    { id: "buzz-agent", command: "/usr/local/bin/buzz-agent", defaultArgs: [] },
+    {
+      id: "ambush-agent",
+      command: "/usr/local/bin/ambush-agent",
+      defaultArgs: [],
+    },
     { id: "claude", command: "/usr/local/bin/claude", defaultArgs: [] },
   ];
   const selectedRuntimeId = "claude"; // catalog-arrival effect derives Claude
@@ -979,11 +995,11 @@ test("editAgent_inheritedBuzzAgentProvider_clearsWhenUserSwitchesToInheritedClau
 
 test("editAgent_findingE_emptyCatalog_providerOmittedNotCleared", () => {
   // Form 1: runtimes has not loaded yet at submit time.
-  // Inherited buzz-agent agent with saved databricks_v2.
+  // Inherited ambush-agent agent with saved databricks_v2.
   // A name-only save must omit provider (not send null).
 
   const inheritHarness = true;
-  const agentCommand = "buzz-agent"; // inherited command (short form)
+  const agentCommand = "ambush-agent"; // inherited command (short form)
   const runtimes = []; // catalog still loading
   const selectedRuntimeId = "custom"; // not yet derived
   const selectedRuntime = undefined;
@@ -1016,15 +1032,15 @@ test("editAgent_findingE_emptyCatalog_providerOmittedNotCleared", () => {
 });
 
 test("editAgent_findingE_commandNullCatalogEntry_providerPreservedByIdMatch", () => {
-  // Form 2: catalog loaded, but buzz-agent's entry has command:null (adapter
+  // Form 2: catalog loaded, but ambush-agent's entry has command:null (adapter
   // binary not installed). The command-based match fails; id-based fallback
   // finds the entry. Capability resolves to "capable" via id.
   // A name-only save must omit provider (unchanged → no-op, not null-clear).
 
   const inheritHarness = true;
-  const agentCommand = "buzz-agent"; // inherited command (short form = runtime id)
+  const agentCommand = "ambush-agent"; // inherited command (short form = runtime id)
   const runtimes = [
-    { id: "buzz-agent", command: null, defaultArgs: [] }, // adapter missing
+    { id: "ambush-agent", command: null, defaultArgs: [] }, // adapter missing
     { id: "claude", command: "claude-agent-acp", defaultArgs: [] },
   ];
   const selectedRuntimeId = "custom"; // command match failed → not re-derived
@@ -1042,7 +1058,7 @@ test("editAgent_findingE_commandNullCatalogEntry_providerPreservedByIdMatch", ()
   assert.equal(
     capability,
     "capable",
-    "command:null buzz-agent entry must resolve to 'capable' via id-based fallback",
+    "command:null ambush-agent entry must resolve to 'capable' via id-based fallback",
   );
 
   const providerUpdate = computeProviderUpdate({
@@ -1053,7 +1069,7 @@ test("editAgent_findingE_commandNullCatalogEntry_providerPreservedByIdMatch", ()
   assert.equal(
     providerUpdate,
     undefined,
-    "name-only save on inherited buzz-agent (command:null) must omit provider, not clear it",
+    "name-only save on inherited ambush-agent (command:null) must omit provider, not clear it",
   );
 });
 
@@ -1064,10 +1080,10 @@ test("editAgent_findingE_lockedRuntimeStillClears", () => {
   const inheritHarness = true;
   const agentCommand = "claude-agent-acp"; // inherited Claude
   const runtimes = [
-    { id: "buzz-agent", command: "buzz-agent", defaultArgs: [] },
+    { id: "ambush-agent", command: "ambush-agent", defaultArgs: [] },
     { id: "claude", command: "claude-agent-acp", defaultArgs: [] },
   ];
-  const selectedRuntimeId = "buzz-agent"; // stale dropdown state (irrelevant)
+  const selectedRuntimeId = "ambush-agent"; // stale dropdown state (irrelevant)
   const selectedRuntime = runtimes.find((r) => r.id === selectedRuntimeId);
   const savedProvider = "databricks_v2"; // stale saved provider
   const currentProvider = "databricks_v2";
@@ -1097,17 +1113,17 @@ test("editAgent_findingE_lockedRuntimeStillClears", () => {
   );
 });
 
-test("editAgent_findingE_capableBuzzAgentLoadedCatalog_preservedOnNoOpSave", () => {
-  // Confirm loaded-catalog inherited buzz-agent still preserves provider.
+test("editAgent_findingE_capableAmbushAgentLoadedCatalog_preservedOnNoOpSave", () => {
+  // Confirm loaded-catalog inherited ambush-agent still preserves provider.
   // This is Finding D's good path — must not regress with the tri-state change.
 
   const inheritHarness = true;
-  const agentCommand = "buzz-agent";
+  const agentCommand = "ambush-agent";
   const runtimes = [
-    { id: "buzz-agent", command: "buzz-agent", defaultArgs: [] },
+    { id: "ambush-agent", command: "ambush-agent", defaultArgs: [] },
     { id: "claude", command: "claude-agent-acp", defaultArgs: [] },
   ];
-  const selectedRuntimeId = "buzz-agent";
+  const selectedRuntimeId = "ambush-agent";
   const selectedRuntime = runtimes.find((r) => r.id === selectedRuntimeId);
   const savedProvider = "databricks_v2";
   const currentProvider = "databricks_v2"; // unchanged
@@ -1119,7 +1135,7 @@ test("editAgent_findingE_capableBuzzAgentLoadedCatalog_preservedOnNoOpSave", () 
     selectedRuntimeId,
     selectedRuntime,
   });
-  assert.equal(capability, "capable", "loaded buzz-agent must be 'capable'");
+  assert.equal(capability, "capable", "loaded ambush-agent must be 'capable'");
 
   const providerUpdate = computeProviderUpdate({
     capability,
@@ -1129,15 +1145,15 @@ test("editAgent_findingE_capableBuzzAgentLoadedCatalog_preservedOnNoOpSave", () 
   assert.equal(
     providerUpdate,
     undefined,
-    "no-op save on inherited buzz-agent (loaded catalog) must omit provider",
+    "no-op save on inherited ambush-agent (loaded catalog) must omit provider",
   );
 });
 
 // ── Bug A fix: inherited-runtime (short-name agentCommand) seeds selectedRuntimeId
 //              correctly via id-fallback when catalog command is the resolved path
 //
-// Problem: buzz-agent stores agentCommand="buzz-agent" (short name) while the
-// catalog entry has command="/Applications/Buzz.app/.../buzz-agent" (resolved path).
+// Problem: ambush-agent stores agentCommand="ambush-agent" (short name) while the
+// catalog entry has command="/Applications/Ambush.app/.../ambush-agent" (resolved path).
 // Command-based matching fails (short name ≠ full path), so selectedRuntimeId
 // stayed "custom" → selectedRuntime=undefined → canDiscoverModelOptions=false →
 // discovery never fired for inherited agents.
@@ -1156,15 +1172,15 @@ function deriveSelectedRuntimeId(agentCommand, runtimes) {
 }
 
 test("editAgent_bugA_inheritedShortName_resolvesViaIdFallback", () => {
-  // The core regression: agentCommand is the short name "buzz-agent" but the
+  // The core regression: agentCommand is the short name "ambush-agent" but the
   // catalog's command is the resolved binary path. Command match fails; id
   // fallback must rescue it.
 
-  const agentCommand = "buzz-agent"; // short name stored by effective_agent_command
+  const agentCommand = "ambush-agent"; // short name stored by effective_agent_command
   const runtimes = [
     {
-      id: "buzz-agent",
-      command: "/Applications/Buzz.app/Contents/MacOS/buzz-agent", // resolved path
+      id: "ambush-agent",
+      command: "/Applications/Ambush.app/Contents/MacOS/ambush-agent", // resolved path
       availability: "available",
       defaultArgs: [],
     },
@@ -1179,8 +1195,8 @@ test("editAgent_bugA_inheritedShortName_resolvesViaIdFallback", () => {
   const selectedRuntimeId = deriveSelectedRuntimeId(agentCommand, runtimes);
   assert.equal(
     selectedRuntimeId,
-    "buzz-agent",
-    "short-name agentCommand must resolve to buzz-agent id via id-fallback when command path differs",
+    "ambush-agent",
+    "short-name agentCommand must resolve to ambush-agent id via id-fallback when command path differs",
   );
 });
 
@@ -1188,11 +1204,11 @@ test("editAgent_bugA_inheritedShortName_commandMatchStillWinsWhenPresent", () =>
   // Command-path match must still win when it succeeds (no regression for the
   // explicit-pin path where agentCommand IS the full resolved path).
 
-  const agentCommand = "/usr/local/bin/buzz-agent"; // full path (explicit pin)
+  const agentCommand = "/usr/local/bin/ambush-agent"; // full path (explicit pin)
   const runtimes = [
     {
-      id: "buzz-agent",
-      command: "/usr/local/bin/buzz-agent",
+      id: "ambush-agent",
+      command: "/usr/local/bin/ambush-agent",
       availability: "available",
       defaultArgs: [],
     },
@@ -1201,13 +1217,13 @@ test("editAgent_bugA_inheritedShortName_commandMatchStillWinsWhenPresent", () =>
   const selectedRuntimeId = deriveSelectedRuntimeId(agentCommand, runtimes);
   assert.equal(
     selectedRuntimeId,
-    "buzz-agent",
+    "ambush-agent",
     "command-path match must still win when agentCommand equals catalog command",
   );
 });
 
 test("editAgent_bugA_inheritedShortName_discoveryGatePasses", () => {
-  // Once selectedRuntimeId is correctly resolved to "buzz-agent" via id-fallback,
+  // Once selectedRuntimeId is correctly resolved to "ambush-agent" via id-fallback,
   // selectedRuntime resolves to the available catalog entry, and the discovery gate
   // (canDiscoverModelOptions) passes so the model list populates.
   //
@@ -1215,11 +1231,11 @@ test("editAgent_bugA_inheritedShortName_discoveryGatePasses", () => {
   //   open && modelFieldVisible && selectedRuntime?.availability === "available"
   //   && discoveryAgentCommand !== null && ...
 
-  const agentCommand = "buzz-agent"; // short name
+  const agentCommand = "ambush-agent"; // short name
   const runtimes = [
     {
-      id: "buzz-agent",
-      command: "/Applications/Buzz.app/Contents/MacOS/buzz-agent",
+      id: "ambush-agent",
+      command: "/Applications/Ambush.app/Contents/MacOS/ambush-agent",
       availability: "available",
       defaultArgs: [],
     },
@@ -1247,8 +1263,8 @@ test("editAgent_bugA_inheritedShortName_discoveryGatePasses", () => {
 
   assert.equal(
     selectedRuntimeId,
-    "buzz-agent",
-    "id-fallback must resolve selectedRuntimeId to buzz-agent",
+    "ambush-agent",
+    "id-fallback must resolve selectedRuntimeId to ambush-agent",
   );
   assert.ok(
     selectedRuntime !== undefined,
@@ -1256,13 +1272,13 @@ test("editAgent_bugA_inheritedShortName_discoveryGatePasses", () => {
   );
   assert.equal(
     discoveryAgentCommand,
-    "/Applications/Buzz.app/Contents/MacOS/buzz-agent",
+    "/Applications/Ambush.app/Contents/MacOS/ambush-agent",
     "discoveryAgentCommand must be the resolved path from the catalog entry",
   );
   assert.equal(
     canDiscoverModelOptions,
     true,
-    "discovery gate must pass for inherited buzz-agent with databricks_v2 provider once id-fallback resolves the runtime",
+    "discovery gate must pass for inherited ambush-agent with databricks_v2 provider once id-fallback resolves the runtime",
   );
 });
 
@@ -1273,8 +1289,8 @@ test("editAgent_bugA_unknownCommandStillFallsBackToCustom", () => {
   const agentCommand = "/some/custom/binary"; // not in catalog
   const runtimes = [
     {
-      id: "buzz-agent",
-      command: "/Applications/Buzz.app/Contents/MacOS/buzz-agent",
+      id: "ambush-agent",
+      command: "/Applications/Ambush.app/Contents/MacOS/ambush-agent",
       availability: "available",
       defaultArgs: [],
     },
@@ -1293,18 +1309,18 @@ test("editAgent_bugA_unknownCommandStillFallsBackToCustom", () => {
 // Guards the provider-aware credential requirements surface so Phase 2
 // required env rows stay correct as providers and runtimes change.
 
-test("requiredCredentialEnvKeys: buzz-agent + anthropic → ANTHROPIC_API_KEY", () => {
-  const keys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+test("requiredCredentialEnvKeys: ambush-agent + anthropic → ANTHROPIC_API_KEY", () => {
+  const keys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   assert.deepEqual(keys, ["ANTHROPIC_API_KEY"]);
 });
 
-test("requiredCredentialEnvKeys: buzz-agent + openai → OPENAI_COMPAT_API_KEY", () => {
-  const keys = requiredCredentialEnvKeys("buzz-agent", "openai");
+test("requiredCredentialEnvKeys: ambush-agent + openai → OPENAI_COMPAT_API_KEY", () => {
+  const keys = requiredCredentialEnvKeys("ambush-agent", "openai");
   assert.deepEqual(keys, ["OPENAI_COMPAT_API_KEY"]);
 });
 
-test("requiredCredentialEnvKeys: buzz-agent + databricks → DATABRICKS_HOST only (no token)", () => {
-  const keys = requiredCredentialEnvKeys("buzz-agent", "databricks");
+test("requiredCredentialEnvKeys: ambush-agent + databricks → DATABRICKS_HOST only (no token)", () => {
+  const keys = requiredCredentialEnvKeys("ambush-agent", "databricks");
   // DATABRICKS_TOKEN is NOT required — OAuth PKCE is the normal path.
   assert.deepEqual(keys, ["DATABRICKS_HOST"]);
   assert.ok(
@@ -1313,8 +1329,8 @@ test("requiredCredentialEnvKeys: buzz-agent + databricks → DATABRICKS_HOST onl
   );
 });
 
-test("requiredCredentialEnvKeys: buzz-agent + databricks_v2 → DATABRICKS_HOST only", () => {
-  const keys = requiredCredentialEnvKeys("buzz-agent", "databricks_v2");
+test("requiredCredentialEnvKeys: ambush-agent + databricks_v2 → DATABRICKS_HOST only", () => {
+  const keys = requiredCredentialEnvKeys("ambush-agent", "databricks_v2");
   assert.deepEqual(keys, ["DATABRICKS_HOST"]);
 });
 
@@ -1328,8 +1344,8 @@ test("requiredCredentialEnvKeys: goose + openai → OPENAI_COMPAT_API_KEY", () =
   assert.deepEqual(keys, ["OPENAI_COMPAT_API_KEY"]);
 });
 
-test("requiredCredentialEnvKeys: buzz-agent + no provider → empty (provider not yet selected)", () => {
-  const keys = requiredCredentialEnvKeys("buzz-agent", "");
+test("requiredCredentialEnvKeys: ambush-agent + no provider → empty (provider not yet selected)", () => {
+  const keys = requiredCredentialEnvKeys("ambush-agent", "");
   assert.deepEqual(keys, []);
 });
 
@@ -1357,9 +1373,9 @@ test("requiredCredentialEnvKeys: custom/unknown runtime → empty", () => {
 
 const hasRequiredEnvKeyMissing = hasMissingRequiredEnvKey;
 
-test("blockSave_buzzAgentAnthropicMissingKey_blocked", () => {
-  // Will's exact case: buzz-agent / anthropic / opus / no ANTHROPIC_API_KEY
-  const requiredKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+test("blockSave_ambushAgentAnthropicMissingKey_blocked", () => {
+  // Will's exact case: ambush-agent / anthropic / opus / no ANTHROPIC_API_KEY
+  const requiredKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const envVars = {}; // key absent
   assert.equal(
     hasRequiredEnvKeyMissing(requiredKeys, envVars),
@@ -1368,8 +1384,8 @@ test("blockSave_buzzAgentAnthropicMissingKey_blocked", () => {
   );
 });
 
-test("blockSave_buzzAgentAnthropicKeyProvided_allowed", () => {
-  const requiredKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+test("blockSave_ambushAgentAnthropicKeyProvided_allowed", () => {
+  const requiredKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const envVars = { ANTHROPIC_API_KEY: "sk-ant-test" };
   assert.equal(
     hasRequiredEnvKeyMissing(requiredKeys, envVars),
@@ -1378,9 +1394,9 @@ test("blockSave_buzzAgentAnthropicKeyProvided_allowed", () => {
   );
 });
 
-test("blockSave_buzzAgentAnthropicEmptyStringKey_blocked", () => {
+test("blockSave_ambushAgentAnthropicEmptyStringKey_blocked", () => {
   // Empty string is treated the same as absent — matches EnvVarsEditor isMissing
-  const requiredKeys = requiredCredentialEnvKeys("buzz-agent", "anthropic");
+  const requiredKeys = requiredCredentialEnvKeys("ambush-agent", "anthropic");
   const envVars = { ANTHROPIC_API_KEY: "" };
   assert.equal(
     hasRequiredEnvKeyMissing(requiredKeys, envVars),
@@ -1410,8 +1426,8 @@ test("blockSave_codexNoCliLogin_notBlocked", () => {
   );
 });
 
-test("blockSave_buzzAgentDatabricksMissingHost_blocked", () => {
-  const requiredKeys = requiredCredentialEnvKeys("buzz-agent", "databricks");
+test("blockSave_ambushAgentDatabricksMissingHost_blocked", () => {
+  const requiredKeys = requiredCredentialEnvKeys("ambush-agent", "databricks");
   const envVars = {};
   assert.equal(
     hasRequiredEnvKeyMissing(requiredKeys, envVars),
@@ -1420,8 +1436,8 @@ test("blockSave_buzzAgentDatabricksMissingHost_blocked", () => {
   );
 });
 
-test("blockSave_buzzAgentDatabricksHostProvided_allowed", () => {
-  const requiredKeys = requiredCredentialEnvKeys("buzz-agent", "databricks");
+test("blockSave_ambushAgentDatabricksHostProvided_allowed", () => {
+  const requiredKeys = requiredCredentialEnvKeys("ambush-agent", "databricks");
   const envVars = { DATABRICKS_HOST: "https://my.databricks.instance" };
   assert.equal(
     hasRequiredEnvKeyMissing(requiredKeys, envVars),
@@ -1480,19 +1496,19 @@ test("blockSave_nullField_allowed", () => {
 // When inheritHarness=true, prospectiveRuntimeId resolves from agent.agentCommand
 // (the persona's runtime), not the current dropdown. These tests guard the two
 // failure modes Thufir flagged:
-//   FALSE-ALLOW: claude pin → inherit buzz-agent persona → missing ANTHROPIC_API_KEY
-//     → must be BLOCKED (prospective runtime is buzz-agent/anthropic, key absent)
-//   FALSE-BLOCK: buzz-agent pin → inherit claude persona
+//   FALSE-ALLOW: claude pin → inherit ambush-agent persona → missing ANTHROPIC_API_KEY
+//     → must be BLOCKED (prospective runtime is ambush-agent/anthropic, key absent)
+//   FALSE-BLOCK: ambush-agent pin → inherit claude persona
 //     → must NOT be blocked (claude has no dialog-fixable credential requirement)
 
-test("blockSave_inheritTransition_claudePin_toBuzzAgentPersona_missingKey_blocked", () => {
+test("blockSave_inheritTransition_claudePin_toAmbushAgentPersona_missingKey_blocked", () => {
   // Scenario: agent is currently pinned to claude (CLI-login, llmProviderFieldVisible=false
   // so providerForDiscovery="" in the component). The user checks "Inherit runtime
-  // from persona" where the persona uses buzz-agent/anthropic.
-  // prospectiveRuntimeId resolves to "buzz-agent"; providerForRequiredKeys must
-  // use the PROSPECTIVE runtime's provider-field visibility (buzz-agent supports
+  // from persona" where the persona uses ambush-agent/anthropic.
+  // prospectiveRuntimeId resolves to "ambush-agent"; providerForRequiredKeys must
+  // use the PROSPECTIVE runtime's provider-field visibility (ambush-agent supports
   // provider selection) rather than the current locked runtime's suppression.
-  const prospectiveRuntimeId = "buzz-agent"; // resolved from persona's agentCommand
+  const prospectiveRuntimeId = "ambush-agent"; // resolved from persona's agentCommand
   const provider = "anthropic"; // agent's configured provider (in envVars / state)
 
   // Mirror the component's providerForRequiredKeys computation:
@@ -1510,7 +1526,7 @@ test("blockSave_inheritTransition_claudePin_toBuzzAgentPersona_missingKey_blocke
   );
   const envVars = {}; // ANTHROPIC_API_KEY absent
 
-  // providerForRequiredKeys must be "anthropic" (buzz-agent supports selection)
+  // providerForRequiredKeys must be "anthropic" (ambush-agent supports selection)
   // so requiredCredentialEnvKeys returns [ANTHROPIC_API_KEY] and save is blocked.
   assert.equal(
     providerForRequiredKeys,
@@ -1521,12 +1537,12 @@ test("blockSave_inheritTransition_claudePin_toBuzzAgentPersona_missingKey_blocke
   assert.equal(
     missing,
     true,
-    "inheriting buzz-agent/anthropic persona with no key must BLOCK save (false-allow prevented)",
+    "inheriting ambush-agent/anthropic persona with no key must BLOCK save (false-allow prevented)",
   );
 });
 
-test("blockSave_inheritTransition_buzzAgentPin_toClaudePersona_notBlocked", () => {
-  // Scenario: agent is pinned to buzz-agent/anthropic. The user checks
+test("blockSave_inheritTransition_ambushAgentPin_toClaudePersona_notBlocked", () => {
+  // Scenario: agent is pinned to ambush-agent/anthropic. The user checks
   // "Inherit runtime from persona" where the persona uses claude.
   // prospectiveRuntimeId resolves to "claude"; claude doesn't support provider
   // selection, so providerForRequiredKeys="" and requiredCredentialEnvKeys returns [].

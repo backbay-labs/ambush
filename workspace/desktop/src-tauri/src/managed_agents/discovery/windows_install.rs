@@ -25,7 +25,7 @@
 //!
 //! # Exit-code fidelity
 //!
-//! [#2892](https://github.com/block/buzz/pull/2892) established that an install
+//! [#2892](https://github.com/backbay-labs/ambush/pull/2892) established that an install
 //! step must not report success when the download failed. Two pieces preserve
 //! that here, and both are load-bearing:
 //!
@@ -52,7 +52,7 @@
 
 /// Build the Windows CLI install command for one runtime.
 ///
-/// `slug` names the downloaded script (`buzz-install-<slug>.ps1`) so concurrent
+/// `slug` names the downloaded script (`ambush-install-<slug>.ps1`) so concurrent
 /// installs of different runtimes cannot overwrite each other's file. The
 /// optional third argument carries a runtime's env prefix (Goose's
 /// `$env:CONFIGURE='false'; `) and must end with `; `.
@@ -67,7 +67,7 @@ macro_rules! windows_install_command {
             "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"",
             $env_prefix,
             "$ErrorActionPreference='Stop'; ",
-            "$installer=Join-Path $env:TEMP 'buzz-install-",
+            "$installer=Join-Path $env:TEMP 'ambush-install-",
             $slug,
             ".ps1'; ",
             "Invoke-RestMethod ",
@@ -137,7 +137,7 @@ mod tests {
                 "{id}: must execute the downloaded file. Got: {command}"
             );
             assert!(
-                command.contains(&format!("buzz-install-{id}.ps1")),
+                command.contains(&format!("ambush-install-{id}.ps1")),
                 "{id}: script name must be runtime-specific so concurrent installs of \
                  different runtimes cannot overwrite each other. Got: {command}"
             );

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use buzz_voice_pkg::imported::{ImportedVoice, PocketVoiceLibrary};
+use ambush_voice_pkg::imported::{ImportedVoice, PocketVoiceLibrary};
 use tauri::{AppHandle, Manager};
 
 pub fn voices_dir(app: &AppHandle) -> Result<PathBuf, String> {

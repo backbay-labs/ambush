@@ -21,7 +21,7 @@ fn oa_profile_event(content: &str) -> (Event, String) {
     let agent_keys = Keys::generate();
     let owner_keys = Keys::generate();
     let agent_pubkey = agent_keys.public_key();
-    let tag_json = buzz_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_pubkey, "")
+    let tag_json = ambush_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_pubkey, "")
         .expect("compute auth tag");
     let tag_values: Vec<String> = serde_json::from_str(&tag_json).expect("parse auth tag json");
     let auth_tag = Tag::parse(tag_values).expect("parse auth tag");
@@ -412,7 +412,7 @@ fn managed_agent_directory_accepts_only_the_verified_owner_policy() {
     let viewer_pubkey = "a".repeat(64);
 
     let auth_tag_json =
-        buzz_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
+        ambush_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
             .expect("compute auth tag");
     let auth_tag_values: Vec<String> =
         serde_json::from_str(&auth_tag_json).expect("parse auth tag json");
@@ -468,7 +468,7 @@ fn managed_agent_directory_uses_the_latest_profile_head() {
     let owner_keys = Keys::generate();
     let agent_pubkey = agent_keys.public_key().to_hex();
     let auth_tag_json =
-        buzz_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
+        ambush_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
             .expect("compute auth tag");
     let auth_tag_values: Vec<String> =
         serde_json::from_str(&auth_tag_json).expect("parse auth tag json");
@@ -563,7 +563,7 @@ fn relay_agent_directory_preserves_headless_profiles_and_prefers_verified_manage
     .expect("sign managed directory profile");
 
     let auth_tag_json =
-        buzz_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &managed_agent_keys.public_key(), "")
+        ambush_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &managed_agent_keys.public_key(), "")
             .expect("compute auth tag");
     let auth_tag_values: Vec<String> =
         serde_json::from_str(&auth_tag_json).expect("parse auth tag json");
@@ -623,7 +623,7 @@ fn authenticated_malformed_managed_policy_does_not_fall_back_to_legacy_permissio
     .sign_with_keys(&agent_keys)
     .expect("sign legacy profile");
     let auth_tag_json =
-        buzz_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
+        ambush_sdk_pkg::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
             .expect("compute auth tag");
     let auth_tag_values: Vec<String> =
         serde_json::from_str(&auth_tag_json).expect("parse auth tag json");

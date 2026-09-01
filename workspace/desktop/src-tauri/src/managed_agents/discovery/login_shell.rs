@@ -23,7 +23,7 @@ use super::login_shell_spawn_probe;
 /// Collect login shell candidates for the current platform.
 ///
 /// On Unix: `/bin/zsh`, `/bin/bash` (the historical defaults).
-/// On Windows: Git Bash via `resolve_bash_path` — skips `BUZZ_SHELL` because
+/// On Windows: Git Bash via `resolve_bash_path` — skips `AMBUSH_SHELL` because
 /// login-shell callers use bash-only `-l -c` syntax.
 pub(crate) fn login_shell_candidates() -> Vec<PathBuf> {
     #[cfg(not(windows))]

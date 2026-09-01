@@ -4,7 +4,7 @@ import type { Page } from "@playwright/test";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const IMAGE_SHA = "c".repeat(64);
-const IMAGE_URL = "http://127.0.0.1:4173/buzz.svg";
+const IMAGE_URL = "http://127.0.0.1:4173/ambush.svg";
 const IMAGE_DESCRIPTOR = {
   url: IMAGE_URL,
   sha256: IMAGE_SHA,
@@ -13,7 +13,7 @@ const IMAGE_DESCRIPTOR = {
   uploaded: Math.floor(Date.now() / 1000),
   thumb: IMAGE_URL,
   dim: "64x64",
-  filename: "buzz.svg",
+  filename: "ambush.svg",
 };
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
@@ -31,7 +31,7 @@ type MockFeedItem = {
 
 type MockFeedWindow = Window &
   typeof globalThis & {
-    __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: MockFeedItem) => MockFeedItem;
+    __AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__?: (item: MockFeedItem) => MockFeedItem;
   };
 
 async function installSpoilerBridge(
@@ -79,7 +79,7 @@ test("no-selection spoiler applies to every composer paragraph", async ({
       input.evaluate(() =>
         Array.from(
           document.querySelectorAll(
-            '[data-testid="message-input"] .buzz-spoiler[data-spoiler]',
+            '[data-testid="message-input"] .ambush-spoiler[data-spoiler]',
           ),
           (node) => node.textContent,
         ),
@@ -113,7 +113,7 @@ test("image attachments can be marked and sent as hidden spoilers", async ({
   await page.getByTestId("send-message").click();
 
   const lastMessage = page.getByTestId("message-row").last();
-  const spoilerBlock = lastMessage.locator(".buzz-spoiler--block");
+  const spoilerBlock = lastMessage.locator(".ambush-spoiler--block");
   await expect(spoilerBlock).toBeVisible();
   await expect(spoilerBlock).toHaveAttribute("data-revealed", "false");
   await expect(spoilerBlock.locator("[data-block-media] img")).toHaveAttribute(
@@ -152,7 +152,7 @@ test("text spoiler stays usable while attachment upload is pending", async ({
   // enabled and works while the upload is still in flight.
   await expect(spoilerButton).toBeEnabled();
   await spoilerButton.click();
-  await expect(input.locator(".buzz-spoiler[data-spoiler]")).toContainText(
+  await expect(input.locator(".ambush-spoiler[data-spoiler]")).toContainText(
     "pending secret",
   );
 
@@ -177,7 +177,7 @@ test("hidden spoiler links reveal without opening on the first click", async ({
   await page.getByTestId("send-message").click();
 
   const lastMessage = page.getByTestId("message-row").last();
-  const spoiler = lastMessage.locator(".buzz-spoiler").first();
+  const spoiler = lastMessage.locator(".ambush-spoiler").first();
   await expect(spoiler).toHaveAttribute("data-revealed", "false");
 
   // The freshly sent row can still be settling layout; a forced click
@@ -227,9 +227,9 @@ test("hidden spoilers stay masked on hover and focus until reveal", async ({
   await page.getByTestId("send-message").click();
 
   const lastMessage = page.getByTestId("message-row").last();
-  const spoiler = lastMessage.locator(".buzz-spoiler").first();
-  const content = spoiler.locator(".buzz-spoiler__content");
-  const particles = spoiler.locator(".buzz-spoiler__particles");
+  const spoiler = lastMessage.locator(".ambush-spoiler").first();
+  const content = spoiler.locator(".ambush-spoiler__content");
+  const particles = spoiler.locator(".ambush-spoiler__particles");
 
   await expect(spoiler).toHaveAttribute("data-revealed", "false");
   await expect(content).toHaveCSS("opacity", "0");
@@ -268,7 +268,7 @@ test("masked link inside a hidden spoiler does not leak its URL until revealed",
   await page.getByTestId("send-message").click();
 
   const lastMessage = page.getByTestId("message-row").last();
-  const spoiler = lastMessage.locator(".buzz-spoiler").first();
+  const spoiler = lastMessage.locator(".ambush-spoiler").first();
   await expect(spoiler).toHaveAttribute("data-revealed", "false");
 
   const secretLink = spoiler.getByRole("link", { name: "secret" });
@@ -320,14 +320,14 @@ test("non-interactive inbox preview spoilers let row clicks pass through", async
   await expect(page.getByTestId("home-inbox-list")).toBeVisible();
   await page.waitForFunction(
     () =>
-      typeof (window as MockFeedWindow).__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ ===
+      typeof (window as MockFeedWindow).__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__ ===
       "function",
   );
 
   await page.evaluate(
     ({ channelId, createdAt, currentPubkey, senderPubkey }) => {
       const pushFeedItem = (window as MockFeedWindow)
-        .__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+        .__AMBUSH_E2E_PUSH_MOCK_FEED_ITEM__;
       if (!pushFeedItem) {
         throw new Error("Mock feed injection helper is not installed.");
       }
@@ -358,7 +358,7 @@ test("non-interactive inbox preview spoilers let row clicks pass through", async
   const item = page.getByTestId("home-inbox-item-mock-feed-spoiler-preview");
   await expect(item).toContainText("Preview contains");
 
-  const spoiler = item.locator(".buzz-spoiler").first();
+  const spoiler = item.locator(".ambush-spoiler").first();
   await expect(spoiler).toBeVisible();
   await expect(spoiler).not.toHaveAttribute("role", "button");
   await expect(spoiler).not.toHaveAttribute("tabindex", "0");

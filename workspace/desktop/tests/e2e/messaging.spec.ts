@@ -139,7 +139,7 @@ test.beforeEach(async ({ page }, testInfo) => {
       : testInfo.title.includes("cardless tweet preview")
         ? {
             linkPreviewMetadata: {
-              title: "Buzz (@buzz) on X",
+              title: "Ambush (@ambush) on X",
               siteName: "X (formerly Twitter)",
               description:
                 "This is a real tweet-style description long enough to wrap across several lines while preserving the message-like treatment. It keeps going with enough distinct words to exceed five rendered lines at the preview width, proving that the overflow-aware control appears only when the content is genuinely clipped rather than relying on a brittle character-count guess.",
@@ -155,15 +155,15 @@ test.beforeEach(async ({ page }, testInfo) => {
               // that fetches with the raw `#fragment` attached would miss these
               // keys and drop the card, which is exactly the bug under test.
               linkPreviewMetadataByHref: {
-                "https://github.com/block/buzz/pull/3767": {
-                  title: "Buzz pull request 3767",
+                "https://github.com/backbay-labs/ambush/pull/3767": {
+                  title: "Ambush pull request 3767",
                   siteName: "GitHub",
                   description: "Fragment-bearing PR link.",
                   imageDataUrl: null,
                   imageDomain: null,
                 },
-                "https://github.com/block/buzz/pull/3867": {
-                  title: "Buzz pull request 3867",
+                "https://github.com/backbay-labs/ambush/pull/3867": {
+                  title: "Ambush pull request 3867",
                   siteName: "GitHub",
                   description: "Plain PR link.",
                   imageDataUrl: null,
@@ -174,7 +174,7 @@ test.beforeEach(async ({ page }, testInfo) => {
           : testInfo.title.includes("mixed link preview image outcomes")
             ? {
                 linkPreviewMetadataByHref: {
-                  "https://github.com/block/buzz/pull/4001": {
+                  "https://github.com/backbay-labs/ambush/pull/4001": {
                     title: "Loaded preview image",
                     siteName: "GitHub",
                     description: "The image request completed.",
@@ -184,7 +184,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                     imageFetchState: "image",
                     imageRetryAfterMs: null,
                   },
-                  "https://github.com/block/buzz/pull/4002": {
+                  "https://github.com/backbay-labs/ambush/pull/4002": {
                     title: "Rate-limited preview image",
                     siteName: "GitHub",
                     description: "Metadata remains available during cooldown.",
@@ -226,10 +226,10 @@ test.beforeEach(async ({ page }, testInfo) => {
                     testInfo.title.includes("composer no-image link embeds")
                   ? {
                       linkPreviewMetadata: {
-                        title: "Buzz",
+                        title: "Ambush",
                         siteName: "GitHub",
                         description:
-                          "Open-source collaboration for the Buzz app.",
+                          "Open-source collaboration for the Ambush app.",
                         imageDataUrl: null,
                         imageDomain: null,
                         faviconDataUrl:
@@ -242,7 +242,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                       )
                     ? {
                         linkPreviewMetadata: {
-                          title: "Buzz pull request",
+                          title: "Ambush pull request",
                           siteName: "GitHub",
                           description:
                             "First paragraph line one.\nFirst paragraph line two.\n\nSecond paragraph.",
@@ -265,7 +265,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                         )
                       ? {
                           linkPreviewMetadata: {
-                            title: "Buzz pull request",
+                            title: "Ambush pull request",
                             siteName: "GitHub",
                             description: "A sender-authored preview snapshot.",
                             imageDataUrl:
@@ -291,7 +291,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                           )
                         ? {
                             linkPreviewMetadata: {
-                              title: "Buzz pull request",
+                              title: "Ambush pull request",
                               siteName: "GitHub",
                               description:
                                 "A sender-authored preview snapshot.",
@@ -313,7 +313,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                           ? {
                               mediaProxyInitiallyUnavailable: true,
                               linkPreviewMetadata: {
-                                title: "Buzz pull request",
+                                title: "Ambush pull request",
                                 siteName: "GitHub",
                                 description:
                                   "A sender-authored preview snapshot.",
@@ -328,7 +328,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                               testInfo.title.includes("supported Compact")
                             ? {
                                 linkPreviewMetadata: {
-                                  title: "Buzz pull request",
+                                  title: "Ambush pull request",
                                   siteName: "GitHub",
                                   description:
                                     "A sender-authored preview snapshot.",
@@ -462,19 +462,19 @@ test("markdown tables overflow wide content and fill the message when narrow", a
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
 
   const longCell = "WIDE TABLE COLUMN VALUE ".repeat(8);
   await page.evaluate(
     ({ wide, narrow }) => {
       const createdAt = Math.floor(Date.now() / 1000);
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: wide,
         createdAt,
       });
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: narrow,
         createdAt: createdAt + 1,
@@ -519,9 +519,9 @@ test("markdown tables overflow wide content and fill the message when narrow", a
 test("sent link preview media uses the authenticated proxy in compact and rich cards", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?proxy=1";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/3246?proxy=1";
   const fallbackMediaPattern =
-    /^buzz-media:\/\/localhost\/media\/[\da-f]{64}\.png$/;
+    /^ambush-media:\/\/localhost\/media\/[\da-f]{64}\.png$/;
   const proxyMediaPattern =
     /^http:\/\/127\.0\.0\.1:54321\/media\/[\da-f]{64}\.png$/;
   await page.route("http://127.0.0.1:54321/media/**", (route) =>
@@ -551,7 +551,7 @@ test("sent link preview media uses the authenticated proxy in compact and rich c
   await expect(compactFavicon).toHaveAttribute("src", fallbackMediaPattern);
 
   const releasedPort = await page.evaluate(() =>
-    window.__BUZZ_E2E_RELEASE_MEDIA_PROXY__?.(),
+    window.__AMBUSH_E2E_RELEASE_MEDIA_PROXY__?.(),
   );
   expect(releasedPort).toBe(54321);
   await expect(compactThumbnail).toHaveAttribute("src", proxyMediaPattern);
@@ -597,7 +597,8 @@ test("sent link preview media uses the authenticated proxy in compact and rich c
 test("link preview style defaults to compact and Rich unfurls descriptions", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?inline=1";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?inline=1";
   await page.setViewportSize({ width: 800, height: 900 });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -606,20 +607,20 @@ test("link preview style defaults to compact and Rich unfurls descriptions", asy
     .locator("[data-composer-link-previews]")
     .locator('[data-link-preview="github-pull-request"]');
   await expect(composerPreview).toHaveAttribute("data-image-state", "pending");
-  if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+  if (process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR) {
     await waitForAnimations(page);
     await page.screenshot({
       animations: "disabled",
-      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/compact-composer-loading.png`,
+      path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/compact-composer-loading.png`,
     });
   }
   await waitForReadyComposerSnapshots(page);
   await expect(composerPreview).toHaveAttribute("data-image-state", "none");
-  if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+  if (process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR) {
     await waitForAnimations(page);
     await page.screenshot({
       animations: "disabled",
-      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/compact-composer-ready.png`,
+      path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/compact-composer-ready.png`,
     });
   }
   await page.getByTestId("send-message").click();
@@ -630,11 +631,11 @@ test("link preview style defaults to compact and Rich unfurls descriptions", asy
   );
   await expect(compactPreview).toHaveCSS("border-top-left-radius", "0px");
   await expect(compactPreview).toHaveCSS("border-left-width", "3px");
-  if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+  if (process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR) {
     await waitForAnimations(page);
     await page.screenshot({
       animations: "disabled",
-      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/recipient-compact.png`,
+      path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/recipient-compact.png`,
     });
   }
 
@@ -651,7 +652,7 @@ test("link preview style defaults to compact and Rich unfurls descriptions", asy
   await expect
     .poll(() =>
       page.evaluate(() =>
-        localStorage.getItem("buzz.appearance.linkPreviewStyle"),
+        localStorage.getItem("ambush.appearance.linkPreviewStyle"),
       ),
     )
     .toBe("rich");
@@ -664,11 +665,11 @@ test("link preview style defaults to compact and Rich unfurls descriptions", asy
   const richHostname = richPreview.locator("[data-link-preview-hostname]");
   await expect(richHostname).toHaveText("github.com");
   await expect(richHostname).toHaveAttribute("href", previewUrl);
-  if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+  if (process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR) {
     await waitForAnimations(page);
     await page.screenshot({
       animations: "disabled",
-      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/recipient-rich.png`,
+      path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/recipient-rich.png`,
     });
     const richComposerUrl = `${previewUrl}&composer=rich`;
     await page.getByTestId("message-input").fill(richComposerUrl);
@@ -682,7 +683,7 @@ test("link preview style defaults to compact and Rich unfurls descriptions", asy
     await waitForAnimations(page);
     await page.screenshot({
       animations: "disabled",
-      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/rich-composer-loading.png`,
+      path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/rich-composer-loading.png`,
     });
     await waitForReadyComposerSnapshots(page);
     await expect(richComposerPreview).toHaveAttribute(
@@ -692,7 +693,7 @@ test("link preview style defaults to compact and Rich unfurls descriptions", asy
     await waitForAnimations(page);
     await page.screenshot({
       animations: "disabled",
-      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/rich-composer-ready.png`,
+      path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/rich-composer-ready.png`,
     });
     await page.getByTestId("message-input").fill("");
   }
@@ -712,7 +713,7 @@ for (const [pasteShape, wrapUrl] of [
   test(`${pasteShape} link preview paste paints before cold resolver work`, async ({
     page,
   }) => {
-    const previewUrl = `https://github.com/block/buzz/pull/3246?paste=${pasteShape}`;
+    const previewUrl = `https://github.com/backbay-labs/ambush/pull/3246?paste=${pasteShape}`;
     await page.goto("/");
     await page.getByTestId("channel-general").click();
     const input = page.getByTestId("message-input");
@@ -735,7 +736,7 @@ for (const [pasteShape, wrapUrl] of [
       );
       return {
         elapsedMs: performance.now() - startedAt,
-        resolverStarted: (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).some(
+        resolverStarted: (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).some(
           (entry) => entry.command === "fetch_link_preview_metadata",
         ),
         text: element.textContent,
@@ -758,7 +759,8 @@ for (const [pasteShape, wrapUrl] of [
 test("display-text link preview produces and sends its preview", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?display=text";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?display=text";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
 
@@ -784,7 +786,7 @@ test("display-text link preview produces and sends its preview", async ({
   ).toHaveAttribute("href", previewUrl);
   await expect(row.locator("[data-link-preview]")).toBeVisible();
   const linkPreviewTags = await page.evaluate(() => {
-    const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+    const call = [...(window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])]
       .reverse()
       .find((entry) => entry.command === "send_channel_message");
     return (
@@ -797,9 +799,10 @@ test("display-text link preview produces and sends its preview", async ({
 test("rich link preview preserves description newlines after sending", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?newlines=1";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?newlines=1";
   await page.addInitScript(() =>
-    localStorage.setItem("buzz.appearance.linkPreviewStyle", "rich"),
+    localStorage.setItem("ambush.appearance.linkPreviewStyle", "rich"),
   );
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -826,12 +829,12 @@ test("completed link previews normalize a trailing-fragment URL and still send",
   // gets a card like the others; the message body keeps the original URL.
   const previewUrls = [
     "https://twitter.com/tellaho",
-    "https://github.com/block/buzz/pull/3246",
+    "https://github.com/backbay-labs/ambush/pull/3246",
     "https://x.com/tellaho/status/1884289176381841506#",
   ];
   const canonicalUrls = [
     "https://twitter.com/tellaho",
-    "https://github.com/block/buzz/pull/3246",
+    "https://github.com/backbay-labs/ambush/pull/3246",
     "https://x.com/tellaho/status/1884289176381841506",
   ];
   const pastedText = previewUrls.join("\n");
@@ -865,7 +868,7 @@ test("completed link previews normalize a trailing-fragment URL and still send",
   await expect(page.getByTestId("message-input")).toHaveText("");
 
   const calls = await page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+    (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
       (entry) => entry.command === "send_channel_message",
     ),
   );
@@ -901,7 +904,8 @@ test("unresolvable preview disappears after the terminal miss", async ({
 test("explicit cancellation suppresses a pending link preview and sends without it", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?send=pending";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?send=pending";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await page.getByTestId("message-input").fill(previewUrl);
@@ -962,7 +966,7 @@ test("explicit cancellation suppresses a pending link preview and sends without 
   await expect(row.locator("[data-link-preview]")).toHaveCount(0);
 
   const linkPreviewTags = await page.evaluate(() => {
-    const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+    const call = [...(window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])]
       .reverse()
       .find((entry) => entry.command === "send_channel_message");
     return (
@@ -975,7 +979,7 @@ test("explicit cancellation suppresses a pending link preview and sends without 
 test("Enter during an in-flight snapshot upload hands off and sends once", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/3246";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -993,7 +997,7 @@ test("Enter during an in-flight snapshot upload hands off and sends once", async
 
   const sendsDuringUpload = await page.evaluate(
     () =>
-      (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+      (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
         (entry) => entry.command === "send_channel_message",
       ).length,
   );
@@ -1005,7 +1009,7 @@ test("Enter during an in-flight snapshot upload hands off and sends once", async
   await expect(progress).toHaveCount(0);
   const sends = await page.evaluate(
     () =>
-      (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+      (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
         (entry) => entry.command === "send_channel_message",
       ).length,
   );
@@ -1015,7 +1019,8 @@ test("Enter during an in-flight snapshot upload hands off and sends once", async
 test("async metadata beyond old cutoff still produces preview image", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?slow=metadata";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?slow=metadata";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1038,7 +1043,8 @@ test("async metadata beyond old cutoff still produces preview image", async ({
 test("async upload beyond metadata budget retains preview image", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?slow=image";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?slow=image";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1057,7 +1063,7 @@ test("async upload beyond metadata budget retains preview image", async ({
     "image",
   );
   const tags = await page.evaluate(() => {
-    const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+    const call = [...(window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])]
       .reverse()
       .find((entry) => entry.command === "send_channel_message");
     return (call?.payload as { linkPreviewTags?: string[][] }).linkPreviewTags;
@@ -1069,7 +1075,7 @@ test("async upload beyond metadata budget retains preview image", async ({
 test("Skip wins the upload race and sends without preview", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?skip=1";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/3246?skip=1";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1088,7 +1094,7 @@ test("Skip wins the upload race and sends without preview", async ({
   await expect(row.locator("[data-link-preview]")).toHaveCount(0);
   await page.waitForTimeout(1_500);
   const calls = await page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+    (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
       (entry) => entry.command === "send_channel_message",
     ),
   );
@@ -1101,7 +1107,8 @@ test("Skip wins the upload race and sends without preview", async ({
 test("promoted link preview send clears Sending after REST publication", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?pending=preview";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?pending=preview";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1115,7 +1122,7 @@ test("promoted link preview send clears Sending after REST publication", async (
   await expect(row).not.toContainText("Sending…");
 
   const restCalls = await page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+    (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
       (entry) => entry.command === "send_channel_message",
     ),
   );
@@ -1128,7 +1135,8 @@ test("promoted link preview send clears Sending after REST publication", async (
 test("settled-empty promoted link preview send uses REST and clears Sending after Skip", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?pending=empty";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?pending=empty";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1143,10 +1151,10 @@ test("settled-empty promoted link preview send uses REST and clears Sending afte
   await expect(row.locator("[data-link-preview]")).toHaveCount(0);
 
   const result = await page.evaluate(() => ({
-    restCalls: (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+    restCalls: (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
       (entry) => entry.command === "send_channel_message",
     ),
-    websocketSends: (window.__BUZZ_E2E_SIGNED_EVENTS__ ?? []).filter(
+    websocketSends: (window.__AMBUSH_E2E_SIGNED_EVENTS__ ?? []).filter(
       (event) => event.kind === 9,
     ),
   }));
@@ -1164,7 +1172,8 @@ test("draft auto-send promotes link preview preparation and sends exactly once",
   // A confirmed Drafts-panel send must fire once immediately, promote preview
   // preparation into the background flow, and eventually publish one enriched
   // event rather than consuming the one-shot trigger while the hook debounces.
-  const previewUrl = "https://github.com/block/buzz/pull/3246?draft=autosend";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?draft=autosend";
   const channelId = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
   // Seed a channel draft under the legacy store key (migrated on startup). The
@@ -1192,7 +1201,7 @@ test("draft auto-send promotes link preview preparation and sends exactly once",
       );
     },
     {
-      storeKey: `buzz-drafts.v1:${"deadbeef".repeat(8)}`,
+      storeKey: `ambush-drafts.v1:${"deadbeef".repeat(8)}`,
       draftKey: channelId,
       content: previewUrl,
       channel: channelId,
@@ -1223,7 +1232,7 @@ test("draft auto-send promotes link preview preparation and sends exactly once",
     .poll(async () =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
             (entry) => entry.command === "send_channel_message",
           ).length,
       ),
@@ -1231,7 +1240,7 @@ test("draft auto-send promotes link preview preparation and sends exactly once",
     .toBe(1);
 
   const linkPreviewTags = await page.evaluate(() => {
-    const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+    const call = [...(window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])]
       .reverse()
       .find((entry) => entry.command === "send_channel_message");
     return (
@@ -1244,7 +1253,7 @@ test("draft auto-send promotes link preview preparation and sends exactly once",
 test("rapid Enter presses on a ready link preview send exactly once", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?rapid=1";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/3246?rapid=1";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1270,7 +1279,7 @@ test("rapid Enter presses on a ready link preview send exactly once", async ({
     .poll(async () =>
       page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
             (entry) => entry.command === "send_channel_message",
           ).length,
       ),
@@ -1281,7 +1290,8 @@ test("rapid Enter presses on a ready link preview send exactly once", async ({
 test("pasting a link and immediately pressing Enter prepares it after submit", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?fast=send";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?fast=send";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1295,7 +1305,7 @@ test("pasting a link and immediately pressing Enter prepares it after submit", a
   await expect(row).toContainText(previewUrl);
   await expect(row.locator("[data-link-preview]")).toBeVisible();
   const calls = await page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+    (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
       (entry) => entry.command === "send_channel_message",
     ),
   );
@@ -1305,7 +1315,8 @@ test("pasting a link and immediately pressing Enter prepares it after submit", a
 test("a snapshot media upload failure preserves a metadata-only preview", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?upload=fail";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?upload=fail";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1316,7 +1327,7 @@ test("a snapshot media upload failure preserves a metadata-only preview", async 
   await expect(row).toContainText(previewUrl);
   await expect(row.locator("[data-link-preview]")).toBeVisible();
   const tags = await page.evaluate(() => {
-    const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+    const call = [...(window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])]
       .reverse()
       .find((entry) => entry.command === "send_channel_message");
     return (call?.payload as { linkPreviewTags?: string[][] }).linkPreviewTags;
@@ -1327,7 +1338,7 @@ test("a snapshot media upload failure preserves a metadata-only preview", async 
     "snapshot",
     "1",
     previewUrl,
-    "Buzz pull request",
+    "Ambush pull request",
     "GitHub",
     "A sender-authored preview snapshot.",
   ]);
@@ -1336,7 +1347,7 @@ test("a snapshot media upload failure preserves a metadata-only preview", async 
 
 test("editing a message excludes link previews entirely", async ({ page }) => {
   const message = `Edit-me ${Date.now()}`;
-  const previewUrl = "https://github.com/block/buzz/pull/3246?edit=1";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/3246?edit=1";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   const input = page.getByTestId("message-input");
@@ -1357,7 +1368,7 @@ test("editing a message excludes link previews entirely", async ({ page }) => {
   // No snapshot upload was attempted for the edited link.
   const uploadedPreviewMedia = await page.evaluate(
     () =>
-      (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+      (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).filter(
         (entry) =>
           entry.command === "upload_media_bytes" &&
           typeof (entry.payload as { filename?: string })?.filename ===
@@ -1375,7 +1386,7 @@ test("editing a message excludes link previews entirely", async ({ page }) => {
 test("hiding composer link previews suppresses the whole draft and emits the blanket marker", async ({
   page,
 }) => {
-  const firstUrl = "https://github.com/block/buzz/pull/3246?hide=all";
+  const firstUrl = "https://github.com/backbay-labs/ambush/pull/3246?hide=all";
   const secondUrl = "https://linear.app/acme/issue/ABC-123/hidden-too";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -1394,7 +1405,7 @@ test("hiding composer link previews suppresses the whole draft and emits the bla
   await expect(row).toContainText(secondUrl);
   await expect(row.locator("[data-link-preview]")).toHaveCount(0);
   const linkPreviewTags = await page.evaluate(() => {
-    const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+    const call = [...(window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [])]
       .reverse()
       .find((entry) => entry.command === "send_channel_message");
     return (
@@ -1410,7 +1421,7 @@ test("hiding composer link previews suppresses the whole draft and emits the bla
 test("composer link preview embeds stay attachment-sized while loading and ready", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/3246";
 
   for (const width of [800, 420]) {
     await page.setViewportSize({ width: 800, height: 700 });
@@ -1434,11 +1445,11 @@ test("composer link preview embeds stay attachment-sized while loading and ready
         .querySelector("[data-link-preview-thumbnail]")
         ?.getBoundingClientRect().width,
     }));
-    if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+    if (process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR) {
       await waitForAnimations(page);
       await page.screenshot({
         animations: "disabled",
-        path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/composer-${width}-loading.png`,
+        path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/composer-${width}-loading.png`,
       });
     }
 
@@ -1456,11 +1467,11 @@ test("composer link preview embeds stay attachment-sized while loading and ready
         .querySelector("[data-link-preview-thumbnail]")
         ?.getBoundingClientRect().width,
     }));
-    if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+    if (process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR) {
       await waitForAnimations(page);
       await page.screenshot({
         animations: "disabled",
-        path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/composer-${width}-ready.png`,
+        path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/composer-${width}-ready.png`,
       });
     }
 
@@ -1475,7 +1486,8 @@ test("composer link preview embeds stay attachment-sized while loading and ready
 test("compact link preview image geometry truncates long titles to one line", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?geometry=1";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?geometry=1";
   // Sent snapshot media is relay-hosted and rewritten through the
   // authenticated media proxy (#5627), so serve the fixture from the mock
   // proxy origin rather than the raw relay origin.
@@ -1512,11 +1524,11 @@ test("compact link preview image geometry truncates long titles to one line", as
     )
     .toBeGreaterThan(1);
 
-  if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+  if (process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR) {
     await waitForAnimations(page);
     await row.screenshot({
       animations: "disabled",
-      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/recipient-compact-long-title.png`,
+      path: `${process.env.AMBUSH_LINK_PREVIEW_SCREENSHOTS_DIR}/recipient-compact-long-title.png`,
     });
   }
 });
@@ -1524,7 +1536,8 @@ test("compact link preview image geometry truncates long titles to one line", as
 test("composer no-image link embeds keep the attachment footprint", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246?inline=none";
+  const previewUrl =
+    "https://github.com/backbay-labs/ambush/pull/3246?inline=none";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await page.getByTestId("message-input").fill(previewUrl);
@@ -1534,7 +1547,7 @@ test("composer no-image link embeds keep the attachment footprint", async ({
   await expect(card).toHaveAttribute("data-image-state", "none");
   await expect(card.locator("[data-link-preview-thumbnail]")).toBeVisible();
   await expect(card.locator('[data-slot="attachment-title"]')).toContainText(
-    /github\.com|Buzz/,
+    /github\.com|Ambush/,
   );
   await expect(card).toHaveCSS("height", "55px");
 });
@@ -1542,8 +1555,8 @@ test("composer no-image link embeds keep the attachment footprint", async ({
 test("mixed link preview image outcomes keep Compact and Rich fallbacks stable", async ({
   page,
 }) => {
-  const loadedUrl = "https://github.com/block/buzz/pull/4001";
-  const rateLimitedUrl = "https://github.com/block/buzz/pull/4002";
+  const loadedUrl = "https://github.com/backbay-labs/ambush/pull/4001";
+  const rateLimitedUrl = "https://github.com/backbay-labs/ambush/pull/4002";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await page
@@ -1593,9 +1606,10 @@ test("fragment link previews render a card per canonical URL", async ({
   // cards total. A resolver that keys previews on the raw fragment-bearing URL
   // drops the fragment cards entirely (the reported bug).
   const fragmentUrlA =
-    "https://github.com/block/buzz/pull/3767#pullrequestreview-4857569498";
-  const fragmentUrlB = "https://github.com/block/buzz/pull/3767#issuecomment-1";
-  const plainUrl = "https://github.com/block/buzz/pull/3867";
+    "https://github.com/backbay-labs/ambush/pull/3767#pullrequestreview-4857569498";
+  const fragmentUrlB =
+    "https://github.com/backbay-labs/ambush/pull/3767#issuecomment-1";
+  const plainUrl = "https://github.com/backbay-labs/ambush/pull/3867";
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await page
@@ -1629,7 +1643,7 @@ test("link preview browser image errors render a fallback", async ({
   await page.getByTestId("channel-general").click();
   await page
     .getByTestId("message-input")
-    .fill("https://github.com/block/buzz/pull/4003");
+    .fill("https://github.com/backbay-labs/ambush/pull/4003");
   await waitForReadyComposerSnapshots(page);
   await page.getByTestId("send-message").click();
 
@@ -1659,7 +1673,7 @@ test("link preview browser image errors render a fallback", async ({
 test("supported Compact link previews keep the message link visible with square outer corners", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/sprout/pull/1334";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/1334";
 
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -1915,7 +1929,7 @@ test("relay GIF search selects content-only media and reports the share", async 
           search: "/gifs/search",
           share: "/gifs/share",
         },
-        supported_extensions: ["buzz-gif"],
+        supported_extensions: ["ambush-gif"],
       }),
       contentType: "application/nostr+json",
     }),
@@ -1999,12 +2013,12 @@ test("relay GIF search selects content-only media and reports the share", async 
         return Boolean(
           (
             window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
+              __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{
                 content?: string;
                 kind?: number;
               }>;
             }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.some(
+          ).__AMBUSH_E2E_SIGNED_EVENTS__?.some(
             (event) => event.kind === 9 && event.content?.includes(expectedUrl),
           ),
         );
@@ -2014,13 +2028,13 @@ test("relay GIF search selects content-only media and reports the share", async 
   const matchingEvent = await page.evaluate((expectedUrl) => {
     return (
       window as Window & {
-        __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
+        __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{
           content?: string;
           kind?: number;
           tags?: string[][];
         }>;
       }
-    ).__BUZZ_E2E_SIGNED_EVENTS__?.find(
+    ).__AMBUSH_E2E_SIGNED_EVENTS__?.find(
       (event) => event.kind === 9 && event.content?.includes(expectedUrl),
     );
   }, gifUrl);
@@ -2052,7 +2066,7 @@ async function routeGifMocks(page: import("@playwright/test").Page) {
           search: "/gifs/search",
           share: "/gifs/share",
         },
-        supported_extensions: ["buzz-gif"],
+        supported_extensions: ["ambush-gif"],
       }),
       contentType: "application/nostr+json",
     }),
@@ -2148,7 +2162,7 @@ test("reduced-motion GIF grid falls back to a named static placeholder", async (
           search: "/gifs/search",
           share: "/gifs/share",
         },
-        supported_extensions: ["buzz-gif"],
+        supported_extensions: ["ambush-gif"],
       }),
       contentType: "application/nostr+json",
     }),
@@ -2422,12 +2436,12 @@ test("send message to DM channel p-tags the recipient", async ({ page }) => {
       page.evaluate((content) => {
         const events = (
           window as Window & {
-            __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
+            __AMBUSH_E2E_SIGNED_EVENTS__?: Array<{
               content: string;
               tags: string[][];
             }>;
           }
-        ).__BUZZ_E2E_SIGNED_EVENTS__;
+        ).__AMBUSH_E2E_SIGNED_EVENTS__;
         return events?.find((event) => event.content === content)?.tags ?? [];
       }, message),
     )
@@ -2444,7 +2458,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
   const attachmentSha = "d".repeat(64);
   const attachmentUrl = `http://localhost:3000/media/${attachmentSha}.txt`;
   const customEmojiUrl = "https://example.com/send-to-channel-party.svg";
-  const previewUrl = "https://github.com/block/buzz/pull/5305";
+  const previewUrl = "https://github.com/backbay-labs/ambush/pull/5305";
   const ownReplyContent = [
     `${replySummary} with @alice :party:`,
     `[launch-notes.txt](${attachmentUrl})`,
@@ -2486,8 +2500,8 @@ test("sends a thread message to its parent channel with a root-thread link", asy
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      (window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      (window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
         channelName: "general",
       }) ??
         false),
@@ -2495,7 +2509,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
 
   const { ownReplyId, rootId } = await page.evaluate(
     ({ alicePubkey, ownReply, root, semanticTags }) => {
-      const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) throw new Error("Mock message emitter is unavailable.");
       const rootEvent = emit({
         channelName: "general",
@@ -2581,7 +2595,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
     .poll(() =>
       page.evaluate((content) => {
         return Boolean(
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
             (entry) =>
               entry.command === "send_channel_message" &&
               (entry.payload as { content?: string } | undefined)?.content ===
@@ -2593,7 +2607,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
     .toBe(true);
   const sentPayload = await page.evaluate(
     (content) =>
-      (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+      (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
         (entry) =>
           entry.command === "send_channel_message" &&
           (entry.payload as { content?: string } | undefined)?.content ===
@@ -2610,7 +2624,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
     mentionPubkeys: [TEST_IDENTITIES.alice.pubkey],
     mentionTags: [mentionTag],
     parentEventId: null,
-    sentFromThreadTag: ["buzz:sent-from-thread", rootId, rootContent],
+    sentFromThreadTag: ["ambush:sent-from-thread", rootId, rootContent],
   });
 
   await page.getByTestId("auxiliary-panel-close").click();
@@ -2967,7 +2981,7 @@ test("opens a single-level thread panel with inline expansion", async ({
 
   await page.evaluate(
     ({ content, parentEventId, pubkey }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content,
         parentEventId,
@@ -3034,7 +3048,7 @@ test("thread panel width uses session storage and reset handle", async ({
 
   await page.addInitScript((width) => {
     window.sessionStorage.setItem(
-      "buzz.desktop.thread-panel-width",
+      "ambush.desktop.thread-panel-width",
       String(width),
     );
   }, customWidthPx);
@@ -3243,12 +3257,12 @@ test("thread refetch preserves a live reply and reaction received in flight", as
   const replyId = await page.evaluate(
     async ({ channelId, content, parentEventId }) => {
       const bridgeWindow = window as Window & {
-        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        __AMBUSH_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
       };
-      const invoke = bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
+      const invoke = bridgeWindow.__AMBUSH_E2E_INVOKE_MOCK_COMMAND__;
       if (!invoke) throw new Error("Mock Tauri invoke bridge is unavailable.");
       const sent = (await invoke("send_channel_message", {
         channelId,
@@ -3400,11 +3414,11 @@ test("editing a pre-seeded thread reply uses and focuses the thread composer", a
 
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   const { replyId, rootId } = await page.evaluate(
     ({ replyContent, rootContent }) => {
-      const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) throw new Error("Mock message emitter is unavailable.");
       const rootEvent = emit({
         channelName: "general",
@@ -3451,11 +3465,11 @@ test("thread composer switches directly between visible reply edits", async ({
 
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   const { firstId, rootId, secondId } = await page.evaluate(
     ({ firstContent, rootContent, secondContent }) => {
-      const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) throw new Error("Mock message emitter is unavailable.");
       const rootEvent = emit({
         channelName: "general",
@@ -3513,10 +3527,10 @@ test("editing a broadcast reply from a thread returns to the main composer", asy
 }) => {
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   const { broadcastId, rootId } = await page.evaluate(() => {
-    const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
     if (!emit) throw new Error("Mock message emitter is unavailable.");
     const rootEvent = emit({
       channelName: "general",
@@ -3629,7 +3643,7 @@ test("editing a thread root in focus mode dismisses the drawer before focusing t
   page,
 }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("buzz.channels.threadViewMode", "focus");
+    localStorage.setItem("ambush.channels.threadViewMode", "focus");
   });
   const root = `Focus root edit ${Date.now()}`;
 
@@ -3664,7 +3678,7 @@ test("focus mode preserves an active reply edit, then Escape makes root editing 
   page,
 }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("buzz.channels.threadViewMode", "focus");
+    localStorage.setItem("ambush.channels.threadViewMode", "focus");
   });
   const root = `Focus guarded root ${Date.now()}`;
   const reply = `Focus guarded reply ${Date.now()}`;
@@ -4001,7 +4015,7 @@ test("a refused message deep link retries after the thread edit is canceled", as
   const destinationId = await destination.getAttribute("data-message-id");
   expect(destinationId).not.toBeNull();
   await mainInput.fill(
-    `Retry link buzz://message?channel=9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50&id=${destinationId}`,
+    `Retry link ambush://message?channel=9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50&id=${destinationId}`,
   );
   await mainInput.press("Enter");
   const destinationLink = page
@@ -4075,11 +4089,11 @@ test("a refused sent-from-thread link preserves the edit and retries after cance
 
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   const { destinationRootId, sourceRootId } = await page.evaluate(
     ({ destinationRoot, sharedMessage, sourceReply, sourceRoot }) => {
-      const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) throw new Error("Mock message emitter is unavailable.");
       const destination = emit({
         channelName: "general",
@@ -4094,7 +4108,9 @@ test("a refused sent-from-thread link preserves the edit and retries after cance
       emit({
         channelName: "general",
         content: sharedMessage,
-        extraTags: [["buzz:sent-from-thread", destination.id, destinationRoot]],
+        extraTags: [
+          ["ambush:sent-from-thread", destination.id, destinationRoot],
+        ],
       });
       return { destinationRootId: destination.id, sourceRootId: source.id };
     },
@@ -4154,11 +4170,11 @@ test("a refused search result preserves the edit and retries after cancel", asyn
 
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   const { destinationRootId, sourceRootId } = await page.evaluate(
     ({ destinationRoot, sourceReply, sourceRoot }) => {
-      const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) throw new Error("Mock message emitter is unavailable.");
       const destination = emit({
         channelName: "general",
@@ -4231,11 +4247,11 @@ test("a refused forum search result preserves the edit and retries after cancel"
 
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   const sourceRootId = await page.evaluate(
     ({ sourceReply, sourceRoot }) => {
-      const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) throw new Error("Mock message emitter is unavailable.");
       const source = emit({ channelName: "general", content: sourceRoot });
       emit({
@@ -4312,11 +4328,11 @@ for (const targetKind of ["reply", "root"] as const) {
 
     await page.goto("/");
     await page.waitForFunction(
-      () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+      () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
     );
     const { sourceReplyId, sourceRootId } = await page.evaluate(
       ({ sourceReply, sourceRoot, targetKind }) => {
-        const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+        const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
         if (!emit) throw new Error("Mock message emitter is unavailable.");
         const root = emit({ channelName: "general", content: sourceRoot });
         const reply = emit({
@@ -4327,7 +4343,7 @@ for (const targetKind of ["reply", "root"] as const) {
         const targetId = targetKind === "reply" ? reply.id : root.id;
         emit({
           channelName: "general",
-          content: `Same-thread ${targetKind} target buzz://message?channel=9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50&id=${targetId}&thread=${root.id}`,
+          content: `Same-thread ${targetKind} target ambush://message?channel=9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50&id=${targetId}&thread=${root.id}`,
         });
         return { sourceReplyId: reply.id, sourceRootId: root.id };
       },
@@ -4358,7 +4374,7 @@ for (const targetKind of ["reply", "root"] as const) {
     }));
     const sendsBefore = await page.evaluate(
       () =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           (entry) => entry.command === "send_channel_message",
         ).length,
     );
@@ -4380,7 +4396,7 @@ for (const targetKind of ["reply", "root"] as const) {
     expect(
       await page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "send_channel_message",
           ).length,
       ),
@@ -4410,11 +4426,11 @@ test("a refused channel switch preserves the reply edit and retries after cancel
 
   await page.goto("/");
   await page.waitForFunction(
-    () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+    () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
   );
   const { sourceReplyId, sourceRootId } = await page.evaluate(
     ({ sourceReply, sourceRoot }) => {
-      const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) throw new Error("Mock message emitter is unavailable.");
       const root = emit({ channelName: "general", content: sourceRoot });
       const reply = emit({
@@ -4448,7 +4464,7 @@ test("a refused channel switch preserves the reply edit and retries after cancel
   }));
   const sendsBefore = await page.evaluate(
     () =>
-      (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+      (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
         (entry) => entry.command === "send_channel_message",
       ).length,
   );
@@ -4470,7 +4486,7 @@ test("a refused channel switch preserves the reply edit and retries after cancel
   expect(
     await page.evaluate(
       () =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           (entry) => entry.command === "send_channel_message",
         ).length,
     ),
@@ -4493,11 +4509,11 @@ for (const backInput of ["button", "keyboard"] as const) {
 
     await page.goto("/");
     await page.waitForFunction(
-      () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+      () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
     );
     const { sourceReplyId, sourceRootId } = await page.evaluate(
       ({ sourceReply, sourceRoot }) => {
-        const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+        const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
         if (!emit) throw new Error("Mock message emitter is unavailable.");
         const root = emit({ channelName: "general", content: sourceRoot });
         const reply = emit({
@@ -4532,7 +4548,7 @@ for (const backInput of ["button", "keyboard"] as const) {
     }));
     const sendsBefore = await page.evaluate(
       () =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           (entry) => entry.command === "send_channel_message",
         ).length,
     );
@@ -4563,7 +4579,7 @@ for (const backInput of ["button", "keyboard"] as const) {
     expect(
       await page.evaluate(
         () =>
-          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
             (entry) => entry.command === "send_channel_message",
           ).length,
       ),

@@ -743,7 +743,7 @@ test("no cell's colour moves more than 3 dE00 in one 60Hz frame", () => {
  * stop 2, and they are the two most distant colours in the palette. A phase
  * axis is cyclic, so driving the ramp with a raw wrap puts a full-palette
  * discontinuity somewhere on screen at all times — measured at 182.5 sRGB on
- * buzz-dark before `cyclicRampPosition` folded the axis into a palindrome.
+ * ambush-dark before `cyclicRampPosition` folded the axis into a palindrome.
  *
  * Asserting only the interior buckets cannot see this: the seam lives exactly
  * at the wrap, which is the one adjacency an interior sweep skips. So this
@@ -788,7 +788,7 @@ test("the hue axis has no seam at the phase wrap", () => {
     // Per-sample bound of 3 dE00 at 1200 samples per cycle, finer than 60Hz over
     // a 9.5s period, so a real seam cannot hide between samples. Generous against
     // sampling noise, brutal against a full-palette discontinuity: the unfolded
-    // seam measured 182.5 sRGB / 55.6 dE00 on buzz-dark.
+    // seam measured 182.5 sRGB / 55.6 dE00 on ambush-dark.
     if (max > 3) offenders.push(`${name} ${max.toFixed(2)}`);
   }
   assert.deepEqual(offenders, [], `temporal seams: ${offenders.join(", ")}`);

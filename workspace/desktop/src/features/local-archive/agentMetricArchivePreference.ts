@@ -13,7 +13,7 @@
  * is just the UI gate that prevents re-seeding after an explicit opt-out).
  */
 
-const KEY_PREFIX = "buzz:agent-metric-archive-default-seeded";
+const KEY_PREFIX = "ambush:agent-metric-archive-default-seeded";
 
 function storageKey(identityPubkey: string): string {
   return `${KEY_PREFIX}:${identityPubkey}`;

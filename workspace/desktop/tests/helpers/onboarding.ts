@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 
 export const E2E_IDENTITY_OVERRIDE_STORAGE_KEY =
-  "buzz:e2e-identity-override.v1";
+  "ambush:e2e-identity-override.v1";
 
 export async function seedActiveIdentity(
   page: Page,

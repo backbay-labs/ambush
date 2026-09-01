@@ -1,5 +1,5 @@
 const MAX_CALLBACK_URL_LENGTH = 4_096;
-const CALLBACK_FRAGMENT_KEY = "buzz_bind";
+const CALLBACK_FRAGMENT_KEY = "ambush_bind";
 const CALLBACK_PAYLOAD_VERSION = "v1";
 
 function encodeBase64Url(value: string): string {

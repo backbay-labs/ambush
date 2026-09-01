@@ -4,13 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/theme.dart';
-import 'buzz_navigation_metrics.dart';
+import 'ambush_navigation_metrics.dart';
 import 'directional_transition_scope.dart';
 import 'frosted_scroll_under_scope.dart';
 import 'ios_glass_navigation_button.dart';
 
 /// Minimum height of the frosted app bar content area below the safe area.
-const _kBarContentMinHeight = buzzNavigationRowHeight;
+const _kBarContentMinHeight = ambushNavigationRowHeight;
 const _kBottomBorderWidth = 1.0;
 
 TextStyle _effectiveTitleStyle(BuildContext context, TextStyle? titleStyle) {
@@ -121,8 +121,8 @@ class FrostedAppBar extends StatelessWidget {
   final Color? iconColor;
 
   /// Paints over the frosted fill instead of the default translucent surface.
-  /// Used by the Buzz themes to carry their branded gradient across the app's
-  /// top section — see [buzzTopSectionGradient].
+  /// Used by the Ambush themes to carry their branded gradient across the app's
+  /// top section — see [ambushTopSectionGradient].
   final Gradient? gradient;
 
   /// Whether to apply the translucent blur treatment behind the app bar.

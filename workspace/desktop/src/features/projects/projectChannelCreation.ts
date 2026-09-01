@@ -9,7 +9,7 @@ import {
 import type { ProjectEventTemplate } from "./projectCreation";
 
 /**
- * Appends a `buzz-related-channel` tag to a live project head. Every other
+ * Appends a `ambush-related-channel` tag to a live project head. Every other
  * tag is preserved so adding a stream cannot erase unknown metadata.
  */
 export function buildProjectRelatedChannelPatchTemplate({
@@ -30,7 +30,7 @@ export function buildProjectRelatedChannelPatchTemplate({
     throw new Error("Project channel is invalid.");
   }
   const homeChannelId = liveHead.tags.find(
-    (tag) => tag[0] === "buzz-channel",
+    (tag) => tag[0] === "ambush-channel",
   )?.[1];
   if (homeChannelId === normalizedChannelId) {
     throw new Error("That channel is already this project's home.");

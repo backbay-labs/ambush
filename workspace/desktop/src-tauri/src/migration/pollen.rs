@@ -24,7 +24,7 @@ fn migrate_pollen_agent_name_in_file(path: &Path, now: &str) {
     };
     let Ok(mut records) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) else {
         eprintln!(
-            "buzz-desktop: migrate-pollen-agent-name: invalid JSON in {}",
+            "ambush-desktop: migrate-pollen-agent-name: invalid JSON in {}",
             path.display()
         );
         return;
@@ -183,18 +183,18 @@ fn migrate_pollen_agent_name_in_file(path: &Path, now: &str) {
         // leaves harmless stale items. The loader verifies each queued expected
         // name against the durable record before publishing.
         if let Err(error) = persist_profile_reconcile_queue(path, &profile_reconciliations) {
-            eprintln!("buzz-desktop: migrate-pollen-agent-name: {error}");
+            eprintln!("ambush-desktop: migrate-pollen-agent-name: {error}");
             return;
         }
         if let Ok(bytes) = serde_json::to_vec_pretty(&records) {
             if let Err(error) = crate::managed_agents::atomic_write_json_restricted(path, &bytes) {
-                eprintln!("buzz-desktop: migrate-pollen-agent-name: {error}");
+                eprintln!("ambush-desktop: migrate-pollen-agent-name: {error}");
             }
         }
     } else if changed {
         if let Ok(bytes) = serde_json::to_vec_pretty(&records) {
             if let Err(error) = crate::managed_agents::atomic_write_json_restricted(path, &bytes) {
-                eprintln!("buzz-desktop: migrate-pollen-agent-name: {error}");
+                eprintln!("ambush-desktop: migrate-pollen-agent-name: {error}");
             }
         }
     }
@@ -378,7 +378,7 @@ pub(crate) fn write_profile_reconcile_queue(
 }
 
 pub(crate) fn profile_reconcile_relay_key(relay_url: &str) -> Result<String, String> {
-    buzz_core_pkg::relay::normalize_relay_url(relay_url)
+    ambush_core_pkg::relay::normalize_relay_url(relay_url)
         .map_err(|error| format!("invalid profile reconcile relay: {error}"))
 }
 
@@ -455,13 +455,14 @@ fn migrate_pollen_fields(
     changed
 }
 
+const LEGACY_FIZZ_NAME_POOL: &[&str] = &[
+    "Nectar", "Comet", "Bramble", "Clover", "Pollen", "Amber", "Daisy", "Mason", "Thistle",
+    "Waxwing", "Hive", "Meadow", "Juniper", "Aster", "Sage", "Willow", "Orchard", "Buzz",
+];
+
 fn remove_pollen_from_legacy_fizz_name_pool(
     record: &mut serde_json::Map<String, serde_json::Value>,
 ) -> bool {
-    const LEGACY_FIZZ_NAME_POOL: &[&str] = &[
-        "Nectar", "Comet", "Bramble", "Clover", "Pollen", "Amber", "Daisy", "Mason", "Thistle",
-        "Waxwing", "Hive", "Meadow", "Juniper", "Aster", "Sage", "Willow", "Orchard", "Buzz",
-    ];
     let Some(names) = record
         .get("name_pool")
         .and_then(serde_json::Value::as_array)
@@ -821,9 +822,10 @@ mod tests {
         let path = dir.path().join("agents/managed-agents.json");
         let mut legacy_fizz =
             crate::managed_agents::built_in_persona_definition("builtin:fizz", "before").unwrap();
-        legacy_fizz
-            .name_pool
-            .insert(4, crate::managed_agents::POLLEN_DISPLAY_NAME.to_string());
+        legacy_fizz.name_pool = LEGACY_FIZZ_NAME_POOL
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
         let old_version = crate::managed_agents::persona_events::persona_content_hash(
             &crate::managed_agents::persona_events::persona_event_content(&legacy_fizz),
         );

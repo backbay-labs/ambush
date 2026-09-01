@@ -3,13 +3,13 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/modal_presentation.dart';
 import '../pairing/pairing_page.dart';
 import 'invite_join_provider.dart';
 
 Future<bool?> showInviteJoinSheet(BuildContext context) {
-  return showBuzzModalBottomSheet<bool>(
+  return showAmbushModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     // The route remains a normal modal while idle, but its contents install a
@@ -75,7 +75,7 @@ class InviteJoinSheet extends ConsumerWidget {
             Text(
               isStarterSetupRecovery
                   ? 'Finish setting up'
-                  : 'Join this Buzz community?',
+                  : 'Join this Ambush community?',
               style: context.textTheme.titleLarge,
             ),
             const SizedBox(height: Grid.xxs),
@@ -161,7 +161,7 @@ class InviteJoinSheet extends ConsumerWidget {
                         ? SizedBox(
                             width: 16,
                             height: 16,
-                            child: BuzzLoadingIndicator(
+                            child: AmbushLoadingIndicator(
                               size: 16,
                               semanticLabel: isStarterSetupRecovery
                                   ? 'Finishing setup'

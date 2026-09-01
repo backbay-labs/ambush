@@ -1,8 +1,8 @@
 part of '../compose_bar.dart';
 
-const _inlinePhotoPickerViewType = 'buzz/inline_photo_picker';
+const _inlinePhotoPickerViewType = 'ambush/inline_photo_picker';
 const _inlinePhotoPickerSupportChannel = MethodChannel(
-  'buzz/inline_photo_picker',
+  'ambush/inline_photo_picker',
 );
 
 class _IOSInlinePhotoPicker extends HookWidget {
@@ -129,7 +129,7 @@ class _IOSInlinePhotoPicker extends HookWidget {
             creationParamsCodec: const StandardMessageCodec(),
             onPlatformViewCreated: (viewId) {
               pickerChannel.value = MethodChannel(
-                'buzz/inline_photo_picker/$viewId',
+                'ambush/inline_photo_picker/$viewId',
               );
             },
           ),
@@ -177,7 +177,7 @@ class _IOSInlinePhotoPicker extends HookWidget {
                 child: isPreparingSelection.value
                     ? const SizedBox.square(
                         dimension: 20,
-                        child: BuzzLoadingIndicator(
+                        child: AmbushLoadingIndicator(
                           size: 20,
                           color: Colors.white,
                           semanticLabel: 'Preparing selected photos',
@@ -196,7 +196,7 @@ class _IOSInlinePhotoPicker extends HookWidget {
             const ColoredBox(
               color: Color.fromRGBO(0, 0, 0, 0.28),
               child: Center(
-                child: BuzzLoadingIndicator(
+                child: AmbushLoadingIndicator(
                   size: 44,
                   color: Colors.white,
                   semanticLabel: 'Preparing selected photos',
@@ -219,7 +219,10 @@ class _NativePhotoPickerLoading extends StatelessWidget {
       height: _attachmentExpandedHeight,
       width: double.infinity,
       child: const Center(
-        child: BuzzLoadingIndicator(size: 44, semanticLabel: 'Opening Photos'),
+        child: AmbushLoadingIndicator(
+          size: 44,
+          semanticLabel: 'Opening Photos',
+        ),
       ),
     );
   }

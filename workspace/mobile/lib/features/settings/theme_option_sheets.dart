@@ -21,7 +21,7 @@ Future<void> showAppearanceModePickerSheet({
   required BuildContext context,
   required ThemeMode selectedMode,
   required ValueChanged<ThemeMode> onSelected,
-}) => showBuzzModalBottomSheet<void>(
+}) => showAmbushModalBottomSheet<void>(
   context: context,
   title: 'Appearance',
   showDragHandle: true,
@@ -34,7 +34,7 @@ Future<void> showAccentColorPickerSheet({
   required ColorScheme colorScheme,
   required int selectedIndex,
   required ValueChanged<int> onSelected,
-}) => showBuzzModalBottomSheet<void>(
+}) => showAmbushModalBottomSheet<void>(
   context: context,
   title: 'Accent color',
   showDragHandle: true,

@@ -136,7 +136,7 @@ test("formatAgentModelLabel — null or empty returns Auto", () => {
 import { resolveModelLabel } from "./formatAgentModelLabel.ts";
 
 test("resolveModelLabel — echoed id name falls through to the registry (real discovery shape)", () => {
-  // buzz-agent's Databricks discovery emits {id, name: id}; the echoed name
+  // ambush-agent's Databricks discovery emits {id, name: id}; the echoed name
   // carries no display info, so the registry tier must curate the label.
   assert.equal(
     resolveModelLabel(

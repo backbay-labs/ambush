@@ -192,13 +192,13 @@ never enter the result. [FI-TRACE-VERIFIER-PARITY]
 
 Policy selects exactly one token class before parsing claims:
 
-- **`at+jwt` access token**: a Buzz-resource access token whose protected
-  `typ` is exactly `at+jwt` and whose `aud` contains the configured Buzz
+- **`at+jwt` access token**: an Ambush-resource access token whose protected
+  `typ` is exactly `at+jwt` and whose `aud` contains the configured Ambush
   resource audience. This class selects tokens carrying the RFC 9068 `at+jwt`
   type but validates them under this document's claim contract; it does not
   implement the full RFC 9068 validation profile, and the long-form media type
   `application/at+jwt` is not accepted;
-- **dedicated Buzz assertion**: a separately minted assertion whose protected
+- **dedicated Ambush assertion**: a separately minted assertion whose protected
   `typ` is exactly `nip-fi+jwt`.
 
 OIDC ID Tokens always deny, even when `iss`, `aud`, and `sub` match. A generic

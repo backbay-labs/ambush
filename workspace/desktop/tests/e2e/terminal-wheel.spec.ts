@@ -1,13 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 
-const TERM = 'section[aria-label="Buzz Term"]';
+const TERM = 'section[aria-label="Ambush Term"]';
 const NAMED = 0x0100_0000;
 const FG = NAMED | 256;
 const BG = NAMED | 257;
 
 /**
- * The shipped mock bridge throws on every `terminal_*` command, so Buzz Term is
+ * The shipped mock bridge throws on every `terminal_*` command, so Ambush Term is
  * unreachable through `installMockBridge` alone. This pre-creates
  * `__TAURI_INTERNALS__` and traps the `invoke` assignment `mockIPC` makes:
  * terminal commands are answered here, everything else falls through to the
@@ -147,7 +147,7 @@ async function reveal(page: Page) {
   await installMockBridge(page);
   await page.goto("/");
   await expect(page.getByTestId("home-inbox-list")).toBeVisible();
-  // Buzz Term needs a channel: TerminalBootstrap's context is null on Home, so
+  // Ambush Term needs a channel: TerminalBootstrap's context is null on Home, so
   // no session spawns and the chord is inert.
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
@@ -169,7 +169,7 @@ async function reveal(page: Page) {
     .toBeGreaterThanOrEqual(180);
 }
 
-test("project terminal button opens Buzz Term for the repository", async ({
+test("project terminal button opens Ambush Term for the repository", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -180,12 +180,12 @@ test("project terminal button opens Buzz Term for the repository", async ({
   await page.getByTestId("projects-section-projects").click();
   const projectEntry = page
     .locator(
-      '[data-testid="project-card-buzz"], [data-testid="project-row-buzz"]',
+      '[data-testid="project-card-ambush"], [data-testid="project-row-ambush"]',
     )
     .first();
   await expect(projectEntry).toBeVisible({ timeout: 10_000 });
   await projectEntry.click();
-  await page.getByTestId("project-home-context-repo-buzz").click();
+  await page.getByTestId("project-home-context-repo-ambush").click();
 
   const terminalButton = page.getByTestId("project-terminal-toggle");
   await expect(terminalButton).toBeEnabled();
@@ -197,11 +197,11 @@ test("project terminal button opens Buzz Term for the repository", async ({
   await expect(page.locator(TERM)).toBeVisible();
 });
 
-test("scrollback: wheel over Buzz Term reaches terminal_scroll", async ({
+test("scrollback: wheel over Ambush Term reaches terminal_scroll", async ({
   page,
 }) => {
   await reveal(page);
-  await pushFrame(page, [{ line: 0, text: "buzz@term:~$ " }], {
+  await pushFrame(page, [{ line: 0, text: "ambush@term:~$ " }], {
     line: 0,
     column: 13,
   });
@@ -225,7 +225,7 @@ test("terminal viewport click retains keyboard input ownership", async ({
   await expect(input).toBeFocused();
 
   await page
-    .locator(".buzz-terminal-viewport")
+    .locator(".ambush-terminal-viewport")
     .click({ position: { x: 40, y: 40 } });
   await expect(input).toBeFocused();
 
@@ -241,7 +241,7 @@ test("terminal viewport click retains keyboard input ownership", async ({
     .toContain("FOCUS_KEYSTROKE");
 });
 
-test("concealed terminal viewport does not steal Buzz focus", async ({
+test("concealed terminal viewport does not steal Ambush focus", async ({
   page,
 }) => {
   await reveal(page);
@@ -251,11 +251,11 @@ test("concealed terminal viewport does not steal Buzz focus", async ({
   const input = page.getByLabel("Terminal input");
   await expect(input).toHaveCount(0);
   await page.getByTestId("chat-title").click();
-  await page.keyboard.type("BUZZ_KEYSTROKE");
+  await page.keyboard.type("AMBUSH_KEYSTROKE");
   const terminalInputs = await page.evaluate(
     () =>
       (window as typeof window & { __SAMI_TERM__: { inputs: string[] } })
         .__SAMI_TERM__.inputs,
   );
-  expect(terminalInputs.join("")).not.toContain("BUZZ_KEYSTROKE");
+  expect(terminalInputs.join("")).not.toContain("AMBUSH_KEYSTROKE");
 });

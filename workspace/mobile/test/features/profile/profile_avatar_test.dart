@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:buzz/features/profile/profile_avatar.dart';
-import 'package:buzz/features/profile/profile_provider.dart';
-import 'package:buzz/shared/profile/user_profile.dart';
-import 'package:buzz/shared/theme/theme.dart';
-import 'package:buzz/shared/widgets/avatar_image.dart';
-import 'package:buzz/shared/widgets/masked_avatar_badge.dart';
+import 'package:ambush/features/profile/profile_avatar.dart';
+import 'package:ambush/features/profile/profile_provider.dart';
+import 'package:ambush/shared/profile/user_profile.dart';
+import 'package:ambush/shared/theme/theme.dart';
+import 'package:ambush/shared/widgets/avatar_image.dart';
+import 'package:ambush/shared/widgets/masked_avatar_badge.dart';
 
 void main() {
   Widget harness({
@@ -108,7 +108,7 @@ void main() {
     const posterUrl = 'https://relay.example/media/poster.png';
     const animationUrl = 'https://relay.example/media/animation.png';
     final avatarUrl =
-        '$posterUrl#buzz-anim=${Uri.encodeComponent(animationUrl)}';
+        '$posterUrl#ambush-anim=${Uri.encodeComponent(animationUrl)}';
 
     await tester.pumpWidget(harness(avatarUrl: avatarUrl));
     await tester.pump();

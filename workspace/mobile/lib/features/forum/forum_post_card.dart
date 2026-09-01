@@ -231,7 +231,7 @@ class ForumPostCard extends HookConsumerWidget {
         currentPubkey != null &&
         post.pubkey.toLowerCase() == currentPubkey!.toLowerCase();
 
-    showBuzzModalBottomSheet<void>(
+    showAmbushModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
@@ -279,7 +279,7 @@ class ForumPostCard extends HookConsumerWidget {
   }
 
   void _confirmDelete(BuildContext context) {
-    showBuzzDialog<void>(
+    showAmbushDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete post'),

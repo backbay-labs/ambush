@@ -1,12 +1,12 @@
 # =============================================================================
 # Isolated test-relay backing stack — GUI read-model overhaul harness (Dawn).
 #
-# A SEPARATE Compose project (`buzz-harness`) so the shared :3000 relay and the
-# default `buzz-*` dev stack are never touched. No fixed container_names (they
+# A SEPARATE Compose project (`ambush-harness`) so the shared :3000 relay and the
+# default `ambush-*` dev stack are never touched. No fixed container_names (they
 # collide across projects) and alternate host ports. Mirrors Eva's evaperf-*
 # isolation pattern.
 #
-#   Bring up:  docker compose -p buzz-harness -f docker-compose.harness.yml up -d
+#   Bring up:  docker compose -p ambush-harness -f docker-compose.harness.yml up -d
 #   Ports:     postgres 5471 · redis 6471 · minio 9471/9472
 #   Relay (run separately by scripts/start-isolated-test-relay.sh):
 #              main 3030 · health 8088 · metrics 9202
@@ -15,16 +15,16 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: buzz
-      POSTGRES_PASSWORD: buzz_dev
-      POSTGRES_DB: buzz
+      POSTGRES_USER: ambush
+      POSTGRES_PASSWORD: ambush_dev
+      POSTGRES_DB: ambush
       PGDATA: /var/lib/postgresql/data
     ports:
       - "5471:5432"
     volumes:
       - harness-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U buzz"]
+      test: ["CMD-SHELL", "pg_isready -U ambush"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -45,8 +45,8 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: buzz_dev
-      MINIO_ROOT_PASSWORD: buzz_dev_secret
+      MINIO_ROOT_USER: ambush_dev
+      MINIO_ROOT_PASSWORD: ambush_dev_secret
     ports:
       - "9471:9000"
       - "9472:9001"
@@ -66,9 +66,9 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-        mc alias set local http://minio:9000 buzz_dev buzz_dev_secret &&
-        mc mb --ignore-existing local/buzz-media &&
-        mc anonymous set none local/buzz-media
+        mc alias set local http://minio:9000 ambush_dev ambush_dev_secret &&
+        mc mb --ignore-existing local/ambush-media &&
+        mc anonymous set none local/ambush-media
       "
     restart: "no"
 

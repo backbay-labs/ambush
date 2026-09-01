@@ -7,13 +7,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "All-in-one Buzz ACP harness, agent, and developer MCP"
+description = "All-in-one Ambush ACP harness, agent, and developer MCP"
 
 [[bin]]
 name = "sprig"
 path = "src/main.rs"
 
 [dependencies]
-buzz-acp = { path = "../buzz-acp" }
-buzz-agent = { path = "../buzz-agent" }
-buzz-dev-mcp = { path = "../buzz-dev-mcp" }
+ambush-acp = { path = "../ambush-acp" }
+ambush-agent = { path = "../ambush-agent" }
+ambush-dev-mcp = { path = "../ambush-dev-mcp" }

@@ -8,10 +8,10 @@ import { assertRelaySeeded } from "../helpers/seed";
 import { denseSecondWall, seedScenario } from "../helpers/seedRelay";
 import { measureAction, type ActionMeasurement } from "./perf/metrics";
 
-const RELAY_HTTP = process.env.BUZZ_E2E_RELAY_URL ?? "http://localhost:3000";
+const RELAY_HTTP = process.env.AMBUSH_E2E_RELAY_URL ?? "http://localhost:3000";
 const GENERAL_CHANNEL_ID = "9f28288a-d724-587a-9709-92dc7f967110";
 const DEEP_ROW_COUNT = Number.parseInt(
-  process.env.BUZZ_RELEASE_SMOKE_ROWS ?? "10000",
+  process.env.AMBUSH_RELEASE_SMOKE_ROWS ?? "10000",
   10,
 );
 const FIXTURE_VERSION = 1;
@@ -45,7 +45,7 @@ async function writeArtifact(testInfo: TestInfo, artifact: ScenarioArtifact) {
     contentType: "application/json",
   });
 
-  const requestedDirectory = process.env.BUZZ_RELEASE_SMOKE_ARTIFACT_DIR;
+  const requestedDirectory = process.env.AMBUSH_RELEASE_SMOKE_ARTIFACT_DIR;
   if (requestedDirectory) {
     const directory = resolve(requestedDirectory);
     await mkdir(directory, { recursive: true });

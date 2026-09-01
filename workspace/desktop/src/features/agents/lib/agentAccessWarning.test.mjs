@@ -43,7 +43,7 @@ test("a provider-backed agent names the server, and not the owner's files", () =
 
 test("an unknown run location reads as local, not as a hedge", () => {
   // "computer or server" names a concept most owners have never been shown:
-  // the Run on selector only renders when a buzz-backend-* provider exists.
+  // the Run on selector only renders when an ambush-backend-* provider exists.
   for (const unknown of [undefined, null]) {
     assert.equal(
       agentAccessWarningText("anyone", unknown),

@@ -16,7 +16,7 @@ import { isAgentAddressMentionTag } from "./agentAddressMention.mjs";
  *   - `imeta` tags come exclusively from the edit (full new attachment set);
  *   - `p` tags from the edit join the original set because only newly added
  *     mentions notify. Reference-only `mention` tags, by contrast, are a full
- *     snapshot from the edited composer (marked by `buzz:mention-snapshot`)
+ *     snapshot from the edited composer (marked by `ambush:mention-snapshot`)
  *     and therefore replace the original set; this preserves the edited body's
  *     stable recipient identities even before profiles load or after an alias
  *     changes. Agent-address mention metadata describes immutable send-time
@@ -40,7 +40,7 @@ export function applyEditTagOverlay(originalTags, editTags) {
   if (!editTags) return originalTags;
   const editEmoji = editTags.filter((t) => t[0] === "emoji");
   const hasMentionSnapshot = editTags.some(
-    (t) => t[0] === "buzz:mention-snapshot",
+    (t) => t[0] === "ambush:mention-snapshot",
   );
   const editMentions = editTags.filter(
     (t) => t[0] === "mention" && !isAgentAddressMentionTag(t),
@@ -63,7 +63,8 @@ export function applyEditTagOverlay(originalTags, editTags) {
   };
   const baseFromOriginal = originalTags.filter(droppedFromOriginal);
   const overlaidFromEdit = editTags.filter(
-    (t) => t[0] === "imeta" || t[0] === "p" || t[0] === "buzz:mention-snapshot",
+    (t) =>
+      t[0] === "imeta" || t[0] === "p" || t[0] === "ambush:mention-snapshot",
   );
   return [
     ...baseFromOriginal,

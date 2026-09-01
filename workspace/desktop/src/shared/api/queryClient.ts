@@ -20,7 +20,7 @@ function configureQueryFocusManager() {
   });
 }
 
-export function createBuzzQueryClient() {
+export function createAmbushQueryClient() {
   configureQueryFocusManager();
   return new QueryClient({
     defaultOptions: {

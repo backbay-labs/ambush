@@ -33,7 +33,7 @@ class ThemeColors {
 
 /// Known light theme names — used to show sun/moon icons before loading.
 const lightThemeNames = <String>{
-  'buzz',
+  'ambush',
   'catppuccin-latte',
   'everforest-light',
   'github-light',
@@ -80,11 +80,11 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF70BF56),
     deleted: Color(0xFFF26D78),
   ),
-  // Buzz and Buzz Dark are first-party: they borrow the GitHub Light / GitHub
+  // Ambush and Ambush Dark are first-party: they borrow the GitHub Light / GitHub
   // Dark palettes wholesale and are distinguished only by the branded gradient
-  // painted across the app's top section (see buzz_theme.dart).
+  // painted across the app's top section (see ambush_theme.dart).
   ThemeColors(
-    name: 'buzz',
+    name: 'ambush',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF24292E),
     comment: Color(0xFF6A737D),
@@ -92,7 +92,7 @@ const themeCatalog = <ThemeColors>[
     deleted: Color(0xFFD73A49),
   ),
   ThemeColors(
-    name: 'buzz-dark',
+    name: 'ambush-dark',
     bg: Color(0xFF24292E),
     fg: Color(0xFFE1E4E8),
     comment: Color(0xFF6A737D),

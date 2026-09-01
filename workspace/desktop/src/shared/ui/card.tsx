@@ -9,7 +9,7 @@ export type CardTextureTone = "light" | "dark";
 export type CardTextureSize = "regular" | "compact";
 
 export const TEXTURED_SURFACE_CLASS =
-  "buzz-card-textured relative isolate rounded-none border-0 bg-transparent p-[var(--buzz-card-textured-safe-inset)] shadow-none";
+  "ambush-card-textured relative isolate rounded-none border-0 bg-transparent p-[var(--ambush-card-textured-safe-inset)] shadow-none";
 
 export function texturedSurfaceClasses({
   size = "regular",
@@ -20,8 +20,8 @@ export function texturedSurfaceClasses({
 } = {}): string {
   return cn(
     TEXTURED_SURFACE_CLASS,
-    tone === "dark" && "buzz-card-textured-dark",
-    size === "compact" && "buzz-card-textured-compact",
+    tone === "dark" && "ambush-card-textured-dark",
+    size === "compact" && "ambush-card-textured-compact",
   );
 }
 
@@ -35,7 +35,7 @@ export function texturedSurfaceClasses({
  * - The baked white center IS the card surface. Never layer an opaque
  *   background (`bg-card`, `bg-white`, …) on top of the texture — it
  *   covers the feathered edge and reintroduces a visible hard border.
- * - Default padding is the safe inset (`--buzz-card-textured-safe-inset`),
+ * - Default padding is the safe inset (`--ambush-card-textured-safe-inset`),
  *   which keeps content on the fully opaque center. Add more padding as
  *   the content needs; go below it only if the content tolerates sitting
  *   on the semi-transparent fade (e.g. a transparent input).
@@ -93,10 +93,10 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(
           cardVariants({ variant, className }),
           variant === "textured" &&
             textureTone === "dark" &&
-            "buzz-card-textured-dark",
+            "ambush-card-textured-dark",
           variant === "textured" &&
             textureSize === "compact" &&
-            "buzz-card-textured-compact",
+            "ambush-card-textured-compact",
         )}
         {...props}
       />

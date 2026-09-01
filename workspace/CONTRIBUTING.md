@@ -1,10 +1,10 @@
-# Contributing to Buzz
+# Contributing to Ambush
 
-Welcome, and thank you for your interest in contributing! Buzz is an
+Welcome, and thank you for your interest in contributing! Ambush is an
 open-source project and we're glad you're here. This guide will help you
 get from zero to a merged pull request.
 
-If you have questions that aren't answered here, [open an issue](https://github.com/block/buzz/issues/new).
+If you have questions that aren't answered here, [open an issue](https://github.com/backbay-labs/ambush/issues/new).
 
 If you believe you found a security vulnerability, do not open a public issue.
 Follow our [security policy](SECURITY.md) to submit a private vulnerability
@@ -21,11 +21,10 @@ report instead.
 5. [Code Style](#code-style)
 6. [Making a Pull Request](#making-a-pull-request)
 7. [Architecture Overview](#architecture-overview)
-8. [Ecosystem](#ecosystem)
-9. [How to Add a New Event Kind](#how-to-add-a-new-event-kind)
-10. [How to Add a New MCP Tool](#how-to-add-a-new-mcp-tool)
-11. [How to Add a New API Endpoint](#how-to-add-a-new-api-endpoint)
-12. [License and CLA](#license-and-cla)
+8. [How to Add a New Event Kind](#how-to-add-a-new-event-kind)
+9. [How to Add a New MCP Tool](#how-to-add-a-new-mcp-tool)
+10. [How to Add a New API Endpoint](#how-to-add-a-new-api-endpoint)
+11. [License and CLA](#license-and-cla)
 
 ---
 
@@ -33,17 +32,17 @@ report instead.
 
 This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md).
 By participating you agree to uphold these standards. Please report
-unacceptable behavior to **conduct@buzz-relay.org**.
+unacceptable behavior to **conduct@ambush.example.com**.
 
 ---
 
 ## Before You Open a PR
 
-Before starting, search [open PRs](https://github.com/block/buzz/pulls) and [open issues](https://github.com/block/buzz/issues) for duplicates — someone may already be working on the same thing. When you open your PR, link the closest existing one in the description (or say "none found").
+Before starting, search [open PRs](https://github.com/backbay-labs/ambush/pulls) and [open issues](https://github.com/backbay-labs/ambush/issues) for duplicates — someone may already be working on the same thing. When you open your PR, link the closest existing one in the description (or say "none found").
 
 For anything beyond a small fix, opening an issue first is strongly recommended. Describe the problem and proposed solution so a maintainer can acknowledge the approach before you build — it avoids two people building the same thing in parallel.
 
-Buzz is an agent platform, so AI-assisted PRs are welcome. No need to disclose the tools you used, but you own and must have reviewed the final code. Submissions that are clearly unreviewed may be closed with a pointer here.
+Ambush is an agent platform, so AI-assisted PRs are welcome. No need to disclose the tools you used, but you own and must have reviewed the final code. Submissions that are clearly unreviewed may be closed with a pointer here.
 
 We squash-merge, so your PR title becomes the commit subject in `main`. Use [Conventional Commits](https://www.conventionalcommits.org/) format: `feat(mcp): add get_feed_actions tool`. The type prefix (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`) is required. See the [Commit Messages](#commit-messages) section for the full reference.
 
@@ -137,8 +136,8 @@ clippy`, `just test-unit`, and `just test` need no GTK.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/block/buzz.git
-cd buzz
+git clone https://github.com/backbay-labs/ambush.git
+cd ambush
 
 # 2. Activate Hermit (optional but recommended)
 . ./bin/activate-hermit
@@ -182,14 +181,14 @@ just desktop-dev  # terminal 2 — Vite dev server only (no Tauri shell)
 
 ```bash
 just down    # Stop Docker services, keep data
-just reset   # Wipe all dev state and recreate it; installed Buzz is preserved
+just reset   # Wipe all dev state and recreate it; installed Ambush is preserved
 ```
 
 Development desktop state uses separate bundle identifiers
-(`xyz.block.buzz.app.dev` and per-worktree variants), a separate keyring service
-(`buzz-desktop-dev`), and `~/.buzz-dev`. `just reset` removes those dev-only
+(`com.backbay.ambush.app.dev` and per-worktree variants), a separate keyring service
+(`ambush-desktop-dev`), and `~/.ambush-dev`. `just reset` removes those dev-only
 locations and the local Docker volumes. It does not touch the installed app's
-`xyz.block.buzz.app` data, `buzz-desktop` keyring service, or `~/.buzz` nest.
+`com.backbay.ambush.app` data, `ambush-desktop` keyring service, or `~/.ambush` nest.
 
 ---
 
@@ -217,7 +216,7 @@ already running.
 
 ### End-to-End Tests
 
-End-to-end tests live in `crates/buzz-test-client/tests/`:
+End-to-end tests live in `crates/ambush-test-client/tests/`:
 
 - `e2e_relay.rs` — WebSocket relay tests
 - `e2e_mcp.rs` — MCP tool tests
@@ -228,7 +227,7 @@ End-to-end tests live in `crates/buzz-test-client/tests/`:
 Run them with (requires running infrastructure):
 
 ```bash
-cargo test -p buzz-test-client -- --ignored
+cargo test -p ambush-test-client -- --ignored
 ```
 
 See `TESTING.md` for the full multi-agent E2E testing guide.
@@ -383,7 +382,7 @@ design principles:
 **The relay is the single source of truth.** All state flows through the
 event store. Crates communicate through the database and Redis pub/sub — not
 through direct function calls across crate boundaries (with the exception
-of `buzz-core` types, which are shared everywhere).
+of `ambush-core` types, which are shared everywhere).
 
 **Event kinds are the only switch.** Every action in the system — a message,
 a reaction, a workflow step, a canvas update — is a Nostr event with a kind
@@ -392,29 +391,9 @@ to existing clients.
 
 ---
 
-## Ecosystem
-
-Buzz is developed across multiple repositories. This repo (`block/buzz`)
-is the open-source home for all application code — the relay, desktop app,
-mobile app, CLI, and agent harness. Internal repositories handle
-enterprise-signed builds and infrastructure deployment.
-
-See [AGENTS.md § Ecosystem](AGENTS.md#ecosystem) for the full repo table and
-dependency diagram.
-
-**External contributors:** Fork `block/buzz`, open a PR, and CI runs
-automatically. No special access is required.
-
-**Block team members:** See the internal
-[sprout-releases CONTRIBUTING.md](https://github.com/squareup/sprout-releases/blob/main/CONTRIBUTING.md)
-for team access setup, onboarding, and the full repo inventory. See
-[RELEASING.md](RELEASING.md) for the release process.
-
----
-
 ## How to Add a New Event Kind
 
-1. **Define the kind constant** in `buzz-core/src/kind.rs`:
+1. **Define the kind constant** in `ambush-core/src/kind.rs`:
 
    ```rust
    /// My new event kind — description of what it represents.
@@ -425,7 +404,7 @@ for team access setup, onboarding, and the full repo inventory. See
    Check the `ALL_KINDS` array for collisions. Each sub-range is documented
    with comments in the file.
 
-2. **Define the payload type** in the appropriate module in `buzz-core/src/`
+2. **Define the payload type** in the appropriate module in `ambush-core/src/`
    (e.g., alongside `event.rs`) if the content field is structured JSON:
 
    ```rust
@@ -437,7 +416,7 @@ for team access setup, onboarding, and the full repo inventory. See
    ```
 
 3. **Register the kind's required scope** in
-   `crates/buzz-relay/src/handlers/ingest.rs` inside
+   `crates/ambush-relay/src/handlers/ingest.rs` inside
    `required_scope_for_kind()`. This controls which auth scope a caller
    needs to submit the event:
 
@@ -446,7 +425,7 @@ for team access setup, onboarding, and the full repo inventory. See
    ```
 
 4. **Handle post-storage side effects** by adding a match arm in
-   `crates/buzz-relay/src/handlers/side_effects.rs` inside
+   `crates/ambush-relay/src/handlers/side_effects.rs` inside
    `handle_side_effects()`:
 
    ```rust
@@ -457,11 +436,11 @@ for team access setup, onboarding, and the full repo inventory. See
    notifications, cache invalidation, or derived data. If the new kind
    also needs an HTTP bridge surface (for example, a protocol helper that
    cannot practically use WebSocket), add a handler in
-   `crates/buzz-relay/src/api/` and register it in
-   `crates/buzz-relay/src/router.rs`.
+   `crates/ambush-relay/src/api/` and register it in
+   `crates/ambush-relay/src/router.rs`.
 
 5. **Persist to the database** — if the event needs to be queryable, add a
-   handler in `buzz-db/src/` (e.g., `buzz-db/src/my_feature.rs`) with
+   handler in `ambush-db/src/` (e.g., `ambush-db/src/my_feature.rs`) with
    the appropriate `INSERT` and `SELECT` queries.
 
 6. **Index for search** (if applicable) — Postgres FTS indexes persisted
@@ -474,7 +453,7 @@ for team access setup, onboarding, and the full repo inventory. See
    needed unless you need custom audit metadata.
 
 8. **Write tests** — add a unit test for payload serialization in
-   `buzz-core` and an integration test in `buzz-test-client` that sends
+   `ambush-core` and an integration test in `ambush-test-client` that sends
    the new event kind and verifies the expected behavior.
 
 9. **Document** — `kind.rs` is the authoritative registry of all kind numbers.
@@ -493,23 +472,23 @@ health probes.
 If an HTTP endpoint is still necessary:
 
 1. **Define the handler** in the appropriate module under
-   `crates/buzz-relay/src/api/`. Resolve the request tenant before any auth or
+   `crates/ambush-relay/src/api/`. Resolve the request tenant before any auth or
    data lookup, use NIP-98 when the endpoint accepts user credentials, and keep
    community scoping explicit.
 
-2. **Register the route** in `crates/buzz-relay/src/router.rs` using the
+2. **Register the route** in `crates/ambush-relay/src/router.rs` using the
    narrowest path possible. Do not add new `/api/*` compatibility routes unless
    the product decision explicitly calls for one.
 
-3. **Add database queries** in `buzz-db/src/` only when the endpoint cannot be
+3. **Add database queries** in `ambush-db/src/` only when the endpoint cannot be
    expressed through the existing event query paths.
 
 4. **Handle errors** using the `api_error()`, `internal_error()`, and
-   `not_found()` helpers in `buzz-relay/src/api/mod.rs`. Return
+   `not_found()` helpers in `ambush-relay/src/api/mod.rs`. Return
    `(StatusCode, Json<Value>)` tuples.
 
-5. **Write tests** with the `buzz-test-client` harness in
-   `crates/buzz-test-client/tests/`, covering auth, community scoping, and the
+5. **Write tests** with the `ambush-test-client` harness in
+   `crates/ambush-test-client/tests/`, covering auth, community scoping, and the
    relevant success path.
 
 6. **Document** any public endpoint in `ARCHITECTURE.md` and user-facing docs.
@@ -518,7 +497,7 @@ If an HTTP endpoint is still necessary:
 
 ## License and CLA
 
-Buzz is licensed under the **Apache License, Version 2.0**. See
+Ambush is licensed under the **Apache License, Version 2.0**. See
 [LICENSE](LICENSE) for the full text.
 
 By submitting a pull request, you agree that your contribution is licensed
@@ -529,5 +508,5 @@ their sign-off. When in doubt, check with your legal team.
 
 ---
 
-*Thank you for contributing to Buzz. Every bug report, documentation fix,
-and code contribution makes the project better for everyone. 🐝*
+*Thank you for contributing to Ambush. Every bug report, documentation fix,
+and code contribution makes the project better for everyone.*

@@ -98,7 +98,7 @@ test("writeSelfProfileCache caps each relay and the global cache by updatedAt", 
     );
   }
   const profileKeys = [...values.keys()].filter((key) =>
-    key.startsWith("buzz-self-profile.v1:"),
+    key.startsWith("ambush-self-profile.v1:"),
   );
   assert.equal(profileKeys.length, MAX_SELF_PROFILE_CACHES);
   assert.equal(values.has(storageKey(relayA, "pubkey-1")), false);
@@ -487,7 +487,7 @@ test("memoized count resyncs when a full scan finds external deletions", () => {
 
   // Externally delete some keys to make the memo stale.
   const keysToDelete = [...storage.values.keys()]
-    .filter((k) => k.startsWith("buzz-self-profile.v1:"))
+    .filter((k) => k.startsWith("ambush-self-profile.v1:"))
     .slice(0, 3);
   for (const k of keysToDelete) storage.values.delete(k);
 
@@ -498,7 +498,7 @@ test("memoized count resyncs when a full scan finds external deletions", () => {
   });
   // After resync the memo reflects actual storage (no stale inflation).
   const finalKeys = [...storage.values.keys()].filter((k) =>
-    k.startsWith("buzz-self-profile.v1:"),
+    k.startsWith("ambush-self-profile.v1:"),
   );
   assert.ok(
     finalKeys.length <= MAX_SELF_PROFILE_CACHES_PER_RELAY,
@@ -588,7 +588,7 @@ test("scan failure in ensureProfileKeyCount: write succeeds, memo stays null, ne
   );
 
   const finalKeys = [...values.keys()].filter((k) =>
-    k.startsWith("buzz-self-profile.v1:"),
+    k.startsWith("ambush-self-profile.v1:"),
   );
   assert.ok(
     finalKeys.length <= MAX_SELF_PROFILE_CACHES_PER_RELAY,

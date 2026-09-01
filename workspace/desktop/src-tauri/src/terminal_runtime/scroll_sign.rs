@@ -5,7 +5,7 @@
 //! about which way is back, and inlining that into the command file buries it
 //! among unrelated session plumbing.
 
-use buzz_terminal::SharedTerminal;
+use ambush_terminal::SharedTerminal;
 use serde::Deserialize;
 
 /// A wheel delta in whole cells, carrying the **DOM's** sign.
@@ -58,13 +58,13 @@ mod tests {
     /// A terminal with four lines of history and a two-row viewport, used by
     /// the sign tests below.
     fn scrollable() -> SharedTerminal {
-        let size = buzz_terminal::Size {
+        let size = ambush_terminal::Size {
             columns: 8,
             screen_lines: 2,
             scrollback: 16,
         };
         let (term, actions) =
-            buzz_terminal::Terminal::new(size, buzz_terminal::fences::Fences::ALL);
+            ambush_terminal::Terminal::new(size, ambush_terminal::fences::Fences::ALL);
         // Leaked deliberately: dropping the receiver disconnects the channel
         // and every later listener send fails silently.
         std::mem::forget(actions);
@@ -74,7 +74,7 @@ mod tests {
     }
 
     fn screen(terminal: &SharedTerminal) -> Vec<String> {
-        let mut encoder = buzz_terminal::damage::Encoder::new();
+        let mut encoder = ambush_terminal::damage::Encoder::new();
         terminal
             .snapshot(&mut encoder)
             .rows

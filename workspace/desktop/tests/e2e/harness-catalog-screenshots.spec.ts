@@ -12,16 +12,16 @@ const SHOTS = "test-results/byoh-after";
  */
 const CATALOG = [
   {
-    id: "buzz-agent",
-    label: "Buzz Agent",
+    id: "ambush-agent",
+    label: "Ambush Agent",
     avatar_url: "",
     availability: "available",
-    command: "buzz-agent",
-    binary_path: "/usr/local/bin/buzz-agent",
+    command: "ambush-agent",
+    binary_path: "/usr/local/bin/ambush-agent",
     default_args: [],
-    mcp_command: "buzz-dev-mcp",
+    mcp_command: "ambush-dev-mcp",
     install_hint: "",
-    install_instructions_url: "https://github.com/block/buzz",
+    install_instructions_url: "https://github.com/backbay-labs/ambush",
     can_auto_install: false,
     underlying_cli_path: null,
     node_required: false,
@@ -71,7 +71,7 @@ const CATALOG = [
     default_args: ["acp"],
     mcp_command: null,
     install_hint:
-      "Buzz talks to Cursor through the cursor-agent CLI's ACP mode.",
+      "Ambush talks to Cursor through the cursor-agent CLI's ACP mode.",
     install_instructions_url: "https://cursor.com/downloads",
     can_auto_install: false,
     underlying_cli_path: null,
@@ -89,7 +89,7 @@ const CATALOG = [
     default_args: ["acp"],
     mcp_command: null,
     install_hint:
-      "Buzz talks to Oh My Pi through its CLI's ACP mode (omp acp).",
+      "Ambush talks to Oh My Pi through its CLI's ACP mode (omp acp).",
     install_instructions_url: "https://github.com/can1357/oh-my-pi",
     can_auto_install: false,
     underlying_cli_path: null,
@@ -107,7 +107,7 @@ const CATALOG = [
     default_args: ["acp"],
     mcp_command: null,
     install_hint:
-      "Buzz talks to OpenCode through its CLI's ACP mode (opencode acp).",
+      "Ambush talks to OpenCode through its CLI's ACP mode (opencode acp).",
     install_instructions_url: "https://opencode.ai/docs",
     can_auto_install: false,
     underlying_cli_path: null,

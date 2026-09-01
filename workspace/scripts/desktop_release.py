@@ -18,11 +18,11 @@ SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 STABLE_TAG = re.compile(r"desktop-v([0-9]+)\.([0-9]+)\.([0-9]+)$")
 DESKTOP_PATHS = (
     "desktop/",
-    "crates/buzz-core/",
-    "crates/buzz-persona/",
-    "crates/buzz-sdk/",
-    "crates/buzz-agent/",
-    "crates/buzz-media/",
+    "crates/ambush-core/",
+    "crates/ambush-persona/",
+    "crates/ambush-sdk/",
+    "crates/ambush-agent/",
+    "crates/ambush-media/",
 )
 CANDIDATE_FILES = {
     ".release/desktop-candidate.json",
@@ -228,7 +228,7 @@ def validate(args: argparse.Namespace) -> None:
         if missing:
             detail.append(f"missing required files: {', '.join(sorted(missing))}")
         raise SystemExit("candidate is not version-only (" + "; ".join(detail) + ")")
-    repo = args.repo or "block/buzz"
+    repo = args.repo or "backbay-labs/ambush"
     previous = previous_release(version, repo, allow_target_sha=candidate)
     recorded_previous = {
         "tag": data.get("previous_tag"),

@@ -53,7 +53,7 @@ pub(super) fn append_worker_audio(
                     "voice_switch"
                 };
                 eprintln!(
-                    "buzz-desktop: tts stage=synthesis status=cancelled reason={reason} route_id={route_id}"
+                    "ambush-desktop: tts stage=synthesis status=cancelled reason={reason} route_id={route_id}"
                 );
                 return false;
             }
@@ -62,7 +62,7 @@ pub(super) fn append_worker_audio(
                     != speaker_generation
             }) {
                 eprintln!(
-                    "buzz-desktop: tts stage=synthesis status=cancelled reason=speaker_removed route_id={route_id}"
+                    "ambush-desktop: tts stage=synthesis status=cancelled reason=speaker_removed route_id={route_id}"
                 );
                 return false;
             }
@@ -101,7 +101,7 @@ pub(super) fn append_worker_audio(
         return false;
     }
     eprintln!(
-        "buzz-desktop: tts stage=player status=append_accepted route_id={route_id} chunk_index={chunk_index} sample_count={sample_count}"
+        "ambush-desktop: tts stage=player status=append_accepted route_id={route_id} chunk_index={chunk_index} sample_count={sample_count}"
     );
     true
 }

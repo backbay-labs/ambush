@@ -39,7 +39,7 @@ CLEAR = "CLEAR"
 # context in the same flattened `contexts` map. `ov_` (the shared
 # 3-byte stem) and the escape marker itself are reserved; any raw
 # context ID that would collide is escaped before being used as a
-# plain frontier key. Escaping is a no-op for every context ID Buzz
+# plain frontier key. Escaping is a no-op for every context ID Ambush
 # actually generates (channel UUID, `msg:<hex64>`, `thread:<hex64>`
 # — none start with `ov_` or `esc:`), so the common case pays zero
 # bytes. Only a pathological ID pays the 4-byte `esc:` cost.

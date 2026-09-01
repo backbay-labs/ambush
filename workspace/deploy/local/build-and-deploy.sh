@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local docker-desktop k8s testbed for the Buzz relay mesh.
+# Local docker-desktop k8s testbed for the Ambush relay mesh.
 #
 # Repeatable path: build image -> helm dep build -> helm install (quickstart HA,
 # 3 replicas) -> wait 3/3 Ready -> probe /_readiness on every pod. This is the
@@ -17,11 +17,11 @@ set -euo pipefail
 
 # ── config ──────────────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-NS="${NS:-buzz-mesh}"
-RELEASE="${RELEASE:-buzz}"
-IMAGE_REPO="${IMAGE_REPO:-buzz-relay}"
+NS="${NS:-ambush-mesh}"
+RELEASE="${RELEASE:-ambush}"
+IMAGE_REPO="${IMAGE_REPO:-ambush-relay}"
 IMAGE_TAG="${IMAGE_TAG:-mesh-local}"
-CHART="${REPO_ROOT}/deploy/charts/buzz"
+CHART="${REPO_ROOT}/deploy/charts/ambush"
 VALUES="${REPO_ROOT}/deploy/local/quickstart-ha-values.yaml"
 CA_PEM="${REPO_ROOT}/deploy/local/proxy-ca.pem"
 EXPECT_CTX="docker-desktop"
@@ -97,16 +97,16 @@ helm upgrade --install "$RELEASE" "$CHART" \
 helm_rc=${PIPESTATUS[0]}
 if [ "$helm_rc" != 0 ]; then
   kubectl -n "$NS" get pods -o wide | tee "$EVID/pods-onfail.txt"
-  kubectl -n "$NS" describe pods -l app.kubernetes.io/name=buzz | tee "$EVID/describe-onfail.txt"
-  kubectl -n "$NS" logs -l app.kubernetes.io/name=buzz --tail=100 --all-containers | tee "$EVID/logs-onfail.txt"
+  kubectl -n "$NS" describe pods -l app.kubernetes.io/name=ambush | tee "$EVID/describe-onfail.txt"
+  kubectl -n "$NS" logs -l app.kubernetes.io/name=ambush --tail=100 --all-containers | tee "$EVID/logs-onfail.txt"
   die "helm install returned rc=$helm_rc"
 fi
 
 # ── 4. verify 3/3 Ready ───────────────────────────────────────────────────────
-# Find the relay Deployment: everything under this release named "buzz" except
+# Find the relay Deployment: everything under this release named "ambush" except
 # the bundled "*-minio" Deployment. (The chart fullname collapses
 # "<release>-<chart>" to "<release>" when the release name already contains the
-# chart name, so the name isn't always "<release>-buzz".)
+# chart name, so the name isn't always "<release>-ambush".)
 DEPLOY=""
 for d in $(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=$RELEASE" \
              -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
@@ -123,13 +123,13 @@ READY=$(kubectl -n "$NS" get deploy "$DEPLOY" -o jsonpath='{.status.readyReplica
 log "deployment reports $READY/$REPLICAS Ready"
 
 # ── 5. probe /_readiness on EVERY relay pod (not just the deployment aggregate)
-# The bundled MinIO + init pods share app.kubernetes.io/name=buzz, so select by
+# The bundled MinIO + init pods share app.kubernetes.io/name=ambush, so select by
 # the relay Deployment's own pod-template hash to hit only relay pods.
 log "probing /_readiness on each relay pod individually"
 : > "$EVID/readiness.txt"
 FAIL=0
 RELAY_PODS=$(kubectl -n "$NS" get pods \
-  -l "app.kubernetes.io/name=buzz,app.kubernetes.io/instance=$RELEASE" \
+  -l "app.kubernetes.io/name=ambush,app.kubernetes.io/instance=$RELEASE" \
   -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' \
   | awk '$2 != "minio" && $2 != "minio-init" {print $1}')
 for pod in $RELAY_PODS; do

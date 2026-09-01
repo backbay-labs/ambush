@@ -67,14 +67,14 @@ export function installFakeCamera(
         } as MediaDeviceInfo,
       ];
       const testWindow = window as Window & {
-        __BUZZ_E2E_CAMERA_CONSTRAINTS__?: MediaStreamConstraints[];
-        __BUZZ_E2E_CAMERA_REQUEST_COUNT__?: number;
-        __BUZZ_E2E_RELEASE_CAMERA__?: () => void;
+        __AMBUSH_E2E_CAMERA_CONSTRAINTS__?: MediaStreamConstraints[];
+        __AMBUSH_E2E_CAMERA_REQUEST_COUNT__?: number;
+        __AMBUSH_E2E_RELEASE_CAMERA__?: () => void;
       };
-      testWindow.__BUZZ_E2E_CAMERA_CONSTRAINTS__ = [];
-      testWindow.__BUZZ_E2E_CAMERA_REQUEST_COUNT__ = 0;
+      testWindow.__AMBUSH_E2E_CAMERA_CONSTRAINTS__ = [];
+      testWindow.__AMBUSH_E2E_CAMERA_REQUEST_COUNT__ = 0;
       let releaseCamera: (() => void) | null = null;
-      testWindow.__BUZZ_E2E_RELEASE_CAMERA__ = () => {
+      testWindow.__AMBUSH_E2E_RELEASE_CAMERA__ = () => {
         releaseCamera?.();
         releaseCamera = null;
       };
@@ -93,11 +93,11 @@ export function installFakeCamera(
       Object.defineProperty(mediaDevices, "getUserMedia", {
         configurable: true,
         value: async (constraints: MediaStreamConstraints) => {
-          testWindow.__BUZZ_E2E_CAMERA_CONSTRAINTS__?.push(constraints);
-          testWindow.__BUZZ_E2E_CAMERA_REQUEST_COUNT__ =
-            (testWindow.__BUZZ_E2E_CAMERA_REQUEST_COUNT__ ?? 0) + 1;
+          testWindow.__AMBUSH_E2E_CAMERA_CONSTRAINTS__?.push(constraints);
+          testWindow.__AMBUSH_E2E_CAMERA_REQUEST_COUNT__ =
+            (testWindow.__AMBUSH_E2E_CAMERA_REQUEST_COUNT__ ?? 0) + 1;
           if (
-            testWindow.__BUZZ_E2E_CAMERA_REQUEST_COUNT__ <=
+            testWindow.__AMBUSH_E2E_CAMERA_REQUEST_COUNT__ <=
             cameraOptions.failRequests
           ) {
             throw new DOMException("Camera access denied", "NotAllowedError");

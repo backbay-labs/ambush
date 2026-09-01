@@ -5,7 +5,7 @@ import { parseEntityLink } from "@/shared/lib/entityLink";
 import { useOpenEntityLink } from "@/shared/ui/markdown/entityLinks";
 
 /**
- * Subscribe to `buzz://repo|project|pr|issue` deep links emitted by the Tauri
+ * Subscribe to `ambush://repo|project|pr|issue` deep links emitted by the Tauri
  * backend and route them through the same handler that opens entity links
  * clicked inside a message, so an OS-opened share link and an in-app one land
  * on the same view.

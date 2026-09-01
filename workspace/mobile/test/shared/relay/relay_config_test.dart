@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:buzz/shared/relay/relay_provider.dart';
+import 'package:ambush/shared/relay/relay_provider.dart';
 
 void main() {
   group('RelayConfig.baseUrl normalization', () {

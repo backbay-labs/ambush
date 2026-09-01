@@ -44,7 +44,7 @@ import { Switch } from "@/shared/ui/switch";
 import { SettingsOptionRow } from "./SettingsOptionGroup";
 import { SegmentedControl } from "@/shared/ui/segmented-control";
 
-/** Buzz navigation can use either its production tint or a stronger tab. */
+/** Ambush navigation can use either its production tint or a stronger tab. */
 export function ProminentActiveTabSetting() {
   const { prominentActiveTab, setProminentActiveTab } = useTheme();
 
@@ -234,7 +234,7 @@ export function ConversationDisplaySettings() {
             className="text-sm font-normal text-muted-foreground/70"
             data-settings-subcopy
           >
-            Spacing in conversations and Markdown content across Buzz
+            Spacing in conversations and Markdown content across Ambush
           </p>
         </div>
         <SegmentedControl
@@ -270,23 +270,23 @@ const LINK_PREVIEW_SAMPLE_BASE: Omit<ResolvedLinkPreview, "imageDataUrl"> = {
 };
 
 /**
- * Build the sample thumbnail as an SVG data URL from the Buzz gradient
+ * Build the sample thumbnail as an SVG data URL from the Ambush gradient
  * tokens. Data-URL images cannot resolve CSS variables, so the token values
- * are read from the live stylesheet and baked in per render — if the Buzz
+ * are read from the live stylesheet and baked in per render — if the Ambush
  * gradient ever changes in `theme.css`, this preview follows automatically.
  */
-function buzzGradientSampleImage(isDark: boolean): string {
+function ambushGradientSampleImage(isDark: boolean): string {
   const styles = globalThis.document
     ? getComputedStyle(document.documentElement)
     : null;
   const readToken = (token: string, fallback: string): string =>
     styles?.getPropertyValue(token).trim() || fallback;
   const top = isDark
-    ? readToken("--buzz-gradient-dark-top", "#4a4616")
-    : readToken("--buzz-gradient-light-top", "#e6e6b6");
+    ? readToken("--ambush-gradient-dark-top", "#4a4616")
+    : readToken("--ambush-gradient-light-top", "#e6e6b6");
   const bottom = isDark
-    ? readToken("--buzz-gradient-dark-bottom", "#0a1423")
-    : readToken("--buzz-gradient-light-bottom", "#c4d0da");
+    ? readToken("--ambush-gradient-dark-bottom", "#0a1423")
+    : readToken("--ambush-gradient-light-bottom", "#c4d0da");
   const shapeToken = isDark ? "--foreground" : "--background";
   const shapeFallback = isDark ? "0 0% 98%" : "0 0% 100%";
   const shape = `hsl(${readToken(shapeToken, shapeFallback)})`;
@@ -308,7 +308,7 @@ function LinkPreviewSample({ style }: { style: LinkPreviewStyle }) {
   const preview = React.useMemo<ResolvedLinkPreview>(
     () => ({
       ...LINK_PREVIEW_SAMPLE_BASE,
-      imageDataUrl: buzzGradientSampleImage(isDark),
+      imageDataUrl: ambushGradientSampleImage(isDark),
     }),
     [isDark],
   );
@@ -505,13 +505,13 @@ function ThreadLayoutDiagram({ mode }: { mode: ThreadViewMode }) {
   const { isDark } = useTheme();
   const gradientId = React.useId();
   // Inline SVG resolves CSS variables, so the frame gradient references the
-  // Buzz gradient tokens directly and follows theme.css automatically.
+  // Ambush gradient tokens directly and follows theme.css automatically.
   const gradientTop = isDark
-    ? "var(--buzz-gradient-dark-top, #4a4616)"
-    : "var(--buzz-gradient-light-top, #e6e6b6)";
+    ? "var(--ambush-gradient-dark-top, #4a4616)"
+    : "var(--ambush-gradient-light-top, #e6e6b6)";
   const gradientBottom = isDark
-    ? "var(--buzz-gradient-dark-bottom, #0a1423)"
-    : "var(--buzz-gradient-light-bottom, #c4d0da)";
+    ? "var(--ambush-gradient-dark-bottom, #0a1423)"
+    : "var(--ambush-gradient-light-bottom, #c4d0da)";
   const channelSurface = "hsl(var(--muted))";
   const threadSurface = "hsl(var(--background))";
   const channelOpacity = isDark ? 0.88 : 0.78;
@@ -668,7 +668,7 @@ export function AccentPickerContent({
           className="text-sm font-normal text-muted-foreground/70"
           data-settings-subcopy
         >
-          Choose the highlight color used throughout Buzz.
+          Choose the highlight color used throughout Ambush.
         </p>
       </div>
       <div

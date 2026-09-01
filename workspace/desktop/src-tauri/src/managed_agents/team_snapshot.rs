@@ -1,4 +1,4 @@
-//! `buzz-team-snapshot v1` — manifest type, encoder, and decoder.
+//! `ambush-team-snapshot v1` — manifest type, encoder, and decoder.
 //!
 //! A team snapshot is a portable, shareable representation of a team: its
 //! header (name, description) plus a `members` array where each member
@@ -6,7 +6,7 @@
 //!
 //! Two encodings:
 //!   - `.team.json` — canonical; supports memory when selected.
-//!   - `.team.png` — 1×1 placeholder PNG with manifest in a `buzz_team_snapshot`
+//!   - `.team.png` — 1×1 placeholder PNG with manifest in a `ambush_team_snapshot`
 //!     tEXt chunk; supports memory when selected. Since `TeamRecord` has no
 //!     team-level avatar, the image body is always the 1×1 placeholder; member
 //!     avatars are carried in each `AgentSnapshot.profile.avatar_data_url`.
@@ -46,10 +46,10 @@ use crate::managed_agents::{
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// tEXt chunk keyword used in `.team.png` files.
-pub const PNG_CHUNK_KEYWORD: &str = "buzz_team_snapshot";
+pub const PNG_CHUNK_KEYWORD: &str = "ambush_team_snapshot";
 
 /// Format discriminator — used for sniffing and validation.
-pub const FORMAT_DISCRIMINATOR: &str = "buzz-team-snapshot";
+pub const FORMAT_DISCRIMINATOR: &str = "ambush-team-snapshot";
 
 /// Version of the manifest format produced by this module.
 pub const FORMAT_VERSION: u32 = 1;
@@ -69,10 +69,10 @@ pub struct TeamSnapshotMeta {
 
 // ── Top-level manifest ────────────────────────────────────────────────────────
 
-/// The top-level `buzz-team-snapshot v1` manifest.
+/// The top-level `ambush-team-snapshot v1` manifest.
 ///
 /// Serializes to / from JSON. Embedded in `.team.json` directly, or in the
-/// `buzz_team_snapshot` tEXt chunk of a `.team.png` (base64-encoded).
+/// `ambush_team_snapshot` tEXt chunk of a `.team.png` (base64-encoded).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamSnapshot {
@@ -129,7 +129,7 @@ pub fn decode_team_snapshot_json(bytes: &[u8]) -> Result<TeamSnapshot, String> {
 /// The image body is a 1×1 transparent placeholder — `TeamRecord` has no
 /// team-level avatar; each member's avatar lives in their own
 /// `AgentSnapshot.profile.avatar_data_url`. The manifest is embedded in the
-/// `buzz_team_snapshot` tEXt chunk (base64-encoded JSON).
+/// `ambush_team_snapshot` tEXt chunk (base64-encoded JSON).
 pub fn encode_team_snapshot_png(snapshot: &TeamSnapshot) -> Result<Vec<u8>, String> {
     // Memory-consistency: reject level=None + non-empty entries (malformed).
     for (i, member) in snapshot.members.iter().enumerate() {
@@ -157,7 +157,7 @@ pub fn decode_team_snapshot_png(png_bytes: &[u8]) -> Result<TeamSnapshot, String
         .iter()
         .find(|c| c.keyword == PNG_CHUNK_KEYWORD)
         .map(|c| c.text.as_str())
-        .ok_or_else(|| "PNG does not contain a buzz_team_snapshot tEXt chunk".to_string())?;
+        .ok_or_else(|| "PNG does not contain a ambush_team_snapshot tEXt chunk".to_string())?;
 
     let json_bytes = STANDARD
         .decode(chunk_text.trim())
@@ -527,7 +527,7 @@ mod tests {
     fn format_and_version_correct_in_output() {
         let json = team_json_string();
         assert!(
-            json.contains("\"buzz-team-snapshot\""),
+            json.contains("\"ambush-team-snapshot\""),
             "format discriminator must be present"
         );
         assert!(json.contains("\"version\": 1"), "version must be 1");
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_agent_snapshot_json_as_team_snapshot() {
-        // An agent snapshot JSON (format: "buzz-agent-snapshot") must NOT
+        // An agent snapshot JSON (format: "ambush-agent-snapshot") must NOT
         // parse as a team snapshot — serde rejects missing `team`/`members`
         // fields, or the discriminator check catches it either way.
         use crate::managed_agents::agent_snapshot::{build_snapshot, encode_snapshot_json};

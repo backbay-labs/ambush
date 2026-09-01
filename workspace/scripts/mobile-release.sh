@@ -7,7 +7,7 @@ usage:
   scripts/mobile-release.sh candidate X.Y.Z
 
 candidate  Publish the next immutable mobile-vX.Y.Z-rc.N candidate tag at the
-           exact current commit of block/buzz's remote main branch.
+           exact current commit of backbay-labs/ambush's remote main branch.
 USAGE
   exit 2
 }
@@ -131,7 +131,7 @@ case "$command" in
     tag="mobile-v${version}-rc.${next}"
     workflow="mobile-release-candidate.yml"
     if dispatch_output="$(gh workflow run "$workflow" \
-      --repo block/buzz \
+      --repo backbay-labs/ambush \
       --ref main \
       -f "version=$version" \
       -f "candidate_number=$next" \
@@ -143,12 +143,12 @@ case "$command" in
       fi
       fail "could not dispatch App-backed publication for $tag: $dispatch_output"
     fi
-    run_url="$(printf '%s\n' "$dispatch_output" | awk '/^https:\/\/github\.com\/block\/buzz\/actions\/runs\/[0-9]+$/ { if (found) exit 2; found = $0 } END { if (found) print found }')" || \
+    run_url="$(printf '%s\n' "$dispatch_output" | awk '/^https:\/\/github\.com\/block\/ambush\/actions\/runs\/[0-9]+$/ { if (found) exit 2; found = $0 } END { if (found) print found }')" || \
       fail "GitHub returned multiple workflow run URLs for one candidate dispatch"
     [[ -n "$run_url" ]] || \
       fail "GitHub accepted the candidate dispatch but returned no workflow run URL"
     run_id="${run_url##*/}"
-    gh run watch "$run_id" --repo block/buzz --exit-status --compact || \
+    gh run watch "$run_id" --repo backbay-labs/ambush --exit-status --compact || \
       fail "App-backed publication failed: $run_url"
 
     current_main_sha="$(remote_main_commit_sha)" || fail "origin/main does not exist after publication"
@@ -161,7 +161,7 @@ case "$command" in
     if [[ "$local_head_sha" != "$main_sha" ]]; then
       echo "Note: local HEAD is $local_head_sha; candidate source is current origin/main $main_sha." >&2
     fi
-    printf 'Published %s at origin/main commit %s through buzz-release-bot. Use this exact tag in Release Mobile.\n' \
+    printf 'Published %s at origin/main commit %s through ambush-release-bot. Use this exact tag in Release Mobile.\n' \
       "$tag" "$main_sha"
     ;;
 

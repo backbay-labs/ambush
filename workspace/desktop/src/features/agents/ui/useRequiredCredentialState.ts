@@ -27,7 +27,7 @@ export interface RequiredCredentialState {
  * Compute runtime/provider-required credential state for the Edit Agent dialog.
  *
  * All keys are derived from the PROSPECTIVE post-submit runtime (not the
- * current dropdown). On an inherit transition (claude→buzz-agent or the
+ * current dropdown). On an inherit transition (claude→ambush-agent or the
  * reverse) the current dropdown would suppress the provider to "" and falsely
  * unblock Save; using the prospective id keeps the gate honest about what will
  * actually be saved.

@@ -7,7 +7,7 @@ const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 
 async function latestClipboardWrite(page: Page) {
   return page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+    (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).findLast(
       ({ command }) => command === "copy_text_to_clipboard",
     ),
   );
@@ -46,13 +46,13 @@ test("message action rail copies the same canonical thread link as More", async 
   await expect
     .poll(() =>
       page.evaluate(
-        () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+        () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
       ),
     )
     .toBe(true);
 
   const { replyId, rootId } = await page.evaluate(() => {
-    const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
     if (!emit) throw new Error("Mock message emitter is unavailable.");
     const root = emit({
       channelName: "general",
@@ -120,7 +120,7 @@ test("message action rail copies the same canonical thread link as More", async 
   await copyLink.hover();
   await expect(page.getByRole("tooltip", { name: "Copy link" })).toBeVisible();
 
-  const expectedLink = `buzz://message?channel=${GENERAL_CHANNEL_ID}&id=${replyId}&thread=${rootId}`;
+  const expectedLink = `ambush://message?channel=${GENERAL_CHANNEL_ID}&id=${replyId}&thread=${rootId}`;
   await copyLink.click();
   await expect
     .poll(async () => (await latestClipboardWrite(page))?.payload.text)
@@ -136,7 +136,7 @@ test("message action rail copies the same canonical thread link as More", async 
   await expect
     .poll(async () => {
       const writes = (await page.evaluate(() =>
-        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (window.__AMBUSH_E2E_COMMAND_LOG__ ?? []).filter(
           ({ command }) => command === "copy_text_to_clipboard",
         ),
       )) as Array<{ payload: unknown }>;
@@ -166,13 +166,13 @@ test("pending and huddle rows omit both copy-link surfaces", async ({
   await expect
     .poll(() =>
       page.evaluate(
-        () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
+        () => typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function",
       ),
     )
     .toBe(true);
 
   const { huddleId, pendingId } = await page.evaluate((huddleKind) => {
-    const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    const emit = window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__;
     if (!emit) throw new Error("Mock message emitter is unavailable.");
     const pending = emit({
       channelName: "general",

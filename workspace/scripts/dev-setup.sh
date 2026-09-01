@@ -49,23 +49,23 @@ load_env() {
     set +o allexport
   fi
 
-  # Smooth the local rename path for developers with a pre-Buzz .env copied
+  # Smooth the local rename path for developers with a pre-Ambush .env copied
   # from .env.example. Only rewrite the old default values; custom values stay
   # untouched.
   if [[ "${DATABASE_URL:-}" == "postgres://sprout:sprout_dev@localhost:5432/sprout" ]]; then
-    warn "Migrating legacy default DATABASE_URL from sprout to buzz for this setup run"
-    DATABASE_URL="postgres://buzz:buzz_dev@localhost:5432/buzz"
+    warn "Migrating legacy default DATABASE_URL from sprout to ambush for this setup run"
+    DATABASE_URL="postgres://ambush:ambush_dev@localhost:5432/ambush"
   fi
-  if [[ "${PGUSER:-}" == "sprout" ]]; then PGUSER="buzz"; fi
-  if [[ "${PGPASSWORD:-}" == "sprout_dev" ]]; then PGPASSWORD="buzz_dev"; fi
-  if [[ "${PGDATABASE:-}" == "sprout" ]]; then PGDATABASE="buzz"; fi
+  if [[ "${PGUSER:-}" == "sprout" ]]; then PGUSER="ambush"; fi
+  if [[ "${PGPASSWORD:-}" == "sprout_dev" ]]; then PGPASSWORD="ambush_dev"; fi
+  if [[ "${PGDATABASE:-}" == "sprout" ]]; then PGDATABASE="ambush"; fi
 
-  export DATABASE_URL="${DATABASE_URL:-postgres://buzz:buzz_dev@localhost:5432/buzz}"
+  export DATABASE_URL="${DATABASE_URL:-postgres://ambush:ambush_dev@localhost:5432/ambush}"
   export PGHOST="${PGHOST:-localhost}"
   export PGPORT="${PGPORT:-5432}"
-  export PGUSER="${PGUSER:-buzz}"
-  export PGPASSWORD="${PGPASSWORD:-buzz_dev}"
-  export PGDATABASE="${PGDATABASE:-buzz}"
+  export PGUSER="${PGUSER:-ambush}"
+  export PGPASSWORD="${PGPASSWORD:-ambush_dev}"
+  export PGDATABASE="${PGDATABASE:-ambush}"
   export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 }
 
@@ -76,7 +76,7 @@ cleanup_legacy_sprout_containers() {
     return
   fi
 
-  warn "Stopping/removing legacy sprout-* dev containers so buzz-* containers can bind the standard ports"
+  warn "Stopping/removing legacy sprout-* dev containers so ambush-* containers can bind the standard ports"
   echo "${legacy_containers}" | xargs docker stop >/dev/null 2>&1 || true
   echo "${legacy_containers}" | xargs docker rm >/dev/null 2>&1 || true
   success "Legacy sprout-* containers removed (volumes preserved)"
@@ -86,7 +86,7 @@ fail_if_local_redis_blocks_compose() {
   if ! command -v lsof >/dev/null 2>&1; then
     return
   fi
-  if docker ps --format '{{.Names}}' | grep -qx 'buzz-redis'; then
+  if docker ps --format '{{.Names}}' | grep -qx 'ambush-redis'; then
     return
   fi
   local redis_pids
@@ -99,7 +99,7 @@ fail_if_local_redis_blocks_compose() {
 }
 
 postgres_accepting_connections() {
-  docker exec buzz-postgres \
+  docker exec ambush-postgres \
     pg_isready -h localhost -p 5432 -U "${PGUSER}" -d "${PGDATABASE}" \
     >/dev/null 2>&1
 }
@@ -128,7 +128,7 @@ until postgres_accepting_connections; do
   sleep 2
 done
 
-"${REPO_ROOT}/bin/cargo" run -p buzz-admin -- migrate
+"${REPO_ROOT}/bin/cargo" run -p ambush-admin -- migrate
 "${REPO_ROOT}/scripts/seed-local-community.sh"
 success "Database migrations complete"
 
@@ -182,7 +182,7 @@ success "Git hooks installed"
 
 echo ""
 echo -e "${GREEN}=======================================================${NC}"
-echo -e "${GREEN}  Buzz dev environment is ready!${NC}"
+echo -e "${GREEN}  Ambush dev environment is ready!${NC}"
 echo -e "${GREEN}=======================================================${NC}"
 echo ""
 echo -e "  ${BLUE}Postgres${NC}    ${DATABASE_URL}"

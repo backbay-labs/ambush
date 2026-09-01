@@ -10,7 +10,7 @@ builtins: signing, hashing
 // This model covers the symbolic security surface for the multi-tenant relay:
 // NIP-98 minting, stamped bearer-token use, per-community signing keys, and
 // independent per-community audit chains. It intentionally follows the house
-// style of crates/buzz-core/src/pairing/NIP-AB.spthy: explicit adversary/leak
+// style of crates/ambush-core/src/pairing/NIP-AB.spthy: explicit adversary/leak
 // rules, action facts for theorem statements, and reachability / anti-vacuity
 // lemmas near the bottom.
 //
@@ -476,8 +476,8 @@ rule Relay_Accepts_NIP43_MemberList:
 // Independent per-community audit chains
 // ============================================================================
 //
-// Target shape, not today's implementation: current `buzz-audit` has one global
-// chain (`buzz-audit/src/service.rs` reads the latest global hash). Multi-tenant
+// Target shape, not today's implementation: current `ambush-audit` has one global
+// chain (`ambush-audit/src/service.rs` reads the latest global hash). Multi-tenant
 // safety requires N independent community-labeled heads so the spec's
 // Implementation Correspondence section can track replacing the global chain.
 

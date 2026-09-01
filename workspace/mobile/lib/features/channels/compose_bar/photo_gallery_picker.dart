@@ -104,7 +104,7 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
     Widget buildGalleryBody() {
       if (recentSnapshot.connectionState != ConnectionState.done) {
         return const Center(
-          child: BuzzLoadingIndicator(
+          child: AmbushLoadingIndicator(
             size: 44,
             semanticLabel: 'Loading recent photos',
           ),
@@ -240,7 +240,7 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
                             () => unawaited(choosePhotos()),
                           ),
                     icon: isResolving.value
-                        ? BuzzLoadingIndicator(
+                        ? AmbushLoadingIndicator(
                             size: 22,
                             color: context.colors.primary,
                             semanticLabel: 'Opening all photos',
@@ -256,7 +256,7 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
                             () => unawaited(choosePhotos()),
                           ),
                     icon: isResolving.value
-                        ? const BuzzLoadingIndicator(
+                        ? const AmbushLoadingIndicator(
                             size: 22,
                             color: Colors.white,
                             semanticLabel: 'Preparing selected photos',

@@ -1,7 +1,7 @@
 // Wes/Carl P1: tombstones must publish through the real relay ingest gate.
 //
 // The relay rejects any event more than ±900s from server time
-// (`crates/buzz-relay/src/handlers/ingest.rs` MAX_TIMESTAMP_DRIFT_SECS). A
+// (`crates/ambush-relay/src/handlers/ingest.rs` MAX_TIMESTAMP_DRIFT_SECS). A
 // future-dated head forces a future-dated tombstone, so a byte-frozen replay
 // can age out of the acceptance window and strand the head live forever. These
 // tests drive the real enqueue helpers for BOTH coordinates (30176 team,
@@ -16,7 +16,7 @@ use crate::app_state::build_app_state;
 use crate::managed_agents::persona_events::flush_pending_events;
 use crate::managed_agents::team_catalog::build_team_catalog_delete;
 use crate::managed_agents::team_events::{build_team_delete, build_team_event};
-use buzz_core_pkg::kind::KIND_TEAM_CATALOG;
+use ambush_core_pkg::kind::KIND_TEAM_CATALOG;
 use std::sync::{Arc, Mutex};
 
 const RELAY_ACCEPT_WINDOW_SECS: i64 = 900;

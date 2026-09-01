@@ -230,8 +230,8 @@ test("repository entry pagination advances and clamps to the total", () => {
 
 test("listRowDescription keeps real copy and drops empty or title-duplicate text", () => {
   assert.equal(
-    listRowDescription("The complete Buzz community platform."),
-    "The complete Buzz community platform.",
+    listRowDescription("The complete Ambush community platform."),
+    "The complete Ambush community platform.",
   );
   assert.equal(listRowDescription("   "), undefined);
   assert.equal(listRowDescription(""), undefined);

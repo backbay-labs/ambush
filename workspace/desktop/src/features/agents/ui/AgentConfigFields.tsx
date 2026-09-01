@@ -50,15 +50,15 @@ import { PersonaProviderApiKeyField } from "@/features/agents/ui/PersonaProvider
 import { usePersonaModelDiscovery } from "@/features/agents/ui/usePersonaModelDiscovery";
 import { resolveModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
 import {
-  BUZZ_AGENT_THINKING_EFFORT,
+  AMBUSH_AGENT_THINKING_EFFORT,
   getProviderEffortConfig,
-} from "@/features/agents/ui/buzzAgentConfig";
+} from "@/features/agents/ui/ambushAgentConfig";
 import {
   EffortSelectField,
   NumericTuningFields,
   useEffortAutoClear,
   type NumericDescriptor,
-} from "@/features/agents/ui/buzzAgentModelTuningFields";
+} from "@/features/agents/ui/ambushAgentModelTuningFields";
 import { SettingsOptionGroup } from "@/features/settings/ui/SettingsOptionGroup";
 import { AdvancedRequiredBadge } from "./AdvancedRequiredBadge";
 import { CardMintKeyCue } from "./CardMintKeyCue";
@@ -72,9 +72,9 @@ export const EMPTY_GLOBAL_CONFIG: GlobalAgentConfig = {
 };
 
 const BAKED_STRUCTURED_KEYS = new Set([
-  "BUZZ_AGENT_PROVIDER",
-  "BUZZ_AGENT_MODEL",
-  BUZZ_AGENT_THINKING_EFFORT,
+  "AMBUSH_AGENT_PROVIDER",
+  "AMBUSH_AGENT_MODEL",
+  AMBUSH_AGENT_THINKING_EFFORT,
 ]);
 
 const PROGRESSIVE_FIELDS_TRANSITION = {
@@ -269,7 +269,8 @@ export function AgentConfigFields({
   ]);
   const bakedEnvMap = Object.fromEntries(bakedEnv.map((e) => [e.key, e.value]));
   const bakedProvider = React.useMemo(
-    () => bakedEnv.find((e) => e.key === "BUZZ_AGENT_PROVIDER")?.value ?? null,
+    () =>
+      bakedEnv.find((e) => e.key === "AMBUSH_AGENT_PROVIDER")?.value ?? null,
     [bakedEnv],
   );
   const selectedRuntimeId = selectedRuntime?.id ?? "";
@@ -296,7 +297,8 @@ export function AgentConfigFields({
     fallbackModel !== null;
   const bakedEffort = React.useMemo(
     () =>
-      bakedEnv.find((e) => e.key === BUZZ_AGENT_THINKING_EFFORT)?.value ?? null,
+      bakedEnv.find((e) => e.key === AMBUSH_AGENT_THINKING_EFFORT)?.value ??
+      null,
     [bakedEnv],
   );
   const bakedGenericRows = React.useMemo<readonly InheritedEnvRow[]>(
@@ -331,7 +333,7 @@ export function AgentConfigFields({
     selectedRuntimeId,
   )
     ? selectedRuntimeId
-    : "buzz-agent";
+    : "ambush-agent";
   const bakedEnvKeys = React.useMemo(
     () => bakedEnv.map((entry) => entry.key),
     [bakedEnv],
@@ -585,17 +587,17 @@ export function AgentConfigFields({
     onConfigChange({ ...config, env_vars: next });
   };
 
-  // On internal Block builds, BUZZ_AGENT_PROVIDER is baked in and a boot
+  // On internal Block builds, AMBUSH_AGENT_PROVIDER is baked in and a boot
   // migration rewrites v1→v2. Hide the legacy v1 option so it is not offered
   // for new selections; OSS builds show it.
   const hideProviderIds = React.useMemo(() => {
     const hidden = new Set<string>();
-    if (bakedEnvKeys.includes("BUZZ_AGENT_PROVIDER")) {
+    if (bakedEnvKeys.includes("AMBUSH_AGENT_PROVIDER")) {
       for (const providerId of BLOCK_BUILD_HIDDEN_PROVIDER_IDS) {
         hidden.add(providerId);
       }
     }
-    if (selectedRuntimeId !== "buzz-agent") {
+    if (selectedRuntimeId !== "ambush-agent") {
       hidden.add("relay-mesh");
     }
     return hidden;

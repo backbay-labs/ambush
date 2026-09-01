@@ -2,13 +2,13 @@
 # =============================================================================
 # ci-mesh-lifecycle-smoke.sh — relay-driven mesh lifecycle smoke
 # =============================================================================
-# Provisions a membership-gated buzz-relay and runs the full relay-driven
-# mesh lifecycle harness (crates/buzz-relay/examples/mesh_relay_lifecycle_smoke.rs):
+# Provisions a membership-gated ambush-relay and runs the full relay-driven
+# mesh lifecycle harness (crates/ambush-relay/examples/mesh_relay_lifecycle_smoke.rs):
 # membership → signed discovery notes → relay-derived allowlist → join →
 # inference over QUIC → stranger denied.
 #
 # Mirrors the shape of mesh-llm's own CI smoke scripts (single runner, tiny
-# CPU model, real multi-process mesh), but with the Buzz relay as the control
+# CPU model, real multi-process mesh), but with the Ambush relay as the control
 # plane instead of a hand-carried invite token.
 #
 # Usage:
@@ -47,13 +47,13 @@ if [[ "${SKIP_BUILD}" == "true" ]]; then
   log "Skipping build (--no-build)"
 else
   log "Building relay, admin CLI, and lifecycle harness (profile: ${CARGO_PROFILE})..."
-  cargo build --profile "${CARGO_PROFILE}" -p buzz-relay -p buzz-admin -p git-credential-nostr
-  cargo build --profile "${CARGO_PROFILE}" -p buzz-relay --example mesh_relay_lifecycle_smoke
+  cargo build --profile "${CARGO_PROFILE}" -p ambush-relay -p ambush-admin -p git-credential-nostr
+  cargo build --profile "${CARGO_PROFILE}" -p ambush-relay --example mesh_relay_lifecycle_smoke
 fi
 
-ADMIN_BIN="target/${CARGO_PROFILE}/buzz-admin"
+ADMIN_BIN="target/${CARGO_PROFILE}/ambush-admin"
 HARNESS_BIN="target/${CARGO_PROFILE}/examples/mesh_relay_lifecycle_smoke"
-for bin in "${ADMIN_BIN}" "${HARNESS_BIN}" "target/${CARGO_PROFILE}/buzz-relay"; do
+for bin in "${ADMIN_BIN}" "${HARNESS_BIN}" "target/${CARGO_PROFILE}/ambush-relay"; do
   if [[ ! -x "${bin}" ]]; then
     err "Missing binary: ${bin}"
     exit 1
@@ -70,14 +70,14 @@ read_keys() { "${ADMIN_BIN}" generate-key 2>/dev/null; }
 OWNER_OUT="$(read_keys)"
 RELAY_OWNER_PUBKEY="$(echo "${OWNER_OUT}" | awk '/Public key:/ {print $3}')"
 SIGNER_OUT="$(read_keys)"
-BUZZ_RELAY_PRIVATE_KEY="$(echo "${SIGNER_OUT}" | awk '/Secret key:/ {print $3}')"
-if [[ -z "${RELAY_OWNER_PUBKEY}" || -z "${BUZZ_RELAY_PRIVATE_KEY}" ]]; then
-  err "Failed to generate relay identities via buzz-admin generate-key"
+AMBUSH_RELAY_PRIVATE_KEY="$(echo "${SIGNER_OUT}" | awk '/Secret key:/ {print $3}')"
+if [[ -z "${RELAY_OWNER_PUBKEY}" || -z "${AMBUSH_RELAY_PRIVATE_KEY}" ]]; then
+  err "Failed to generate relay identities via ambush-admin generate-key"
   exit 1
 fi
-export BUZZ_REQUIRE_RELAY_MEMBERSHIP=true
+export AMBUSH_REQUIRE_RELAY_MEMBERSHIP=true
 export RELAY_OWNER_PUBKEY
-export BUZZ_RELAY_PRIVATE_KEY
+export AMBUSH_RELAY_PRIVATE_KEY
 
 # ── Start the membership-gated relay ─────────────────────────────────────────
 # A stale relay on :3000 would pass the readiness poll while silently running
@@ -93,8 +93,8 @@ CARGO_PROFILE="${CARGO_PROFILE}" ./scripts/start-relay-for-tests.sh --no-build
 
 cleanup() {
   log "Stopping relay..."
-  if [[ -f /tmp/buzz-relay.pid ]]; then
-    kill "$(cat /tmp/buzz-relay.pid)" 2>/dev/null || true
+  if [[ -f /tmp/ambush-relay.pid ]]; then
+    kill "$(cat /tmp/ambush-relay.pid)" 2>/dev/null || true
   fi
   # The harness kills its own children; sweep any stragglers from a hard fail.
   pkill -f mesh_relay_lifecycle_smoke 2>/dev/null || true
@@ -105,9 +105,9 @@ trap cleanup EXIT
 
 log "Running relay-driven mesh lifecycle smoke..."
 RELAY_URL=ws://localhost:3000 \
-DATABASE_URL=postgres://buzz:buzz_dev@localhost:5432/buzz \
+DATABASE_URL=postgres://ambush:ambush_dev@localhost:5432/ambush \
 REDIS_URL=redis://localhost:6379 \
-BUZZ_ADMIN_BIN="${ADMIN_BIN}" \
+AMBUSH_ADMIN_BIN="${ADMIN_BIN}" \
   "${HARNESS_BIN}"
 
 ok "Relay-driven mesh lifecycle smoke passed"

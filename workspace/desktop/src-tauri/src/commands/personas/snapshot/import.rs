@@ -1,4 +1,4 @@
-//! Import-side helpers for `buzz-agent-snapshot v1`.
+//! Import-side helpers for `ambush-agent-snapshot v1`.
 //!
 //! Extracted from `snapshot.rs` to keep that file under the 1000-line gate.
 //! The Tauri commands here (`preview_agent_snapshot_import`,
@@ -212,7 +212,7 @@ pub(crate) fn resolve_snapshot_import_behavior(
 
 const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4e, 0x47];
 
-/// Decode a `buzz-agent-snapshot v1` manifest from raw bytes.
+/// Decode a `ambush-agent-snapshot v1` manifest from raw bytes.
 ///
 /// Sniffs by magic bytes (PNG signature) first, then falls back to JSON.
 /// Fails closed on malformed content, wrong format, or unsupported version.
@@ -435,7 +435,7 @@ pub(crate) fn build_agent_snapshot_import_preview(
 
 // ── `confirm_agent_snapshot_import` ──────────────────────────────────────────
 
-/// Import a `buzz-agent-snapshot v1` file as a brand-new agent.
+/// Import a `ambush-agent-snapshot v1` file as a brand-new agent.
 ///
 /// Phase sequence:
 ///   1. Validate — decode the manifest and reject early on any error.
@@ -521,13 +521,13 @@ pub async fn confirm_agent_snapshot_import(
             .to_bech32()
             .map_err(|e| format!("failed to encode agent private key: {e}"))?;
 
-        // NIP-OA auth tag: bridge nostr 0.37 → 0.36 (buzz-sdk) via hex round-trip.
+        // NIP-OA auth tag: bridge nostr 0.37 → 0.36 (ambush-sdk) via hex round-trip.
         let compat_owner = nostr::Keys::parse(&owner_keys.secret_key().to_secret_hex())
             .map_err(|e| format!("failed to bridge owner keys: {e}"))?;
         let compat_agent = nostr::PublicKey::from_hex(&pubkey)
             .map_err(|e| format!("failed to bridge agent pubkey: {e}"))?;
         let auth_tag = Some(
-            buzz_sdk_pkg::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "")
+            ambush_sdk_pkg::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "")
                 .map_err(|e| format!("failed to compute NIP-OA auth tag: {e}"))?,
         );
         let owner_pubkey_hex = owner_keys.public_key().to_hex();
@@ -705,20 +705,24 @@ pub async fn confirm_agent_snapshot_import(
         let base_ts = nostr::Timestamp::now().as_secs();
 
         for (idx, entry) in snapshot.memory.entries.iter().enumerate() {
-            let body = if entry.slug == buzz_core_pkg::engram::CORE_SLUG {
-                buzz_core_pkg::engram::Body::Core {
+            let body = if entry.slug == ambush_core_pkg::engram::CORE_SLUG {
+                ambush_core_pkg::engram::Body::Core {
                     profile: entry.body.clone(),
                 }
             } else {
-                buzz_core_pkg::engram::Body::Memory {
+                ambush_core_pkg::engram::Body::Memory {
                     slug: entry.slug.clone(),
                     value: Some(entry.body.clone()),
                 }
             };
 
             let created_at = base_ts + idx as u64;
-            match buzz_core_pkg::engram::build_event(&agent_keys, &owner_pubkey, &body, created_at)
-            {
+            match ambush_core_pkg::engram::build_event(
+                &agent_keys,
+                &owner_pubkey,
+                &body,
+                created_at,
+            ) {
                 Ok(event) => {
                     let event_json = nostr::JsonUtil::as_json(&event).into_bytes();
                     let url = format!("{}/events", crate::relay::relay_http_base_url(&relay_url));
@@ -762,7 +766,7 @@ fn retain_agent_pending(app: &AppHandle, state: &AppState, record: &ManagedAgent
         persona_events::monotonic_created_at,
         retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
     };
-    use buzz_core_pkg::kind::KIND_MANAGED_AGENT;
+    use ambush_core_pkg::kind::KIND_MANAGED_AGENT;
     use nostr::JsonUtil;
 
     let result = (|| -> Result<(), String> {
@@ -798,7 +802,7 @@ fn retain_agent_pending(app: &AppHandle, state: &AppState, record: &ManagedAgent
         )
     })();
     if let Err(e) = result {
-        eprintln!("buzz-desktop: snapshot-import retain-agent: {e}");
+        eprintln!("ambush-desktop: snapshot-import retain-agent: {e}");
     }
 }
 

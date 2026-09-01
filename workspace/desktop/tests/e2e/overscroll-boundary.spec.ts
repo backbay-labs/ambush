@@ -65,7 +65,7 @@ test("locks viewport rubber-band outside conversation scrollers", async ({
     }),
   ).resolves.toBe(false);
 
-  // Buzz Term consumes wheel gestures as custom scrollback rather than through
+  // Ambush Term consumes wheel gestures as custom scrollback rather than through
   // a native scroll container. The viewport lock must leave that vertical
   // gesture alone so the substrate's own handler can receive it.
   await page.evaluate(() => {
@@ -131,15 +131,15 @@ test("locks horizontal viewport pan everywhere", async ({ page }) => {
   }
 
   // A concealed substrate is not an active custom wheel consumer. Keep dead
-  // space locked even if a future layout places Buzz content inside it.
+  // space locked even if a future layout places Ambush content inside it.
   await page.evaluate(() => {
     const terminal = document.querySelector<HTMLElement>(
       '[data-testid="terminal-wheel-target"]',
     );
-    const buzzContent = document.createElement("div");
-    buzzContent.dataset.testid = "concealed-terminal-dead-space";
-    terminal?.append(buzzContent);
-    if (terminal) terminal.dataset.terminalOwner = "buzz";
+    const ambushContent = document.createElement("div");
+    ambushContent.dataset.testid = "concealed-terminal-dead-space";
+    terminal?.append(ambushContent);
+    if (terminal) terminal.dataset.terminalOwner = "ambush";
   });
   await expect(
     dispatchWheelPrevented(

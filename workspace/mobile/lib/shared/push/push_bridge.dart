@@ -12,9 +12,9 @@ import '../relay/relay_provider.dart';
 import '../relay/app_lifecycle_provider.dart';
 import 'push_snapshot.dart';
 
-const _channel = MethodChannel('buzz/push');
+const _channel = MethodChannel('ambush/push');
 
-enum BuzzPushAuthorizationStatus {
+enum AmbushPushAuthorizationStatus {
   notDetermined,
   denied,
   authorized,
@@ -22,67 +22,68 @@ enum BuzzPushAuthorizationStatus {
   ephemeral,
 }
 
-typedef BuzzPushAuthorizationStatusReader =
-    Future<BuzzPushAuthorizationStatus> Function();
-typedef BuzzPushNotificationSettingsOpener = Future<bool> Function();
+typedef AmbushPushAuthorizationStatusReader =
+    Future<AmbushPushAuthorizationStatus> Function();
+typedef AmbushPushNotificationSettingsOpener = Future<bool> Function();
 
-final buzzPushAuthorizationStatusReaderProvider =
-    Provider<BuzzPushAuthorizationStatusReader>((ref) {
-      return readBuzzPushAuthorizationStatus;
+final ambushPushAuthorizationStatusReaderProvider =
+    Provider<AmbushPushAuthorizationStatusReader>((ref) {
+      return readAmbushPushAuthorizationStatus;
     });
 
-final buzzPushNotificationSettingsOpenerProvider =
-    Provider<BuzzPushNotificationSettingsOpener>((ref) {
-      return openBuzzPushNotificationSettings;
+final ambushPushNotificationSettingsOpenerProvider =
+    Provider<AmbushPushNotificationSettingsOpener>((ref) {
+      return openAmbushPushNotificationSettings;
     });
 
-final buzzPushAuthorizationStatusProvider =
+final ambushPushAuthorizationStatusProvider =
     AsyncNotifierProvider<
-      BuzzPushAuthorizationStatusNotifier,
-      BuzzPushAuthorizationStatus
-    >(BuzzPushAuthorizationStatusNotifier.new);
+      AmbushPushAuthorizationStatusNotifier,
+      AmbushPushAuthorizationStatus
+    >(AmbushPushAuthorizationStatusNotifier.new);
 
-class BuzzPushAuthorizationStatusNotifier
-    extends AsyncNotifier<BuzzPushAuthorizationStatus> {
+class AmbushPushAuthorizationStatusNotifier
+    extends AsyncNotifier<AmbushPushAuthorizationStatus> {
   @override
-  Future<BuzzPushAuthorizationStatus> build() async {
+  Future<AmbushPushAuthorizationStatus> build() async {
     ref.listen(appLifecycleProvider, (previous, next) {
       if (previous != AppLifecycleState.resumed &&
           next == AppLifecycleState.resumed) {
         unawaited(refresh());
       }
     });
-    return ref.read(buzzPushAuthorizationStatusReaderProvider)();
+    return ref.read(ambushPushAuthorizationStatusReaderProvider)();
   }
 
   Future<void> refresh() async {
-    state = const AsyncLoading<BuzzPushAuthorizationStatus>();
+    state = const AsyncLoading<AmbushPushAuthorizationStatus>();
     state = await AsyncValue.guard(
-      ref.read(buzzPushAuthorizationStatusReaderProvider),
+      ref.read(ambushPushAuthorizationStatusReaderProvider),
     );
   }
 }
 
-Future<BuzzPushAuthorizationStatus> readBuzzPushAuthorizationStatus() async {
+Future<AmbushPushAuthorizationStatus>
+readAmbushPushAuthorizationStatus() async {
   if (defaultTargetPlatform != TargetPlatform.iOS) {
-    return BuzzPushAuthorizationStatus.authorized;
+    return AmbushPushAuthorizationStatus.authorized;
   }
   final raw = await _channel.invokeMethod<String>(
     'notificationAuthorizationStatus',
   );
   return switch (raw) {
-    'notDetermined' => BuzzPushAuthorizationStatus.notDetermined,
-    'denied' => BuzzPushAuthorizationStatus.denied,
-    'authorized' => BuzzPushAuthorizationStatus.authorized,
-    'provisional' => BuzzPushAuthorizationStatus.provisional,
-    'ephemeral' => BuzzPushAuthorizationStatus.ephemeral,
+    'notDetermined' => AmbushPushAuthorizationStatus.notDetermined,
+    'denied' => AmbushPushAuthorizationStatus.denied,
+    'authorized' => AmbushPushAuthorizationStatus.authorized,
+    'provisional' => AmbushPushAuthorizationStatus.provisional,
+    'ephemeral' => AmbushPushAuthorizationStatus.ephemeral,
     _ => throw FormatException(
       'Native push bridge returned unknown authorization status: $raw',
     ),
   };
 }
 
-Future<bool> openBuzzPushNotificationSettings() async {
+Future<bool> openAmbushPushNotificationSettings() async {
   if (defaultTargetPlatform != TargetPlatform.iOS) return false;
   return await _channel.invokeMethod<bool>('openNotificationSettings') ?? false;
 }
@@ -92,7 +93,7 @@ Future<bool> openBuzzPushNotificationSettings() async {
 final apnsDeviceToken = ValueNotifier<String?>(null);
 final apnsRegistrationError = ValueNotifier<String?>(null);
 
-final pushEndpointGrants = ValueNotifier<List<BuzzPushEndpointGrant>>([]);
+final pushEndpointGrants = ValueNotifier<List<AmbushPushEndpointGrant>>([]);
 final pushEndpointGrantError = ValueNotifier<String?>(null);
 
 /// The most recent notification response waiting for app navigation.
@@ -123,7 +124,7 @@ MessageDeepLink? _pushNotificationLink(Object? arguments) {
 
 /// Pulls a notification response that arrived before the Flutter method
 /// handler was installed.
-Future<void> syncPendingBuzzPushNotificationResponse() async {
+Future<void> syncPendingAmbushPushNotificationResponse() async {
   if (defaultTargetPlatform != TargetPlatform.iOS) return;
   try {
     final arguments = await _channel.invokeMapMethod<dynamic, dynamic>(
@@ -139,7 +140,7 @@ Future<void> syncPendingBuzzPushNotificationResponse() async {
 /// Starts the independent iOS notification-authorization and APNs-registration
 /// requests. Display authorization is intentionally not returned or persisted:
 /// APNs registration and enrollment remain valid while display is denied.
-Future<void> startBuzzPushRegistration() async {
+Future<void> startAmbushPushRegistration() async {
   if (defaultTargetPlatform != TargetPlatform.iOS) return;
   try {
     await _channel.invokeMethod<void>('startRegistration');
@@ -148,7 +149,7 @@ Future<void> startBuzzPushRegistration() async {
   }
 }
 
-class BuzzPushEndpointGrant {
+class AmbushPushEndpointGrant {
   final String relayOrigin;
   final String relayPubkey;
   final String installationId;
@@ -159,7 +160,7 @@ class BuzzPushEndpointGrant {
   final int generation;
   final int expiresAt;
 
-  const BuzzPushEndpointGrant({
+  const AmbushPushEndpointGrant({
     required this.relayOrigin,
     required this.relayPubkey,
     required this.installationId,
@@ -171,9 +172,9 @@ class BuzzPushEndpointGrant {
     required this.expiresAt,
   });
 
-  factory BuzzPushEndpointGrant.fromMap(Map<dynamic, dynamic> map) {
+  factory AmbushPushEndpointGrant.fromMap(Map<dynamic, dynamic> map) {
     final generation = map['generation'] as int;
-    return BuzzPushEndpointGrant(
+    return AmbushPushEndpointGrant(
       relayOrigin: map['relayOrigin'] as String,
       relayPubkey: map['relayPubkey'] as String,
       installationId: map['installationId'] as String,
@@ -187,13 +188,13 @@ class BuzzPushEndpointGrant {
   }
 }
 
-Future<List<BuzzPushEndpointGrant>> readBuzzPushEndpointGrants() async {
+Future<List<AmbushPushEndpointGrant>> readAmbushPushEndpointGrants() async {
   if (defaultTargetPlatform != TargetPlatform.iOS) return const [];
   try {
     final raw = await _channel.invokeListMethod<dynamic>('endpointGrants');
     final grants = [
       for (final value in raw ?? const [])
-        BuzzPushEndpointGrant.fromMap(value as Map<dynamic, dynamic>),
+        AmbushPushEndpointGrant.fromMap(value as Map<dynamic, dynamic>),
     ];
     pushEndpointGrants.value = grants;
     pushEndpointGrantError.value = null;
@@ -208,7 +209,7 @@ Future<List<BuzzPushEndpointGrant>> readBuzzPushEndpointGrants() async {
 ///
 /// The rewrite propagates NIP-11 `self` rotations even when the opaque grant
 /// and accepted relay lease remain reusable and their generations do not move.
-Future<BuzzPushEndpointGrant> enrollBuzzPush(
+Future<AmbushPushEndpointGrant> enrollAmbushPush(
   String relayUrl,
   String gatewayUrl, {
   List<Community>? communitiesForSnapshotRefresh,
@@ -220,11 +221,11 @@ Future<BuzzPushEndpointGrant> enrollBuzzPush(
   if (raw == null) {
     throw StateError('Native push enrollment returned no grant.');
   }
-  final grant = BuzzPushEndpointGrant.fromMap(raw);
-  await readBuzzPushEndpointGrants();
+  final grant = AmbushPushEndpointGrant.fromMap(raw);
+  await readAmbushPushEndpointGrants();
   if (communitiesForSnapshotRefresh != null) {
     try {
-      await registerBuzzPushCommunitySnapshot(communitiesForSnapshotRefresh);
+      await registerAmbushPushCommunitySnapshot(communitiesForSnapshotRefresh);
       pushCommunitySnapshotError.value = null;
     } catch (error, stackTrace) {
       reportPushCommunitySnapshotError(error, stackTrace);
@@ -251,7 +252,7 @@ void reportPushLeaseCleanupError(Object error, StackTrace stackTrace) {
   debugPrintStack(stackTrace: stackTrace);
 }
 
-Future<void> registerBuzzPushCommunitySnapshot(
+Future<void> registerAmbushPushCommunitySnapshot(
   List<Community> communities,
 ) async {
   if (defaultTargetPlatform != TargetPlatform.iOS) return;
@@ -259,7 +260,7 @@ Future<void> registerBuzzPushCommunitySnapshot(
     final snapshots = [
       for (final community in communities)
         if (community.pushNotificationsEnabled)
-          BuzzPushCommunitySnapshot(
+          AmbushPushCommunitySnapshot(
             id: community.id,
             name: community.name,
             relayUrl: community.relayUrl,
@@ -293,7 +294,7 @@ Future<void> registerBuzzPushCommunitySnapshot(
   }
 }
 
-void installBuzzPushMethodHandler() {
+void installAmbushPushMethodHandler() {
   _channel.setMethodCallHandler((call) async {
     switch (call.method) {
       case 'apnsTokenChanged':
@@ -320,7 +321,9 @@ void installBuzzPushMethodHandler() {
         pendingPushNotificationLink.value = link;
         return 'handled';
       default:
-        throw MissingPluginException('Unknown buzz/push method ${call.method}');
+        throw MissingPluginException(
+          'Unknown ambush/push method ${call.method}',
+        );
     }
   });
 }

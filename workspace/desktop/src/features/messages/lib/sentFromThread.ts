@@ -1,4 +1,4 @@
-export const SENT_FROM_THREAD_TAG = "buzz:sent-from-thread";
+export const SENT_FROM_THREAD_TAG = "ambush:sent-from-thread";
 const THREAD_ROOT_EXCERPT_MAX_LENGTH = 64;
 
 export type SentFromThreadReference = {

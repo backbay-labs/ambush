@@ -20,7 +20,7 @@ import {
   useIncrementalMount,
 } from "@/shared/hooks/useIncrementalMount";
 import { cn } from "@/shared/lib/cn";
-import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
+import { AmbushLoadingState } from "@/shared/ui/AmbushLoadingState";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { DropdownMenuItem } from "@/shared/ui/dropdown-menu";
@@ -241,7 +241,7 @@ export function ProjectsIssuesList({
   );
 
   if (isLoading) {
-    return <BuzzLoadingState label="Loading tasks" />;
+    return <AmbushLoadingState label="Loading tasks" />;
   }
 
   const loadNotice = (

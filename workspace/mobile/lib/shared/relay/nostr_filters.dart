@@ -3,11 +3,11 @@ import 'nostr_models.dart';
 /// Aggregate cap on explicit `#h` channel values the relay accepts across one
 /// REQ's filters before rejecting it as `restricted: too many explicit
 /// channels`. Mirrors `MAX_EXPLICIT_CHANNEL_VALUES` in
-/// `crates/buzz-relay/src/handlers/req.rs`. A subscription over more channels
+/// `crates/ambush-relay/src/handlers/req.rs`. A subscription over more channels
 /// than this must be split into multiple REQs, each within the cap.
 const int kMaxExplicitChannelValues = 128;
 
-/// Canonical [NostrFilter] constructors for common Buzz queries.
+/// Canonical [NostrFilter] constructors for common Ambush queries.
 ///
 /// Centralising filter shapes keeps relay queries consistent across providers
 /// and makes kind/tag conventions easy to audit.
@@ -150,7 +150,7 @@ abstract final class NostrFilters {
 
   /// Global user search over kind:0 profiles (NIP-50 via the HTTP bridge).
   ///
-  /// `search_mode: "prefix"` is a Buzz bridge-only extension: every caller is
+  /// `search_mode: "prefix"` is an Ambush bridge-only extension: every caller is
   /// a typeahead surface, so a partially typed name must match ("rac" →
   /// "raccoon"). Mirrors desktop's `build_user_search_filter`
   /// (desktop/src-tauri/src/commands/profile.rs). Bridge-only — send through

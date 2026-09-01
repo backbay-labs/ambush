@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Forked from Buzz and renamed to Ambush.
+
 ## v0.5.20
 
 ### Desktop and shared changes

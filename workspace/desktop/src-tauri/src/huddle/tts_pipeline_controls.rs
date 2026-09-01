@@ -34,7 +34,7 @@ impl TtsPipeline {
                 text,
             })
             .map_err(|e| {
-                eprintln!("buzz-desktop: TTS queue saturated, dropping message: {e}");
+                eprintln!("ambush-desktop: TTS queue saturated, dropping message: {e}");
                 format!("TTS queue full, dropping: {e}")
             })
     }
@@ -100,7 +100,7 @@ impl TtsPipeline {
         );
         if acknowledged.is_some() {
             self.broadcasters.cancel_all();
-            eprintln!("buzz-desktop: tts stage=cancellation reason=voice_switch route_id=0");
+            eprintln!("ambush-desktop: tts stage=cancellation reason=voice_switch route_id=0");
         }
         acknowledged
     }
@@ -116,7 +116,7 @@ impl TtsPipeline {
 
     /// Signal the worker thread to stop.
     pub fn shutdown(&self) {
-        eprintln!("buzz-desktop: tts stage=cancellation reason=shutdown route_id=0");
+        eprintln!("ambush-desktop: tts stage=cancellation reason=shutdown route_id=0");
         self.broadcasters.shutdown();
         self.shutdown.store(true, Ordering::Release);
     }

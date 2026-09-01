@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:buzz/features/profile/camera_disposal_barrier.dart';
+import 'package:ambush/features/profile/camera_disposal_barrier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

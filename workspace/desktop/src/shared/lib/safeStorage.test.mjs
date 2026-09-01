@@ -54,10 +54,10 @@ test.beforeEach(() => {
 
 test("getStorageItem returns the stored value when storage is healthy", () => {
   const restore = patchLocalStorage(
-    createThrowingStorage({ "buzz-theme": "buzz" }),
+    createThrowingStorage({ "ambush-theme": "ambush" }),
   );
   try {
-    assert.equal(getStorageItem("buzz-theme"), "buzz");
+    assert.equal(getStorageItem("ambush-theme"), "ambush");
     assert.equal(getStorageItem("missing"), null);
   } finally {
     restore();
@@ -67,7 +67,7 @@ test("getStorageItem returns the stored value when storage is healthy", () => {
 test("getStorageItem returns null when the key is absent", () => {
   const restore = patchLocalStorage(createThrowingStorage());
   try {
-    assert.equal(getStorageItem("buzz-theme"), null);
+    assert.equal(getStorageItem("ambush-theme"), null);
   } finally {
     restore();
   }
@@ -87,8 +87,8 @@ test("setStorageItem returns true on a healthy write", () => {
   const storage = createThrowingStorage();
   const restore = patchLocalStorage(storage);
   try {
-    assert.equal(setStorageItem("buzz-theme", "buzz-dark"), true);
-    assert.equal(storage.values.get("buzz-theme"), "buzz-dark");
+    assert.equal(setStorageItem("ambush-theme", "ambush-dark"), true);
+    assert.equal(storage.values.get("ambush-theme"), "ambush-dark");
   } finally {
     restore();
   }

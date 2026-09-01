@@ -18,7 +18,7 @@
  * a stored opt-out to be silently overridden.
  */
 
-const KEY_PREFIX = "buzz:observer-archive-default-seeded";
+const KEY_PREFIX = "ambush:observer-archive-default-seeded";
 
 function storageKey(identityPubkey: string): string {
   return `${KEY_PREFIX}:${identityPubkey}`;

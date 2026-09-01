@@ -1,5 +1,5 @@
-import 'package:buzz/features/settings/theme_picker_page.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/features/settings/theme_picker_page.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -72,22 +72,22 @@ void main() {
           findsNothing,
         );
         expect(
-          find.byKey(const ValueKey('theme-preview-name-buzz')),
+          find.byKey(const ValueKey('theme-preview-name-ambush')),
           findsOneWidget,
         );
 
         final nameBounds = tester.getRect(
-          find.byKey(const ValueKey('theme-preview-name-buzz')),
+          find.byKey(const ValueKey('theme-preview-name-ambush')),
         );
         final previewBounds = tester.getRect(
-          find.byKey(const ValueKey('theme-device-pair-preview-buzz')),
+          find.byKey(const ValueKey('theme-device-pair-preview-ambush')),
         );
         expect(nameBounds.bottom, lessThan(previewBounds.bottom));
         expect(previewBounds.top - nameBounds.bottom, closeTo(Grid.md, 1));
         expect(
           tester
               .widget<FittedBox>(
-                find.byKey(const ValueKey('theme-full-preview-buzz')),
+                find.byKey(const ValueKey('theme-full-preview-ambush')),
               )
               .alignment,
           Alignment.center,
@@ -118,10 +118,10 @@ void main() {
       await _pumpPicker(tester);
 
       final nameBounds = tester.getRect(
-        find.byKey(const ValueKey('theme-preview-name-buzz')),
+        find.byKey(const ValueKey('theme-preview-name-ambush')),
       );
       final cardBounds = tester.getRect(
-        find.byKey(const ValueKey('theme-preview-page-buzz')),
+        find.byKey(const ValueKey('theme-preview-page-ambush')),
       );
       expect(cardBounds.contains(nameBounds.topLeft), isTrue);
       expect(cardBounds.contains(nameBounds.bottomRight), isTrue);
@@ -148,7 +148,7 @@ void main() {
         final chatFrame = tester.widget<Container>(
           find
               .descendant(
-                of: find.byKey(const ValueKey('theme-full-chat-buzz')),
+                of: find.byKey(const ValueKey('theme-full-chat-ambush')),
                 matching: find.byType(Container),
               )
               .first,
@@ -185,7 +185,7 @@ void main() {
       await tester.pump();
 
       final titleMotion = tester.widget<Transform>(
-        find.byKey(const ValueKey('theme-preview-name-motion-buzz')),
+        find.byKey(const ValueKey('theme-preview-name-motion-ambush')),
       );
       expect(titleMotion.transform.getTranslation().x, lessThan(0));
 
@@ -202,7 +202,7 @@ void main() {
       await tester.pump();
 
       final titleMotion = tester.widget<Transform>(
-        find.byKey(const ValueKey('theme-preview-name-motion-buzz')),
+        find.byKey(const ValueKey('theme-preview-name-motion-ambush')),
       );
       expect(titleMotion.transform.getTranslation().x, 0);
 
@@ -275,7 +275,7 @@ void main() {
           .byKey(const ValueKey('theme-preview-community-identity'))
           .first;
       final home = tester.getRect(
-        find.byKey(const ValueKey('theme-full-home-buzz')),
+        find.byKey(const ValueKey('theme-full-home-ambush')),
       );
       final identityBounds = tester.getRect(identity);
       expect(
@@ -305,7 +305,7 @@ void main() {
         find.byKey(const ValueKey('theme-chat-header-title')).first,
       );
       final chatFrame = tester.getRect(
-        find.byKey(const ValueKey('theme-full-chat-buzz')),
+        find.byKey(const ValueKey('theme-full-chat-ambush')),
       );
       expect(
         (title.left - chatFrame.left) / chatFrame.width * 393,
@@ -341,7 +341,7 @@ void main() {
         find.byWidgetPredicate(
           (widget) =>
               widget is UiKitView &&
-              widget.viewType == 'buzz/theme_pagination_glass',
+              widget.viewType == 'ambush/theme_pagination_glass',
         ),
       );
       final params = nativePagination.creationParams! as Map<String, Object>;
@@ -354,7 +354,7 @@ void main() {
               find.byWidgetPredicate(
                 (widget) =>
                     widget is UiKitView &&
-                    widget.viewType == 'buzz/theme_pagination_glass',
+                    widget.viewType == 'ambush/theme_pagination_glass',
               ),
             )
             .width,
@@ -373,14 +373,14 @@ void main() {
       await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'light',
-          'buzz_color_scheme': 'github-light',
+          'ambush_theme_mode': 'light',
+          'ambush_color_scheme': 'github-light',
         },
       );
 
       final nativeActions = tester
           .widgetList<UiKitView>(find.byType(UiKitView))
-          .where((view) => view.viewType == 'buzz/navigation_glass');
+          .where((view) => view.viewType == 'ambush/navigation_glass');
       final accentAction = nativeActions.firstWhere(
         (view) =>
             (view.creationParams! as Map<String, Object>)['icon'] ==
@@ -405,19 +405,19 @@ void main() {
     ) async {
       final instance = await _pumpPicker(
         tester,
-        prefs: {'buzz_theme_mode': 'system', 'buzz_color_scheme': 'buzz'},
+        prefs: {'ambush_theme_mode': 'system', 'ambush_color_scheme': 'ambush'},
       );
 
       await _swipeToNextTheme(tester);
-      expect(instance.getString('buzz_color_scheme'), 'buzz');
+      expect(instance.getString('ambush_color_scheme'), 'ambush');
       expect(
-        find.byKey(const ValueKey('theme-preview-name-buzz')),
+        find.byKey(const ValueKey('theme-preview-name-ambush')),
         findsNothing,
       );
 
       await tester.tap(find.byKey(const ValueKey('theme-preview-set')));
       await tester.pumpAndSettle();
-      expect(instance.getString('buzz_color_scheme'), isNot('buzz'));
+      expect(instance.getString('ambush_color_scheme'), isNot('ambush'));
     });
 
     testWidgets('Set submits one complete theme preference', (tester) async {
@@ -431,12 +431,12 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(notifier.preferenceWrites, 1);
-      expect(notifier.lastPreference?.theme, isNot('buzz'));
+      expect(notifier.lastPreference?.theme, isNot('ambush'));
       expect(notifier.lastPreference?.followSystem, isTrue);
       expect(notifier.lastPreference?.accent, defaultCommunityTheme.accent);
     });
 
-    testWidgets('preserves the stored accent when leaving Buzz', (
+    testWidgets('preserves the stored accent when leaving Ambush', (
       tester,
     ) async {
       final green = accentColors.indexWhere((accent) => accent.name == 'Green');
@@ -444,9 +444,9 @@ void main() {
       final instance = await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'system',
-          'buzz_color_scheme': 'buzz',
-          'buzz_accent_color': legacyGreen,
+          'ambush_theme_mode': 'system',
+          'ambush_color_scheme': 'ambush',
+          'ambush_accent_color': legacyGreen,
         },
       );
 
@@ -454,8 +454,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('theme-preview-set')));
       await tester.pumpAndSettle();
 
-      expect(instance.getString('buzz_color_scheme'), isNot('buzz'));
-      expect(instance.getInt('buzz_accent_color'), green);
+      expect(instance.getString('ambush_color_scheme'), isNot('ambush'));
+      expect(instance.getInt('ambush_accent_color'), green);
     });
 
     testWidgets('accent action scales and fades with theme availability', (
@@ -463,7 +463,7 @@ void main() {
     ) async {
       await _pumpPicker(
         tester,
-        prefs: {'buzz_theme_mode': 'system', 'buzz_color_scheme': 'buzz'},
+        prefs: {'ambush_theme_mode': 'system', 'ambush_color_scheme': 'ambush'},
       );
 
       expect(
@@ -511,8 +511,8 @@ void main() {
       final instance = await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'dark',
-          'buzz_color_scheme': 'catppuccin-macchiato',
+          'ambush_theme_mode': 'dark',
+          'ambush_color_scheme': 'catppuccin-macchiato',
         },
       );
       final pageView = tester.widget<PageView>(
@@ -528,7 +528,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(pageView.controller!.page, greaterThan(2));
-      expect(instance.getString('buzz_color_scheme'), 'catppuccin-macchiato');
+      expect(instance.getString('ambush_color_scheme'), 'catppuccin-macchiato');
     });
 
     testWidgets('cycles appearance inline with scale and opacity motion', (
@@ -537,8 +537,8 @@ void main() {
       final instance = await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'light',
-          'buzz_color_scheme': 'github-light',
+          'ambush_theme_mode': 'light',
+          'ambush_color_scheme': 'github-light',
         },
       );
 
@@ -578,10 +578,10 @@ void main() {
       expect(opacityValues.any((value) => value > 0 && value < 1), isTrue);
 
       await tester.pumpAndSettle();
-      expect(instance.getString('buzz_theme_mode'), 'light');
+      expect(instance.getString('ambush_theme_mode'), 'light');
       await tester.tap(find.byKey(const ValueKey('theme-preview-set')));
       await tester.pumpAndSettle();
-      expect(instance.getString('buzz_theme_mode'), 'dark');
+      expect(instance.getString('ambush_theme_mode'), 'dark');
     });
 
     testWidgets('appearance changes replace pagination state without motion', (
@@ -590,8 +590,8 @@ void main() {
       await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'light',
-          'buzz_color_scheme': 'github-light',
+          'ambush_theme_mode': 'light',
+          'ambush_color_scheme': 'github-light',
         },
       );
 
@@ -618,7 +618,7 @@ void main() {
     ) async {
       await _pumpPicker(
         tester,
-        prefs: {'buzz_theme_mode': 'light'},
+        prefs: {'ambush_theme_mode': 'light'},
         reduceMotion: true,
       );
       final switcher = tester.widget<AnimatedSwitcher>(
@@ -642,8 +642,8 @@ void main() {
       await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'dark',
-          'buzz_color_scheme': 'catppuccin-macchiato',
+          'ambush_theme_mode': 'dark',
+          'ambush_color_scheme': 'catppuccin-macchiato',
         },
       );
       var selectionHaptics = 0;
@@ -682,12 +682,12 @@ void main() {
       final instance = await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'light',
-          'buzz_color_scheme': 'github-light',
-          'buzz_accent_color': 0,
+          'ambush_theme_mode': 'light',
+          'ambush_color_scheme': 'github-light',
+          'ambush_accent_color': 0,
         },
       );
-      final storedBefore = instance.getInt('buzz_accent_color');
+      final storedBefore = instance.getInt('ambush_accent_color');
       await tester.tap(
         find.byKey(const ValueKey('theme-preview-accent-action-button')),
       );
@@ -705,7 +705,7 @@ void main() {
       );
       await tester.tap(find.byKey(ValueKey('accent-option-$green')));
       await tester.pumpAndSettle();
-      expect(instance.getInt('buzz_accent_color'), storedBefore);
+      expect(instance.getInt('ambush_accent_color'), storedBefore);
 
       Navigator.of(
         tester.element(find.byKey(ValueKey('accent-option-$green'))),
@@ -713,7 +713,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('theme-preview-set')));
       await tester.pumpAndSettle();
-      expect(instance.getInt('buzz_accent_color'), green);
+      expect(instance.getInt('ambush_accent_color'), green);
     });
 
     testWidgets('accent swatch is optically smaller than its tap target', (
@@ -722,8 +722,8 @@ void main() {
       await _pumpPicker(
         tester,
         prefs: {
-          'buzz_theme_mode': 'light',
-          'buzz_color_scheme': 'github-light',
+          'ambush_theme_mode': 'light',
+          'ambush_color_scheme': 'github-light',
         },
       );
 
@@ -741,8 +741,8 @@ void main() {
       );
     });
 
-    testWidgets('Buzz keeps the accent action unavailable', (tester) async {
-      await _pumpPicker(tester, prefs: {'buzz_color_scheme': 'buzz'});
+    testWidgets('Ambush keeps the accent action unavailable', (tester) async {
+      await _pumpPicker(tester, prefs: {'ambush_color_scheme': 'ambush'});
       expect(
         find.byKey(const ValueKey('theme-preview-accent-action-button')),
         findsNothing,

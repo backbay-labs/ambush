@@ -24,7 +24,7 @@ fn parse_entity_deep_link_accepts_every_share_link_shape() {
         .map(|value| value.as_str().unwrap().to_owned())
         .chain(golden["tabs"].as_array().unwrap().iter().map(|tab| {
             format!(
-                "buzz://repo?owner={owner}&d={dtag}&tab={}",
+                "ambush://repo?owner={owner}&d={dtag}&tab={}",
                 tab.as_str().unwrap()
             )
         }))
@@ -35,7 +35,7 @@ fn parse_entity_deep_link_accepts_every_share_link_shape() {
         );
     }
     let commit_link = format!(
-        "buzz://repo?owner={owner}&d={dtag}&tab=commits&commit={}",
+        "ambush://repo?owner={owner}&d={dtag}&tab=commits&commit={}",
         golden["eventId"].as_str().unwrap()
     );
     assert!(parse_entity_deep_link(&Url::parse(&commit_link).unwrap()).is_some());
@@ -55,27 +55,27 @@ fn parse_entity_deep_link_rejects_malformed_and_non_canonical_links() {
     let event_id = golden["eventId"].as_str().unwrap();
     for raw in [
         // Missing or malformed identifiers.
-        format!("buzz://repo?owner={owner}"),
-        "buzz://repo?owner=nope&d=buzz-world".to_owned(),
-        format!("buzz://repo?owner={owner}&d=.hidden"),
-        format!("buzz://repo?owner={owner}&d=has%20space"),
-        format!("buzz://pr?owner={owner}&d=buzz-world"),
-        format!("buzz://pr?id=short&owner={owner}&d=buzz-world"),
+        format!("ambush://repo?owner={owner}"),
+        "ambush://repo?owner=nope&d=ambush-world".to_owned(),
+        format!("ambush://repo?owner={owner}&d=.hidden"),
+        format!("ambush://repo?owner={owner}&d=has%20space"),
+        format!("ambush://pr?owner={owner}&d=ambush-world"),
+        format!("ambush://pr?id=short&owner={owner}&d=ambush-world"),
         // Coordinate links take no event id.
-        format!("buzz://repo?id={event_id}&owner={owner}&d=buzz-world"),
+        format!("ambush://repo?id={event_id}&owner={owner}&d=ambush-world"),
         // Non-canonical: unknown param, duplicate param, path, fragment.
-        format!("buzz://repo?owner={owner}&d=buzz-world&relay=wss%3A%2F%2Fx.example"),
-        format!("buzz://repo?owner={owner}&owner={owner}&d=buzz-world"),
+        format!("ambush://repo?owner={owner}&d=ambush-world&relay=wss%3A%2F%2Fx.example"),
+        format!("ambush://repo?owner={owner}&owner={owner}&d=ambush-world"),
         // Unknown tab value, duplicate tab, and tab on an event link.
-        format!("buzz://repo?owner={owner}&d=buzz-world&tab=overview"),
-        format!("buzz://repo?owner={owner}&d=buzz-world&tab=prs&tab=prs"),
-        format!("buzz://repo?owner={owner}&d=buzz-world&tab=files&commit={event_id}"),
-        format!("buzz://repo?owner={owner}&d=buzz-world&tab=commits&commit=short"),
-        format!("buzz://pr?id={event_id}&owner={owner}&d=buzz-world&tab=prs"),
-        format!("buzz://repo/extra?owner={owner}&d=buzz-world"),
-        format!("buzz://repo?owner={owner}&d=buzz-world#top"),
+        format!("ambush://repo?owner={owner}&d=ambush-world&tab=overview"),
+        format!("ambush://repo?owner={owner}&d=ambush-world&tab=prs&tab=prs"),
+        format!("ambush://repo?owner={owner}&d=ambush-world&tab=files&commit={event_id}"),
+        format!("ambush://repo?owner={owner}&d=ambush-world&tab=commits&commit=short"),
+        format!("ambush://pr?id={event_id}&owner={owner}&d=ambush-world&tab=prs"),
+        format!("ambush://repo/extra?owner={owner}&d=ambush-world"),
+        format!("ambush://repo?owner={owner}&d=ambush-world#top"),
         // Not an entity host.
-        format!("buzz://message?owner={owner}&d=buzz-world"),
+        format!("ambush://message?owner={owner}&d=ambush-world"),
     ] {
         assert!(
             parse_entity_deep_link(&Url::parse(&raw).unwrap()).is_none(),
@@ -221,8 +221,8 @@ fn pending_community_links_dedupe_exact_intents() {
 #[test]
 fn pending_entity_links_survive_until_acknowledged_in_order() {
     let queue = PendingEntityDeepLinks::default();
-    let first = queue.enqueue("buzz://project?owner=aa&d=first".to_owned());
-    let second = queue.enqueue("buzz://project?owner=aa&d=second".to_owned());
+    let first = queue.enqueue("ambush://project?owner=aa&d=first".to_owned());
+    let second = queue.enqueue("ambush://project?owner=aa&d=second".to_owned());
 
     assert_eq!(queue.first(), Some(first.clone()));
     assert!(!queue.acknowledge(&second.id));
@@ -233,7 +233,7 @@ fn pending_entity_links_survive_until_acknowledged_in_order() {
 #[test]
 fn pending_entity_links_dedupe_launch_and_open_callbacks() {
     let queue = PendingEntityDeepLinks::default();
-    let href = "buzz://project?owner=aa&d=buzz".to_owned();
+    let href = "ambush://project?owner=aa&d=ambush".to_owned();
     let first = queue.enqueue(href.clone());
     let duplicate = queue.enqueue(href);
 
@@ -244,7 +244,7 @@ fn pending_entity_links_dedupe_launch_and_open_callbacks() {
 
 fn valid_nostr_bind_url() -> Url {
     Url::parse(
-        "buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard",
+        "ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard",
     )
     .unwrap()
 }
@@ -252,19 +252,22 @@ fn valid_nostr_bind_url() -> Url {
 #[test]
 fn parse_add_community_deep_link_extracts_relay_and_name() {
     let url = Url::parse(
-        "buzz://add-community?relay=wss%3A%2F%2Facme.communities.buzz.xyz&name=Acme%20Team&ignored=value",
+        "ambush://add-community?relay=wss%3A%2F%2Facme.communities.ambush.example.com&name=Acme%20Team&ignored=value",
     )
     .unwrap();
     let payload = parse_add_community_deep_link(&url).unwrap();
-    assert_eq!(payload.relay_url, "wss://acme.communities.buzz.xyz");
+    assert_eq!(
+        payload.relay_url,
+        "wss://acme.communities.ambush.example.com"
+    );
     assert_eq!(payload.name.as_deref(), Some("Acme Team"));
 }
 
 #[test]
 fn parse_add_community_deep_link_accepts_an_omitted_or_empty_name() {
     for raw in [
-        "buzz://add-community?relay=wss%3A%2F%2Facme.example",
-        "buzz://add-community?relay=wss%3A%2F%2Facme.example&name=",
+        "ambush://add-community?relay=wss%3A%2F%2Facme.example",
+        "ambush://add-community?relay=wss%3A%2F%2Facme.example&name=",
     ] {
         assert!(parse_add_community_deep_link(&Url::parse(raw).unwrap())
             .unwrap()
@@ -276,11 +279,11 @@ fn parse_add_community_deep_link_accepts_an_omitted_or_empty_name() {
 #[test]
 fn parse_add_community_deep_link_rejects_invalid_relays() {
     for raw in [
-        "buzz://add-community",
-        "buzz://add-community?relay=",
-        "buzz://add-community?relay=not-a-url",
-        "buzz://add-community?relay=https%3A%2F%2Facme.example",
-        "buzz://add-community?relay=wss%3A%2F%2F",
+        "ambush://add-community",
+        "ambush://add-community?relay=",
+        "ambush://add-community?relay=not-a-url",
+        "ambush://add-community?relay=https%3A%2F%2Facme.example",
+        "ambush://add-community?relay=wss%3A%2F%2F",
     ] {
         assert!(parse_add_community_deep_link(&Url::parse(raw).unwrap()).is_none());
     }
@@ -288,7 +291,7 @@ fn parse_add_community_deep_link_rejects_invalid_relays() {
 
 #[test]
 fn parse_channel_deep_link_accepts_one_path_segment() {
-    let url = Url::parse("buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32").unwrap();
+    let url = Url::parse("ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32").unwrap();
     let payload = parse_channel_deep_link(&url).unwrap();
     assert_eq!(payload["channelId"], "580ca78b-9dae-46f3-8854-bd671853ba32");
 }
@@ -297,7 +300,7 @@ fn parse_channel_deep_link_accepts_one_path_segment() {
 fn parse_channel_deep_link_accepts_message_path() {
     let message_id = "8455293f0123456789abcdef0123456789abcdef0123456789abcdef01234567";
     let url = Url::parse(&format!(
-        "buzz://channel/a372f080-5961-4535-b1a3-edffface377d/{message_id}"
+        "ambush://channel/a372f080-5961-4535-b1a3-edffface377d/{message_id}"
     ))
     .unwrap();
     let payload = parse_channel_deep_link(&url).unwrap();
@@ -309,11 +312,11 @@ fn parse_channel_deep_link_accepts_message_path() {
 fn parse_channel_deep_link_accepts_v7_and_normalizes_uppercase() {
     for (raw, expected) in [
         (
-            "buzz://channel/018fdb5d-3a64-7c35-b5f9-4a23e1f9d2d9",
+            "ambush://channel/018fdb5d-3a64-7c35-b5f9-4a23e1f9d2d9",
             "018fdb5d-3a64-7c35-b5f9-4a23e1f9d2d9",
         ),
         (
-            "buzz://channel/580CA78B-9DAE-46F3-8854-BD671853BA32",
+            "ambush://channel/580CA78B-9DAE-46F3-8854-BD671853BA32",
             "580ca78b-9dae-46f3-8854-bd671853ba32",
         ),
     ] {
@@ -325,19 +328,19 @@ fn parse_channel_deep_link_accepts_v7_and_normalizes_uppercase() {
 #[test]
 fn parse_channel_deep_link_rejects_malformed_forms() {
     for raw in [
-        "buzz://channel",
-        "buzz://channel/",
-        "buzz://channel/one/two",
-        "buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32/not-hex",
-        "buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/extra",
-        "buzz://channel/580ca78b-9dae-46f3-8854-bd671853ba32/",
-        "buzz://channel/one?extra=true",
-        "buzz://channel/one#fragment",
-        "buzz://:pass@channel/580ca78b-9dae-46f3-8854-bd671853ba32/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "buzz://channel/not-a-uuid",
-        "buzz://channel/%2F",
-        "buzz://channel/%00",
+        "ambush://channel",
+        "ambush://channel/",
+        "ambush://channel/one/two",
+        "ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32/not-hex",
+        "ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/extra",
+        "ambush://channel/580ca78b-9dae-46f3-8854-bd671853ba32/",
+        "ambush://channel/one?extra=true",
+        "ambush://channel/one#fragment",
+        "ambush://:pass@channel/580ca78b-9dae-46f3-8854-bd671853ba32/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ambush://channel/not-a-uuid",
+        "ambush://channel/%2F",
+        "ambush://channel/%00",
     ] {
         assert!(parse_channel_deep_link(&Url::parse(raw).unwrap()).is_none());
     }
@@ -345,7 +348,7 @@ fn parse_channel_deep_link_rejects_malformed_forms() {
 
 #[test]
 fn parse_message_deep_link_extracts_required_params() {
-    let url = Url::parse("buzz://message?channel=abc&id=xyz").unwrap();
+    let url = Url::parse("ambush://message?channel=abc&id=xyz").unwrap();
     let payload = parse_message_deep_link(&url).expect("required params present");
     assert_eq!(payload["channelId"], "abc");
     assert_eq!(payload["messageId"], "xyz");
@@ -353,8 +356,8 @@ fn parse_message_deep_link_extracts_required_params() {
 }
 
 #[test]
-fn parse_message_deep_link_accepts_buzz_scheme() {
-    let url = Url::parse("buzz://message?channel=abc&id=xyz").unwrap();
+fn parse_message_deep_link_accepts_ambush_scheme() {
+    let url = Url::parse("ambush://message?channel=abc&id=xyz").unwrap();
     let payload = parse_message_deep_link(&url).expect("required params present");
     assert_eq!(payload["channelId"], "abc");
     assert_eq!(payload["messageId"], "xyz");
@@ -362,40 +365,40 @@ fn parse_message_deep_link_accepts_buzz_scheme() {
 
 #[test]
 fn parse_message_deep_link_includes_thread_root() {
-    let url = Url::parse("buzz://message?channel=abc&id=xyz&thread=root1").unwrap();
+    let url = Url::parse("ambush://message?channel=abc&id=xyz&thread=root1").unwrap();
     let payload = parse_message_deep_link(&url).expect("required params present");
     assert_eq!(payload["threadRootId"], "root1");
 }
 
 #[test]
 fn parse_message_deep_link_rejects_missing_id() {
-    let url = Url::parse("buzz://message?channel=abc").unwrap();
+    let url = Url::parse("ambush://message?channel=abc").unwrap();
     assert!(parse_message_deep_link(&url).is_none());
 }
 
 #[test]
 fn parse_message_deep_link_rejects_empty_channel() {
     // Regression: `channel=&id=foo` previously produced channelId: "".
-    let url = Url::parse("buzz://message?channel=&id=foo").unwrap();
+    let url = Url::parse("ambush://message?channel=&id=foo").unwrap();
     assert!(parse_message_deep_link(&url).is_none());
 }
 
 #[test]
 fn parse_message_deep_link_rejects_empty_id() {
-    let url = Url::parse("buzz://message?channel=abc&id=").unwrap();
+    let url = Url::parse("ambush://message?channel=abc&id=").unwrap();
     assert!(parse_message_deep_link(&url).is_none());
 }
 
 #[test]
 fn parse_message_deep_link_treats_empty_thread_as_absent() {
-    let url = Url::parse("buzz://message?channel=abc&id=xyz&thread=").unwrap();
+    let url = Url::parse("ambush://message?channel=abc&id=xyz&thread=").unwrap();
     let payload = parse_message_deep_link(&url).expect("required params present");
     assert!(payload["threadRootId"].is_null());
 }
 
 #[test]
 fn parse_join_deep_link_extracts_relay_and_code() {
-    let url = Url::parse("buzz://join?relay=wss%3A%2F%2Frelay.example&code=abc.def").unwrap();
+    let url = Url::parse("ambush://join?relay=wss%3A%2F%2Frelay.example&code=abc.def").unwrap();
     let payload = parse_join_deep_link(&url).expect("required params present");
     assert_eq!(payload["relayUrl"], "wss://relay.example");
     assert_eq!(payload["code"], "abc.def");
@@ -405,7 +408,7 @@ fn parse_join_deep_link_extracts_relay_and_code() {
 #[test]
 fn parse_join_deep_link_extracts_policy_receipt() {
     let url = Url::parse(
-        "buzz://join?relay=wss%3A%2F%2Frelay.example&code=abc.def&policy_receipt=receipt.value",
+        "ambush://join?relay=wss%3A%2F%2Frelay.example&code=abc.def&policy_receipt=receipt.value",
     )
     .unwrap();
     let payload = parse_join_deep_link(&url).expect("required params present");
@@ -414,25 +417,25 @@ fn parse_join_deep_link_extracts_policy_receipt() {
 
 #[test]
 fn parse_join_deep_link_rejects_missing_code() {
-    let url = Url::parse("buzz://join?relay=wss%3A%2F%2Frelay.example").unwrap();
+    let url = Url::parse("ambush://join?relay=wss%3A%2F%2Frelay.example").unwrap();
     assert!(parse_join_deep_link(&url).is_none());
 }
 
 #[test]
 fn parse_join_deep_link_rejects_empty_code() {
-    let url = Url::parse("buzz://join?relay=wss%3A%2F%2Frelay.example&code=").unwrap();
+    let url = Url::parse("ambush://join?relay=wss%3A%2F%2Frelay.example&code=").unwrap();
     assert!(parse_join_deep_link(&url).is_none());
 }
 
 #[test]
 fn parse_join_deep_link_rejects_missing_relay() {
-    let url = Url::parse("buzz://join?code=abc.def").unwrap();
+    let url = Url::parse("ambush://join?code=abc.def").unwrap();
     assert!(parse_join_deep_link(&url).is_none());
 }
 
 #[test]
 fn parse_join_deep_link_rejects_non_websocket_relay() {
-    let url = Url::parse("buzz://join?relay=https%3A%2F%2Frelay.example&code=abc.def").unwrap();
+    let url = Url::parse("ambush://join?relay=https%3A%2F%2Frelay.example&code=abc.def").unwrap();
     assert!(parse_join_deep_link(&url).is_none());
 }
 
@@ -442,9 +445,9 @@ fn parse_nostr_bind_deep_link_accepts_valid_url() {
     assert_eq!(payload.challenge_id, "550e8400-e29b-41d4-a716-446655440000");
     assert_eq!(payload.nonce, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567");
     assert_eq!(payload.verification_code, "123456");
-    assert_eq!(payload.audience, "buzz:nostr-identity");
+    assert_eq!(payload.audience, "ambush:nostr-identity");
     assert_eq!(payload.action, "bind_nostr_identity");
-    assert_eq!(payload.protocol, "buzz-nostr-identity");
+    assert_eq!(payload.protocol, "ambush-nostr-identity");
     assert_eq!(payload.version, "1");
     assert_eq!(payload.origin, "https://example.com");
     assert_eq!(payload.expires_at, "2999-01-01T00:00:00Z");
@@ -454,29 +457,29 @@ fn parse_nostr_bind_deep_link_accepts_valid_url() {
 
 #[test]
 fn parse_nostr_bind_deep_link_accepts_same_origin_callback_url() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard&callback_url=https%3A%2F%2Fexample.com%2Fbuzz%3FmockSession%3D1").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard&callback_url=https%3A%2F%2Fexample.com%2Fambush%3FmockSession%3D1").unwrap();
     let payload = parse_nostr_bind_deep_link(&url).unwrap();
     assert_eq!(
         payload.callback_url.as_deref(),
-        Some("https://example.com/buzz?mockSession=1")
+        Some("https://example.com/ambush?mockSession=1")
     );
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_accepts_browser_fragment_return() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=browser_fragment_v1&callback_url=https%3A%2F%2Fexample.com%2Fbuzz").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=browser_fragment_v1&callback_url=https%3A%2F%2Fexample.com%2Fambush").unwrap();
     let payload = parse_nostr_bind_deep_link(&url).unwrap();
 
     assert_eq!(payload.return_mode, "browser_fragment_v1");
     assert_eq!(
         payload.callback_url.as_deref(),
-        Some("https://example.com/buzz")
+        Some("https://example.com/ambush")
     );
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_requires_callback_for_browser_fragment_return() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=browser_fragment_v1").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=browser_fragment_v1").unwrap();
 
     assert_eq!(
         parse_nostr_bind_deep_link(&url).unwrap_err(),
@@ -486,91 +489,91 @@ fn parse_nostr_bind_deep_link_requires_callback_for_browser_fragment_return() {
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_cross_origin_callback_url() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard&callback_url=https%3A%2F%2Fevil.example%2Fbuzz").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard&callback_url=https%3A%2F%2Fevil.example%2Fambush").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_http_callback_url() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard&callback_url=http%3A%2F%2Fexample.com%2Fbuzz").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard&callback_url=http%3A%2F%2Fexample.com%2Fambush").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_missing_challenge_id() {
-    let url = Url::parse("buzz://nostr-bind?nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_empty_nonce() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_missing_verification_code() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_short_verification_code() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=12345&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=12345&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_long_verification_code() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=1234567&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=1234567&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_non_digit_verification_code() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=12345a&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=12345a&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_wrong_action() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=wrong&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=wrong&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_wrong_audience() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=other&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=other&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_non_https_origin() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=http%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=http%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_origin_with_path() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com%2Fbind&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com%2Fbind&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_origin_with_credentials() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fuser%40example.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fuser%40example.com&expires_at=2999-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_rejects_unsupported_return_mode() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=callback").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2999-01-01T00%3A00%3A00Z&return=callback").unwrap();
     assert!(parse_nostr_bind_deep_link(&url).is_err());
 }
 
 #[test]
 fn parse_nostr_bind_deep_link_accepts_expired_link_for_user_facing_error() {
-    let url = Url::parse("buzz://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=buzz%3Anostr-identity&action=bind_nostr_identity&protocol=buzz-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2000-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
+    let url = Url::parse("ambush://nostr-bind?challenge_id=550e8400-e29b-41d4-a716-446655440000&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&audience=ambush%3Anostr-identity&action=bind_nostr_identity&protocol=ambush-nostr-identity&version=1&origin=https%3A%2F%2Fexample.com&expires_at=2000-01-01T00%3A00%3A00Z&return=clipboard").unwrap();
     let payload = parse_nostr_bind_deep_link(&url).unwrap();
     assert_eq!(payload.expires_at, "2000-01-01T00:00:00Z");
 }

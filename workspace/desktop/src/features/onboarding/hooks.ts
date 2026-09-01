@@ -177,7 +177,7 @@ async function refreshChannelsCache(
   await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
 }
 
-const ONBOARDING_COMPLETION_STORAGE_KEY = "buzz-onboarding-complete.v1";
+const ONBOARDING_COMPLETION_STORAGE_KEY = "ambush-onboarding-complete.v1";
 type OnboardingGateStage = "blocking" | "onboarding" | "ready";
 
 type UseFirstRunOnboardingGateOptions = {

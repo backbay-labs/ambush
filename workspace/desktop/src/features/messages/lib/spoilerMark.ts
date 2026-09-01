@@ -1,9 +1,9 @@
 import { Mark, mergeAttributes } from "@tiptap/core";
 
 export const SPOILER_MARK_NAME = "spoiler";
-const SPOILER_MARKDOWN_RULE = "buzz_spoiler";
-const SPOILER_OPEN_TOKEN = "buzz_spoiler_open";
-const SPOILER_CLOSE_TOKEN = "buzz_spoiler_close";
+const SPOILER_MARKDOWN_RULE = "ambush_spoiler";
+const SPOILER_OPEN_TOKEN = "ambush_spoiler_open";
+const SPOILER_CLOSE_TOKEN = "ambush_spoiler_close";
 const PIPE_CHAR = 0x7c;
 
 export function registerSpoilerMarkdownIt(
@@ -49,7 +49,7 @@ export function registerSpoilerMarkdownIt(
   // the composer WYSIWYG surface.
   md.inline.ruler.before("emphasis", SPOILER_MARKDOWN_RULE, rule);
   md.renderer.rules[SPOILER_OPEN_TOKEN] = () =>
-    '<span data-spoiler="" class="buzz-spoiler">';
+    '<span data-spoiler="" class="ambush-spoiler">';
   md.renderer.rules[SPOILER_CLOSE_TOKEN] = () => "</span>";
 }
 
@@ -85,7 +85,7 @@ export const SpoilerMark = Mark.create({
       "span",
       mergeAttributes(HTMLAttributes, {
         "data-spoiler": "",
-        class: "buzz-spoiler",
+        class: "ambush-spoiler",
       }),
       0,
     ];

@@ -5,11 +5,11 @@ pub(crate) const INITIAL_RENDER_READY_EVENT: &str = "initial-render-ready";
 
 pub(crate) fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
     if let Err(error) = window.show() {
-        eprintln!("buzz-desktop: failed to reveal main window: {error}");
+        eprintln!("ambush-desktop: failed to reveal main window: {error}");
         return;
     }
     if let Err(error) = window.set_focus() {
-        eprintln!("buzz-desktop: failed to focus main window: {error}");
+        eprintln!("ambush-desktop: failed to focus main window: {error}");
     }
 }
 
@@ -26,7 +26,7 @@ pub(crate) fn set_initial_window_backing<R: tauri::Runtime>(window: &tauri::Wind
     // Write an opaque dark backing so the previous app cannot show through
     // before WebKit submits its first composited surface.
     if let Err(error) = window.set_background_color(Some(tauri::window::Color(17, 21, 24, 255))) {
-        eprintln!("buzz-desktop: failed to set initial window backing: {error}");
+        eprintln!("ambush-desktop: failed to set initial window backing: {error}");
     }
 }
 
@@ -38,7 +38,7 @@ pub(crate) async fn clear_initial_window_backing<R: tauri::Runtime>(window: &tau
     // written at reveal. Targets the Window (NSWindow) layer only; webview
     // canvas and glass state are unaffected.
     if let Err(error) = window.set_background_color(None) {
-        eprintln!("buzz-desktop: failed to clear initial window backing: {error}");
+        eprintln!("ambush-desktop: failed to clear initial window backing: {error}");
     }
 }
 
@@ -74,5 +74,5 @@ pub(crate) async fn wait_for_stable_initial_window_geometry<R: tauri::Runtime>(
         tokio::time::sleep(std::time::Duration::from_millis(16)).await;
     }
 
-    eprintln!("buzz-desktop: initial window geometry did not settle before reveal timeout");
+    eprintln!("ambush-desktop: initial window geometry did not settle before reveal timeout");
 }

@@ -1,16 +1,16 @@
 import 'dart:convert';
 
-/// User-visible Buzz message kinds. This mirrors
+/// User-visible Ambush message kinds. This mirrors
 /// `EventKind.channelMessageEventKinds` without importing feature code into
 /// the shared push layer.
-const buzzPushEligibleKinds = [9, 40002, 45001, 45003];
-const buzzPushSelfDirectedKinds = buzzPushEligibleKinds;
-const buzzPushRenderableKinds = buzzPushEligibleKinds;
-const buzzPushChannelKinds = [9];
-const buzzPushChannelChunkSize = 50;
-const buzzPushMaxSubscriptions = 16;
-const buzzPushMaxIgnoreFilters = 8;
-const buzzPushHellthreadParticipantLimit = 20;
+const ambushPushEligibleKinds = [9, 40002, 45001, 45003];
+const ambushPushSelfDirectedKinds = ambushPushEligibleKinds;
+const ambushPushRenderableKinds = ambushPushEligibleKinds;
+const ambushPushChannelKinds = [9];
+const ambushPushChannelChunkSize = 50;
+const ambushPushMaxSubscriptions = 16;
+const ambushPushMaxIgnoreFilters = 8;
+const ambushPushHellthreadParticipantLimit = 20;
 
 const _supportedNotificationClasses = {'default'};
 const _filterKeys = {'kinds', 'authors', '#p', '#h', '#e'};
@@ -19,16 +19,16 @@ final _channelIdPattern = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
 );
 
-enum BuzzPushLeaseSubscriptionAuthority { desired, accepted }
+enum AmbushPushLeaseSubscriptionAuthority { desired, accepted }
 
-class BuzzPushFilter {
+class AmbushPushFilter {
   final List<int> kinds;
   final List<String>? authors;
   final List<String>? pTags;
   final List<String>? hTags;
   final List<String>? eTags;
 
-  BuzzPushFilter({
+  AmbushPushFilter({
     required Iterable<int> kinds,
     Iterable<String>? authors,
     Iterable<String>? pTags,
@@ -50,9 +50,9 @@ class BuzzPushFilter {
     if (eTags != null) '#e': eTags,
   };
 
-  factory BuzzPushFilter.fromJson(Map<String, dynamic> json) {
+  factory AmbushPushFilter.fromJson(Map<String, dynamic> json) {
     _rejectUnknownKeys(json, _filterKeys, 'push filter');
-    return BuzzPushFilter(
+    return AmbushPushFilter(
       kinds: _intList(json, 'kinds'),
       authors: _optionalStringList(json, 'authors'),
       pTags: _optionalStringList(json, '#p'),
@@ -63,7 +63,7 @@ class BuzzPushFilter {
 
   void _validate() {
     if (kinds.isEmpty ||
-        kinds.any((kind) => !buzzPushEligibleKinds.contains(kind))) {
+        kinds.any((kind) => !ambushPushEligibleKinds.contains(kind))) {
       throw const FormatException('Push filter contains invalid kinds.');
     }
     for (final value in [...?authors, ...?pTags, ...?eTags]) {
@@ -83,33 +83,33 @@ class BuzzPushFilter {
   }
 }
 
-class BuzzPushSuppression {
+class AmbushPushSuppression {
   final int pTagsMax;
 
-  const BuzzPushSuppression({required this.pTagsMax}) : assert(pTagsMax > 0);
+  const AmbushPushSuppression({required this.pTagsMax}) : assert(pTagsMax > 0);
 
   Map<String, dynamic> toJson() => {'p_tags_max': pTagsMax};
 
-  factory BuzzPushSuppression.fromJson(Map<String, dynamic> json) {
+  factory AmbushPushSuppression.fromJson(Map<String, dynamic> json) {
     _rejectUnknownKeys(json, const {'p_tags_max'}, 'push suppression');
     final value = json['p_tags_max'];
     if (value is! int || value <= 0) {
       throw const FormatException('p_tags_max must be a positive integer.');
     }
-    return BuzzPushSuppression(pTagsMax: value);
+    return AmbushPushSuppression(pTagsMax: value);
   }
 }
 
-class BuzzPushSubscription {
-  final BuzzPushFilter filter;
+class AmbushPushSubscription {
+  final AmbushPushFilter filter;
   final String notificationClass;
-  final List<BuzzPushFilter> ignore;
-  final BuzzPushSuppression? suppress;
+  final List<AmbushPushFilter> ignore;
+  final AmbushPushSuppression? suppress;
 
-  BuzzPushSubscription({
+  AmbushPushSubscription({
     required this.filter,
     required this.notificationClass,
-    Iterable<BuzzPushFilter> ignore = const [],
+    Iterable<AmbushPushFilter> ignore = const [],
     this.suppress,
   }) : ignore = List.unmodifiable(ignore) {
     if (!_supportedNotificationClasses.contains(notificationClass)) {
@@ -120,7 +120,7 @@ class BuzzPushSubscription {
         filter.hTags == null) {
       throw const FormatException('Push subscription filter is not narrowed.');
     }
-    if (this.ignore.length > buzzPushMaxIgnoreFilters) {
+    if (this.ignore.length > ambushPushMaxIgnoreFilters) {
       throw const FormatException(
         'Push subscription has too many ignore filters.',
       );
@@ -135,7 +135,7 @@ class BuzzPushSubscription {
     if (suppress != null) 'suppress': suppress!.toJson(),
   };
 
-  factory BuzzPushSubscription.fromJson(Map<String, dynamic> json) {
+  factory AmbushPushSubscription.fromJson(Map<String, dynamic> json) {
     _rejectUnknownKeys(json, const {
       'filter',
       'class',
@@ -157,19 +157,19 @@ class BuzzPushSubscription {
         'Push subscription suppress must be an object.',
       );
     }
-    return BuzzPushSubscription(
-      filter: BuzzPushFilter.fromJson(Map<String, dynamic>.from(filter)),
+    return AmbushPushSubscription(
+      filter: AmbushPushFilter.fromJson(Map<String, dynamic>.from(filter)),
       notificationClass: notificationClass,
       ignore: [
         for (final raw in ignore as List<dynamic>? ?? const [])
           if (raw is Map)
-            BuzzPushFilter.fromJson(Map<String, dynamic>.from(raw))
+            AmbushPushFilter.fromJson(Map<String, dynamic>.from(raw))
           else
             throw const FormatException('Malformed push ignore filter.'),
       ],
       suppress: suppress == null
           ? null
-          : BuzzPushSuppression.fromJson(Map<String, dynamic>.from(suppress)),
+          : AmbushPushSuppression.fromJson(Map<String, dynamic>.from(suppress)),
     );
   }
 }
@@ -177,10 +177,10 @@ class BuzzPushSubscription {
 /// Desired and relay-accepted lease subscriptions are intentionally separate.
 /// Keeping both sets makes relay rejection or expiry detectable instead of
 /// assuming the desired lease was accepted unchanged.
-class BuzzPushLeaseSubscriptionState {
-  final BuzzPushLeaseSubscriptionAuthority authority;
-  final List<BuzzPushSubscription> desired;
-  final List<BuzzPushSubscription>? accepted;
+class AmbushPushLeaseSubscriptionState {
+  final AmbushPushLeaseSubscriptionAuthority authority;
+  final List<AmbushPushSubscription> desired;
+  final List<AmbushPushSubscription>? accepted;
 
   /// Monotonic generation of the relay-facing kind-30350 lease.
   final int? acceptedGeneration;
@@ -197,7 +197,7 @@ class BuzzPushLeaseSubscriptionState {
   /// lost is safely superseded without weakening strict relay monotonicity.
   final int? pendingTombstoneGeneration;
 
-  const BuzzPushLeaseSubscriptionState.desired({
+  const AmbushPushLeaseSubscriptionState.desired({
     this.desired = const [],
     this.accepted,
     this.acceptedGeneration,
@@ -209,15 +209,15 @@ class BuzzPushLeaseSubscriptionState {
                  generationCursor != null &&
                  pendingTombstoneGeneration <= generationCursor),
        ),
-       authority = BuzzPushLeaseSubscriptionAuthority.desired;
+       authority = AmbushPushLeaseSubscriptionAuthority.desired;
 
-  BuzzPushLeaseSubscriptionState.accepted({
-    required Iterable<BuzzPushSubscription> desired,
-    required Iterable<BuzzPushSubscription> acceptedSubscriptions,
+  AmbushPushLeaseSubscriptionState.accepted({
+    required Iterable<AmbushPushSubscription> desired,
+    required Iterable<AmbushPushSubscription> acceptedSubscriptions,
     required this.acceptedGeneration,
     this.generationCursor,
     this.pendingTombstoneGeneration,
-  }) : authority = BuzzPushLeaseSubscriptionAuthority.accepted,
+  }) : authority = AmbushPushLeaseSubscriptionAuthority.accepted,
        desired = List.unmodifiable(desired),
        accepted = List.unmodifiable(acceptedSubscriptions) {
     if (acceptedGeneration == null || acceptedGeneration! <= 0) {
@@ -245,26 +245,26 @@ class BuzzPushLeaseSubscriptionState {
     }
   }
 
-  List<BuzzPushSubscription> get authoritative => switch (authority) {
-    BuzzPushLeaseSubscriptionAuthority.desired => desired,
-    BuzzPushLeaseSubscriptionAuthority.accepted => accepted!,
+  List<AmbushPushSubscription> get authoritative => switch (authority) {
+    AmbushPushLeaseSubscriptionAuthority.desired => desired,
+    AmbushPushLeaseSubscriptionAuthority.accepted => accepted!,
   };
 
-  BuzzPushLeaseSubscriptionState withDesired(
-    Iterable<BuzzPushSubscription> subscriptions,
+  AmbushPushLeaseSubscriptionState withDesired(
+    Iterable<AmbushPushSubscription> subscriptions,
   ) {
-    final updated = List<BuzzPushSubscription>.unmodifiable(subscriptions);
+    final updated = List<AmbushPushSubscription>.unmodifiable(subscriptions);
     return switch (authority) {
-      BuzzPushLeaseSubscriptionAuthority.desired =>
-        BuzzPushLeaseSubscriptionState.desired(
+      AmbushPushLeaseSubscriptionAuthority.desired =>
+        AmbushPushLeaseSubscriptionState.desired(
           desired: updated,
           accepted: accepted,
           acceptedGeneration: acceptedGeneration,
           generationCursor: generationCursor,
           pendingTombstoneGeneration: pendingTombstoneGeneration,
         ),
-      BuzzPushLeaseSubscriptionAuthority.accepted =>
-        BuzzPushLeaseSubscriptionState.accepted(
+      AmbushPushLeaseSubscriptionAuthority.accepted =>
+        AmbushPushLeaseSubscriptionState.accepted(
           desired: updated,
           acceptedSubscriptions: accepted!,
           acceptedGeneration: acceptedGeneration,
@@ -274,10 +274,10 @@ class BuzzPushLeaseSubscriptionState {
     };
   }
 
-  BuzzPushLeaseSubscriptionState withAccepted({
-    required Iterable<BuzzPushSubscription> subscriptions,
+  AmbushPushLeaseSubscriptionState withAccepted({
+    required Iterable<AmbushPushSubscription> subscriptions,
     required int generation,
-  }) => BuzzPushLeaseSubscriptionState.accepted(
+  }) => AmbushPushLeaseSubscriptionState.accepted(
     desired: desired,
     acceptedSubscriptions: subscriptions,
     acceptedGeneration: generation,
@@ -291,23 +291,23 @@ class BuzzPushLeaseSubscriptionState {
         : null,
   );
 
-  BuzzPushLeaseSubscriptionState withReservedGeneration(int generation) {
+  AmbushPushLeaseSubscriptionState withReservedGeneration(int generation) {
     if (generation <= (generationCursor ?? acceptedGeneration ?? 0)) {
       throw const FormatException(
         'Reserved push lease generation must advance monotonically.',
       );
     }
     return switch (authority) {
-      BuzzPushLeaseSubscriptionAuthority.desired =>
-        BuzzPushLeaseSubscriptionState.desired(
+      AmbushPushLeaseSubscriptionAuthority.desired =>
+        AmbushPushLeaseSubscriptionState.desired(
           desired: desired,
           accepted: accepted,
           acceptedGeneration: acceptedGeneration,
           generationCursor: generation,
           pendingTombstoneGeneration: pendingTombstoneGeneration,
         ),
-      BuzzPushLeaseSubscriptionAuthority.accepted =>
-        BuzzPushLeaseSubscriptionState.accepted(
+      AmbushPushLeaseSubscriptionAuthority.accepted =>
+        AmbushPushLeaseSubscriptionState.accepted(
           desired: desired,
           acceptedSubscriptions: accepted!,
           acceptedGeneration: acceptedGeneration,
@@ -317,13 +317,13 @@ class BuzzPushLeaseSubscriptionState {
     };
   }
 
-  BuzzPushLeaseSubscriptionState withPendingTombstone(int generation) {
+  AmbushPushLeaseSubscriptionState withPendingTombstone(int generation) {
     if (generation <= (generationCursor ?? acceptedGeneration ?? 0)) {
       throw const FormatException(
         'Pending push tombstone generation must advance monotonically.',
       );
     }
-    return BuzzPushLeaseSubscriptionState.desired(
+    return AmbushPushLeaseSubscriptionState.desired(
       desired: desired,
       accepted: accepted,
       acceptedGeneration: acceptedGeneration,
@@ -334,12 +334,12 @@ class BuzzPushLeaseSubscriptionState {
 
   /// Migrates a generation reserved by an older client before the explicit
   /// tombstone journal field existed.
-  BuzzPushLeaseSubscriptionState withPendingTombstoneAtCursor() {
+  AmbushPushLeaseSubscriptionState withPendingTombstoneAtCursor() {
     final generation = generationCursor;
     if (generation == null || generation <= (acceptedGeneration ?? 0)) {
       return this;
     }
-    return BuzzPushLeaseSubscriptionState.desired(
+    return AmbushPushLeaseSubscriptionState.desired(
       desired: desired,
       accepted: accepted,
       acceptedGeneration: acceptedGeneration,
@@ -348,12 +348,12 @@ class BuzzPushLeaseSubscriptionState {
     );
   }
 
-  BuzzPushLeaseSubscriptionState withAcceptedTombstone(int generation) {
+  AmbushPushLeaseSubscriptionState withAcceptedTombstone(int generation) {
     if (generation != pendingTombstoneGeneration ||
         generation < (acceptedGeneration ?? 0)) {
       return this;
     }
-    return BuzzPushLeaseSubscriptionState.desired(
+    return AmbushPushLeaseSubscriptionState.desired(
       desired: desired,
       acceptedGeneration: generation,
       generationCursor:
@@ -374,7 +374,7 @@ class BuzzPushLeaseSubscriptionState {
       'pendingTombstoneGeneration': pendingTombstoneGeneration,
   };
 
-  factory BuzzPushLeaseSubscriptionState.fromJson(Map<String, dynamic> json) {
+  factory AmbushPushLeaseSubscriptionState.fromJson(Map<String, dynamic> json) {
     _rejectUnknownKeys(json, const {
       'authority',
       'desired',
@@ -422,7 +422,7 @@ class BuzzPushLeaseSubscriptionState {
       );
     }
     return switch (authority) {
-      'desired' => BuzzPushLeaseSubscriptionState.desired(
+      'desired' => AmbushPushLeaseSubscriptionState.desired(
         desired: desired,
         accepted: accepted,
         acceptedGeneration: acceptedGeneration as int?,
@@ -430,7 +430,7 @@ class BuzzPushLeaseSubscriptionState {
         pendingTombstoneGeneration: pendingTombstoneGeneration as int?,
       ),
       'accepted' when accepted != null && acceptedGeneration is int =>
-        BuzzPushLeaseSubscriptionState.accepted(
+        AmbushPushLeaseSubscriptionState.accepted(
           desired: desired,
           acceptedSubscriptions: accepted,
           acceptedGeneration: acceptedGeneration,
@@ -445,7 +445,7 @@ class BuzzPushLeaseSubscriptionState {
   }
 }
 
-List<BuzzPushSubscription> buildDesiredBuzzPushSubscriptions({
+List<AmbushPushSubscription> buildDesiredAmbushPushSubscriptions({
   required String myPubkey,
   Iterable<String> channelIds = const [],
   Iterable<String> mutedChannelIds = const [],
@@ -459,28 +459,28 @@ List<BuzzPushSubscription> buildDesiredBuzzPushSubscriptions({
   final normalizedMuted = mutedChannelIds.map(_normalizeChannelID).toSet();
   final activeMuted =
       normalizedMuted.intersection(normalizedChannelIds).toList()..sort();
-  final mutedIgnoreFilters = <BuzzPushFilter>[];
-  for (final chunk in _chunks(activeMuted, buzzPushChannelChunkSize)) {
+  final mutedIgnoreFilters = <AmbushPushFilter>[];
+  for (final chunk in _chunks(activeMuted, ambushPushChannelChunkSize)) {
     mutedIgnoreFilters.add(
-      BuzzPushFilter(kinds: buzzPushChannelKinds, hTags: chunk),
+      AmbushPushFilter(kinds: ambushPushChannelKinds, hTags: chunk),
     );
   }
-  if (mutedIgnoreFilters.length + 1 > buzzPushMaxIgnoreFilters) {
+  if (mutedIgnoreFilters.length + 1 > ambushPushMaxIgnoreFilters) {
     throw const FormatException('Too many muted channels for a push lease.');
   }
 
-  final selfAuthored = BuzzPushFilter(
-    kinds: buzzPushRenderableKinds,
+  final selfAuthored = AmbushPushFilter(
+    kinds: ambushPushRenderableKinds,
     authors: [normalizedPubkey],
   );
   final ignores = [selfAuthored, ...mutedIgnoreFilters];
-  const suppression = BuzzPushSuppression(
-    pTagsMax: buzzPushHellthreadParticipantLimit,
+  const suppression = AmbushPushSuppression(
+    pTagsMax: ambushPushHellthreadParticipantLimit,
   );
-  final subscriptions = <BuzzPushSubscription>[
-    BuzzPushSubscription(
-      filter: BuzzPushFilter(
-        kinds: buzzPushSelfDirectedKinds,
+  final subscriptions = <AmbushPushSubscription>[
+    AmbushPushSubscription(
+      filter: AmbushPushFilter(
+        kinds: ambushPushSelfDirectedKinds,
         pTags: [normalizedPubkey],
       ),
       notificationClass: 'default',
@@ -491,30 +491,30 @@ List<BuzzPushSubscription> buildDesiredBuzzPushSubscriptions({
 
   final channels = normalizedChannelIds.difference(normalizedMuted).toList()
     ..sort();
-  for (final chunk in _chunks(channels, buzzPushChannelChunkSize)) {
+  for (final chunk in _chunks(channels, ambushPushChannelChunkSize)) {
     subscriptions.add(
-      BuzzPushSubscription(
-        filter: BuzzPushFilter(kinds: buzzPushChannelKinds, hTags: chunk),
+      AmbushPushSubscription(
+        filter: AmbushPushFilter(kinds: ambushPushChannelKinds, hTags: chunk),
         notificationClass: 'default',
         ignore: ignores,
         suppress: suppression,
       ),
     );
   }
-  if (subscriptions.length > buzzPushMaxSubscriptions) {
+  if (subscriptions.length > ambushPushMaxSubscriptions) {
     throw const FormatException('Too many channels for a push lease.');
   }
   return List.unmodifiable(subscriptions);
 }
 
-String buzzPushSubscriptionsFingerprint(
-  List<BuzzPushSubscription> subscriptions,
+String ambushPushSubscriptionsFingerprint(
+  List<AmbushPushSubscription> subscriptions,
 ) => jsonEncode([
   for (final subscription in subscriptions) subscription.toJson(),
 ]);
 
-String buzzPushSubscriptionStateFingerprint(
-  BuzzPushLeaseSubscriptionState state,
+String ambushPushSubscriptionStateFingerprint(
+  AmbushPushLeaseSubscriptionState state,
 ) => jsonEncode(state.toJson());
 
 List<List<String>> _chunks(List<String> values, int size) => [
@@ -550,7 +550,7 @@ List<String>? _optionalStringList(Map<String, dynamic> json, String key) {
   return raw.cast<String>();
 }
 
-List<BuzzPushSubscription> _subscriptionList(
+List<AmbushPushSubscription> _subscriptionList(
   Object? raw,
   String label, {
   bool allowEmpty = false,
@@ -561,7 +561,7 @@ List<BuzzPushSubscription> _subscriptionList(
   return [
     for (final item in raw)
       if (item is Map)
-        BuzzPushSubscription.fromJson(Map<String, dynamic>.from(item))
+        AmbushPushSubscription.fromJson(Map<String, dynamic>.from(item))
       else
         throw FormatException('Malformed $label subscription.'),
   ];

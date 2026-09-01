@@ -1,4 +1,4 @@
-import 'package:buzz/features/channels/channel_sections/channel_sections_storage.dart';
+import 'package:ambush/features/channels/channel_sections/channel_sections_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

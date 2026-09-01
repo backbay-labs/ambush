@@ -53,8 +53,8 @@ export function AgentContextPayloadPreview({
         >
           <p className="mb-2 text-xs text-muted-foreground">
             This exact text is appended to your message before it is signed and
-            sent. Quoted values are untrusted workspace metadata — Buzz does not
-            verify or rewrite them.
+            sent. Quoted values are untrusted workspace metadata — Ambush does
+            not verify or rewrite them.
           </p>
           <pre
             className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-foreground"

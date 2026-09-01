@@ -97,7 +97,7 @@ test("foreground paints and handles a sidebar action before resume fetches", asy
       };
       type QueryClientLike = { getQueryCache: () => QueryCacheLike };
       const client =
-        window.__BUZZ_E2E_QUERY_CLIENT__ as unknown as QueryClientLike;
+        window.__AMBUSH_E2E_QUERY_CLIENT__ as unknown as QueryClientLike;
       if (!client) throw new Error("E2E query client is unavailable.");
 
       const families = new Set(representativeFamilies);

@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:buzz/shared/relay/relay.dart';
-import 'package:buzz/shared/theme/theme.dart';
+import 'package:ambush/shared/relay/relay.dart';
+import 'package:ambush/shared/theme/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   const local = CommunityThemePreference(
-    theme: 'buzz',
+    theme: 'ambush',
     accent: '#3b82f6',
     followSystem: true,
   );
@@ -115,7 +115,7 @@ void main() {
       );
 
       await manager.initialize();
-      expect(applied.single.theme, 'buzz');
+      expect(applied.single.theme, 'ambush');
 
       session.emit(
         _event(

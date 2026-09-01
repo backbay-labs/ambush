@@ -64,7 +64,7 @@ export function AnimatedAvatarCameraControls({
             className={cn(
               "h-12 w-full rounded-xl",
               compact &&
-                "bg-[rgb(var(--buzz-onboarding-avatar-accent-bg))] text-[rgb(var(--buzz-onboarding-avatar-accent-fg))] hover:bg-[rgb(var(--buzz-onboarding-avatar-accent-bg))]",
+                "bg-[rgb(var(--ambush-onboarding-avatar-accent-bg))] text-[rgb(var(--ambush-onboarding-avatar-accent-fg))] hover:bg-[rgb(var(--ambush-onboarding-avatar-accent-bg))]",
             )}
             data-testid={`${testIdPrefix}-animated-retry`}
             disabled={disabled}
@@ -78,7 +78,7 @@ export function AnimatedAvatarCameraControls({
             asChild
             className={cn(
               compact
-                ? "h-[2.375rem] rounded-full bg-[rgb(var(--buzz-onboarding-avatar-action-bg))] px-6 text-sm font-medium text-[rgb(var(--buzz-onboarding-avatar-action-fg))] hover:bg-[color:rgb(var(--buzz-onboarding-avatar-action-bg)_/_0.9)]"
+                ? "h-[2.375rem] rounded-full bg-[rgb(var(--ambush-onboarding-avatar-action-bg))] px-6 text-sm font-medium text-[rgb(var(--ambush-onboarding-avatar-action-fg))] hover:bg-[color:rgb(var(--ambush-onboarding-avatar-action-bg)_/_0.9)]"
                 : "h-12 w-full rounded-xl",
             )}
             data-testid={`${testIdPrefix}-animated-record`}

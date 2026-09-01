@@ -21,7 +21,7 @@
 
 import { normalizeRelayUrl } from "@/shared/lib/normalizeRelayUrl";
 
-const PREFIX = "buzz-sync-watermark.v1";
+const PREFIX = "ambush-sync-watermark.v1";
 
 /**
  * Tri-state result returned by every `fetchRemote*()` method.

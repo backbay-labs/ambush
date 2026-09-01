@@ -197,7 +197,8 @@ fn transcode_to_mp4_with_cancellation(
     cancellation: Option<&CancellationToken>,
 ) -> Result<std::path::PathBuf, String> {
     // UUID-based temp path — unique across concurrent uploads.
-    let output = std::env::temp_dir().join(format!("buzz-transcode-{}.mp4", uuid::Uuid::new_v4()));
+    let output =
+        std::env::temp_dir().join(format!("ambush-transcode-{}.mp4", uuid::Uuid::new_v4()));
 
     let result = run_ffmpeg_with_cancellation(
         ffmpeg_command(ffmpeg)
@@ -286,7 +287,7 @@ fn transcode_heic_to_jpeg(
     cancellation: Option<&CancellationToken>,
 ) -> Result<std::path::PathBuf, String> {
     // UUID-based temp path — unique across concurrent uploads.
-    let output = std::env::temp_dir().join(format!("buzz-heic-{}.jpg", uuid::Uuid::new_v4()));
+    let output = std::env::temp_dir().join(format!("ambush-heic-{}.jpg", uuid::Uuid::new_v4()));
 
     // Single-frame image decode — 60s is generous even for large HEICs.
     let heic_timeout = std::time::Duration::from_secs(60);
@@ -372,7 +373,7 @@ fn extract_poster_frame_with_cancellation(
     ffmpeg: &std::path::Path,
     cancellation: Option<&CancellationToken>,
 ) -> Result<std::path::PathBuf, String> {
-    let output = std::env::temp_dir().join(format!("buzz-poster-{}.jpg", uuid::Uuid::new_v4()));
+    let output = std::env::temp_dir().join(format!("ambush-poster-{}.jpg", uuid::Uuid::new_v4()));
 
     // Poster extraction is a single-frame decode — 30s is generous.
     let poster_timeout = std::time::Duration::from_secs(30);
@@ -407,7 +408,7 @@ fn extract_poster_frame_with_cancellation(
     {
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
-            eprintln!("buzz-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
+            eprintln!("ambush-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
         }
         let _ = std::fs::remove_file(&output);
         let fallback = run_ffmpeg_with_cancellation(
@@ -432,7 +433,7 @@ fn extract_poster_frame_with_cancellation(
 
         if !fallback.status.success() || !output.exists() {
             let stderr = String::from_utf8_lossy(&fallback.stderr);
-            eprintln!("buzz-desktop: poster frame extraction failed: {stderr}");
+            eprintln!("ambush-desktop: poster frame extraction failed: {stderr}");
             let _ = std::fs::remove_file(&output);
             return Err("ffmpeg could not extract a poster frame".to_string());
         }
@@ -467,7 +468,7 @@ pub(super) fn transcode_and_extract_poster_with_cancellation(
                 bytes
             }
             Err(e) => {
-                eprintln!("buzz-desktop: poster extraction failed (non-fatal): {e}");
+                eprintln!("ambush-desktop: poster extraction failed (non-fatal): {e}");
                 None
             }
         };
@@ -619,7 +620,7 @@ mod tests {
             return;
         };
         let source =
-            std::env::temp_dir().join(format!("buzz-metadata-test-{}.mp4", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("ambush-metadata-test-{}.mp4", uuid::Uuid::new_v4()));
         let generated = std::process::Command::new(&ffmpeg)
             .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
             .arg("testsrc2=size=64x64:rate=1")
@@ -667,7 +668,7 @@ mod tests {
 
         // Generate a small HEIC test image from a synthetic color source.
         let heic_path =
-            std::env::temp_dir().join(format!("buzz-test-{}.heic", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("ambush-test-{}.heic", uuid::Uuid::new_v4()));
         let gen = std::process::Command::new(&ffmpeg)
             .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
             .arg("color=c=red:s=64x64:d=1")

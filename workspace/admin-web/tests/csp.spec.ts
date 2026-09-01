@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 
 const ROUTER_RS = fileURLToPath(
-  new URL("../../crates/buzz-relay/src/router.rs", import.meta.url),
+  new URL("../../crates/ambush-relay/src/router.rs", import.meta.url),
 );
 
 /// The exact policy the relay serves on admin SPA documents. Read from the

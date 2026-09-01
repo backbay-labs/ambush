@@ -1,7 +1,7 @@
 import * as React from "react";
 
-const DONE_STORAGE_KEY = "buzz-home-feed-done.v1";
-const UNREAD_STORAGE_KEY = "buzz-home-feed-unread.v1";
+const DONE_STORAGE_KEY = "ambush-home-feed-done.v1";
+const UNREAD_STORAGE_KEY = "ambush-home-feed-unread.v1";
 const MAX_ITEMS = 500;
 
 function doneStorageKey(pubkey: string) {

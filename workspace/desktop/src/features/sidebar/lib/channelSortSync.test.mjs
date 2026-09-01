@@ -119,7 +119,7 @@ test("revert-fix: absent fetch with prior watermark blocks seed-publish via boot
   mock.method(relayClient, "publishEvent", () => Promise.resolve());
   const fw = makeFakeWindow();
   fw.localStorage.setItem(
-    `buzz-sync-watermark.v1:channel-sort:pk-stale:${RELAY_KEY}`,
+    `ambush-sync-watermark.v1:channel-sort:pk-stale:${RELAY_KEY}`,
     "1700000000",
   );
   const restore = installFakeWindow(fw);
@@ -128,7 +128,7 @@ test("revert-fix: absent fetch with prior watermark blocks seed-publish via boot
     assert.ok(
       Number(
         fw.localStorage.getItem(
-          `buzz-sync-watermark.v1:channel-sort:pk-stale:${RELAY_KEY}`,
+          `ambush-sync-watermark.v1:channel-sort:pk-stale:${RELAY_KEY}`,
         ) ?? "0",
       ) > 0,
     );
@@ -152,7 +152,7 @@ test("revert-fix: absent fetch with zero watermark seeds via bootstrap (first-sy
     const manager = new ChannelSortSyncManager("pk-fresh", RELAY);
     assert.equal(
       fw.localStorage.getItem(
-        `buzz-sync-watermark.v1:channel-sort:pk-fresh:${RELAY_KEY}`,
+        `ambush-sync-watermark.v1:channel-sort:pk-fresh:${RELAY_KEY}`,
       ),
       null,
     );
@@ -195,7 +195,7 @@ test("revert-fix: sort LWW — newer decryptable pre-publish event selected afte
     assert.ok(
       Number(
         fw.localStorage.getItem(
-          `buzz-sync-watermark.v1:channel-sort:pk-lww:${RELAY_KEY}`,
+          `ambush-sync-watermark.v1:channel-sort:pk-lww:${RELAY_KEY}`,
         ) ?? "0",
       ) >= 100,
     );
@@ -230,7 +230,7 @@ test("revert-fix: undecryptable live event advances watermark before decrypt att
     const manager = new ChannelSortSyncManager("pk-live", RELAY);
     assert.equal(
       fw.localStorage.getItem(
-        `buzz-sync-watermark.v1:channel-sort:pk-live:${RELAY_KEY}`,
+        `ambush-sync-watermark.v1:channel-sort:pk-live:${RELAY_KEY}`,
       ),
       null,
       "watermark starts absent",
@@ -250,7 +250,7 @@ test("revert-fix: undecryptable live event advances watermark before decrypt att
     assert.ok(
       Number(
         fw.localStorage.getItem(
-          `buzz-sync-watermark.v1:channel-sort:pk-live:${RELAY_KEY}`,
+          `ambush-sync-watermark.v1:channel-sort:pk-live:${RELAY_KEY}`,
         ) ?? "0",
       ) >= 1700005555,
       "live undecryptable event must advance the watermark before decrypt is attempted",

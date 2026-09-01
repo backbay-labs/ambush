@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:nostr/nostr.dart' as nostr;
-import 'package:buzz/features/channels/channel_management_provider.dart';
-import 'package:buzz/features/channels/mobile_huddle_controller.dart';
-import 'package:buzz/shared/relay/relay.dart';
+import 'package:ambush/features/channels/channel_management_provider.dart';
+import 'package:ambush/features/channels/mobile_huddle_controller.dart';
+import 'package:ambush/shared/relay/relay.dart';
 
 /// Tests for [channelDetailsFromEvent].
 ///

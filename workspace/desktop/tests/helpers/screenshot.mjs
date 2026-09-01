@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// Standalone Playwright screenshot helper for the Buzz desktop app.
+// Standalone Playwright screenshot helper for the Ambush desktop app.
 //
 // Launches headless Chromium with the E2E mock bridge pre-injected (same
 // setup as installMockBridge in bridge.ts), navigates to a route, optionally
@@ -81,7 +81,7 @@ function bail(msg) {
 
 const BASE_URL = "http://127.0.0.1:4173";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
-const ONBOARDING_PREFIX = "buzz-onboarding-complete.v1:";
+const ONBOARDING_PREFIX = "ambush-onboarding-complete.v1:";
 
 const TEST_PUBKEYS = [
   DEFAULT_MOCK_PUBKEY,
@@ -92,7 +92,7 @@ const TEST_PUBKEYS = [
   "df8e91b86fda13a9a67896df77232f7bdab2ba9c3e165378e1ba3d24c13a328e",
 ];
 
-// `BUZZ_HEADED=1` runs a real browser window instead of headless.
+// `AMBUSH_HEADED=1` runs a real browser window instead of headless.
 //
 // Headless Chromium rasterizes in software (SwiftShader), which mis-renders
 // `backdrop-filter` when an ancestor establishes a rounded clip
@@ -101,7 +101,7 @@ const TEST_PUBKEYS = [
 // inside the rounded focus drawer. Headed rendering is correct, as is the real
 // app's WKWebView, so this is a capture-only artifact. Default stays headless so
 // CI is unaffected.
-const browser = await chromium.launch({ headless: !process.env.BUZZ_HEADED });
+const browser = await chromium.launch({ headless: !process.env.AMBUSH_HEADED });
 const page = await browser.newPage({
   viewport: { width: vpWidth, height: vpHeight },
 });
@@ -115,8 +115,11 @@ await page.addInitScript(() => {
     relayUrl: "ws://localhost:3000",
     addedAt: new Date().toISOString(),
   };
-  window.localStorage.setItem("buzz-communities", JSON.stringify([community]));
-  window.localStorage.setItem("buzz-active-community-id", communityId);
+  window.localStorage.setItem(
+    "ambush-communities",
+    JSON.stringify([community]),
+  );
+  window.localStorage.setItem("ambush-active-community-id", communityId);
 });
 
 // Seed onboarding completion for all known identities
@@ -163,11 +166,11 @@ await page.addInitScript(
       writable: true,
     });
 
-    window.__BUZZ_E2E__ = {
+    window.__AMBUSH_E2E__ = {
       mode: "mock",
       ...(updateReady ? { mock: { updateAvailable: true } } : {}),
     };
-    window.__BUZZ_E2E_APP_BADGE_COUNT__ = 0;
+    window.__AMBUSH_E2E_APP_BADGE_COUNT__ = 0;
   },
   { updateReady: args["update-ready"] },
 );
@@ -223,7 +226,7 @@ try {
     for (const ch of targetChannels) {
       await page.waitForFunction(
         (name) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
             channelName: name,
           }) ?? false,
         ch,
@@ -234,7 +237,7 @@ try {
     for (const msg of messages) {
       await page.evaluate(
         (m) => {
-          window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.(m);
+          window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.(m);
         },
         { ...msg, pubkey: msg.pubkey ?? DEFAULT_MOCK_PUBKEY },
       );

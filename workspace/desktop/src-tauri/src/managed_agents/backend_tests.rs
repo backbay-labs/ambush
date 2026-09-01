@@ -395,27 +395,27 @@ fn split_config_key_handles_all_styles() {
 #[test]
 fn provider_filename_strips_the_windows_extension() {
     assert_eq!(
-        provider_id_from_filename("buzz-backend-kubernetes"),
+        provider_id_from_filename("ambush-backend-kubernetes"),
         Some("kubernetes")
     );
     assert_eq!(
-        provider_id_from_filename("buzz-backend-kubernetes.exe"),
+        provider_id_from_filename("ambush-backend-kubernetes.exe"),
         Some("kubernetes")
     );
     assert_eq!(
-        provider_id_from_filename("buzz-backend-kubernetes.EXE"),
+        provider_id_from_filename("ambush-backend-kubernetes.EXE"),
         Some("kubernetes")
     );
     assert_eq!(
-        provider_id_from_filename("buzz-backend-kubernetes.bat"),
+        provider_id_from_filename("ambush-backend-kubernetes.bat"),
         Some("kubernetes")
     );
     assert_eq!(
-        provider_id_from_filename("buzz-backend-kubernetes.CMD"),
+        provider_id_from_filename("ambush-backend-kubernetes.CMD"),
         Some("kubernetes")
     );
     assert_eq!(
-        provider_id_from_filename("buzz-backend-my-provider"),
+        provider_id_from_filename("ambush-backend-my-provider"),
         Some("my-provider")
     );
     assert_eq!(provider_id_from_filename("other"), None);

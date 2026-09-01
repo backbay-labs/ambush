@@ -207,7 +207,7 @@ void runProfileEditMotionAndAccessibilityTests() {
     tester,
   ) async {
     const avatar =
-        'https://relay.example/poster.png#buzz-anim=https%3A%2F%2Frelay.example%2Fanimation.png';
+        'https://relay.example/poster.png#ambush-anim=https%3A%2F%2Frelay.example%2Fanimation.png';
     await tester.pumpWidget(
       WidgetHelpers.testable(
         overrides: [
@@ -216,7 +216,7 @@ void runProfileEditMotionAndAccessibilityTests() {
               profile: const UserProfile(
                 pubkey: 'aabb',
                 displayName: 'Alice',
-                about: 'Building Buzz',
+                about: 'Building Ambush',
                 avatarUrl: avatar,
               ),
             ),
@@ -240,7 +240,7 @@ void runProfileEditMotionAndAccessibilityTests() {
     tester,
   ) async {
     const avatar =
-        'https://relay.example/poster.png#buzz-anim=https%3A%2F%2Frelay.example%2Fanimation.png';
+        'https://relay.example/poster.png#ambush-anim=https%3A%2F%2Frelay.example%2Fanimation.png';
     await tester.pumpWidget(
       WidgetHelpers.testable(
         overrides: [

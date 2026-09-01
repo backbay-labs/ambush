@@ -3,7 +3,7 @@ import test from "node:test";
 
 // revealDesktopAppWindow and listenForDesktopNotificationActions cross the
 // Tauri IPC boundary through window.__TAURI_INTERNALS__ — stub it before the
-// module (and @tauri-apps/api) load. block/buzz#3509: a macOS notification
+// module (and @tauri-apps/api) load. block/ambush#3509: a macOS notification
 // click must always route, even when a window invoke hangs or the Tauri
 // activation emit is lost.
 
@@ -46,7 +46,7 @@ globalThis.document = new EventTarget();
 globalThis.isTauri = true;
 Object.defineProperty(globalThis, "navigator", {
   configurable: true,
-  value: { platform: "MacIntel", userAgent: "buzz-test" },
+  value: { platform: "MacIntel", userAgent: "ambush-test" },
 });
 
 const { listenForDesktopNotificationActions, revealDesktopAppWindow } =

@@ -1,6 +1,6 @@
-# Buzz Mobile
+# Ambush Mobile
 
-Flutter mobile client for Buzz.
+Flutter mobile client for Ambush.
 
 ## Setup
 
@@ -8,7 +8,7 @@ Use the Flutter SDK pinned by the repository. Activate Hermit from the repo
 root before resolving packages or running any Flutter command:
 
 ```bash
-cd /path/to/buzz
+cd /path/to/ambush
 . ./bin/activate-hermit
 ./bin/just mobile-install
 ```
@@ -32,9 +32,9 @@ cd mobile && flutter run
 
 Debug builds produced from a git worktree get a unique app identifier keyed
 to the **worktree directory name**
-(`xyz.block.buzz.dogfood.mobile.<slug>` on iOS,
-`xyz.block.buzz.mobile.<slug>` on Android) plus a display-only branch label
-in the app name (`Buzz (my-branch)`, or a short SHA when the worktree is
+(`com.backbay.ambush.dogfood.mobile.<slug>` on iOS,
+`com.backbay.ambush.mobile.<slug>` on Android) plus a display-only branch label
+in the app name (`Ambush (my-branch)`, or a short SHA when the worktree is
 detached). Because the identifier follows the directory rather than the
 branch, one worktree keeps exactly one installed app — and its login state —
 across branch switches, and builds from multiple worktrees install side by
@@ -56,34 +56,34 @@ over the generated worktree values by creating the gitignored
 `mobile/android/AppOverrides.properties`:
 
 ```properties
-appName=Buzz Pairing
+appName=Ambush Pairing
 applicationIdSuffix=.device_pairing_e2e1
 ```
 
 These values are consumed by the debug build type only. The standard
 `just mobile-build-android` command can still be used; regenerating
 `worktree.properties` does not overwrite `AppOverrides.properties`. Release
-and profile builds keep the production `Buzz` name and application ID.
+and profile builds keep the production `Ambush` name and application ID.
 
 For direct Xcode / Android Studio / `flutter run` development, run
 `./scripts/mobile-worktree-overrides.sh` from the repo root once per branch
 switch to refresh the display label (the install identity never changes);
 the persisted files are then picked up by any subsequent build. In the main
 checkout the script is a no-op that removes stale override files, restoring
-the plain `Buzz` identity.
+the plain `Ambush` identity.
 
-For an Android debug build that must remain installed alongside other Buzz
+For an Android debug build that must remain installed alongside other Ambush
 worktree builds, set an explicit launcher name and package suffix when invoking
 the generator or a recipe that invokes it:
 
 ```bash
-BUZZ_ANDROID_DEBUG_APP_NAME="Buzz Huddles" \
-BUZZ_ANDROID_DEBUG_ID_SUFFIX=".huddles_829c" \
+AMBUSH_ANDROID_DEBUG_APP_NAME="Ambush Huddles" \
+AMBUSH_ANDROID_DEBUG_ID_SUFFIX=".huddles_829c" \
 ./bin/just mobile-build-android
 ```
 
 This example produces the debug-only package
-`xyz.block.buzz.mobile.huddles_829c` with the launcher label `Buzz Huddles`.
+`com.backbay.ambush.mobile.huddles_829c` with the launcher label `Ambush Huddles`.
 The suffix must start with a dot followed by a lowercase letter and may contain
 only lowercase letters, digits, and underscores. Release and profile builds
 ignore these overrides and retain the production package and name.
@@ -98,14 +98,14 @@ installs are never touched.
 Every iOS artifact builds and embeds the Notification Service Extension and
 native push bridge. Runtime activation is fail-closed and scoped to the current
 relay. After authenticated connectivity and a fully valid NIP-11 `nip-pl` push
-descriptor, Buzz independently requests display permission and registers with
+descriptor, Ambush independently requests display permission and registers with
 APNs. Display denial or request failure does not gate the device token, gateway
 enrollment, or lease publication, so a later user opt-in can display pushes
 without rebuilding transport authority. An absent, malformed, or unreachable
 descriptor leaves push inactive without partial enrollment.
 
 Relay rollout remains an explicit deployment opt-in. Only deployments with
-`BUZZ_PUSH_ENABLED=true` advertise the descriptor and process push. See
+`AMBUSH_PUSH_ENABLED=true` advertise the descriptor and process push. See
 `docs/push-gateway-deployment.md` for the canonical gateway profile contract,
 manual physical-device proof, measurements, and rollback procedure.
 
@@ -113,10 +113,10 @@ For local physical-device development, override the identity and sandbox
 environments in the gitignored `mobile/ios/Flutter/AppOverrides.xcconfig`:
 
 ```xcconfig
-BUNDLE_IDENTIFIER = xyz.block.buzz.mobile
-BUZZ_DEVELOPMENT_TEAM = EYF346PHUG
-BUZZ_IOS_PUSH_ENVIRONMENT = development
-BUZZ_APP_ATTEST_ENVIRONMENT = development
+BUNDLE_IDENTIFIER = com.backbay.ambush.mobile
+AMBUSH_DEVELOPMENT_TEAM = EYF346PHUG
+AMBUSH_IOS_PUSH_ENVIRONMENT = development
+AMBUSH_APP_ATTEST_ENVIRONMENT = development
 ```
 
 This exercises the client, extension, relay, and gateway integration without
@@ -158,18 +158,18 @@ Or from the repo root: `just mobile-check` and `just mobile-test`.
 Android release builds fail unless all upload-key inputs are supplied through the
 environment:
 
-- `BUZZ_ANDROID_UPLOAD_KEYSTORE_PATH`: path to a CI-vended keystore file
-- `BUZZ_ANDROID_UPLOAD_KEYSTORE_PASSWORD`
-- `BUZZ_ANDROID_UPLOAD_KEY_ALIAS`
-- `BUZZ_ANDROID_UPLOAD_KEY_PASSWORD`
+- `AMBUSH_ANDROID_UPLOAD_KEYSTORE_PATH`: path to a CI-vended keystore file
+- `AMBUSH_ANDROID_UPLOAD_KEYSTORE_PASSWORD`
+- `AMBUSH_ANDROID_UPLOAD_KEY_ALIAS`
+- `AMBUSH_ANDROID_UPLOAD_KEY_PASSWORD`
 
 The keystore path must be absolute, and the keystore must remain outside the
 repository. Development and debug builds do not require these variables.
 
 Release pipelines that sign through the central APK Signer service instead of
-a local upload keystore must set `BUZZ_ANDROID_RELEASE_SIGNING=external`. That
+a local upload keystore must set `AMBUSH_ANDROID_RELEASE_SIGNING=external`. That
 mode produces an unsigned release bundle and refuses to run if any
-`BUZZ_ANDROID_UPLOAD_*` value is also set.
+`AMBUSH_ANDROID_UPLOAD_*` value is also set.
 
 ## Architecture
 

@@ -70,7 +70,7 @@ test("resolves the NIP-05 local part alias", () => {
   const profiles = {
     [PUBKEY]: profile({
       displayName: "Tyler Durden",
-      nip05Handle: "tyler@buzz.example",
+      nip05Handle: "tyler@ambush.example",
     }),
   };
 
@@ -119,7 +119,7 @@ test("every rendered name resolves to a pubkey (outputs stay in sync)", () => {
     [PUBKEY]: profile({
       displayName: "Tyler Durden",
       name: "tyler",
-      nip05Handle: "td@buzz.example",
+      nip05Handle: "td@ambush.example",
     }),
     [OTHER_PUBKEY]: profile({ displayName: "bob", name: "bobby" }),
   };

@@ -8,7 +8,7 @@ const ALIGNMENT_TOLERANCE_PX = 2;
 async function enableProjectsFeature(page: import("@playwright/test").Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem(
-      "buzz-feature-overrides-v1",
+      "ambush-feature-overrides-v1",
       JSON.stringify({ projects: true }),
     );
   });
@@ -32,7 +32,7 @@ test("first-time project empty state opens project creation", async ({
 }) => {
   await enableProjectsFeature(page);
   await page.addInitScript(() => {
-    window.__BUZZ_E2E_EMPTY_PROJECTS__ = true;
+    window.__AMBUSH_E2E_EMPTY_PROJECTS__ = true;
   });
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -51,7 +51,7 @@ test("project home context aligns with the channel header", async ({
   await enableProjectsFeature(page);
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await addProjectToSidebar(page, "buzz");
+  await addProjectToSidebar(page, "ambush");
   await waitForAnimations(page);
 
   const [headerTitleBox, tasksBox] = await Promise.all([

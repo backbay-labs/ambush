@@ -1,6 +1,6 @@
 name: Docker image
 
-# Builds and publishes the public Buzz relay images as ghcr.io/block/buzz.
+# Builds and publishes the public Ambush relay images as ghcr.io/backbay-labs/ambush.
 # Normal tags contain stripped binaries; matching debug-* tags contain the same
 # optimized binaries with line-table debug information for native profilers.
 #
@@ -13,7 +13,7 @@ name: Docker image
 # Versioning: the relay is versioned independently of the desktop app via
 # its own `relay-v*` tags (see `just release-relay`). Desktop `v*` tags and
 # agent `sprig-v*` tags do NOT publish this image — only `relay-v*` does, so
-# the relay image version tracks crates/buzz-relay/Cargo.toml, never desktop.
+# the relay image version tracks crates/ambush-relay/Cargo.toml, never desktop.
 #
 # Triggers:
 #   - push to main           → :main + :sha-<7>
@@ -49,7 +49,7 @@ on:
       - "Dockerfile.push-gateway"
       - ".dockerignore"
       - ".github/workflows/docker.yml"
-      - "deploy/charts/buzz/Chart.yaml"
+      - "deploy/charts/ambush/Chart.yaml"
       - "scripts/create-deployment-eligibility-predicate.jq"
       - "scripts/select-qualified-ci-run.jq"
       - "scripts/test-relay-image-eligibility-workflow.sh"
@@ -80,7 +80,7 @@ env:
   # Single source of truth for the image name. Set GHCR_IMAGE as a repo
   # variable to override (e.g., for forks that want to push to their own
   # namespace without forking this file).
-  IMAGE_NAME: ${{ vars.GHCR_IMAGE != '' && vars.GHCR_IMAGE || 'ghcr.io/block/buzz' }}
+  IMAGE_NAME: ${{ vars.GHCR_IMAGE != '' && vars.GHCR_IMAGE || 'ghcr.io/backbay-labs/ambush' }}
 
 jobs:
   build:
@@ -163,8 +163,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},match=^relay-v(.*)$,value=${{ inputs.version }}
             type=semver,pattern={{major}},match=^relay-v(.*)$,value=${{ inputs.version }}
           labels: |
-            org.opencontainers.image.title=Buzz
-            org.opencontainers.image.description=WebSocket relay server for the Buzz communications platform
+            org.opencontainers.image.title=Ambush
+            org.opencontainers.image.description=WebSocket relay server for the Ambush communications platform
             org.opencontainers.image.licenses=Apache-2.0
 
       - name: Build and push release image by digest
@@ -177,9 +177,9 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BUZZ_SOURCE_SHA=${{ github.sha }}
-            BUZZ_BUILD_ID=github-actions:${{ github.run_id }}:${{ github.run_attempt }}
-            BUZZ_BUILD_URL=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+            AMBUSH_SOURCE_SHA=${{ github.sha }}
+            AMBUSH_BUILD_ID=github-actions:${{ github.run_id }}:${{ github.run_attempt }}
+            AMBUSH_BUILD_URL=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
           # Push by digest, not by tag — the merge job assembles the tags
           # into one multi-arch manifest. This is what makes the native-arm
           # matrix possible.
@@ -199,9 +199,9 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BUZZ_SOURCE_SHA=${{ github.sha }}
-            BUZZ_BUILD_ID=github-actions:${{ github.run_id }}:${{ github.run_attempt }}
-            BUZZ_BUILD_URL=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+            AMBUSH_SOURCE_SHA=${{ github.sha }}
+            AMBUSH_BUILD_ID=github-actions:${{ github.run_id }}:${{ github.run_attempt }}
+            AMBUSH_BUILD_URL=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: |
             type=registry,ref=${{ env.IMAGE_NAME }}-buildcache:${{ matrix.arch }}
@@ -278,9 +278,9 @@ jobs:
               ci_run_id=$(jq -r '.id' <<<"$successful_run")
               ci_run_attempt=$(jq -r '.run_attempt' <<<"$successful_run")
               ci_run_url=$(jq -r '.html_url' <<<"$successful_run")
-              chart_version=$(awk '/^version:/ { print $2; exit }' deploy/charts/buzz/Chart.yaml)
+              chart_version=$(awk '/^version:/ { print $2; exit }' deploy/charts/ambush/Chart.yaml)
               if [[ ! "$chart_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-                echo "::error::Invalid Buzz chart version: $chart_version"
+                echo "::error::Invalid Ambush chart version: $chart_version"
                 exit 1
               fi
               {
@@ -398,11 +398,11 @@ jobs:
 
           annotations=(
             --annotation "index:org.opencontainers.image.revision=${SOURCE_SHA}"
-            --annotation "index:xyz.block.buzz.build.id=github-actions:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
-            --annotation "index:xyz.block.buzz.qualification.ci-run-id=${CI_RUN_ID}"
-            --annotation "index:xyz.block.buzz.qualification.ci-run-attempt=${CI_RUN_ATTEMPT}"
-            --annotation "index:xyz.block.buzz.qualification.ci-conclusion=success"
-            --annotation "index:xyz.block.buzz.helm-chart.version=${CHART_VERSION}"
+            --annotation "index:com.backbay.ambush.build.id=github-actions:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+            --annotation "index:com.backbay.ambush.qualification.ci-run-id=${CI_RUN_ID}"
+            --annotation "index:com.backbay.ambush.qualification.ci-run-attempt=${CI_RUN_ATTEMPT}"
+            --annotation "index:com.backbay.ambush.qualification.ci-conclusion=success"
+            --annotation "index:com.backbay.ambush.helm-chart.version=${CHART_VERSION}"
           )
           docker buildx imagetools create "${tags[@]}" "${annotations[@]}" "${digests[@]}"
 
@@ -414,7 +414,7 @@ jobs:
 
       - name: Attest provenance for the merged image
         # Sigstore-signed in-toto attestation, verifiable with:
-        #   gh attestation verify oci://ghcr.io/block/buzz:<tag> --owner block
+        #   gh attestation verify oci://ghcr.io/backbay-labs/ambush:<tag> --owner block
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:
           subject-name: ${{ env.IMAGE_NAME }}
@@ -452,7 +452,7 @@ jobs:
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
-          predicate-type: https://buzz.block.xyz/attestations/deployment-eligibility/v1
+          predicate-type: https://ambush.example.com/attestations/deployment-eligibility/v1
           predicate-path: /tmp/deployment-eligibility.json
           push-to-registry: true
 
@@ -471,7 +471,7 @@ jobs:
             echo
             echo "**Digest:** \`${MERGED_DIGEST}\`"
             echo "**Source:** \`${SOURCE_SHA}\`"
-            echo "**Compatible Buzz chart:** \`${CHART_VERSION}\`"
+            echo "**Compatible Ambush chart:** \`${CHART_VERSION}\`"
             echo "**Qualifying CI:** ${CI_RUN_URL} (success)"
             echo
             echo "**Tags:**"
@@ -487,7 +487,7 @@ jobs:
               echo
               echo "Verify deployment eligibility:"
               echo '```'
-              echo "gh attestation verify oci://${IMAGE_NAME}@${MERGED_DIGEST} --repo block/buzz --signer-workflow block/buzz/.github/workflows/docker.yml --predicate-type https://buzz.block.xyz/attestations/deployment-eligibility/v1 --source-digest ${SOURCE_SHA}"
+              echo "gh attestation verify oci://${IMAGE_NAME}@${MERGED_DIGEST} --repo backbay-labs/ambush --signer-workflow backbay-labs/ambush/.github/workflows/docker.yml --predicate-type https://ambush.example.com/attestations/deployment-eligibility/v1 --source-digest ${SOURCE_SHA}"
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -539,10 +539,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
         with:
-          images: ghcr.io/block/buzz-push-gateway
+          images: ghcr.io/backbay-labs/ambush-push-gateway
           labels: |
-            org.opencontainers.image.title=Buzz Push Gateway
-            org.opencontainers.image.description=Capability-gated APNs last hop for Buzz
+            org.opencontainers.image.title=Ambush Push Gateway
+            org.opencontainers.image.description=Capability-gated APNs last hop for Ambush
             org.opencontainers.image.licenses=Apache-2.0
       - name: Build and push by digest
         id: build
@@ -552,9 +552,9 @@ jobs:
           file: ./Dockerfile.push-gateway
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=ghcr.io/block/buzz-push-gateway,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=registry,ref=ghcr.io/block/buzz-push-gateway-buildcache:${{ matrix.arch }}
-          cache-to: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && format('type=registry,ref=ghcr.io/block/buzz-push-gateway-buildcache:{0},mode=max,compression=zstd', matrix.arch) || '' }}
+          outputs: type=image,name=ghcr.io/backbay-labs/ambush-push-gateway,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=registry,ref=ghcr.io/backbay-labs/ambush-push-gateway-buildcache:${{ matrix.arch }}
+          cache-to: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && format('type=registry,ref=ghcr.io/backbay-labs/ambush-push-gateway-buildcache:{0},mode=max,compression=zstd', matrix.arch) || '' }}
       - name: Export digest
         if: github.event_name != 'pull_request'
         env:
@@ -599,7 +599,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
         with:
-          images: ghcr.io/block/buzz-push-gateway
+          images: ghcr.io/backbay-labs/ambush-push-gateway
           tags: |
             type=ref,event=branch,enable=${{ github.event_name != 'workflow_dispatch' || inputs.version == '' }}
             type=sha,prefix=sha-,format=short,enable=${{ github.event_name != 'workflow_dispatch' || inputs.version == '' }}
@@ -613,7 +613,7 @@ jobs:
         run: |
           set -euo pipefail
           tags=(); while IFS= read -r tag; do [ -n "$tag" ] && tags+=("-t" "$tag"); done <<< "$META_TAGS"
-          digests=(); for digest in *; do digests+=("ghcr.io/block/buzz-push-gateway@sha256:${digest}"); done
+          digests=(); for digest in *; do digests+=("ghcr.io/backbay-labs/ambush-push-gateway@sha256:${digest}"); done
           docker buildx imagetools create "${tags[@]}" "${digests[@]}"
           first_tag=$(echo "$META_TAGS" | head -n1)
           digest=$(docker buildx imagetools inspect "$first_tag" --format '{{json .Manifest}}' | jq -r '.digest')
@@ -621,7 +621,7 @@ jobs:
       - name: Attest gateway image provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:
-          subject-name: ghcr.io/block/buzz-push-gateway
+          subject-name: ghcr.io/backbay-labs/ambush-push-gateway
           subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
       - name: Gateway publication summary
@@ -631,7 +631,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "### Published \`ghcr.io/block/buzz-push-gateway\`"
+            echo "### Published \`ghcr.io/backbay-labs/ambush-push-gateway\`"
             echo
             printf "**Digest:** \`%s\`\n" "$GATEWAY_DIGEST"
             echo
@@ -642,6 +642,6 @@ jobs:
             echo
             echo 'Verify provenance before deployment:'
             echo "\`\`\`"
-            printf 'gh attestation verify oci://ghcr.io/block/buzz-push-gateway@%s --owner block\n' "$GATEWAY_DIGEST"
+            printf 'gh attestation verify oci://ghcr.io/backbay-labs/ambush-push-gateway@%s --owner block\n' "$GATEWAY_DIGEST"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"

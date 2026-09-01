@@ -4,7 +4,7 @@ use crate::managed_agents::{
     team_catalog::build_team_catalog_event,
     AgentDefinition, TeamRecord,
 };
-use buzz_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
+use ambush_core_pkg::kind::{event_is_shared, KIND_TEAM_CATALOG};
 use nostr::JsonUtil;
 use std::collections::BTreeMap;
 

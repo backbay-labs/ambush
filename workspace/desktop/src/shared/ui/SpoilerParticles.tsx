@@ -68,7 +68,7 @@ export function SpoilerParticles({
     return mountSpoilerParticleCanvas({ canvas, content });
   }, [active, contentRef]);
 
-  return <canvas className="buzz-spoiler__particles" ref={canvasRef} />;
+  return <canvas className="ambush-spoiler__particles" ref={canvasRef} />;
 }
 
 export function mountSpoilerParticleCanvas({

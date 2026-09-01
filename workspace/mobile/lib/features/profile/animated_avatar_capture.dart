@@ -17,7 +17,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../shared/emoji/emoji_avatar.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
 import '../../shared/widgets/ios_glass_navigation_button.dart';
 import 'avatar_background_grid.dart';
 import 'camera_disposal_barrier.dart';
@@ -594,7 +594,7 @@ class AnimatedAvatarCapture extends HookConsumerWidget {
                     color: Colors.black,
                     child: isPreparingFrames.value
                         ? Center(
-                            child: BuzzLoadingIndicator(
+                            child: AmbushLoadingIndicator(
                               size: 44,
                               color: context.colors.onSurface,
                               semanticLabel: 'Preparing animated avatar',
@@ -604,7 +604,7 @@ class AnimatedAvatarCapture extends HookConsumerWidget {
                         ? _AspectCorrectCameraPreview(controller: active)
                         : Center(
                             child: isInitializing.value
-                                ? const BuzzLoadingIndicator(
+                                ? const AmbushLoadingIndicator(
                                     color: Colors.white,
                                     semanticLabel: 'Starting camera',
                                   )

@@ -313,7 +313,7 @@ class _MarkdownEditingController extends TextEditingController {
     TextStyle style,
   ) {
     final expression = RegExp(
-      r'''buzz://(?:message\?|channel/|(?:repo|pr|issue)\?)[^\s<>"']+''',
+      r'''ambush://(?:message\?|channel/|(?:repo|pr|issue)\?)[^\s<>"']+''',
       caseSensitive: false,
     );
     final matches = expression.allMatches(source).toList();
@@ -343,7 +343,7 @@ class _MarkdownEditingController extends TextEditingController {
           WidgetSpan(
             alignment: PlaceholderAlignment.baseline,
             baseline: TextBaseline.alphabetic,
-            child: _ComposerBuzzLinkChip(
+            child: _ComposerAmbushLinkChip(
               icon: presentation.$1,
               label: presentation.$2,
               semanticLabel: presentation.$3,
@@ -382,7 +382,7 @@ class _MarkdownEditingController extends TextEditingController {
   (IconData, String, String)? _composerLinkPresentation(String raw) {
     final uri = Uri.tryParse(raw);
     if (uri == null) return null;
-    final link = parseBuzzDeepLink(uri) ?? parseEntityDeepLink(uri);
+    final link = parseAmbushDeepLink(uri) ?? parseEntityDeepLink(uri);
     return switch (link) {
       ChannelDeepLink(:final channelId) => (
         LucideIcons.hash,
@@ -490,13 +490,13 @@ class _MarkdownEditingController extends TextEditingController {
   }
 }
 
-class _ComposerBuzzLinkChip extends StatelessWidget {
+class _ComposerAmbushLinkChip extends StatelessWidget {
   final IconData icon;
   final String label;
   final String semanticLabel;
   final TextStyle textStyle;
 
-  const _ComposerBuzzLinkChip({
+  const _ComposerAmbushLinkChip({
     required this.icon,
     required this.label,
     required this.semanticLabel,
@@ -515,7 +515,7 @@ class _ComposerBuzzLinkChip extends StatelessWidget {
       label: semanticLabel,
       excludeSemantics: true,
       child: Container(
-        key: ValueKey('composer-buzz-link-chip:$label'),
+        key: ValueKey('composer-ambush-link-chip:$label'),
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
           color: context.colors.primary.withValues(alpha: 0.16),

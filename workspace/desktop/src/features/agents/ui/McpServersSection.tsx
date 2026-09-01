@@ -7,17 +7,17 @@ type McpServersSectionProps = {
   runtimeId: string | null;
   mcpConfigFilePath?: string | null;
   variant?: "compact" | "profile";
-  buzzAgentSlot?: React.ReactNode;
+  ambushAgentSlot?: React.ReactNode;
 };
 
 export function shouldRenderMcpServers(
   runtimeId: string | null,
   extensions: ExtensionEntry[],
 ): boolean {
-  // buzz-agent always surfaces its built-in MCP servers even with no
+  // ambush-agent always surfaces its built-in MCP servers even with no
   // user-configured extensions; every other runtime shows the section only
   // once it has extensions parsed from its config file.
-  return runtimeId === "buzz-agent" || extensions.length > 0;
+  return runtimeId === "ambush-agent" || extensions.length > 0;
 }
 
 // #3493: the servers are read from the isolated `.claude.json` under a custom
@@ -30,13 +30,13 @@ export function mcpConfigFileCaption(
 }
 
 export function McpServersSection({
-  buzzAgentSlot,
+  ambushAgentSlot,
   extensions,
   mcpConfigFilePath,
   runtimeId,
   variant = "compact",
 }: McpServersSectionProps) {
-  const isBuzzAgent = runtimeId === "buzz-agent";
+  const isAmbushAgent = runtimeId === "ambush-agent";
 
   if (!shouldRenderMcpServers(runtimeId, extensions)) {
     return null;
@@ -56,7 +56,7 @@ export function McpServersSection({
         <p className="py-2 text-xs font-medium text-foreground">MCP servers</p>
       ) : null}
 
-      {isBuzzAgent && buzzAgentSlot ? buzzAgentSlot : null}
+      {isAmbushAgent && ambushAgentSlot ? ambushAgentSlot : null}
 
       {extensions.length > 0 ? (
         <div className="divide-y divide-border/55">

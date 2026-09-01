@@ -6,12 +6,13 @@ import '../relay/relay_provider.dart';
 import '../relay/relay_session.dart';
 import 'dev_push_lease.dart';
 
-typedef BuzzPushDescriptorFetcher =
-    Future<BuzzPushLeaseDescriptor> Function(String relayBaseUrl);
+typedef AmbushPushDescriptorFetcher =
+    Future<AmbushPushLeaseDescriptor> Function(String relayBaseUrl);
 
-final buzzPushDescriptorFetcherProvider = Provider<BuzzPushDescriptorFetcher>(
-  (ref) => fetchBuzzPushLeaseDescriptor,
-);
+final ambushPushDescriptorFetcherProvider =
+    Provider<AmbushPushDescriptorFetcher>(
+      (ref) => fetchAmbushPushLeaseDescriptor,
+    );
 
 /// The fully validated push capability advertised by the current relay.
 ///
@@ -19,7 +20,7 @@ final buzzPushDescriptorFetcherProvider = Provider<BuzzPushDescriptorFetcher>(
 /// descriptor is represented as no capability, so no notification permission,
 /// APNs registration, gateway enrollment, or relay lease can begin.
 final currentRelayPushDescriptorProvider =
-    FutureProvider.autoDispose<BuzzPushLeaseDescriptor?>((ref) async {
+    FutureProvider.autoDispose<AmbushPushLeaseDescriptor?>((ref) async {
       final session = ref.watch(relaySessionProvider);
       final config = ref.watch(relayConfigProvider);
       final community = ref.watch(activeCommunityProvider).value;
@@ -33,15 +34,15 @@ final currentRelayPushDescriptorProvider =
         return null;
       }
 
-      return discoverBuzzPushRelayCapability(
+      return discoverAmbushPushRelayCapability(
         config.baseUrl,
-        fetchDescriptor: ref.read(buzzPushDescriptorFetcherProvider),
+        fetchDescriptor: ref.read(ambushPushDescriptorFetcherProvider),
       );
     });
 
-Future<BuzzPushLeaseDescriptor?> discoverBuzzPushRelayCapability(
+Future<AmbushPushLeaseDescriptor?> discoverAmbushPushRelayCapability(
   String relayBaseUrl, {
-  required BuzzPushDescriptorFetcher fetchDescriptor,
+  required AmbushPushDescriptorFetcher fetchDescriptor,
 }) async {
   try {
     return await fetchDescriptor(relayBaseUrl);
@@ -52,8 +53,8 @@ Future<BuzzPushLeaseDescriptor?> discoverBuzzPushRelayCapability(
   }
 }
 
-Future<void> startBuzzPushRegistrationIfCapable(
-  BuzzPushLeaseDescriptor? descriptor, {
+Future<void> startAmbushPushRegistrationIfCapable(
+  AmbushPushLeaseDescriptor? descriptor, {
   required Future<void> Function() startRegistration,
 }) async {
   if (descriptor == null) return;

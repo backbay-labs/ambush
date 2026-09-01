@@ -62,8 +62,8 @@ test("MEASURE: fast-wheel scroll-up layout cost on a busy un-virtualized timelin
   await page.goto("/");
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      typeof window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ === "function",
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_PREPEND_MOCK_HISTORY__ === "function",
   );
 
   await page.evaluate(
@@ -77,7 +77,7 @@ test("MEASURE: fast-wheel scroll-up layout cost on a busy un-virtualized timelin
           { length: lines },
           (_u, l) => `busy row ${i} line ${l + 1}`,
         ).join("\n");
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "general",
           content: body,
         });
@@ -210,8 +210,8 @@ test("MEASURE: prepend re-render cost while scrolled up (the untested event-cost
   await page.goto("/");
   await page.waitForFunction(
     () =>
-      typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
-      typeof window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ === "function",
+      typeof window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__ === "function" &&
+      typeof window.__AMBUSH_E2E_PREPEND_MOCK_HISTORY__ === "function",
   );
 
   // Seed the channel at roughly the real data-window cap (CHANNEL_HISTORY_LIMIT
@@ -224,7 +224,7 @@ test("MEASURE: prepend re-render cost while scrolled up (the untested event-cost
           { length: lines },
           (_u, l) => `seed row ${i} line ${l + 1}`,
         ).join("\n");
-        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__AMBUSH_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: "general",
           content: body,
         });
@@ -266,7 +266,7 @@ test("MEASURE: prepend re-render cost while scrolled up (the untested event-cost
   // that flushes the resulting React commit + layout + anchor restore.
   const tickMs = await page.evaluate(async (count) => {
     const t0 = performance.now();
-    window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__?.({
+    window.__AMBUSH_E2E_PREPEND_MOCK_HISTORY__?.({
       channelName: "general",
       count,
       lineCount: 3,

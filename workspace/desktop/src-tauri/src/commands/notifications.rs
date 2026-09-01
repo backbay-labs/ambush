@@ -84,7 +84,7 @@ mod linux {
             let handle = match builder.show() {
                 Ok(handle) => handle,
                 Err(error) => {
-                    eprintln!("buzz-desktop: failed to post native notification: {error}");
+                    eprintln!("ambush-desktop: failed to post native notification: {error}");
                     return;
                 }
             };

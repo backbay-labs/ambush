@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run-tests.sh — Run Buzz test suite
+# run-tests.sh — Run Ambush test suite
 # =============================================================================
 # Usage:
 #   ./scripts/run-tests.sh              # run all tests (default)
@@ -40,12 +40,12 @@ if [[ -f ".env" ]]; then
   set +o allexport
 else
   # Use defaults matching docker-compose.yml
-  export DATABASE_URL="postgres://buzz:buzz_dev@localhost:5432/buzz" # sadscan:disable np.postgres.1
+  export DATABASE_URL="postgres://ambush:ambush_dev@localhost:5432/ambush" # sadscan:disable np.postgres.1
   export PGHOST=localhost
   export PGPORT=5432
-  export PGUSER=buzz
-  export PGPASSWORD=buzz_dev
-  export PGDATABASE=buzz
+  export PGUSER=ambush
+  export PGPASSWORD=ambush_dev
+  export PGDATABASE=ambush
   export REDIS_URL="redis://localhost:6379"
 fi
 
@@ -78,48 +78,48 @@ ensure_infra() {
 run_unit_tests() {
   section "Unit Tests (no infra required)"
 
-  run_test_step "buzz-core tests" \
-    cargo test -p buzz-core --lib -- --nocapture
+  run_test_step "ambush-core tests" \
+    cargo test -p ambush-core --lib -- --nocapture
 
-  run_test_step "buzz-auth unit tests" \
-    cargo test -p buzz-auth --lib -- --nocapture
+  run_test_step "ambush-auth unit tests" \
+    cargo test -p ambush-auth --lib -- --nocapture
 
-  run_test_step "buzz-voice tests" \
-    cargo test -p buzz-voice --lib -- --nocapture
+  run_test_step "ambush-voice tests" \
+    cargo test -p ambush-voice --lib -- --nocapture
 
-  run_test_step "buzz-cli tests" \
-    cargo test -p buzz-cli -- --nocapture
+  run_test_step "ambush-cli tests" \
+    cargo test -p ambush-cli -- --nocapture
 
-  # buzz-db migrator/lint unit tests (no infra): guard the embedded-migrator
+  # ambush-db migrator/lint unit tests (no infra): guard the embedded-migrator
   # invariant (exactly the consolidated 0001; cutover/backfill stays an operator
   # script, not startup state) and the tenant-scoping lints. The Postgres-backed
-  # buzz-db tests are #[ignore]d; nothing here (or in integration mode below,
-  # which runs `cargo test -p buzz-db` without --ignored) runs them — they need a
+  # ambush-db tests are #[ignore]d; nothing here (or in integration mode below,
+  # which runs `cargo test -p ambush-db` without --ignored) runs them — they need a
   # separate isolated-DB gate, so --lib keeps this step infra-free.
-  run_test_step "buzz-db unit tests" \
-    cargo test -p buzz-db --lib -- --nocapture
+  run_test_step "ambush-db unit tests" \
+    cargo test -p ambush-db --lib -- --nocapture
 
   # Multi-tenant conformance gate: independent replay checker + golden
-  # fixtures (buzz-conformance). Pure in-process trace replay, no infra.
-  run_test_step "buzz-conformance tests" \
-    cargo test -p buzz-conformance -- --nocapture
+  # fixtures (ambush-conformance). Pure in-process trace replay, no infra.
+  run_test_step "ambush-conformance tests" \
+    cargo test -p ambush-conformance -- --nocapture
 
-  run_test_step "buzz-push-gateway tests" \
-    cargo test -p buzz-push-gateway -- --nocapture
+  run_test_step "ambush-push-gateway tests" \
+    cargo test -p ambush-push-gateway -- --nocapture
 
   # Kubernetes backend provider: pure decision layers driven by a fake
   # substrate, no cluster. Mirrors the nextest path in `just test-unit` —
   # the two lists must stay in step or the fallback silently covers less.
-  run_test_step "buzz-backend-kubernetes tests" \
-    cargo test -p buzz-backend-kubernetes -- --nocapture
+  run_test_step "ambush-backend-kubernetes tests" \
+    cargo test -p ambush-backend-kubernetes -- --nocapture
 
-  # buzz-agent model-capabilities corpus: the Rust half of the cross-language
+  # ambush-agent model-capabilities corpus: the Rust half of the cross-language
   # drift guard. model_capabilities.rs embeds scripts/model-capabilities.json +
   # scripts/normative-corpus.json via include_str! and replays the full locked
   # corpus as pure in-process tests (no infra). Mirrors the nextest path in
   # `just test-unit` — the two lists must stay in step.
-  run_test_step "buzz-agent unit tests" \
-    cargo test -p buzz-agent --lib -- --nocapture
+  run_test_step "ambush-agent unit tests" \
+    cargo test -p ambush-agent --lib -- --nocapture
 }
 
 # ---- DB / integration tests (infra required) --------------------------------
@@ -129,14 +129,14 @@ run_integration_tests() {
 
   ensure_infra
 
-  run_test_step "buzz-db tests" \
-    cargo test -p buzz-db -- --nocapture
+  run_test_step "ambush-db tests" \
+    cargo test -p ambush-db -- --nocapture
 
-  if find crates/buzz-auth/tests -maxdepth 1 -name '*.rs' -print -quit 2>/dev/null | grep -q .; then
-    run_test_step "buzz-auth integration tests" \
-      cargo test -p buzz-auth --test '*' -- --nocapture
+  if find crates/ambush-auth/tests -maxdepth 1 -name '*.rs' -print -quit 2>/dev/null | grep -q .; then
+    run_test_step "ambush-auth integration tests" \
+      cargo test -p ambush-auth --test '*' -- --nocapture
   else
-    run_test_step "buzz-auth (no integration tests found)" true
+    run_test_step "ambush-auth (no integration tests found)" true
   fi
 
   run_test_step "workspace integration tests" \

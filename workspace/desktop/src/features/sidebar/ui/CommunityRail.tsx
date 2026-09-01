@@ -155,7 +155,7 @@ function CommunityButton({
                     src={iconUrl}
                   />
                 ) : (
-                  getInitials(community.name) || "🐝"
+                  getInitials(community.name)
                 )}
               </span>
               {showBadge ? (
@@ -197,7 +197,7 @@ function CommunityDragOverlay({
   return (
     <div
       className="flex h-9 w-9 cursor-grabbing items-center justify-center overflow-hidden rounded-xl bg-primary text-xs font-semibold text-primary-foreground opacity-90 shadow-lg ring-1 ring-sidebar-border"
-      data-buzz-flat
+      data-ambush-flat
     >
       {iconUrl ? (
         <img
@@ -207,7 +207,7 @@ function CommunityDragOverlay({
           src={iconUrl}
         />
       ) : (
-        getInitials(community.name) || "🐝"
+        getInitials(community.name)
       )}
     </div>
   );
@@ -374,7 +374,7 @@ export function CommunityRail({
   return (
     <nav
       aria-label="Communities"
-      className="relative z-20 flex w-14 shrink-0 flex-col items-center gap-2.5 overflow-y-auto bg-sidebar px-2.5 pb-5 pt-[calc(var(--buzz-top-chrome-height,40px)+7px)]"
+      className="relative z-20 flex w-14 shrink-0 flex-col items-center gap-2.5 overflow-y-auto bg-sidebar px-2.5 pb-5 pt-[calc(var(--ambush-top-chrome-height,40px)+7px)]"
       data-testid="community-rail"
     >
       <DndContext

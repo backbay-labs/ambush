@@ -295,7 +295,7 @@ pub(super) async fn fetch_channels(
             let events = query_relay(
                 state,
                 &[serde_json::json!({
-                    "kinds": [buzz_core_pkg::kind::KIND_DM_VISIBILITY],
+                    "kinds": [ambush_core_pkg::kind::KIND_DM_VISIBILITY],
                     "#p": [&my_pubkey],
                     "limit": 1,
                 })],
@@ -437,7 +437,7 @@ pub(super) async fn fetch_channels(
     {
         let total = _profile_start.elapsed();
         eprintln!(
-            "buzz-desktop: get_channels profile channels={} phase1(member_chain+open_meta+hidden_dm)={:?} phase2(member_counts+last_msg)={:?} total={:?}",
+            "ambush-desktop: get_channels profile channels={} phase1(member_chain+open_meta+hidden_dm)={:?} phase2(member_counts+last_msg)={:?} total={:?}",
             channels.len(),
             t_phase1,
             total - t_phase1,

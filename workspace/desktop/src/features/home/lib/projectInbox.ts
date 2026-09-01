@@ -48,7 +48,7 @@ function tagValue(item: Pick<FeedItem, "tags">, name: string) {
   )?.[1];
 }
 
-/** Returns the canonical Buzz Git repository and root event for an Inbox row. */
+/** Returns the canonical Ambush Git repository and root event for an Inbox row. */
 export function getProjectInboxReference(
   item: Pick<FeedItem, "id" | "kind" | "tags">,
 ): { repoAddress: string; rootId: string } | null {
@@ -69,12 +69,12 @@ export function getProjectInboxReference(
   return rootId ? { repoAddress, rootId } : null;
 }
 
-/** Whether a feed event belongs to a Buzz Git pull request or issue thread. */
+/** Whether a feed event belongs to an Ambush Git pull request or issue thread. */
 export function isProjectInboxItem(item: FeedItem) {
   return getProjectInboxReference(item) !== null;
 }
 
-/** Resolves an Inbox event to the current canonical Buzz Git work item. */
+/** Resolves an Inbox event to the current canonical Ambush Git work item. */
 export function resolveProjectInboxWorkItem(
   item: FeedItem,
   workItems: ProjectsWorkItemsResult<Project> | undefined,

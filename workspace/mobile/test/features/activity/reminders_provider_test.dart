@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:buzz/features/activity/reminders_provider.dart';
-import 'package:buzz/shared/relay/relay.dart';
+import 'package:ambush/features/activity/reminders_provider.dart';
+import 'package:ambush/shared/relay/relay.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 NostrEvent reminderEvent({

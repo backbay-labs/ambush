@@ -1,6 +1,6 @@
 import { isMacPlatform } from "@/shared/lib/platform";
 
-export const HUDDLE_SHORTCUT_EVENT = "buzz:huddle-shortcut";
+export const HUDDLE_SHORTCUT_EVENT = "ambush:huddle-shortcut";
 
 export type HuddleShortcutDetail = {
   channelId: string;

@@ -11,9 +11,9 @@ import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/app_list.dart';
 import '../../shared/widgets/app_list_card.dart';
-import '../../shared/widgets/buzz_action_tile.dart';
-import '../../shared/widgets/buzz_loading_indicator.dart';
-import '../../shared/widgets/buzz_search_field.dart';
+import '../../shared/widgets/ambush_action_tile.dart';
+import '../../shared/widgets/ambush_loading_indicator.dart';
+import '../../shared/widgets/ambush_search_field.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import '../../shared/widgets/modal_presentation.dart';
@@ -38,7 +38,7 @@ class CommunityInvitePage extends ConsumerWidget {
       ),
       body: roleAsync.when(
         loading: () => const Center(
-          child: BuzzLoadingIndicator(
+          child: AmbushLoadingIndicator(
             size: 48,
             semanticLabel: 'Checking community permissions',
           ),

@@ -38,7 +38,7 @@ void showRemindMeLaterSheet({
     }
   }
 
-  showBuzzModalBottomSheet<void>(
+  showAmbushModalBottomSheet<void>(
     context: context,
     title: 'Remind me about this message',
     showDragHandle: true,
@@ -93,7 +93,7 @@ void showRemindMeLaterSheet({
 /// timestamp in seconds, or null when cancelled or not in the future.
 Future<int?> _pickCustomDateTime(BuildContext context) async {
   final now = DateTime.now();
-  final date = await showBuzzDialog<DateTime>(
+  final date = await showAmbushDialog<DateTime>(
     context: context,
     builder: (_) => DatePickerDialog(
       initialDate: now,
@@ -103,7 +103,7 @@ Future<int?> _pickCustomDateTime(BuildContext context) async {
   );
   if (date == null || !context.mounted) return null;
 
-  final time = await showBuzzDialog<TimeOfDay>(
+  final time = await showAmbushDialog<TimeOfDay>(
     context: context,
     builder: (_) =>
         const TimePickerDialog(initialTime: TimeOfDay(hour: 9, minute: 0)),

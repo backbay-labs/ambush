@@ -875,7 +875,7 @@ export function useEditMessageMutation(channel: Channel | null) {
         const editTags = [
           ...(mediaTags ?? []),
           ...(mentionPubkeys ?? []).map((pubkey) => ["p", pubkey]),
-          ["buzz:mention-snapshot"],
+          ["ambush:mention-snapshot"],
         ];
         const nextTags =
           mediaTags !== undefined || editTags.length > 0

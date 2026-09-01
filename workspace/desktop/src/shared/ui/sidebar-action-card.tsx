@@ -109,18 +109,18 @@ function SidebarActionDescriptionText({
 
   if (shouldReduceMotion || !transition.isAnimating) {
     return (
-      <span className="buzz-sidebar-action-description">
+      <span className="ambush-sidebar-action-description">
         {transition.current}
       </span>
     );
   }
 
   return (
-    <span className="buzz-sidebar-action-description">
+    <span className="ambush-sidebar-action-description">
       <span className="sr-only">{transition.current}</span>
-      <span aria-hidden className="buzz-sidebar-action-description__motion">
+      <span aria-hidden className="ambush-sidebar-action-description__motion">
         <span
-          className="buzz-sidebar-action-description__reel"
+          className="ambush-sidebar-action-description__reel"
           key={`${transition.version}-${transition.previous}-${transition.current}`}
         >
           <span>{transition.previous}</span>
@@ -253,7 +253,7 @@ export function SidebarCompactActionCard({
         className={cn(
           "flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left shadow-xs transition-[background-color,border-color,color,box-shadow] duration-150 ease-out focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-muted-foreground/40 disabled:cursor-default disabled:opacity-100",
           isSuccess
-            ? "buzz-sidebar-action-card--success disabled:cursor-default disabled:opacity-100"
+            ? "ambush-sidebar-action-card--success disabled:cursor-default disabled:opacity-100"
             : surface === "secondary"
               ? "border-border/70 bg-secondary/80 text-secondary-foreground hover:border-border hover:bg-secondary dark:bg-secondary/60 dark:hover:bg-secondary/70"
               : "border-border/70 bg-background/70 text-foreground hover:border-border hover:bg-muted/40 dark:bg-background/50 dark:hover:bg-muted/30",
@@ -305,7 +305,7 @@ export function SidebarCompactActionCard({
           className={cn(
             "ml-auto flex h-10 w-10 shrink-0 items-center justify-center transition-colors duration-150 ease-out",
             isSuccess
-              ? "buzz-sidebar-action-card__success-icon"
+              ? "ambush-sidebar-action-card__success-icon"
               : "text-muted-foreground group-hover/sidebar-compact-action-card:text-foreground",
           )}
           layout="position"

@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     name: Build signed macOS canary
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'backbay-labs/ambush'
     runs-on: macos-latest
     timeout-minutes: 60
     permissions:
@@ -73,7 +73,7 @@ jobs:
         run: echo "id=$(scripts/desktop-native-toolchain-id.sh macos)" >> "$GITHUB_OUTPUT"
 
       # Compute this after cargo update so the key describes the graph that is
-      # actually compiled. The helper normalizes only Buzz Desktop's release
+      # actually compiled. The helper normalizes only Ambush Desktop's release
       # version, allowing a canary to warm an otherwise identical tag build.
       - name: Compute exact release cache key
         id: rust_cache_key
@@ -115,7 +115,7 @@ jobs:
 
       - name: Build sidecars
         run: |
-          cargo build --release -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          cargo build --release -p ambush-acp -p ambush-agent -p ambush-backend-kubernetes -p ambush-dev-mcp -p git-credential-nostr -p ambush-cli
           ./scripts/bundle-sidecars.sh
 
       # Mesh rev derived from Cargo.lock (no lockstep edit on dep bump); cache key tracks it.
@@ -198,7 +198,7 @@ jobs:
           codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
           unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
           entitlements-plist-path: ${{ runner.temp }}/entitlements.plist
-          artifact-name: buzz-canary-${{ github.sha }}-${{ github.run_id }}-arm64
+          artifact-name: ambush-canary-${{ github.sha }}-${{ github.run_id }}-arm64
 
       - name: Verify signed app
         env:
@@ -208,9 +208,9 @@ jobs:
           EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract"
           rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
           ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
-          codesign --verify --deep --strict --verbose=2 "$EXTRACT_DIR/Buzz.app"
-          spctl --assess --type execute --verbose=4 "$EXTRACT_DIR/Buzz.app"
-          desktop/scripts/verify-macos-entitlements.sh "$EXTRACT_DIR/Buzz.app"
+          codesign --verify --deep --strict --verbose=2 "$EXTRACT_DIR/Ambush.app"
+          spctl --assess --type execute --verbose=4 "$EXTRACT_DIR/Ambush.app"
+          desktop/scripts/verify-macos-entitlements.sh "$EXTRACT_DIR/Ambush.app"
 
       - name: Stage signed DMG
         id: artifact
@@ -219,7 +219,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          NAME="Buzz_${VERSION}_aarch64-signed.dmg"
+          NAME="Ambush_${VERSION}_aarch64-signed.dmg"
           cp "$SIGNED_DMG" "$RUNNER_TEMP/$NAME"
           echo "path=$RUNNER_TEMP/$NAME" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
@@ -227,7 +227,7 @@ jobs:
       - name: Upload signed canary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: buzz-macos-canary-${{ github.sha }}
+          name: ambush-macos-canary-${{ github.sha }}
           path: ${{ steps.artifact.outputs.path }}
           if-no-files-found: error
           retention-days: 7

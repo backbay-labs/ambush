@@ -12,7 +12,7 @@ import {
 import { parseSupportedLinkPreview } from "@/shared/lib/linkPreview";
 
 import {
-  loadBuzzEntityMetadata,
+  loadAmbushEntityMetadata,
   type LinkPreviewMetadata,
 } from "@/shared/lib/useResolvedLinkPreviews";
 import {
@@ -22,7 +22,7 @@ import {
   TooltipTrigger,
 } from "@/shared/ui/tooltip";
 
-import { BuzzInlineLink, BuzzLinkChip } from "./BuzzLinkChip";
+import { AmbushInlineLink, AmbushLinkChip } from "./AmbushLinkChip";
 import { useInlineTooltipPosition } from "./useInlineTooltipPosition";
 
 function EntityMetadataTooltip({
@@ -49,7 +49,7 @@ function EntityMetadataTooltip({
   } | null>(null);
   React.useEffect(() => {
     let cancelled = false;
-    void loadBuzzEntityMetadata(href).then((value) => {
+    void loadAmbushEntityMetadata(href).then((value) => {
       if (!cancelled) setResolved({ href, metadata: value });
     });
     return () => {
@@ -103,14 +103,14 @@ function EntityMetadataTooltip({
           {context ? (
             <span
               className="line-clamp-3 [overflow-wrap:anywhere] whitespace-normal"
-              data-buzz-tooltip-metadata-content=""
+              data-ambush-tooltip-metadata-content=""
             >
               {context}
             </span>
           ) : null}
           <span
             className={`${context ? "mt-1 " : ""}line-clamp-2 max-w-full [overflow-wrap:anywhere] whitespace-normal text-2xs text-secondary-foreground/80`}
-            data-buzz-tooltip-metadata-type=""
+            data-ambush-tooltip-metadata-type=""
           >
             {footer}
           </span>
@@ -160,7 +160,7 @@ function entityLinkPresentation(link: ParsedEntityLink) {
 }
 
 /**
- * Navigate to the project detail view for a `buzz://pr|issue|repo` link.
+ * Navigate to the project detail view for a `ambush://pr|issue|repo` link.
  * The link's (owner, d) coordinate is exactly the `/projects/$projectId`
  * route id, so no read-model resolution is needed.
  */
@@ -191,9 +191,9 @@ export function useOpenEntityLink(): (link: ParsedEntityLink) => void {
 }
 
 /**
- * Resolve an anchor href to a canonical `buzz://` entity link, accepting
+ * Resolve an anchor href to a canonical `ambush://` entity link, accepting
  * both the deep-link scheme directly and HTTPS relay clone URLs (which the
- * preview parser normalizes onto `buzz://repo` only when the URL origin
+ * preview parser normalizes onto `ambush://repo` only when the URL origin
  * matches the active relay origin).
  */
 function resolveEntityHref(
@@ -208,7 +208,7 @@ function resolveEntityHref(
 }
 
 /**
- * Render an inline anchor for a Buzz entity link (`buzz://pr|issue|repo` or
+ * Render an inline anchor for an Ambush entity link (`ambush://pr|issue|repo` or
  * an HTTPS relay clone URL whose origin matches the active relay) that
  * navigates in-app instead of handing the URL to the OS. Returns null when
  * the href is not a valid entity link so the caller can fall through to its
@@ -278,7 +278,7 @@ export function renderEntityLinkAnchor({
       ? `${presentation.ariaLabel}: ${resolvedContext}`
       : presentation.ariaLabel;
     return (
-      <BuzzInlineLink
+      <AmbushInlineLink
         href={href}
         title={href}
         aria-label={ariaLabel}
@@ -286,7 +286,7 @@ export function renderEntityLinkAnchor({
         onOpenLink={() => onOpenEntityLink(parsed.value)}
       >
         {children}
-      </BuzzInlineLink>
+      </AmbushInlineLink>
     );
   };
 
@@ -321,8 +321,8 @@ export function renderEntityLinkAnchor({
         ? `${presentation.ariaLabel}: ${parsed.value.dtag} · ${resolvedContext}`
         : presentation.ariaLabel;
     return (
-      <BuzzLinkChip
-        data-buzz-link-kind={parsed.value.type}
+      <AmbushLinkChip
+        data-ambush-link-kind={parsed.value.type}
         href={href}
         icon={presentation.icon}
         aria-label={ariaLabel}
@@ -331,7 +331,7 @@ export function renderEntityLinkAnchor({
         wrapping
       >
         {chipLabel}
-      </BuzzLinkChip>
+      </AmbushLinkChip>
     );
   };
   return interactive ? (

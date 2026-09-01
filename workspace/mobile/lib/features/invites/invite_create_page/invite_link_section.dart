@@ -72,7 +72,7 @@ class _InviteLinkSection extends HookConsumerWidget {
             children: [
               Expanded(
                 child: Builder(
-                  builder: (buttonContext) => BuzzActionTile(
+                  builder: (buttonContext) => AmbushActionTile(
                     key: const Key('community-invite-share-link'),
                     icon: LucideIcons.share2,
                     label: 'Share',
@@ -83,7 +83,7 @@ class _InviteLinkSection extends HookConsumerWidget {
               ),
               const SizedBox(width: Grid.twelve),
               Expanded(
-                child: BuzzActionTile(
+                child: AmbushActionTile(
                   key: const Key('community-invite-copy-link'),
                   icon: LucideIcons.copy,
                   label: 'Copy',
@@ -166,7 +166,7 @@ void _showInviteOptionSheet<T>({
   required List<CommunityInviteOption<T>> options,
   required ValueChanged<T> onSelected,
 }) {
-  showBuzzModalBottomSheet<void>(
+  showAmbushModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
     builder: (_) => _InviteOptionSheet<T>(

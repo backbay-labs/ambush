@@ -11,14 +11,14 @@ pub fn kill_stale_tracked_processes(
     kill_stale_tracked_processes_with(
         records,
         runtimes,
-        |pid| process_has_buzz_marker(pid, instance_id),
+        |pid| process_has_ambush_marker(pid, instance_id),
         terminate_process,
     )
 }
 
 /// Injectable version of `kill_stale_tracked_processes` for testing.
 /// `has_marker(pid)` returns true when the process carries this instance's
-/// `BUZZ_MANAGED_AGENT` marker; `kill(pid)` performs the termination.
+/// `AMBUSH_MANAGED_AGENT` marker; `kill(pid)` performs the termination.
 pub(crate) fn kill_stale_tracked_processes_with(
     records: &mut [ManagedAgentRecord],
     runtimes: &HashMap<ManagedAgentRuntimeKey, ManagedAgentPairRuntime>,
@@ -37,7 +37,7 @@ pub(crate) fn kill_stale_tracked_processes_with(
         };
         if !runtimes.keys().any(|key| key.pubkey == record.pubkey) {
             // Name-gate is omitted intentionally: custom harnesses use arbitrary
-            // binary names not in KNOWN_AGENT_BINARIES. BUZZ_MANAGED_AGENT is the
+            // binary names not in KNOWN_AGENT_BINARIES. AMBUSH_MANAGED_AGENT is the
             // authoritative ownership proof; terminate only if it matches.
             if has_marker(pid) {
                 let _ = kill(pid);

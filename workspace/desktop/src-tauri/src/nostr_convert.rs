@@ -75,7 +75,7 @@ pub(crate) fn profile_valid_oa_owner_pubkey(event: &Event) -> Option<String> {
         let Ok(json) = serde_json::to_string(slice) else {
             continue;
         };
-        if let Ok(owner_pubkey) = buzz_sdk_pkg::nip_oa::verify_auth_tag(&json, &target_pubkey) {
+        if let Ok(owner_pubkey) = ambush_sdk_pkg::nip_oa::verify_auth_tag(&json, &target_pubkey) {
             return Some(owner_pubkey.to_hex());
         }
     }

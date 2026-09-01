@@ -24,7 +24,7 @@ pub(crate) fn shut_down_app(app: &tauri::AppHandle, shutdown_done: &std::sync::a
         app.state::<crate::terminal_runtime::TerminalSessions>()
             .shutdown_all();
         if let Err(error) = shutdown_managed_agents(app) {
-            eprintln!("buzz-desktop: failed to stop managed agents: {error}");
+            eprintln!("ambush-desktop: failed to stop managed agents: {error}");
         }
         #[cfg(feature = "mesh-llm")]
         shutdown_mesh_runtime(app);
@@ -55,7 +55,7 @@ pub(crate) fn install_signal_handler(
         #[cfg(not(all(feature = "mesh-llm", target_os = "macos")))]
         std::process::exit(0);
     }) {
-        eprintln!("buzz-desktop: failed to register signal handler: {error}");
+        eprintln!("ambush-desktop: failed to register signal handler: {error}");
     }
 }
 
@@ -88,17 +88,17 @@ pub(crate) fn relaunch_after_mesh_shutdown(app: &tauri::AppHandle) -> ! {
                 .args(env.args_os.iter().skip(1))
                 .spawn()
             {
-                eprintln!("buzz-desktop: failed to relaunch app: {error}");
+                eprintln!("ambush-desktop: failed to relaunch app: {error}");
             }
         }
-        Err(error) => eprintln!("buzz-desktop: failed to locate app for relaunch: {error}"),
+        Err(error) => eprintln!("ambush-desktop: failed to locate app for relaunch: {error}"),
     }
     hard_exit_after_mesh_shutdown();
 }
 
 #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
 pub(crate) fn hard_exit_after_mesh_shutdown() -> ! {
-    // SAFETY: all Buzz-managed subprocesses and the embedded Mesh runtime have
+    // SAFETY: all Ambush-managed subprocesses and the embedded Mesh runtime have
     // been stopped. `_exit` intentionally skips only process-global C++
     // destructors and buffered stdio; no application state remains observable.
     unsafe { libc::_exit(0) }
@@ -119,8 +119,8 @@ pub(crate) fn shutdown_mesh_runtime(app: &tauri::AppHandle) {
     });
     match rx.recv_timeout(std::time::Duration::from_secs(5)) {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("buzz-desktop: failed to stop Mesh runtime: {error}"),
-        Err(error) => eprintln!("buzz-desktop: timed out stopping Mesh runtime: {error}"),
+        Ok(Err(error)) => eprintln!("ambush-desktop: failed to stop Mesh runtime: {error}"),
+        Err(error) => eprintln!("ambush-desktop: timed out stopping Mesh runtime: {error}"),
     }
 }
 
@@ -252,13 +252,13 @@ pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), Stri
     // All tracked PIDs have already been killed above, so pass an empty skip list.
     managed_agents::sweep_orphaned_agent_processes(app, &[]);
 
-    // System-wide sweep: agent workers (goose, buzz-agent, etc.) are spawned
-    // in their own process groups by buzz-acp, so group-kills above only
+    // System-wide sweep: agent workers (goose, ambush-agent, etc.) are spawned
+    // in their own process groups by ambush-acp, so group-kills above only
     // reach the harness, not the workers. Scan all user processes and kill any
     // known agent binaries that are still running.
     managed_agents::sweep_system_agent_processes(&managed_agents::current_instance_id(app), &[]);
 
-    // Dead-instance reaping: find agents belonging to Buzz instances
+    // Dead-instance reaping: find agents belonging to Ambush instances
     // whose desktop process is no longer running and reap them.
     managed_agents::reap_dead_instance_agents(&managed_agents::current_instance_id(app), &[]);
 

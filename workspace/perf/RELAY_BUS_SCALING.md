@@ -1,9 +1,9 @@
-# Buzz relay bus scaling harness
+# Ambush relay bus scaling harness
 
 This harness gives reproducible evidence for the rewrite's Redis fan-out scaling claim:
 
 - **old/global bus:** every relay pod receives every community's event;
-- **new/community-scoped bus:** each pod retains only the server-resolved community topics for which it has local subscribers (`buzz:{community_id}:global` or `buzz:{community_id}:channel:{channel_id}`).
+- **new/community-scoped bus:** each pod retains only the server-resolved community topics for which it has local subscribers (`ambush:{community_id}:global` or `ambush:{community_id}:channel:{channel_id}`).
 
 The measured default uses Redis PUB/SUB directly with simulated relay pod subscribers. It intentionally isolates the bus boundary: no DB ingest, websocket framing, client rendering, or relay business logic is included.
 
@@ -58,9 +58,9 @@ The unit tests pin the default 1/2/4-pod 64× contract and include a mutant row 
 
 ## Code provenance
 
-The scoped Redis channel format corresponds to `buzz_pubsub::EventTopicKey::redis_channel()` in `crates/buzz-pubsub/src/topic.rs`:
+The scoped Redis channel format corresponds to `ambush_pubsub::EventTopicKey::redis_channel()` in `crates/ambush-pubsub/src/topic.rs`:
 
-- global: `buzz:{community_id}:global`
-- channel: `buzz:{community_id}:channel:{channel_id}`
+- global: `ambush:{community_id}:global`
+- channel: `ambush:{community_id}:channel:{channel_id}`
 
 `retain_topic` / `release_topic` drive dynamic local Redis `SUBSCRIBE` interest. This harness measures that bus-bound property only. Live relay latency, DB capacity, and client rendering should be measured separately with a full stack because they include unrelated bottlenecks.

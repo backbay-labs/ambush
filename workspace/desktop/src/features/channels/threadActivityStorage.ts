@@ -11,7 +11,7 @@ export type ThreadActivityItem = {
   tags: string[][];
 };
 
-const ACTIVITY_STORAGE_PREFIX = "buzz-thread-activity.v1";
+const ACTIVITY_STORAGE_PREFIX = "ambush-thread-activity.v1";
 const MAX_ACTIVITY_ITEMS = 100;
 
 // Scoped to relay+pubkey. The legacy pubkey-only key is intentionally not read
@@ -121,7 +121,7 @@ export function addThreadActivityItems(
 
 /**
  * One-time removal of the orphaned pre-relay-scoping key
- * `buzz-thread-activity.v1:<pubkey>`. The legacy pubkey-only writer was dropped
+ * `ambush-thread-activity.v1:<pubkey>`. The legacy pubkey-only writer was dropped
  * when the key became relay-scoped, but the old ~400 KB blob is never read and
  * is absent from the quota-sweep whitelist, so it lingers as dead weight.
  * removeItem on an absent key is a no-op, so running this on every identity

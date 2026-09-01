@@ -234,7 +234,7 @@ export function HuddleParticipantsControl({
   const participantDetails = (
     <PopoverContent
       align="end"
-      className="buzz-huddle-drawer buzz-huddle-popover w-72 p-3 text-foreground"
+      className="ambush-huddle-drawer ambush-huddle-popover w-72 p-3 text-foreground"
       side={appearance === "room" ? "bottom" : "top"}
       sideOffset={10}
     >
@@ -301,7 +301,7 @@ export function HuddleParticipantsControl({
       {visibleIdentities.map((participant) =>
         appearance === "room" ? (
           <div
-            className="buzz-huddle-participant-tile relative flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-border/70 bg-muted/45 px-3 py-3"
+            className="ambush-huddle-participant-tile relative flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-border/70 bg-muted/45 px-3 py-3"
             data-testid="huddle-participant-tile"
             key={participant.pubkey}
           >
@@ -353,7 +353,7 @@ export function HuddleParticipantsControl({
           <AgentVoiceMenu
             agentPubkey={participant.pubkey}
             contentAlign="start"
-            contentClassName="buzz-huddle-drawer buzz-huddle-popover text-foreground"
+            contentClassName="ambush-huddle-drawer ambush-huddle-popover text-foreground"
             contentSide="top"
             displayName={participant.displayName}
             key={participant.pubkey}
@@ -388,7 +388,7 @@ export function HuddleParticipantsControl({
                 <ParticipantAvatar participant={participant} size="bar" />
               </span>
             </TooltipTrigger>
-            <TooltipContent className="buzz-huddle-tooltip" side="top">
+            <TooltipContent className="ambush-huddle-tooltip" side="top">
               {participant.displayName}
             </TooltipContent>
           </Tooltip>
@@ -401,7 +401,7 @@ export function HuddleParticipantsControl({
             className={cn(
               "relative z-10 shrink-0 px-1 text-2xs font-semibold shadow-none tabular-nums",
               appearance === "room"
-                ? "buzz-huddle-participant-tile min-h-[6.375rem] min-w-28 rounded-xl border border-border/70 bg-muted/45 text-foreground/70 hover:bg-muted/65 hover:text-foreground"
+                ? "ambush-huddle-participant-tile min-h-[6.375rem] min-w-28 rounded-xl border border-border/70 bg-muted/45 text-foreground/70 hover:bg-muted/65 hover:text-foreground"
                 : "h-9 min-w-9 rounded-full border-2 border-black bg-white/15 text-white hover:bg-white/25 hover:text-white",
             )}
             type="button"
@@ -435,15 +435,15 @@ function ParticipantAvatar({
     size === "room" ? "h-14 w-14" : size === "bar" ? "h-9 w-9" : "h-8 w-8";
   const speakerLevel = Math.min(1, Math.max(0, participant.speakerLevel));
   const speakerStyle = {
-    "--buzz-huddle-speaker-opacity":
+    "--ambush-huddle-speaker-opacity":
       speakerLevel > 0.04 ? (0.45 + speakerLevel * 0.55).toFixed(3) : "0",
-    "--buzz-huddle-speaker-scale": (1.02 + speakerLevel * 0.14).toFixed(3),
+    "--ambush-huddle-speaker-scale": (1.02 + speakerLevel * 0.14).toFixed(3),
   } as React.CSSProperties;
 
   return (
     <span
       className={cn(
-        "buzz-huddle-speaking-avatar relative z-0 inline-flex shrink-0 rounded-full",
+        "ambush-huddle-speaking-avatar relative z-0 inline-flex shrink-0 rounded-full",
         sizeClass,
       )}
       data-testid="huddle-participant-avatar"

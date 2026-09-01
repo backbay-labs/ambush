@@ -9,10 +9,10 @@ import {
 } from "./entityLink";
 
 export type SupportedLinkPreviewKind =
-  | "buzz-pull-request"
-  | "buzz-issue"
-  | "buzz-repository"
-  | "buzz-project"
+  | "ambush-pull-request"
+  | "ambush-issue"
+  | "ambush-repository"
+  | "ambush-project"
   | "github-pull-request"
   | "github-issue"
   | "github-repository"
@@ -47,13 +47,13 @@ export type SupportedLinkPreview = {
     | "link";
 };
 
-// Buzz relay hosts differ per community, so relay git URLs are recognized by
+// Ambush relay hosts differ per community, so relay git URLs are recognized by
 // their distinctive path shape (`/git/<64-hex-pubkey>/<repo>`) rather than by
 // hostname, and require an explicit scheme. Generic previews remain HTTPS-only.
 const SUPPORTED_URL_RE =
-  /(^|[\s([{<>"'])(https:\/\/[^\s<>"'\]]+|https?:\/\/[^\s<>"'\]]+\/git\/[a-f0-9]{64}\/[^\s<>"'\]]+|buzz:\/\/(?:pr|issue|repo|project)\?[^\s<>"'\]]+|(?:(?:www\.)?github\.com|(?:www\.)?linear\.app|drive\.google\.com|docs\.google\.com)\/[^\s<>"'\]]+)/gi;
+  /(^|[\s([{<>"'])(https:\/\/[^\s<>"'\]]+|https?:\/\/[^\s<>"'\]]+\/git\/[a-f0-9]{64}\/[^\s<>"'\]]+|ambush:\/\/(?:pr|issue|repo|project)\?[^\s<>"'\]]+|(?:(?:www\.)?github\.com|(?:www\.)?linear\.app|drive\.google\.com|docs\.google\.com)\/[^\s<>"'\]]+)/gi;
 const MARKDOWN_SUPPORTED_LINK_RE =
-  /!?\[([^\]\n]+)\]\((https:\/\/[^)\s<>"']+|https?:\/\/[^)\s<>"']+\/git\/[a-f0-9]{64}\/[^)\s<>"']+|buzz:\/\/(?:pr|issue|repo|project)\?[^)\s<>"']+|(?:(?:www\.)?github\.com|(?:www\.)?linear\.app|drive\.google\.com|docs\.google\.com)\/[^)\s<>"']+)\)/gi;
+  /!?\[([^\]\n]+)\]\((https:\/\/[^)\s<>"']+|https?:\/\/[^)\s<>"']+\/git\/[a-f0-9]{64}\/[^)\s<>"']+|ambush:\/\/(?:pr|issue|repo|project)\?[^)\s<>"']+|(?:(?:www\.)?github\.com|(?:www\.)?linear\.app|drive\.google\.com|docs\.google\.com)\/[^)\s<>"']+)\)/gi;
 const MAX_PREVIEWS = 8;
 
 type HiddenRange = {
@@ -299,76 +299,76 @@ function createPreview(
  * Exported so the resolver can tell "still the fallback" apart from a
  * markdown-label override it must not overwrite.
  */
-export function buzzEntityFallbackTitle(link: ParsedEntityLink): string {
+export function ambushEntityFallbackTitle(link: ParsedEntityLink): string {
   if (link.type === "repo" || link.type === "project") return link.dtag;
   return `${link.dtag} #${link.id.slice(0, 8)}`;
 }
 
 /**
- * Map a `buzz://pr|issue|repo|project` deep link onto a preview card. The
+ * Map a `ambush://pr|issue|repo|project` deep link onto a preview card. The
  * href is rebuilt through the canonical builders so equivalent links (case
  * or query order variants) dedupe to a single card.
  */
-function parseBuzzEntityPreview(href: string): SupportedLinkPreview | null {
+function parseAmbushEntityPreview(href: string): SupportedLinkPreview | null {
   const parsed = parseEntityLink(href);
   if (!parsed.ok) return null;
 
   const link = parsed.value;
-  const title = buzzEntityFallbackTitle(link);
+  const title = ambushEntityFallbackTitle(link);
   if (link.type === "pr") {
     return {
-      kind: "buzz-pull-request",
+      kind: "ambush-pull-request",
       href: buildPullRequestLink(link),
-      provider: "Buzz",
+      provider: "Ambush",
       title,
       typeLabel: "Review",
     };
   }
   if (link.type === "issue") {
     return {
-      kind: "buzz-issue",
+      kind: "ambush-issue",
       href: buildIssueLink(link),
-      provider: "Buzz",
+      provider: "Ambush",
       title,
       typeLabel: "Task",
     };
   }
   if (link.type === "project") {
     return {
-      kind: "buzz-project",
+      kind: "ambush-project",
       href: buildProjectLink(link),
-      provider: "Buzz",
+      provider: "Ambush",
       title,
       typeLabel: "project",
     };
   }
   return {
-    kind: "buzz-repository",
+    kind: "ambush-repository",
     href: buildRepoLink(link),
-    provider: "Buzz",
+    provider: "Ambush",
     title,
     typeLabel: "repo",
   };
 }
 
-const BUZZ_GIT_PATH_RE =
+const AMBUSH_GIT_PATH_RE =
   /^\/git\/([a-f0-9]{64})\/([a-zA-Z0-9._-]+?)(?:\.git)?\/?$/;
 
 /**
- * Recognize a Buzz relay git URL (`{relay-origin}/git/<owner-pubkey>/<repo>`,
+ * Recognize an Ambush relay git URL (`{relay-origin}/git/<owner-pubkey>/<repo>`,
  * the clone URL shape agents paste when announcing work). The preview href
- * is normalized to the canonical `buzz://repo` deep link: the raw git
- * transport endpoint is not a browsable page, and the buzz:// href gives the
+ * is normalized to the canonical `ambush://repo` deep link: the raw git
+ * transport endpoint is not a browsable page, and the ambush:// href gives the
  * card the same in-app click navigation as explicit entity links (and
  * dedupes the two spellings of the same repository).
  *
  * Security: the URL origin must equal `activeRelayOrigin` (the currently
  * connected relay). Path shape alone is not proof that a host belongs to the
- * active Buzz relay — an arbitrary external URL sharing the path shape must
+ * active Ambush relay — an arbitrary external URL sharing the path shape must
  * remain an ordinary external link. Pass `null` when the relay origin is not
  * yet resolved; the link stays external until it can be verified.
  */
-function parseBuzzGitLink(
+function parseAmbushGitLink(
   parsed: URL,
   activeRelayOrigin: string | null,
 ): SupportedLinkPreview | null {
@@ -376,7 +376,7 @@ function parseBuzzGitLink(
     return null;
   }
 
-  const match = BUZZ_GIT_PATH_RE.exec(parsed.pathname);
+  const match = AMBUSH_GIT_PATH_RE.exec(parsed.pathname);
   if (!match) return null;
 
   const [, owner, repo] = match;
@@ -385,9 +385,9 @@ function parseBuzzGitLink(
   }
 
   return {
-    kind: "buzz-repository",
+    kind: "ambush-repository",
     href: buildRepoLink({ owner, dtag: repo }),
-    provider: "Buzz",
+    provider: "Ambush",
     title: repo,
     typeLabel: "repo",
   };
@@ -547,7 +547,7 @@ export function parseSupportedLinkPreview(
 ): SupportedLinkPreview | null {
   const candidate = trimUrlCandidate(href);
   if (isEntityLink(candidate)) {
-    return parseBuzzEntityPreview(candidate);
+    return parseAmbushEntityPreview(candidate);
   }
 
   let parsed: URL;
@@ -564,7 +564,7 @@ export function parseSupportedLinkPreview(
   }
 
   const recognized =
-    parseBuzzGitLink(parsed, activeRelayOrigin ?? null) ??
+    parseAmbushGitLink(parsed, activeRelayOrigin ?? null) ??
     parseGithubLink(parsed) ??
     parseLinearIssue(parsed) ??
     parseGoogleDriveLink(parsed) ??
@@ -665,14 +665,14 @@ export function extractSupportedLinkPreviews(
   const relayOrigin = activeRelayOrigin ?? null;
   for (const candidate of candidates) {
     const preview = parseSupportedLinkPreview(candidate.href, relayOrigin);
-    // Buzz-native links render as inline entity chips. Their relay-backed
+    // Ambush-native links render as inline entity chips. Their relay-backed
     // metadata is available from the chip on hover, so a second standalone
     // preview would duplicate the same entity presentation. This also covers
     // same-relay clone URLs, which parseSupportedLinkPreview normalizes to a
-    // buzz://repo href. External web links continue through the snapshot path.
+    // ambush://repo href. External web links continue through the snapshot path.
     if (
       !preview ||
-      preview.href.startsWith("buzz://") ||
+      preview.href.startsWith("ambush://") ||
       seen.has(preview.href)
     )
       continue;

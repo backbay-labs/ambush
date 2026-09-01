@@ -183,7 +183,7 @@ test("removeLegacyThreadActivityKey removes the orphaned pubkey-only key and pre
   const { store } = installStore();
 
   const pubkey = "pk1";
-  const legacyKey = `buzz-thread-activity.v1:${pubkey}`;
+  const legacyKey = `ambush-thread-activity.v1:${pubkey}`;
   const scopedKey = activityStorageKey(pubkey, RELAY);
   store.set(legacyKey, JSON.stringify([{ id: "legacy" }]));
   store.set(scopedKey, JSON.stringify([{ id: "scoped" }]));

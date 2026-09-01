@@ -18,13 +18,13 @@ const _maximumRetryDelay = Duration(hours: 6);
 const _lowercaseHex64Pattern = r'^[0-9a-f]{64}$';
 const _installationIdPattern = r'^[0-9a-f]{32}$';
 
-typedef BuzzPushLeaseRevocationPublisher =
-    Future<void> Function(BuzzPushLeaseRevocationRecord record);
-typedef BuzzPushLeaseRevocationClock = DateTime Function();
-typedef BuzzPushLeaseRevocationJitter = double Function();
-typedef BuzzPushLeaseRevocationErrorReporter =
+typedef AmbushPushLeaseRevocationPublisher =
+    Future<void> Function(AmbushPushLeaseRevocationRecord record);
+typedef AmbushPushLeaseRevocationClock = DateTime Function();
+typedef AmbushPushLeaseRevocationJitter = double Function();
+typedef AmbushPushLeaseRevocationErrorReporter =
     void Function(Object error, StackTrace stackTrace);
-typedef BuzzPushLeaseRevocationWakeScheduler =
+typedef AmbushPushLeaseRevocationWakeScheduler =
     void Function() Function(Duration delay, void Function() wake);
 
 /// Durable state for retracting one precise NIP-PL lease address.
@@ -32,7 +32,7 @@ typedef BuzzPushLeaseRevocationWakeScheduler =
 /// The signing key is intentionally retained in secure storage only until the
 /// relay accepts the tombstone or the old endpoint grant expires.
 @immutable
-class BuzzPushLeaseRevocationRecord {
+class AmbushPushLeaseRevocationRecord {
   final String relayUrl;
   final String relayOrigin;
   final String memberPubkey;
@@ -45,7 +45,7 @@ class BuzzPushLeaseRevocationRecord {
   final int attemptCount;
   final int nextAttemptAt;
 
-  BuzzPushLeaseRevocationRecord({
+  AmbushPushLeaseRevocationRecord({
     required this.relayUrl,
     required this.relayOrigin,
     required this.memberPubkey,
@@ -56,7 +56,7 @@ class BuzzPushLeaseRevocationRecord {
     required this.attemptCount,
     required this.nextAttemptAt,
   }) {
-    if (canonicalBuzzPushRelayOrigin(relayUrl) != relayOrigin) {
+    if (canonicalAmbushPushRelayOrigin(relayUrl) != relayOrigin) {
       throw const FormatException(
         'Push revocation relay URL and origin do not match.',
       );
@@ -89,12 +89,12 @@ class BuzzPushLeaseRevocationRecord {
 
   String get leaseAddress => '$memberPubkey|$relayOrigin|$installationId';
 
-  BuzzPushLeaseRevocationRecord copyWith({
+  AmbushPushLeaseRevocationRecord copyWith({
     int? generation,
     int? expiresAt,
     int? attemptCount,
     int? nextAttemptAt,
-  }) => BuzzPushLeaseRevocationRecord(
+  }) => AmbushPushLeaseRevocationRecord(
     relayUrl: relayUrl,
     relayOrigin: relayOrigin,
     memberPubkey: memberPubkey,
@@ -119,7 +119,7 @@ class BuzzPushLeaseRevocationRecord {
     'nextAttemptAt': nextAttemptAt,
   };
 
-  factory BuzzPushLeaseRevocationRecord.fromJson(Map<String, dynamic> json) {
+  factory AmbushPushLeaseRevocationRecord.fromJson(Map<String, dynamic> json) {
     const keys = {
       'version',
       'relayUrl',
@@ -146,7 +146,7 @@ class BuzzPushLeaseRevocationRecord {
         json['nextAttemptAt'] is! int) {
       throw const FormatException('Invalid push revocation record.');
     }
-    return BuzzPushLeaseRevocationRecord(
+    return AmbushPushLeaseRevocationRecord(
       relayUrl: json['relayUrl'] as String,
       relayOrigin: json['relayOrigin'] as String,
       memberPubkey: json['memberPubkey'] as String,
@@ -160,24 +160,24 @@ class BuzzPushLeaseRevocationRecord {
   }
 }
 
-class BuzzPushLeaseRevocationStorage {
-  static const _key = 'buzz_push_lease_revocations_v1';
+class AmbushPushLeaseRevocationStorage {
+  static const _key = 'ambush_push_lease_revocations_v1';
 
   final FlutterSecureStorage _secure;
 
-  BuzzPushLeaseRevocationStorage({FlutterSecureStorage? secure})
+  AmbushPushLeaseRevocationStorage({FlutterSecureStorage? secure})
     : _secure = secure ?? const FlutterSecureStorage();
 
-  Future<List<BuzzPushLeaseRevocationRecord>> loadAll() async {
+  Future<List<AmbushPushLeaseRevocationRecord>> loadAll() async {
     final raw = await _secure.read(key: _key);
-    if (raw == null) return <BuzzPushLeaseRevocationRecord>[];
+    if (raw == null) return <AmbushPushLeaseRevocationRecord>[];
     final decoded = jsonDecode(raw);
     if (decoded is! List<dynamic>) {
       throw const FormatException('Push revocation outbox must be a list.');
     }
     final records = [
       for (final value in decoded)
-        BuzzPushLeaseRevocationRecord.fromJson(
+        AmbushPushLeaseRevocationRecord.fromJson(
           Map<String, dynamic>.from(value as Map),
         ),
     ];
@@ -191,7 +191,7 @@ class BuzzPushLeaseRevocationStorage {
   }
 
   Future<void> replaceAll(
-    Iterable<BuzzPushLeaseRevocationRecord> records,
+    Iterable<AmbushPushLeaseRevocationRecord> records,
   ) async {
     final values = records.toList();
     final addresses = values.map((record) => record.leaseAddress).toSet();
@@ -217,23 +217,23 @@ class BuzzPushLeaseRevocationStorage {
 /// network I/O. A process death during an ambiguous publication therefore
 /// cannot cause an immediate replay or reuse a generation the relay may have
 /// accepted.
-class BuzzPushLeaseRevocationOutbox {
-  BuzzPushLeaseRevocationOutbox({
+class AmbushPushLeaseRevocationOutbox {
+  AmbushPushLeaseRevocationOutbox({
     required this.storage,
     required this.publisher,
     this.now = DateTime.now,
-    BuzzPushLeaseRevocationJitter? jitter,
+    AmbushPushLeaseRevocationJitter? jitter,
     this.reportError = reportPushLeaseCleanupError,
-    BuzzPushLeaseRevocationWakeScheduler? scheduleWake,
+    AmbushPushLeaseRevocationWakeScheduler? scheduleWake,
   }) : jitter = jitter ?? Random.secure().nextDouble,
        scheduleWake = scheduleWake ?? _scheduleTimer;
 
-  final BuzzPushLeaseRevocationStorage storage;
-  final BuzzPushLeaseRevocationPublisher publisher;
-  final BuzzPushLeaseRevocationClock now;
-  final BuzzPushLeaseRevocationJitter jitter;
-  final BuzzPushLeaseRevocationErrorReporter reportError;
-  final BuzzPushLeaseRevocationWakeScheduler scheduleWake;
+  final AmbushPushLeaseRevocationStorage storage;
+  final AmbushPushLeaseRevocationPublisher publisher;
+  final AmbushPushLeaseRevocationClock now;
+  final AmbushPushLeaseRevocationJitter jitter;
+  final AmbushPushLeaseRevocationErrorReporter reportError;
+  final AmbushPushLeaseRevocationWakeScheduler scheduleWake;
 
   Future<void> _storageTail = Future.value();
   Future<void>? _drain;
@@ -251,7 +251,7 @@ class BuzzPushLeaseRevocationOutbox {
     return result;
   }
 
-  Future<void> enqueue(BuzzPushLeaseRevocationRecord record) async {
+  Future<void> enqueue(AmbushPushLeaseRevocationRecord record) async {
     await _serialize(() async {
       final records = await storage.loadAll();
       final index = records.indexWhere(
@@ -270,7 +270,7 @@ class BuzzPushLeaseRevocationOutbox {
 
   Future<bool> enqueueCommunity(
     Community community, {
-    Future<List<BuzzPushEndpointGrant>> Function()? readGrants,
+    Future<List<AmbushPushEndpointGrant>> Function()? readGrants,
   }) async {
     final state = community.pushSubscriptionState;
     final highestGeneration =
@@ -288,14 +288,14 @@ class BuzzPushLeaseRevocationOutbox {
     }
     final decoded = nostr.Nip19.decode(payload: nsec);
     final memberPubkey = community.pubkey ?? nostr.Keys(decoded.data).public;
-    final relayUrl = canonicalBuzzPushRelayHttpUrl(community.relayUrl);
-    final relayOrigin = canonicalBuzzPushRelayOrigin(relayUrl);
-    final grants = await (readGrants ?? readBuzzPushEndpointGrants)();
+    final relayUrl = canonicalAmbushPushRelayHttpUrl(community.relayUrl);
+    final relayOrigin = canonicalAmbushPushRelayOrigin(relayUrl);
+    final grants = await (readGrants ?? readAmbushPushEndpointGrants)();
     final matching = grants
         .where(
           (grant) =>
               grant.relayOrigin == relayOrigin &&
-              grant.appProfile == buzzDevPushAppProfile,
+              grant.appProfile == ambushDevPushAppProfile,
         )
         .toList();
     if (matching.length != 1) {
@@ -310,7 +310,7 @@ class BuzzPushLeaseRevocationOutbox {
       throw StateError('Push lease generation is exhausted.');
     }
     await enqueue(
-      BuzzPushLeaseRevocationRecord(
+      AmbushPushLeaseRevocationRecord(
         relayUrl: relayUrl,
         relayOrigin: relayOrigin,
         memberPubkey: memberPubkey,
@@ -362,51 +362,51 @@ class BuzzPushLeaseRevocationOutbox {
     }
   }
 
-  Future<BuzzPushLeaseRevocationRecord?> _reserveNextDueAttempt() => _serialize(
-    () async {
-      final currentSeconds = now().millisecondsSinceEpoch ~/ 1000;
-      final records = await storage.loadAll();
-      final active = records
-          .where((record) => record.expiresAt > currentSeconds)
-          .toList();
-      final due =
-          active
-              .where((record) => record.nextAttemptAt <= currentSeconds)
-              .toList()
-            ..sort((left, right) {
-              final schedule = left.nextAttemptAt.compareTo(
-                right.nextAttemptAt,
-              );
-              return schedule != 0
-                  ? schedule
-                  : left.leaseAddress.compareTo(right.leaseAddress);
-            });
-      if (due.isEmpty) {
-        if (active.length != records.length) {
-          await storage.replaceAll(active);
+  Future<AmbushPushLeaseRevocationRecord?> _reserveNextDueAttempt() =>
+      _serialize(() async {
+        final currentSeconds = now().millisecondsSinceEpoch ~/ 1000;
+        final records = await storage.loadAll();
+        final active = records
+            .where((record) => record.expiresAt > currentSeconds)
+            .toList();
+        final due =
+            active
+                .where((record) => record.nextAttemptAt <= currentSeconds)
+                .toList()
+              ..sort((left, right) {
+                final schedule = left.nextAttemptAt.compareTo(
+                  right.nextAttemptAt,
+                );
+                return schedule != 0
+                    ? schedule
+                    : left.leaseAddress.compareTo(right.leaseAddress);
+              });
+        if (due.isEmpty) {
+          if (active.length != records.length) {
+            await storage.replaceAll(active);
+          }
+          return null;
         }
-        return null;
-      }
-      final record = due.first;
-      if (record.generation >= _maxSafeJsonInteger) {
-        throw StateError('Push lease generation is exhausted.');
-      }
-      final reserved = record.copyWith(
-        generation: record.generation + 1,
-        attemptCount: record.attemptCount + 1,
-        nextAttemptAt: currentSeconds + _retryDelaySeconds(record.attemptCount),
-      );
-      final index = active.indexWhere(
-        (candidate) => candidate.leaseAddress == record.leaseAddress,
-      );
-      if (index < 0) {
-        throw StateError('Reserved push revocation record disappeared.');
-      }
-      active[index] = reserved;
-      await storage.replaceAll(active);
-      return record;
-    },
-  );
+        final record = due.first;
+        if (record.generation >= _maxSafeJsonInteger) {
+          throw StateError('Push lease generation is exhausted.');
+        }
+        final reserved = record.copyWith(
+          generation: record.generation + 1,
+          attemptCount: record.attemptCount + 1,
+          nextAttemptAt:
+              currentSeconds + _retryDelaySeconds(record.attemptCount),
+        );
+        final index = active.indexWhere(
+          (candidate) => candidate.leaseAddress == record.leaseAddress,
+        );
+        if (index < 0) {
+          throw StateError('Reserved push revocation record disappeared.');
+        }
+        active[index] = reserved;
+        await storage.replaceAll(active);
+        return record;
+      });
 
   int _retryDelaySeconds(int priorAttempts) {
     final exponent = min(priorAttempts, 20);
@@ -419,7 +419,7 @@ class BuzzPushLeaseRevocationOutbox {
     return half + (jitter() * (maximumSeconds - half)).floor();
   }
 
-  Future<void> _removeAccepted(BuzzPushLeaseRevocationRecord attempted) =>
+  Future<void> _removeAccepted(AmbushPushLeaseRevocationRecord attempted) =>
       _serialize(() async {
         final records = await storage.loadAll();
         records.removeWhere(
@@ -474,8 +474,8 @@ void Function() _scheduleTimer(Duration delay, void Function() wake) {
   return timer.cancel;
 }
 
-String canonicalBuzzPushRelayOrigin(String relayUrl) {
-  final uri = _buzzPushRelayUri(relayUrl);
+String canonicalAmbushPushRelayOrigin(String relayUrl) {
+  final uri = _ambushPushRelayUri(relayUrl);
   final scheme = switch (uri.scheme) {
     'https' || 'wss' => 'wss',
     'http' || 'ws' => 'ws',
@@ -484,8 +484,8 @@ String canonicalBuzzPushRelayOrigin(String relayUrl) {
   return '$scheme://${uri.authority}';
 }
 
-String canonicalBuzzPushRelayHttpUrl(String relayUrl) {
-  final uri = _buzzPushRelayUri(relayUrl);
+String canonicalAmbushPushRelayHttpUrl(String relayUrl) {
+  final uri = _ambushPushRelayUri(relayUrl);
   final scheme = switch (uri.scheme) {
     'https' || 'wss' => 'https',
     'http' || 'ws' => 'http',
@@ -494,7 +494,7 @@ String canonicalBuzzPushRelayHttpUrl(String relayUrl) {
   return uri.replace(scheme: scheme, path: '/').toString();
 }
 
-Uri _buzzPushRelayUri(String relayUrl) {
+Uri _ambushPushRelayUri(String relayUrl) {
   final uri = Uri.tryParse(relayUrl);
   if (uri == null ||
       !const {'http', 'https', 'ws', 'wss'}.contains(uri.scheme) ||
@@ -508,10 +508,10 @@ Uri _buzzPushRelayUri(String relayUrl) {
   return uri;
 }
 
-Future<void> publishBuzzPushLeaseRevocation(
-  BuzzPushLeaseRevocationRecord record,
+Future<void> publishAmbushPushLeaseRevocation(
+  AmbushPushLeaseRevocationRecord record,
 ) async {
-  final descriptor = await fetchBuzzPushLeaseDescriptor(record.relayUrl);
+  final descriptor = await fetchAmbushPushLeaseDescriptor(record.relayUrl);
   if (descriptor.origin != record.relayOrigin) {
     throw StateError('Relay push origin changed while revocation was pending.');
   }
@@ -519,7 +519,7 @@ Future<void> publishBuzzPushLeaseRevocation(
   final wsUrl = uri
       .replace(scheme: uri.scheme == 'https' ? 'wss' : 'ws')
       .toString();
-  await publishBuzzPushLeaseTombstone(
+  await publishAmbushPushLeaseTombstone(
     descriptor: descriptor,
     installationId: record.installationId,
     generation: record.generation,
@@ -537,16 +537,16 @@ Future<void> publishBuzzPushLeaseRevocation(
   );
 }
 
-final buzzPushLeaseRevocationStorageProvider =
-    Provider<BuzzPushLeaseRevocationStorage>(
-      (ref) => BuzzPushLeaseRevocationStorage(),
+final ambushPushLeaseRevocationStorageProvider =
+    Provider<AmbushPushLeaseRevocationStorage>(
+      (ref) => AmbushPushLeaseRevocationStorage(),
     );
 
-final buzzPushLeaseRevocationOutboxProvider =
-    Provider<BuzzPushLeaseRevocationOutbox>((ref) {
-      final outbox = BuzzPushLeaseRevocationOutbox(
-        storage: ref.read(buzzPushLeaseRevocationStorageProvider),
-        publisher: publishBuzzPushLeaseRevocation,
+final ambushPushLeaseRevocationOutboxProvider =
+    Provider<AmbushPushLeaseRevocationOutbox>((ref) {
+      final outbox = AmbushPushLeaseRevocationOutbox(
+        storage: ref.read(ambushPushLeaseRevocationStorageProvider),
+        publisher: publishAmbushPushLeaseRevocation,
       );
       ref.onDispose(outbox.dispose);
       return outbox;

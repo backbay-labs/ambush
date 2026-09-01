@@ -10,17 +10,18 @@ const isCi = Boolean(process.env.CI);
 // hit `localhost:3000`, not `127.0.0.1:3000`, or every /query 404s. This also
 // matches the rest of the desktop e2e suite (e2eBridge.ts / bridge.ts), which
 // already default to localhost.
-const relayBaseUrl = process.env.BUZZ_E2E_RELAY_URL ?? "http://localhost:3000";
+const relayBaseUrl =
+  process.env.AMBUSH_E2E_RELAY_URL ?? "http://localhost:3000";
 const seedTimeoutMs = Number.parseInt(
-  process.env.BUZZ_E2E_SEED_TIMEOUT_MS ?? (isCi ? "60000" : "25000"),
+  process.env.AMBUSH_E2E_SEED_TIMEOUT_MS ?? (isCi ? "60000" : "25000"),
   10,
 );
 const requestTimeoutMs = Number.parseInt(
-  process.env.BUZZ_E2E_SEED_REQUEST_TIMEOUT_MS ?? (isCi ? "5000" : "2000"),
+  process.env.AMBUSH_E2E_SEED_REQUEST_TIMEOUT_MS ?? (isCi ? "5000" : "2000"),
   10,
 );
 const retryDelayMs = Number.parseInt(
-  process.env.BUZZ_E2E_SEED_RETRY_DELAY_MS ?? "1000",
+  process.env.AMBUSH_E2E_SEED_RETRY_DELAY_MS ?? "1000",
   10,
 );
 

@@ -194,7 +194,7 @@ impl Drop for SttPipeline {
 /// previous 19-frame / 304 ms window.
 ///
 /// This window is a turn-taking quality knob, not a latency lever: an earlier
-/// env override (`BUZZ_STT_FLUSH_MS`) let it be lowered to 150 ms, which split
+/// env override (`AMBUSH_STT_FLUSH_MS`) let it be lowered to 150 ms, which split
 /// natural mid-sentence pauses into separate messages and confused the
 /// listening agents. Reverted — the window is fixed at the production value.
 const SILENCE_FLUSH_FRAMES: usize = 31;
@@ -354,23 +354,23 @@ const RECV_TIMEOUT: Duration = Duration::from_millis(50);
 const STT_NUM_THREADS: i32 = 1;
 
 /// EXPERIMENTAL (latency bench): override recognizer intra-op threads via
-/// `BUZZ_STT_THREADS`. Default preserves the production single thread.
+/// `AMBUSH_STT_THREADS`. Default preserves the production single thread.
 fn stt_num_threads() -> i32 {
-    std::env::var("BUZZ_STT_THREADS")
+    std::env::var("AMBUSH_STT_THREADS")
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
         .filter(|&n| n >= 1)
         .unwrap_or(STT_NUM_THREADS)
 }
 
-/// EXPERIMENTAL (latency bench): `BUZZ_STT_SPECULATIVE=1` starts the Parakeet
+/// EXPERIMENTAL (latency bench): `AMBUSH_STT_SPECULATIVE=1` starts the Parakeet
 /// decode at the FIRST silent VAD frame instead of after the full flush
 /// window, overlapping the ~150-250 ms decode with the silence wait. If
 /// speech resumes, the speculative result is discarded. When silence holds
 /// to the flush threshold the transcript is emitted immediately, so the STT
 /// leg collapses to ~max(flush window, decode time).
 fn stt_speculative_decode() -> bool {
-    std::env::var("BUZZ_STT_SPECULATIVE").is_ok_and(|v| v == "1")
+    std::env::var("AMBUSH_STT_SPECULATIVE").is_ok_and(|v| v == "1")
 }
 
 struct SttStreamState {
@@ -464,7 +464,7 @@ fn stt_worker(
     let model_path = model_dir.join("model.int8.onnx");
     if !tokens_path.exists() || !model_path.exists() {
         eprintln!(
-            "buzz-desktop: STT model not found at {} — STT disabled",
+            "ambush-desktop: STT model not found at {} — STT disabled",
             model_dir.display()
         );
         drain_until_shutdown(audio_rx, &shutdown);
@@ -482,7 +482,7 @@ fn stt_worker(
     let recognizer = match OfflineRecognizer::create(&cfg) {
         Some(r) => r,
         None => {
-            eprintln!("buzz-desktop: OfflineRecognizer::create returned None — STT disabled");
+            eprintln!("ambush-desktop: OfflineRecognizer::create returned None — STT disabled");
             drain_until_shutdown(audio_rx, &shutdown);
             return;
         }
@@ -494,14 +494,14 @@ fn stt_worker(
     let mut local_stream = match SttStreamState::new() {
         Ok(stream) => stream,
         Err(error) => {
-            eprintln!("buzz-desktop: {error}");
+            eprintln!("ambush-desktop: {error}");
             return;
         }
     };
     let mut remote_stream = match SttStreamState::new() {
         Ok(stream) => stream,
         Err(error) => {
-            eprintln!("buzz-desktop: {error}");
+            eprintln!("ambush-desktop: {error}");
             return;
         }
     };
@@ -629,7 +629,7 @@ fn resample_chunk(resampler: &mut rubato::Fft<f32>, chunk_48k: &[f32]) -> Vec<f3
     let input = match InterleavedSlice::new(chunk_48k, 1, chunk_48k.len()) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("buzz-desktop: STT resample input error: {e}");
+            eprintln!("ambush-desktop: STT resample input error: {e}");
             return Vec::new();
         }
     };
@@ -637,7 +637,7 @@ fn resample_chunk(resampler: &mut rubato::Fft<f32>, chunk_48k: &[f32]) -> Vec<f3
     match resampler.process(&input, 0, None) {
         Ok(out) => out.take_data(),
         Err(e) => {
-            eprintln!("buzz-desktop: STT resample error: {e}");
+            eprintln!("ambush-desktop: STT resample error: {e}");
             Vec::new()
         }
     }
@@ -782,7 +782,7 @@ fn flush_to_stt(
     }
     if !has_enough_voiced_audio(voiced_frames) {
         eprintln!(
-            "buzz-desktop: STT dropped short VAD segment ({voiced_frames}/{MIN_VOICED_FRAMES} voiced frames)"
+            "ambush-desktop: STT dropped short VAD segment ({voiced_frames}/{MIN_VOICED_FRAMES} voiced frames)"
         );
         return;
     }
@@ -804,7 +804,7 @@ fn decode_speech(recognizer: &sherpa_onnx::OfflineRecognizer, speech_buf: &[f32]
 fn send_transcript(text: String, text_tx: &tokio_mpsc::Sender<String>) {
     if !text.is_empty() {
         if let Err(e) = text_tx.blocking_send(text) {
-            eprintln!("buzz-desktop: STT text channel closed: {e}");
+            eprintln!("ambush-desktop: STT text channel closed: {e}");
         }
     }
 }

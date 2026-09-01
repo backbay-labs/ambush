@@ -23,18 +23,18 @@ import {
   resolveSystemTheme,
 } from "./theme-loader";
 
-export const THEME_STORAGE_KEY = "buzz-theme";
-const CACHE_KEY = "buzz-theme-cache";
-export const ACCENT_STORAGE_KEY = "buzz-accent-color";
-export const GLASS_BACKGROUND_STORAGE_KEY = "buzz-glass-background";
-export const GLASS_OPACITY_STORAGE_KEY = "buzz-glass-opacity";
-export const PROMINENT_ACTIVE_TAB_STORAGE_KEY = "buzz-prominent-active-tab";
+export const THEME_STORAGE_KEY = "ambush-theme";
+const CACHE_KEY = "ambush-theme-cache";
+export const ACCENT_STORAGE_KEY = "ambush-accent-color";
+export const GLASS_BACKGROUND_STORAGE_KEY = "ambush-glass-background";
+export const GLASS_OPACITY_STORAGE_KEY = "ambush-glass-opacity";
+export const PROMINENT_ACTIVE_TAB_STORAGE_KEY = "ambush-prominent-active-tab";
 export const GLASS_OPACITY_MIN = 30;
 export const GLASS_OPACITY_MAX = 90;
 export const DEFAULT_GLASS_OPACITY = 65;
 export const DEFAULT_PROMINENT_ACTIVE_TAB = false;
 export const NEUTRAL_ACCENT = "neutral";
-const FOLLOW_SYSTEM_KEY = "buzz-follow-system";
+const FOLLOW_SYSTEM_KEY = "ambush-follow-system";
 const VIDEO_REVIEW_NEUTRAL_ACCENT = "0 0% 98%";
 const VIDEO_REVIEW_CHIP_SURFACE = "#161616";
 const VIDEO_REVIEW_TEXT_CONTRAST = 4.5;
@@ -95,7 +95,7 @@ function isValidThemeName(name: string): name is SyntaxThemeName {
 
 /** Read stored theme, migrating legacy "light"/"dark"/"system" values. */
 function readStoredTheme(fallback: SyntaxThemeName): SyntaxThemeName {
-  // block/buzz#5078 — WebKit throws SecurityError from getItem under a
+  // block/ambush#5078 — WebKit throws SecurityError from getItem under a
   // denied-storage origin; the throw-safe helper lets the provider degrade to
   // the fallback instead of unmounting the root during first render.
   const stored = getStorageItem(THEME_STORAGE_KEY);
@@ -201,13 +201,13 @@ function applyAccentColor(value: string) {
     const styles = window.getComputedStyle(root);
     const foreground = styles.getPropertyValue("--foreground").trim();
     const background = styles.getPropertyValue("--background").trim();
-    root.style.setProperty("--buzz-selected-accent", foreground);
+    root.style.setProperty("--ambush-selected-accent", foreground);
     root.style.setProperty(
-      "--buzz-video-review-accent",
+      "--ambush-video-review-accent",
       VIDEO_REVIEW_NEUTRAL_ACCENT,
     );
     root.style.setProperty(
-      "--buzz-video-review-accent-foreground",
+      "--ambush-video-review-accent-foreground",
       VIDEO_REVIEW_NEUTRAL_ACCENT,
     );
     root.style.setProperty("--primary", foreground);
@@ -222,10 +222,10 @@ function applyAccentColor(value: string) {
   const hex = value;
   const accentHsl = hexToHsl(hex);
   const fgHsl = hexToHsl(getContrastColor(hex));
-  root.style.setProperty("--buzz-selected-accent", accentHsl);
-  root.style.setProperty("--buzz-video-review-accent", accentHsl);
+  root.style.setProperty("--ambush-selected-accent", accentHsl);
+  root.style.setProperty("--ambush-video-review-accent", accentHsl);
   root.style.setProperty(
-    "--buzz-video-review-accent-foreground",
+    "--ambush-video-review-accent-foreground",
     getReviewAccentForeground(hex),
   );
   root.style.setProperty("--primary", accentHsl);
@@ -237,40 +237,40 @@ function applyAccentColor(value: string) {
 }
 
 /**
- * The Buzz themes ship with a fixed neutral accent (the GitHub black/white
- * foreground) rather than a user-selectable accent color. When a Buzz theme is
+ * The Ambush themes ship with a fixed neutral accent (the GitHub black/white
+ * foreground) rather than a user-selectable accent color. When an Ambush theme is
  * active we force `NEUTRAL_ACCENT` regardless of the stored preference, and the
  * appearance panel hides the accent picker. The user's chosen accent is left
  * untouched in storage so it returns when they switch back to another theme.
  */
-export function isBuzzTheme(themeName: string): boolean {
-  return themeName === "buzz" || themeName === "buzz-dark";
+export function isAmbushTheme(themeName: string): boolean {
+  return themeName === "ambush" || themeName === "ambush-dark";
 }
 
 /**
- * Resolve the accent to actually apply for a theme: Buzz themes are pinned to
+ * Resolve the accent to actually apply for a theme: Ambush themes are pinned to
  * the neutral accent; every other theme uses the stored/selected accent.
  */
 function resolveEffectiveAccent(
   themeName: string,
   accentColor: string,
 ): string {
-  return isBuzzTheme(themeName) ? NEUTRAL_ACCENT : accentColor;
+  return isAmbushTheme(themeName) ? NEUTRAL_ACCENT : accentColor;
 }
 
-/** Toggle the Buzz-specific gradient marker independently from glass. */
-function applyBuzzSidebar(themeName: string) {
+/** Toggle the Ambush-specific gradient marker independently from glass. */
+function applyAmbushSidebar(themeName: string) {
   const root = document.documentElement;
-  if (isBuzzTheme(themeName)) {
-    root.setAttribute("data-buzz-sidebar", "");
-    // Keep the concrete Buzz variant on the root as well as the generic
+  if (isAmbushTheme(themeName)) {
+    root.setAttribute("data-ambush-sidebar", "");
+    // Keep the concrete Ambush variant on the root as well as the generic
     // marker. The gradient stylesheet matches this attribute directly, which
     // makes WKWebView invalidate the painted background when light/dark mode
     // changes instead of relying only on a custom-property dependency update.
-    root.setAttribute("data-buzz-theme", themeName);
+    root.setAttribute("data-ambush-theme", themeName);
   } else {
-    root.removeAttribute("data-buzz-sidebar");
-    root.removeAttribute("data-buzz-theme");
+    root.removeAttribute("data-ambush-sidebar");
+    root.removeAttribute("data-ambush-theme");
   }
 }
 
@@ -407,12 +407,12 @@ function applyCachedVars(): string | null {
     }
     root.classList.remove("light", "dark");
     root.classList.add(isDark ? "dark" : "light");
-    applyBuzzSidebar(themeName);
+    applyAmbushSidebar(themeName);
     glassThemeReady = true;
 
     const accent = getStorageItem(ACCENT_STORAGE_KEY) ?? DEFAULT_ACCENT;
-    // Pin Buzz themes to the neutral accent here too, matching applyTheme.
-    // Otherwise a cached Buzz theme + non-neutral stored accent flashes the
+    // Pin Ambush themes to the neutral accent here too, matching applyTheme.
+    // Otherwise a cached Ambush theme + non-neutral stored accent flashes the
     // old accent on reload until the async applyTheme effect runs.
     applyAccentColor(resolveEffectiveAccent(themeName, accent));
 
@@ -448,14 +448,14 @@ async function applyTheme(name: SyntaxThemeName): Promise<{
 
   root.classList.remove("light", "dark");
   root.classList.add(isDark ? "dark" : "light");
-  applyBuzzSidebar(name);
+  applyAmbushSidebar(name);
   glassThemeReady = true;
   maybeEnableGlassBackground(glassVibrancyRequest);
 
   // Apply the accent synchronously in the same batch as the theme vars so the
   // browser paints the new theme + accent together. Doing this in a later
   // microtask (e.g. the caller's `.then`) let the previous accent flash on the
-  // new theme for a frame — the flicker seen when switching to Buzz. Buzz
+  // new theme for a frame — the flicker seen when switching to Ambush. Ambush
   // themes resolve to the neutral accent regardless of the stored value.
   applyAccentColor(
     resolveEffectiveAccent(
@@ -479,7 +479,7 @@ async function applyTheme(name: SyntaxThemeName): Promise<{
 
 export function ThemeProvider({
   children,
-  defaultTheme = "buzz",
+  defaultTheme = "ambush",
 }: ThemeProviderProps) {
   const glassBackgroundSupported = isTauri() && isMacPlatform();
 
@@ -497,7 +497,7 @@ export function ThemeProvider({
   >(null);
   const loadingRef = useRef<string | null>(null);
   const [accentColor, setAccentColorState] = useState<string>(() => {
-    // block/buzz#5078 — use the throw-safe accessor for init-time reads; a
+    // block/ambush#5078 — use the throw-safe accessor for init-time reads; a
     // denied-storage origin would otherwise kill the root on first mount.
     return getStorageItem(ACCENT_STORAGE_KEY) ?? DEFAULT_ACCENT;
   });
@@ -524,7 +524,7 @@ export function ThemeProvider({
   const [followSystem, setFollowSystemState] = useState<boolean>(() => {
     const stored = getStorageItem(FOLLOW_SYSTEM_KEY);
     if (stored !== null) return stored === "true";
-    // Fresh profiles (no saved theme) default to System mode so the Buzz
+    // Fresh profiles (no saved theme) default to System mode so the Ambush
     // default tracks the OS light/dark scheme. Profiles that picked a theme
     // before this toggle existed keep their fixed theme until they opt in.
     return getStorageItem(THEME_STORAGE_KEY) === null;
@@ -574,12 +574,12 @@ export function ThemeProvider({
     void applyWindowGlass(glassBackground);
   }, [glassBackground]);
 
-  // The stronger selected-row treatment belongs exclusively to Buzz. Keep
-  // the saved preference so it is restored when the user returns to Buzz,
+  // The stronger selected-row treatment belongs exclusively to Ambush. Keep
+  // the saved preference so it is restored when the user returns to Ambush,
   // but remove the live marker for every other theme.
   useEffect(() => {
     setProminentActiveTabActive(
-      prominentActiveTab && isBuzzTheme(effectiveTheme),
+      prominentActiveTab && isAmbushTheme(effectiveTheme),
     );
   }, [effectiveTheme, prominentActiveTab]);
 
@@ -626,7 +626,7 @@ export function ThemeProvider({
   }, [followSystem]);
 
   // Re-apply the accent when the user picks a new swatch or the effective theme
-  // changes. applyTheme already applies the (Buzz-neutral-aware) accent in the
+  // changes. applyTheme already applies the (Ambush-neutral-aware) accent in the
   // same synchronous batch as the theme vars — the flicker fix — so this effect
   // is idempotent on theme changes and simply covers accent-only changes.
   useEffect(() => {

@@ -27,8 +27,8 @@ part 'channels_provider_lifecycle.dart';
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 const _unreadCatchUpLimit = 1000;
-const _participatedRootIdsPrefix = 'buzz-thread-participation.v1';
-const _authoredRootIdsPrefix = 'buzz-thread-authored.v1';
+const _participatedRootIdsPrefix = 'ambush-thread-participation.v1';
+const _authoredRootIdsPrefix = 'ambush-thread-authored.v1';
 
 /// Loads the user's channel list from the relay over WebSocket.
 ///
@@ -300,7 +300,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     // linkage validation and member-count hydration.
     if (memberEvents.isNotEmpty) _cacheMemberSnapshots(memberEvents);
     unawaited(
-      cacheBuzzPushChannelEvents(communityID, dedupedMetas, [
+      cacheAmbushPushChannelEvents(communityID, dedupedMetas, [
         ...memberships,
         ...memberEvents,
       ]),

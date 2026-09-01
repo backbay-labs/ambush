@@ -35,7 +35,7 @@ export const presenceFocusRefetchPolicy = {
   refetchOnWindowFocus: false,
 } as const;
 const PRESENCE_ACTIVITY_THROTTLE_MS = 1_000;
-const PRESENCE_PREFERENCE_STORAGE_KEY = "buzz-presence-preference";
+const PRESENCE_PREFERENCE_STORAGE_KEY = "ambush-presence-preference";
 
 type PresencePreference = "auto" | "away" | "offline" | null;
 

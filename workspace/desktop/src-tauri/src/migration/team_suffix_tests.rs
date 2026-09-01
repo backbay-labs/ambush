@@ -13,7 +13,7 @@ fn agent_json(name: &str, prompt: Option<&str>) -> serde_json::Value {
         "name": name,
         "pubkey": "",
         "relay_url": "ws://localhost:3000",
-        "acp_command": "buzz-acp",
+        "acp_command": "ambush-acp",
         "agent_command": "goose",
         "agent_args": [],
         "mcp_command": "",
