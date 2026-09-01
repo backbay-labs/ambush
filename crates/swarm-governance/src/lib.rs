@@ -10474,13 +10474,20 @@ fn write_atomic_synced_at(
     // Preserve the historical fixed blocker name as an occupied namespace
     // signal.  This also prevents a stale or foreign process-id temporary
     // from being bypassed by the monotonic recovery suffix below.
-    let legacy_temporary_name = OsString::from(format!(
+    let legacy_temporary_path = path.with_extension(format!(
         "{}.tmp-{}",
         path.extension()
             .and_then(|extension| extension.to_str())
             .unwrap_or("state"),
         std::process::id()
     ));
+    let legacy_temporary_name = legacy_temporary_path
+        .file_name()
+        .ok_or_else(|| GovernancePersistenceError::Write {
+            path: legacy_temporary_path.clone(),
+            source: std::io::Error::other("legacy atomic temporary has no final component"),
+        })?
+        .to_os_string();
     if directory_entry_identity_at(&parent.file, &legacy_temporary_name)
         .map_err(|source| GovernancePersistenceError::Write {
             path: path.to_path_buf(),
@@ -15256,7 +15263,8 @@ mod tests {
         inject_atomic_parent_sync_failure, inject_authority_lock_failure,
         inject_cleanup_maintenance_crash, inject_health_crash,
         inject_reinitialization_commit_journal_failure, inject_reinitialization_crash,
-        install_authority_cleanup_barrier, install_authority_cleanup_final_unlink_barrier,
+        install_authority_cleanup_barrier, install_authority_cleanup_final_absence_barrier,
+        install_authority_cleanup_final_unlink_barrier,
         install_authority_cleanup_post_move_barrier, install_authority_cleanup_post_verify_barrier,
         install_authority_cleanup_pre_rename_barrier, install_authority_cleanup_reclaim_barrier,
         install_authority_cleanup_source_final_barrier, install_cleanup_maintenance_move_barrier,
@@ -17686,9 +17694,12 @@ mod tests {
         let backup = move_replacer.join().unwrap();
         let retirement = retirement_destination.lock().unwrap().clone().unwrap();
 
-        assert_eq!(fs::read(&sidecar).unwrap(), Vec::<u8>::new());
+        assert!(
+            !sidecar.exists(),
+            "a replaced private cleanup slot must not be trusted to restore the canonical name"
+        );
         assert_eq!(
-            fs::read(backup.join(sidecar.file_name().unwrap())).unwrap(),
+            fs::read(backup.join(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME)).unwrap(),
             foreign
         );
         assert_eq!(
@@ -17890,8 +17901,8 @@ mod tests {
             .clone()
             .expect("cleanup retains the fixed slot path");
         let replacement_parent_sidecar = replacement_parent.join(sidecar.file_name().unwrap());
-        let held_parent_sidecar = held_parent.join(sidecar.file_name().unwrap());
-        assert_eq!(fs::read(&held_parent_sidecar).unwrap(), foreign);
+        let held_parent_quarantine = held_parent.join(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME);
+        assert_eq!(fs::read(&held_parent_quarantine).unwrap(), foreign);
         assert_eq!(
             fs::read(&replacement_parent_sidecar).unwrap(),
             parent_marker
@@ -17912,7 +17923,6 @@ mod tests {
         let (reached, resume, reclaim_destination) =
             install_authority_cleanup_reclaim_barrier(&sidecar);
         let replacer = std::thread::spawn({
-            let sidecar_name = sidecar.file_name().unwrap().to_os_string();
             let reclaim_destination = Arc::clone(&reclaim_destination);
             move || {
                 reached.wait();
@@ -17921,10 +17931,10 @@ mod tests {
                     .unwrap()
                     .clone()
                     .expect("cleanup publishes the held reclaim directory");
-                let entry = reclaim.join(&sidecar_name);
-                fs::remove_file(&entry).unwrap();
-                fs::write(&entry, foreign).unwrap();
+                let entry = reclaim.join(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME);
+                let replacement = fs::remove_file(&entry).and_then(|()| fs::write(&entry, foreign));
                 resume.wait();
+                replacement.unwrap();
             }
         });
         inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
@@ -17944,7 +17954,7 @@ mod tests {
             .clone()
             .expect("test barrier retains the reclaim path");
         assert_eq!(
-            fs::read(reclaim.join(sidecar.file_name().unwrap())).unwrap(),
+            fs::read(reclaim.join(GOVERNANCE_CLEANUP_POOL_QUARANTINE_NAME)).unwrap(),
             b"foreign reclaim entry survives final snapshot gap"
         );
         cleanup_persistence(&path);
@@ -17995,6 +18005,40 @@ mod tests {
         assert_eq!(fs::read(&sidecar).unwrap(), Vec::<u8>::new());
         assert_eq!(fs::read(&quarantine).unwrap(), expected_foreign);
         fs::remove_file(quarantine).unwrap();
+        cleanup_persistence(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authority_cleanup_final_absence_race_preserves_foreign_canonical_entry() {
+        let _test_guard = lock_authority_cleanup_tests();
+        let path = persistence_path("authority-cleanup-final-absence-race");
+        let key = SigningKey::from_bytes(&[203; 32]);
+        let sidecar = GovernancePolicy::persistence_authority_lock_path(&path);
+        let foreign = b"foreign canonical entry created after final absence read".to_vec();
+        let expected_foreign = foreign.clone();
+        let (reached, resume) = install_authority_cleanup_final_absence_barrier(&sidecar);
+        let replacement = sidecar.clone();
+        let replacer = std::thread::spawn(move || {
+            reached.wait();
+            fs::write(&replacement, foreign).unwrap();
+            resume.wait();
+        });
+
+        inject_authority_lock_failure(&sidecar, InjectedAuthorityLockFailure::IdentityVerification);
+        assert!(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key,
+            )
+            .is_err()
+        );
+        replacer.join().unwrap();
+
+        assert_eq!(fs::read(&sidecar).unwrap(), expected_foreign);
+        fs::remove_file(&sidecar).unwrap();
         cleanup_persistence(&path);
     }
 
@@ -20958,18 +21002,32 @@ mod tests {
             }],
             1_851_000_000_001,
         );
-        assert!(matches!(
-            policy.authority(),
-            Err(super::GovernanceAuthorityError::PendingHealthObservation { .. })
-        ));
+        let error = policy
+            .authority()
+            .err()
+            .expect("pending health must refuse authority minting");
+        assert!(
+            matches!(
+                error,
+                super::GovernanceAuthorityError::PendingHealthObservation { .. }
+            ),
+            "expected pending-health refusal, got {error}"
+        );
         drop(policy);
         fs::remove_dir(blocker).unwrap();
 
         let reopened = Arc::new(load_signed_policy(&path, &key).unwrap());
-        assert!(matches!(
-            reopened.authority(),
-            Err(super::GovernanceAuthorityError::PendingHealthObservation { .. })
-        ));
+        let error = reopened
+            .authority()
+            .err()
+            .expect("restarted pending health must refuse authority minting");
+        assert!(
+            matches!(
+                error,
+                super::GovernanceAuthorityError::PendingHealthObservation { .. }
+            ),
+            "expected restarted pending-health refusal, got {error}"
+        );
         reopened.observe_health(
             &governing_id,
             &[AgentHealthEntry {
