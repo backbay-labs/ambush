@@ -1221,7 +1221,7 @@ GOVERNANCE_ASSURANCE_INPUT_DIGESTS = {
     ".github/workflows/release.yml": "b3b48322b10e7a7da2138aa308a49f393406706e579bf4e978af50947a03f652",
     "tools/check-supply-chain.sh": "005837ca0e4e4d2f714db5424eae0834885380db8a9d90e26b1973319eca4855",
     "tools/generate-sbom.sh": "95764c8a4e0797bcf3876242912b158cd95f898b1856e4c68633ef866857175d",
-    "tools/check-single-governor-key.sh": "ae4be333264845f32208ea53343e8c7f4a0a6cd421b9cb12df34bdbfa1224fd3",
+    "tools/check-single-governor-key.sh": "d0196a7c6622a441c31c10e0acb32656160b6a04e6e01edcb3cad8967c7bd0d7",
     "crates/swarm-governance/Cargo.toml": "304f4b64c8efdbfd7da27dd6fa4ea191de6db6498b0a57cd3cd86a98ef881831",
     "crates/swarm-runtime/Cargo.toml": "d0d7570100a329751d1abbec9ef627d5c2b01f5bdfc62559b7cb22979ea1521e",
     "crates/swarm-ingest-runtime/Cargo.toml": "9332eb415a092cbf5f1c4ae02b79d2a3e928464441c7d14ae1fcd39ecf406875",
