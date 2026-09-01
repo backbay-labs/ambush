@@ -4990,6 +4990,7 @@ fn ensure_private_file_metadata(
 }
 
 pub(crate) fn prepare_private_store_root(path: &Path) -> Result<(), GraphStoreError> {
+    reject_parent_directory_components(path)?;
     ensure_no_symlink_ancestors(path)?;
     ensure_path_not_symlink(path)?;
     let mut missing = Vec::new();
@@ -5041,6 +5042,21 @@ pub(crate) fn prepare_private_store_root(path: &Path) -> Result<(), GraphStoreEr
             })?;
     }
     ensure_private_store_root_mode(path)
+}
+
+fn reject_parent_directory_components(path: &Path) -> Result<(), GraphStoreError> {
+    if path
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: format!(
+                "store root contains a parent-directory component: {}",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn durability_parent(path: &Path) -> &Path {
@@ -8296,6 +8312,32 @@ mod tests {
             durability_parent(Path::new("state/graph")),
             Path::new("state")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_store_root_rejects_parent_components_before_filesystem_mutation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = temp_dir("parent-component-refusal");
+        fs::create_dir_all(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        let intermediate = parent.join("untrusted-new-directory");
+        let requested = intermediate.join("..").join("graph");
+
+        let error = prepare_private_store_root(&requested).unwrap_err();
+        assert!(matches!(
+            error,
+            GraphStoreError::InvalidState { ref reason }
+                if reason.contains("parent-directory component")
+        ));
+        assert!(!intermediate.exists());
+        assert_eq!(
+            fs::metadata(&parent).unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
+
+        fs::remove_dir_all(parent).unwrap();
     }
 
     #[test]

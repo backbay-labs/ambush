@@ -632,6 +632,24 @@ struct DepositKeyPartitionIndex {
 
 #[cfg(feature = "nats")]
 impl DepositKeyPartitionIndex {
+    fn insert_for_feedback_reconciliation(
+        &mut self,
+        indexed: IndexedDepositKey,
+        kind: DepositKeyKind,
+    ) {
+        let _ = self.remove_key(&indexed.key);
+        match kind {
+            DepositKeyKind::Evidence => {
+                self.evidence_bytes = self.evidence_bytes.saturating_add(indexed.encoded_len);
+                self.evidence.insert(indexed);
+            }
+            DepositKeyKind::Control => {
+                self.control_bytes = self.control_bytes.saturating_add(indexed.encoded_len);
+                self.controls.insert(indexed);
+            }
+        }
+    }
+
     fn remove_key(&mut self, key: &str) -> Option<IndexedDepositKey> {
         let evidence = self
             .evidence
@@ -671,16 +689,7 @@ impl DepositKeyPartitionIndex {
         count_limit: usize,
     ) -> Vec<IndexedDepositKey> {
         let mut removed = Vec::new();
-        match kind {
-            DepositKeyKind::Evidence => {
-                self.evidence_bytes = self.evidence_bytes.saturating_add(indexed.encoded_len);
-                self.evidence.insert(indexed);
-            }
-            DepositKeyKind::Control => {
-                self.control_bytes = self.control_bytes.saturating_add(indexed.encoded_len);
-                self.controls.insert(indexed);
-            }
-        }
+        self.insert_for_feedback_reconciliation(indexed, kind);
 
         while self.evidence.len() > count_limit {
             if let Some(evicted) = self.remove_oldest(DepositKeyKind::Evidence) {
@@ -2097,6 +2106,20 @@ impl JetStreamPheromoneSubstrate {
                         // occupant of the same slot.
                         return Ok(RecentDepositPointerWrite::Superseded);
                     }
+                    if current.kind == DepositKeyKind::Control {
+                        let orphaned = self
+                            .recent_pointers_orphaned_by_control_eviction(
+                                connection, &current, pointer,
+                            )
+                            .await?;
+                        for orphaned_pointer in orphaned {
+                            self.remove_recent_pointer_and_value_if_unchanged(
+                                connection,
+                                &orphaned_pointer,
+                            )
+                            .await?;
+                        }
+                    }
                     match connection
                         .store
                         .update(&key, payload.clone().into(), entry.revision)
@@ -2120,6 +2143,147 @@ impl JetStreamPheromoneSubstrate {
                 "compare-and-swap contention exceeded {MAX_RECENT_DEPOSIT_INDEX_CAS_ATTEMPTS} attempts"
             ),
         })
+    }
+
+    #[cfg(feature = "nats")]
+    async fn recent_pointers_orphaned_by_control_eviction(
+        &self,
+        connection: &JetStreamConnection,
+        evicted: &RecentDepositPointer,
+        incoming: &RecentDepositPointer,
+    ) -> Result<Vec<RecentDepositPointer>, SubstrateError> {
+        let removed = self
+            .indexed_recent_pointer_entry(connection, evicted)
+            .await?;
+        if removed.feedback_marker.is_none() {
+            return Ok(Vec::new());
+        }
+
+        let mut pointers = self
+            .existing_recent_deposit_pointers(connection, DepositKeyKind::Evidence)
+            .await?;
+        pointers.extend(
+            self.existing_recent_deposit_pointers(connection, DepositKeyKind::Control)
+                .await?,
+        );
+        pointers.retain(|pointer| pointer != evicted);
+        if !pointers.iter().any(|pointer| pointer == incoming) {
+            pointers.push(incoming.clone());
+        }
+
+        let mut partition = DepositKeyPartitionIndex::default();
+        let mut pointers_by_key = BTreeMap::new();
+        for pointer in pointers {
+            let indexed = self
+                .indexed_recent_pointer_entry(connection, &pointer)
+                .await?;
+            partition.insert_for_feedback_reconciliation(indexed, pointer.kind);
+            pointers_by_key.insert(pointer.deposit_key.clone(), pointer);
+        }
+        Ok(partition
+            .remove_evidence_orphaned_by_feedback(&removed)
+            .into_iter()
+            .filter_map(|entry| pointers_by_key.remove(&entry.key))
+            .collect())
+    }
+
+    #[cfg(feature = "nats")]
+    async fn indexed_recent_pointer_entry(
+        &self,
+        connection: &JetStreamConnection,
+        pointer: &RecentDepositPointer,
+    ) -> Result<IndexedDepositKey, SubstrateError> {
+        use async_nats::jetstream::kv::Operation;
+
+        let Some(entry) = connection
+            .store
+            .entry_for_revision(&pointer.deposit_key, pointer.deposit_revision)
+            .await
+            .map_err(|error| nats_error("load recent pointer for feedback reconciliation", error))?
+            .filter(|entry| !matches!(entry.operation, Operation::Delete | Operation::Purge))
+        else {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "recent pointer for `{}` lost its signed deposit before feedback reconciliation",
+                    pointer.deposit_key
+                ),
+            });
+        };
+        if entry.value.is_empty()
+            || entry.value.len() > MAX_SINGLE_DEPOSIT_BYTES
+            || deposit_key_timestamp(&pointer.deposit_key).is_none()
+            || deposit_key_ordinal(&pointer.deposit_key)
+                .is_some_and(|ordinal| ordinal != pointer.ordinal)
+            || deposit_key_kind(&pointer.deposit_key).is_some_and(|kind| kind != pointer.kind)
+            || deposit_key_encoded_len(&pointer.deposit_key)
+                .is_some_and(|encoded_len| encoded_len != entry.value.len())
+        {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "recent pointer for `{}` has conflicting metadata",
+                    pointer.deposit_key
+                ),
+            });
+        }
+        let location = format!("jetstream://{}/{}", self.bucket, pointer.deposit_key);
+        let deposit = decode_deposit_payload(&entry.value, location)?;
+        self.admission_control
+            .validate_deposit_admission(&deposit)?;
+        if deposit_kind(&deposit) != pointer.kind
+            || deposit.timestamp != deposit_key_timestamp(&pointer.deposit_key).unwrap_or_default()
+        {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "recent pointer for `{}` does not bind its signed deposit",
+                    pointer.deposit_key
+                ),
+            });
+        }
+        Ok(IndexedDepositKey {
+            timestamp: deposit.timestamp,
+            key: pointer.deposit_key.clone(),
+            encoded_len: entry.value.len(),
+            suppression_key: deposit_suppression_key(&deposit),
+            feedback_marker: feedback_suppression_marker(&deposit)
+                .map(|(key, state, order)| IndexedFeedbackMarker { key, state, order }),
+        })
+    }
+
+    #[cfg(feature = "nats")]
+    async fn remove_recent_pointer_and_value_if_unchanged(
+        &self,
+        connection: &JetStreamConnection,
+        pointer: &RecentDepositPointer,
+    ) -> Result<(), SubstrateError> {
+        use async_nats::jetstream::kv::{Operation, UpdateErrorKind};
+
+        let key = recent_deposit_index_key(pointer.kind, pointer.ordinal);
+        let Some(entry) = connection
+            .store
+            .entry(&key)
+            .await
+            .map_err(|error| nats_error("read governed recent pointer", error))?
+            .filter(|entry| !matches!(entry.operation, Operation::Delete | Operation::Purge))
+        else {
+            return Ok(());
+        };
+        let location = format!("jetstream://{}/{}", self.bucket, key);
+        let observed = serde_json::from_slice::<RecentDepositPointer>(&entry.value)
+            .map_err(|source| SubstrateError::Decode { location, source })?;
+        if &observed != pointer {
+            return Ok(());
+        }
+        match connection
+            .store
+            .delete_expect_revision(&key, Some(entry.revision))
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => return Ok(()),
+            Err(error) => return Err(nats_error("delete governed recent pointer", error)),
+        }
+        self.purge_deposit_key(connection, &pointer.deposit_key)
+            .await
     }
 
     #[cfg(feature = "nats")]
@@ -3419,6 +3583,8 @@ impl JetStreamPheromoneSubstrate {
         connection: &JetStreamConnection,
         now: i64,
     ) -> Result<usize, SubstrateError> {
+        use async_nats::jetstream::kv::Operation;
+
         let mut keys = connection
             .store
             .keys()
@@ -3431,35 +3597,101 @@ impl JetStreamPheromoneSubstrate {
             if !is_idempotent_deposit_intent_key(&key) {
                 continue;
             }
-            let Some(payload) = connection
+            let Some(entry) = connection
                 .store
-                .get(&key)
+                .entry(&key)
                 .await
                 .map_err(|error| nats_error("get idempotent intent for GC", error))?
+                .filter(|entry| !matches!(entry.operation, Operation::Delete | Operation::Purge))
             else {
                 continue;
             };
-            let intent =
-                serde_json::from_slice::<IdempotentDepositIntent>(&payload).map_err(|source| {
-                    SubstrateError::Decode {
-                        location: format!("jetstream://{}/{}", self.bucket, key),
-                        source,
-                    }
-                })?;
+            let intent = serde_json::from_slice::<IdempotentDepositIntent>(&entry.value).map_err(
+                |source| SubstrateError::Decode {
+                    location: format!("jetstream://{}/{}", self.bucket, key),
+                    source,
+                },
+            )?;
             let page =
                 key_gc_page(&intent.deposit_key).ok_or_else(|| SubstrateError::InvalidDeposit {
                     reason: format!("idempotent intent `{key}` contains an unscoped deposit key"),
                 })?;
-            if page <= sweep_page {
+            if page <= sweep_page
+                && !self
+                    .idempotent_intent_referenced_deposit_is_live(connection, &key, &intent, now)
+                    .await?
+            {
                 connection
                     .store
-                    .delete(&key)
+                    .delete_expect_revision(&key, Some(entry.revision))
                     .await
                     .map_err(|error| nats_error("delete expired idempotent intent", error))?;
                 removed = removed.saturating_add(1);
             }
         }
         Ok(removed)
+    }
+
+    #[cfg(feature = "nats")]
+    async fn idempotent_intent_referenced_deposit_is_live(
+        &self,
+        connection: &JetStreamConnection,
+        intent_key: &str,
+        intent: &IdempotentDepositIntent,
+        now: i64,
+    ) -> Result<bool, SubstrateError> {
+        use async_nats::jetstream::kv::Operation;
+
+        let Some(entry) = connection
+            .store
+            .entry(&intent.deposit_key)
+            .await
+            .map_err(|error| nats_error("get idempotent intent deposit for GC", error))?
+            .filter(|entry| !matches!(entry.operation, Operation::Delete | Operation::Purge))
+        else {
+            return Ok(false);
+        };
+        if intent
+            .committed_deposit_revision
+            .is_some_and(|revision| revision != entry.revision)
+            || hash_prefix(&entry.value, 64) != intent.payload_digest
+            || deposit_key_ordinal(&intent.deposit_key)
+                .is_some_and(|ordinal| ordinal != intent.ordinal)
+            || deposit_key_kind(&intent.deposit_key) != Some(intent.kind)
+            || deposit_key_encoded_len(&intent.deposit_key) != Some(entry.value.len())
+        {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "idempotent intent `{intent_key}` does not bind its referenced deposit"
+                ),
+            });
+        }
+
+        let location = format!("jetstream://{}/{}", self.bucket, intent.deposit_key);
+        let deposit = decode_deposit_payload(&entry.value, location)?;
+        self.admission_control
+            .validate_deposit_admission(&deposit)?;
+        if deposit_kind(&deposit) != intent.kind
+            || deposit_operation_id(&deposit)?.as_deref() != Some(intent.operation_id.as_str())
+            || deposit_key_timestamp(&intent.deposit_key) != Some(deposit.timestamp)
+        {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "idempotent intent `{intent_key}` identifies a conflicting signed deposit"
+                ),
+            });
+        }
+
+        let threat_class_config = self.load_threat_class_config(&deposit.threat_class).await?;
+        let policy = self
+            .config
+            .resolve_threat_class_policy(threat_class_config.as_ref());
+        Ok(!is_retention_expired(
+            &deposit,
+            now,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+        ))
     }
 
     #[cfg(feature = "nats")]
@@ -6886,11 +7118,12 @@ mod tests {
             .unwrap()
             .unwrap()
             .revision;
+        let extended_evaporation_threshold = policy.evaporation_threshold / 10.0;
         substrate
             .store_threat_class_config(ThreatClassConfig {
                 threat_class: deposit.threat_class.clone(),
                 half_life_secs: deposit.decay_half_life,
-                evaporation_threshold: policy.evaporation_threshold * 2.0,
+                evaporation_threshold: extended_evaporation_threshold,
                 alert_threshold: 1.2,
                 incident_threshold: 3.4,
             })
@@ -6907,6 +7140,61 @@ mod tests {
                 .revision,
             stable_intent_revision,
             "an exact retry must resolve the original intent after a retention-policy change"
+        );
+        let original_deadline = super::evaporation_deadline(
+            &deposit,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+        );
+        let extended_deadline = super::evaporation_deadline(
+            &deposit,
+            deposit.decay_half_life,
+            extended_evaporation_threshold,
+        );
+        let original_sweep = super::expiration_gc_page(
+            &deposit,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+        )
+        .saturating_mul(super::GC_PAGE_SPAN_SECS);
+        assert!(original_sweep >= original_deadline);
+        assert!(original_sweep < extended_deadline);
+        substrate.gc_evaporated(original_sweep).await.unwrap();
+        let retained_intent = connection
+            .store
+            .entry(&stable_intent_key)
+            .await
+            .unwrap()
+            .unwrap();
+        let retained_intent =
+            serde_json::from_slice::<super::IdempotentDepositIntent>(&retained_intent.value)
+                .unwrap();
+        assert!(
+            connection
+                .store
+                .get(&retained_intent.deposit_key)
+                .await
+                .unwrap()
+                .is_some(),
+            "the extended policy must retain the signed deposit"
+        );
+        substrate.deposit(deposit.clone()).await.unwrap();
+        assert_eq!(
+            substrate
+                .recent_deposits(10)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|candidate| {
+                    candidate
+                        .indicator
+                        .get("feedback_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("feedback-idempotency-operation")
+                })
+                .count(),
+            1,
+            "GC under an extended policy must not permit a duplicate exact retry"
         );
 
         let crash_window = resign_sample_deposit(
@@ -7382,8 +7670,10 @@ mod tests {
             sample_deposit("feedback-reviewer", now - 5, 0.0),
             serde_json::json!({
                 "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "feedback_id": "feedback-dismiss-event",
                 "event_id": "event-dismissed",
-                "action": "dismiss"
+                "action": "dismiss",
+                "observed_at_ms": now.saturating_sub(5).saturating_mul(1_000),
             }),
         );
         let unrelated_control = resign_sample_deposit(
@@ -7393,7 +7683,81 @@ mod tests {
         );
         substrate.deposit(evidence).await.unwrap();
         substrate.deposit(dismissal).await.unwrap();
-        substrate.deposit(unrelated_control).await.unwrap();
+
+        let connection = substrate.ensure_connected().await.unwrap();
+        let evidence_pointer = substrate
+            .existing_recent_deposit_pointers(connection, DepositKeyKind::Evidence)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let dismissal_pointer = substrate
+            .existing_recent_deposit_pointers(connection, DepositKeyKind::Control)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let unrelated_ordinal = dismissal_pointer
+            .ordinal
+            .saturating_add(MAX_RECENT_DEPOSIT_INDEX_SLOTS);
+        let unrelated_payload = serde_json::to_vec(&unrelated_control).unwrap();
+        let policy = substrate.config.resolve_threat_class_policy(None);
+        let unrelated_key = super::deposit_key(
+            &unrelated_control,
+            &unrelated_payload,
+            policy.half_life_secs,
+            policy.evaporation_threshold,
+            unrelated_ordinal,
+        );
+        let unrelated_revision = connection
+            .store
+            .put(unrelated_key.clone(), unrelated_payload.into())
+            .await
+            .unwrap();
+        assert_eq!(
+            substrate
+                .write_recent_deposit_pointer(
+                    connection,
+                    &RecentDepositPointer {
+                        ordinal: unrelated_ordinal,
+                        kind: DepositKeyKind::Control,
+                        deposit_key: unrelated_key,
+                        deposit_revision: unrelated_revision,
+                    },
+                )
+                .await
+                .unwrap(),
+            super::RecentDepositPointerWrite::Indexed
+        );
+        substrate
+            .publish_recent_deposit_index_state_at_least(
+                connection,
+                DepositKeyKind::Control,
+                unrelated_ordinal,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            substrate
+                .existing_recent_deposit_pointers(connection, DepositKeyKind::Evidence)
+                .await
+                .unwrap()
+                .iter()
+                .all(|pointer| pointer != &evidence_pointer),
+            "rotating away the last dismissal must remove the governed evidence pointer"
+        );
+        assert!(
+            connection
+                .store
+                .get(&evidence_pointer.deposit_key)
+                .await
+                .unwrap()
+                .is_none(),
+            "rotating away the last dismissal must purge the governed evidence value"
+        );
 
         let retained = substrate
             .load_deposits_bounded(Some(&ThreatClass::Execution), None, Some(now), 1, false)

@@ -341,27 +341,26 @@ where
                         Some(started_at_ms),
                         None,
                     );
-                    if let Err(error) = worker_store.persist(&running_bundle) {
-                        worker_scheduler
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .finish(&running_bundle.investigation_id);
-                        let mut guard = worker_state
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner());
-                        guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                        guard.failed_jobs = guard.failed_jobs.saturating_add(1);
-                        guard.last_failure_reason = Some(error.to_string());
-                        continue;
-                    }
-
-                    // Persist the ambiguous/in-progress state before acquiring
-                    // the non-reclaimable execution fence. A crash on either
-                    // side of this boundary must never leave a durable `Queued`
-                    // bundle that later submissions keep scheduling against an
-                    // already-consumed fence.
+                    // The durable fence is the authority to publish `Running`.
+                    // A stale queued worker must discover that it lost before
+                    // it can overwrite a terminal result produced by the
+                    // winner on another service instance.
                     match worker_store.claim_execution(&job.bundle) {
-                        Ok(InvestigationExecutionClaim::Acquired) => {}
+                        Ok(InvestigationExecutionClaim::Acquired) => {
+                            if let Err(error) = worker_store.persist(&running_bundle) {
+                                worker_scheduler
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .finish(&running_bundle.investigation_id);
+                                let mut guard = worker_state
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner());
+                                guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                                guard.failed_jobs = guard.failed_jobs.saturating_add(1);
+                                guard.last_failure_reason = Some(error.to_string());
+                                continue;
+                            }
+                        }
                         Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
                             worker_scheduler
                                 .lock()
