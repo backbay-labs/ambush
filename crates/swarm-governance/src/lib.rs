@@ -16213,10 +16213,11 @@ mod tests {
         for index in 0..GOVERNANCE_CLEANUP_POOL_SLOT_COUNT {
             let artifact = path.with_file_name(format!("normal-retention-exhaustion-{index}"));
             fs::write(&artifact, format!("retained-{index}")).unwrap();
-            assert!(matches!(
-                quarantine_verified_entry(&artifact, || true, |_| true),
-                QuarantineOutcome::Retained
-            ));
+            let outcome = quarantine_verified_entry(&artifact, || true, |_| true);
+            assert!(
+                matches!(outcome, QuarantineOutcome::Retained),
+                "cleanup-pool fill failed at slot {index}: {outcome:?}"
+            );
             artifacts.push(artifact);
         }
         let policy = initialize_signed_policy(&path, &key);

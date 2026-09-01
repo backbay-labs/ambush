@@ -16,7 +16,12 @@ fn unique_persistence_path() -> std::path::PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("current time should be after unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("swarm-governance-resilience-{suffix}.json"))
+    let directory = std::env::temp_dir().join(format!(
+        "swarm-governance-resilience-{}-{suffix}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).unwrap();
+    directory.join("state.json")
 }
 
 #[test]
@@ -126,7 +131,5 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
     assert!(status.last_reconciliation_report_id.is_some());
     drop(reloaded);
 
-    let _ = fs::remove_file(&path);
-    let _ = fs::remove_file(GovernancePolicy::persistence_sequence_path(&path));
-    let _ = fs::remove_file(GovernancePolicy::persistence_lock_path(&path));
+    fs::remove_dir_all(path.parent().expect("test state has an isolated parent")).unwrap();
 }

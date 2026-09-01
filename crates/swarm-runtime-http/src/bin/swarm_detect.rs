@@ -2992,7 +2992,7 @@ fn remove_private_governance_quarantine_with_parent_and_retention(
         ));
     }
     verify_governance_quarantine_parent(&parent.path, parent, parent.identity)?;
-    let _retained_source = retain_governance_entry_no_replace(
+    retain_governance_entry_no_replace(
         parent,
         name,
         &file,
@@ -3016,7 +3016,7 @@ fn remove_private_governance_quarantine_with_parent_and_retention(
         ));
     }
     verify_governance_quarantine_parent(&parent.path, parent, parent.identity)?;
-    let _retained_staged = retain_governance_entry_no_replace(
+    retain_governance_entry_no_replace(
         parent,
         &staged_name,
         &file,
@@ -3224,7 +3224,7 @@ fn quarantine_governance_artifact_with_parent(
         ));
     }
     verify_governance_quarantine_parent(&parent.path, parent, parent.identity)?;
-    let _retained_source = retain_governance_entry_no_replace(
+    retain_governance_entry_no_replace(
         parent,
         name,
         &source_file,
@@ -4043,10 +4043,31 @@ fn compensate_governance_rollback_journal(
                         cleanup_error.map_or(Ok(()), Err)
                     }
                 } else {
-                    Err(governance_artifact_identity_error(
-                        &entry.path,
-                        "restore a missing rollback artifact",
-                    ))
+                    // Journalization moves the post-constructor entry into a
+                    // private quarantine before any prestate is installed.
+                    // If a later journal entry drifts, compensation therefore
+                    // sees the canonical name absent and must republish the
+                    // exact quarantined post-constructor inode.  Publication
+                    // is atomic no-replace, so a competing creator at this
+                    // seam remains untouched and turns compensation into an
+                    // explicit error instead of an overwrite.
+                    let source =
+                        rollback_copy_for_entry(entry, &entry.after)?.ok_or_else(|| {
+                            governance_artifact_identity_error(
+                                &entry.path,
+                                "restore a rollback artifact after journalization failure",
+                            )
+                        })?;
+                    selection.verify_rollback_guards()?;
+                    restore_governance_quarantine_no_replace(&source, &entry.path, &entry.after)?;
+                    selection.verify_rollback_guards()?;
+                    let result = remove_private_governance_quarantine_for_selection(
+                        selection,
+                        &source,
+                        &entry.after,
+                    );
+                    let backup_cleanup = cleanup_governance_rollback_backups(selection, entry);
+                    result.and(backup_cleanup)
                 }
             }
             GovernanceArtifactMutation::Preserve => Ok(()),
@@ -5614,8 +5635,9 @@ mod tests {
         Cli, GovernanceArtifactSet, GovernancePathResolutionMode, GovernancePathSelectionLock,
         ShippedGovernanceWiring, backup_governance_rollback_entry, bootstrap_artifact_ownership,
         build_approval_harness, default_partition_governance_state_path,
-        ensure_governance_authority_lock_pair, governance_artifact_record, governance_artifact_set,
-        governance_artifact_snapshot, governance_policy_for_bootstrap,
+        ensure_governance_authority_lock_pair, governance_artifact_record,
+        governance_artifact_record_at, governance_artifact_set, governance_artifact_snapshot,
+        governance_policy_for_bootstrap, governance_quarantine_expected_copy_name,
         governance_selection_lock_path, inject_governance_rollback_cleanup_failure_on_call,
         install_governance_artifact_read_barrier, install_governance_authority_hard_link_barrier,
         install_governance_authority_sidecar_create_barrier,
@@ -5626,10 +5648,12 @@ mod tests {
         install_governance_retained_move_barrier,
         install_governance_rollback_after_reservation_barrier, install_governance_rollback_barrier,
         install_governance_rollback_install_barrier, install_governance_rollback_journal_barrier,
+        next_governance_quarantine_name, open_governance_quarantine_parent,
         quarantine_governance_artifact, register_optional_calico_agent,
         register_optional_sphinx_agent, reinitialize_artifact_ownership,
         remove_private_governance_quarantine, resolve_partition_governance_state_path,
-        rollback_governance_artifacts_after_selection_conflict, watch_paths_differ,
+        retain_governance_entry_no_replace, rollback_governance_artifacts_after_selection_conflict,
+        watch_paths_differ,
     };
     use clap::Parser;
     use std::path::PathBuf;
@@ -7410,6 +7434,42 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn quarantine_refuses_source_replacement_before_identity_recheck() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-governance-quarantine-source-recheck-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("artifact");
+        std::fs::write(&source, b"owned-artifact").unwrap();
+        let expected = governance_artifact_record(&source)
+            .unwrap()
+            .expect("source should be regular");
+        let (reached, resumed) = install_governance_rollback_barrier();
+        let replacement = std::thread::spawn({
+            let source = source.clone();
+            move || {
+                reached.wait();
+                std::fs::remove_file(&source).unwrap();
+                std::fs::write(&source, b"foreign-source").unwrap();
+                resumed.wait();
+            }
+        });
+
+        let error = quarantine_governance_artifact(None, &source, &expected)
+            .expect_err("a source replacement before identity recheck must fail closed");
+        replacement.join().unwrap();
+        assert!(error.to_string().contains("changed"), "{error}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"foreign-source");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn quarantine_refuses_reserved_destination_replacement() {
         let root = std::env::temp_dir().join(format!(
             "swarm-governance-quarantine-destination-race-{}-{}",
@@ -7469,30 +7529,65 @@ mod tests {
             );
             std::fs::write(&candidate, b"foreign-quarantine-destination").unwrap();
             resumed.wait();
+            candidate
         });
         let error = quarantine_governance_artifact(Some(&selection), &current_path, &expected)
             .expect_err("a replaced quarantine destination must fail before rename");
-        replacement.join().unwrap();
+        let candidate = replacement.join().unwrap();
         assert!(error.to_string().contains("destination"), "{error}");
         assert_eq!(
             governance_artifact_record(&current_path).unwrap().as_ref(),
             Some(&expected),
             "the source artifact must remain when the private destination changes"
         );
-        let candidate = std::fs::read_dir(current_path.parent().unwrap())
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| {
-                path.file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
-            })
-            .expect("foreign quarantine destination must be retained");
         assert_eq!(
             std::fs::read(candidate).unwrap(),
             b"foreign-quarantine-destination"
         );
         drop(policy);
         drop(selection);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_quarantine_refuses_replacement_before_final_mutation() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-governance-private-final-mutation-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let private_path = root.join("private-quarantine");
+        std::fs::write(&private_path, b"owned-private-quarantine").unwrap();
+        let expected = governance_artifact_record(&private_path)
+            .unwrap()
+            .expect("private quarantine should be regular");
+        let (reached, resumed) = install_governance_final_mutation_barrier();
+        let replacement = std::thread::spawn({
+            let private_path = private_path.clone();
+            move || {
+                reached.wait();
+                std::fs::remove_file(&private_path).unwrap();
+                std::fs::write(&private_path, b"foreign-private-final-mutation").unwrap();
+                resumed.wait();
+            }
+        });
+
+        let error = remove_private_governance_quarantine(&private_path, &expected)
+            .expect_err("a private replacement before final mutation must fail closed");
+        replacement.join().unwrap();
+        assert!(
+            error.to_string().contains("after final identity check"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read(&private_path).unwrap(),
+            b"foreign-private-final-mutation"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -7878,7 +7973,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn rollback_refuses_same_bytes_replacement_before_restore_rename() {
+    fn rollback_refuses_same_bytes_replacement_before_restore_install() {
         let root = std::env::temp_dir().join(format!(
             "swarm-governance-rollback-rename-identity-{}-{}",
             std::process::id(),
@@ -7932,14 +8027,10 @@ mod tests {
             .acquire_cleanup_pool_retention_guard(&tom_identity)
             .expect("completed reinitialize stream should retain through its fixed pool");
         let expected_state = after.state.as_ref().unwrap().bytes.clone();
-        let (reached_before_recheck, resumed_before_recheck) =
-            install_governance_rollback_barrier();
-        let (reached_final, resumed_final) = install_governance_final_mutation_barrier();
+        let (reached_final, resumed_final) = install_governance_rollback_install_barrier();
         let foreign_path = current_path.clone();
         let foreign_temp = current_path.with_extension("foreign-state");
         let replacement = std::thread::spawn(move || {
-            reached_before_recheck.wait();
-            resumed_before_recheck.wait();
             reached_final.wait();
             std::fs::write(&foreign_temp, expected_state).unwrap();
             std::fs::rename(&foreign_temp, &foreign_path).unwrap();
@@ -7953,7 +8044,7 @@ mod tests {
             rollback_governance_artifacts_after_selection_conflict(&selection, &before, ownership)
                 .expect_err("same-bytes replacement with a new inode must refuse overwrite");
         replacement.join().unwrap();
-        assert!(error.to_string().contains("changed identity"));
+        assert!(error.to_string().contains("overwrite"), "{error}");
         let foreign = governance_artifact_snapshot(&current_path).unwrap();
         assert_eq!(
             foreign.state.as_ref().unwrap().bytes,

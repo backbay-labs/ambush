@@ -242,15 +242,16 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
     // one and starts authorizing again. Same failure family as b4bf119's:
     // governance state that survives a restart deciding differently from the
     // state that wrote it.
-    let path = std::env::temp_dir().join(format!(
-        "swarm-governance-peer-reload-{}-{}.json",
+    let root = std::env::temp_dir().join(format!(
+        "swarm-governance-peer-reload-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock is after the unix epoch")
             .as_nanos(),
     ));
-    let _ = std::fs::remove_file(&path);
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("state.json");
 
     let policy = GovernancePolicy::initialize_persistence(
         GovernancePolicyConfig::default(),
@@ -293,9 +294,7 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
     );
 
     drop(reloaded);
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(GovernancePolicy::persistence_sequence_path(&path));
-    let _ = std::fs::remove_file(GovernancePolicy::persistence_lock_path(&path));
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Records everything a round publishes. Accepts any committee, which is
