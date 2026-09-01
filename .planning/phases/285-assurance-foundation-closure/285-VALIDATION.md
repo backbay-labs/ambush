@@ -184,7 +184,7 @@ Local and hosted artifacts therefore cannot masquerade as final: ASSURE-03 is pe
 
 The hosted `selector_records` set equals, with no omission or addition, every literal case row in Plan01's Rust registry, the six literal transport rows in this validation file, the literal governance/detector cases plus `cli-migration` registered by Plans05A through 06C, and Plan06C's five literal `combined_checkpoint_*` direct controls. The hosted `gate_records` set has exactly these IDs: `plan-schema`, `workspace-tests`, `serial-runtime-ingest-tests`, `strict-clippy`, `format`, `diff-check`, `clean-tree`, `workspace-layering`, `single-governor-key`, `mapping`, `negative-registry`, `fixture-freshness`, `supply-chain`, `sbom`, `witness-dependency-closure`, `deployment-render`, `deployment-live`, and `gates-wired`. Case/target inventories are enumerated before execution; a duplicate, extra, missing, substring-only, filtered-only, skipped, or wrong-filter-count record is invalid.
 
-`workspace-tests` is produced only by `bash tools/check-phase285-workspace-tests.sh`, never by treating a raw successful `cargo test --workspace` exit as sufficient evidence. The orchestrator compiles every workspace test target; validates the exact FQN and stable-reason inventory of intentional external-environment `#[ignore]` tests; runs packages without intentional ignores normally; runs every ordinary test in packages containing intentional ignores while excluding exactly those inventoried FQNs, with each accepted summary reporting `ignored: 0`; and consumes one owned exact-selector receipt proving every excluded external test executed once in its required harness with `passed: 1` and `ignored: 0`. The union must equal the compiler-discovered test inventory exactly. An ignored pure test, ignored-FQN or reason drift, missing/extra/duplicate/substituted test, excluded ordinary test, nonzero accepted ignored count, receipt reuse, wrong target/filter count, or selector omission fails the gate. The checker self-test must kill each such mutation. `GateRecordV1.ignored: 0` therefore describes accepted executions, while intentionally ignored discovery entries are independently executed and bound rather than silently accepted.
+`workspace-tests` is produced only by `bash tools/check-phase285-workspace-tests.sh`, never by treating a raw successful `cargo test --workspace` exit as sufficient evidence. The orchestrator compiles every workspace test target; validates the exact FQN and stable-reason inventory of intentional external-environment `#[ignore]` tests; runs every ordinary test outside the separately recorded `serial-runtime-ingest-tests` gate; runs ordinary tests in packages containing intentional ignores while excluding exactly those inventoried FQNs, with each accepted summary reporting `ignored: 0`; and consumes one already-produced owned exact-selector receipt proving every excluded external test executed once in its required harness with `passed: 1` and `ignored: 0`. Final closure invokes the selector lanes first and supplies their confined receipts explicitly to the workspace gate. The union of the workspace, serial runtime/ingest, and selector receipts must equal the compiler-discovered test inventory exactly. An ignored pure test, ignored-FQN or reason drift, missing/extra/duplicate/substituted test, excluded ordinary test, runtime/ingest overlap, nonzero accepted ignored count, receipt reuse, wrong target/filter count, or selector omission fails the gate. The checker self-test must kill each such mutation. `GateRecordV1.ignored: 0` therefore describes accepted executions, while intentionally ignored discovery entries are independently executed and bound rather than silently accepted.
 
 ### `phase285-local-evidence` exact object
 
@@ -271,9 +271,6 @@ The closure checker must write to a new confined temporary file, fsync, no-repla
 `tools/check-phase285-closure.sh --local` must include, at minimum:
 
 ```text
-cargo test -p swarm-governance --lib --locked --offline
-cargo test -p swarm-runtime-http --bin swarm_detect --locked --offline
-cargo test --workspace --exclude swarm-runtime --exclude swarm-ingest-runtime --locked --offline
 cargo test -p swarm-runtime -p swarm-ingest-runtime --locked --offline -- --test-threads=1
 cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
 cargo fmt --all -- --check
@@ -309,6 +306,7 @@ bash tools/check-phase285-governance-persistence.sh offline-maintenance
 bash tools/check-phase285-governance-persistence.sh detector-integration
 bash tools/check-phase285-governance-persistence.sh cli-migration
 PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="${PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256:?reviewed final-tree pin required}" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="${PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256:?reviewed final-tree pin required}" bash tools/check-phase285-witness-integrity.sh combined-checkpoint
+bash tools/check-phase285-workspace-tests.sh
 bash tools/check-phase285-deployment.sh
 git diff --check HEAD^ HEAD
 bash tools/check-worktree-clean.sh "the Phase 285 final run"
