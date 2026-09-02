@@ -817,25 +817,32 @@ impl FileReplayBundleStore {
             .map_err(|source| ReplayStoreError::Parse { path, source })
     }
 
-    /// Repair the sequence projection for one record from the authoritative
-    /// replay index. The index is committed before these direct-lookup files,
-    /// so an interrupted append can legitimately leave either sidecar stale.
-    /// Idempotent retry must finish that commit instead of returning early.
-    fn repair_sequence_projection(
-        &self,
-        index: &ReplayIndex,
-        record: &ReplayBundleRecord,
-    ) -> Result<(), ReplayStoreError> {
-        let record_is_current = self
-            .read_sequence_record(record.store_sequence)
-            .is_ok_and(|persisted| persisted == *record);
-        if !record_is_current {
-            self.write_json_atomically(&self.sequence_record_path(record.store_sequence), record)?;
-        }
-        let head_is_current = self
+    /// Repair the unprojected sequence suffix from the authoritative replay
+    /// index. The head is advanced only after every record beyond its prior
+    /// high-water is durable, so a later distinct append also closes an older
+    /// index-only commit gap.
+    fn repair_sequence_projection(&self, index: &ReplayIndex) -> Result<(), ReplayStoreError> {
+        let projected_head = self
             .read_sequence_head()
-            .is_ok_and(|head| head.next_sequence == index.next_sequence);
-        if !head_is_current {
+            .ok()
+            .filter(|head| head.next_sequence <= index.next_sequence)
+            .map_or(0, |head| head.next_sequence);
+        for record in index
+            .entries
+            .iter()
+            .filter(|record| record.store_sequence > projected_head)
+        {
+            let record_is_current = self
+                .read_sequence_record(record.store_sequence)
+                .is_ok_and(|persisted| persisted == *record);
+            if !record_is_current {
+                self.write_json_atomically(
+                    &self.sequence_record_path(record.store_sequence),
+                    record,
+                )?;
+            }
+        }
+        if projected_head != index.next_sequence {
             self.write_json_atomically(
                 &self.sequence_head_path(),
                 &ReplaySequenceHead {
@@ -944,7 +951,7 @@ impl ReplayBundleStore for FileReplayBundleStore {
                     bundle_id: bundle.bundle_id.clone(),
                 });
             }
-            self.repair_sequence_projection(&index, existing_record)?;
+            self.repair_sequence_projection(&index)?;
             return Ok(existing_record.clone());
         }
         index.next_sequence =
@@ -959,7 +966,7 @@ impl ReplayBundleStore for FileReplayBundleStore {
         let record = ReplayBundleRecord::from_bundle(bundle, bundle_path, store_sequence);
         index.entries.push(record.clone());
         self.write_index(&index)?;
-        self.repair_sequence_projection(&index, &record)?;
+        self.repair_sequence_projection(&index)?;
         Ok(record)
     }
 
@@ -1480,6 +1487,40 @@ mod tests {
                 .record,
             repaired
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn later_append_repairs_an_older_index_only_gap_before_advancing_head() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-index-gap-recovery-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileReplayBundleStore::open(&root).unwrap();
+        let first = sample_bundle();
+
+        std::fs::remove_dir_all(store.sequences_dir()).unwrap();
+        std::fs::write(store.sequences_dir(), b"block first sequence projection").unwrap();
+        assert!(matches!(
+            store.persist(&first),
+            Err(ReplayStoreError::Write { .. })
+        ));
+
+        std::fs::remove_file(store.sequences_dir()).unwrap();
+        std::fs::create_dir_all(store.sequences_dir()).unwrap();
+        let mut second = sample_bundle();
+        second.bundle_id = "bundle:hunt-1:later-approval".to_string();
+        second.event.event_id = "evt-later-approval".to_string();
+        let second_record = store.persist(&second).unwrap();
+        assert_eq!(second_record.store_sequence, 2);
+
+        let repaired = store.scan_after_sequence(0, 2).unwrap();
+        assert_eq!(repaired.len(), 2);
+        assert_eq!(repaired[0].bundle_id, first.bundle_id);
+        assert_eq!(repaired[0].store_sequence, 1);
+        assert_eq!(repaired[1], second_record);
 
         let _ = std::fs::remove_dir_all(root);
     }

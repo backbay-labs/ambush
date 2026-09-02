@@ -474,6 +474,7 @@
     #[derive(Debug, Clone)]
     struct SlowInvestigator {
         delay_ms: u64,
+        completed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     }
 
     #[async_trait]
@@ -484,6 +485,9 @@
 
         async fn investigate(&self, replay: &ReplayBundle) -> Result<InvestigationOutcome, String> {
             tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            if let Some(completed) = &self.completed {
+                completed.store(true, std::sync::atomic::Ordering::Release);
+            }
             Ok(InvestigationOutcome {
                 summary: format!("investigated {}", replay.audit.hunt_id),
                 evidence_points: vec!["host_id=host-1".to_string()],

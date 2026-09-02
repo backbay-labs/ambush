@@ -4177,9 +4177,11 @@ fn seed_signal_converges_through_real_runtime() {
     }
     assert_eq!(projection.graph.edges.len(), 1);
     let inferred_edge = projection.graph.edges.values().next().unwrap();
-    assert_eq!(inferred_edge.relation, CausalRelation::Uses);
-    assert!(projection.graph.nodes.contains_key(&inferred_edge.from));
-    assert!(projection.graph.nodes.contains_key(&inferred_edge.to));
+    assert_eq!(inferred_edge.relation, CausalRelation::Spawns);
+    assert!(projection.graph.edges.values().all(|edge| {
+        projection.graph.nodes.contains_key(&edge.from)
+            && projection.graph.nodes.contains_key(&edge.to)
+    }));
     assert_eq!(projection.tasks.len(), 3);
     assert!(
         projection
@@ -4190,13 +4192,13 @@ fn seed_signal_converges_through_real_runtime() {
     assert_eq!(projection.terminal_publications, 3);
     assert_eq!(projection.memory.len(), 1);
     assert_eq!(projection.hypotheses.len(), 2);
-    let causal_edge_id = projection.graph.edges.keys().next().unwrap();
-    assert!(
+    assert!(projection.hypotheses.values().all(|hypothesis| {
         projection
-            .hypotheses
-            .values()
-            .all(|hypothesis| hypothesis.claims.contains(causal_edge_id))
-    );
+            .graph
+            .edges
+            .keys()
+            .all(|edge_id| hypothesis.claims.contains(edge_id))
+    }));
     let benign_hypothesis_id = projection
         .tasks
         .iter()
@@ -4295,9 +4297,9 @@ fn enabled_minimum_node_limit_admits_parented_process_without_user() {
 
     let submission = service.submit_replay(&replay).unwrap();
     let projection = service.operator_projection().unwrap();
-    assert_eq!(projection.graph.nodes.len(), 4);
+    assert_eq!(projection.graph.nodes.len(), 3);
     let evidence = &projection.graph.evidence[&submission.evidence_id];
-    assert_eq!(evidence.entity_ids().len(), 2);
+    assert_eq!(evidence.entity_ids().len(), 3);
     assert!(
         evidence
             .entity_ids()
@@ -4305,16 +4307,21 @@ fn enabled_minimum_node_limit_admits_parented_process_without_user() {
             .all(|node_id| projection.graph.nodes.contains_key(node_id))
     );
     let edge = projection.graph.edges.values().next().unwrap();
-    assert_eq!(edge.relation, CausalRelation::ObservedIn);
+    assert_eq!(edge.relation, CausalRelation::Spawns);
     assert!(evidence.entity_ids().contains(&edge.from));
+    assert!(evidence.entity_ids().contains(&edge.to));
     assert!(matches!(
         projection.graph.nodes[&edge.from],
-        GraphNode::Event(_)
+        GraphNode::Process(_)
     ));
     assert!(matches!(
         projection.graph.nodes[&edge.to],
-        GraphNode::Asset(_)
+        GraphNode::Process(_)
     ));
+    let GraphNode::Process(child) = &projection.graph.nodes[&edge.to] else {
+        unreachable!()
+    };
+    assert_eq!(child.parent_node_id.as_ref(), Some(&edge.from));
 }
 
 #[test]

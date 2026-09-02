@@ -5,7 +5,8 @@
 //! resulting endpoint/relation triples with an independent oracle.
 
 use swarm_core::hypothesis_graph::{
-    CausalRelation, GraphAdmissionError, GraphNodeId, TypedEvidencePayload,
+    CausalRelation, GraphAdmissionError, GraphNodeId, ProcessNode, TypedEvidencePayload,
+    canonical_digest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +91,18 @@ pub fn infer_causal_relations(
             ..
         } => (signal_kind.as_str(), entity_ids.as_slice()),
     };
+    let expected_parent_node_id = match payload {
+        TypedEvidencePayload::Process {
+            signal_kind,
+            parent_process_digest: Some(parent_process_digest),
+            ..
+        } if signal_kind == "process_start" => {
+            let executable_digest =
+                canonical_digest(&("parent_executable", parent_process_digest))?;
+            Some(ProcessNode::new(parent_process_digest, executable_digest)?.node_id)
+        }
+        _ => None,
+    };
 
     let candidates = match payload {
         TypedEvidencePayload::Signal { .. } => match signal_kind {
@@ -142,16 +155,34 @@ pub fn infer_causal_relations(
                 signal_kind,
             )?]
         }
-        TypedEvidencePayload::Process { .. } if entity_ids.len() >= 3 => vec![inferred(
-            entity_ids,
-            2,
-            0,
-            CausalRelation::Uses,
-            signal_kind,
-        )?],
+        TypedEvidencePayload::Process {
+            parent_process_digest: Some(_),
+            ..
+        } if signal_kind == "process_start"
+            && entity_ids.get(2) == expected_parent_node_id.as_ref() =>
+        {
+            vec![inferred(
+                entity_ids,
+                2,
+                0,
+                CausalRelation::Spawns,
+                signal_kind,
+            )?]
+        }
+        TypedEvidencePayload::Process { .. }
+            if signal_kind == "process_start" && entity_ids.len() >= 3 =>
+        {
+            vec![inferred(
+                entity_ids,
+                2,
+                0,
+                CausalRelation::Uses,
+                signal_kind,
+            )?]
+        }
         TypedEvidencePayload::Identity {
             credential_digest: Some(_),
-            success: true,
+            success: Some(true),
             ..
         } => vec![inferred(
             entity_ids,
@@ -262,15 +293,66 @@ mod tests {
             content_digest: "0".repeat(64),
         };
 
-        let success = infer_causal_relations(&payload(true)).expect("success should infer");
+        let success = infer_causal_relations(&payload(Some(true))).expect("success should infer");
         assert_eq!(success.len(), 1);
         assert_eq!(success[0].relation, CausalRelation::Assumes);
-        assert!(
-            infer_causal_relations(&payload(false))
-                .expect("failure should remain valid evidence")
-                .is_empty(),
-            "failed authentication must not assert credential assumption"
-        );
+        for outcome in [Some(false), None] {
+            assert!(
+                infer_causal_relations(&payload(outcome))
+                    .expect("non-success outcome should remain valid evidence")
+                    .is_empty(),
+                "failed or legacy-unknown authentication must not assert credential assumption"
+            );
+        }
+    }
+
+    #[test]
+    fn process_start_inference_preserves_parent_lineage_with_or_without_actor() {
+        let parent_digest = "parent";
+        let parent_executable_digest = canonical_digest(&("parent_executable", parent_digest))
+            .expect("fixture parent executable digest should be canonical");
+        let parent_node_id = ProcessNode::new(parent_digest, parent_executable_digest)
+            .expect("fixture parent process should be valid")
+            .node_id;
+        let payload = |entity_ids| TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "child".to_string(),
+            parent_process_digest: Some(parent_digest.to_string()),
+            entity_ids,
+            content_digest: "0".repeat(64),
+        };
+
+        let without_actor = infer_causal_relations(&payload(vec![
+            GraphNodeId::new("child"),
+            GraphNodeId::new("event"),
+            parent_node_id.clone(),
+        ]))
+        .expect("parented process should infer");
+        assert_eq!(without_actor.len(), 1);
+        assert_eq!(without_actor[0].from, parent_node_id);
+        assert_eq!(without_actor[0].to, GraphNodeId::new("child"));
+        assert_eq!(without_actor[0].relation, CausalRelation::Spawns);
+
+        let with_actor = infer_causal_relations(&payload(vec![
+            GraphNodeId::new("child"),
+            GraphNodeId::new("event"),
+            parent_node_id,
+            GraphNodeId::new("actor"),
+        ]))
+        .expect("parented process with actor should infer");
+        assert_eq!(with_actor.len(), 1);
+        assert_eq!(with_actor[0].relation, CausalRelation::Spawns);
+
+        let legacy_with_actor = infer_causal_relations(&payload(vec![
+            GraphNodeId::new("legacy-child"),
+            GraphNodeId::new("legacy-event"),
+            GraphNodeId::new("legacy-actor"),
+        ]))
+        .expect("legacy parented process should retain its actor edge");
+        assert_eq!(legacy_with_actor.len(), 1);
+        assert_eq!(legacy_with_actor[0].from, GraphNodeId::new("legacy-actor"));
+        assert_eq!(legacy_with_actor[0].to, GraphNodeId::new("legacy-child"));
+        assert_eq!(legacy_with_actor[0].relation, CausalRelation::Uses);
     }
 
     #[test]

@@ -793,7 +793,8 @@ pub enum TypedEvidencePayload {
         signal_kind: String,
         principal_digest: String,
         credential_digest: Option<String>,
-        success: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        success: Option<bool>,
         entity_ids: Vec<GraphNodeId>,
         content_digest: String,
     },
@@ -864,7 +865,8 @@ enum TypedEvidencePayloadWire {
         signal_kind: String,
         principal_digest: String,
         credential_digest: Option<String>,
-        success: bool,
+        #[serde(default)]
+        success: Option<bool>,
         entity_ids: Vec<GraphNodeId>,
         content_digest: String,
     },
@@ -9209,6 +9211,41 @@ mod tests {
             "content_digest": "digest:intel"
         });
         assert!(serde_json::from_value::<TypedEvidencePayload>(expired).is_err());
+
+        let legacy_identity = serde_json::json!({
+            "kind": "identity",
+            "signal_kind": "authentication_event",
+            "principal_digest": "principal:legacy",
+            "credential_digest": "credential:legacy",
+            "entity_ids": ["node:actor:legacy", "node:credential:legacy"],
+            "content_digest": "digest:legacy"
+        });
+        let legacy_payload: TypedEvidencePayload =
+            serde_json::from_value(legacy_identity).expect("legacy identity payload should decode");
+        assert!(matches!(
+            &legacy_payload,
+            TypedEvidencePayload::Identity { success: None, .. }
+        ));
+        let signed_legacy = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Identity,
+            "source:legacy-identity",
+            SourceLineage::new("fixture", "legacy-identity").unwrap(),
+            EvidenceClock::observed(GraphLogicalTime::new(10)),
+            OrderingClaim::Unknown,
+            legacy_payload,
+        )
+        .unwrap()
+        .sign_with(
+            &signer(),
+            GraphProducerRole::Normalizer,
+            "normalizer:legacy-identity",
+        )
+        .unwrap();
+        let legacy_wire = serde_json::to_string(&signed_legacy).unwrap();
+        assert!(!legacy_wire.contains("\"success\""));
+        let reloaded: EvidenceEnvelope = serde_json::from_str(&legacy_wire).unwrap();
+        assert_eq!(reloaded, signed_legacy);
+        reloaded.validate().unwrap();
     }
 
     #[test]

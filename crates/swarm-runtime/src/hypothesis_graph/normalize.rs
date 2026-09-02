@@ -506,6 +506,9 @@ fn process_payload(
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("process_start", event_node_source_record_id, observed_at)?;
     let mut entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
+    if let Some(parent) = parent_node.as_ref() {
+        entity_ids.push(parent.node_id.clone());
+    }
     let mut nodes = parent_node
         .into_iter()
         .map(GraphNode::Process)
@@ -867,7 +870,7 @@ fn identity_payload(
             signal_kind: "authentication_event".to_string(),
             principal_digest,
             credential_digest: Some(credential_digest),
-            success: authentication.success,
+            success: Some(authentication.success),
             entity_ids,
             content_digest,
         },
