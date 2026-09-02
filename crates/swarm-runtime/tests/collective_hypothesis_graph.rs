@@ -40,6 +40,7 @@ use swarm_runtime::hypothesis_graph::{
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
     project_memory_priority, run_collective_benchmark,
 };
+use swarm_spine::hypothesis_graph_store::GraphStoreError;
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, FileHypothesisGraphStore, GraphStoreRevision,
     GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore, MemoryHypothesisGraphStore,
@@ -3483,6 +3484,14 @@ fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTas
     )
     .unwrap()
     .with_claims([edge_id.clone()]);
+    let unrelated_hypothesis_id = HypothesisId::new("hypothesis:unrelated-decision");
+    let unrelated_hypothesis = Hypothesis::new(
+        unrelated_hypothesis_id.clone(),
+        ConfidenceDistribution::uniform_two(),
+        [],
+        [],
+    )
+    .unwrap();
     let initial = store.snapshot().unwrap();
     let reasoning_state = GraphStoreState::with_reasoning_state(
         initial.state().clone(),
@@ -3490,7 +3499,10 @@ fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTas
             config.resource_limits(),
             GraphLogicalTime::new(100),
         )
-        .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
+        .with_hypotheses(BTreeMap::from([
+            (hypothesis_id.clone(), hypothesis),
+            (unrelated_hypothesis_id, unrelated_hypothesis),
+        ]))
         .with_scheduler_budget(
             SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(100)).unwrap(),
         ),
@@ -3634,6 +3646,38 @@ fn challenge_completion_retains_edge_lineage() {
         TaskTarget::Edge {
             edge_id: fixture.edge_id
         }
+    );
+}
+
+#[test]
+fn challenge_completion_rejects_unrelated_hypothesis_without_mutation() {
+    let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    fixture.hypothesis_id = HypothesisId::new("hypothesis:unrelated-decision");
+    let claim = claim_decision_task(&mut fixture);
+    let before = fixture.store.snapshot().unwrap();
+    let before_bytes = before.canonical_bytes().unwrap();
+    let budget_before = fixture.ledger.scheduler_budget().clone();
+    let (envelope, decision) = decision_terminal(&fixture, &claim);
+
+    assert!(matches!(
+        fixture.ledger.complete_task(
+            &fixture.store,
+            before.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence.clone()],
+            Some(decision),
+            None,
+            None,
+        ),
+        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition {
+            ref reason
+        })) if reason.contains("challenged edge is not claimed")
+    ));
+    assert_eq!(fixture.ledger.scheduler_budget(), &budget_before);
+    assert_eq!(
+        fixture.store.snapshot().unwrap().canonical_bytes().unwrap(),
+        before_bytes
     );
 }
 
@@ -3991,6 +4035,13 @@ fn seed_signal_converges_through_real_runtime() {
     assert_eq!(projection.terminal_publications, 3);
     assert_eq!(projection.memory.len(), 1);
     assert_eq!(projection.hypotheses.len(), 2);
+    let causal_edge_id = projection.graph.edges.keys().next().unwrap();
+    assert!(
+        projection
+            .hypotheses
+            .values()
+            .all(|hypothesis| hypothesis.claims.contains(causal_edge_id))
+    );
     let benign_hypothesis_id = projection
         .tasks
         .iter()

@@ -11,6 +11,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::{Arc, Barrier, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -92,6 +93,7 @@ pub struct ApprovalSetReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalSetRecord {
     pub set_id: String,
+    #[serde(default)]
     pub report_digest: String,
     pub voter_count: usize,
     pub threshold: ThresholdRule,
@@ -1380,6 +1382,7 @@ impl FileApprovalSetStore {
             path: reports_dir.clone(),
             source,
         })?;
+        let mut report_ids = HashSet::new();
         let mut changed = false;
         for entry in entries {
             let entry = entry.map_err(|source| ApprovalSetStoreError::Read {
@@ -1419,7 +1422,22 @@ impl FileApprovalSetStore {
             let record =
                 ApprovalSetRecord::from_report(&report, expected_path.display().to_string())?;
             validate_approval_set_record(self, &record, &report)?;
+            report_ids.insert(record.set_id.clone());
             match records.get(&record.set_id) {
+                Some(indexed) if indexed.report_digest.is_empty() => {
+                    let mut legacy_record = record.clone();
+                    legacy_record.report_digest.clear();
+                    if indexed != &legacy_record {
+                        return Err(ApprovalSetStoreError::Invalid {
+                            reason: format!(
+                                "legacy approval set index record `{}` conflicts with its durable report",
+                                record.set_id
+                            ),
+                        });
+                    }
+                    records.insert(record.set_id.clone(), record);
+                    changed = true;
+                }
                 Some(indexed) if indexed != &record => {
                     return Err(ApprovalSetStoreError::Invalid {
                         reason: format!(
@@ -1434,6 +1452,14 @@ impl FileApprovalSetStore {
                     changed = true;
                 }
             }
+        }
+
+        if let Some(orphaned_set_id) = records.keys().find(|set_id| !report_ids.contains(*set_id)) {
+            return Err(ApprovalSetStoreError::Invalid {
+                reason: format!(
+                    "approval set index record `{orphaned_set_id}` has no canonical durable report"
+                ),
+            });
         }
 
         if changed {
@@ -2191,7 +2217,6 @@ impl DefaultApprovalHarness {
     ) -> Result<ApprovalSetRecord, ApprovalError> {
         self.with_workflow_lock(|| {
             let eligible_voters = normalize_voter_ids(eligible_voters);
-            self.set_store.reconcile_unindexed_reports()?;
             let existing = self
                 .set_store
                 .validated()?
@@ -2285,7 +2310,7 @@ impl DefaultApprovalHarness {
         signer: &Ed25519Signer,
     ) -> Result<ApprovalLedgerQuorumState, ApprovalError> {
         self.with_workflow_lock(|| {
-            let set = self.load_approval_set(set_id)?.ok_or_else(|| {
+            let set = self.load_approval_set_unlocked(set_id)?.ok_or_else(|| {
                 ApprovalError::ApprovalSetNotFound {
                     set_id: set_id.to_string(),
                 }
@@ -2371,7 +2396,7 @@ impl DefaultApprovalHarness {
                 }
             })?;
             let set = self
-                .load_approval_set(&ledger.report.approval_set_id)?
+                .load_approval_set_unlocked(&ledger.report.approval_set_id)?
                 .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
                     set_id: ledger.report.approval_set_id.clone(),
                 })?;
@@ -2451,6 +2476,13 @@ impl DefaultApprovalHarness {
         &self,
         set_id: &str,
     ) -> Result<Option<ApprovalSetLookup>, ApprovalError> {
+        self.with_workflow_lock(|| self.load_approval_set_unlocked(set_id))
+    }
+
+    fn load_approval_set_unlocked(
+        &self,
+        set_id: &str,
+    ) -> Result<Option<ApprovalSetLookup>, ApprovalError> {
         self.set_store.load(set_id).map_err(Into::into)
     }
 
@@ -2516,7 +2548,7 @@ impl DefaultApprovalHarness {
     }
 
     pub fn list_approval_sets(&self) -> Result<ApprovalSetList, ApprovalError> {
-        self.set_store.list().map_err(Into::into)
+        self.with_workflow_lock(|| self.set_store.list().map_err(Into::into))
     }
 
     pub fn list_ledgers(
@@ -2705,11 +2737,11 @@ impl DefaultApprovalHarness {
         ledger_id: &str,
     ) -> Result<ApprovalVerdictLookup, ApprovalError> {
         let verdict_store = self.verdict_store()?;
-        let set = self.load_approval_set(approval_set_id)?.ok_or_else(|| {
-            ApprovalError::ApprovalSetNotFound {
+        let set = self
+            .load_approval_set_unlocked(approval_set_id)?
+            .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
                 set_id: approval_set_id.to_string(),
-            }
-        })?;
+            })?;
         let ledger = self.load_ledger_unlocked(ledger_id)?.ok_or_else(|| {
             ApprovalError::ApprovalLedgerNotFound {
                 ledger_id: ledger_id.to_string(),
@@ -2792,7 +2824,7 @@ impl DefaultApprovalHarness {
             }
         })?;
         let set = self
-            .load_approval_set(&verdict.report.approval_set_id)?
+            .load_approval_set_unlocked(&verdict.report.approval_set_id)?
             .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
                 set_id: verdict.report.approval_set_id.clone(),
             })?;
@@ -3080,6 +3112,11 @@ impl DefaultApprovalHarness {
     ) -> Result<T, ApprovalError> {
         let lock = self.workflow_lock()?;
         lock.verify()?;
+        // Schema repair is its own lock-protected durable transition. Capture
+        // the rollback snapshot only after it succeeds so an unrelated later
+        // request failure cannot undo a completed migration or mistake its
+        // atomic replacement inode for an attacker-controlled path swap.
+        self.set_store.reconcile_unindexed_reports()?;
         let snapshot = self.workflow_snapshot()?;
         #[cfg(test)]
         wait_for_workflow_test_hook(&lock.path);
@@ -3979,7 +4016,38 @@ where
 {
     let json = serde_json::to_vec_pretty(value)
         .map_err(|source| parse_error(path.to_path_buf(), source))?;
-    fs::write(path, json).map_err(|source| write_error(path.to_path_buf(), source))
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("approval.json");
+    static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
+    let (temp_path, mut temp_file) = loop {
+        let nonce = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&candidate)
+        {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => return Err(write_error(candidate, source)),
+        }
+    };
+    let write_result = (|| -> Result<(), std::io::Error> {
+        temp_file.write_all(&json)?;
+        temp_file.sync_all()?;
+        fs::rename(&temp_path, path)?;
+        #[cfg(unix)]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if let Err(source) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(write_error(path.to_path_buf(), source));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -4950,12 +5018,12 @@ mod tests {
                 "promotion-evidence:workflow-lock-path-replacement",
             )
             .unwrap();
+        let before_set_tree = capture_store_tree(&dir.child("approval-sets"));
         let lock_path = dir.child("approval-ledgers/.approval-workflow.lock");
         let original_lock_path = dir.child("approval-ledgers/.approval-workflow.lock.original");
         fs::rename(&lock_path, &original_lock_path).unwrap();
         fs::write(&lock_path, b"replacement").unwrap();
 
-        let before_sets = harness.list_approval_sets().unwrap().total_count;
         let ledger_index_path = dir.child("approval-ledgers/index.json");
         let before_ledger_index = fs::read(&ledger_index_path).unwrap();
         let error = harness
@@ -4967,8 +5035,8 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, ApprovalError::WorkflowLock { .. }));
         assert_eq!(
-            harness.list_approval_sets().unwrap().total_count,
-            before_sets
+            capture_store_tree(&dir.child("approval-sets")),
+            before_set_tree
         );
         assert_eq!(fs::read(&ledger_index_path).unwrap(), before_ledger_index);
     }
@@ -5240,12 +5308,12 @@ mod tests {
                 "promotion-evidence:workflow-lock-symlink",
             )
             .unwrap();
+        let before_set_tree = capture_store_tree(&dir.child("approval-sets"));
         let lock_path = dir.child("approval-ledgers/.approval-workflow.lock");
         let original_lock_path = dir.child("approval-ledgers/.approval-workflow.lock.original");
         fs::rename(&lock_path, &original_lock_path).unwrap();
         symlink(&original_lock_path, &lock_path).unwrap();
 
-        let before_sets = harness.list_approval_sets().unwrap().total_count;
         let ledger_index_path = dir.child("approval-ledgers/index.json");
         let before_ledger_index = fs::read(&ledger_index_path).unwrap();
         let error = harness
@@ -5257,8 +5325,8 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, ApprovalError::WorkflowLock { .. }));
         assert_eq!(
-            harness.list_approval_sets().unwrap().total_count,
-            before_sets
+            capture_store_tree(&dir.child("approval-sets")),
+            before_set_tree
         );
         assert_eq!(fs::read(&ledger_index_path).unwrap(), before_ledger_index);
     }
@@ -5573,15 +5641,44 @@ mod tests {
 
         let mut legacy_index: serde_json::Value =
             serde_json::from_slice(&original_index_bytes).unwrap();
-        legacy_index["entries"][0]
+        legacy_index["entries"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entry| entry["set_id"] == json!(set.set_id))
+            .unwrap()
             .as_object_mut()
             .unwrap()
             .remove("report_digest");
         let legacy_index_bytes = serde_json::to_vec_pretty(&legacy_index).unwrap();
         fs::write(&set_index_path, &legacy_index_bytes).unwrap();
-        let mut expected_set_tree = baseline_set_tree.clone();
-        expected_set_tree.insert(set_index_path.clone(), legacy_index_bytes);
-        assert_rejected(expected_set_tree);
+        let reopened = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            &verdict_root,
+            &pack_root,
+            &set_root,
+            &ledger_root,
+        )
+        .unwrap();
+        assert_eq!(reopened.list_approval_sets().unwrap().total_count, 2);
+        let migrated_index: serde_json::Value =
+            serde_json::from_slice(&fs::read(&set_index_path).unwrap()).unwrap();
+        let migrated_record = migrated_index["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["set_id"] == json!(set.set_id))
+            .unwrap();
+        let expected_report: ApprovalSetReport =
+            serde_json::from_value(original_report.clone()).unwrap();
+        let expected_report_digest = approval_set_report_digest(&expected_report).unwrap();
+        assert_eq!(
+            migrated_record["report_digest"],
+            json!(expected_report_digest)
+        );
+        assert_eq!(capture_store_tree(&ledger_root), baseline_ledger_tree);
+        assert_eq!(capture_store_tree(&verdict_root), baseline_verdict_tree);
+        assert_eq!(capture_store_tree(&pack_root), baseline_pack_tree);
         fs::write(&set_index_path, &original_index_bytes).unwrap();
 
         fs::write(&set_report_path, &other_report_bytes).unwrap();

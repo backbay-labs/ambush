@@ -7283,10 +7283,14 @@ fn atomic_write_json_at(
         }
         let mode = target_stat.st_mode & 0o7777;
         if mode != 0o600 {
+            // `libc::mode_t` is `u16` on macOS and `u32` on Linux. Keep the
+            // conversion explicit so the error contract remains portable.
+            #[allow(clippy::useless_conversion)]
+            let observed = u32::from(mode);
             return Err(GraphStoreError::InsecurePermissions {
                 path: path.to_path_buf(),
                 expected: 0o600,
-                observed: u32::from(mode),
+                observed,
             });
         }
     } else {

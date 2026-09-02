@@ -1013,22 +1013,49 @@ fn coordinate_seed_once(
     evidence_scope
         .validate()
         .map_err(GraphStoreError::Admission)?;
-    let candidate_hypotheses =
-        competing_hypotheses(seed, limits).map_err(GraphStoreError::Admission)?;
-
     let mut next = snapshot.state().clone();
     let mut changed = match graph_records {
         Some(records) => records.admit_into(&mut next)?,
         None => false,
     };
+    let seed_evidence_ids = seed
+        .assessments
+        .iter()
+        .flat_map(|assessment| assessment.evidence_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let edge_ids = next
+        .graph
+        .edges
+        .values()
+        .filter(|edge| !edge.source_evidence_ids.is_disjoint(&seed_evidence_ids))
+        .map(|edge| edge.edge_id.clone())
+        .collect::<BTreeSet<_>>();
+    let candidate_hypotheses = competing_hypotheses(seed, limits)
+        .map_err(GraphStoreError::Admission)?
+        .into_iter()
+        .map(|(hypothesis_id, hypothesis)| {
+            (
+                hypothesis_id,
+                hypothesis.with_claims(edge_ids.iter().cloned()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut hypothesis_ids = candidate_hypotheses.keys().cloned().collect::<Vec<_>>();
     hypothesis_ids.sort();
     for (hypothesis_id, candidate) in candidate_hypotheses {
         match next.hypotheses.get(&hypothesis_id) {
             Some(existing) if existing != &candidate => {
                 // An existing hypothesis is durable history, not a projection
-                // to be overwritten by a later seed.  It may have decisions,
-                // claims, or status changes that must remain append-only.
+                // to be overwritten by a later seed. Preserve its decisions,
+                // confidence, and status while monotonically attaching causal
+                // edges admitted for this evidence-scoped retry.
+                let mut updated = existing.clone();
+                let prior_claim_count = updated.claims.len();
+                updated.claims.extend(candidate.claims);
+                if updated.claims.len() != prior_claim_count {
+                    next.hypotheses.insert(hypothesis_id, updated);
+                    changed = true;
+                }
             }
             Some(_) => {}
             None => {
@@ -1109,18 +1136,6 @@ fn coordinate_seed_once(
         changed = true;
     }
 
-    let seed_evidence_ids = seed
-        .assessments
-        .iter()
-        .flat_map(|assessment| assessment.evidence_ids.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    let edge_ids = next
-        .graph
-        .edges
-        .values()
-        .filter(|edge| !edge.source_evidence_ids.is_disjoint(&seed_evidence_ids))
-        .map(|edge| edge.edge_id.clone())
-        .collect::<BTreeSet<_>>();
     let task_targets =
         coordination_task_targets(seed, &edge_ids).map_err(GraphStoreError::Admission)?;
     let mut task_ids = Vec::with_capacity(task_targets.len());
@@ -1528,6 +1543,21 @@ pub fn commit_terminal_once(
                         return Err(GraphStoreError::Admission(
                             GraphAdmissionError::InvalidTransition {
                                 reason: "terminal challenge targets an unknown edge".to_string(),
+                            },
+                        ));
+                    }
+                    let hypothesis =
+                        next.hypotheses
+                            .get(&decision.hypothesis_id)
+                            .ok_or_else(|| GraphStoreError::InvalidState {
+                                reason: "terminal decision targets an unknown hypothesis"
+                                    .to_string(),
+                            })?;
+                    if !hypothesis.claims.contains(edge_id) {
+                        return Err(GraphStoreError::Admission(
+                            GraphAdmissionError::InvalidTransition {
+                                reason: "challenged edge is not claimed by the decision hypothesis"
+                                    .to_string(),
                             },
                         ));
                     }

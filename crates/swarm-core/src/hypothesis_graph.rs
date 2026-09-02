@@ -4578,6 +4578,52 @@ impl TaskTerminalOutboxEntry {
         Ok(())
     }
 
+    fn validate_decision_for_task(
+        &self,
+        task: &TaskRecord,
+        evidence_ids: &BTreeSet<EvidenceId>,
+    ) -> Result<(), GraphAdmissionError> {
+        match (&self.envelope.decision_link, &self.decision) {
+            (None, None) => Ok(()),
+            (Some(link), Some(decision)) => {
+                link.validate()?;
+                decision.validate()?;
+                let expected_kind = match task.request.kind {
+                    TaskKind::ChallengeEdge => DecisionKind::Challenge,
+                    TaskKind::FalsifyHypothesis => DecisionKind::Falsify,
+                    TaskKind::AcquireEvidence => {
+                        return Err(GraphAdmissionError::InvalidTransition {
+                            reason: "evidence acquisition cannot publish a decision".to_string(),
+                        });
+                    }
+                };
+                if decision.kind != expected_kind || decision.producer_role != task.request.role {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason:
+                            "terminal decision kind and producer role do not match the claimed task"
+                                .to_string(),
+                    });
+                }
+                if link.task_id != self.envelope.task_id
+                    || link.decision_id.as_ref() != Some(&decision.decision_id)
+                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
+                    || decision.hypothesis_id.as_str().trim().is_empty()
+                {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision and link lineage do not match".to_string(),
+                    });
+                }
+                if !decision.evidence_ids.is_subset(evidence_ids) {
+                    return Err(GraphAdmissionError::UnknownEvidence);
+                }
+                Ok(())
+            }
+            _ => Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal decision must be present with its decision link".to_string(),
+            }),
+        }
+    }
+
     pub fn validate_for_task(
         &self,
         task: &TaskRecord,
@@ -4637,30 +4683,7 @@ impl TaskTerminalOutboxEntry {
             return Err(GraphAdmissionError::UnknownEvidence);
         }
         validate_outbox_evidence_scope(&task.request, &self.envelope.completion, &evidence_ids)?;
-        match (&self.envelope.decision_link, &self.decision) {
-            (None, None) => {}
-            (Some(link), Some(decision)) => {
-                link.validate()?;
-                decision.validate()?;
-                if link.task_id != self.envelope.task_id
-                    || link.decision_id.as_ref() != Some(&decision.decision_id)
-                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
-                    || decision.hypothesis_id.as_str().trim().is_empty()
-                {
-                    return Err(GraphAdmissionError::InvalidTransition {
-                        reason: "terminal decision and link lineage do not match".to_string(),
-                    });
-                }
-                if !decision.evidence_ids.is_subset(&evidence_ids) {
-                    return Err(GraphAdmissionError::UnknownEvidence);
-                }
-            }
-            _ => {
-                return Err(GraphAdmissionError::InvalidTransition {
-                    reason: "terminal decision must be present with its decision link".to_string(),
-                });
-            }
-        }
+        self.validate_decision_for_task(task, &evidence_ids)?;
         Ok(evidence_ids)
     }
 
@@ -4818,27 +4841,7 @@ impl TaskTerminalOutboxEntry {
             return Err(GraphAdmissionError::UnknownEvidence);
         }
         validate_outbox_evidence_scope(&task.request, &self.envelope.completion, &evidence_ids)?;
-        match (&self.envelope.decision_link, &self.decision) {
-            (None, None) => {}
-            (Some(link), Some(decision)) => {
-                link.validate()?;
-                decision.validate()?;
-                if link.task_id != self.envelope.task_id
-                    || link.decision_id.as_ref() != Some(&decision.decision_id)
-                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
-                    || !decision.evidence_ids.is_subset(&evidence_ids)
-                {
-                    return Err(GraphAdmissionError::InvalidTransition {
-                        reason: "terminal decision and link lineage do not match".to_string(),
-                    });
-                }
-            }
-            _ => {
-                return Err(GraphAdmissionError::InvalidTransition {
-                    reason: "terminal decision must be present with its decision link".to_string(),
-                });
-            }
-        }
+        self.validate_decision_for_task(task, &evidence_ids)?;
         self.validate_memory_lineage_for_committed_state(
             descriptor,
             &evidence_ids,
@@ -10032,6 +10035,119 @@ mod tests {
                 .validate_for_task(&task, &wrong_target, &GraphResourceLimits::default())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn terminal_outbox_rejects_individually_valid_decision_for_wrong_task_kind() {
+        let key = signer();
+        let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
+        let evidence = envelope(
+            "record:wrong-terminal-decision",
+            GraphProducerRole::Normalizer,
+        );
+        let hypothesis_id = HypothesisId::new("hypothesis:wrong-terminal-decision");
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            GraphId::new("graph:wrong-terminal-decision"),
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            canonical_digest(&"wrong-terminal-decision-seed").expect("seed digest"),
+        )
+        .expect("descriptor");
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            descriptor.kind,
+            target.clone(),
+            GraphProducerRole::Falsifier,
+            claimant.clone(),
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [evidence.evidence_id.clone()],
+                [],
+            )
+            .expect("scope"),
+            GraphLogicalTime::new(100),
+        )
+        .expect("request");
+        let lease = TaskLease::new(
+            LeaseId::new("lease:wrong-terminal-decision"),
+            claimant.clone(),
+            GraphLogicalTime::new(100),
+            GraphLogicalTime::new(200),
+            FencingToken::new(1),
+        )
+        .expect("lease");
+        let task = TaskRecord::claimed(request.clone(), lease.clone()).expect("task");
+        let capability = TaskCapabilityProof::new(
+            request.task_id.clone(),
+            claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().expect("claim digest"),
+            &key,
+            "falsifier:wrong-terminal-decision",
+        )
+        .expect("capability");
+
+        // This support decision is internally valid and signed by the exact
+        // claimant key, but it cannot satisfy a falsification task.
+        let decision = DecisionRecord::new(
+            DecisionKind::Support,
+            hypothesis_id,
+            [evidence.evidence_id.clone()],
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            GraphLogicalTime::new(150),
+            "support cannot close falsification work",
+        )
+        .expect("decision")
+        .signed_with(&key, "hunter:wrong-terminal-decision")
+        .expect("signed decision");
+        assert!(decision.validate().is_ok());
+        let link = TaskDecisionLink::new(
+            request.task_id.clone(),
+            target,
+            [evidence.evidence_id.clone()],
+            Some(decision.decision_id.clone()),
+        )
+        .expect("decision link");
+        let terminal = TaskTerminalEnvelope::new(
+            request.task_id,
+            request.idempotency_key,
+            lease.lease_id,
+            lease.fencing_token,
+            TaskCompletion::new(
+                TaskCompletionKind::HypothesisFalsified,
+                claimant.clone(),
+                GraphLogicalTime::new(150),
+                [evidence.evidence_id.clone()],
+                "digest:wrong-terminal-decision",
+            )
+            .expect("completion"),
+            Some(link),
+            claimant.clone(),
+            capability,
+        )
+        .expect("terminal envelope")
+        .signed_with(&key, "falsifier:wrong-terminal-decision")
+        .expect("terminal signature");
+        assert!(terminal.validate_for_task(&task, 1_000, 3).is_ok());
+
+        let publication = TaskTerminalOutboxEntry {
+            envelope: terminal,
+            evidence: vec![evidence],
+            decision: Some(decision),
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: claimant,
+        };
+        assert!(matches!(
+            publication.validate_for_task(&task, &descriptor, &GraphResourceLimits::default()),
+            Err(GraphAdmissionError::InvalidTransition { ref reason })
+                if reason.contains("decision kind and producer role")
+        ));
     }
 
     #[test]
