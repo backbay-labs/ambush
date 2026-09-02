@@ -4055,6 +4055,7 @@ fn failed_coordination_does_not_publish_partial_graph() {
 fn seed_signal_converges_through_real_runtime() {
     let config = HypothesisGraphConfig {
         enabled: true,
+        max_nodes: 3,
         max_work_units_per_tick: 32,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
@@ -4115,7 +4116,12 @@ fn seed_signal_converges_through_real_runtime() {
 
     let projection = service.operator_projection().unwrap();
     assert_eq!(projection.graph.evidence.len(), 1);
+    assert_eq!(projection.graph.nodes.len(), 3);
     assert_eq!(projection.graph.edges.len(), 1);
+    let inferred_edge = projection.graph.edges.values().next().unwrap();
+    assert_eq!(inferred_edge.relation, CausalRelation::Uses);
+    assert!(projection.graph.nodes.contains_key(&inferred_edge.from));
+    assert!(projection.graph.nodes.contains_key(&inferred_edge.to));
     assert_eq!(projection.tasks.len(), 3);
     assert!(
         projection

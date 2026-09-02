@@ -199,10 +199,11 @@ impl HypothesisGraphConfig {
     pub fn validate_reasoning_limits(
         &self,
     ) -> Result<(), crate::hypothesis_graph::GraphAdmissionError> {
-        if self.enabled && self.max_nodes < 2 {
+        if self.enabled && self.max_nodes < 3 {
             return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
                 field: "max_nodes".to_string(),
-                reason: "must be at least 2 when enabled so one replay can be admitted".to_string(),
+                reason: "must be at least 3 when enabled so one inferred process replay and its parent can be admitted"
+                    .to_string(),
             });
         }
         if self.enabled && self.max_hypotheses < 2 {

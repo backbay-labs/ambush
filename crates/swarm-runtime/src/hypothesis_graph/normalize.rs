@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::Value;
 use swarm_core::hypothesis_graph::{
     ActorNode, AssetNode, ClockPrecision, CredentialNode, EventNode, EvidenceClock,
-    EvidenceEnvelope, EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime,
+    EvidenceEnvelope, EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime, GraphNode,
     GraphProducerRole, OrderingClaim, ProcessNode, SourceLineage, TypedEvidencePayload,
 };
 use swarm_core::{
@@ -21,6 +21,21 @@ use swarm_core::{
 use swarm_crypto::{Keypair, canonical_json_bytes, sha256_hex};
 
 use super::clock::GraphClock;
+
+/// One normalized evidence envelope plus the exact typed graph nodes used to
+/// derive its entity identifiers. Runtime admission can therefore materialize
+/// inferred causal endpoints without reconstructing or aliasing identities.
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedGraphEvidence {
+    pub(crate) evidence: EvidenceEnvelope,
+    pub(crate) nodes: Vec<GraphNode>,
+}
+
+#[derive(Debug)]
+struct NormalizedPayload {
+    payload: TypedEvidencePayload,
+    nodes: Vec<GraphNode>,
+}
 
 /// Maximum size of a single source text field accepted by an adapter.
 pub const MAX_SOURCE_TEXT_BYTES: usize = 16 * 1024;
@@ -77,6 +92,18 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
     role: GraphProducerRole,
     scoped_agent_id: impl Into<String>,
 ) -> Result<EvidenceEnvelope, GraphAdmissionError> {
+    normalize_telemetry_graph_with_unit(event, timestamp_unit, clock, signer, role, scoped_agent_id)
+        .map(|normalized| normalized.evidence)
+}
+
+fn normalize_telemetry_graph_with_unit<C: GraphClock + ?Sized>(
+    event: &TelemetryEvent,
+    timestamp_unit: SourceTimestampUnit,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
     if event.source == TETRAGON_FALLBACK_TIME_SOURCE_MARKER
         || event
             .event_id
@@ -93,7 +120,7 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
     let (observed_at, precision, uncertainty_ms) =
         normalize_source_timestamp(event.timestamp, timestamp_unit)?;
     let evidence_clock = clock_for(observed_at, precision, uncertainty_ms, clock)?;
-    let (source_family, signal_kind, payload) = match &event.payload {
+    let (source_family, signal_kind, normalized) = match &event.payload {
         TelemetryPayload::ProcessStart(process) => (
             EvidenceSourceFamily::Process,
             "process_start",
@@ -189,9 +216,13 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
         lineage,
         evidence_clock,
         OrderingClaim::Unknown,
-        payload,
+        normalized.payload,
     )?;
-    envelope.sign_with(signer, role, scoped_agent_id)
+    let evidence = envelope.sign_with(signer, role, scoped_agent_id)?;
+    Ok(NormalizedGraphEvidence {
+        evidence,
+        nodes: normalized.nodes,
+    })
 }
 
 /// Compatibility alias with the name used by the plan and integration tests.
@@ -203,6 +234,25 @@ pub fn normalize_telemetry_event<C: GraphClock + ?Sized>(
     scoped_agent_id: impl Into<String>,
 ) -> Result<EvidenceEnvelope, GraphAdmissionError> {
     normalize_telemetry(event, clock, signer, role, scoped_agent_id)
+}
+
+/// Normalize telemetry for durable graph admission, retaining the exact typed
+/// nodes whose IDs appear in the evidence payload.
+pub(crate) fn normalize_telemetry_event_for_graph<C: GraphClock + ?Sized>(
+    event: &TelemetryEvent,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
+    normalize_telemetry_graph_with_unit(
+        event,
+        legacy_timestamp_unit(event.timestamp),
+        clock,
+        signer,
+        role,
+        scoped_agent_id,
+    )
 }
 
 /// Explicit-unit alias matching the event-oriented adapter name.
@@ -407,7 +457,7 @@ fn process_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let parent_process = match process.parent_process.trim() {
         "" | "<none>" | "none" | "unknown" => None,
         value => Some(bounded_text("process.parent_process", value, 4 * 1024)?),
@@ -445,7 +495,7 @@ fn process_payload(
             ProcessNode::new(digest, parent_executable_digest)
         })
         .transpose()?;
-    let process_node = match parent_node {
+    let process_node = match parent_node.as_ref() {
         Some(parent) => ProcessNode::new_with_parent(
             process_digest.clone(),
             executable_digest,
@@ -455,10 +505,17 @@ fn process_payload(
     };
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("process_start", event_node_source_record_id, observed_at)?;
-    let mut entity_ids = vec![process_node.node_id, event_node.node_id];
+    let mut entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
+    let mut nodes = parent_node
+        .into_iter()
+        .map(GraphNode::Process)
+        .collect::<Vec<_>>();
+    nodes.push(GraphNode::Process(process_node));
+    nodes.push(GraphNode::Event(event_node));
     if let Some(user) = user.as_deref() {
-        entity_ids
-            .push(ActorNode::new(digest_projection(&("user", user))?, "process_user")?.node_id);
+        let actor = ActorNode::new(digest_projection(&("user", user))?, "process_user")?;
+        entity_ids.push(actor.node_id.clone());
+        nodes.push(GraphNode::Actor(actor));
     }
     let content_digest = digest_projection(&(
         "process_start",
@@ -470,12 +527,15 @@ fn process_payload(
         &signer,
         process.signature_valid,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: "process_start".to_string(),
-        process_digest,
-        parent_process_digest: parent_digest,
-        entity_ids,
-        content_digest,
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest,
+            parent_process_digest: parent_digest,
+            entity_ids,
+            content_digest,
+        },
+        nodes,
     })
 }
 
@@ -484,7 +544,7 @@ fn process_memory_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let source = bounded_text(
         "process_memory.source_process",
         &access.source_process,
@@ -533,12 +593,24 @@ fn process_memory_payload(
         access.region_size,
         &call_stack,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: "process_memory_access".to_string(),
-        process_digest: target_digest,
-        parent_process_digest: Some(source_digest),
-        entity_ids: vec![source_node.node_id, target_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        source_node.node_id.clone(),
+        target_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: "process_memory_access".to_string(),
+            process_digest: target_digest,
+            parent_process_digest: Some(source_digest),
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(source_node),
+            GraphNode::Process(target_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -547,7 +619,7 @@ fn registry_access_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text("registry.process_name", &access.process_name, 4 * 1024)?;
     let path = bounded_text("registry.registry_path", &access.registry_path, 4 * 1024)?;
     let access_type = bounded_text("registry.access_type", &access.access_type, 512)?;
@@ -575,7 +647,7 @@ fn registry_persistence_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text(
         "registry_persistence.process_name",
         &persistence.process_name,
@@ -632,12 +704,19 @@ fn registry_persistence_payload(
         &value_name_digest,
         &value_data_digest,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: "registry_persistence".to_string(),
-        process_digest,
-        parent_process_digest: None,
-        entity_ids: vec![process_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: "registry_persistence".to_string(),
+            process_digest,
+            parent_process_digest: None,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(process_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -646,7 +725,7 @@ fn file_persistence_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text(
         "file_persistence.process_name",
         &persistence.process_name,
@@ -691,7 +770,7 @@ fn process_like_payload(
     second_projection: &str,
     optional_projection: &Option<String>,
     context: EventNodeContext<'_>,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process_digest =
         digest_projection(&(signal_kind, process, first_projection, second_projection))?;
     let process_node = ProcessNode::new(process_digest.clone(), process_digest.clone())?;
@@ -709,12 +788,19 @@ fn process_like_payload(
         second_projection,
         optional_projection,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: signal_kind.to_string(),
-        process_digest,
-        parent_process_digest: None,
-        entity_ids: vec![process_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: signal_kind.to_string(),
+            process_digest,
+            parent_process_digest: None,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(process_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -723,7 +809,7 @@ fn identity_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let auth_type = bounded_text("identity.auth_type", &authentication.auth_type, 512)?;
     let source_host = optional_text(
         "identity.source_host",
@@ -771,12 +857,24 @@ fn identity_payload(
         authentication.success,
         &user,
     ))?;
-    Ok(TypedEvidencePayload::Identity {
-        signal_kind: "authentication_event".to_string(),
-        principal_digest,
-        credential_digest: Some(credential_digest),
-        entity_ids: vec![actor.node_id, credential.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        actor.node_id.clone(),
+        credential.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Identity {
+            signal_kind: "authentication_event".to_string(),
+            principal_digest,
+            credential_digest: Some(credential_digest),
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Actor(actor),
+            GraphNode::Credential(credential),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -785,7 +883,7 @@ fn kubernetes_payload(
     source_id: &str,
     audit_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let verb = bounded_text("kubernetes.verb", &audit.verb, 512)?;
     let resource = bounded_text("kubernetes.resource", &audit.resource, 4 * 1024)?;
     let stage = optional_text("kubernetes.stage", audit.stage.as_deref(), 512)?;
@@ -860,13 +958,25 @@ fn kubernetes_payload(
         &request_digest,
         &impersonated_username,
     ))?;
-    Ok(TypedEvidencePayload::KubernetesAudit {
-        signal_kind: "kubernetes_audit".to_string(),
-        audit_id: audit_id.to_string(),
-        verb,
-        resource_digest,
-        entity_ids: vec![actor.node_id, asset.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        actor.node_id.clone(),
+        asset.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::KubernetesAudit {
+            signal_kind: "kubernetes_audit".to_string(),
+            audit_id: audit_id.to_string(),
+            verb,
+            resource_digest,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Actor(actor),
+            GraphNode::Asset(asset),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -875,7 +985,7 @@ fn cloudtrail_payload(
     source_id: &str,
     event_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let event_name = bounded_text("cloudtrail.event_name", &cloudtrail.event_name, 4 * 1024)?;
     let event_source = bounded_text(
         "cloudtrail.event_source",
@@ -981,7 +1091,11 @@ fn cloudtrail_payload(
     let account_node = AssetNode::new(account_digest.clone(), "aws_account")?;
     let event_node_source_record_id = event_node_source_record_id(source_id, event_id)?;
     let event_node = EventNode::new("cloudtrail", event_node_source_record_id, observed_at)?;
-    let entity_ids = vec![actor.node_id, account_node.node_id, event_node.node_id];
+    let entity_ids = vec![
+        actor.node_id.clone(),
+        account_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
     let content_digest = digest_projection(&(
         event_id,
         &event_name,
@@ -1002,22 +1116,29 @@ fn cloudtrail_payload(
     ))?;
     // CloudTrail's account and principal semantics remain in their dedicated
     // digest fields; `host_id` is deliberately not consulted.
-    Ok(TypedEvidencePayload::Cloudtrail {
-        signal_kind: "cloudtrail".to_string(),
-        event_id: event_id.to_string(),
-        event_name,
-        event_source,
-        principal_digest,
-        account_digest,
-        source_ip_digest,
-        request_digest,
-        response_digest,
-        mfa_authenticated: cloudtrail.mfa_authenticated,
-        region,
-        error_code,
-        error_message,
-        entity_ids,
-        content_digest,
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Cloudtrail {
+            signal_kind: "cloudtrail".to_string(),
+            event_id: event_id.to_string(),
+            event_name,
+            event_source,
+            principal_digest,
+            account_digest,
+            source_ip_digest,
+            request_digest,
+            response_digest,
+            mfa_authenticated: cloudtrail.mfa_authenticated,
+            region,
+            error_code,
+            error_message,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Actor(actor),
+            GraphNode::Asset(account_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -1026,7 +1147,7 @@ fn network_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text("network.process_name", &network.process_name, 4 * 1024)?;
     let destination_ip = bounded_text("network.destination_ip", &network.destination_ip, 256)?;
     let protocol = bounded_text("network.protocol", &network.protocol, 256)?;
@@ -1044,13 +1165,25 @@ fn network_payload(
         network.destination_port,
         &protocol,
     ))?;
-    Ok(TypedEvidencePayload::Network {
-        signal_kind: "network_connect".to_string(),
-        source_digest,
-        destination_digest,
-        protocol,
-        entity_ids: vec![process_node.node_id, asset_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        process_node.node_id.clone(),
+        asset_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Network {
+            signal_kind: "network_connect".to_string(),
+            source_digest,
+            destination_digest,
+            protocol,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(process_node),
+            GraphNode::Asset(asset_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -1059,7 +1192,7 @@ fn dns_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let query_name = bounded_text("dns.query_name", &dns.query_name, 4 * 1024)?;
     let query_type = bounded_text("dns.query_type", &dns.query_type, 256)?;
     let source_ip = optional_text("dns.source_ip", dns.source_ip.as_deref(), 256)?;
@@ -1079,17 +1212,25 @@ fn dns_payload(
         &process_name,
         &response_code,
     ))?;
-    Ok(TypedEvidencePayload::Network {
-        signal_kind: "dns_query".to_string(),
-        source_digest,
-        destination_digest,
-        protocol: query_type,
-        entity_ids: vec![
-            source_node.node_id,
-            destination_node.node_id,
-            event_node.node_id,
+    let entity_ids = vec![
+        source_node.node_id.clone(),
+        destination_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Network {
+            signal_kind: "dns_query".to_string(),
+            source_digest,
+            destination_digest,
+            protocol: query_type,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Asset(source_node),
+            GraphNode::Asset(destination_node),
+            GraphNode::Event(event_node),
         ],
-        content_digest,
     })
 }
 
@@ -1100,20 +1241,24 @@ fn infrastructure_payload<T: Serialize>(
     source_id: &str,
     source_record_id: &str,
     observed_at: GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let node_name = bounded_text("infrastructure.node_name", node_name, 4 * 1024)?;
     let node_digest = digest_projection(&("infrastructure_node", &node_name))?;
     let node = AssetNode::new(node_digest, "infrastructure_node")?;
     let event_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event = EventNode::new(signal_kind, event_record_id, observed_at)?;
     let content_digest = digest_projection(&(signal_kind, payload))?;
-    Ok(TypedEvidencePayload::Signal {
-        signal_kind: signal_kind.to_string(),
-        entity_ids: vec![event.node_id, node.node_id],
-        relation_ids: Vec::new(),
-        supports: Vec::new(),
-        refutes: Vec::new(),
-        content_digest,
+    let entity_ids = vec![event.node_id.clone(), node.node_id.clone()];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Signal {
+            signal_kind: signal_kind.to_string(),
+            entity_ids,
+            relation_ids: Vec::new(),
+            supports: Vec::new(),
+            refutes: Vec::new(),
+            content_digest,
+        },
+        nodes: vec![GraphNode::Event(event), GraphNode::Asset(node)],
     })
 }
 
@@ -1265,11 +1410,12 @@ fn indicator_kind(indicator_type: &ThreatIntelIndicatorType) -> &'static str {
 mod tests {
     use super::{
         TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX, TETRAGON_FALLBACK_TIME_SOURCE_MARKER,
-        normalize_telemetry_event, normalize_threat_intel_entry,
+        normalize_telemetry_event, normalize_telemetry_event_for_graph,
+        normalize_threat_intel_entry,
     };
     use crate::hypothesis_graph::clock::FixedGraphClock;
     use swarm_core::hypothesis_graph::{
-        EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime, GraphProducerRole,
+        EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime, GraphNode, GraphProducerRole,
         TypedEvidencePayload,
     };
     use swarm_core::{
@@ -1330,6 +1476,36 @@ mod tests {
         assert!(!encoded.contains("token=secret"));
         assert!(!encoded.contains("host-secret-that-must-not-be-causal"));
         envelope.validate().unwrap();
+    }
+
+    #[test]
+    fn graph_normalization_retains_every_payload_and_parent_node_identity() {
+        let normalized = normalize_telemetry_event_for_graph(
+            &process_event(),
+            &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+            &key(),
+            GraphProducerRole::Normalizer,
+            "normalizer-process-graph",
+        )
+        .unwrap();
+        let TypedEvidencePayload::Process { entity_ids, .. } = &normalized.evidence.payload else {
+            panic!("process telemetry must produce process evidence");
+        };
+        for entity_id in entity_ids {
+            assert!(
+                normalized.nodes.iter().any(|node| node.id() == entity_id),
+                "payload entity {entity_id:?} was not retained"
+            );
+        }
+        for parent_id in normalized.nodes.iter().filter_map(|node| match node {
+            GraphNode::Process(process) => process.parent_node_id.as_ref(),
+            _ => None,
+        }) {
+            assert!(
+                normalized.nodes.iter().any(|node| node.id() == parent_id),
+                "process parent {parent_id:?} was not retained"
+            );
+        }
     }
 
     #[test]

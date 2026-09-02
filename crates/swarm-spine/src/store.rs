@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::hypothesis_graph::GraphId;
 use swarm_core::types::ResponseRehearsalPreview;
+use swarm_crypto::canonical_json_bytes;
 
 /// Metadata for one persisted replay bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +124,9 @@ pub enum ReplayStoreError {
     #[error("invalid replay store state: {reason}")]
     InvalidState { reason: String },
 
+    #[error("replay bundle ID `{bundle_id}` is already bound to different contents")]
+    BundleIdConflict { bundle_id: String },
+
     #[error("failed to read replay store file `{path}`: {source}")]
     Read {
         path: PathBuf,
@@ -143,6 +147,21 @@ pub enum ReplayStoreError {
         #[source]
         source: serde_json::Error,
     },
+}
+
+fn replay_bundles_match(
+    existing: &ReplayBundle,
+    incoming: &ReplayBundle,
+) -> Result<bool, ReplayStoreError> {
+    let canonicalize = |bundle: &ReplayBundle| {
+        canonical_json_bytes(bundle).map_err(|error| ReplayStoreError::InvalidState {
+            reason: format!(
+                "replay bundle `{}` cannot be canonicalized: {error}",
+                bundle.bundle_id
+            ),
+        })
+    };
+    Ok(canonicalize(existing)? == canonicalize(incoming)?)
 }
 
 /// Store contract for persisted replay bundles.
@@ -362,23 +381,34 @@ impl ReplayBundleStore for MemoryReplayBundleStore {
             .sequencing
             .write()
             .map_err(|_| ReplayStoreError::PoisonedLock)?;
-        let store_sequence = match sequencing.by_bundle_id.get(&bundle.bundle_id).copied() {
-            Some(sequence) => sequence,
-            None => {
-                sequencing.next_sequence =
-                    sequencing.next_sequence.checked_add(1).ok_or_else(|| {
-                        ReplayStoreError::InvalidState {
-                            reason: "replay store sequence exhausted".to_string(),
-                        }
-                    })?;
-                let sequence = sequencing.next_sequence;
-                sequencing
-                    .by_bundle_id
-                    .insert(bundle.bundle_id.clone(), sequence);
-                sequence
+        if let Some(existing) = guard
+            .iter()
+            .find(|existing| existing.bundle_id == bundle.bundle_id)
+        {
+            if !replay_bundles_match(existing, bundle)? {
+                return Err(ReplayStoreError::BundleIdConflict {
+                    bundle_id: bundle.bundle_id.clone(),
+                });
             }
-        };
-        guard.retain(|existing| existing.bundle_id != bundle.bundle_id);
+            return memory_replay_record(existing, &sequencing);
+        }
+        if sequencing.by_bundle_id.contains_key(&bundle.bundle_id) {
+            return Err(ReplayStoreError::InvalidState {
+                reason: format!(
+                    "replay sequence references missing bundle `{}`",
+                    bundle.bundle_id
+                ),
+            });
+        }
+        sequencing.next_sequence = sequencing.next_sequence.checked_add(1).ok_or_else(|| {
+            ReplayStoreError::InvalidState {
+                reason: "replay store sequence exhausted".to_string(),
+            }
+        })?;
+        let store_sequence = sequencing.next_sequence;
+        sequencing
+            .by_bundle_id
+            .insert(bundle.bundle_id.clone(), store_sequence);
         guard.push(bundle.clone());
         Ok(ReplayBundleRecord::from_bundle(
             bundle,
@@ -873,27 +903,29 @@ impl ReplayBundleStore for FileReplayBundleStore {
             .index_lock
             .lock()
             .map_err(|_| ReplayStoreError::PoisonedLock)?;
-        let bundle_path = self.write_bundle(bundle)?;
         let mut index = self.read_index()?;
-        let store_sequence = match index
+        if let Some(existing_record) = index
             .entries
             .iter()
             .find(|entry| entry.bundle_id == bundle.bundle_id)
-            .map(|entry| entry.store_sequence)
         {
-            Some(sequence) => sequence,
-            None => {
-                index.next_sequence = index.next_sequence.checked_add(1).ok_or_else(|| {
-                    ReplayStoreError::InvalidState {
-                        reason: "replay store sequence exhausted".to_string(),
-                    }
-                })?;
-                index.next_sequence
+            let existing = self.read_bundle(existing_record.clone())?;
+            if !replay_bundles_match(&existing.bundle, bundle)? {
+                return Err(ReplayStoreError::BundleIdConflict {
+                    bundle_id: bundle.bundle_id.clone(),
+                });
             }
-        };
-        index
-            .entries
-            .retain(|entry| entry.bundle_id != bundle.bundle_id);
+            return Ok(existing_record.clone());
+        }
+        index.next_sequence =
+            index
+                .next_sequence
+                .checked_add(1)
+                .ok_or_else(|| ReplayStoreError::InvalidState {
+                    reason: "replay store sequence exhausted".to_string(),
+                })?;
+        let store_sequence = index.next_sequence;
+        let bundle_path = self.write_bundle(bundle)?;
         let record = ReplayBundleRecord::from_bundle(bundle, bundle_path, store_sequence);
         index.entries.push(record.clone());
         self.write_index(&index)?;
@@ -1155,7 +1187,7 @@ mod tests {
     use super::{
         ConfiguredReplayBundleStore, FileReplayBundleStore, GraphId,
         HypothesisGraphReplayCheckpoint, MemoryReplayBundleStore, ReplayBundleStore, ReplayPreview,
-        ReplayStoreHealth,
+        ReplayStoreError, ReplayStoreHealth,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
     use swarm_core::config::BundleStoreConfig;
@@ -1381,6 +1413,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let file = FileReplayBundleStore::open(&root).unwrap();
         assert_monotonic_sequence_scan(&file);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn assert_bundle_id_is_immutable(store: &dyn ReplayBundleStore) {
+        let original = sample_bundle();
+        let first = store.persist(&original).unwrap();
+        let idempotent = store.persist(&original).unwrap();
+        assert_eq!(idempotent, first);
+
+        let mut changed = original.clone();
+        changed.event.event_id = "evt-mutated".to_string();
+        let error = store.persist(&changed).unwrap_err();
+        assert!(matches!(
+            error,
+            ReplayStoreError::BundleIdConflict { ref bundle_id }
+                if bundle_id == &original.bundle_id
+        ));
+
+        let retained = store
+            .load_by_bundle_id(&original.bundle_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.bundle.event.event_id, original.event.event_id);
+        assert!(
+            store
+                .scan_after_sequence(first.store_sequence, 1)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut second = original;
+        second.bundle_id = "bundle:hunt-1:2".to_string();
+        let second_record = store.persist(&second).unwrap();
+        assert_eq!(second_record.store_sequence, first.store_sequence + 1);
+    }
+
+    #[test]
+    fn memory_and_file_stores_reject_changed_contents_for_an_existing_bundle_id() {
+        assert_bundle_id_is_immutable(&MemoryReplayBundleStore::default());
+
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-immutable-bundle-id-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = FileReplayBundleStore::open(&root).unwrap();
+        assert_bundle_id_is_immutable(&file);
         let _ = std::fs::remove_dir_all(root);
     }
 

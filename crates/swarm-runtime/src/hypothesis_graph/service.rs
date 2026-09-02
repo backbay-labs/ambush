@@ -20,11 +20,11 @@ use serde::{Deserialize, Serialize};
 use swarm_core::config::{BundleStoreConfig, HypothesisGraphConfig};
 use swarm_core::hypothesis_graph::{
     AssetNode, CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeState, EvidenceId,
-    EvidenceScope, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphProducerRole,
-    Hypothesis, HypothesisDelta, HypothesisId, HypothesisStatus, MemoryOutcome, MemoryProvenance,
-    SchedulerBudget, StrategyMemory, StrategyMemoryExpiryEnvelope, TaskCapabilityProof,
-    TaskClaimRequest, TaskCompletion, TaskCompletionKind, TaskDecisionLink, TaskId, TaskKind,
-    TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope,
+    EvidenceScope, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphNodeId,
+    GraphProducerRole, Hypothesis, HypothesisDelta, HypothesisId, HypothesisStatus, MemoryOutcome,
+    MemoryProvenance, SchedulerBudget, StrategyMemory, StrategyMemoryExpiryEnvelope,
+    TaskCapabilityProof, TaskClaimRequest, TaskCompletion, TaskCompletionKind, TaskDecisionLink,
+    TaskId, TaskKind, TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::{
@@ -42,8 +42,9 @@ use swarm_spine::{
 
 use super::clock::FixedGraphClock;
 use super::hypotheses::{HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput};
+use super::inference::{InferredCausalRelation, infer_causal_relations};
 use super::memory::{MemoryPriorityProjection, MemoryProjectionReport, StrategyMemoryProjector};
-use super::normalize::normalize_telemetry_event;
+use super::normalize::normalize_telemetry_event_for_graph;
 use super::tasks::GraphSeedRecords;
 use super::{DurableHypothesisCoordinator, KeypairGraphRecordSigner, TaskClaim, WitnessAdmission};
 use crate::detection::metrics::CriticalPathMetrics;
@@ -1201,59 +1202,46 @@ impl CollectiveHypothesisService {
         // high-water mark orders coordination; it is not the replay's ingest
         // timestamp.
         let clock = FixedGraphClock::new(replay_ingested_at);
-        let evidence = normalize_telemetry_event(
+        let normalized = normalize_telemetry_event_for_graph(
             &replay.event,
             &clock,
             &self.signer,
             GraphProducerRole::Normalizer,
             "runtime-replay-normalizer",
         )?;
+        let evidence = normalized.evidence;
         let evidence_id = evidence.evidence_id.clone();
         if let Some(existing) = self.existing_submission(&evidence_id)? {
             return Ok(existing);
         }
 
-        let event_node = swarm_core::hypothesis_graph::EventNode::new(
-            "runtime_replay",
-            replay.event.event_id.clone(),
-            evidence.clock.observed_at,
-        )?;
-        let asset_kind = if replay.event.host_id.is_some() {
-            "host"
-        } else {
-            "telemetry_source"
-        };
-        let asset_material = replay
-            .event
-            .host_id
-            .as_deref()
-            .unwrap_or(replay.event.source.as_str());
-        let asset_node = AssetNode::new(sha256_hex(asset_material.as_bytes()), asset_kind)?;
-        let event_node_id = event_node.node_id.clone();
-        let asset_node_id = asset_node.node_id.clone();
         let confidence_basis_points = replay
             .findings
             .iter()
             .map(|finding| (finding.confidence.clamp(0.0, 1.0) * 10_000.0).round() as u16)
             .max()
             .unwrap_or(5_000);
-        let edge = CausalEdge::new(
-            &event_node_id,
-            &asset_node_id,
-            CausalRelation::ObservedIn,
-            confidence_basis_points,
-            [evidence_id.clone()],
-            GraphProducerRole::Hunter,
-            AgentId::from_public_key_hex(&self.signer.public_key().to_hex()),
-            evidence.clock.observed_at,
-            EdgeState::Proposed,
-        )?
-        .signed_with(&self.signer, "runtime-replay-edge")?;
-        let graph_records = GraphSeedRecords::new(
-            evidence.clone(),
-            vec![GraphNode::Event(event_node), GraphNode::Asset(asset_node)],
-            edge,
-        );
+        let inferred = infer_causal_relations(&evidence.payload)?;
+        let (nodes, edges) = if inferred.is_empty() {
+            fallback_observation_records(replay, &evidence, &self.signer, confidence_basis_points)?
+        } else {
+            inferred_causal_records(
+                normalized.nodes,
+                inferred,
+                &evidence,
+                &self.signer,
+                confidence_basis_points,
+            )?
+        };
+        let scope_node_ids = nodes
+            .iter()
+            .map(|node| node.id().clone())
+            .collect::<BTreeSet<_>>();
+        let graph_edge_ids = edges
+            .iter()
+            .map(|edge| edge.edge_id.clone())
+            .collect::<BTreeSet<_>>();
+        let graph_records = GraphSeedRecords::new(evidence.clone(), nodes, edges);
 
         let malicious = scoped_hypothesis_id("malicious-activity", &evidence_id);
         let benign = scoped_hypothesis_id("benign-authorized-activity", &evidence_id);
@@ -1266,7 +1254,7 @@ impl CollectiveHypothesisService {
         let worker_claimants = state.worker_claimants.clone();
         let mut campaign = self.active_campaign()?;
         let mut initial = campaign.store.snapshot()?;
-        if campaign_requires_rotation(&initial, &evidence)? {
+        if campaign_requires_rotation(&initial, &evidence, &scope_node_ids, &graph_edge_ids)? {
             let outstanding_tasks = initial
                 .tasks()
                 .filter(|task| !task_is_terminal(task.task.state))
@@ -1283,7 +1271,7 @@ impl CollectiveHypothesisService {
         let scope = EvidenceScope::new(
             [evidence.source_family],
             [evidence_id.clone()],
-            [event_node_id, asset_node_id],
+            scope_node_ids,
         )?;
         let mut retried_persisted_capacity = false;
         let result = loop {
@@ -3123,9 +3111,133 @@ fn task_is_terminal(state: TaskState) -> bool {
     matches!(state, TaskState::Completed | TaskState::Failed)
 }
 
+fn signed_runtime_edge(
+    from: &GraphNodeId,
+    to: &GraphNodeId,
+    relation: CausalRelation,
+    evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
+    signer: &Keypair,
+    confidence_basis_points: u16,
+    signer_scope: &str,
+) -> Result<CausalEdge, GraphServiceError> {
+    Ok(CausalEdge::new(
+        from,
+        to,
+        relation,
+        confidence_basis_points,
+        [evidence.evidence_id.clone()],
+        GraphProducerRole::Hunter,
+        AgentId::from_public_key_hex(&signer.public_key().to_hex()),
+        evidence.clock.observed_at,
+        EdgeState::Proposed,
+    )?
+    .signed_with(signer, signer_scope)?)
+}
+
+fn inferred_causal_records(
+    normalized_nodes: Vec<GraphNode>,
+    inferred: Vec<InferredCausalRelation>,
+    evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
+    signer: &Keypair,
+    confidence_basis_points: u16,
+) -> Result<(Vec<GraphNode>, Vec<CausalEdge>), GraphServiceError> {
+    let mut required_node_ids = inferred
+        .iter()
+        .flat_map(|candidate| [candidate.from.clone(), candidate.to.clone()])
+        .collect::<BTreeSet<_>>();
+    loop {
+        let parent_ids = normalized_nodes
+            .iter()
+            .filter(|node| required_node_ids.contains(node.id()))
+            .filter_map(|node| match node {
+                GraphNode::Process(process) => process.parent_node_id.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let prior_len = required_node_ids.len();
+        required_node_ids.extend(parent_ids);
+        if required_node_ids.len() == prior_len {
+            break;
+        }
+    }
+    let available_node_ids = normalized_nodes
+        .iter()
+        .map(|node| node.id().clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(node_id) = required_node_ids.difference(&available_node_ids).next() {
+        return Err(GraphServiceError::Admission(
+            GraphAdmissionError::InvalidField {
+                field: "inference.entity_ids".to_string(),
+                reason: format!(
+                    "inferred endpoint `{}` has no normalized graph node",
+                    node_id.as_str()
+                ),
+            },
+        ));
+    }
+    let edges = inferred
+        .into_iter()
+        .map(|candidate| {
+            signed_runtime_edge(
+                &candidate.from,
+                &candidate.to,
+                candidate.relation,
+                evidence,
+                signer,
+                confidence_basis_points,
+                "runtime-replay-inferred-edge",
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let nodes = normalized_nodes
+        .into_iter()
+        .filter(|node| required_node_ids.contains(node.id()))
+        .collect();
+    Ok((nodes, edges))
+}
+
+fn fallback_observation_records(
+    replay: &ReplayBundle,
+    evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
+    signer: &Keypair,
+    confidence_basis_points: u16,
+) -> Result<(Vec<GraphNode>, Vec<CausalEdge>), GraphServiceError> {
+    let event_node = swarm_core::hypothesis_graph::EventNode::new(
+        "runtime_replay",
+        replay.event.event_id.clone(),
+        evidence.clock.observed_at,
+    )?;
+    let asset_kind = if replay.event.host_id.is_some() {
+        "host"
+    } else {
+        "telemetry_source"
+    };
+    let asset_material = replay
+        .event
+        .host_id
+        .as_deref()
+        .unwrap_or(replay.event.source.as_str());
+    let asset_node = AssetNode::new(sha256_hex(asset_material.as_bytes()), asset_kind)?;
+    let edge = signed_runtime_edge(
+        &event_node.node_id,
+        &asset_node.node_id,
+        CausalRelation::ObservedIn,
+        evidence,
+        signer,
+        confidence_basis_points,
+        "runtime-replay-observation-edge",
+    )?;
+    Ok((
+        vec![GraphNode::Event(event_node), GraphNode::Asset(asset_node)],
+        vec![edge],
+    ))
+}
+
 fn campaign_requires_rotation(
     snapshot: &GraphStoreSnapshot,
     evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
+    candidate_node_ids: &BTreeSet<GraphNodeId>,
+    candidate_edge_ids: &BTreeSet<swarm_core::hypothesis_graph::EdgeId>,
 ) -> Result<bool, GraphServiceError> {
     let state = snapshot.state();
     let has_retained_work =
@@ -3145,6 +3257,14 @@ fn campaign_requires_rotation(
             size.map(|size| total.saturating_add(size))
         })?;
     let added_evidence_bytes = evidence.canonical_bytes()?.len();
+    let added_node_count = candidate_node_ids
+        .iter()
+        .filter(|node_id| !state.graph.nodes.contains_key(*node_id))
+        .count();
+    let added_edge_count = candidate_edge_ids
+        .iter()
+        .filter(|edge_id| !state.graph.edges.contains_key(*edge_id))
+        .count();
     // Every admitted replay creates one falsification task, and a successful
     // falsification can append one strategy-memory record. Reserve that slot
     // at admission time so concurrent outstanding replays cannot overcommit
@@ -3156,8 +3276,8 @@ fn campaign_requires_rotation(
         .count();
     Ok(
         state.graph.evidence.len().saturating_add(1) > limits.max_nodes
-            || state.graph.nodes.len().saturating_add(2) > limits.max_nodes
-            || state.graph.edges.len().saturating_add(1) > limits.max_edges
+            || state.graph.nodes.len().saturating_add(added_node_count) > limits.max_nodes
+            || state.graph.edges.len().saturating_add(added_edge_count) > limits.max_edges
             || retained_evidence_bytes.saturating_add(added_evidence_bytes)
                 > limits.max_evidence_bytes
             || state.hypotheses.len().saturating_add(2) > limits.max_hypotheses

@@ -275,12 +275,11 @@ fn process_event_json(event_id: &str, host_id: &str, timestamp: i64) -> Value {
     event
 }
 
-fn seed_platform_replay_bundle(
-    state: &IngestState,
+fn platform_replay_bundle(
     event_id: &str,
     host_id: &str,
     created_at_ms: i64,
-) {
+) -> swarm_spine::ReplayBundle {
     let event = validate_and_parse(process_event_json(event_id, host_id, created_at_ms)).unwrap();
     let finding = swarm_whisker::DetectionFinding {
         finding_id: format!("finding-{event_id}"),
@@ -294,7 +293,7 @@ fn seed_platform_replay_bundle(
         }),
         strategy_id: "suspicious_process_tree".to_string(),
     };
-    let bundle = swarm_spine::ReplayBundle {
+    swarm_spine::ReplayBundle {
         bundle_id: format!("bundle-{event_id}"),
         event,
         findings: vec![finding.clone()],
@@ -326,8 +325,16 @@ fn seed_platform_replay_bundle(
             },
             created_at_ms,
         },
-    };
+    }
+}
 
+fn seed_platform_replay_bundle(
+    state: &IngestState,
+    event_id: &str,
+    host_id: &str,
+    created_at_ms: i64,
+) {
+    let bundle = platform_replay_bundle(event_id, host_id, created_at_ms);
     state.current_replay_store().persist(&bundle).unwrap();
 }
 
@@ -2562,18 +2569,8 @@ async fn permanent_replay_failures_do_not_hide_later_valid_evidence() {
 
     for index in 0..super::HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
         let hunt_id = format!("poison-replay-{index:03}");
-        seed_platform_replay_bundle(
-            &state,
-            &hunt_id,
-            "host-poison",
-            1_700_000_033_000 + index as i64,
-        );
-        let mut poison = state
-            .current_replay_store()
-            .load_by_hunt_id(&hunt_id)
-            .unwrap()
-            .unwrap()
-            .bundle;
+        let mut poison =
+            platform_replay_bundle(&hunt_id, "host-poison", 1_700_000_033_000 + index as i64);
         poison.audit.created_at_ms = -1;
         state.current_replay_store().persist(&poison).unwrap();
     }
@@ -2684,18 +2681,11 @@ async fn infrastructure_detector_replays_reach_enabled_collective_graph() {
         ),
     ];
     for (offset, (hunt_id, payload)) in payloads.into_iter().enumerate() {
-        seed_platform_replay_bundle(
-            &state,
+        let mut replay = platform_replay_bundle(
             hunt_id,
             "infrastructure-host",
             1_700_000_035_000 + offset as i64,
         );
-        let mut replay = state
-            .current_replay_store()
-            .load_by_hunt_id(hunt_id)
-            .unwrap()
-            .unwrap()
-            .bundle;
         replay.event.source = "sentinel".to_string();
         replay.event.payload = payload;
         state.current_replay_store().persist(&replay).unwrap();

@@ -701,15 +701,19 @@ pub struct HypothesisCoordinationResult {
 pub(crate) struct GraphSeedRecords {
     evidence: EvidenceEnvelope,
     nodes: Vec<GraphNode>,
-    edge: CausalEdge,
+    edges: Vec<CausalEdge>,
 }
 
 impl GraphSeedRecords {
-    pub(crate) fn new(evidence: EvidenceEnvelope, nodes: Vec<GraphNode>, edge: CausalEdge) -> Self {
+    pub(crate) fn new(
+        evidence: EvidenceEnvelope,
+        nodes: Vec<GraphNode>,
+        edges: Vec<CausalEdge>,
+    ) -> Self {
         Self {
             evidence,
             nodes,
-            edge,
+            edges,
         }
     }
 
@@ -725,10 +729,12 @@ impl GraphSeedRecords {
                 .admit_node(node)
                 .map_err(GraphStoreError::Admission)?;
         }
-        state
-            .graph
-            .admit_edge(self.edge)
-            .map_err(GraphStoreError::Admission)?;
+        for edge in self.edges {
+            state
+                .graph
+                .admit_edge(edge)
+                .map_err(GraphStoreError::Admission)?;
+        }
         Ok(state.graph.version != prior_version)
     }
 }
