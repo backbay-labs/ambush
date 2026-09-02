@@ -547,6 +547,9 @@ const fn source_semantics(source_family: EvidenceSourceFamily) -> (CausalRelatio
         EvidenceSourceFamily::Network => {
             (CausalRelation::Contacts, KillChainStage::CommandAndControl)
         }
+        EvidenceSourceFamily::Infrastructure => {
+            (CausalRelation::DependsOn, KillChainStage::Execution)
+        }
         EvidenceSourceFamily::ThreatIntelligence => (
             CausalRelation::MatchesIndicator,
             KillChainStage::CommandAndControl,

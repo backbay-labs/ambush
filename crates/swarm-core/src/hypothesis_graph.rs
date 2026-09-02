@@ -611,6 +611,7 @@ pub enum EvidenceSourceFamily {
     Kubernetes,
     Cloudtrail,
     Network,
+    Infrastructure,
     ThreatIntelligence,
 }
 

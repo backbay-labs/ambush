@@ -125,6 +125,7 @@ type IngestBuiltRuntime = (
 
 const MAX_INGEST_FUTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
 const TIMESTAMP_MILLISECONDS_CUTOFF: i64 = 100_000_000_000;
+const HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE: usize = 256;
 
 type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send + Sync>;
 
@@ -1460,7 +1461,9 @@ pub enum IngestBuildError {
     #[error(transparent)]
     HypothesisGraph(#[from] GraphServiceError),
 
-    #[error("hypothesis_graph configuration cannot be hot-reloaded; restart the runtime")]
+    #[error(
+        "hypothesis_graph and its Stalker/Weaver worker configuration cannot be hot-reloaded; restart the runtime"
+    )]
     HypothesisGraphReload,
 }
 
@@ -1784,8 +1787,9 @@ impl IngestState {
         let current = &current_stack.service.config;
         let graph_worker_bindings_changed = current.hypothesis_graph.enabled
             && (config.audit.bundle_store != current.audit.bundle_store
-                || config.investigation.bundle_store != current.investigation.bundle_store
-                || config.correlation.incident_store != current.correlation.incident_store);
+                || config.investigation != current.investigation
+                || config.correlation != current.correlation
+                || config.pheromone != current.pheromone);
         if config.hypothesis_graph != current.hypothesis_graph || graph_worker_bindings_changed {
             return Err(IngestBuildError::HypothesisGraphReload);
         }
@@ -2295,10 +2299,12 @@ impl IngestState {
             .transpose()
     }
 
-    /// Reconcile the bounded recent durable replay window after production
-    /// worker identities have registered. Individual graph failures remain a
-    /// visible degraded lane rather than preventing the detect runtime from
-    /// starting; unreadable replay storage still fails the reconciliation.
+    /// Reconcile every durable replay after production worker identities have
+    /// registered. The store is scanned in bounded, stable pages so records
+    /// that previously failed admission cannot age out of a recent-record
+    /// window. Individual graph failures remain a visible degraded lane rather
+    /// than preventing the detect runtime from starting; unreadable replay
+    /// storage still fails the reconciliation.
     pub fn reconcile_hypothesis_graph_replays(
         &self,
     ) -> Result<HypothesisGraphReplayReconciliation, ReplayStoreError> {
@@ -2306,45 +2312,51 @@ impl IngestState {
             return Ok(HypothesisGraphReplayReconciliation::default());
         };
         let replay_store = self.current_replay_store();
-        let limit = self
-            .stack
-            .load_full()
-            .service
-            .config
-            .hypothesis_graph
-            .max_tasks;
-        let mut records = replay_store.recent(limit)?;
-        records.reverse();
         let mut report = HypothesisGraphReplayReconciliation::default();
-        for record in records {
-            report.examined = report.examined.saturating_add(1);
-            let Some(replay) = replay_store.load_by_bundle_id(&record.bundle_id)? else {
-                report.failures = report.failures.saturating_add(1);
-                tracing::warn!(
-                    bundle_id = %record.bundle_id,
-                    hunt_id = %record.hunt_id,
-                    module = module_path!(),
-                    "durable replay disappeared during hypothesis graph startup reconciliation"
-                );
-                continue;
-            };
-            match graph.submit_replay(&replay.bundle) {
-                Ok(submission) if submission.idempotent => {
-                    report.idempotent = report.idempotent.saturating_add(1);
-                }
-                Ok(_) => {
-                    report.admitted = report.admitted.saturating_add(1);
-                }
-                Err(error) => {
+        let mut after_bundle_id = None;
+        loop {
+            let records = replay_store.scan_after_bundle_id(
+                after_bundle_id.as_deref(),
+                HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE,
+            )?;
+            let page_len = records.len();
+            if page_len == 0 {
+                break;
+            }
+            for record in records {
+                after_bundle_id = Some(record.bundle_id.clone());
+                report.examined = report.examined.saturating_add(1);
+                let Some(replay) = replay_store.load_by_bundle_id(&record.bundle_id)? else {
                     report.failures = report.failures.saturating_add(1);
                     tracing::warn!(
                         bundle_id = %record.bundle_id,
                         hunt_id = %record.hunt_id,
-                        reason = %error,
                         module = module_path!(),
-                        "durable replay hypothesis graph startup reconciliation degraded"
+                        "durable replay disappeared during hypothesis graph startup reconciliation"
                     );
+                    continue;
+                };
+                match graph.submit_replay(&replay.bundle) {
+                    Ok(submission) if submission.idempotent => {
+                        report.idempotent = report.idempotent.saturating_add(1);
+                    }
+                    Ok(_) => {
+                        report.admitted = report.admitted.saturating_add(1);
+                    }
+                    Err(error) => {
+                        report.failures = report.failures.saturating_add(1);
+                        tracing::warn!(
+                            bundle_id = %record.bundle_id,
+                            hunt_id = %record.hunt_id,
+                            reason = %error,
+                            module = module_path!(),
+                            "durable replay hypothesis graph startup reconciliation degraded"
+                        );
+                    }
                 }
+            }
+            if page_len < HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE {
+                break;
             }
         }
         Ok(report)

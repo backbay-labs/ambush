@@ -138,6 +138,17 @@ pub trait ReplayBundleStore: Send + Sync {
         receipt_id: &str,
     ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError>;
     fn recent(&self, limit: usize) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError>;
+    /// Return a stable, bundle-ID-ordered page from the complete replay index.
+    ///
+    /// `after_bundle_id` is an exclusive cursor. Unlike [`Self::recent`], this
+    /// scan is intended for durable background reconciliation and must not
+    /// silently discard older records when the store grows beyond a runtime
+    /// work limit.
+    fn scan_after_bundle_id(
+        &self,
+        after_bundle_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError>;
     fn health(&self) -> Result<ReplayStoreHealth, ReplayStoreError>;
 }
 
@@ -201,6 +212,17 @@ impl ReplayBundleStore for ConfiguredReplayBundleStore {
         match self {
             Self::Memory(store) => store.recent(limit),
             Self::LocalFiles(store) => store.recent(limit),
+        }
+    }
+
+    fn scan_after_bundle_id(
+        &self,
+        after_bundle_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError> {
+        match self {
+            Self::Memory(store) => store.scan_after_bundle_id(after_bundle_id, limit),
+            Self::LocalFiles(store) => store.scan_after_bundle_id(after_bundle_id, limit),
         }
     }
 
@@ -299,6 +321,27 @@ impl ReplayBundleStore for MemoryReplayBundleStore {
             .into_iter()
             .map(|bundle| ReplayBundleRecord::from_bundle(&bundle, "memory".to_string()))
             .collect::<Vec<_>>();
+        entries.truncate(limit);
+        Ok(entries)
+    }
+
+    fn scan_after_bundle_id(
+        &self,
+        after_bundle_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError> {
+        let guard = self
+            .bundles
+            .read()
+            .map_err(|_| ReplayStoreError::PoisonedLock)?;
+        let mut entries = guard
+            .iter()
+            .filter(|bundle| {
+                after_bundle_id.is_none_or(|cursor| bundle.bundle_id.as_str() > cursor)
+            })
+            .map(|bundle| ReplayBundleRecord::from_bundle(bundle, "memory".to_string()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.bundle_id.cmp(&right.bundle_id));
         entries.truncate(limit);
         Ok(entries)
     }
@@ -466,6 +509,19 @@ impl ReplayBundleStore for FileReplayBundleStore {
         Ok(entries)
     }
 
+    fn scan_after_bundle_id(
+        &self,
+        after_bundle_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError> {
+        let mut entries = self.read_index()?.entries;
+        entries
+            .retain(|entry| after_bundle_id.is_none_or(|cursor| entry.bundle_id.as_str() > cursor));
+        entries.sort_by(|left, right| left.bundle_id.cmp(&right.bundle_id));
+        entries.truncate(limit);
+        Ok(entries)
+    }
+
     fn health(&self) -> Result<ReplayStoreHealth, ReplayStoreError> {
         fs::create_dir_all(self.bundles_dir()).map_err(|source| ReplayStoreError::Write {
             path: self.root.clone(),
@@ -509,8 +565,8 @@ fn sanitize_id(id: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConfiguredReplayBundleStore, FileReplayBundleStore, ReplayBundleStore, ReplayPreview,
-        ReplayStoreHealth,
+        ConfiguredReplayBundleStore, FileReplayBundleStore, MemoryReplayBundleStore,
+        ReplayBundleStore, ReplayPreview, ReplayStoreHealth,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
     use swarm_core::config::BundleStoreConfig;
@@ -650,6 +706,51 @@ mod tests {
         })
         .unwrap();
         assert_eq!(local.health().unwrap().backend, "local_files");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn assert_complete_stable_scan(store: &dyn ReplayBundleStore) {
+        for bundle_id in ["bundle:c", "bundle:a", "bundle:d", "bundle:b"] {
+            let mut bundle = sample_bundle();
+            bundle.bundle_id = bundle_id.to_string();
+            store.persist(&bundle).unwrap();
+        }
+
+        let first = store.scan_after_bundle_id(None, 2).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|record| record.bundle_id.as_str())
+                .collect::<Vec<_>>(),
+            ["bundle:a", "bundle:b"]
+        );
+        let second = store
+            .scan_after_bundle_id(first.last().map(|record| record.bundle_id.as_str()), 2)
+            .unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|record| record.bundle_id.as_str())
+                .collect::<Vec<_>>(),
+            ["bundle:c", "bundle:d"]
+        );
+        assert!(
+            store
+                .scan_after_bundle_id(Some("bundle:d"), 2)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn memory_and_file_stores_scan_every_replay_with_an_exclusive_stable_cursor() {
+        assert_complete_stable_scan(&MemoryReplayBundleStore::default());
+
+        let root =
+            std::env::temp_dir().join(format!("swarm-spine-complete-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = FileReplayBundleStore::open(&root).unwrap();
+        assert_complete_stable_scan(&file);
         let _ = std::fs::remove_dir_all(root);
     }
 }

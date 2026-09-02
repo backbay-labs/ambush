@@ -2,7 +2,7 @@
 //!
 //! The ingest crates and `swarm-whisker` own vendor parsing.  This module only
 //! consumes their typed records, bounds any legacy `serde_json::Value` fields
-//! before hashing them, and emits the six core evidence families.  Raw
+//! before hashing them, and emits typed evidence families. Raw
 //! request/response objects, command lines, credentials, and host labels never
 //! cross the evidence-envelope boundary.
 
@@ -144,15 +144,42 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
             "dns_query",
             dns_payload(dns, &source_id, &source_record_id, observed_at)?,
         ),
-        other => {
-            return Err(GraphAdmissionError::InvalidField {
-                field: "telemetry.payload".to_string(),
-                reason: format!(
-                    "payload kind `{}` is not a graph source family",
-                    payload_kind(other)
-                ),
-            });
-        }
+        TelemetryPayload::InfrastructureHealth(health) => (
+            EvidenceSourceFamily::Infrastructure,
+            "infrastructure_health",
+            infrastructure_payload(
+                "infrastructure_health",
+                &health.node_name,
+                health,
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
+        ),
+        TelemetryPayload::ThermalAnomaly(thermal) => (
+            EvidenceSourceFamily::Infrastructure,
+            "thermal_anomaly",
+            infrastructure_payload(
+                "thermal_anomaly",
+                &thermal.node_name,
+                thermal,
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
+        ),
+        TelemetryPayload::ResourceExhaustion(exhaustion) => (
+            EvidenceSourceFamily::Infrastructure,
+            "resource_exhaustion",
+            infrastructure_payload(
+                "resource_exhaustion",
+                &exhaustion.node_name,
+                exhaustion,
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
+        ),
     };
 
     let lineage = SourceLineage::new(format!("telemetry:{signal_kind}"), source_record_id)?;
@@ -1066,6 +1093,30 @@ fn dns_payload(
     })
 }
 
+fn infrastructure_payload<T: Serialize>(
+    signal_kind: &'static str,
+    node_name: &str,
+    payload: &T,
+    source_id: &str,
+    source_record_id: &str,
+    observed_at: GraphLogicalTime,
+) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+    let node_name = bounded_text("infrastructure.node_name", node_name, 4 * 1024)?;
+    let node_digest = digest_projection(&("infrastructure_node", &node_name))?;
+    let node = AssetNode::new(node_digest, "infrastructure_node")?;
+    let event_record_id = event_node_source_record_id(source_id, source_record_id)?;
+    let event = EventNode::new(signal_kind, event_record_id, observed_at)?;
+    let content_digest = digest_projection(&(signal_kind, payload))?;
+    Ok(TypedEvidencePayload::Signal {
+        signal_kind: signal_kind.to_string(),
+        entity_ids: vec![event.node_id, node.node_id],
+        relation_ids: Vec::new(),
+        supports: Vec::new(),
+        refutes: Vec::new(),
+        content_digest,
+    })
+}
+
 fn digest_projection<T: Serialize>(projection: &T) -> Result<String, GraphAdmissionError> {
     let bytes = canonical_json_bytes(projection).map_err(|error| {
         GraphAdmissionError::Canonicalization {
@@ -1209,24 +1260,6 @@ fn indicator_kind(indicator_type: &ThreatIntelIndicatorType) -> &'static str {
     }
 }
 
-fn payload_kind(payload: &TelemetryPayload) -> &'static str {
-    match payload {
-        TelemetryPayload::ProcessStart(_) => "process_start",
-        TelemetryPayload::ProcessMemoryAccess(_) => "process_memory_access",
-        TelemetryPayload::NetworkConnect(_) => "network_connect",
-        TelemetryPayload::DnsQuery(_) => "dns_query",
-        TelemetryPayload::CloudTrail(_) => "cloudtrail",
-        TelemetryPayload::KubernetesAudit(_) => "kubernetes_audit",
-        TelemetryPayload::RegistryAccess(_) => "registry_access",
-        TelemetryPayload::RegistryPersistence(_) => "registry_persistence",
-        TelemetryPayload::FilePersistence(_) => "file_persistence",
-        TelemetryPayload::AuthenticationEvent(_) => "authentication_event",
-        TelemetryPayload::InfrastructureHealth(_) => "infrastructure_health",
-        TelemetryPayload::ThermalAnomaly(_) => "thermal_anomaly",
-        TelemetryPayload::ResourceExhaustion(_) => "resource_exhaustion",
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
@@ -1240,8 +1273,9 @@ mod tests {
         TypedEvidencePayload,
     };
     use swarm_core::{
-        CloudTrailEvent, ProcessStartEvent, TelemetryEvent, TelemetryPayload, ThreatIntelEntry,
-        ThreatIntelIndicatorType,
+        CloudTrailEvent, ExhaustedResource, InfrastructureHealthEvent, ProcessStartEvent,
+        ResourceExhaustionEvent, TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent,
+        ThermalSeverity, ThreatIntelEntry, ThreatIntelIndicatorType,
     };
     use swarm_crypto::Keypair;
 
@@ -1296,6 +1330,88 @@ mod tests {
         assert!(!encoded.contains("token=secret"));
         assert!(!encoded.contains("host-secret-that-must-not-be-causal"));
         envelope.validate().unwrap();
+    }
+
+    #[test]
+    fn infrastructure_detector_payloads_admit_as_redacted_graph_evidence() {
+        let payloads = [
+            (
+                "infrastructure_health",
+                TelemetryPayload::InfrastructureHealth(InfrastructureHealthEvent {
+                    node_name: "node-secret-health".to_string(),
+                    cpu_usage_percent: 91.0,
+                    cpu_frequency_mhz: 3_200.0,
+                    load_average_1m: 8.0,
+                    load_average_5m: 7.0,
+                    load_average_15m: 6.0,
+                    memory_usage_percent: 88.0,
+                    memory_available_bytes: 1_024,
+                    disk_usage_percent: 72.0,
+                    disk_io_latency_ms: 45.0,
+                    network_rx_bytes: 11,
+                    network_tx_bytes: 12,
+                    network_rx_errors: 2,
+                    network_tx_errors: 3,
+                    failure_probability: 0.9,
+                    prediction_confidence: 0.95,
+                    time_to_failure_secs: 120.0,
+                    collection_duration_ms: 25.0,
+                }),
+            ),
+            (
+                "thermal_anomaly",
+                TelemetryPayload::ThermalAnomaly(ThermalAnomalyEvent {
+                    node_name: "node-secret-thermal".to_string(),
+                    temperature_celsius: 96.0,
+                    cpu_throttled: true,
+                    trend_slope: 1.5,
+                    severity: ThermalSeverity::Critical,
+                    estimated_time_to_critical_secs: 30.0,
+                }),
+            ),
+            (
+                "resource_exhaustion",
+                TelemetryPayload::ResourceExhaustion(ResourceExhaustionEvent {
+                    node_name: "node-secret-resource".to_string(),
+                    resource_kind: ExhaustedResource::Memory,
+                    utilization_percent: 99.0,
+                    current_value: 990,
+                    capacity_value: 1_000,
+                    oom_kill_count: Some(4),
+                    swap_used_bytes: Some(512),
+                    is_new: true,
+                }),
+            ),
+        ];
+
+        for (index, (expected_kind, payload)) in payloads.into_iter().enumerate() {
+            let event = TelemetryEvent {
+                source: "sentinel".to_string(),
+                event_id: format!("record:infrastructure:{index}"),
+                timestamp: 1_700_000_000,
+                host_id: Some("host-secret-that-must-not-be-causal".to_string()),
+                payload,
+            };
+            let envelope = normalize_telemetry_event(
+                &event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-infrastructure",
+            )
+            .unwrap();
+
+            assert_eq!(envelope.source_family, EvidenceSourceFamily::Infrastructure);
+            assert!(matches!(
+                &envelope.payload,
+                TypedEvidencePayload::Signal { signal_kind, entity_ids, .. }
+                    if signal_kind == expected_kind && entity_ids.len() == 2
+            ));
+            let encoded = serde_json::to_string(&envelope).unwrap();
+            assert!(!encoded.contains("node-secret"));
+            assert!(!encoded.contains("host-secret"));
+            envelope.validate().unwrap();
+        }
     }
 
     #[test]

@@ -1983,6 +1983,27 @@ async fn ingest_state_rejects_hypothesis_graph_hot_reload() {
             Err(super::IngestBuildError::HypothesisGraphReload)
         ));
     }
+
+    let mut changed = config.clone();
+    changed.investigation.time_budget_ms += 1;
+    assert!(matches!(
+        state.reload(changed),
+        Err(super::IngestBuildError::HypothesisGraphReload)
+    ));
+
+    let mut changed = config.clone();
+    changed.correlation.time_window_ms += 1;
+    assert!(matches!(
+        state.reload(changed),
+        Err(super::IngestBuildError::HypothesisGraphReload)
+    ));
+
+    let mut changed = config;
+    changed.pheromone.default_half_life_secs += 1.0;
+    assert!(matches!(
+        state.reload(changed),
+        Err(super::IngestBuildError::HypothesisGraphReload)
+    ));
 }
 
 #[test]
@@ -2211,6 +2232,215 @@ async fn startup_reconciliation_recovers_durable_replays_missing_from_graph() {
     assert_eq!(retry.admitted, 0);
     assert_eq!(retry.idempotent, 2);
     assert_eq!(retry.failures, 0);
+    drop(state);
+    fs::remove_dir_all(graph_root).unwrap();
+}
+
+#[tokio::test]
+async fn infrastructure_detector_replays_reach_enabled_collective_graph() {
+    let mut config = test_config("infrastructure_anomaly");
+    let graph_root = temp_path("infrastructure-replay-hypothesis-graph");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    let state = IngestState::from_config(
+        temp_path("infrastructure-replay-hypothesis-graph-config"),
+        config,
+    )
+    .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[132; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[133; 32]),
+        )
+        .unwrap()
+        .unwrap();
+
+    let payloads = [
+        (
+            "infrastructure-health",
+            swarm_core::TelemetryPayload::InfrastructureHealth(
+                swarm_core::InfrastructureHealthEvent {
+                    node_name: "node-health".to_string(),
+                    cpu_usage_percent: 91.0,
+                    cpu_frequency_mhz: 3_200.0,
+                    load_average_1m: 8.0,
+                    load_average_5m: 7.0,
+                    load_average_15m: 6.0,
+                    memory_usage_percent: 88.0,
+                    memory_available_bytes: 1_024,
+                    disk_usage_percent: 72.0,
+                    disk_io_latency_ms: 45.0,
+                    network_rx_bytes: 11,
+                    network_tx_bytes: 12,
+                    network_rx_errors: 2,
+                    network_tx_errors: 3,
+                    failure_probability: 0.9,
+                    prediction_confidence: 0.95,
+                    time_to_failure_secs: 120.0,
+                    collection_duration_ms: 25.0,
+                },
+            ),
+        ),
+        (
+            "thermal-anomaly",
+            swarm_core::TelemetryPayload::ThermalAnomaly(swarm_core::ThermalAnomalyEvent {
+                node_name: "node-thermal".to_string(),
+                temperature_celsius: 96.0,
+                cpu_throttled: true,
+                trend_slope: 1.5,
+                severity: swarm_core::ThermalSeverity::Critical,
+                estimated_time_to_critical_secs: 30.0,
+            }),
+        ),
+        (
+            "resource-exhaustion",
+            swarm_core::TelemetryPayload::ResourceExhaustion(swarm_core::ResourceExhaustionEvent {
+                node_name: "node-resource".to_string(),
+                resource_kind: swarm_core::ExhaustedResource::Memory,
+                utilization_percent: 99.0,
+                current_value: 990,
+                capacity_value: 1_000,
+                oom_kill_count: Some(4),
+                swap_used_bytes: Some(512),
+                is_new: true,
+            }),
+        ),
+    ];
+    for (offset, (hunt_id, payload)) in payloads.into_iter().enumerate() {
+        seed_platform_replay_bundle(
+            &state,
+            hunt_id,
+            "infrastructure-host",
+            1_700_000_035_000 + offset as i64,
+        );
+        let mut replay = state
+            .current_replay_store()
+            .load_by_hunt_id(hunt_id)
+            .unwrap()
+            .unwrap()
+            .bundle;
+        replay.event.source = "sentinel".to_string();
+        replay.event.payload = payload;
+        state.current_replay_store().persist(&replay).unwrap();
+    }
+
+    let reconciliation = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(reconciliation.examined, 3);
+    assert_eq!(reconciliation.admitted, 3);
+    assert_eq!(reconciliation.failures, 0);
+    let summary = state.current_hypothesis_graph().unwrap().summary().unwrap();
+    assert_eq!(summary.evidence_count, 3);
+    assert_eq!(summary.pending_task_count, 9);
+
+    drop(state);
+    fs::remove_dir_all(graph_root).unwrap();
+}
+
+#[tokio::test]
+async fn reconciliation_retries_old_failed_replays_beyond_graph_task_capacity() {
+    let mut config = test_config("suspicious_process_tree");
+    let graph_root = temp_path("reconcile-all-replays-beyond-task-capacity");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    config.hypothesis_graph.max_tasks = 3;
+    let state = IngestState::from_config(
+        temp_path("reconcile-all-replays-beyond-task-capacity-config"),
+        config,
+    )
+    .unwrap();
+    let stalker = state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[130; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    let weaver = state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[131; 32]),
+        )
+        .unwrap()
+        .unwrap();
+
+    let created_at_ms = 1_700_000_040_000;
+    seed_platform_replay_bundle(&state, "a-active", "host-a", created_at_ms);
+    let first = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(first.examined, 1);
+    assert_eq!(first.admitted, 1);
+
+    for (offset, event_id) in ["b-old-failed", "c-newer", "d-newer", "e-newest"]
+        .into_iter()
+        .enumerate()
+    {
+        seed_platform_replay_bundle(
+            &state,
+            event_id,
+            "host-pending",
+            created_at_ms + offset as i64 + 1,
+        );
+    }
+    let blocked = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(blocked.examined, 5);
+    assert_eq!(blocked.idempotent, 1);
+    assert_eq!(blocked.admitted, 0);
+    assert_eq!(blocked.failures, 4);
+
+    stalker
+        .complete_stalker_hunt(
+            "a-active",
+            swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 10),
+            9_800,
+            false,
+            true,
+        )
+        .unwrap();
+    let challenge = weaver
+        .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+            created_at_ms + 11,
+        ))
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.hunt_id, "a-active");
+    assert!(
+        weaver
+            .complete_challenge(
+                &challenge.task_id,
+                swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 12),
+            )
+            .unwrap()
+    );
+
+    let retried = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(retried.examined, 5);
+    assert_eq!(retried.idempotent, 1);
+    assert_eq!(retried.admitted, 1);
+    assert_eq!(retried.failures, 3);
+    let old_failed_replay = state
+        .current_replay_store()
+        .load_by_hunt_id("b-old-failed")
+        .unwrap()
+        .unwrap();
+    assert!(
+        state
+            .current_hypothesis_graph()
+            .unwrap()
+            .submit_replay(&old_failed_replay.bundle)
+            .unwrap()
+            .idempotent
+    );
+
     drop(state);
     fs::remove_dir_all(graph_root).unwrap();
 }

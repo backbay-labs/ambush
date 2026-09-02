@@ -13,7 +13,7 @@ pub struct AuditConfig {
 }
 
 /// Async investigation settings that stay off the critical lane.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InvestigationConfig {
     /// Whether the investigation queue is enabled.
@@ -43,7 +43,7 @@ pub struct InvestigationConfig {
 }
 
 /// Incident correlation settings layered on top of investigation bundles.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CorrelationConfig {
     /// Whether incident correlation is enabled.
