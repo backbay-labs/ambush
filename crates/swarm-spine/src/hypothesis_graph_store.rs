@@ -502,12 +502,6 @@ pub struct GraphStoreState {
     pub task_tombstones: BTreeMap<TaskId, TaskMonotonicity>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub terminal_outbox: BTreeMap<TaskId, TaskTerminalOutboxEntry>,
-    /// One-way durable delivery acknowledgements for terminal worker
-    /// publications. Entries remain in the authenticated outbox for audit,
-    /// while recovery indexes can enumerate only publications not present in
-    /// this set.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub terminal_publication_acks: BTreeSet<TaskId>,
     pub fencing_counter: u64,
     #[serde(
         default = "default_graph_limits",
@@ -662,7 +656,6 @@ impl GraphStoreState {
             logical_task_descriptors: BTreeMap::new(),
             task_tombstones: BTreeMap::new(),
             terminal_outbox: BTreeMap::new(),
-            terminal_publication_acks: BTreeSet::new(),
             fencing_counter: 0,
             limits,
             cross_graph_links: std::collections::BTreeSet::new(),
@@ -764,7 +757,6 @@ impl GraphStoreState {
         }
         if self.logical_task_descriptors.len() > limits.max_tasks
             || self.terminal_outbox.len() > limits.max_tasks
-            || self.terminal_publication_acks.len() > limits.max_tasks
         {
             return Err(GraphStoreError::ResourceLimit {
                 resource: "reasoning.tasks".to_string(),
@@ -1033,15 +1025,6 @@ impl GraphStoreState {
                         }
                     }
                 }
-            }
-        }
-        for task_id in &self.terminal_publication_acks {
-            if !self.terminal_outbox.contains_key(task_id) {
-                return Err(GraphStoreError::InvalidState {
-                    reason:
-                        "terminal publication acknowledgement references an unknown outbox entry"
-                            .to_string(),
-                });
             }
         }
         // Coordinator-authored decisions must be signed by a producer that
@@ -1467,7 +1450,6 @@ impl LegacyGraphStoreState {
                 .map(|(task_id, tombstone)| (task_id, tombstone.into_current()))
                 .collect(),
             terminal_outbox: BTreeMap::new(),
-            terminal_publication_acks: BTreeSet::new(),
             fencing_counter: self.fencing_counter,
             limits: GraphResourceLimits::default(),
             cross_graph_links: std::collections::BTreeSet::new(),
@@ -3226,6 +3208,20 @@ fn read_authenticated_state(
 /// admitted here is a terminal publication accompanied by its descriptor and
 /// outbox entry.  This keeps the one-transition reasoning boundary while
 /// retaining the durable monotonic fences from Plan 03.
+fn terminal_outbox_entry_transition_allowed(
+    prior: &TaskTerminalOutboxEntry,
+    next: &TaskTerminalOutboxEntry,
+) -> bool {
+    if prior == next {
+        return true;
+    }
+    let mut normalized_next = next.clone();
+    normalized_next.publication_acknowledged = prior.publication_acknowledged;
+    prior.publication_acknowledged == Some(false)
+        && next.publication_acknowledged == Some(true)
+        && normalized_next == *prior
+}
+
 fn validate_reasoning_cas_transition(
     current: &GraphStoreState,
     candidate: &GraphStoreState,
@@ -3244,8 +3240,7 @@ fn validate_reasoning_cas_transition(
     if candidate.migration_marker < GRAPH_STATE_MIGRATION_HYPOTHESES
         && (candidate.tasks != current.tasks
             || candidate.logical_task_descriptors != current.logical_task_descriptors
-            || candidate.terminal_outbox != current.terminal_outbox
-            || candidate.terminal_publication_acks != current.terminal_publication_acks)
+            || candidate.terminal_outbox != current.terminal_outbox)
     {
         return Err(GraphStoreError::InvalidState {
             reason: "task replacement requires the reasoning-state migration marker".to_string(),
@@ -3423,29 +3418,18 @@ fn validate_reasoning_cas_transition(
                 reason: "reasoning CAS removed an existing terminal outbox entry".to_string(),
             }
         })?;
-        if next != prior {
+        if !terminal_outbox_entry_transition_allowed(prior, next) {
             return Err(GraphStoreError::InvalidState {
-                reason: "reasoning CAS rewrote an existing terminal outbox entry".to_string(),
+                reason: format!(
+                    "reasoning CAS rewrote terminal outbox entry `{task_id}` outside the one-way publication acknowledgement: {:?} -> {:?}",
+                    prior.publication_acknowledged, next.publication_acknowledged
+                ),
             });
         }
     }
-    if !current
-        .terminal_publication_acks
-        .is_subset(&candidate.terminal_publication_acks)
-    {
-        return Err(GraphStoreError::InvalidState {
-            reason: "reasoning CAS removed a terminal publication acknowledgement".to_string(),
-        });
-    }
-    for task_id in &candidate.terminal_publication_acks {
-        if !candidate.terminal_outbox.contains_key(task_id) {
-            return Err(GraphStoreError::InvalidState {
-                reason: "terminal publication acknowledgement references an unknown outbox entry"
-                    .to_string(),
-            });
-        }
-        if !current.terminal_publication_acks.contains(task_id)
-            && !current.terminal_outbox.contains_key(task_id)
+    for (task_id, publication) in &candidate.terminal_outbox {
+        if !current.terminal_outbox.contains_key(task_id)
+            && publication.publication_acknowledged != Some(false)
         {
             return Err(GraphStoreError::InvalidState {
                 reason: "terminal publication cannot be acknowledged in its commit transition"
@@ -3628,10 +3612,12 @@ fn validate_reasoning_cas_transition(
     }
     for (task_id, entry) in &candidate.terminal_outbox {
         if let Some(prior_entry) = current.terminal_outbox.get(task_id)
-            && prior_entry != entry
+            && !terminal_outbox_entry_transition_allowed(prior_entry, entry)
         {
             return Err(GraphStoreError::InvalidState {
-                reason: "reasoning CAS rewrote an existing terminal outbox entry".to_string(),
+                reason: format!(
+                    "reasoning CAS rewrote terminal outbox entry `{task_id}` outside the one-way publication acknowledgement"
+                ),
             });
         }
         if !current.terminal_outbox.contains_key(task_id)
@@ -5546,7 +5532,6 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
             current.logical_task_descriptors = state.logical_task_descriptors;
             current.task_tombstones = state.task_tombstones;
             current.terminal_outbox = state.terminal_outbox;
-            current.terminal_publication_acks = state.terminal_publication_acks;
             current.fencing_counter = state.fencing_counter;
             current.limits = state.limits;
             current.cross_graph_links = state.cross_graph_links;
@@ -8664,7 +8649,6 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
             current.logical_task_descriptors = state.logical_task_descriptors.clone();
             current.task_tombstones = state.task_tombstones.clone();
             current.terminal_outbox = state.terminal_outbox.clone();
-            current.terminal_publication_acks = state.terminal_publication_acks.clone();
             current.fencing_counter = state.fencing_counter;
             current.limits = state.limits.clone();
             current.cross_graph_links = state.cross_graph_links.clone();
@@ -10899,6 +10883,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: AgentId::from_public_key_hex(&claimant_key.public_key().to_hex()),
+            publication_acknowledged: Some(false),
         };
         valid_entry
             .validate_for_committed_task_at(

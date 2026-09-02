@@ -4452,6 +4452,13 @@ pub struct TaskTerminalOutboxEntry {
     pub memory: Option<StrategyMemory>,
     pub memory_expiry: Option<StrategyMemoryExpiryEnvelope>,
     pub producer_key_id: AgentId,
+    /// Durable worker-publication delivery state. `None` identifies a legacy
+    /// outbox entry created before replayable worker publications existed and
+    /// is treated as already delivered. New entries reserve `Some(false)` in
+    /// the terminal commit; acknowledgement changes it to `Some(true)`, which
+    /// cannot increase the serialized campaign size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_acknowledged: Option<bool>,
 }
 
 impl TaskTerminalOutboxEntry {
@@ -4474,6 +4481,7 @@ impl TaskTerminalOutboxEntry {
             memory,
             memory_expiry,
             producer_key_id,
+            publication_acknowledged: Some(false),
         };
         entry.validate_for_task(task, descriptor, limits)?;
         Ok(entry)
@@ -9959,6 +9967,25 @@ mod tests {
         (task, descriptor, entry, key)
     }
 
+    #[test]
+    fn terminal_publication_acknowledgement_consumes_reserved_wire_capacity() {
+        let (_, _, pending, _) = outbox_fixture();
+        assert_eq!(pending.publication_acknowledged, Some(false));
+        let pending_bytes = serde_json::to_vec(&pending).unwrap();
+        let mut acknowledged = pending.clone();
+        acknowledged.publication_acknowledged = Some(true);
+        let acknowledged_bytes = serde_json::to_vec(&acknowledged).unwrap();
+        assert!(acknowledged_bytes.len() <= pending_bytes.len());
+
+        let mut legacy_value = serde_json::to_value(&pending).unwrap();
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("publication_acknowledged");
+        let legacy: TaskTerminalOutboxEntry = serde_json::from_value(legacy_value).unwrap();
+        assert_eq!(legacy.publication_acknowledged, None);
+    }
+
     fn outbox_evidence_fixture() -> (
         TaskRecord,
         LogicalTaskDescriptor,
@@ -10288,6 +10315,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: claimant.clone(),
+            publication_acknowledged: Some(false),
         };
         assert!(matches!(
             publication.validate_for_task(&task, &descriptor, &GraphResourceLimits::default()),
@@ -10346,6 +10374,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: claimant,
+            publication_acknowledged: Some(false),
         };
         assert!(matches!(
             wrong_producer_publication.validate_for_task(
@@ -10447,6 +10476,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: claimant.clone(),
+            publication_acknowledged: Some(false),
         };
         assert!(
             boundary_entry
@@ -10586,6 +10616,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: valid.producer_key_id.clone(),
+            publication_acknowledged: Some(false),
         };
         let wrong_target_committed = task
             .clone()
@@ -10649,6 +10680,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: claimant,
+            publication_acknowledged: Some(false),
         };
         let out_of_scope_committed = out_of_scope_task
             .clone()

@@ -182,7 +182,9 @@ impl StalkerAgent {
         }
         let mut hunts = detection_hunts(&env.pheromones);
         for hunt_id in graph
-            .outstanding_stalker_hunts()
+            .outstanding_stalker_hunts_at(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                env.now.saturating_mul(1_000),
+            ))
             .map_err(agent_tick_error)?
         {
             if !self.published_hunts.contains(&hunt_id) && !hunts.contains(&hunt_id) {

@@ -4360,6 +4360,69 @@ fn enabled_service_restores_graph_tasks_and_memory_after_restart() {
 }
 
 #[test]
+fn restart_rebinds_an_elapsed_claim_to_a_replacement_worker() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "swarm-phase286-elapsed-worker-rebind-{}-{unique}",
+        std::process::id()
+    ));
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        state_store: BundleStoreConfig::LocalFiles {
+            directory: root.display().to_string(),
+        },
+        max_lease_ms: 10,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let registered_at = GraphLogicalTime::new(1_700_000_032_000);
+    let expired_at = GraphLogicalTime::new(1_700_000_032_011);
+    let service_key = key(151);
+    let prior_key = key(152);
+    let replacement_key = key(153);
+    let replay = production_replay_bundle("hunt:phase286:elapsed-rebind", 1_700_000_032_000);
+
+    let initial =
+        Arc::new(CollectiveHypothesisService::new(&config, service_key.clone(), None).unwrap());
+    let prior = initial
+        .worker_at([TaskKind::ChallengeEdge], prior_key, registered_at)
+        .unwrap();
+    initial
+        .worker_at(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(154),
+            registered_at,
+        )
+        .unwrap();
+    initial.submit_replay(&replay).unwrap();
+    let abandoned = prior
+        .claim_next(GraphLogicalTime::new(1_700_000_032_001))
+        .unwrap()
+        .unwrap();
+    assert_eq!(abandoned.request.kind, TaskKind::ChallengeEdge);
+    drop(prior);
+    drop(initial);
+
+    let restarted = Arc::new(CollectiveHypothesisService::new(&config, service_key, None).unwrap());
+    let replacement = restarted
+        .worker_at([TaskKind::ChallengeEdge], replacement_key, expired_at)
+        .unwrap();
+    let reclaimed = replacement.claim_next(expired_at).unwrap().unwrap();
+    assert_eq!(reclaimed.claim.task_id, abandoned.claim.task_id);
+    assert_ne!(reclaimed.request.claimant, abandoned.request.claimant);
+    assert_eq!(&reclaimed.request.claimant, replacement.claimant());
+    assert!(reclaimed.claim.fencing_token > abandoned.claim.fencing_token);
+
+    drop(replacement);
+    drop(restarted);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn expired_worker_lease_is_fenced_and_reclaimed() {
     let config = HypothesisGraphConfig {
         enabled: true,

@@ -5147,11 +5147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 examined = reconciliation.examined,
                 admitted = reconciliation.admitted,
                 idempotent = reconciliation.idempotent,
+                quarantined = reconciliation.quarantined,
+                retryable_failures = reconciliation.retryable_failures,
                 failures = reconciliation.failures,
                 "reconciled durable replays into the collective hypothesis graph"
             );
             hypothesis_graph_admission_retry_pending =
-                hypothesis_graph_admission_requires_retry(reconciliation.failures);
+                hypothesis_graph_admission_requires_retry(reconciliation.retryable_failures);
         }
         let mut hypothesis_graph_admission_handle = hypothesis_graph_admission_notify.map(|notify| {
             let state = state.clone();

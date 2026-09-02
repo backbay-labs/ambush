@@ -171,7 +171,9 @@ fn build_platform_openapi_spec() -> Value {
                     "operationId": "list_hypothesis_graphs",
                     "description": "Returns the enabled runtime graph summary. The collection is empty when collective reasoning is disabled.",
                     "parameters": [
-                        { "$ref": "#/components/parameters/SchemaVersionHeader" }
+                        { "$ref": "#/components/parameters/SchemaVersionHeader" },
+                        { "$ref": "#/components/parameters/Cursor" },
+                        { "$ref": "#/components/parameters/PageSize" }
                     ],
                     "responses": standard_platform_responses("#/components/schemas/HypothesisGraphSummariesPage")
                 }

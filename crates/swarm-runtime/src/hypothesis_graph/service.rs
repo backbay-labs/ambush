@@ -1012,6 +1012,14 @@ impl CollectiveHypothesisService {
         )
     }
 
+    /// Stable identity for durable replay admission checkpoints. Campaign
+    /// rotation changes the active graph ID, but it must not reset a replay
+    /// consumer and rescan the lifetime store. Replacing the graph signing
+    /// identity produces a different base ID and safely resets the cursor.
+    pub fn replay_consumer_graph_id(&self) -> GraphId {
+        graph_id_for_campaign(&self.signer, 0)
+    }
+
     pub fn store(&self) -> Result<Arc<dyn HypothesisGraphStore>, GraphServiceError> {
         Ok(self.active_campaign()?.store)
     }
@@ -1034,6 +1042,22 @@ impl CollectiveHypothesisService {
         capabilities: impl IntoIterator<Item = TaskKind>,
         signer: Keypair,
     ) -> Result<GraphWorkerAdapter, GraphServiceError> {
+        let registration_time = self
+            .active_campaign()?
+            .store
+            .snapshot()?
+            .state()
+            .logical_time_high_water;
+        self.worker_at(capabilities, signer, registration_time)
+    }
+
+    pub fn worker_at(
+        self: &Arc<Self>,
+        capabilities: impl IntoIterator<Item = TaskKind>,
+        signer: Keypair,
+        registration_time: GraphLogicalTime,
+    ) -> Result<GraphWorkerAdapter, GraphServiceError> {
+        registration_time.validate()?;
         let capabilities = capabilities.into_iter().collect::<BTreeSet<_>>();
         if capabilities.is_empty() {
             return Err(GraphServiceError::EmptyWorkerCapabilities);
@@ -1056,7 +1080,11 @@ impl CollectiveHypothesisService {
                 .tasks()
                 .find(|task| {
                     task.task.request.kind == *kind
-                        && task_blocks_worker_rebind(task.task.state)
+                        && task_blocks_worker_rebind_at(
+                            task.task.state,
+                            task.task.lease.as_ref().map(|lease| lease.expires_at),
+                            registration_time,
+                        )
                         && task.task.request.claimant != claimant
                 })
                 .map(|task| &task.task.request.claimant)
@@ -1909,6 +1937,21 @@ impl GraphWorkerAdapter {
     /// graph tasks survive longer than the detection deposit that created
     /// them.
     pub fn outstanding_stalker_hunts(&self) -> Result<Vec<String>, GraphServiceError> {
+        let now = self
+            .service
+            .active_campaign()?
+            .store
+            .snapshot()?
+            .state()
+            .logical_time_high_water;
+        self.outstanding_stalker_hunts_at(now)
+    }
+
+    pub fn outstanding_stalker_hunts_at(
+        &self,
+        now: GraphLogicalTime,
+    ) -> Result<Vec<String>, GraphServiceError> {
+        now.validate()?;
         if !self.capabilities.contains(&TaskKind::AcquireEvidence)
             && !self.capabilities.contains(&TaskKind::FalsifyHypothesis)
         {
@@ -1943,7 +1986,9 @@ impl GraphWorkerAdapter {
                 && task_is_visible_to_claimant(
                     task.task.state,
                     &task.task.request.claimant,
+                    task.task.lease.as_ref().map(|lease| lease.expires_at),
                     &self.claimant,
+                    now,
                 )
                 && !task_is_terminal(task.task.state)
         }) {
@@ -2130,9 +2175,20 @@ impl GraphWorkerAdapter {
             let campaign = self.service.campaign_at(campaign_index)?;
             let snapshot = campaign.store.snapshot()?;
             let mut next = snapshot.state().clone();
-            let before = next.terminal_publication_acks.len();
-            next.terminal_publication_acks.extend(task_ids);
-            if next.terminal_publication_acks.len() != before {
+            let mut changed = false;
+            for task_id in task_ids {
+                let publication = next.terminal_outbox.get_mut(&task_id).ok_or_else(|| {
+                    GraphStoreError::InvalidState {
+                        reason: "pending worker publication references an unknown outbox entry"
+                            .to_string(),
+                    }
+                })?;
+                if publication.publication_acknowledged == Some(false) {
+                    publication.publication_acknowledged = Some(true);
+                    changed = true;
+                }
+            }
+            if changed {
                 next.generation = snapshot.revision().generation;
                 next.predecessor_digest = snapshot.state().predecessor_digest.clone();
                 campaign.store.compare_and_swap(snapshot.revision(), next)?;
@@ -2881,20 +2937,28 @@ impl GraphWorkerAdapter {
     }
 }
 
-fn task_blocks_worker_rebind(state: TaskState) -> bool {
-    matches!(state, TaskState::Pending | TaskState::Claimed)
+fn task_blocks_worker_rebind_at(
+    state: TaskState,
+    lease_expires_at: Option<GraphLogicalTime>,
+    now: GraphLogicalTime,
+) -> bool {
+    state == TaskState::Pending
+        || (state == TaskState::Claimed && lease_expires_at.is_none_or(|expiry| now < expiry))
 }
 
 fn task_is_visible_to_claimant(
     state: TaskState,
     persisted_claimant: &AgentId,
+    lease_expires_at: Option<GraphLogicalTime>,
     current_claimant: &AgentId,
+    now: GraphLogicalTime,
 ) -> bool {
     match state {
         // Expiry releases the prior claimant. A replacement worker registered
         // after restart must rediscover the task so its next claim can issue a
         // fresh claimant-bound request and fencing token.
         TaskState::Expired => true,
+        TaskState::Claimed if lease_expires_at.is_some_and(|expiry| now >= expiry) => true,
         TaskState::Pending | TaskState::Claimed => persisted_claimant == current_claimant,
         TaskState::Completed | TaskState::Failed => false,
     }
@@ -3030,9 +3094,6 @@ fn pending_worker_publication_for_task(
     snapshot: &GraphStoreSnapshot,
     task_id: &TaskId,
 ) -> Result<Option<PendingWorkerPublication>, GraphServiceError> {
-    if snapshot.state().terminal_publication_acks.contains(task_id) {
-        return Ok(None);
-    }
     let Some(task) = snapshot.state().tasks.get(task_id).map(|task| &task.task) else {
         return Err(GraphStoreError::InvalidState {
             reason: "terminal publication index references an unknown task".to_string(),
@@ -3042,6 +3103,12 @@ fn pending_worker_publication_for_task(
     let Some(outbox) = snapshot.terminal_outbox().get(task_id) else {
         return Ok(None);
     };
+    // Legacy outbox entries have no delivery marker and were emitted by the
+    // pre-replay worker path. Only terminals that reserved pending delivery
+    // state in their atomic commit participate in crash replay.
+    if outbox.publication_acknowledged != Some(false) {
+        return Ok(None);
+    }
     let Some(hunt_id) =
         hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot.graph())
     else {
@@ -3162,11 +3229,25 @@ mod tests {
 
     #[test]
     fn only_outstanding_tasks_block_worker_rebind_after_restart() {
-        assert!(task_blocks_worker_rebind(TaskState::Pending));
-        assert!(task_blocks_worker_rebind(TaskState::Claimed));
-        assert!(!task_blocks_worker_rebind(TaskState::Completed));
-        assert!(!task_blocks_worker_rebind(TaskState::Failed));
-        assert!(!task_blocks_worker_rebind(TaskState::Expired));
+        let now = GraphLogicalTime::new(200);
+        assert!(task_blocks_worker_rebind_at(TaskState::Pending, None, now));
+        assert!(task_blocks_worker_rebind_at(
+            TaskState::Claimed,
+            Some(GraphLogicalTime::new(201)),
+            now
+        ));
+        assert!(!task_blocks_worker_rebind_at(
+            TaskState::Claimed,
+            Some(now),
+            now
+        ));
+        assert!(!task_blocks_worker_rebind_at(
+            TaskState::Completed,
+            None,
+            now
+        ));
+        assert!(!task_blocks_worker_rebind_at(TaskState::Failed, None, now));
+        assert!(!task_blocks_worker_rebind_at(TaskState::Expired, None, now));
     }
 
     #[test]
@@ -3177,17 +3258,30 @@ mod tests {
         assert!(task_is_visible_to_claimant(
             TaskState::Expired,
             &prior,
-            &replacement
+            None,
+            &replacement,
+            GraphLogicalTime::new(200),
         ));
         assert!(!task_is_visible_to_claimant(
             TaskState::Pending,
             &prior,
-            &replacement
+            None,
+            &replacement,
+            GraphLogicalTime::new(200),
         ));
         assert!(!task_is_visible_to_claimant(
             TaskState::Claimed,
             &prior,
-            &replacement
+            Some(GraphLogicalTime::new(201)),
+            &replacement,
+            GraphLogicalTime::new(200),
+        ));
+        assert!(task_is_visible_to_claimant(
+            TaskState::Claimed,
+            &prior,
+            Some(GraphLogicalTime::new(200)),
+            &replacement,
+            GraphLogicalTime::new(200),
         ));
     }
 

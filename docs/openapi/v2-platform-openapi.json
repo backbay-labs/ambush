@@ -1527,6 +1527,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {

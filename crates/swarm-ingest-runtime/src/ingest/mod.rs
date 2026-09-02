@@ -97,8 +97,8 @@ use swarm_runtime::threat_intel_runtime::SharedThreatIntelFeedHealth;
 use swarm_runtime::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
-    ConfiguredReplayBundleStore, CorrelatedIncident, IncidentStore, ReplayBundleStore,
-    ReplayStoreError,
+    ConfiguredReplayBundleStore, CorrelatedIncident, GraphStoreError, IncidentStore,
+    ReplayBundleLookup, ReplayBundleStore, ReplayStoreError,
 };
 use swarm_whisker::{CompositeDetector, DetectionFinding, TelemetryEvent};
 use tracing::Instrument;
@@ -1473,7 +1473,87 @@ pub struct HypothesisGraphReplayReconciliation {
     pub examined: usize,
     pub admitted: usize,
     pub idempotent: usize,
+    pub quarantined: usize,
+    pub retryable_failures: usize,
     pub failures: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayReconciliationDisposition {
+    Admitted,
+    Idempotent,
+    Retry,
+    Quarantined,
+}
+
+fn replay_submission_failure_is_retryable(error: &GraphServiceError) -> bool {
+    match error {
+        // These failures are derived from the replay's own bounded, typed
+        // graph material. Replaying the same bytes cannot make them valid.
+        GraphServiceError::Admission(_)
+        | GraphServiceError::Store(
+            GraphStoreError::Admission(_)
+            | GraphStoreError::Canonicalization { .. }
+            | GraphStoreError::ResourceLimit { .. },
+        ) => false,
+
+        // Everything else describes service composition, durable state,
+        // concurrency, identity, or I/O. Advancing the replay cursor across
+        // any of those failures would turn an operational outage into data
+        // loss. Keep the record retryable, including persisted-state
+        // validation failures that require operator repair.
+        GraphServiceError::Store(
+            GraphStoreError::PoisonedLock
+            | GraphStoreError::UnsupportedSchema(_)
+            | GraphStoreError::InvalidState { .. }
+            | GraphStoreError::InvalidSignature { .. }
+            | GraphStoreError::SignerMismatch { .. }
+            | GraphStoreError::DigestMismatch { .. }
+            | GraphStoreError::StalePredecessor { .. }
+            | GraphStoreError::TaskExists { .. }
+            | GraphStoreError::TaskNotFound { .. }
+            | GraphStoreError::AlreadyClaimed { .. }
+            | GraphStoreError::TaskExpiredNeedsReclaim { .. }
+            | GraphStoreError::StaleTaskGeneration { .. }
+            | GraphStoreError::LeaseMissing { .. }
+            | GraphStoreError::StaleLease { .. }
+            | GraphStoreError::StaleFence { .. }
+            | GraphStoreError::LeaseExpired { .. }
+            | GraphStoreError::InvalidLease { .. }
+            | GraphStoreError::InvalidTransition { .. }
+            | GraphStoreError::MissingState { .. }
+            | GraphStoreError::MissingAnchor { .. }
+            | GraphStoreError::MissingHighWater { .. }
+            | GraphStoreError::AnchorMismatch { .. }
+            | GraphStoreError::ReplayDetected { .. }
+            | GraphStoreError::NotRegularFile { .. }
+            | GraphStoreError::LockContended { .. }
+            | GraphStoreError::LockBinding { .. }
+            | GraphStoreError::InsecurePermissions { .. }
+            | GraphStoreError::Read { .. }
+            | GraphStoreError::Write { .. }
+            | GraphStoreError::Parse { .. }
+            | GraphStoreError::Serialize { .. },
+        )
+        | GraphServiceError::Memory(_)
+        | GraphServiceError::Poisoned
+        | GraphServiceError::NonDurableEnabledStore
+        | GraphServiceError::MissingCapability(_)
+        | GraphServiceError::MissingWorkerRegistration(_)
+        | GraphServiceError::EmptyWorkerCapabilities
+        | GraphServiceError::WorkerCapabilityConflict { .. }
+        | GraphServiceError::WorkerIdentityMismatch { .. }
+        | GraphServiceError::TaskUnavailable(_)
+        | GraphServiceError::GraphMismatch { .. }
+        | GraphServiceError::InvalidCollectionCursor
+        | GraphServiceError::CampaignRotationBlocked { .. }
+        | GraphServiceError::CampaignIndexExhausted
+        | GraphServiceError::InvalidCampaignEntry { .. }
+        | GraphServiceError::MissingCampaignHead { .. }
+        | GraphServiceError::InvalidCampaignHead { .. }
+        | GraphServiceError::CampaignIndexMismatch { .. }
+        | GraphServiceError::CampaignIo { .. } => true,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2298,7 +2378,13 @@ impl IngestState {
         let signer = swarm_crypto::Keypair::from_seed(&signing_key.to_bytes());
         self.hypothesis_graph
             .as_ref()
-            .map(|service| service.worker(capabilities, signer))
+            .map(|service| {
+                service.worker_at(
+                    capabilities,
+                    signer,
+                    swarm_core::hypothesis_graph::GraphLogicalTime::new(now_ms()),
+                )
+            })
             .transpose()
     }
 
@@ -2322,6 +2408,15 @@ impl IngestState {
         let replay_store = self.current_replay_store();
         let mut report = HypothesisGraphReplayReconciliation::default();
         let mut checkpoint = replay_store.hypothesis_graph_checkpoint()?;
+        let consumer_graph_id = graph.replay_consumer_graph_id();
+        if checkpoint.consumer_graph_id.as_ref() != Some(&consumer_graph_id) {
+            checkpoint = swarm_spine::HypothesisGraphReplayCheckpoint {
+                consumer_graph_id: Some(consumer_graph_id),
+                cursor_sequence: 0,
+                retry_bundle_ids: BTreeSet::new(),
+            };
+            replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
+        }
         if checkpoint.retry_bundle_ids.len() > HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
             return Err(ReplayStoreError::InvalidState {
                 reason: format!(
@@ -2332,36 +2427,53 @@ impl IngestState {
             });
         }
 
-        let mut reconcile_bundle = |bundle_id: &str| -> Result<bool, ReplayStoreError> {
+        let mut reconcile_bundle = |bundle_id: &str,
+                                    replay: Option<ReplayBundleLookup>|
+         -> Result<
+            ReplayReconciliationDisposition,
+            ReplayStoreError,
+        > {
             report.examined = report.examined.saturating_add(1);
-            let Some(replay) = replay_store.load_by_bundle_id(bundle_id)? else {
+            let Some(replay) = replay else {
                 report.failures = report.failures.saturating_add(1);
+                report.quarantined = report.quarantined.saturating_add(1);
                 tracing::warn!(
                     bundle_id,
                     module = module_path!(),
-                    "durable replay disappeared during hypothesis graph reconciliation"
+                    "durable replay disappeared during hypothesis graph reconciliation; quarantining its sequence"
                 );
-                return Ok(false);
+                return Ok(ReplayReconciliationDisposition::Quarantined);
             };
             match graph.submit_replay(&replay.bundle) {
                 Ok(submission) if submission.idempotent => {
                     report.idempotent = report.idempotent.saturating_add(1);
-                    Ok(true)
+                    Ok(ReplayReconciliationDisposition::Idempotent)
                 }
                 Ok(_) => {
                     report.admitted = report.admitted.saturating_add(1);
-                    Ok(true)
+                    Ok(ReplayReconciliationDisposition::Admitted)
                 }
                 Err(error) => {
                     report.failures = report.failures.saturating_add(1);
+                    let retryable = replay_submission_failure_is_retryable(&error);
+                    if !retryable {
+                        report.quarantined = report.quarantined.saturating_add(1);
+                    } else {
+                        report.retryable_failures = report.retryable_failures.saturating_add(1);
+                    }
                     tracing::warn!(
                         bundle_id = %replay.record.bundle_id,
                         hunt_id = %replay.record.hunt_id,
                         reason = %error,
+                        retryable,
                         module = module_path!(),
                         "durable replay hypothesis graph reconciliation degraded"
                     );
-                    Ok(false)
+                    Ok(if retryable {
+                        ReplayReconciliationDisposition::Retry
+                    } else {
+                        ReplayReconciliationDisposition::Quarantined
+                    })
                 }
             }
         };
@@ -2372,27 +2484,22 @@ impl IngestState {
             .cloned()
             .collect::<Vec<_>>()
         {
-            if reconcile_bundle(&bundle_id)? {
+            let replay = replay_store.load_by_bundle_id(&bundle_id)?;
+            if reconcile_bundle(&bundle_id, replay)? != ReplayReconciliationDisposition::Retry {
                 checkpoint.retry_bundle_ids.remove(&bundle_id);
             }
         }
 
+        let mut scan_sequence = checkpoint.cursor_sequence;
+        let mut checkpoint_blocked = false;
         loop {
-            if checkpoint.retry_bundle_ids.len() == HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
-                break;
-            }
-            let records = replay_store.scan_after_sequence(
-                checkpoint.cursor_sequence,
-                HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE,
-            )?;
+            let records = replay_store
+                .scan_after_sequence(scan_sequence, HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE)?;
             if records.is_empty() {
                 break;
             }
-            let mut previous_sequence = checkpoint.cursor_sequence;
+            let mut previous_sequence = scan_sequence;
             for record in records {
-                if checkpoint.retry_bundle_ids.len() == HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
-                    break;
-                }
                 if record.store_sequence <= previous_sequence {
                     return Err(ReplayStoreError::InvalidState {
                         reason: format!(
@@ -2401,11 +2508,36 @@ impl IngestState {
                         ),
                     });
                 }
-                if !reconcile_bundle(&record.bundle_id)? {
-                    checkpoint.retry_bundle_ids.insert(record.bundle_id.clone());
+                let replay = replay_store.load_by_store_sequence(record.store_sequence)?;
+                if replay
+                    .as_ref()
+                    .is_some_and(|lookup| lookup.record != record)
+                {
+                    return Err(ReplayStoreError::InvalidState {
+                        reason: format!(
+                            "replay sequence {} changed between page and bundle load",
+                            record.store_sequence
+                        ),
+                    });
                 }
-                checkpoint.cursor_sequence = record.store_sequence;
+                if reconcile_bundle(&record.bundle_id, replay)?
+                    == ReplayReconciliationDisposition::Retry
+                {
+                    if checkpoint.retry_bundle_ids.len() < HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
+                        checkpoint.retry_bundle_ids.insert(record.bundle_id.clone());
+                    } else {
+                        // Continue the bounded scan so a full retry queue
+                        // cannot hide later admissible evidence. Keep the
+                        // durable cursor before this unrecorded retry so the
+                        // record is never silently abandoned.
+                        checkpoint_blocked = true;
+                    }
+                }
+                if !checkpoint_blocked {
+                    checkpoint.cursor_sequence = record.store_sequence;
+                }
                 previous_sequence = record.store_sequence;
+                scan_sequence = record.store_sequence;
             }
             replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
         }

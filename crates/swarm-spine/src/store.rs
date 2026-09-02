@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use swarm_core::config::BundleStoreConfig;
+use swarm_core::hypothesis_graph::GraphId;
 use swarm_core::types::ResponseRehearsalPreview;
 
 /// Metadata for one persisted replay bundle.
@@ -103,6 +104,11 @@ pub struct ReplayStoreHealth {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HypothesisGraphReplayCheckpoint {
+    /// Identity of the graph consumer that advanced this cursor. A missing
+    /// identity is a legacy checkpoint and must be replayed from sequence zero
+    /// before it can be attached to a graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumer_graph_id: Option<GraphId>,
     pub cursor_sequence: u64,
     #[serde(default)]
     pub retry_bundle_ids: BTreeSet<String>,
@@ -153,6 +159,12 @@ pub trait ReplayBundleStore: Send + Sync {
     fn load_by_receipt_id(
         &self,
         receipt_id: &str,
+    ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError>;
+    /// Load a replay through its immutable persistence sequence without
+    /// consulting the lifetime bundle index.
+    fn load_by_store_sequence(
+        &self,
+        store_sequence: u64,
     ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError>;
     fn recent(&self, limit: usize) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError>;
     /// Return a stable, bundle-ID-ordered page from the complete replay index.
@@ -236,6 +248,16 @@ impl ReplayBundleStore for ConfiguredReplayBundleStore {
         match self {
             Self::Memory(store) => store.load_by_receipt_id(receipt_id),
             Self::LocalFiles(store) => store.load_by_receipt_id(receipt_id),
+        }
+    }
+
+    fn load_by_store_sequence(
+        &self,
+        store_sequence: u64,
+    ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError> {
+        match self {
+            Self::Memory(store) => store.load_by_store_sequence(store_sequence),
+            Self::LocalFiles(store) => store.load_by_store_sequence(store_sequence),
         }
     }
 
@@ -436,6 +458,38 @@ impl ReplayBundleStore for MemoryReplayBundleStore {
         Ok(Some(ReplayBundleLookup { record, bundle }))
     }
 
+    fn load_by_store_sequence(
+        &self,
+        store_sequence: u64,
+    ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError> {
+        let guard = self
+            .bundles
+            .read()
+            .map_err(|_| ReplayStoreError::PoisonedLock)?;
+        let sequencing = self
+            .sequencing
+            .read()
+            .map_err(|_| ReplayStoreError::PoisonedLock)?;
+        let Some(bundle_id) = sequencing
+            .by_bundle_id
+            .iter()
+            .find_map(|(bundle_id, sequence)| (*sequence == store_sequence).then_some(bundle_id))
+        else {
+            return Ok(None);
+        };
+        let bundle = guard
+            .iter()
+            .find(|bundle| &bundle.bundle_id == bundle_id)
+            .cloned()
+            .ok_or_else(|| ReplayStoreError::InvalidState {
+                reason: format!(
+                    "replay sequence {store_sequence} references missing bundle `{bundle_id}`"
+                ),
+            })?;
+        let record = memory_replay_record(&bundle, &sequencing)?;
+        Ok(Some(ReplayBundleLookup { record, bundle }))
+    }
+
     fn recent(&self, limit: usize) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError> {
         let guard = self
             .bundles
@@ -520,12 +574,17 @@ impl ReplayBundleStore for MemoryReplayBundleStore {
             .sequencing
             .write()
             .map_err(|_| ReplayStoreError::PoisonedLock)?;
-        if checkpoint.cursor_sequence < sequencing.hypothesis_graph_checkpoint.cursor_sequence
-            || checkpoint.cursor_sequence > sequencing.next_sequence
+        let persisted = &sequencing.hypothesis_graph_checkpoint;
+        let identity_changed = checkpoint.consumer_graph_id != persisted.consumer_graph_id;
+        if checkpoint.cursor_sequence > sequencing.next_sequence
+            || (!identity_changed && checkpoint.cursor_sequence < persisted.cursor_sequence)
+            || (identity_changed
+                && (checkpoint.cursor_sequence != 0 || !checkpoint.retry_bundle_ids.is_empty()))
         {
             return Err(ReplayStoreError::InvalidState {
-                reason: "hypothesis graph replay cursor is outside the monotonic store sequence"
-                    .to_string(),
+                reason:
+                    "hypothesis graph replay checkpoint is outside the monotonic consumer sequence"
+                        .to_string(),
             });
         }
         sequencing.hypothesis_graph_checkpoint = checkpoint.clone();
@@ -563,10 +622,16 @@ impl FileReplayBundleStore {
             path: root.clone(),
             source,
         })?;
-        Ok(Self {
+        fs::create_dir_all(root.join("sequences")).map_err(|source| ReplayStoreError::Write {
+            path: root.clone(),
+            source,
+        })?;
+        let store = Self {
             root,
             index_lock: Arc::new(Mutex::new(())),
-        })
+        };
+        store.migrate_sequence_index()?;
+        Ok(store)
     }
 
     fn bundles_dir(&self) -> PathBuf {
@@ -575,6 +640,22 @@ impl FileReplayBundleStore {
 
     fn index_path(&self) -> PathBuf {
         self.root.join("index.json")
+    }
+
+    fn sequences_dir(&self) -> PathBuf {
+        self.root.join("sequences")
+    }
+
+    fn sequence_record_path(&self, sequence: u64) -> PathBuf {
+        self.sequences_dir().join(format!("{sequence:020}.json"))
+    }
+
+    fn sequence_head_path(&self) -> PathBuf {
+        self.root.join("sequence-head.json")
+    }
+
+    fn hypothesis_graph_checkpoint_path(&self) -> PathBuf {
+        self.root.join("hypothesis-graph-checkpoint.json")
     }
 
     fn read_index(&self) -> Result<ReplayIndex, ReplayStoreError> {
@@ -591,18 +672,38 @@ impl FileReplayBundleStore {
         normalize_replay_index(index)
     }
 
-    fn write_index(&self, index: &ReplayIndex) -> Result<(), ReplayStoreError> {
-        let path = self.index_path();
+    fn write_json_atomically<T: Serialize>(
+        &self,
+        path: &Path,
+        value: &T,
+    ) -> Result<(), ReplayStoreError> {
         let raw =
-            serde_json::to_string_pretty(index).map_err(|source| ReplayStoreError::Parse {
-                path: path.clone(),
+            serde_json::to_string_pretty(value).map_err(|source| ReplayStoreError::Parse {
+                path: path.to_path_buf(),
                 source,
+            })?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| ReplayStoreError::InvalidState {
+                reason: format!("replay store path `{}` has no parent", path.display()),
+            })?;
+        fs::create_dir_all(parent).map_err(|source| ReplayStoreError::Write {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let target_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ReplayStoreError::InvalidState {
+                reason: format!(
+                    "replay store path `{}` has no UTF-8 file name",
+                    path.display()
+                ),
             })?;
         let (temporary, mut file) = loop {
             let nonce = NEXT_REPLAY_INDEX_TEMP.fetch_add(1, Ordering::Relaxed);
-            let temporary = self
-                .root
-                .join(format!(".index.json.tmp-{}-{nonce}", std::process::id()));
+            let temporary =
+                parent.join(format!(".{target_name}.tmp-{}-{nonce}", std::process::id()));
             match fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -621,13 +722,109 @@ impl FileReplayBundleStore {
         let result = (|| -> Result<(), std::io::Error> {
             file.write_all(raw.as_bytes())?;
             file.sync_all()?;
-            fs::rename(&temporary, &path)?;
-            fs::File::open(&self.root)?.sync_all()?;
+            fs::rename(&temporary, path)?;
+            fs::File::open(parent)?.sync_all()?;
             Ok(())
         })();
         if let Err(source) = result {
             let _ = fs::remove_file(&temporary);
-            return Err(ReplayStoreError::Write { path, source });
+            return Err(ReplayStoreError::Write {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+        Ok(())
+    }
+
+    fn write_index(&self, index: &ReplayIndex) -> Result<(), ReplayStoreError> {
+        self.write_json_atomically(&self.index_path(), index)
+    }
+
+    fn read_sequence_head(&self) -> Result<ReplaySequenceHead, ReplayStoreError> {
+        let path = self.sequence_head_path();
+        if !path.exists() {
+            return Ok(ReplaySequenceHead::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| ReplayStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw).map_err(|source| ReplayStoreError::Parse { path, source })
+    }
+
+    fn read_sequence_record(&self, sequence: u64) -> Result<ReplayBundleRecord, ReplayStoreError> {
+        let path = self.sequence_record_path(sequence);
+        let raw = fs::read_to_string(&path).map_err(|source| ReplayStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let record: ReplayBundleRecord = serde_json::from_str(&raw)
+            .map_err(|source| ReplayStoreError::Parse { path, source })?;
+        if record.store_sequence != sequence {
+            return Err(ReplayStoreError::InvalidState {
+                reason: format!(
+                    "replay sequence file {sequence} contains sequence {}",
+                    record.store_sequence
+                ),
+            });
+        }
+        Ok(record)
+    }
+
+    fn read_standalone_checkpoint(
+        &self,
+    ) -> Result<Option<HypothesisGraphReplayCheckpoint>, ReplayStoreError> {
+        let path = self.hypothesis_graph_checkpoint_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| ReplayStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw)
+            .map(Some)
+            .map_err(|source| ReplayStoreError::Parse { path, source })
+    }
+
+    /// Materialize the direct sequence lookup once when opening a legacy
+    /// store. Steady-state reconciliation then reads only the requested page,
+    /// and checkpoint commits never rewrite the lifetime replay index.
+    fn migrate_sequence_index(&self) -> Result<(), ReplayStoreError> {
+        let _guard = self
+            .index_lock
+            .lock()
+            .map_err(|_| ReplayStoreError::PoisonedLock)?;
+        let index = self.read_index()?;
+        for record in &index.entries {
+            let path = self.sequence_record_path(record.store_sequence);
+            if path.exists() {
+                let persisted = self.read_sequence_record(record.store_sequence)?;
+                if persisted != *record {
+                    self.write_json_atomically(&path, record)?;
+                }
+            } else {
+                self.write_json_atomically(&path, record)?;
+            }
+        }
+        self.write_json_atomically(
+            &self.sequence_head_path(),
+            &ReplaySequenceHead {
+                next_sequence: index.next_sequence,
+            },
+        )?;
+        let standalone_checkpoint = self.read_standalone_checkpoint()?;
+        let checkpoint_missing = standalone_checkpoint.is_none();
+        let checkpoint =
+            standalone_checkpoint.unwrap_or_else(|| index.hypothesis_graph_checkpoint.clone());
+        if checkpoint.cursor_sequence > index.next_sequence {
+            return Err(ReplayStoreError::InvalidState {
+                reason: "hypothesis graph replay cursor exceeds the replay sequence high-water"
+                    .to_string(),
+            });
+        }
+        if checkpoint_missing {
+            self.write_json_atomically(&self.hypothesis_graph_checkpoint_path(), &checkpoint)?;
         }
         Ok(())
     }
@@ -700,6 +897,13 @@ impl ReplayBundleStore for FileReplayBundleStore {
         let record = ReplayBundleRecord::from_bundle(bundle, bundle_path, store_sequence);
         index.entries.push(record.clone());
         self.write_index(&index)?;
+        self.write_json_atomically(&self.sequence_record_path(store_sequence), &record)?;
+        self.write_json_atomically(
+            &self.sequence_head_path(),
+            &ReplaySequenceHead {
+                next_sequence: index.next_sequence,
+            },
+        )?;
         Ok(record)
     }
 
@@ -747,6 +951,18 @@ impl ReplayBundleStore for FileReplayBundleStore {
         Ok(None)
     }
 
+    fn load_by_store_sequence(
+        &self,
+        store_sequence: u64,
+    ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError> {
+        let head = self.read_sequence_head()?;
+        if store_sequence == 0 || store_sequence > head.next_sequence {
+            return Ok(None);
+        }
+        self.read_bundle(self.read_sequence_record(store_sequence)?)
+            .map(Some)
+    }
+
     fn recent(&self, limit: usize) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError> {
         let mut entries = self.read_index()?.entries;
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
@@ -772,17 +988,31 @@ impl ReplayBundleStore for FileReplayBundleStore {
         after_sequence: u64,
         limit: usize,
     ) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError> {
-        let mut entries = self.read_index()?.entries;
-        entries.retain(|entry| entry.store_sequence > after_sequence);
-        entries.sort_by_key(|entry| entry.store_sequence);
-        entries.truncate(limit);
-        Ok(entries)
+        let head = self.read_sequence_head()?;
+        if limit == 0 || after_sequence >= head.next_sequence {
+            return Ok(Vec::new());
+        }
+        let available = head.next_sequence.saturating_sub(after_sequence);
+        let page_len = u64::try_from(limit).unwrap_or(u64::MAX).min(available);
+        let mut records = Vec::with_capacity(usize::try_from(page_len).unwrap_or(limit));
+        for offset in 1..=page_len {
+            let sequence = after_sequence.checked_add(offset).ok_or_else(|| {
+                ReplayStoreError::InvalidState {
+                    reason: "replay sequence page overflowed".to_string(),
+                }
+            })?;
+            records.push(self.read_sequence_record(sequence)?);
+        }
+        Ok(records)
     }
 
     fn hypothesis_graph_checkpoint(
         &self,
     ) -> Result<HypothesisGraphReplayCheckpoint, ReplayStoreError> {
-        Ok(self.read_index()?.hypothesis_graph_checkpoint)
+        self.read_standalone_checkpoint()?
+            .ok_or_else(|| ReplayStoreError::InvalidState {
+                reason: "replay store is missing its hypothesis graph checkpoint".to_string(),
+            })
     }
 
     fn persist_hypothesis_graph_checkpoint(
@@ -793,20 +1023,28 @@ impl ReplayBundleStore for FileReplayBundleStore {
             .index_lock
             .lock()
             .map_err(|_| ReplayStoreError::PoisonedLock)?;
-        let mut index = self.read_index()?;
-        if checkpoint.cursor_sequence < index.hypothesis_graph_checkpoint.cursor_sequence
-            || checkpoint.cursor_sequence > index.next_sequence
+        let head = self.read_sequence_head()?;
+        let persisted =
+            self.read_standalone_checkpoint()?
+                .ok_or_else(|| ReplayStoreError::InvalidState {
+                    reason: "replay store is missing its hypothesis graph checkpoint".to_string(),
+                })?;
+        let identity_changed = checkpoint.consumer_graph_id != persisted.consumer_graph_id;
+        if checkpoint.cursor_sequence > head.next_sequence
+            || (!identity_changed && checkpoint.cursor_sequence < persisted.cursor_sequence)
+            || (identity_changed
+                && (checkpoint.cursor_sequence != 0 || !checkpoint.retry_bundle_ids.is_empty()))
         {
             return Err(ReplayStoreError::InvalidState {
-                reason: "hypothesis graph replay cursor is outside the monotonic store sequence"
-                    .to_string(),
+                reason:
+                    "hypothesis graph replay checkpoint is outside the monotonic consumer sequence"
+                        .to_string(),
             });
         }
-        if index.hypothesis_graph_checkpoint == *checkpoint {
+        if persisted == *checkpoint {
             return Ok(());
         }
-        index.hypothesis_graph_checkpoint = checkpoint.clone();
-        self.write_index(&index)
+        self.write_json_atomically(&self.hypothesis_graph_checkpoint_path(), checkpoint)
     }
 
     fn health(&self) -> Result<ReplayStoreHealth, ReplayStoreError> {
@@ -832,6 +1070,12 @@ struct ReplayIndex {
     next_sequence: u64,
     #[serde(default)]
     hypothesis_graph_checkpoint: HypothesisGraphReplayCheckpoint,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplaySequenceHead {
+    next_sequence: u64,
 }
 
 fn normalize_replay_index(mut index: ReplayIndex) -> Result<ReplayIndex, ReplayStoreError> {
@@ -873,6 +1117,11 @@ fn normalize_replay_index(mut index: ReplayIndex) -> Result<ReplayIndex, ReplayS
         }
     }
     index.next_sequence = high_water;
+    if usize::try_from(high_water).ok() != Some(index.entries.len()) {
+        return Err(ReplayStoreError::InvalidState {
+            reason: "replay store sequence index is not contiguous".to_string(),
+        });
+    }
     if index.hypothesis_graph_checkpoint.cursor_sequence > high_water {
         return Err(ReplayStoreError::InvalidState {
             reason: "hypothesis graph replay cursor exceeds the replay sequence high-water"
@@ -904,8 +1153,9 @@ fn sanitize_id(id: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConfiguredReplayBundleStore, FileReplayBundleStore, HypothesisGraphReplayCheckpoint,
-        MemoryReplayBundleStore, ReplayBundleStore, ReplayPreview, ReplayStoreHealth,
+        ConfiguredReplayBundleStore, FileReplayBundleStore, GraphId,
+        HypothesisGraphReplayCheckpoint, MemoryReplayBundleStore, ReplayBundleStore, ReplayPreview,
+        ReplayStoreHealth,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
     use swarm_core::config::BundleStoreConfig;
@@ -1104,6 +1354,14 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].bundle_id, "bundle:z");
         assert_eq!(first[0].store_sequence, 1);
+        assert_eq!(
+            store
+                .load_by_store_sequence(first[0].store_sequence)
+                .unwrap()
+                .unwrap()
+                .record,
+            first[0]
+        );
         let second = store
             .scan_after_sequence(first[0].store_sequence, 1)
             .unwrap();
@@ -1135,13 +1393,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let store = FileReplayBundleStore::open(&root).unwrap();
         store.persist(&sample_bundle()).unwrap();
+        let index_before_checkpoint = std::fs::read(store.index_path()).unwrap();
+        store
+            .persist_hypothesis_graph_checkpoint(&HypothesisGraphReplayCheckpoint {
+                consumer_graph_id: Some(GraphId::new("graph:test-consumer")),
+                cursor_sequence: 0,
+                retry_bundle_ids: Default::default(),
+            })
+            .unwrap();
         let checkpoint = HypothesisGraphReplayCheckpoint {
+            consumer_graph_id: Some(GraphId::new("graph:test-consumer")),
             cursor_sequence: 1,
             retry_bundle_ids: ["bundle:retry".to_string()].into_iter().collect(),
         };
         store
             .persist_hypothesis_graph_checkpoint(&checkpoint)
             .unwrap();
+        assert_eq!(
+            std::fs::read(store.index_path()).unwrap(),
+            index_before_checkpoint,
+            "checkpoint persistence must not rewrite the lifetime replay index"
+        );
         drop(store);
 
         let reopened = FileReplayBundleStore::open(&root).unwrap();
@@ -1155,6 +1427,14 @@ mod tests {
         store.persist(&sample_bundle()).unwrap();
         store
             .persist_hypothesis_graph_checkpoint(&HypothesisGraphReplayCheckpoint {
+                consumer_graph_id: Some(GraphId::new("graph:test-consumer")),
+                cursor_sequence: 0,
+                retry_bundle_ids: Default::default(),
+            })
+            .unwrap();
+        store
+            .persist_hypothesis_graph_checkpoint(&HypothesisGraphReplayCheckpoint {
+                consumer_graph_id: Some(GraphId::new("graph:test-consumer")),
                 cursor_sequence: 1,
                 retry_bundle_ids: Default::default(),
             })
@@ -1163,6 +1443,7 @@ mod tests {
         assert!(
             store
                 .persist_hypothesis_graph_checkpoint(&HypothesisGraphReplayCheckpoint {
+                    consumer_graph_id: Some(GraphId::new("graph:test-consumer")),
                     cursor_sequence: 0,
                     retry_bundle_ids: Default::default(),
                 })
@@ -1171,10 +1452,36 @@ mod tests {
         assert!(
             store
                 .persist_hypothesis_graph_checkpoint(&HypothesisGraphReplayCheckpoint {
+                    consumer_graph_id: Some(GraphId::new("graph:test-consumer")),
                     cursor_sequence: 2,
                     retry_bundle_ids: Default::default(),
                 })
                 .is_err()
+        );
+
+        store
+            .persist_hypothesis_graph_checkpoint(&HypothesisGraphReplayCheckpoint {
+                consumer_graph_id: Some(GraphId::new("graph:replacement-consumer")),
+                cursor_sequence: 0,
+                retry_bundle_ids: Default::default(),
+            })
+            .unwrap();
+        assert_eq!(
+            store
+                .hypothesis_graph_checkpoint()
+                .unwrap()
+                .consumer_graph_id,
+            Some(GraphId::new("graph:replacement-consumer"))
+        );
+        assert!(
+            store
+                .persist_hypothesis_graph_checkpoint(&HypothesisGraphReplayCheckpoint {
+                    consumer_graph_id: Some(GraphId::new("graph:third-consumer")),
+                    cursor_sequence: 1,
+                    retry_bundle_ids: Default::default(),
+                })
+                .is_err(),
+            "a new graph identity must reset before advancing its cursor"
         );
     }
 }

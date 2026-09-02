@@ -775,15 +775,23 @@ mod tests {
         assert!(replacement.tick(&env(hunt_id)).await.unwrap().is_empty());
         let store = graph.store().unwrap();
         let acknowledged = store.snapshot().unwrap();
-        assert_eq!(acknowledged.state().terminal_publication_acks.len(), 1);
+        assert!(
+            acknowledged
+                .terminal_outbox()
+                .values()
+                .all(|entry| entry.publication_acknowledged == Some(true))
+        );
         let mut regressed = acknowledged.state().clone();
-        regressed.terminal_publication_acks.clear();
+        regressed
+            .terminal_outbox
+            .values_mut()
+            .for_each(|entry| entry.publication_acknowledged = Some(false));
         regressed.generation = acknowledged.revision().generation;
         regressed.predecessor_digest = acknowledged.state().predecessor_digest.clone();
         assert!(matches!(
             store.compare_and_swap(acknowledged.revision(), regressed),
             Err(swarm_spine::hypothesis_graph_store::GraphStoreError::InvalidState { reason })
-                if reason.contains("removed a terminal publication acknowledgement")
+                if reason.contains("outside the one-way publication acknowledgement")
         ));
         drop(store);
         drop(replacement);

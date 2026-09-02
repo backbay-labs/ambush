@@ -240,6 +240,7 @@ pub struct InvestigationBundleRecord {
     pub selected_interpretation_id: Option<String>,
     pub final_confidence_basis_points: u16,
     pub ambiguous: bool,
+    #[serde(default)]
     pub graph_findings_published: bool,
     pub summary_preview: Option<String>,
     pub failure_reason: Option<String>,
@@ -1167,10 +1168,11 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
 mod tests {
     use super::{
         ConfiguredInvestigationBundleStore, FileInvestigationBundleStore,
-        INVESTIGATION_CLAIM_TEMP_COUNTER, InvestigationBundle, InvestigationBundleStore,
-        InvestigationDecision, InvestigationExecutionClaim, InvestigationInterpretation,
-        InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
-        InvestigationStoreError, InvestigationStoreHealth, InvestigationVote,
+        INVESTIGATION_CLAIM_TEMP_COUNTER, InvestigationBundle, InvestigationBundleRecord,
+        InvestigationBundleStore, InvestigationDecision, InvestigationExecutionClaim,
+        InvestigationIndex, InvestigationInterpretation, InvestigationPriority,
+        InvestigationPriorityClass, InvestigationStatus, InvestigationStoreError,
+        InvestigationStoreHealth, InvestigationVote,
         create_investigation_directory_tree_durable_with, finish_acquired_execution_claim,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
@@ -1365,6 +1367,23 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_investigation_index_defaults_graph_publication_state() {
+        let bundle = sample_investigation_bundle();
+        let record = InvestigationBundleRecord::from_bundle(
+            &bundle,
+            "bundles/legacy-investigation.json".to_string(),
+        );
+        let mut value = serde_json::json!({ "entries": [record] });
+        value["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("graph_findings_published");
+
+        let index: InvestigationIndex = serde_json::from_value(value).unwrap();
+        assert!(!index.entries[0].graph_findings_published);
     }
 
     #[test]
