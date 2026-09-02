@@ -4466,6 +4466,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
         .next_challenge_context(GraphLogicalTime::new(1_700_000_100_001))
         .unwrap()
         .unwrap();
+    assert_eq!(challenge.graph_id, first.graph_id);
     assert!(
         weaver
             .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_100_001))
@@ -4485,6 +4486,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
 
     let second = service.submit_replay(&second_replay).unwrap();
     assert_ne!(second.graph_id, first.graph_id);
+    assert_eq!(challenge.graph_id, first.graph_id);
     assert_eq!(service.graph_id(), second.graph_id);
     assert_eq!(service.summary().unwrap().metrics.campaign_rotations, 1);
     let archived = service.operator_projection_for(&first.graph_id).unwrap();

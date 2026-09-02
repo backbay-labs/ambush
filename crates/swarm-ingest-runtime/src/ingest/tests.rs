@@ -2101,11 +2101,14 @@ async fn handler_rejects_future_timestamp_before_detection_or_deposit() {
 }
 
 #[tokio::test]
-async fn handler_projects_persisted_replay_into_enabled_hypothesis_graph() {
+async fn handler_queues_durable_replay_without_graph_io_on_request_path() {
     let mut config = test_config("suspicious_process_tree");
     let graph_root = temp_path("ingest-enabled-hypothesis-graph");
     enable_collective_hypothesis_graph(&mut config, &graph_root);
-    let state = IngestState::from_config(temp_path("ingest-enabled-graph-config"), config).unwrap();
+    let admission_notify = Arc::new(tokio::sync::Notify::new());
+    let state = IngestState::from_config(temp_path("ingest-enabled-graph-config"), config)
+        .unwrap()
+        .with_hypothesis_graph_admission_notify(Arc::clone(&admission_notify));
     state
         .current_hypothesis_graph_worker(
             [
@@ -2142,6 +2145,20 @@ async fn handler_projects_persisted_replay_into_enabled_hypothesis_graph() {
     let body = parse_response(response).await;
     assert_eq!(body.accepted.len(), 1);
     assert!(body.rejected.is_empty());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        admission_notify.notified(),
+    )
+    .await
+    .expect("durable replay should signal background graph admission");
+    assert_eq!(state.current_replay_store().recent(10).unwrap().len(), 1);
+    let request_path_summary = graph.summary().unwrap();
+    assert_eq!(request_path_summary.evidence_count, 0);
+    assert_eq!(request_path_summary.metrics.submissions, 0);
+
+    let reconciliation = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(reconciliation.admitted, 1);
+    assert_eq!(reconciliation.failures, 0);
     let summary = graph.summary().unwrap();
     assert_eq!(summary.evidence_count, 1);
     assert_eq!(summary.edge_count, 1);

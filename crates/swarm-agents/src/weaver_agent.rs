@@ -7,11 +7,11 @@ use swarm_core::agent::{
 };
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
 use swarm_spine::{
-    ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, InvestigationBundleStore,
-    InvestigationStatus,
+    ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, IncidentStore,
+    InvestigationBundleStore, InvestigationStatus,
 };
 
-use swarm_runtime::correlation::CorrelationEngine;
+use swarm_runtime::correlation::{CorrelationEngine, CorrelationOutcome};
 use swarm_runtime::hypothesis_graph::{GraphServiceError, GraphWorkerAdapter};
 
 pub struct WeaverAgent {
@@ -102,13 +102,8 @@ impl WeaverAgent {
                 return Ok(Vec::new());
             }
             InvestigationStatus::Failed | InvestigationStatus::TimedOut => {
-                let terminal_at = investigation
-                    .bundle
-                    .completed_at_ms
-                    .map(swarm_core::hypothesis_graph::GraphLogicalTime::new)
-                    .unwrap_or(now);
                 if !graph
-                    .complete_challenge_no_finding(&context.task_id, terminal_at)
+                    .complete_challenge_no_finding(&context.task_id, now)
                     .map_err(internal_error)?
                 {
                     return Ok(Vec::new());
@@ -116,9 +111,10 @@ impl WeaverAgent {
                 return Ok(vec![SwarmAction::PublishFindings {
                     hunt_id: HuntId(context.hunt_id),
                     findings: serde_json::json!({
-                        "graph_id": graph.graph_id(),
+                        "graph_id": context.graph_id,
                         "graph_task_id": context.task_id,
                         "evidence_ids": context.evidence_ids,
+                        "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
                         "investigation_status": investigation.bundle.status,
                         "failure_reason": investigation.bundle.failure_reason,
                         "challenge_no_finding": true,
@@ -128,14 +124,13 @@ impl WeaverAgent {
             }
             InvestigationStatus::Completed => {}
         }
-        let outcome = self
-            .correlation
-            .correlate_hunt(
-                &self.investigation_store,
-                &self.incident_store,
-                &context.hunt_id,
-            )
-            .map_err(internal_error)?;
+        let outcome = self.correlate_challenge_once(
+            &context.hunt_id,
+            investigation
+                .bundle
+                .completed_at_ms
+                .unwrap_or(investigation.bundle.queued_at_ms),
+        )?;
         let Some(outcome) = outcome else {
             return Ok(Vec::new());
         };
@@ -150,13 +145,40 @@ impl WeaverAgent {
             findings: serde_json::json!({
                 "incident_id": outcome.incident.incident_id,
                 "summary": outcome.incident.summary,
-                "graph_id": graph.graph_id(),
+                "graph_id": context.graph_id,
                 "graph_task_id": context.task_id,
                 "evidence_ids": context.evidence_ids,
+                "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
                 "correlation_confidence": outcome.incident.confidence_score,
             }),
             confidence: 1.0,
         }])
+    }
+
+    fn correlate_challenge_once(
+        &self,
+        hunt_id: &str,
+        stable_created_at_ms: i64,
+    ) -> Result<Option<CorrelationOutcome>, SwarmError> {
+        let incident_id = format!("incident:{hunt_id}:{stable_created_at_ms}");
+        if let Some(existing) = self
+            .incident_store
+            .load_by_incident_id(&incident_id)
+            .map_err(internal_error)?
+        {
+            return Ok(Some(CorrelationOutcome {
+                record: existing.record,
+                incident: existing.incident,
+            }));
+        }
+        self.correlation
+            .correlate_hunt_at(
+                &self.investigation_store,
+                &self.incident_store,
+                hunt_id,
+                stable_created_at_ms,
+            )
+            .map_err(internal_error)
     }
 }
 
@@ -270,8 +292,8 @@ mod tests {
     use swarm_runtime::hypothesis_graph::CollectiveHypothesisService;
     use swarm_spine::{
         AuditResponseRecord, AuditTrail, ConfiguredIncidentStore,
-        ConfiguredInvestigationBundleStore, InvestigationBundle, InvestigationBundleStore,
-        InvestigationStatus, PolicyRecord, ReplayBundle,
+        ConfiguredInvestigationBundleStore, IncidentStore, InvestigationBundle,
+        InvestigationBundleStore, InvestigationStatus, PolicyRecord, ReplayBundle,
     };
     use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
@@ -442,6 +464,35 @@ mod tests {
             .expect("publish findings action");
         assert!(findings.get("correlation_confidence").is_some());
         assert!(findings.get("graph_dimensions").is_some());
+    }
+
+    #[test]
+    fn weaver_graph_correlation_recovers_the_stable_incident_on_retry() {
+        let hunt_id = "hunt-graph-correlation-retry";
+        let investigation_store = investigation_store();
+        let investigation = completed_investigation(hunt_id);
+        let completed_at_ms = investigation.completed_at_ms.unwrap();
+        investigation_store.persist(&investigation).unwrap();
+        let incident_store = incident_store();
+        let agent = WeaverAgent::new(
+            AgentId::new("weaver", "retry"),
+            correlation(),
+            investigation_store,
+            incident_store.clone(),
+        );
+
+        let first = agent
+            .correlate_challenge_once(hunt_id, completed_at_ms)
+            .unwrap()
+            .unwrap();
+        let retry = agent
+            .correlate_challenge_once(hunt_id, completed_at_ms)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(first.incident.incident_id, retry.incident.incident_id);
+        assert_eq!(first.record, retry.record);
+        assert_eq!(incident_store.recent(10).unwrap().len(), 1);
     }
 
     #[tokio::test]

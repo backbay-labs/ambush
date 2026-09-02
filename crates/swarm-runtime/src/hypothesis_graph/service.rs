@@ -682,46 +682,81 @@ impl CollectiveHypothesisService {
             campaign = self.rotate_campaign(&mut state, &campaign)?;
             initial = campaign.store.snapshot()?;
         }
-        let logical_time = GraphLogicalTime::new(
-            replay
-                .audit
-                .created_at_ms
-                .max(initial.state().logical_time_high_water.as_millis()),
-        );
-        logical_time.validate()?;
-        let assessments = vec![
-            HypothesisSeedAssessment {
-                hypothesis_id: malicious.clone(),
-                evidence_ids: vec![evidence_id.clone()],
-                disposition: HypothesisDisposition::Unresolved,
-                provenance: evidence_id.clone(),
-            },
-            HypothesisSeedAssessment {
-                hypothesis_id: benign.clone(),
-                evidence_ids: vec![evidence_id.clone()],
-                disposition: HypothesisDisposition::Contradicts,
-                provenance: evidence_id.clone(),
-            },
-        ];
-        let seed = HypothesisSeedInput::new(
-            campaign.graph_id.clone(),
-            vec![malicious, benign],
-            assessments,
-            logical_time,
-        )?;
         let scope = EvidenceScope::new(
             [evidence.source_family],
             [evidence_id.clone()],
             [event_node_id, asset_node_id],
         )?;
-        let result = state.coordinator.coordinate_graph_seed_for_claimants(
-            campaign.store.as_ref(),
-            initial.revision(),
-            &seed,
-            &worker_claimants,
-            scope,
-            graph_records,
-        )?;
+        let mut retried_persisted_capacity = false;
+        let result = loop {
+            let logical_time = GraphLogicalTime::new(
+                replay
+                    .audit
+                    .created_at_ms
+                    .max(initial.state().logical_time_high_water.as_millis()),
+            );
+            logical_time.validate()?;
+            let assessments = vec![
+                HypothesisSeedAssessment {
+                    hypothesis_id: malicious.clone(),
+                    evidence_ids: vec![evidence_id.clone()],
+                    disposition: HypothesisDisposition::Unresolved,
+                    provenance: evidence_id.clone(),
+                },
+                HypothesisSeedAssessment {
+                    hypothesis_id: benign.clone(),
+                    evidence_ids: vec![evidence_id.clone()],
+                    disposition: HypothesisDisposition::Contradicts,
+                    provenance: evidence_id.clone(),
+                },
+            ];
+            let seed = HypothesisSeedInput::new(
+                campaign.graph_id.clone(),
+                vec![malicious.clone(), benign.clone()],
+                assessments,
+                logical_time,
+            )?;
+            match state.coordinator.coordinate_graph_seed_for_claimants(
+                campaign.store.as_ref(),
+                initial.revision(),
+                &seed,
+                &worker_claimants,
+                scope.clone(),
+                graph_records.clone(),
+            ) {
+                Ok(result) => break result,
+                Err(GraphStoreError::ResourceLimit { resource, limit })
+                    if resource == "persisted_file_bytes" && !retried_persisted_capacity =>
+                {
+                    // The complete signed envelope contains descriptors,
+                    // tombstones, and terminal outbox copies that the cheap
+                    // preflight cannot safely estimate. CAS is atomic, so a
+                    // persisted-file limit leaves the old campaign unchanged;
+                    // rotate a terminal campaign and retry the exact replay
+                    // once against a fresh store.
+                    let retained = !initial.state().graph.evidence.is_empty()
+                        || !initial.state().hypotheses.is_empty()
+                        || !initial.state().tasks.is_empty();
+                    if !retained {
+                        return Err(GraphStoreError::ResourceLimit { resource, limit }.into());
+                    }
+                    let outstanding_tasks = initial
+                        .tasks()
+                        .filter(|task| !task_is_terminal(task.task.state))
+                        .count();
+                    if outstanding_tasks > 0 {
+                        return Err(GraphServiceError::CampaignRotationBlocked {
+                            graph_id: campaign.graph_id,
+                            outstanding_tasks,
+                        });
+                    }
+                    campaign = self.rotate_campaign(&mut state, &campaign)?;
+                    initial = campaign.store.snapshot()?;
+                    retried_persisted_capacity = true;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
         self.observe_state(result.snapshot.state());
         Ok(GraphSubmission {
             graph_id: campaign.graph_id,
@@ -1108,6 +1143,7 @@ pub struct ClaimedGraphTask {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphChallengeContext {
+    pub graph_id: GraphId,
     pub task_id: TaskId,
     pub hunt_id: String,
     pub evidence_ids: BTreeSet<EvidenceId>,
@@ -1179,7 +1215,8 @@ impl GraphWorkerAdapter {
                 TaskKind::AcquireEvidence,
             ));
         }
-        let snapshot = self.service.active_campaign()?.store.snapshot()?;
+        let campaign = self.service.active_campaign()?;
+        let snapshot = campaign.store.snapshot()?;
         let mut hunts = BTreeSet::new();
         for task in snapshot.tasks().filter(|task| {
             task.task.request.claimant == self.claimant
@@ -1454,7 +1491,8 @@ impl GraphWorkerAdapter {
             ));
         }
         self.service.repair_memory_projection()?;
-        let snapshot = self.service.active_campaign()?.store.snapshot()?;
+        let campaign = self.service.active_campaign()?;
+        let snapshot = campaign.store.snapshot()?;
         let mut candidates = snapshot
             .tasks()
             .filter(|task| {
@@ -1480,6 +1518,7 @@ impl GraphWorkerAdapter {
             hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot.graph())
                 .unwrap_or_else(|| task.request.task_id.to_string());
         Ok(Some(GraphChallengeContext {
+            graph_id: campaign.graph_id,
             task_id: task.request.task_id,
             hunt_id,
             evidence_ids: task.request.evidence_scope.evidence_ids,

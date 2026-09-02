@@ -1227,17 +1227,21 @@ async fn process_runtime_event(
                 .await
             {
                 Ok(replay) => {
-                    if let (Some(graph), Some(replay)) =
-                        (state.current_hypothesis_graph(), replay.as_ref())
-                        && let Err(error) = graph.submit_replay(&replay.replay.bundle)
-                    {
-                        tracing::warn!(
-                            correlation_id = %correlation_id,
-                            event_id = %event.event_id,
-                            reason = %error,
-                            module = module_path!(),
-                            "collective hypothesis lane degraded after critical-path persistence"
-                        );
+                    if replay.is_some() && state.current_hypothesis_graph().is_some() {
+                        if let Some(notify) = &state.hypothesis_graph_admission_notify {
+                            // The replay is durable at this point. A coalescing
+                            // signal wakes the background reconciler, which
+                            // reloads durable replay records and performs all
+                            // graph snapshot/sign/fsync work off this request.
+                            notify.notify_one();
+                        } else {
+                            tracing::warn!(
+                                correlation_id = %correlation_id,
+                                event_id = %event.event_id,
+                                module = module_path!(),
+                                "collective hypothesis admission worker is unavailable after critical-path persistence"
+                            );
+                        }
                     }
                     if let Some(tx) = &state.telemetry_tx {
                         match tx.try_send(event.clone()) {
@@ -1653,6 +1657,7 @@ pub struct IngestState {
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
     hypothesis_graph: Option<Arc<CollectiveHypothesisService>>,
+    hypothesis_graph_admission_notify: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl IngestState {
@@ -1762,6 +1767,7 @@ impl IngestState {
                 }),
             )),
             hypothesis_graph,
+            hypothesis_graph_admission_notify: None,
         };
         state.install_notification_payload_builder();
         Ok(state)
@@ -1967,6 +1973,17 @@ impl IngestState {
 
     pub fn with_telemetry_channel(mut self, tx: tokio::sync::mpsc::Sender<TelemetryEvent>) -> Self {
         self.telemetry_tx = Some(tx);
+        self
+    }
+
+    /// Install the coalescing wakeup used by the daemon's durable replay
+    /// reconciler. The HTTP path only signals this primitive after replay
+    /// persistence; graph I/O remains entirely in the background worker.
+    pub fn with_hypothesis_graph_admission_notify(
+        mut self,
+        notify: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.hypothesis_graph_admission_notify = Some(notify);
         self
     }
 

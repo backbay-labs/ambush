@@ -4736,6 +4736,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let approval_harness = build_approval_harness(&cli)?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel(10_000);
+        let hypothesis_graph_admission_notify = config
+            .hypothesis_graph
+            .enabled
+            .then(|| Arc::new(tokio::sync::Notify::new()));
         let (bridge_ingest_tx, mut bridge_ingest_rx) =
             tokio::sync::mpsc::channel::<swarm_core::telemetry::TelemetryEvent>(10_000);
         let telemetry_rx = WhiskerAgent::shared_receiver(telemetry_rx);
@@ -4880,6 +4884,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?
         .with_startup_attestation(startup_attestation.clone())
         .with_anti_tamper_report(anti_tamper.clone());
+        let state = match &hypothesis_graph_admission_notify {
+            Some(notify) => state.with_hypothesis_graph_admission_notify(Arc::clone(notify)),
+            None => state,
+        };
         let state = governance.configure_ingest(
             state
                 .with_telemetry_channel(telemetry_tx.clone())
@@ -5137,6 +5145,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "reconciled durable replays into the collective hypothesis graph"
             );
         }
+        let mut hypothesis_graph_admission_handle = hypothesis_graph_admission_notify.map(|notify| {
+            let state = state.clone();
+            let mut shutdown = shutdown_rx.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        changed = shutdown.changed() => {
+                            if changed.is_err() || *shutdown.borrow() {
+                                break;
+                            }
+                        }
+                        () = notify.notified() => {
+                            let reconciliation_state = state.clone();
+                            match tokio::task::spawn_blocking(move || {
+                                reconciliation_state.reconcile_hypothesis_graph_replays()
+                            })
+                            .await
+                            {
+                                Ok(Ok(report)) if report.failures == 0 => {
+                                    tracing::debug!(
+                                        examined = report.examined,
+                                        admitted = report.admitted,
+                                        idempotent = report.idempotent,
+                                        failures = report.failures,
+                                        "reconciled durable replay queue into the collective hypothesis graph"
+                                    );
+                                }
+                                Ok(Ok(report)) => {
+                                    tracing::warn!(
+                                        examined = report.examined,
+                                        admitted = report.admitted,
+                                        idempotent = report.idempotent,
+                                        failures = report.failures,
+                                        module = module_path!(),
+                                        "durable replay queue reconciliation left collective hypothesis admissions degraded"
+                                    );
+                                }
+                                Ok(Err(error)) => {
+                                    tracing::warn!(
+                                        reason = %error,
+                                        module = module_path!(),
+                                        "durable replay queue reconciliation failed"
+                                    );
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        reason = %error,
+                                        module = module_path!(),
+                                        "durable replay queue worker panicked"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        });
         dispatcher.set_admitted_identities(admitted_identities);
         let mut dispatcher_handle = Some(tokio::spawn(async move {
             dispatcher.run().await;
@@ -5330,6 +5395,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(handle) = bridge_processor_handle.take() {
                     await_background_task("bridge_processor", handle).await;
                 }
+                if let Some(handle) = hypothesis_graph_admission_handle.take() {
+                    await_background_task("hypothesis_graph_admission", handle).await;
+                }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
                 }
@@ -5387,6 +5455,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = bridge_processor_handle.take() {
                     await_background_task("bridge_processor", handle).await;
+                }
+                if let Some(handle) = hypothesis_graph_admission_handle.take() {
+                    await_background_task("hypothesis_graph_admission", handle).await;
                 }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
