@@ -265,6 +265,7 @@ pub struct CollectiveHypothesisService {
     config: HypothesisGraphConfig,
     campaigns: RwLock<CampaignRegistry>,
     campaign_root: Option<PathBuf>,
+    replay_consumer_graph_id: GraphId,
     active_campaign_index: AtomicU64,
     signer: Keypair,
     /// Serialize shipped graph mutations across replay admission and worker
@@ -917,6 +918,21 @@ impl CollectiveHypothesisService {
         config.resource_limits().validate()?;
         config.validate_reasoning_limits()?;
         let (campaigns, campaign_root) = load_campaigns(config, &signer)?;
+        let replay_consumer_graph_id = match campaign_root.as_deref() {
+            Some(campaign_root) => {
+                let state_root = campaign_root.parent().ok_or_else(|| {
+                    GraphServiceError::InvalidCampaignHead {
+                        path: campaign_root.to_path_buf(),
+                        reason: "campaign directory has no state-store parent".to_string(),
+                    }
+                })?;
+                GraphId::new(format!(
+                    "graph:runtime-replay-consumer:{}",
+                    sha256_hex(campaign_head_stream_id(state_root, &signer)?.as_bytes())
+                ))
+            }
+            None => graph_id_for_campaign(&signer, 0),
+        };
         let active = campaigns
             .last()
             .cloned()
@@ -949,6 +965,7 @@ impl CollectiveHypothesisService {
             config: config.clone(),
             campaigns: RwLock::new(CampaignRegistry { campaigns }),
             campaign_root,
+            replay_consumer_graph_id,
             active_campaign_index: AtomicU64::new(active.index),
             signer,
             operation: Mutex::new(()),
@@ -1029,10 +1046,11 @@ impl CollectiveHypothesisService {
 
     /// Stable identity for durable replay admission checkpoints. Campaign
     /// rotation changes the active graph ID, but it must not reset a replay
-    /// consumer and rescan the lifetime store. Replacing the graph signing
-    /// identity produces a different base ID and safely resets the cursor.
+    /// consumer and rescan the lifetime store. The durable campaign stream
+    /// binds both the signing identity and canonical graph-store root, so a
+    /// replacement store resets the cursor even when it reuses the signer.
     pub fn replay_consumer_graph_id(&self) -> GraphId {
-        graph_id_for_campaign(&self.signer, 0)
+        self.replay_consumer_graph_id.clone()
     }
 
     pub fn store(&self) -> Result<Arc<dyn HypothesisGraphStore>, GraphServiceError> {
@@ -1223,7 +1241,13 @@ impl CollectiveHypothesisService {
             .unwrap_or(5_000);
         let inferred = infer_causal_relations(&evidence.payload)?;
         let (nodes, edges) = if inferred.is_empty() {
-            fallback_observation_records(replay, &evidence, &self.signer, confidence_basis_points)?
+            fallback_observation_records(
+                normalized.nodes,
+                replay,
+                &evidence,
+                &self.signer,
+                confidence_basis_points,
+            )?
         } else {
             inferred_causal_records(
                 normalized.nodes,
@@ -1237,12 +1261,6 @@ impl CollectiveHypothesisService {
             .iter()
             .map(|node| node.id().clone())
             .collect::<BTreeSet<_>>();
-        let graph_edge_ids = edges
-            .iter()
-            .map(|edge| edge.edge_id.clone())
-            .collect::<BTreeSet<_>>();
-        let graph_records = GraphSeedRecords::new(evidence.clone(), nodes, edges);
-
         let malicious = scoped_hypothesis_id("malicious-activity", &evidence_id);
         let benign = scoped_hypothesis_id("benign-authorized-activity", &evidence_id);
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
@@ -1254,7 +1272,7 @@ impl CollectiveHypothesisService {
         let worker_claimants = state.worker_claimants.clone();
         let mut campaign = self.active_campaign()?;
         let mut initial = campaign.store.snapshot()?;
-        if campaign_requires_rotation(&initial, &evidence, &scope_node_ids, &graph_edge_ids)? {
+        if campaign_requires_rotation(&initial, &evidence, &scope_node_ids, &edges)? {
             let outstanding_tasks = initial
                 .tasks()
                 .filter(|task| !task_is_terminal(task.task.state))
@@ -1268,6 +1286,7 @@ impl CollectiveHypothesisService {
             campaign = self.rotate_campaign(&mut state, &campaign)?;
             initial = campaign.store.snapshot()?;
         }
+        let graph_records = GraphSeedRecords::new(evidence.clone(), nodes, edges);
         let scope = EvidenceScope::new(
             [evidence.source_family],
             [evidence_id.clone()],
@@ -3145,21 +3164,11 @@ fn inferred_causal_records(
         .iter()
         .flat_map(|candidate| [candidate.from.clone(), candidate.to.clone()])
         .collect::<BTreeSet<_>>();
-    loop {
-        let parent_ids = normalized_nodes
-            .iter()
-            .filter(|node| required_node_ids.contains(node.id()))
-            .filter_map(|node| match node {
-                GraphNode::Process(process) => process.parent_node_id.clone(),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let prior_len = required_node_ids.len();
-        required_node_ids.extend(parent_ids);
-        if required_node_ids.len() == prior_len {
-            break;
-        }
-    }
+    required_node_ids.extend(evidence.entity_ids());
+    required_node_ids.extend(normalized_nodes.iter().filter_map(|node| match node {
+        GraphNode::Process(process) => process.parent_node_id.clone(),
+        _ => None,
+    }));
     let available_node_ids = normalized_nodes
         .iter()
         .map(|node| node.id().clone())
@@ -3168,10 +3177,7 @@ fn inferred_causal_records(
         return Err(GraphServiceError::Admission(
             GraphAdmissionError::InvalidField {
                 field: "inference.entity_ids".to_string(),
-                reason: format!(
-                    "inferred endpoint `{}` has no normalized graph node",
-                    node_id.as_str()
-                ),
+                reason: format!("evidence entity `{node_id}` has no normalized graph node"),
             },
         ));
     }
@@ -3189,19 +3195,31 @@ fn inferred_causal_records(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let nodes = normalized_nodes
-        .into_iter()
-        .filter(|node| required_node_ids.contains(node.id()))
-        .collect();
-    Ok((nodes, edges))
+    Ok((normalized_nodes, edges))
 }
 
 fn fallback_observation_records(
+    mut normalized_nodes: Vec<GraphNode>,
     replay: &ReplayBundle,
     evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
     signer: &Keypair,
     confidence_basis_points: u16,
 ) -> Result<(Vec<GraphNode>, Vec<CausalEdge>), GraphServiceError> {
+    let available_node_ids = normalized_nodes
+        .iter()
+        .map(|node| node.id().clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(node_id) = evidence
+        .entity_ids()
+        .into_iter()
+        .find(|node_id| !available_node_ids.contains(node_id))
+    {
+        return Err(GraphAdmissionError::InvalidField {
+            field: "evidence.entity_ids".to_string(),
+            reason: format!("evidence entity `{node_id}` has no normalized graph node"),
+        }
+        .into());
+    }
     let event_node = swarm_core::hypothesis_graph::EventNode::new(
         "runtime_replay",
         replay.event.event_id.clone(),
@@ -3227,17 +3245,29 @@ fn fallback_observation_records(
         confidence_basis_points,
         "runtime-replay-observation-edge",
     )?;
-    Ok((
-        vec![GraphNode::Event(event_node), GraphNode::Asset(asset_node)],
-        vec![edge],
-    ))
+    for node in [GraphNode::Event(event_node), GraphNode::Asset(asset_node)] {
+        match normalized_nodes
+            .iter()
+            .find(|existing| existing.id() == node.id())
+        {
+            Some(existing) if existing != &node => {
+                return Err(GraphAdmissionError::IdCollision {
+                    id: node.id().as_str().to_string(),
+                }
+                .into());
+            }
+            Some(_) => {}
+            None => normalized_nodes.push(node),
+        }
+    }
+    Ok((normalized_nodes, vec![edge]))
 }
 
 fn campaign_requires_rotation(
     snapshot: &GraphStoreSnapshot,
     evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
     candidate_node_ids: &BTreeSet<GraphNodeId>,
-    candidate_edge_ids: &BTreeSet<swarm_core::hypothesis_graph::EdgeId>,
+    candidate_edges: &[CausalEdge],
 ) -> Result<bool, GraphServiceError> {
     let state = snapshot.state();
     let has_retained_work =
@@ -3261,8 +3291,11 @@ fn campaign_requires_rotation(
         .iter()
         .filter(|node_id| !state.graph.nodes.contains_key(*node_id))
         .count();
-    let added_edge_count = candidate_edge_ids
+    let added_edge_count = candidate_edges
         .iter()
+        .map(|edge| &edge.edge_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .filter(|edge_id| !state.graph.edges.contains_key(*edge_id))
         .count();
     // Every admitted replay creates one falsification task, and a successful
@@ -3282,8 +3315,84 @@ fn campaign_requires_rotation(
                 > limits.max_evidence_bytes
             || state.hypotheses.len().saturating_add(2) > limits.max_hypotheses
             || state.tasks.len().saturating_add(3) > limits.max_tasks
-            || reserved_memory_records.saturating_add(1) > limits.max_memory_records,
+            || reserved_memory_records.saturating_add(1) > limits.max_memory_records
+            || topology_requires_rotation(state, candidate_edges),
     )
+}
+
+fn topology_requires_rotation(state: &GraphStoreState, candidate_edges: &[CausalEdge]) -> bool {
+    let limits = &state.limits;
+    // A candidate that cannot fit an empty campaign must reach ordinary
+    // admission so the operator receives the precise topology error.
+    if !topology_within_limits(
+        candidate_edges.iter(),
+        limits.max_graph_fan_out,
+        limits.max_graph_depth,
+    ) {
+        return false;
+    }
+    !topology_within_limits(
+        state.graph.edges.values().chain(candidate_edges),
+        limits.max_graph_fan_out,
+        limits.max_graph_depth,
+    )
+}
+
+fn topology_within_limits<'a>(
+    edges: impl IntoIterator<Item = &'a CausalEdge>,
+    max_fan_out: usize,
+    max_depth: usize,
+) -> bool {
+    let mut edge_ids = BTreeSet::new();
+    let mut outgoing = BTreeMap::<GraphNodeId, usize>::new();
+    let mut adjacency = BTreeMap::<GraphNodeId, BTreeSet<GraphNodeId>>::new();
+    for edge in edges {
+        if !edge_ids.insert(edge.edge_id.clone()) {
+            continue;
+        }
+        let count = outgoing.entry(edge.from.clone()).or_default();
+        *count = count.saturating_add(1);
+        if *count > max_fan_out {
+            return false;
+        }
+        adjacency
+            .entry(edge.from.clone())
+            .or_default()
+            .insert(edge.to.clone());
+    }
+    topology_depth(&adjacency).is_some_and(|depth| depth <= max_depth)
+}
+
+fn topology_depth(adjacency: &BTreeMap<GraphNodeId, BTreeSet<GraphNodeId>>) -> Option<usize> {
+    fn visit(
+        node: &GraphNodeId,
+        adjacency: &BTreeMap<GraphNodeId, BTreeSet<GraphNodeId>>,
+        visiting: &mut BTreeSet<GraphNodeId>,
+        memo: &mut BTreeMap<GraphNodeId, usize>,
+    ) -> Option<usize> {
+        if let Some(depth) = memo.get(node) {
+            return Some(*depth);
+        }
+        if !visiting.insert(node.clone()) {
+            return None;
+        }
+        let mut depth = 1_usize;
+        if let Some(children) = adjacency.get(node) {
+            for child in children {
+                depth = depth.max(visit(child, adjacency, visiting, memo)?.saturating_add(1));
+            }
+        }
+        visiting.remove(node);
+        memo.insert(node.clone(), depth);
+        Some(depth)
+    }
+
+    let mut memo = BTreeMap::new();
+    let mut maximum = 0_usize;
+    for node in adjacency.keys() {
+        maximum = maximum.max(visit(node, adjacency, &mut BTreeSet::new(), &mut memo)?);
+    }
+    Some(maximum)
 }
 
 fn task_is_claimable_at(task: &TaskRecord, now: GraphLogicalTime) -> bool {
@@ -3470,6 +3579,34 @@ fn evidence_for_scope(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    fn topology_edge(from: &str, to: &str) -> CausalEdge {
+        CausalEdge::new(
+            &GraphNodeId::new(from),
+            &GraphNodeId::new(to),
+            CausalRelation::DependsOn,
+            5_000,
+            [],
+            GraphProducerRole::Hunter,
+            AgentId("agent:topology-test".to_string()),
+            GraphLogicalTime::new(1),
+            EdgeState::Unresolved,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn topology_preflight_bounds_candidate_edges_with_retained_graph() {
+        let first = topology_edge("node:a", "node:b");
+        let depth_extension = topology_edge("node:b", "node:c");
+        let fan_out_extension = topology_edge("node:a", "node:d");
+
+        assert!(topology_within_limits([&first], 1, 2));
+        assert!(topology_within_limits([&depth_extension], 1, 2));
+        assert!(!topology_within_limits([&first, &depth_extension], 1, 2));
+        assert!(topology_within_limits([&fan_out_extension], 1, 2));
+        assert!(!topology_within_limits([&first, &fan_out_extension], 1, 2));
+    }
 
     #[test]
     fn disabled_config_constructs_no_service() {

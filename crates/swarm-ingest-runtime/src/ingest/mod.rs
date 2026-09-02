@@ -2492,6 +2492,7 @@ impl IngestState {
             }
         };
 
+        let mut retry_tick_consumed = false;
         for bundle_id in checkpoint
             .retry_bundle_ids
             .iter()
@@ -2499,8 +2500,15 @@ impl IngestState {
             .collect::<Vec<_>>()
         {
             let replay = replay_store.load_by_bundle_id(&bundle_id)?;
-            if reconcile_bundle(&bundle_id, replay, true)? != ReplayReconciliationDisposition::Retry
-            {
+            let disposition = reconcile_bundle(&bundle_id, replay, !retry_tick_consumed)?;
+            if disposition == ReplayReconciliationDisposition::Admitted {
+                // The first successful retry establishes this reconciliation
+                // pass's next logical scheduler tick. Every remaining retry
+                // must share its persisted budget instead of manufacturing a
+                // fresh tick for each bundle.
+                retry_tick_consumed = true;
+            }
+            if disposition != ReplayReconciliationDisposition::Retry {
                 checkpoint.retry_bundle_ids.remove(&bundle_id);
             }
         }

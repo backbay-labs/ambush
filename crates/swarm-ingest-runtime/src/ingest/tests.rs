@@ -2245,7 +2245,7 @@ async fn startup_reconciliation_recovers_durable_replays_missing_from_graph() {
 }
 
 #[tokio::test]
-async fn scheduler_budget_replay_failure_advances_tick_and_converges() {
+async fn scheduler_budget_retries_share_each_reconciliation_tick_and_converge() {
     let mut config = test_config("suspicious_process_tree");
     let graph_root = temp_path("reconcile-scheduler-budget-retry");
     enable_collective_hypothesis_graph(&mut config, &graph_root);
@@ -2274,23 +2274,48 @@ async fn scheduler_budget_replay_failure_advances_tick_and_converges() {
     let created_at_ms = 1_700_000_130_000;
     seed_platform_replay_bundle(&state, "same-tick-first", "host-a", created_at_ms);
     seed_platform_replay_bundle(&state, "same-tick-second", "host-b", created_at_ms);
+    seed_platform_replay_bundle(&state, "same-tick-third", "host-c", created_at_ms);
     let first = state.reconcile_hypothesis_graph_replays().unwrap();
-    assert_eq!(first.examined, 2);
+    assert_eq!(first.examined, 3);
     assert_eq!(first.admitted, 1);
-    assert_eq!(first.retryable_failures, 1);
+    assert_eq!(first.retryable_failures, 2);
     assert_eq!(first.quarantined, 0);
     let checkpoint = state
         .current_replay_store()
         .hypothesis_graph_checkpoint()
         .unwrap();
-    assert_eq!(checkpoint.cursor_sequence, 2);
-    assert_eq!(checkpoint.retry_bundle_ids.len(), 1);
+    assert_eq!(checkpoint.cursor_sequence, 3);
+    assert_eq!(checkpoint.retry_bundle_ids.len(), 2);
 
     let retry = state.reconcile_hypothesis_graph_replays().unwrap();
-    assert_eq!(retry.examined, 1);
+    assert_eq!(retry.examined, 2);
     assert_eq!(retry.admitted, 1);
-    assert_eq!(retry.retryable_failures, 0);
+    assert_eq!(retry.retryable_failures, 1);
     assert_eq!(retry.quarantined, 0);
+    assert_eq!(
+        state
+            .current_replay_store()
+            .hypothesis_graph_checkpoint()
+            .unwrap()
+            .retry_bundle_ids
+            .len(),
+        1
+    );
+    assert_eq!(
+        state
+            .current_hypothesis_graph()
+            .unwrap()
+            .summary()
+            .unwrap()
+            .evidence_count,
+        2
+    );
+
+    let final_retry = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(final_retry.examined, 1);
+    assert_eq!(final_retry.admitted, 1);
+    assert_eq!(final_retry.retryable_failures, 0);
+    assert_eq!(final_retry.quarantined, 0);
     assert!(
         state
             .current_replay_store()
@@ -2306,7 +2331,7 @@ async fn scheduler_budget_replay_failure_advances_tick_and_converges() {
             .summary()
             .unwrap()
             .evidence_count,
-        2
+        3
     );
     drop(state);
     fs::remove_dir_all(graph_root).unwrap();
@@ -2399,10 +2424,11 @@ async fn reconciliation_resets_checkpoint_for_a_replacement_graph_identity() {
     let root = temp_path("reconcile-replacement-graph-identity");
     enable_collective_hypothesis_graph(&mut first_config, &root);
     let config_path = temp_path("reconcile-replacement-graph-identity-config");
+    let runtime_signing_key = ed25519_dalek::SigningKey::from_bytes(&[141; 32]);
     let first = IngestState::from_config_with_signing_key(
         config_path.clone(),
         first_config.clone(),
-        ed25519_dalek::SigningKey::from_bytes(&[141; 32]),
+        runtime_signing_key.clone(),
     )
     .unwrap();
     seed_platform_replay_bundle(
@@ -2437,6 +2463,10 @@ async fn reconciliation_resets_checkpoint_for_a_replacement_graph_identity() {
         1
     );
     let first_graph_id = first.current_hypothesis_graph().unwrap().graph_id();
+    let first_consumer_id = first
+        .current_hypothesis_graph()
+        .unwrap()
+        .replay_consumer_graph_id();
     drop(first);
 
     let mut replacement_config = first_config;
@@ -2449,7 +2479,7 @@ async fn reconciliation_resets_checkpoint_for_a_replacement_graph_identity() {
     let replacement = IngestState::from_config_with_signing_key(
         config_path,
         replacement_config,
-        ed25519_dalek::SigningKey::from_bytes(&[144; 32]),
+        runtime_signing_key,
     )
     .unwrap();
     for (kinds, seed) in [
@@ -2473,9 +2503,16 @@ async fn reconciliation_resets_checkpoint_for_a_replacement_graph_identity() {
             .unwrap()
             .unwrap();
     }
-    assert_ne!(
+    assert_eq!(
         replacement.current_hypothesis_graph().unwrap().graph_id(),
         first_graph_id
+    );
+    assert_ne!(
+        replacement
+            .current_hypothesis_graph()
+            .unwrap()
+            .replay_consumer_graph_id(),
+        first_consumer_id
     );
     let replayed = replacement.reconcile_hypothesis_graph_replays().unwrap();
     assert_eq!(replayed.examined, 1);
@@ -2698,6 +2735,22 @@ async fn infrastructure_detector_replays_reach_enabled_collective_graph() {
     let summary = state.current_hypothesis_graph().unwrap().summary().unwrap();
     assert_eq!(summary.evidence_count, 3);
     assert_eq!(summary.pending_task_count, 9);
+    let projection = state
+        .current_hypothesis_graph()
+        .unwrap()
+        .operator_projection()
+        .unwrap();
+    // Two normalized nodes and one replay event per signal, plus the shared
+    // fallback host asset retained once across all three replays.
+    assert_eq!(projection.graph.nodes.len(), 10);
+    for evidence in projection.graph.evidence.values() {
+        for entity_id in evidence.entity_ids() {
+            assert!(
+                projection.graph.nodes.contains_key(&entity_id),
+                "fallback evidence entity {entity_id} must be navigable"
+            );
+        }
+    }
 
     drop(state);
     fs::remove_dir_all(graph_root).unwrap();

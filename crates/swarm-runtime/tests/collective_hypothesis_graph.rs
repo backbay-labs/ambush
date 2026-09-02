@@ -4055,7 +4055,7 @@ fn failed_coordination_does_not_publish_partial_graph() {
 fn seed_signal_converges_through_real_runtime() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_nodes: 3,
+        max_nodes: 4,
         max_work_units_per_tick: 32,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
@@ -4116,7 +4116,13 @@ fn seed_signal_converges_through_real_runtime() {
 
     let projection = service.operator_projection().unwrap();
     assert_eq!(projection.graph.evidence.len(), 1);
-    assert_eq!(projection.graph.nodes.len(), 3);
+    assert_eq!(projection.graph.nodes.len(), 4);
+    for entity_id in projection.graph.evidence[&first.evidence_id].entity_ids() {
+        assert!(
+            projection.graph.nodes.contains_key(&entity_id),
+            "normalized evidence entity {entity_id} must be navigable"
+        );
+    }
     assert_eq!(projection.graph.edges.len(), 1);
     let inferred_edge = projection.graph.edges.values().next().unwrap();
     assert_eq!(inferred_edge.relation, CausalRelation::Uses);
@@ -4925,6 +4931,69 @@ fn worker_can_renew_the_same_claim_repeatedly() {
 }
 
 #[test]
+fn terminal_campaign_rotates_before_inferred_edge_exceeds_fan_out() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_graph_fan_out: 1,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(171), None).unwrap());
+    let replay_consumer_graph_id = service.replay_consumer_graph_id();
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(172),
+        )
+        .unwrap();
+    let weaver = service.worker([TaskKind::ChallengeEdge], key(173)).unwrap();
+    let mut first_replay =
+        production_replay_bundle("hunt:phase286:fan-out:first", 1_700_000_095_000);
+    first_replay.event = network_event(&first_replay.audit.hunt_id, "198.51.100.10");
+    let mut second_replay =
+        production_replay_bundle("hunt:phase286:fan-out:second", 1_700_000_095_100);
+    second_replay.event = network_event(&second_replay.audit.hunt_id, "198.51.100.11");
+
+    let first = service.submit_replay(&first_replay).unwrap();
+    let challenge = weaver
+        .next_challenge_context(GraphLogicalTime::new(1_700_000_095_001))
+        .unwrap()
+        .unwrap();
+    assert!(
+        weaver
+            .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_095_001),)
+            .unwrap()
+    );
+    let completion = stalker
+        .complete_stalker_hunt(
+            &first_replay.audit.hunt_id,
+            GraphLogicalTime::new(1_700_000_095_002),
+            9_000,
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(completion.acquisitions, 1);
+    assert_eq!(completion.falsifications, 1);
+
+    let second = service.submit_replay(&second_replay).unwrap();
+    assert_ne!(second.graph_id, first.graph_id);
+    assert_eq!(service.replay_consumer_graph_id(), replay_consumer_graph_id);
+    assert_eq!(service.summary().unwrap().metrics.campaign_rotations, 1);
+    assert_eq!(
+        service
+            .operator_projection_for(&first.graph_id)
+            .unwrap()
+            .graph
+            .edges
+            .len(),
+        1
+    );
+    assert_eq!(service.operator_projection().unwrap().graph.edges.len(), 1);
+}
+
+#[test]
 fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4952,6 +5021,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
         production_replay_bundle("hunt:phase286:campaign:second", 1_700_000_100_100);
     let service =
         Arc::new(CollectiveHypothesisService::new(&config, service_key.clone(), None).unwrap());
+    let replay_consumer_graph_id = service.replay_consumer_graph_id();
     let stalker = service
         .worker(
             [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
@@ -4997,6 +5067,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     assert_ne!(second.graph_id, first.graph_id);
     assert_eq!(challenge.graph_id, first.graph_id);
     assert_eq!(service.graph_id(), second.graph_id);
+    assert_eq!(service.replay_consumer_graph_id(), replay_consumer_graph_id);
     assert_eq!(service.summary().unwrap().metrics.campaign_rotations, 1);
     let summaries = service.summaries().unwrap();
     assert_eq!(summaries.len(), 2);
@@ -5063,6 +5134,10 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
         .worker([TaskKind::ChallengeEdge], weaver_key)
         .unwrap();
     assert_eq!(restarted.graph_id(), second.graph_id);
+    assert_eq!(
+        restarted.replay_consumer_graph_id(),
+        replay_consumer_graph_id
+    );
     assert_eq!(restarted.summary().unwrap().metrics.campaign_rotations, 1);
     let restarted_summaries = restarted.summaries().unwrap();
     assert_eq!(restarted_summaries.len(), 2);

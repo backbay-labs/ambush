@@ -158,9 +158,10 @@ fn hypothesis_graph_config_rejects_zero_and_contradictory_limits() {
 #[test]
 fn enabled_hypothesis_graph_config_must_admit_one_complete_replay() {
     for (field, expected) in [
-        ("max_nodes", "must be at least 3"),
+        ("max_nodes", "must be at least 4"),
         ("max_hypotheses", "must be at least 2"),
         ("max_tasks", "must be at least 3"),
+        ("max_graph_depth", "must be at least 2"),
         ("max_work_units_per_tick", "must be between 3"),
     ] {
         let mut value = serde_json::to_value(HypothesisGraphConfig {
@@ -181,9 +182,9 @@ fn enabled_hypothesis_graph_config_must_admit_one_complete_replay() {
         ..HypothesisGraphConfig::default()
     })
     .unwrap();
-    value["max_nodes"] = serde_json::json!(2);
+    value["max_nodes"] = serde_json::json!(3);
     let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
-    assert!(error.to_string().contains("must be at least 3"));
+    assert!(error.to_string().contains("must be at least 4"));
 }
 
 #[test]
