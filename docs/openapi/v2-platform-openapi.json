@@ -351,6 +351,10 @@
       "GraphServiceMetrics": {
         "additionalProperties": false,
         "properties": {
+          "campaign_rotations": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "completed_acquisitions": {
             "minimum": 0,
             "type": "integer"
@@ -392,7 +396,8 @@
           "completed_falsifications",
           "falsification_no_findings",
           "memory_records_projected",
-          "memory_projection_failures"
+          "memory_projection_failures",
+          "campaign_rotations"
         ],
         "type": "object"
       },

@@ -1577,9 +1577,10 @@ pub fn commit_terminal_once(
                 }
             }
         }
-        decision
-            .validate_identity_admission(&next.graph.evidence)
-            .map_err(GraphStoreError::Admission)?;
+        // `publication.validate_for_task_at` above authenticates the worker
+        // decision through the claimed capability, producer key, lease, and
+        // fence. Evidence-witness admission applies to coordinator decisions;
+        // a terminal challenger/falsifier is intentionally a different actor.
         let hypothesis = next
             .hypotheses
             .get(&decision.hypothesis_id)

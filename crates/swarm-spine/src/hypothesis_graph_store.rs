@@ -11,9 +11,7 @@
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -26,7 +24,7 @@ use std::sync::{
 #[cfg(test)]
 use std::time::Duration;
 use swarm_core::hypothesis_graph::{
-    FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime, GraphResourceLimits,
+    DecisionId, FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime, GraphResourceLimits,
     HYPOTHESIS_GRAPH_SCHEMA_VERSION, Hypothesis, HypothesisGraph, HypothesisId, LeaseId,
     LogicalTaskDescriptor, SchedulerBudget, TaskCapabilityProof, TaskClaimRequest, TaskCompletion,
     TaskId, TaskLease, TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope,
@@ -808,9 +806,6 @@ impl GraphStoreState {
                         GraphAdmissionError::UnknownEvidence,
                     ));
                 }
-                decision
-                    .validate_identity_admission(&self.graph.evidence)
-                    .map_err(GraphStoreError::Admission)?;
             }
         }
         for (task_id, descriptor) in &self.logical_task_descriptors {
@@ -939,6 +934,7 @@ impl GraphStoreState {
                 });
             }
         }
+        let mut terminal_worker_decisions = BTreeSet::<DecisionId>::new();
         for (task_id, entry) in &self.terminal_outbox {
             let task = self
                 .tasks
@@ -1002,6 +998,7 @@ impl GraphStoreState {
                             .to_string(),
                     });
                 }
+                terminal_worker_decisions.insert(decision.decision_id.clone());
                 if let Some(link) = &entry.envelope.decision_link {
                     match &link.target {
                         TaskTarget::Edge { edge_id } => {
@@ -1028,6 +1025,22 @@ impl GraphStoreState {
                         }
                     }
                 }
+            }
+        }
+        // Coordinator-authored decisions must be signed by a producer that
+        // also supplied admitted evidence. Worker-authored terminal decisions
+        // instead derive identity admission from the fully validated task
+        // capability, claim, lease, fencing proof, and terminal outbox above.
+        // Nothing else may introduce a decision under an unrelated key.
+        for decision in self
+            .hypotheses
+            .values()
+            .flat_map(|hypothesis| hypothesis.decision_history.iter())
+        {
+            if let Err(error) = decision.validate_identity_admission(&self.graph.evidence)
+                && !terminal_worker_decisions.contains(&decision.decision_id)
+            {
+                return Err(GraphStoreError::Admission(error));
             }
         }
         Ok(())
@@ -4613,21 +4626,43 @@ fn expire_task_op(
     now: GraphLogicalTime,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    reject_reasoning_terminal_transition(state)?;
+    let retry_exhaustion = state
+        .tasks
+        .get(&TaskId::new(task_id))
+        .is_some_and(|entry| entry.task.attempts >= limits.max_task_retries);
+    // Marker-one tasks ordinarily terminate only through the descriptor-bound
+    // outbox CAS. Retry exhaustion is the narrow store-authenticated exception:
+    // no worker result exists to publish, and leaving the elapsed final lease
+    // claimable would block every later campaign forever.
+    if !retry_exhaustion {
+        reject_reasoning_terminal_transition(state)?;
+    }
     observe_logical_time(state, now)?;
     {
         let entry = task_entry_mut(state, task_id)?;
         ensure_task_generation(entry, expected_generation)?;
-        if entry.task.state != TaskState::Claimed {
+        if entry.task.state != TaskState::Claimed
+            && !(entry.task.state == TaskState::Expired
+                && entry.task.attempts >= limits.max_task_retries)
+        {
             return Err(GraphStoreError::InvalidTransition {
-                reason: "only claimed tasks can expire".to_string(),
+                reason: "only claimed tasks or retry-exhausted expired tasks can expire"
+                    .to_string(),
             });
         }
-        entry.task = entry
-            .task
-            .clone()
-            .expire(now, limits.max_task_lease_ms)
-            .map_err(GraphStoreError::Admission)?;
+        entry.task = if entry.task.attempts >= limits.max_task_retries {
+            entry
+                .task
+                .clone()
+                .exhaust_retries(now, limits.max_task_lease_ms)
+                .map_err(GraphStoreError::Admission)?
+        } else {
+            entry
+                .task
+                .clone()
+                .expire(now, limits.max_task_lease_ms)
+                .map_err(GraphStoreError::Admission)?
+        };
     }
     // Expiry is itself a fencing barrier.  Advance the durable counter before
     // publishing the expired record so the token of the expired lease can

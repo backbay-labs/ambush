@@ -4598,10 +4598,13 @@ impl TaskTerminalOutboxEntry {
                         });
                     }
                 };
-                if decision.kind != expected_kind || decision.producer_role != task.request.role {
+                if decision.kind != expected_kind
+                    || decision.producer_role != task.request.role
+                    || decision.producer_identity != task.request.claimant
+                {
                     return Err(GraphAdmissionError::InvalidTransition {
                         reason:
-                            "terminal decision kind and producer role do not match the claimed task"
+                            "terminal decision kind, producer role, and producer identity do not match the claimed task"
                                 .to_string(),
                     });
                 }
@@ -4876,6 +4879,10 @@ pub struct TaskTerminalProof {
     pub failure_summary_digest: Option<String>,
 }
 
+/// Bounded authenticated reason retained when a task's final permitted lease
+/// expires. This is a store-driven terminal, not a worker-authored failure.
+pub const TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY: &str = "task:retry-budget-exhausted";
+
 impl TaskTerminalProof {
     pub fn new(
         prior_generation: u64,
@@ -4921,11 +4928,38 @@ impl TaskTerminalProof {
         Ok(proof)
     }
 
+    pub fn new_retry_exhausted(
+        prior_state: TaskState,
+        prior_generation: u64,
+        prior_lease: TaskLease,
+        completer: AgentId,
+        completed_at: GraphLogicalTime,
+        max_task_lease_ms: u64,
+    ) -> Result<Self, GraphAdmissionError> {
+        let proof = Self {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            prior_state,
+            terminal_state: TaskState::Failed,
+            prior_generation,
+            prior_lease,
+            completer,
+            completed_at,
+            failure_summary_digest: Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY.to_string()),
+        };
+        proof.validate(max_task_lease_ms)?;
+        Ok(proof)
+    }
+
     pub fn validate(&self, max_task_lease_ms: u64) -> Result<(), GraphAdmissionError> {
         validate_schema(self.schema_version)?;
-        if self.prior_state != TaskState::Claimed {
+        let retry_exhausted = self.terminal_state == TaskState::Failed
+            && self.failure_summary_digest.as_deref() == Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY);
+        if self.prior_state != TaskState::Claimed
+            && !(retry_exhausted && self.prior_state == TaskState::Expired)
+        {
             return Err(GraphAdmissionError::InvalidTransition {
-                reason: "terminal proof must originate from a claimed task".to_string(),
+                reason: "terminal proof must originate from a claimed task, except retry exhaustion may follow expiry"
+                    .to_string(),
             });
         }
         if !matches!(
@@ -4957,7 +4991,8 @@ impl TaskTerminalProof {
         if matches!(
             self.terminal_state,
             TaskState::Completed | TaskState::Failed
-        ) && self.completed_at >= self.prior_lease.expires_at
+        ) && !retry_exhausted
+            && self.completed_at >= self.prior_lease.expires_at
         {
             return Err(GraphAdmissionError::InvalidTransition {
                 reason: "completed or failed proof must finish before lease expiry".to_string(),
@@ -4968,6 +5003,11 @@ impl TaskTerminalProof {
         {
             return Err(GraphAdmissionError::InvalidTransition {
                 reason: "expired proof must finish at or after lease expiry".to_string(),
+            });
+        }
+        if retry_exhausted && self.completed_at < self.prior_lease.expires_at {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "retry exhaustion must occur at or after lease expiry".to_string(),
             });
         }
         if let Some(summary) = &self.failure_summary_digest {
@@ -5066,11 +5106,14 @@ impl TaskRecord {
             });
         }
         let mut expected_prior_generation = 1_u64;
+        let mut expected_prior_state = TaskState::Claimed;
         for proof in &self.terminal_history {
             proof.validate(max_task_lease_ms)?;
-            if proof.prior_generation != expected_prior_generation {
+            if proof.prior_generation != expected_prior_generation
+                || proof.prior_state != expected_prior_state
+            {
                 return Err(GraphAdmissionError::InvalidTransition {
-                    reason: "terminal proof generations are not append-only".to_string(),
+                    reason: "terminal proof state and generations are not append-only".to_string(),
                 });
             }
             if proof.prior_lease.holder != self.request.claimant {
@@ -5079,6 +5122,7 @@ impl TaskRecord {
                 });
             }
             expected_prior_generation = expected_prior_generation.saturating_add(1);
+            expected_prior_state = proof.terminal_state;
         }
         if self.terminal_history.is_empty() && self.generation != 1 {
             return Err(GraphAdmissionError::InvalidTransition {
@@ -5263,6 +5307,64 @@ impl TaskRecord {
         self.state = TaskState::Expired;
         self.generation = self.generation.saturating_add(1);
         self.lease = None;
+        Ok(self)
+    }
+
+    /// Convert the last permitted expired lease into a durable failed state.
+    /// Both a still-materialized `Claimed` record and an explicitly `Expired`
+    /// record are accepted so restart recovery cannot strand either shape.
+    pub fn exhaust_retries(
+        mut self,
+        now: GraphLogicalTime,
+        max_task_lease_ms: u64,
+    ) -> Result<Self, GraphAdmissionError> {
+        now.validate()?;
+        let (prior_state, lease) = match self.state {
+            TaskState::Claimed => {
+                let lease = self
+                    .lease
+                    .clone()
+                    .ok_or(GraphAdmissionError::InvalidTransition {
+                        reason: "claimed retry exhaustion requires the active lease".to_string(),
+                    })?;
+                (TaskState::Claimed, lease)
+            }
+            TaskState::Expired => {
+                let lease = self
+                    .terminal_history
+                    .last()
+                    .map(|proof| proof.prior_lease.clone())
+                    .ok_or(GraphAdmissionError::InvalidTransition {
+                        reason: "expired retry exhaustion requires retained lease proof"
+                            .to_string(),
+                    })?;
+                (TaskState::Expired, lease)
+            }
+            TaskState::Pending | TaskState::Completed | TaskState::Failed => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "only an elapsed claimed or expired task can exhaust retries"
+                        .to_string(),
+                });
+            }
+        };
+        if now < lease.expires_at {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "task lease has not expired".to_string(),
+            });
+        }
+        let proof = TaskTerminalProof::new_retry_exhausted(
+            prior_state,
+            self.generation,
+            lease.clone(),
+            lease.holder,
+            now,
+            max_task_lease_ms,
+        )?;
+        self.terminal_history.push(proof);
+        self.state = TaskState::Failed;
+        self.generation = self.generation.saturating_add(1);
+        self.lease = None;
+        self.completion = None;
         Ok(self)
     }
 }
@@ -9981,6 +10083,48 @@ mod tests {
     }
 
     #[test]
+    fn retry_exhaustion_terminalizes_claimed_and_legacy_expired_shapes() {
+        let (mut claimed, _, _, _) = outbox_fixture();
+        claimed.attempts = 2;
+        assert!(
+            claimed
+                .clone()
+                .exhaust_retries(GraphLogicalTime::new(199), 100)
+                .is_err()
+        );
+
+        let directly_failed = claimed
+            .clone()
+            .exhaust_retries(GraphLogicalTime::new(200), 100)
+            .expect("elapsed final claim should fail terminally");
+        assert_eq!(directly_failed.state, TaskState::Failed);
+        assert_eq!(directly_failed.generation, 2);
+        assert_eq!(directly_failed.terminal_history.len(), 1);
+        assert_eq!(
+            directly_failed.terminal_history[0]
+                .failure_summary_digest
+                .as_deref(),
+            Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY)
+        );
+        directly_failed
+            .validate_with_limits(100, 2)
+            .expect("retry-exhausted claim should validate");
+
+        let expired = claimed
+            .expire(GraphLogicalTime::new(200), 100)
+            .expect("legacy final claim may already be persisted as expired");
+        let recovered = expired
+            .exhaust_retries(GraphLogicalTime::new(201), 100)
+            .expect("legacy expired retry should become failed");
+        assert_eq!(recovered.state, TaskState::Failed);
+        assert_eq!(recovered.generation, 3);
+        assert_eq!(recovered.terminal_history.len(), 2);
+        recovered
+            .validate_with_limits(100, 2)
+            .expect("recovered retry exhaustion should validate");
+    }
+
+    #[test]
     fn terminal_outbox_binds_claim_capability_kind_key_digest_and_target() {
         let (task, descriptor, valid, _key) = outbox_fixture();
         assert!(
@@ -10096,7 +10240,7 @@ mod tests {
         // claimant key, but it cannot satisfy a falsification task.
         let decision = DecisionRecord::new(
             DecisionKind::Support,
-            hypothesis_id,
+            hypothesis_id.clone(),
             [evidence.evidence_id.clone()],
             GraphProducerRole::Hunter,
             claimant.clone(),
@@ -10109,15 +10253,15 @@ mod tests {
         assert!(decision.validate().is_ok());
         let link = TaskDecisionLink::new(
             request.task_id.clone(),
-            target,
+            target.clone(),
             [evidence.evidence_id.clone()],
             Some(decision.decision_id.clone()),
         )
         .expect("decision link");
         let terminal = TaskTerminalEnvelope::new(
-            request.task_id,
-            request.idempotency_key,
-            lease.lease_id,
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            lease.lease_id.clone(),
             lease.fencing_token,
             TaskCompletion::new(
                 TaskCompletionKind::HypothesisFalsified,
@@ -10129,7 +10273,7 @@ mod tests {
             .expect("completion"),
             Some(link),
             claimant.clone(),
-            capability,
+            capability.clone(),
         )
         .expect("terminal envelope")
         .signed_with(&key, "falsifier:wrong-terminal-decision")
@@ -10138,16 +10282,78 @@ mod tests {
 
         let publication = TaskTerminalOutboxEntry {
             envelope: terminal,
-            evidence: vec![evidence],
+            evidence: vec![evidence.clone()],
             decision: Some(decision),
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: claimant.clone(),
+        };
+        assert!(matches!(
+            publication.validate_for_task(&task, &descriptor, &GraphResourceLimits::default()),
+            Err(GraphAdmissionError::InvalidTransition { ref reason })
+                if reason.contains("decision kind, producer role, and producer identity")
+        ));
+
+        let attacker_key = Keypair::from_seed(&[91_u8; 32]);
+        let attacker = AgentId::from_public_key_hex(&attacker_key.public_key().to_hex());
+        let wrong_producer_decision = DecisionRecord::new(
+            DecisionKind::Falsify,
+            hypothesis_id,
+            [evidence.evidence_id.clone()],
+            GraphProducerRole::Falsifier,
+            attacker,
+            GraphLogicalTime::new(150),
+            "a correctly typed decision from the wrong worker key",
+        )
+        .expect("decision")
+        .with_resulting_status(HypothesisStatus::Falsified)
+        .expect("status")
+        .signed_with(&attacker_key, "non-claimant-falsifier")
+        .expect("signature");
+        assert!(wrong_producer_decision.validate().is_ok());
+        let wrong_producer_link = TaskDecisionLink::new(
+            request.task_id.clone(),
+            target.clone(),
+            [evidence.evidence_id.clone()],
+            Some(wrong_producer_decision.decision_id.clone()),
+        )
+        .expect("decision link");
+        let wrong_producer_terminal = TaskTerminalEnvelope::new(
+            request.task_id,
+            request.idempotency_key,
+            lease.lease_id,
+            lease.fencing_token,
+            TaskCompletion::new(
+                TaskCompletionKind::HypothesisFalsified,
+                claimant.clone(),
+                GraphLogicalTime::new(150),
+                [evidence.evidence_id.clone()],
+                "digest:wrong-terminal-producer",
+            )
+            .expect("completion"),
+            Some(wrong_producer_link),
+            claimant.clone(),
+            capability,
+        )
+        .expect("terminal envelope")
+        .signed_with(&key, "falsifier:wrong-terminal-producer")
+        .expect("terminal signature");
+        let wrong_producer_publication = TaskTerminalOutboxEntry {
+            envelope: wrong_producer_terminal,
+            evidence: vec![evidence],
+            decision: Some(wrong_producer_decision),
             memory: None,
             memory_expiry: None,
             producer_key_id: claimant,
         };
         assert!(matches!(
-            publication.validate_for_task(&task, &descriptor, &GraphResourceLimits::default()),
+            wrong_producer_publication.validate_for_task(
+                &task,
+                &descriptor,
+                &GraphResourceLimits::default()
+            ),
             Err(GraphAdmissionError::InvalidTransition { ref reason })
-                if reason.contains("decision kind and producer role")
+                if reason.contains("producer identity")
         ));
     }
 

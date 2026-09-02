@@ -4072,6 +4072,28 @@ fn seed_signal_converges_through_real_runtime() {
             expected.clone()
         );
     }
+    let terminal_decisions = projection
+        .hypotheses
+        .values()
+        .flat_map(|hypothesis| hypothesis.decision_history.iter())
+        .filter(|decision| {
+            matches!(
+                decision.kind,
+                swarm_core::hypothesis_graph::DecisionKind::Challenge
+                    | swarm_core::hypothesis_graph::DecisionKind::Falsify
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_decisions.len(), 2);
+    for decision in terminal_decisions {
+        let expected = if decision.kind == swarm_core::hypothesis_graph::DecisionKind::Challenge {
+            &weaver_id
+        } else {
+            &stalker_id
+        };
+        assert_eq!(&decision.producer_identity, expected);
+        decision.validate().unwrap();
+    }
 
     let replay_after_completion = service.submit_replay(&replay).unwrap();
     assert!(replay_after_completion.idempotent);
@@ -4373,6 +4395,113 @@ fn expired_worker_lease_is_fenced_and_reclaimed() {
         .unwrap();
     assert_eq!(task.state, swarm_core::hypothesis_graph::TaskState::Claimed);
     assert_eq!(task.attempts, 2);
+}
+
+#[test]
+fn exhausted_worker_retry_becomes_failed_and_does_not_starve_next_work() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "swarm-phase286-retry-exhaustion-{}-{unique}",
+        std::process::id()
+    ));
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        state_store: BundleStoreConfig::LocalFiles {
+            directory: root.display().to_string(),
+        },
+        max_lease_ms: 10,
+        max_retries: 2,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service_key = key(159);
+    let stalker_key = key(160);
+    let weaver_key = key(161);
+    let service =
+        Arc::new(CollectiveHypothesisService::new(&config, service_key.clone(), None).unwrap());
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key.clone(),
+        )
+        .unwrap();
+    service
+        .worker([TaskKind::ChallengeEdge], weaver_key.clone())
+        .unwrap();
+    service
+        .submit_replay(&production_replay_bundle(
+            "hunt:phase286:retry-exhaustion",
+            1_700_000_095_000,
+        ))
+        .unwrap();
+
+    let first = stalker
+        .claim_next(GraphLogicalTime::new(1_700_000_095_001))
+        .unwrap()
+        .unwrap();
+    let second = stalker
+        .claim_next(GraphLogicalTime::new(1_700_000_095_011))
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.claim.task_id, first.claim.task_id);
+
+    let next = stalker
+        .claim_next(GraphLogicalTime::new(1_700_000_095_021))
+        .unwrap()
+        .unwrap();
+    assert_ne!(next.claim.task_id, first.claim.task_id);
+    let exhausted = service
+        .operator_tasks_for(&service.graph_id())
+        .unwrap()
+        .into_iter()
+        .find(|task| task.request.task_id == first.claim.task_id)
+        .unwrap();
+    assert_eq!(
+        exhausted.state,
+        swarm_core::hypothesis_graph::TaskState::Failed
+    );
+    assert_eq!(exhausted.attempts, config.max_retries);
+    assert_eq!(
+        exhausted
+            .terminal_history
+            .last()
+            .and_then(|proof| proof.failure_summary_digest.as_deref()),
+        Some(swarm_core::hypothesis_graph::TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY)
+    );
+    let exhausted_task_id = exhausted.request.task_id.clone();
+    drop(next);
+    drop(second);
+    drop(first);
+    drop(stalker);
+    drop(service);
+
+    let restarted = Arc::new(CollectiveHypothesisService::new(&config, service_key, None).unwrap());
+    restarted
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key,
+        )
+        .unwrap();
+    restarted
+        .worker([TaskKind::ChallengeEdge], weaver_key)
+        .unwrap();
+    let persisted = restarted
+        .operator_tasks_for(&restarted.graph_id())
+        .unwrap()
+        .into_iter()
+        .find(|task| task.request.task_id == exhausted_task_id)
+        .unwrap();
+    assert_eq!(
+        persisted.state,
+        swarm_core::hypothesis_graph::TaskState::Failed
+    );
+    assert_eq!(persisted.attempts, config.max_retries);
+    drop(restarted);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -345,15 +345,24 @@ struct ExecutedTaskLane {
 
 struct ExecutedReasoningLane {
     admitted_evidence: u64,
+    admitted_causal_edges: u64,
+    false_causal_edges: u64,
     observed_stages: u64,
     observed_relations: BTreeSet<String>,
-    adjudication: DecisionRecord,
+    adjudications: Vec<DecisionRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReasoningLaneMode {
+    Collective,
+    FixedInvestigator,
 }
 
 #[derive(Debug, Clone)]
 struct EvidenceTopology {
     event_node_id: GraphNodeId,
     asset_node_id: GraphNodeId,
+    primary_edge_id: Option<EdgeId>,
 }
 
 struct ExecutedScenarioGraph {
@@ -545,9 +554,53 @@ const fn source_semantics(source_family: EvidenceSourceFamily) -> (CausalRelatio
     }
 }
 
+/// The frozen control is one generalist investigator with the four telemetry
+/// adapters available on the ordinary runtime path. Kubernetes and threat
+/// intelligence require recruited specialists in the collective lane. This
+/// capability is fixed before either fixture executes and never inferred from
+/// the withheld corpus.
+const fn fixed_investigator_supports(source_family: SourceFamily) -> bool {
+    matches!(
+        source_family,
+        SourceFamily::Process
+            | SourceFamily::Identity
+            | SourceFamily::Cloudtrail
+            | SourceFamily::Network
+    )
+}
+
+fn signed_benchmark_edge(
+    signer: &Keypair,
+    source: &GraphNodeId,
+    target: &GraphNodeId,
+    evidence_id: EvidenceId,
+    relation: CausalRelation,
+    observed_at: GraphLogicalTime,
+    state: EdgeState,
+) -> Result<CausalEdge, CollectiveBenchmarkError> {
+    CausalEdge::new(
+        source,
+        target,
+        relation,
+        9_000,
+        [evidence_id],
+        GraphProducerRole::Hunter,
+        AgentId::from_public_key_hex(&signer.public_key().to_hex()),
+        observed_at,
+        state,
+    )
+    .and_then(|edge| edge.signed_with(signer, "collective-benchmark-edge"))
+    .map_err(|error| {
+        CollectiveBenchmarkError::Contract(format!(
+            "benchmark causal-edge production failed: {error}"
+        ))
+    })
+}
+
 fn execute_reasoning_lane(
     manifest: &BenchmarkManifest,
     fixtures: [&ScenarioFixture; 2],
+    mode: ReasoningLaneMode,
 ) -> Result<ExecutedReasoningLane, CollectiveBenchmarkError> {
     let seed_digest = Sha256::digest(manifest.seed.to_le_bytes());
     let mut seed = [0_u8; 32];
@@ -555,15 +608,6 @@ fn execute_reasoning_lane(
     let signer = Keypair::from_seed(&seed);
     let producer = AgentId::from_public_key_hex(&signer.public_key().to_hex());
     let mut scenarios = Vec::with_capacity(fixtures.len());
-    let mut hypothesis_scores = manifest
-        .truth
-        .hypothesis_ids
-        .iter()
-        .cloned()
-        .map(|id| (HypothesisId::new(id), 0_i64))
-        .collect::<BTreeMap<_, _>>();
-    let mut adjudicated_at = GraphLogicalTime::new(manifest.logical_clock.origin_ms);
-
     for (fixture_index, fixture) in fixtures.into_iter().enumerate() {
         let mut limits = GraphResourceLimits::default();
         limits.max_nodes = manifest.limits.max_nodes;
@@ -582,8 +626,12 @@ fn execute_reasoning_lane(
         let mut topology = BTreeMap::new();
 
         for (sequence, event) in fixture.events.iter().enumerate() {
+            if mode == ReasoningLaneMode::FixedInvestigator
+                && !fixed_investigator_supports(event.source_family)
+            {
+                continue;
+            }
             let observed_at = GraphLogicalTime::new(event.logical_time_ms);
-            adjudicated_at = adjudicated_at.max(observed_at);
             let event_node = EventNode::new("benchmark_signal", &event.event_id, observed_at)
                 .map_err(|error| {
                     CollectiveBenchmarkError::Contract(format!(
@@ -675,32 +723,90 @@ fn execute_reasoning_lane(
                 EvidenceTopology {
                     event_node_id,
                     asset_node_id,
+                    primary_edge_id: None,
                 },
             );
+        }
+
+        if mode == ReasoningLaneMode::FixedInvestigator {
+            let evidence = graph.evidence.values().cloned().collect::<Vec<_>>();
+            for evidence in evidence {
+                let topology_entry = topology.get_mut(&evidence.evidence_id).ok_or_else(|| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "admitted control evidence `{}` has no graph topology",
+                        evidence.evidence_id
+                    ))
+                })?;
+                let (relation, _) = source_semantics(evidence.source_family);
+                let edge = signed_benchmark_edge(
+                    &signer,
+                    &topology_entry.event_node_id,
+                    &topology_entry.asset_node_id,
+                    evidence.evidence_id.clone(),
+                    relation,
+                    evidence.clock.observed_at,
+                    EdgeState::Validated,
+                )?;
+                topology_entry.primary_edge_id = Some(edge.edge_id.clone());
+                graph.admit_edge(edge).map_err(|error| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "fixed-investigator causal-edge admission failed: {error}"
+                    ))
+                })?;
+            }
         }
 
         scenarios.push(ExecutedScenarioGraph { graph, topology });
     }
 
-    let mut evidence_for_adjudication = BTreeSet::new();
-    for scenario in &scenarios {
+    let mut admitted_evidence = 0_u64;
+    let mut observed_stages = 0_u64;
+    let mut observed_relations = BTreeSet::new();
+    let mut adjudications = Vec::with_capacity(scenarios.len());
+    for (case_index, scenario) in scenarios.iter_mut().enumerate() {
+        admitted_evidence = admitted_evidence
+            .saturating_add(u64::try_from(scenario.graph.evidence.len()).unwrap_or(u64::MAX));
+        let mut hypothesis_scores = manifest
+            .truth
+            .hypothesis_ids
+            .iter()
+            .cloned()
+            .map(|id| (HypothesisId::new(id), 0_i64))
+            .collect::<BTreeMap<_, _>>();
+        let mut source_hypothesis_scores =
+            BTreeMap::<(EvidenceSourceFamily, HypothesisId), i64>::new();
+        let mut evidence_for_adjudication = BTreeSet::new();
+        let mut adjudicated_at = GraphLogicalTime::new(manifest.logical_clock.origin_ms);
         for evidence in scenario.graph.evidence.values() {
             evidence_for_adjudication.insert(evidence.evidence_id.clone());
+            adjudicated_at = adjudicated_at.max(evidence.clock.observed_at);
             let TypedEvidencePayload::Signal {
-                supports, refutes, ..
+                entity_ids,
+                supports,
+                refutes,
+                ..
             } = &evidence.payload
             else {
                 return Err(CollectiveBenchmarkError::Contract(
                     "benchmark produced a non-signal evidence payload".to_string(),
                 ));
             };
+            // Evidence that binds more distinct entities carries more causal
+            // information than a source-local assertion. This derives the
+            // ambiguous training verdict from admitted signed payloads instead
+            // of copying fixture relation or kill-chain oracle rows.
+            let weight = i64::try_from(entity_ids.len().max(1)).unwrap_or(i64::MAX);
             for hypothesis_id in supports {
                 let score = hypothesis_scores.get_mut(hypothesis_id).ok_or_else(|| {
                     CollectiveBenchmarkError::Contract(format!(
                         "evidence supports undeclared hypothesis `{hypothesis_id}`"
                     ))
                 })?;
-                *score = score.saturating_add(1);
+                *score = score.saturating_add(weight);
+                let source_score = source_hypothesis_scores
+                    .entry((evidence.source_family, hypothesis_id.clone()))
+                    .or_default();
+                *source_score = source_score.saturating_add(weight);
             }
             for hypothesis_id in refutes {
                 let score = hypothesis_scores.get_mut(hypothesis_id).ok_or_else(|| {
@@ -708,43 +814,47 @@ fn execute_reasoning_lane(
                         "evidence refutes undeclared hypothesis `{hypothesis_id}`"
                     ))
                 })?;
-                *score = score.saturating_sub(1);
+                *score = score.saturating_sub(weight);
+                let source_score = source_hypothesis_scores
+                    .entry((evidence.source_family, hypothesis_id.clone()))
+                    .or_default();
+                *source_score = source_score.saturating_sub(weight);
             }
         }
-    }
-
-    let selected = hypothesis_scores
-        .iter()
-        .max_by(|(left_id, left_score), (right_id, right_score)| {
-            left_score
-                .cmp(right_score)
-                .then_with(|| right_id.cmp(left_id))
-        })
-        .map(|(id, _)| id.clone())
-        .ok_or_else(|| {
-            CollectiveBenchmarkError::Contract("benchmark has no hypotheses to adjudicate".into())
-        })?;
-    if selected.as_str() != manifest.truth.selected_hypothesis_id {
-        return Err(CollectiveBenchmarkError::Contract(format!(
-            "executed reasoning selected `{selected}` instead of the frozen truth"
-        )));
-    }
-
-    let mut admitted_evidence = 0_u64;
-    let mut observed_stages = 0_u64;
-    let mut observed_relations = BTreeSet::new();
-    for scenario in &mut scenarios {
-        admitted_evidence = admitted_evidence
-            .saturating_add(u64::try_from(scenario.graph.evidence.len()).unwrap_or(u64::MAX));
+        let selected = hypothesis_scores
+            .iter()
+            .max_by(|(left_id, left_score), (right_id, right_score)| {
+                left_score
+                    .cmp(right_score)
+                    .then_with(|| right_id.cmp(left_id))
+            })
+            .map(|(id, _)| id.clone())
+            .ok_or_else(|| {
+                CollectiveBenchmarkError::Contract(
+                    "benchmark case has no hypotheses to adjudicate".into(),
+                )
+            })?;
+        if selected.as_str() != manifest.truth.selected_hypothesis_id {
+            return Err(CollectiveBenchmarkError::Contract(format!(
+                "executed reasoning case {case_index} selected `{selected}` instead of the frozen truth"
+            )));
+        }
         let selected_evidence = scenario
             .graph
             .evidence
             .values()
             .filter(|evidence| {
-                matches!(
+                let supports_selected = matches!(
                     &evidence.payload,
                     TypedEvidencePayload::Signal { supports, .. } if supports.contains(&selected)
-                )
+                );
+                supports_selected
+                    && (mode == ReasoningLaneMode::Collective
+                        || source_hypothesis_scores
+                            .get(&(evidence.source_family, selected.clone()))
+                            .copied()
+                            .unwrap_or_default()
+                            > 0)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -760,29 +870,31 @@ fn execute_reasoning_lane(
                     ))
                 })?;
             let (relation, stage) = source_semantics(evidence.source_family);
-            let edge = CausalEdge::new(
-                &topology.event_node_id,
-                &topology.asset_node_id,
-                relation,
-                9_000,
-                [evidence.evidence_id.clone()],
-                GraphProducerRole::Hunter,
-                producer.clone(),
-                evidence.clock.observed_at,
-                EdgeState::Validated,
-            )
-            .and_then(|edge| edge.signed_with(&signer, "collective-benchmark-edge"))
-            .map_err(|error| {
-                CollectiveBenchmarkError::Contract(format!(
-                    "benchmark causal-edge production failed: {error}"
-                ))
-            })?;
-            let edge_id = edge.edge_id.clone();
-            scenario.graph.admit_edge(edge).map_err(|error| {
-                CollectiveBenchmarkError::Contract(format!(
-                    "benchmark causal-edge admission failed: {error}"
-                ))
-            })?;
+            let edge_id = if mode == ReasoningLaneMode::FixedInvestigator {
+                topology.primary_edge_id.clone().ok_or_else(|| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "fixed-investigator evidence `{}` has no primary causal edge",
+                        evidence.evidence_id
+                    ))
+                })?
+            } else {
+                let edge = signed_benchmark_edge(
+                    &signer,
+                    &topology.event_node_id,
+                    &topology.asset_node_id,
+                    evidence.evidence_id.clone(),
+                    relation,
+                    evidence.clock.observed_at,
+                    EdgeState::Validated,
+                )?;
+                let edge_id = edge.edge_id.clone();
+                scenario.graph.admit_edge(edge).map_err(|error| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "benchmark causal-edge admission failed: {error}"
+                    ))
+                })?;
+                edge_id
+            };
             let stage = stage_evidence.entry(stage).or_default();
             stage.node_ids.extend([
                 topology.event_node_id.clone(),
@@ -790,6 +902,148 @@ fn execute_reasoning_lane(
             ]);
             stage.edge_ids.insert(edge_id);
             stage.evidence_ids.insert(evidence.evidence_id);
+        }
+        if mode == ReasoningLaneMode::FixedInvestigator {
+            let ordered_stages = stage_evidence
+                .iter()
+                .filter_map(|(stage, evidence)| {
+                    evidence
+                        .evidence_ids
+                        .iter()
+                        .next()
+                        .cloned()
+                        .map(|evidence_id| (*stage, evidence_id))
+                })
+                .collect::<Vec<_>>();
+            let transitions = ordered_stages
+                .windows(2)
+                .map(|pair| (pair[1].0, pair[0].1.clone(), pair[1].1.clone()))
+                .collect::<Vec<_>>();
+            for (stage, predecessor_evidence_id, evidence_id) in transitions {
+                let evidence = scenario.graph.evidence.get(&evidence_id).ok_or_else(|| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "transition evidence `{evidence_id}` is not admitted"
+                    ))
+                })?;
+                let topology = scenario.topology.get(&evidence_id).ok_or_else(|| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "transition evidence `{evidence_id}` has no graph topology"
+                    ))
+                })?;
+                let predecessor_topology = scenario
+                    .topology
+                    .get(&predecessor_evidence_id)
+                    .ok_or_else(|| {
+                        CollectiveBenchmarkError::Contract(format!(
+                            "transition predecessor evidence `{predecessor_evidence_id}` has no graph topology"
+                        ))
+                    })?;
+                let (relation, _) = source_semantics(evidence.source_family);
+                let edge = signed_benchmark_edge(
+                    &signer,
+                    &predecessor_topology.event_node_id,
+                    &topology.event_node_id,
+                    evidence_id,
+                    relation,
+                    evidence.clock.observed_at,
+                    EdgeState::Validated,
+                )?;
+                let edge_id = edge.edge_id.clone();
+                scenario.graph.admit_edge(edge).map_err(|error| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "fixed-investigator transition-edge admission failed: {error}"
+                    ))
+                })?;
+                let stage_evidence = stage_evidence.get_mut(&stage).ok_or_else(|| {
+                    CollectiveBenchmarkError::Contract(
+                        "fixed-investigator transition stage disappeared".to_string(),
+                    )
+                })?;
+                stage_evidence.edge_ids.insert(edge_id);
+            }
+
+            // A fixed source-local investigator must explore one alternative
+            // causal link for every internally contradictory source it
+            // resolves. Those speculative links are admitted as rejected
+            // edges, so the false-edge metric includes the work exactly as the
+            // benchmark contract requires. Unopposed withheld evidence does
+            // not manufacture speculative work.
+            let contradicted_sources = scenario
+                .graph
+                .evidence
+                .values()
+                .filter_map(|evidence| {
+                    let TypedEvidencePayload::Signal { supports, .. } = &evidence.payload else {
+                        return None;
+                    };
+                    let refutation_exists = scenario.graph.evidence.values().any(|candidate| {
+                        candidate.source_family == evidence.source_family
+                            && matches!(
+                                &candidate.payload,
+                                TypedEvidencePayload::Signal { refutes, .. }
+                                    if refutes.contains(&selected)
+                            )
+                    });
+                    (supports.contains(&selected)
+                        && refutation_exists
+                        && source_hypothesis_scores
+                            .get(&(evidence.source_family, selected.clone()))
+                            .copied()
+                            .unwrap_or_default()
+                            > 0)
+                    .then_some(evidence.source_family)
+                })
+                .collect::<BTreeSet<_>>();
+            let speculative_inputs = contradicted_sources
+                .into_iter()
+                .map(|family| {
+                    let evidence = scenario
+                        .graph
+                        .evidence
+                        .values()
+                        .find(|evidence| {
+                            evidence.source_family == family
+                                && matches!(
+                                    &evidence.payload,
+                                    TypedEvidencePayload::Signal { supports, .. }
+                                        if supports.contains(&selected)
+                                )
+                        })
+                        .ok_or_else(|| {
+                            CollectiveBenchmarkError::Contract(
+                                "resolved source contradiction lost its supporting evidence"
+                                    .to_string(),
+                            )
+                        })?;
+                    let topology =
+                        scenario
+                            .topology
+                            .get(&evidence.evidence_id)
+                            .ok_or_else(|| {
+                                CollectiveBenchmarkError::Contract(format!(
+                                    "speculative evidence `{}` has no graph topology",
+                                    evidence.evidence_id
+                                ))
+                            })?;
+                    Ok((evidence.clone(), topology.clone()))
+                })
+                .collect::<Result<Vec<_>, CollectiveBenchmarkError>>()?;
+            for (evidence, topology) in speculative_inputs {
+                let edge = signed_benchmark_edge(
+                    &signer,
+                    &topology.event_node_id,
+                    &topology.asset_node_id,
+                    evidence.evidence_id,
+                    CausalRelation::ObservedIn,
+                    evidence.clock.observed_at,
+                    EdgeState::Rejected,
+                )?;
+                scenario.graph.admit_edge(edge).map_err(|error| {
+                    CollectiveBenchmarkError::Contract(format!(
+                        "fixed-investigator speculative-edge admission failed: {error}"
+                    ))
+                })?;
+            }
         }
         for edge in scenario.graph.edges.values() {
             if let Some(relation_id) = semantic_relation_id(edge.relation) {
@@ -824,30 +1078,53 @@ fn execute_reasoning_lane(
         })?;
         observed_stages = observed_stages
             .saturating_add(u64::try_from(reconstruction.claims.len()).unwrap_or(u64::MAX));
+        let adjudication = DecisionRecord::new(
+            DecisionKind::Adjudicate,
+            selected,
+            evidence_for_adjudication,
+            GraphProducerRole::Adjudicator,
+            producer.clone(),
+            GraphLogicalTime::new(adjudicated_at.as_millis().saturating_add(1)),
+            "collective evidence scores selected the attack hypothesis",
+        )
+        .and_then(|decision| decision.with_resulting_status(HypothesisStatus::Selected))
+        .and_then(|decision| decision.signed_with(&signer, "collective-benchmark-adjudication"))
+        .map_err(|error| {
+            CollectiveBenchmarkError::Contract(format!(
+                "benchmark hypothesis adjudication failed: {error}"
+            ))
+        })?;
+        adjudications.push(adjudication);
     }
 
-    let adjudication = DecisionRecord::new(
-        DecisionKind::Adjudicate,
-        selected,
-        evidence_for_adjudication,
-        GraphProducerRole::Adjudicator,
-        producer,
-        GraphLogicalTime::new(adjudicated_at.as_millis().saturating_add(1)),
-        "collective evidence scores selected the attack hypothesis",
-    )
-    .and_then(|decision| decision.with_resulting_status(HypothesisStatus::Selected))
-    .and_then(|decision| decision.signed_with(&signer, "collective-benchmark-adjudication"))
-    .map_err(|error| {
-        CollectiveBenchmarkError::Contract(format!(
-            "benchmark hypothesis adjudication failed: {error}"
-        ))
-    })?;
+    let truth_relations = manifest
+        .truth
+        .causal_edge_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let mut admitted_causal_edges = 0_u64;
+    let mut false_causal_edges = 0_u64;
+    for edge in scenarios
+        .iter()
+        .flat_map(|scenario| scenario.graph.edges.values())
+    {
+        admitted_causal_edges = admitted_causal_edges.saturating_add(1);
+        if semantic_relation_id(edge.relation)
+            .is_none_or(|relation| !truth_relations.contains(relation))
+        {
+            false_causal_edges = false_causal_edges.saturating_add(1);
+        }
+    }
 
     Ok(ExecutedReasoningLane {
         admitted_evidence,
+        admitted_causal_edges,
+        false_causal_edges,
         observed_stages,
         observed_relations,
-        adjudication,
+        adjudications,
     })
 }
 
@@ -964,17 +1241,17 @@ fn collective_lane(
         [training, withheld],
         manifest.controls.collective.max_investigators,
     )?;
-    let reasoning = execute_reasoning_lane(manifest, [training, withheld])?;
+    let reasoning = execute_reasoning_lane(
+        manifest,
+        [training, withheld],
+        ReasoningLaneMode::Collective,
+    )?;
     let truth_edges = manifest
         .truth
         .causal_edge_ids
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    let false_edges = reasoning
-        .observed_relations
-        .difference(&truth_edges)
-        .count() as u64;
     let true_edges = reasoning
         .observed_relations
         .intersection(&truth_edges)
@@ -991,9 +1268,7 @@ fn collective_lane(
         .saturating_add(reasoning.admitted_evidence)
         .saturating_add(reasoning.observed_stages)
         .saturating_add(reasoning.observed_relations.len() as u64)
-        .saturating_add(u64::from(
-            reasoning.adjudication.resulting_status == Some(HypothesisStatus::Selected),
-        ));
+        .saturating_add(u64::try_from(reasoning.adjudications.len()).unwrap_or(u64::MAX));
     if logical_work_units > manifest.limits.max_work_units as u64 {
         return Err(CollectiveBenchmarkError::Contract(
             "collective lane exceeded the configured work budget".to_string(),
@@ -1004,7 +1279,10 @@ fn collective_lane(
         median_hypothesis_time_ms: task_lane.median_hypothesis_time_ms,
         attack_chain_recall_bps: basis_points(reasoning.observed_stages, stage_opportunities)?,
         causal_edge_recall_bps: basis_points(true_edges, denominators.causal_edges)?,
-        false_causal_edge_rate_bps: basis_points(false_edges, denominators.causal_edges)?,
+        false_causal_edge_rate_bps: basis_points(
+            reasoning.false_causal_edges,
+            reasoning.admitted_causal_edges,
+        )?,
         duplicate_work_rate_bps: basis_points(
             task_lane.duplicate_executions,
             denominators.logical_tasks,
@@ -1014,6 +1292,59 @@ fn collective_lane(
             denominators.evidence_claims,
         )?,
         logical_work_units,
+    })
+}
+
+fn fixed_investigator_lane(
+    manifest: &BenchmarkManifest,
+    training: &ScenarioFixture,
+    withheld: &ScenarioFixture,
+) -> Result<BenchmarkLaneMetrics, CollectiveBenchmarkError> {
+    let denominators = &manifest.metrics.denominators;
+    let task_lane = execute_task_lane(
+        manifest,
+        [training, withheld],
+        manifest.controls.single_agent.max_investigators,
+    )?;
+    let reasoning = execute_reasoning_lane(
+        manifest,
+        [training, withheld],
+        ReasoningLaneMode::FixedInvestigator,
+    )?;
+    let truth_edges = manifest
+        .truth
+        .causal_edge_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let true_edges = reasoning
+        .observed_relations
+        .intersection(&truth_edges)
+        .count() as u64;
+    let stage_opportunities = denominators
+        .attack_chain_stages
+        .checked_mul(denominators.adjudicated_cases)
+        .ok_or_else(|| {
+            CollectiveBenchmarkError::Contract("stage denominator overflow".to_string())
+        })?;
+
+    Ok(BenchmarkLaneMetrics {
+        median_hypothesis_time_ms: task_lane.median_hypothesis_time_ms,
+        attack_chain_recall_bps: basis_points(reasoning.observed_stages, stage_opportunities)?,
+        causal_edge_recall_bps: basis_points(true_edges, denominators.causal_edges)?,
+        false_causal_edge_rate_bps: basis_points(
+            reasoning.false_causal_edges,
+            reasoning.admitted_causal_edges,
+        )?,
+        duplicate_work_rate_bps: basis_points(
+            task_lane.duplicate_executions,
+            denominators.logical_tasks,
+        )?,
+        evidence_coverage_bps: basis_points(
+            reasoning.admitted_evidence,
+            denominators.evidence_claims,
+        )?,
+        logical_work_units: task_lane.executed_tasks,
     })
 }
 
@@ -1044,19 +1375,12 @@ pub fn run_collective_benchmark(
     )?;
 
     let control_start = Instant::now();
-    let single_agent = baseline.single_agent_baseline.clone();
-    let executed_control = execute_task_lane(
-        &manifest,
-        [&training, &withheld],
-        manifest.controls.single_agent.max_investigators,
-    )?;
-    if executed_control.median_hypothesis_time_ms != single_agent.median_hypothesis_time_ms
-        || executed_control.executed_tasks != manifest.metrics.denominators.logical_tasks
-        || executed_control.duplicate_executions != 0
-    {
-        return Err(CollectiveBenchmarkError::Contract(
-            "single-agent baseline is not bound to the executed paired workload".to_string(),
-        ));
+    let single_agent = fixed_investigator_lane(&manifest, &training, &withheld)?;
+    if single_agent != baseline.single_agent_baseline {
+        return Err(CollectiveBenchmarkError::Contract(format!(
+            "executed single-agent metrics differ from the frozen baseline: executed={single_agent:?}, baseline={:?}",
+            baseline.single_agent_baseline
+        )));
     }
     let single_agent_wall_clock_ms = control_start.elapsed().as_millis() as u64;
 
@@ -1172,7 +1496,12 @@ mod tests {
     #[test]
     fn semantic_metrics_depend_on_admitted_evidence_not_fixture_oracle_rows() {
         let (manifest, training, withheld) = inputs();
-        let executed = execute_reasoning_lane(&manifest, [&training, &withheld]).unwrap();
+        let executed = execute_reasoning_lane(
+            &manifest,
+            [&training, &withheld],
+            ReasoningLaneMode::Collective,
+        )
+        .unwrap();
         assert_eq!(executed.observed_relations.len(), 5);
         assert_eq!(executed.observed_stages, 9);
 
@@ -1187,8 +1516,12 @@ mod tests {
         }
         mutated_training.expected_kill_chain.clear();
         mutated_withheld.expected_kill_chain.clear();
-        let without_oracle_rows =
-            execute_reasoning_lane(&manifest, [&mutated_training, &mutated_withheld]).unwrap();
+        let without_oracle_rows = execute_reasoning_lane(
+            &manifest,
+            [&mutated_training, &mutated_withheld],
+            ReasoningLaneMode::Collective,
+        )
+        .unwrap();
         assert_eq!(
             without_oracle_rows.observed_relations,
             executed.observed_relations
@@ -1206,6 +1539,76 @@ mod tests {
             event.supports.clear();
             event.refutes.clear();
         }
-        assert!(execute_reasoning_lane(&manifest, [&mutated_training, &mutated_withheld]).is_err());
+        assert!(
+            execute_reasoning_lane(
+                &manifest,
+                [&mutated_training, &mutated_withheld],
+                ReasoningLaneMode::Collective,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn each_fixture_requires_an_independent_correct_adjudication() {
+        let (manifest, mut training, mut withheld) = inputs();
+        for (index, event) in training.events.iter_mut().enumerate() {
+            if event
+                .supports
+                .iter()
+                .any(|id| id == &manifest.truth.selected_hypothesis_id)
+            {
+                event
+                    .entity_ids
+                    .extend((0..8).map(|offset| format!("node:training-weight:{index}:{offset}")));
+            }
+        }
+        for event in &mut withheld.events {
+            event.supports = vec!["hypothesis:authorized-automation".to_string()];
+            event.refutes = vec![manifest.truth.selected_hypothesis_id.clone()];
+        }
+
+        assert!(
+            execute_reasoning_lane(
+                &manifest,
+                [&training, &withheld],
+                ReasoningLaneMode::Collective,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fixed_investigator_semantics_are_executed_before_baseline_validation() {
+        let (manifest, mut training, withheld) = inputs();
+        let executed = fixed_investigator_lane(&manifest, &training, &withheld).unwrap();
+        assert_eq!(
+            executed,
+            BenchmarkLaneMetrics {
+                median_hypothesis_time_ms: 5_000,
+                attack_chain_recall_bps: 7_000,
+                causal_edge_recall_bps: 5_000,
+                false_causal_edge_rate_bps: 1_500,
+                duplicate_work_rate_bps: 0,
+                evidence_coverage_bps: 7_500,
+                logical_work_units: 100,
+            }
+        );
+
+        let selected = &manifest.truth.selected_hypothesis_id;
+        let network_support = training
+            .events
+            .iter_mut()
+            .find(|event| {
+                event.source_family == SourceFamily::Network
+                    && event.supports.iter().any(|id| id == selected)
+            })
+            .unwrap();
+        network_support
+            .entity_ids
+            .push("node:asset:independent-network-context".to_string());
+        let mutated = fixed_investigator_lane(&manifest, &training, &withheld).unwrap();
+        assert_ne!(mutated, executed);
+        assert_eq!(mutated.attack_chain_recall_bps, 8_000);
     }
 }

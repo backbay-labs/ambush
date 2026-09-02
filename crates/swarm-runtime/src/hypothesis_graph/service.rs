@@ -1263,87 +1263,114 @@ impl GraphWorkerAdapter {
             .state
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
-        let snapshot = campaign.store.snapshot()?;
-        let mut candidates = snapshot
-            .tasks()
-            .filter(|task| {
-                task_is_claimable_at(&task.task, now)
-                    && self.capabilities.contains(&task.task.request.kind)
-                    && predicate(&task.task, &snapshot)
-            })
-            .map(|task| {
-                let priority = if use_memory_priority {
-                    self.service.priority_for_task(&task.task, &snapshot, now)?
-                } else {
-                    MemoryPriorityProjection::unchanged(base_task_priority(task.task.request.kind))
-                };
-                let key = swarm_core::hypothesis_graph::GraphSchedulerKey::new(
-                    task.task.request.requested_at,
-                    task.task.request.kind,
-                    priority.adjusted_priority_basis_points,
-                    task.task.request.task_id.clone(),
+        loop {
+            let snapshot = campaign.store.snapshot()?;
+            let mut candidates = snapshot
+                .tasks()
+                .filter(|task| {
+                    task_is_claimable_at(&task.task, now)
+                        && self.capabilities.contains(&task.task.request.kind)
+                        && predicate(&task.task, &snapshot)
+                })
+                .map(|task| {
+                    let priority = if use_memory_priority {
+                        self.service.priority_for_task(&task.task, &snapshot, now)?
+                    } else {
+                        MemoryPriorityProjection::unchanged(base_task_priority(
+                            task.task.request.kind,
+                        ))
+                    };
+                    let key = swarm_core::hypothesis_graph::GraphSchedulerKey::new(
+                        task.task.request.requested_at,
+                        task.task.request.kind,
+                        priority.adjusted_priority_basis_points,
+                        task.task.request.task_id.clone(),
+                    )?;
+                    Ok((key, task.task.clone(), task.generation))
+                })
+                .collect::<Result<Vec<_>, GraphServiceError>>()?;
+            candidates.sort_by(|left, right| left.0.cmp(&right.0));
+            let Some((_, task, task_generation)) = candidates.into_iter().next() else {
+                return Ok(None);
+            };
+            let elapsed_lease = task.state == TaskState::Expired
+                || (task.state == TaskState::Claimed
+                    && task
+                        .lease
+                        .as_ref()
+                        .is_some_and(|lease| now >= lease.expires_at));
+            if elapsed_lease && task.attempts >= snapshot.state().limits.max_task_retries {
+                let exhausted = campaign.store.expire_task(
+                    task.request.task_id.as_str(),
+                    task_generation,
+                    now,
                 )?;
-                Ok((key, task.task.clone()))
-            })
-            .collect::<Result<Vec<_>, GraphServiceError>>()?;
-        candidates.sort_by(|left, right| left.0.cmp(&right.0));
-        let Some((_, task)) = candidates.into_iter().next() else {
-            return Ok(None);
-        };
-        let request = if task.request.claimant == self.claimant {
-            task.request.clone()
-        } else if task.state == TaskState::Expired
-            || (task.state == TaskState::Claimed
-                && task
-                    .lease
-                    .as_ref()
-                    .is_some_and(|lease| now >= lease.expires_at))
-        {
-            TaskClaimRequest::new(
-                task.request.task_id.clone(),
-                task.request.kind,
-                task.request.target.clone(),
-                task.request.role,
-                self.claimant.clone(),
-                task.request.evidence_scope.clone(),
-                task.request.requested_at,
-            )?
-        } else {
-            return Err(GraphServiceError::WorkerIdentityMismatch {
-                expected: task.request.claimant,
-                observed: self.claimant.clone(),
-            });
-        };
-        let proof = TaskCapabilityProof::new(
-            request.task_id.clone(),
-            request.claimant.clone(),
-            request.role,
-            request.kind,
-            request.canonical_digest()?,
-            &self.signer,
-            worker_scope(request.kind),
-        )?;
-        let lease_ms = GRAPH_LEASE_MS.min(self.service.config.max_lease_ms).max(1);
-        let claim = state.coordinator.ledger_mut().claim_or_reclaim_task(
-            campaign.store.as_ref(),
-            request.clone(),
-            now,
-            lease_ms,
-            proof,
-        )?;
-        let claimed_snapshot = campaign.store.snapshot()?;
-        let task_generation = claimed_snapshot
-            .state()
-            .tasks
-            .get(&claim.task_id)
-            .ok_or_else(|| GraphServiceError::TaskUnavailable(claim.task_id.clone()))?
-            .generation;
-        self.service.observe_state(claimed_snapshot.state());
-        Ok(Some(ClaimedGraphTask {
-            claim,
-            request,
-            task_generation,
-        }))
+                let exhausted_snapshot = campaign.store.snapshot()?;
+                self.service.observe_state(exhausted_snapshot.state());
+                if exhausted.task.state != TaskState::Failed {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "retry exhaustion did not produce a terminal failed task"
+                            .to_string(),
+                    }
+                    .into());
+                }
+                continue;
+            }
+            let request = if task.request.claimant == self.claimant {
+                task.request.clone()
+            } else if task.state == TaskState::Expired
+                || (task.state == TaskState::Claimed
+                    && task
+                        .lease
+                        .as_ref()
+                        .is_some_and(|lease| now >= lease.expires_at))
+            {
+                TaskClaimRequest::new(
+                    task.request.task_id.clone(),
+                    task.request.kind,
+                    task.request.target.clone(),
+                    task.request.role,
+                    self.claimant.clone(),
+                    task.request.evidence_scope.clone(),
+                    task.request.requested_at,
+                )?
+            } else {
+                return Err(GraphServiceError::WorkerIdentityMismatch {
+                    expected: task.request.claimant,
+                    observed: self.claimant.clone(),
+                });
+            };
+            let proof = TaskCapabilityProof::new(
+                request.task_id.clone(),
+                request.claimant.clone(),
+                request.role,
+                request.kind,
+                request.canonical_digest()?,
+                &self.signer,
+                worker_scope(request.kind),
+            )?;
+            let lease_ms = GRAPH_LEASE_MS.min(self.service.config.max_lease_ms).max(1);
+            let claim = state.coordinator.ledger_mut().claim_or_reclaim_task(
+                campaign.store.as_ref(),
+                request.clone(),
+                now,
+                lease_ms,
+                proof,
+            )?;
+            let claimed_snapshot = campaign.store.snapshot()?;
+            let task_generation = claimed_snapshot
+                .state()
+                .tasks
+                .get(&claim.task_id)
+                .ok_or_else(|| GraphServiceError::TaskUnavailable(claim.task_id.clone()))?
+                .generation;
+            self.service.observe_state(claimed_snapshot.state());
+            return Ok(Some(ClaimedGraphTask {
+                claim,
+                request,
+                task_generation,
+            }));
+        }
     }
 
     pub fn renew(
@@ -1651,11 +1678,11 @@ impl GraphWorkerAdapter {
             scoped_hypothesis_id("malicious-activity", evidence_id),
             evidence_ids.iter().cloned(),
             GraphProducerRole::Challenger,
-            AgentId::from_public_key_hex(&self.service.signer.public_key().to_hex()),
+            claimed.request.claimant.clone(),
             completed_at,
             "correlation review challenged the event-to-asset causal edge",
         )?
-        .signed_with(&self.service.signer, "weaver-edge-challenge-adjudication")?;
+        .signed_with(&self.signer, "weaver-edge-challenge-adjudication")?;
         self.accept_terminal(
             claimed,
             completed_at,
@@ -1682,15 +1709,12 @@ impl GraphWorkerAdapter {
             hypothesis_id.clone(),
             evidence_ids.iter().cloned(),
             GraphProducerRole::Falsifier,
-            AgentId::from_public_key_hex(&self.service.signer.public_key().to_hex()),
+            claimed.request.claimant.clone(),
             completed_at,
             "completed investigation falsified the benign authorized alternative",
         )?
         .with_resulting_status(HypothesisStatus::Falsified)?
-        .signed_with(
-            &self.service.signer,
-            "stalker-hypothesis-falsifier-adjudication",
-        )?;
+        .signed_with(&self.signer, "stalker-hypothesis-falsifier-adjudication")?;
         let provenance = MemoryProvenance::new(
             claimed.request.claimant.clone(),
             evidence_ids.iter().cloned(),

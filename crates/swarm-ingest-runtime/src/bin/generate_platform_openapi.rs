@@ -464,7 +464,7 @@ fn build_platform_openapi_spec() -> Value {
                 "PlatformRuntimeStatusPage": platform_page_schema("PlatformRuntimeStatus"),
                 "GraphServiceMetrics": {
                     "type": "object",
-                    "required": ["submissions", "submission_failures", "completed_acquisitions", "completed_challenges", "completed_falsifications", "falsification_no_findings", "memory_records_projected", "memory_projection_failures"],
+                    "required": ["submissions", "submission_failures", "completed_acquisitions", "completed_challenges", "completed_falsifications", "falsification_no_findings", "memory_records_projected", "memory_projection_failures", "campaign_rotations"],
                     "properties": {
                         "submissions": { "type": "integer", "minimum": 0 },
                         "submission_failures": { "type": "integer", "minimum": 0 },
@@ -473,7 +473,8 @@ fn build_platform_openapi_spec() -> Value {
                         "completed_falsifications": { "type": "integer", "minimum": 0 },
                         "falsification_no_findings": { "type": "integer", "minimum": 0 },
                         "memory_records_projected": { "type": "integer", "minimum": 0 },
-                        "memory_projection_failures": { "type": "integer", "minimum": 0 }
+                        "memory_projection_failures": { "type": "integer", "minimum": 0 },
+                        "campaign_rotations": { "type": "integer", "minimum": 0 }
                     },
                     "additionalProperties": false
                 },

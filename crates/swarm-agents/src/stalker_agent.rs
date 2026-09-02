@@ -200,7 +200,7 @@ impl StalkerAgent {
             .investigation
             .load_by_hunt_id(hunt_id)
             .map_err(agent_tick_error)?;
-        let investigation = match existing {
+        let mut investigation = match existing {
             Some(existing) => existing,
             None => {
                 let Some(replay) = replay else {
@@ -216,15 +216,34 @@ impl StalkerAgent {
                 return Ok(actions);
             }
         };
-        let investigation_completed_at_ms = investigation.bundle.completed_at_ms;
-        let worker_now =
-            swarm_core::hypothesis_graph::GraphLogicalTime::new(env.now.saturating_mul(1_000));
         if matches!(
             investigation.bundle.status,
             InvestigationStatus::Queued | InvestigationStatus::Running
         ) {
-            return Ok(actions);
+            let Some(replay) = replay else {
+                return Ok(actions);
+            };
+            self.investigation
+                .resume_unfinished(&replay.bundle, &investigation.bundle)
+                .map_err(agent_tick_error)?;
+            let Some(recovered) = self
+                .investigation
+                .load_by_hunt_id(hunt_id)
+                .map_err(agent_tick_error)?
+            else {
+                return Ok(actions);
+            };
+            investigation = recovered;
+            if matches!(
+                investigation.bundle.status,
+                InvestigationStatus::Queued | InvestigationStatus::Running
+            ) {
+                return Ok(actions);
+            }
         }
+        let investigation_completed_at_ms = investigation.bundle.completed_at_ms;
+        let worker_now =
+            swarm_core::hypothesis_graph::GraphLogicalTime::new(env.now.saturating_mul(1_000));
         if matches!(
             investigation.bundle.status,
             InvestigationStatus::Failed | InvestigationStatus::TimedOut
@@ -938,6 +957,107 @@ mod tests {
         assert_eq!(summary.evidence_count, 1);
         assert_eq!(summary.hypothesis_count, 2);
         assert_eq!(summary.pending_task_count, 3);
+    }
+
+    #[tokio::test]
+    async fn stalker_resumes_a_queued_investigation_after_coordinator_restart() {
+        let hunt_id = "hunt-graph-restart-resume";
+        let pheromone = pheromone_config();
+        let replay_store = replay_store();
+        let replay = replay_bundle(hunt_id);
+        replay_store.persist(&replay).unwrap();
+        let graph_config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 32,
+            max_claims_per_tick: 16,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph = Arc::new(
+            CollectiveHypothesisService::new(&graph_config, Keypair::from_seed(&[139; 32]), None)
+                .unwrap(),
+        );
+        let stalker_seed = [140; 32];
+        let signing_key = SigningKey::from_bytes(&stalker_seed);
+        let stalker_worker = graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&stalker_seed),
+            )
+            .unwrap();
+        graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&[141; 32]),
+            )
+            .unwrap();
+        graph.submit_replay(&replay).unwrap();
+
+        let investigation_store =
+            ConfiguredInvestigationBundleStore::from_config(&BundleStoreConfig::Memory).unwrap();
+        let original_id = format!("investigation:{hunt_id}:before-restart");
+        let original_queued_at_ms = 1_700_000_000_050;
+        investigation_store
+            .persist(&InvestigationBundle::queued_from_bundle(
+                &replay,
+                original_id.clone(),
+                original_queued_at_ms,
+                Default::default(),
+            ))
+            .unwrap();
+        let coordinator = InvestigationCoordinator::new(
+            InvestigationConfig {
+                enabled: true,
+                worker_count: 1,
+                max_pending_jobs: 8,
+                time_budget_ms: 250,
+                bundle_store: BundleStoreConfig::Memory,
+                ..InvestigationConfig::default()
+            },
+            SummaryInvestigator,
+            investigation_store,
+        );
+        let mut agent = StalkerAgent::new_with_signing_key(
+            AgentId::from_verifying_key(&signing_key.verifying_key()),
+            signing_key,
+            replay_store,
+            coordinator.clone(),
+            substrate(&pheromone),
+            pheromone,
+        )
+        .with_hypothesis_graph(stalker_worker)
+        .unwrap();
+        let mut recovered_env = env(hunt_id);
+        recovered_env.pheromones.clear();
+
+        assert!(agent.tick(&recovered_env).await.unwrap().is_empty());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if coordinator
+                    .load_by_hunt_id(hunt_id)
+                    .unwrap()
+                    .is_some_and(|lookup| lookup.bundle.status == InvestigationStatus::Completed)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let completed = coordinator.load_by_hunt_id(hunt_id).unwrap().unwrap();
+        assert_eq!(completed.bundle.investigation_id, original_id);
+        assert_eq!(completed.bundle.queued_at_ms, original_queued_at_ms);
+        let actions = agent.tick(&recovered_env).await.unwrap();
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, SwarmAction::PublishFindings { .. }))
+        );
+        assert_eq!(graph.summary().unwrap().completed_task_count, 2);
     }
 
     #[tokio::test]
