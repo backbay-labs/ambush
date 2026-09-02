@@ -113,7 +113,7 @@ TOP = {
 }
 METRICS = {
     "median_hypothesis_time_ms", "attack_chain_recall_bps",
-    "false_causal_edge_rate_bps", "duplicate_work_rate_bps",
+    "causal_edge_recall_bps", "false_causal_edge_rate_bps", "duplicate_work_rate_bps",
     "evidence_coverage_bps", "logical_work_units",
 }
 DELTAS = {"hypothesis_time_reduction_bps", "attack_chain_recall_gain_bps"}
@@ -123,7 +123,7 @@ OBSERVATIONS = {
 }
 GATE_INPUTS = {
     "median_hypothesis_time_ms", "attack_chain_recall_bps",
-    "false_causal_edge_rate_bps", "duplicate_work_rate_bps",
+    "causal_edge_recall_bps", "false_causal_edge_rate_bps", "duplicate_work_rate_bps",
     "evidence_coverage_bps", "logical_work_units",
 }
 FAMILIES = [
@@ -193,6 +193,8 @@ def verify(report):
         failures.append("hypothesis_time")
     if expected_recall < thresholds["min_attack_chain_recall_gain_bps"]:
         failures.append("attack_chain_recall")
+    if report["collective"]["causal_edge_recall_bps"] < thresholds["min_causal_edge_recall_bps"]:
+        failures.append("causal_edge_recall")
     if report["collective"]["false_causal_edge_rate_bps"] > thresholds["max_false_causal_edge_rate_bps"]:
         failures.append("false_causal_edges")
     if report["collective"]["duplicate_work_rate_bps"] > thresholds["max_duplicate_work_rate_bps"]:
@@ -245,7 +247,7 @@ families = [
 ]
 metric_fields = {
     "median_hypothesis_time_ms", "attack_chain_recall_bps",
-    "false_causal_edge_rate_bps", "duplicate_work_rate_bps",
+    "causal_edge_recall_bps", "false_causal_edge_rate_bps", "duplicate_work_rate_bps",
     "evidence_coverage_bps", "logical_work_units",
 }
 report = {
@@ -261,6 +263,7 @@ report = {
     "single_agent": {
         "median_hypothesis_time_ms": 5000,
         "attack_chain_recall_bps": 7000,
+        "causal_edge_recall_bps": 5000,
         "false_causal_edge_rate_bps": 1500,
         "duplicate_work_rate_bps": 0,
         "evidence_coverage_bps": 7500,
@@ -269,6 +272,7 @@ report = {
     "collective": {
         "median_hypothesis_time_ms": 3500,
         "attack_chain_recall_bps": 8500,
+        "causal_edge_recall_bps": 8500,
         "false_causal_edge_rate_bps": 800,
         "duplicate_work_rate_bps": 400,
         "evidence_coverage_bps": 9500,
@@ -303,6 +307,7 @@ def verify(value, baseline_value=baseline):
         raise ValueError("oracle digest")
     required_thresholds = {
         "min_hypothesis_time_reduction_bps", "min_attack_chain_recall_gain_bps",
+        "min_causal_edge_recall_bps",
         "max_false_causal_edge_rate_bps", "max_duplicate_work_rate_bps",
         "min_evidence_coverage_bps",
     }
@@ -317,6 +322,8 @@ def verify(value, baseline_value=baseline):
         failures.append("hypothesis_time")
     if value["deltas"]["attack_chain_recall_gain_bps"] < thresholds["min_attack_chain_recall_gain_bps"]:
         failures.append("attack_chain_recall")
+    if candidate["causal_edge_recall_bps"] < thresholds["min_causal_edge_recall_bps"]:
+        failures.append("causal_edge_recall")
     if candidate["false_causal_edge_rate_bps"] > thresholds["max_false_causal_edge_rate_bps"]:
         failures.append("false_causal_edges")
     if candidate["duplicate_work_rate_bps"] > thresholds["max_duplicate_work_rate_bps"]:
@@ -345,6 +352,7 @@ must_fail("source omission", lambda value, _: value["source_families"].pop())
 must_fail("oracle mutation", lambda value, _: value["oracle_digests"].update({"manifest_sha256": hashlib.sha256(b"mutated").hexdigest()}))
 must_fail("threshold removal", lambda _, base: base["thresholds"].pop("max_false_causal_edge_rate_bps"))
 must_fail("threshold failure", lambda value, _: value["collective"].update({"false_causal_edge_rate_bps": 1001}))
+must_fail("missing causal execution", lambda value, _: value["collective"].update({"causal_edge_recall_bps": 0}))
 must_fail("verdict inversion", lambda value, _: value["verdict"].update({"passed": False, "failed_gates": ["inverted"]}))
 must_fail("wall-clock gating", lambda value, _: value["observations"]["gate_inputs"].append("collective_wall_clock_ms"))
 print("collective hypothesis report verifier self-test passed")

@@ -3,7 +3,7 @@
   "corpus_id": "collective-hypothesis-graph-v1",
   "corpus_version": 1,
   "oracle_digests": {
-    "manifest_sha256": "ebb9bda6b612cc78144d507223a09687491e9c5efe2cc7c4b5d835e818f2c191",
+    "manifest_sha256": "bebbddcd626d6154dd06a1d3552680a69bb2f67ce2d93e86a63ad4b5335ff04f",
     "ambiguous_fixture_sha256": "ef5858c104a79089ececd7ecf61f244475c811a18bfd1db7bc4d8a425540996b",
     "withheld_fixture_sha256": "6671ab6688ccd5608d35c45f2c782b17a3a98b9643a2c7aa3bb0a70a550fc0b5"
   },
@@ -17,6 +17,7 @@
   "thresholds": {
     "min_hypothesis_time_reduction_bps": 2000,
     "min_attack_chain_recall_gain_bps": 1000,
+    "min_causal_edge_recall_bps": 8000,
     "max_false_causal_edge_rate_bps": 1000,
     "max_duplicate_work_rate_bps": 500,
     "min_evidence_coverage_bps": 9000
@@ -24,6 +25,7 @@
   "single_agent_baseline": {
     "median_hypothesis_time_ms": 5000,
     "attack_chain_recall_bps": 7000,
+    "causal_edge_recall_bps": 5000,
     "false_causal_edge_rate_bps": 1500,
     "duplicate_work_rate_bps": 0,
     "evidence_coverage_bps": 7500,

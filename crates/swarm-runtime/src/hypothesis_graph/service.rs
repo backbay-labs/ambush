@@ -6,8 +6,11 @@
 //! response authority.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 use swarm_core::config::{BundleStoreConfig, HypothesisGraphConfig};
@@ -33,7 +36,7 @@ use swarm_spine::{
 
 use super::clock::FixedGraphClock;
 use super::hypotheses::{HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput};
-use super::memory::{MemoryPriorityProjection, StrategyMemoryProjector};
+use super::memory::{MemoryPriorityProjection, MemoryProjectionReport, StrategyMemoryProjector};
 use super::normalize::normalize_telemetry_event;
 use super::tasks::GraphSeedRecords;
 use super::{DurableHypothesisCoordinator, KeypairGraphRecordSigner, TaskClaim, WitnessAdmission};
@@ -92,6 +95,27 @@ pub enum GraphServiceError {
         expected: GraphId,
         observed: GraphId,
     },
+
+    #[error(
+        "graph campaign `{graph_id}` reached capacity with {outstanding_tasks} outstanding tasks"
+    )]
+    CampaignRotationBlocked {
+        graph_id: GraphId,
+        outstanding_tasks: usize,
+    },
+
+    #[error("graph campaign index exhausted")]
+    CampaignIndexExhausted,
+
+    #[error("invalid graph campaign entry `{path}`")]
+    InvalidCampaignEntry { path: PathBuf },
+
+    #[error("graph campaign I/O failed at `{path}`: {source}")]
+    CampaignIo {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +140,7 @@ pub struct GraphServiceMetricsSnapshot {
     pub falsification_no_findings: u64,
     pub memory_records_projected: u64,
     pub memory_projection_failures: u64,
+    pub campaign_rotations: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -163,11 +188,35 @@ struct CollectiveHypothesisState {
     memory_projection_dirty: bool,
 }
 
-pub struct CollectiveHypothesisService {
+#[derive(Clone)]
+struct HypothesisCampaign {
+    index: u64,
     graph_id: GraphId,
-    config: HypothesisGraphConfig,
     store: Arc<dyn HypothesisGraphStore>,
     memory: StrategyMemoryProjector,
+}
+
+struct CampaignRegistry {
+    campaigns: Vec<HypothesisCampaign>,
+}
+
+impl CampaignRegistry {
+    fn active(&self) -> Option<&HypothesisCampaign> {
+        self.campaigns.last()
+    }
+
+    fn find(&self, graph_id: &GraphId) -> Option<&HypothesisCampaign> {
+        self.campaigns
+            .iter()
+            .find(|campaign| &campaign.graph_id == graph_id)
+    }
+}
+
+pub struct CollectiveHypothesisService {
+    config: HypothesisGraphConfig,
+    campaigns: RwLock<CampaignRegistry>,
+    campaign_root: Option<PathBuf>,
+    active_campaign_index: AtomicU64,
     signer: Keypair,
     /// Serialize shipped graph mutations across replay admission and worker
     /// terminal publication. The durable store remains the final CAS/fencing
@@ -210,6 +259,132 @@ fn initialize_reasoning_store(
     Ok(store.compare_and_swap(initial.revision(), candidate)?)
 }
 
+fn open_campaign(
+    index: u64,
+    config: &HypothesisGraphConfig,
+    signer: &Keypair,
+    graph_root: Option<&Path>,
+    memory_root: Option<&Path>,
+) -> Result<HypothesisCampaign, GraphServiceError> {
+    let graph_id = graph_id_for_campaign(signer, index);
+    let graph = swarm_core::hypothesis_graph::HypothesisGraph::new(
+        graph_id.clone(),
+        config.resource_limits(),
+    )?;
+    let (store, memory_store): (Arc<dyn HypothesisGraphStore>, Arc<dyn StrategyMemoryStore>) =
+        match (graph_root, memory_root) {
+            (Some(graph_root), Some(memory_root)) => (
+                Arc::new(ConfiguredHypothesisGraphStore::local_files_with_config(
+                    graph_root,
+                    graph,
+                    signer.clone(),
+                    config,
+                )?),
+                Arc::new(FileStrategyMemoryStore::new_with_config(
+                    memory_root,
+                    signer.clone(),
+                    config,
+                )?),
+            ),
+            (None, None) => (
+                Arc::new(ConfiguredHypothesisGraphStore::memory_with_config(
+                    graph,
+                    signer.clone(),
+                    config,
+                )?),
+                Arc::new(MemoryStrategyMemoryStore::new_with_config(
+                    signer.clone(),
+                    config,
+                )?),
+            ),
+            _ => {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "graph and memory campaign backends must use the same durability mode"
+                        .to_string(),
+                }
+                .into());
+            }
+        };
+    initialize_reasoning_store(store.as_ref(), config)?;
+    Ok(HypothesisCampaign {
+        index,
+        graph_id,
+        store,
+        memory: StrategyMemoryProjector::new(memory_store),
+    })
+}
+
+fn load_campaigns(
+    config: &HypothesisGraphConfig,
+    signer: &Keypair,
+) -> Result<(Vec<HypothesisCampaign>, Option<PathBuf>), GraphServiceError> {
+    match &config.state_store {
+        BundleStoreConfig::Memory => {
+            Ok((vec![open_campaign(0, config, signer, None, None)?], None))
+        }
+        BundleStoreConfig::LocalFiles { directory } => {
+            let root = Path::new(directory);
+            let mut campaigns = vec![open_campaign(
+                0,
+                config,
+                signer,
+                Some(&root.join("graph")),
+                Some(&root.join("strategy-memory")),
+            )?];
+            let campaign_root = root.join("campaigns");
+            let mut indexes = Vec::new();
+            match fs::read_dir(&campaign_root) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = entry.map_err(|source| GraphServiceError::CampaignIo {
+                            path: campaign_root.clone(),
+                            source,
+                        })?;
+                        let path = entry.path();
+                        let file_type =
+                            entry
+                                .file_type()
+                                .map_err(|source| GraphServiceError::CampaignIo {
+                                    path: path.clone(),
+                                    source,
+                                })?;
+                        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                            return Err(GraphServiceError::InvalidCampaignEntry { path });
+                        };
+                        let Ok(index) = name.parse::<u64>() else {
+                            return Err(GraphServiceError::InvalidCampaignEntry { path });
+                        };
+                        if index == 0 || !file_type.is_dir() || file_type.is_symlink() {
+                            return Err(GraphServiceError::InvalidCampaignEntry { path });
+                        }
+                        indexes.push(index);
+                    }
+                }
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(GraphServiceError::CampaignIo {
+                        path: campaign_root.clone(),
+                        source,
+                    });
+                }
+            }
+            indexes.sort_unstable();
+            indexes.dedup();
+            for index in indexes {
+                let root = campaign_root.join(index.to_string());
+                campaigns.push(open_campaign(
+                    index,
+                    config,
+                    signer,
+                    Some(&root.join("graph")),
+                    Some(&root.join("strategy-memory")),
+                )?);
+            }
+            Ok((campaigns, Some(campaign_root)))
+        }
+    }
+}
+
 impl CollectiveHypothesisService {
     /// Construct only when the feature is enabled. The caller retains an
     /// explicit `None` for the legacy path rather than a partially active
@@ -235,87 +410,89 @@ impl CollectiveHypothesisService {
     ) -> Result<Self, GraphServiceError> {
         config.resource_limits().validate()?;
         config.validate_reasoning_limits()?;
-        let graph_id = graph_id_for_key(&signer);
-        let graph = swarm_core::hypothesis_graph::HypothesisGraph::new(
-            graph_id.clone(),
-            config.resource_limits(),
-        )?;
-        let (store, memory_store): (Arc<dyn HypothesisGraphStore>, Arc<dyn StrategyMemoryStore>) =
-            match &config.state_store {
-                BundleStoreConfig::Memory => (
-                    Arc::new(ConfiguredHypothesisGraphStore::memory_with_config(
-                        graph,
-                        signer.clone(),
-                        config,
-                    )?),
-                    Arc::new(MemoryStrategyMemoryStore::new_with_config(
-                        signer.clone(),
-                        config,
-                    )?),
-                ),
-                BundleStoreConfig::LocalFiles { directory } => {
-                    let root = Path::new(directory);
-                    let graph_root = root.join("graph");
-                    let memory_root = root.join("strategy-memory");
-                    (
-                        Arc::new(ConfiguredHypothesisGraphStore::local_files_with_config(
-                            graph_root,
-                            graph,
-                            signer.clone(),
-                            config,
-                        )?),
-                        Arc::new(FileStrategyMemoryStore::new_with_config(
-                            memory_root,
-                            signer.clone(),
-                            config,
-                        )?),
-                    )
-                }
-            };
+        let (campaigns, campaign_root) = load_campaigns(config, &signer)?;
+        let active = campaigns
+            .last()
+            .cloned()
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "collective hypothesis service has no graph campaign".to_string(),
+            })?;
         let admission = WitnessAdmission::from_key(&signer);
         let record_signer = KeypairGraphRecordSigner::with_admission(signer.clone(), &admission)?;
-        let initial = initialize_reasoning_store(store.as_ref(), config)?;
+        let initial = active.store.snapshot()?;
         let coordinator = DurableHypothesisCoordinator::new_with_store(
             config,
             initial.state().logical_time_high_water,
-            store.as_ref(),
+            active.store.as_ref(),
             record_signer,
         )?;
+        let mut service_metrics = GraphServiceMetrics::default();
+        service_metrics.snapshot.campaign_rotations = active.index;
         let service = Self {
-            graph_id,
             config: config.clone(),
-            store,
-            memory: StrategyMemoryProjector::new(memory_store),
+            campaigns: RwLock::new(CampaignRegistry { campaigns }),
+            campaign_root,
+            active_campaign_index: AtomicU64::new(active.index),
             signer,
             operation: Mutex::new(()),
             state: Mutex::new(CollectiveHypothesisState {
                 coordinator,
-                metrics: GraphServiceMetrics::default(),
+                metrics: service_metrics,
                 worker_claimants: BTreeMap::new(),
                 memory_projection_dirty: false,
             }),
             prometheus,
         };
-        let snapshot = service.store.snapshot()?;
-        let projection = service.memory.project_committed(&snapshot)?;
+        let mut inserted = 0_usize;
+        for campaign in service.campaigns()? {
+            let snapshot = campaign.store.snapshot()?;
+            inserted =
+                inserted.saturating_add(campaign.memory.project_committed(&snapshot)?.inserted);
+        }
         {
             let mut state = service
                 .state
                 .lock()
                 .map_err(|_| GraphServiceError::Poisoned)?;
             state.metrics.snapshot.memory_records_projected =
-                u64::try_from(projection.inserted).unwrap_or(u64::MAX);
+                u64::try_from(inserted).unwrap_or(u64::MAX);
         }
-        service.observe_state(snapshot.state());
+        service.observe_state(initial.state());
         Ok(service)
     }
 
-    pub fn graph_id(&self) -> &GraphId {
-        &self.graph_id
+    fn campaigns(&self) -> Result<Vec<HypothesisCampaign>, GraphServiceError> {
+        Ok(self
+            .campaigns
+            .read()
+            .map_err(|_| GraphServiceError::Poisoned)?
+            .campaigns
+            .clone())
     }
 
-    pub fn store(&self) -> &Arc<dyn HypothesisGraphStore> {
-        &self.store
+    fn active_campaign(&self) -> Result<HypothesisCampaign, GraphServiceError> {
+        self.campaigns
+            .read()
+            .map_err(|_| GraphServiceError::Poisoned)?
+            .active()
+            .cloned()
+            .ok_or_else(|| {
+                GraphStoreError::InvalidState {
+                    reason: "collective hypothesis service has no active campaign".to_string(),
+                }
+                .into()
+            })
+    }
+
+    pub fn graph_id(&self) -> GraphId {
+        graph_id_for_campaign(
+            &self.signer,
+            self.active_campaign_index.load(Ordering::Acquire),
+        )
+    }
+
+    pub fn store(&self) -> Result<Arc<dyn HypothesisGraphStore>, GraphServiceError> {
+        Ok(self.active_campaign()?.store)
     }
 
     /// Prove the enabled service has every production worker identity before
@@ -341,8 +518,9 @@ impl CollectiveHypothesisService {
             return Err(GraphServiceError::EmptyWorkerCapabilities);
         }
         let claimant = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+        let campaign = self.active_campaign()?;
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
-        let snapshot = self.store.snapshot()?;
+        let snapshot = campaign.store.snapshot()?;
         for kind in &capabilities {
             if let Some(existing) = state.worker_claimants.get(kind)
                 && existing != &claimant
@@ -392,6 +570,7 @@ impl CollectiveHypothesisService {
             .operation
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
+        self.repair_memory_projection()?;
         let result = self.submit_replay_inner(replay);
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
         match &result {
@@ -417,23 +596,8 @@ impl CollectiveHypothesisService {
         &self,
         replay: &ReplayBundle,
     ) -> Result<GraphSubmission, GraphServiceError> {
-        let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
-        for kind in required_worker_kinds() {
-            if !state.worker_claimants.contains_key(&kind) {
-                return Err(GraphServiceError::MissingWorkerRegistration(kind));
-            }
-        }
-        let worker_claimants = state.worker_claimants.clone();
-        let initial = self.store.snapshot()?;
         let replay_ingested_at = GraphLogicalTime::new(replay.audit.created_at_ms);
         replay_ingested_at.validate()?;
-        let logical_time = GraphLogicalTime::new(
-            replay
-                .audit
-                .created_at_ms
-                .max(initial.state().logical_time_high_water.as_millis()),
-        );
-        logical_time.validate()?;
         // Evidence identity must remain stable when the same durable replay is
         // retried after later task decisions advance graph logical time. The
         // high-water mark orders coordination; it is not the replay's ingest
@@ -447,7 +611,9 @@ impl CollectiveHypothesisService {
             "runtime-replay-normalizer",
         )?;
         let evidence_id = evidence.evidence_id.clone();
-        let already_present = initial.graph().evidence.contains_key(&evidence_id);
+        if let Some(existing) = self.existing_submission(&evidence_id)? {
+            return Ok(existing);
+        }
 
         let event_node = swarm_core::hypothesis_graph::EventNode::new(
             "runtime_replay",
@@ -493,6 +659,36 @@ impl CollectiveHypothesisService {
 
         let malicious = scoped_hypothesis_id("malicious-activity", &evidence_id);
         let benign = scoped_hypothesis_id("benign-authorized-activity", &evidence_id);
+        let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
+        for kind in required_worker_kinds() {
+            if !state.worker_claimants.contains_key(&kind) {
+                return Err(GraphServiceError::MissingWorkerRegistration(kind));
+            }
+        }
+        let worker_claimants = state.worker_claimants.clone();
+        let mut campaign = self.active_campaign()?;
+        let mut initial = campaign.store.snapshot()?;
+        if campaign_requires_rotation(&initial, &evidence)? {
+            let outstanding_tasks = initial
+                .tasks()
+                .filter(|task| !task_is_terminal(task.task.state))
+                .count();
+            if outstanding_tasks > 0 {
+                return Err(GraphServiceError::CampaignRotationBlocked {
+                    graph_id: campaign.graph_id,
+                    outstanding_tasks,
+                });
+            }
+            campaign = self.rotate_campaign(&mut state, &campaign)?;
+            initial = campaign.store.snapshot()?;
+        }
+        let logical_time = GraphLogicalTime::new(
+            replay
+                .audit
+                .created_at_ms
+                .max(initial.state().logical_time_high_water.as_millis()),
+        );
+        logical_time.validate()?;
         let assessments = vec![
             HypothesisSeedAssessment {
                 hypothesis_id: malicious.clone(),
@@ -508,7 +704,7 @@ impl CollectiveHypothesisService {
             },
         ];
         let seed = HypothesisSeedInput::new(
-            self.graph_id.clone(),
+            campaign.graph_id.clone(),
             vec![malicious, benign],
             assessments,
             logical_time,
@@ -519,7 +715,7 @@ impl CollectiveHypothesisService {
             [event_node_id, asset_node_id],
         )?;
         let result = state.coordinator.coordinate_graph_seed_for_claimants(
-            self.store.as_ref(),
+            campaign.store.as_ref(),
             initial.revision(),
             &seed,
             &worker_claimants,
@@ -528,19 +724,141 @@ impl CollectiveHypothesisService {
         )?;
         self.observe_state(result.snapshot.state());
         Ok(GraphSubmission {
-            graph_id: self.graph_id.clone(),
+            graph_id: campaign.graph_id,
             evidence_id,
             hypothesis_ids: result.hypothesis_ids,
             task_ids: result.task_ids,
             generation: result.snapshot.revision().generation,
-            idempotent: already_present,
+            idempotent: false,
         })
+    }
+
+    fn existing_submission(
+        &self,
+        evidence_id: &EvidenceId,
+    ) -> Result<Option<GraphSubmission>, GraphServiceError> {
+        for campaign in self.campaigns()? {
+            let snapshot = campaign.store.snapshot()?;
+            if !snapshot.graph().evidence.contains_key(evidence_id) {
+                continue;
+            }
+            let task_ids = snapshot
+                .tasks()
+                .filter(|task| {
+                    task.task
+                        .request
+                        .evidence_scope
+                        .evidence_ids
+                        .contains(evidence_id)
+                })
+                .map(|task| task.task.request.task_id.clone())
+                .collect();
+            return Ok(Some(GraphSubmission {
+                graph_id: campaign.graph_id,
+                evidence_id: evidence_id.clone(),
+                hypothesis_ids: vec![
+                    scoped_hypothesis_id("malicious-activity", evidence_id),
+                    scoped_hypothesis_id("benign-authorized-activity", evidence_id),
+                ],
+                task_ids,
+                generation: snapshot.revision().generation,
+                idempotent: true,
+            }));
+        }
+        Ok(None)
+    }
+
+    fn rotate_campaign(
+        &self,
+        state: &mut CollectiveHypothesisState,
+        current: &HypothesisCampaign,
+    ) -> Result<HypothesisCampaign, GraphServiceError> {
+        let index = current
+            .index
+            .checked_add(1)
+            .ok_or(GraphServiceError::CampaignIndexExhausted)?;
+        let campaign = match &self.campaign_root {
+            Some(root) => {
+                fs::create_dir_all(root).map_err(|source| GraphServiceError::CampaignIo {
+                    path: root.clone(),
+                    source,
+                })?;
+                let campaign_root = root.join(index.to_string());
+                match fs::create_dir(&campaign_root) {
+                    Ok(()) => {
+                        let directory = fs::File::open(root).map_err(|source| {
+                            GraphServiceError::CampaignIo {
+                                path: root.clone(),
+                                source,
+                            }
+                        })?;
+                        directory
+                            .sync_all()
+                            .map_err(|source| GraphServiceError::CampaignIo {
+                                path: root.clone(),
+                                source,
+                            })?;
+                    }
+                    Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(source) => {
+                        return Err(GraphServiceError::CampaignIo {
+                            path: campaign_root,
+                            source,
+                        });
+                    }
+                }
+                open_campaign(
+                    index,
+                    &self.config,
+                    &self.signer,
+                    Some(&campaign_root.join("graph")),
+                    Some(&campaign_root.join("strategy-memory")),
+                )?
+            }
+            None => open_campaign(index, &self.config, &self.signer, None, None)?,
+        };
+        let snapshot = campaign.store.snapshot()?;
+        let admission = WitnessAdmission::from_key(&self.signer);
+        let record_signer =
+            KeypairGraphRecordSigner::with_admission(self.signer.clone(), &admission)?;
+        let coordinator = DurableHypothesisCoordinator::new_with_store(
+            &self.config,
+            snapshot.state().logical_time_high_water,
+            campaign.store.as_ref(),
+            record_signer,
+        )?;
+        {
+            let mut campaigns = self
+                .campaigns
+                .write()
+                .map_err(|_| GraphServiceError::Poisoned)?;
+            let observed = campaigns
+                .active()
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: "collective hypothesis service has no active campaign".to_string(),
+                })?;
+            if observed.index != current.index {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "active graph campaign changed during serialized rotation".to_string(),
+                }
+                .into());
+            }
+            campaigns.campaigns.push(campaign.clone());
+        }
+        state.coordinator = coordinator;
+        state.memory_projection_dirty = false;
+        state.metrics.snapshot.campaign_rotations =
+            state.metrics.snapshot.campaign_rotations.saturating_add(1);
+        self.active_campaign_index.store(index, Ordering::Release);
+        self.observe_state(snapshot.state());
+        Ok(campaign)
     }
 
     pub fn summary(&self) -> Result<GraphSummaryProjection, GraphServiceError> {
         self.repair_memory_projection()?;
-        let snapshot = self.store.snapshot()?;
-        let memory_count = self
+        let campaign = self.active_campaign()?;
+        let snapshot = campaign.store.snapshot()?;
+        let memory_count = campaign
             .memory
             .store()
             .list(self.config.max_memory_records)?
@@ -560,7 +878,7 @@ impl CollectiveHypothesisService {
             .filter(|task| task.task.state == TaskState::Completed)
             .count();
         Ok(GraphSummaryProjection {
-            graph_id: self.graph_id.clone(),
+            graph_id: campaign.graph_id,
             generation: snapshot.revision().generation,
             graph_version: snapshot.graph().version,
             evidence_count: snapshot.graph().evidence.len(),
@@ -579,8 +897,19 @@ impl CollectiveHypothesisService {
 
     pub fn operator_projection(&self) -> Result<GraphOperatorProjection, GraphServiceError> {
         self.repair_memory_projection()?;
-        let snapshot = self.store.snapshot()?;
-        let memory = self.memory.store().list(self.config.max_memory_records)?;
+        let campaign = self.active_campaign()?;
+        self.operator_projection_for_campaign(&campaign)
+    }
+
+    fn operator_projection_for_campaign(
+        &self,
+        campaign: &HypothesisCampaign,
+    ) -> Result<GraphOperatorProjection, GraphServiceError> {
+        let snapshot = campaign.store.snapshot()?;
+        let memory = campaign
+            .memory
+            .store()
+            .list(self.config.max_memory_records)?;
         let metrics = self
             .state
             .lock()
@@ -588,7 +917,7 @@ impl CollectiveHypothesisService {
             .metrics
             .snapshot;
         Ok(GraphOperatorProjection {
-            graph_id: self.graph_id.clone(),
+            graph_id: campaign.graph_id.clone(),
             generation: snapshot.revision().generation,
             digest: snapshot.revision().digest.clone(),
             graph: snapshot.graph().clone(),
@@ -605,16 +934,19 @@ impl CollectiveHypothesisService {
         &self,
         graph_id: &GraphId,
     ) -> Result<GraphOperatorProjection, GraphServiceError> {
-        self.ensure_graph(graph_id)?;
-        self.operator_projection()
+        let campaign = self.campaign_for(graph_id)?;
+        if campaign.index == self.active_campaign_index.load(Ordering::Acquire) {
+            self.repair_memory_projection()?;
+        }
+        self.operator_projection_for_campaign(&campaign)
     }
 
     pub fn operator_tasks_for(
         &self,
         graph_id: &GraphId,
     ) -> Result<Vec<TaskRecord>, GraphServiceError> {
-        self.ensure_graph(graph_id)?;
-        Ok(self
+        let campaign = self.campaign_for(graph_id)?;
+        Ok(campaign
             .store
             .snapshot()?
             .tasks()
@@ -626,19 +958,26 @@ impl CollectiveHypothesisService {
         &self,
         graph_id: &GraphId,
     ) -> Result<Vec<StrategyMemoryRecord>, GraphServiceError> {
-        self.ensure_graph(graph_id)?;
-        self.repair_memory_projection()?;
-        Ok(self.memory.store().list(self.config.max_memory_records)?)
+        let campaign = self.campaign_for(graph_id)?;
+        if campaign.index == self.active_campaign_index.load(Ordering::Acquire) {
+            self.repair_memory_projection()?;
+        }
+        Ok(campaign
+            .memory
+            .store()
+            .list(self.config.max_memory_records)?)
     }
 
-    fn ensure_graph(&self, graph_id: &GraphId) -> Result<(), GraphServiceError> {
-        if graph_id != &self.graph_id {
-            return Err(GraphServiceError::GraphMismatch {
-                expected: self.graph_id.clone(),
+    fn campaign_for(&self, graph_id: &GraphId) -> Result<HypothesisCampaign, GraphServiceError> {
+        self.campaigns
+            .read()
+            .map_err(|_| GraphServiceError::Poisoned)?
+            .find(graph_id)
+            .cloned()
+            .ok_or_else(|| GraphServiceError::GraphMismatch {
+                expected: self.graph_id(),
                 observed: graph_id.clone(),
-            });
-        }
-        Ok(())
+            })
     }
 
     fn repair_memory_projection(&self) -> Result<(), GraphServiceError> {
@@ -650,8 +989,9 @@ impl CollectiveHypothesisService {
         if !dirty {
             return Ok(());
         }
-        let snapshot = self.store.snapshot()?;
-        let projection = self.memory.project_committed(&snapshot)?;
+        let campaign = self.active_campaign()?;
+        let snapshot = campaign.store.snapshot()?;
+        let projection = campaign.memory.project_committed(&snapshot)?;
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
         state.metrics.snapshot.memory_records_projected = state
             .metrics
@@ -660,6 +1000,39 @@ impl CollectiveHypothesisService {
             .saturating_add(u64::try_from(projection.inserted).unwrap_or(u64::MAX));
         state.memory_projection_dirty = false;
         Ok(())
+    }
+
+    fn record_post_commit_memory_projection(
+        &self,
+        result: Result<MemoryProjectionReport, StrategyMemoryStoreError>,
+    ) -> Result<usize, GraphServiceError> {
+        let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
+        match result {
+            Ok(projection) => {
+                state.metrics.snapshot.memory_records_projected = state
+                    .metrics
+                    .snapshot
+                    .memory_records_projected
+                    .saturating_add(u64::try_from(projection.inserted).unwrap_or(u64::MAX));
+                Ok(projection.inserted)
+            }
+            Err(_error) => {
+                state.memory_projection_dirty = true;
+                state.metrics.snapshot.memory_projection_failures = state
+                    .metrics
+                    .snapshot
+                    .memory_projection_failures
+                    .saturating_add(1);
+                if let Some(metrics) = &self.prometheus {
+                    metrics.observe_hypothesis_graph_memory_projection_failure();
+                }
+                // The graph terminal and its embedded memory have already
+                // committed atomically. Treat the external memory index as a
+                // repairable projection: returning an error here would make
+                // the worker report failure for work that cannot be retried.
+                Ok(0)
+            }
+        }
     }
 
     fn observe_state(&self, state: &swarm_spine::GraphStoreState) {
@@ -683,11 +1056,7 @@ impl CollectiveHypothesisService {
         snapshot: &GraphStoreSnapshot,
         now: GraphLogicalTime,
     ) -> Result<MemoryPriorityProjection, GraphServiceError> {
-        let base = match task.request.kind {
-            TaskKind::AcquireEvidence => 7_000,
-            TaskKind::ChallengeEdge => 6_000,
-            TaskKind::FalsifyHypothesis => 8_000,
-        };
+        let base = base_task_priority(task.request.kind);
         let candidates: Vec<HypothesisId> = match &task.request.target {
             TaskTarget::Hypothesis { hypothesis_id } => vec![hypothesis_id.clone()],
             TaskTarget::Evidence { .. } | TaskTarget::Edge { .. } => {
@@ -695,9 +1064,10 @@ impl CollectiveHypothesisService {
             }
         };
         let mut best = MemoryPriorityProjection::unchanged(base);
+        let campaign = self.active_campaign()?;
         for hypothesis_id in candidates {
-            let projected = self.memory.priority_for_context(
-                &self.graph_id,
+            let projected = campaign.memory.priority_for_context(
+                &campaign.graph_id,
                 &hypothesis_id,
                 &task.request.evidence_scope.evidence_ids,
                 now,
@@ -718,7 +1088,13 @@ impl CollectiveHypothesisService {
         requested: GraphLogicalTime,
     ) -> Result<GraphLogicalTime, GraphServiceError> {
         requested.validate()?;
-        Ok(requested.max(self.store.snapshot()?.state().logical_time_high_water))
+        Ok(requested.max(
+            self.active_campaign()?
+                .store
+                .snapshot()?
+                .state()
+                .logical_time_high_water,
+        ))
     }
 }
 
@@ -741,6 +1117,7 @@ pub struct GraphChallengeContext {
 #[serde(deny_unknown_fields)]
 pub struct StalkerGraphCompletion {
     pub acquisitions: usize,
+    pub acquisition_no_findings: usize,
     pub falsifications: usize,
     pub falsification_no_findings: usize,
     pub memory_records_projected: usize,
@@ -762,7 +1139,7 @@ pub struct GraphWorkerAdapter {
 }
 
 impl GraphWorkerAdapter {
-    pub fn graph_id(&self) -> &GraphId {
+    pub fn graph_id(&self) -> GraphId {
         self.service.graph_id()
     }
 
@@ -802,7 +1179,7 @@ impl GraphWorkerAdapter {
                 TaskKind::AcquireEvidence,
             ));
         }
-        let snapshot = self.service.store.snapshot()?;
+        let snapshot = self.service.active_campaign()?.store.snapshot()?;
         let mut hunts = BTreeSet::new();
         for task in snapshot.tasks().filter(|task| {
             task.task.request.claimant == self.claimant
@@ -826,24 +1203,30 @@ impl GraphWorkerAdapter {
         &self,
         now: GraphLogicalTime,
     ) -> Result<Option<ClaimedGraphTask>, GraphServiceError> {
-        self.claim_matching(now, |_, _| true)
+        // Repair the advisory index before beginning new work. Terminal
+        // completion paths intentionally bypass this preflight: once a graph
+        // terminal commits, a still-failing projection must not prevent the
+        // adapter from returning that completion to its agent.
+        self.service.repair_memory_projection()?;
+        self.claim_matching(now, true, |_, _| true)
     }
 
     fn claim_matching<F>(
         &self,
         now: GraphLogicalTime,
+        use_memory_priority: bool,
         predicate: F,
     ) -> Result<Option<ClaimedGraphTask>, GraphServiceError>
     where
         F: Fn(&TaskRecord, &GraphStoreSnapshot) -> bool,
     {
-        self.service.repair_memory_projection()?;
+        let campaign = self.service.active_campaign()?;
         let mut state = self
             .service
             .state
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
-        let snapshot = self.service.store.snapshot()?;
+        let snapshot = campaign.store.snapshot()?;
         let mut candidates = snapshot
             .tasks()
             .filter(|task| {
@@ -852,7 +1235,11 @@ impl GraphWorkerAdapter {
                     && predicate(&task.task, &snapshot)
             })
             .map(|task| {
-                let priority = self.service.priority_for_task(&task.task, &snapshot, now)?;
+                let priority = if use_memory_priority {
+                    self.service.priority_for_task(&task.task, &snapshot, now)?
+                } else {
+                    MemoryPriorityProjection::unchanged(base_task_priority(task.task.request.kind))
+                };
                 let key = swarm_core::hypothesis_graph::GraphSchedulerKey::new(
                     task.task.request.requested_at,
                     task.task.request.kind,
@@ -901,13 +1288,13 @@ impl GraphWorkerAdapter {
         )?;
         let lease_ms = GRAPH_LEASE_MS.min(self.service.config.max_lease_ms).max(1);
         let claim = state.coordinator.ledger_mut().claim_or_reclaim_task(
-            self.service.store.as_ref(),
+            campaign.store.as_ref(),
             request.clone(),
             now,
             lease_ms,
             proof,
         )?;
-        let claimed_snapshot = self.service.store.snapshot()?;
+        let claimed_snapshot = campaign.store.snapshot()?;
         let task_generation = claimed_snapshot
             .state()
             .tasks
@@ -924,7 +1311,7 @@ impl GraphWorkerAdapter {
 
     pub fn renew(
         &self,
-        claimed: &ClaimedGraphTask,
+        claimed: &mut ClaimedGraphTask,
         now: GraphLogicalTime,
     ) -> Result<(), GraphServiceError> {
         if !self.capabilities.contains(&claimed.request.kind) {
@@ -935,7 +1322,8 @@ impl GraphWorkerAdapter {
             .state
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
-        self.service.store.renew_task(
+        let campaign = self.service.active_campaign()?;
+        let renewed = campaign.store.renew_task(
             claimed.claim.task_id.as_str(),
             claimed.task_generation,
             &claimed.claim.lease_id,
@@ -943,6 +1331,7 @@ impl GraphWorkerAdapter {
             now,
             GRAPH_LEASE_MS.min(self.service.config.max_lease_ms).max(1),
         )?;
+        claimed.task_generation = renewed.task_generation;
         Ok(())
     }
 
@@ -966,7 +1355,7 @@ impl GraphWorkerAdapter {
             ));
         }
         let mut report = StalkerGraphCompletion::default();
-        while let Some(claimed) = self.claim_matching(completed_at, |task, snapshot| {
+        while let Some(claimed) = self.claim_matching(completed_at, false, |task, snapshot| {
             task.request.kind == TaskKind::AcquireEvidence
                 && task_matches_hunt(task, hunt_id, snapshot)
         })? {
@@ -980,20 +1369,71 @@ impl GraphWorkerAdapter {
             && final_confidence_basis_points >= 7_000
             && self.capabilities.contains(&TaskKind::FalsifyHypothesis)
         {
-            while let Some(claimed) = self.claim_matching(completed_at, |task, snapshot| {
-                task.request.kind == TaskKind::FalsifyHypothesis
-                    && task_matches_hunt(task, hunt_id, snapshot)
-            })? {
+            while let Some(claimed) =
+                self.claim_matching(completed_at, false, |task, snapshot| {
+                    task.request.kind == TaskKind::FalsifyHypothesis
+                        && task_matches_hunt(task, hunt_id, snapshot)
+                })?
+            {
                 let projected = self.complete_falsification(claimed, completed_at)?;
                 report.falsifications = report.falsifications.saturating_add(1);
                 report.memory_records_projected =
                     report.memory_records_projected.saturating_add(projected);
             }
         } else if self.capabilities.contains(&TaskKind::FalsifyHypothesis) {
-            while let Some(claimed) = self.claim_matching(completed_at, |task, snapshot| {
-                task.request.kind == TaskKind::FalsifyHypothesis
-                    && task_matches_hunt(task, hunt_id, snapshot)
-            })? {
+            while let Some(claimed) =
+                self.claim_matching(completed_at, false, |task, snapshot| {
+                    task.request.kind == TaskKind::FalsifyHypothesis
+                        && task_matches_hunt(task, hunt_id, snapshot)
+                })?
+            {
+                let projected = self.complete_falsification_no_finding(claimed, completed_at)?;
+                report.falsification_no_findings =
+                    report.falsification_no_findings.saturating_add(1);
+                report.memory_records_projected =
+                    report.memory_records_projected.saturating_add(projected);
+            }
+        }
+        Ok(report)
+    }
+
+    /// Close Stalker-owned graph work when its durable investigation reached
+    /// a terminal failure and cannot produce a semantic finding. These signed
+    /// no-finding publications keep failed jobs from remaining claimable on
+    /// every subsequent tick and restart.
+    pub fn close_failed_stalker_hunt(
+        &self,
+        hunt_id: &str,
+        completed_at: GraphLogicalTime,
+    ) -> Result<StalkerGraphCompletion, GraphServiceError> {
+        let _operation = self
+            .service
+            .operation
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        let completed_at = self.service.nonretrograde_time(completed_at)?;
+        if !self.capabilities.contains(&TaskKind::AcquireEvidence) {
+            return Err(GraphServiceError::MissingCapability(
+                TaskKind::AcquireEvidence,
+            ));
+        }
+        let mut report = StalkerGraphCompletion::default();
+        while let Some(claimed) = self.claim_matching(completed_at, false, |task, snapshot| {
+            task.request.kind == TaskKind::AcquireEvidence
+                && task_matches_hunt(task, hunt_id, snapshot)
+        })? {
+            let projected = self.complete_acquisition_no_finding(claimed, completed_at)?;
+            report.acquisition_no_findings = report.acquisition_no_findings.saturating_add(1);
+            report.memory_records_projected =
+                report.memory_records_projected.saturating_add(projected);
+        }
+        if self.capabilities.contains(&TaskKind::FalsifyHypothesis) {
+            while let Some(claimed) =
+                self.claim_matching(completed_at, false, |task, snapshot| {
+                    task.request.kind == TaskKind::FalsifyHypothesis
+                        && task_matches_hunt(task, hunt_id, snapshot)
+                })?
+            {
                 let projected = self.complete_falsification_no_finding(claimed, completed_at)?;
                 report.falsification_no_findings =
                     report.falsification_no_findings.saturating_add(1);
@@ -1014,7 +1454,7 @@ impl GraphWorkerAdapter {
             ));
         }
         self.service.repair_memory_projection()?;
-        let snapshot = self.service.store.snapshot()?;
+        let snapshot = self.service.active_campaign()?.store.snapshot()?;
         let mut candidates = snapshot
             .tasks()
             .filter(|task| {
@@ -1057,13 +1497,52 @@ impl GraphWorkerAdapter {
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
         let completed_at = self.service.nonretrograde_time(completed_at)?;
-        let Some(claimed) = self.claim_matching(completed_at, |task, _| {
+        let Some(claimed) = self.claim_matching(completed_at, false, |task, _| {
             task.request.kind == TaskKind::ChallengeEdge && &task.request.task_id == task_id
         })?
         else {
             return Ok(false);
         };
         self.complete_edge_challenge(claimed, completed_at)?;
+        Ok(true)
+    }
+
+    /// Complete a challenge without a semantic finding when its durable
+    /// investigation terminated unsuccessfully. The scoped evidence remains
+    /// attached to the signed terminal so validation can prove what was
+    /// investigated without manufacturing a challenge decision.
+    pub fn complete_challenge_no_finding(
+        &self,
+        task_id: &TaskId,
+        completed_at: GraphLogicalTime,
+    ) -> Result<bool, GraphServiceError> {
+        let _operation = self
+            .service
+            .operation
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        let completed_at = self.service.nonretrograde_time(completed_at)?;
+        let Some(claimed) = self.claim_matching(completed_at, false, |task, _| {
+            task.request.kind == TaskKind::ChallengeEdge && &task.request.task_id == task_id
+        })?
+        else {
+            return Ok(false);
+        };
+        let evidence_ids = claimed.request.evidence_scope.evidence_ids.clone();
+        let evidence = evidence_for_scope(
+            &evidence_ids,
+            &self.service.active_campaign()?.store.snapshot()?,
+        )?;
+        self.accept_terminal(
+            claimed,
+            completed_at,
+            TerminalPublication {
+                kind: TaskCompletionKind::NoFinding,
+                evidence,
+                decision: None,
+                memory: None,
+            },
+        )?;
         Ok(true)
     }
 
@@ -1075,7 +1554,7 @@ impl GraphWorkerAdapter {
         let TaskTarget::Evidence { evidence_id } = &claimed.request.target else {
             return Err(GraphServiceError::TaskUnavailable(claimed.claim.task_id));
         };
-        let snapshot = self.service.store.snapshot()?;
+        let snapshot = self.service.active_campaign()?.store.snapshot()?;
         let evidence = snapshot
             .graph()
             .evidence
@@ -1094,13 +1573,36 @@ impl GraphWorkerAdapter {
         )
     }
 
+    fn complete_acquisition_no_finding(
+        &self,
+        claimed: ClaimedGraphTask,
+        completed_at: GraphLogicalTime,
+    ) -> Result<usize, GraphServiceError> {
+        let TaskTarget::Evidence { .. } = &claimed.request.target else {
+            return Err(GraphServiceError::TaskUnavailable(claimed.claim.task_id));
+        };
+        self.accept_terminal(
+            claimed,
+            completed_at,
+            TerminalPublication {
+                kind: TaskCompletionKind::NoFinding,
+                evidence: Vec::new(),
+                decision: None,
+                memory: None,
+            },
+        )
+    }
+
     fn complete_edge_challenge(
         &self,
         claimed: ClaimedGraphTask,
         completed_at: GraphLogicalTime,
     ) -> Result<usize, GraphServiceError> {
         let evidence_ids = claimed.request.evidence_scope.evidence_ids.clone();
-        let evidence = evidence_for_scope(&evidence_ids, &self.service.store.snapshot()?)?;
+        let evidence = evidence_for_scope(
+            &evidence_ids,
+            &self.service.active_campaign()?.store.snapshot()?,
+        )?;
         let evidence_id = evidence_ids
             .iter()
             .next()
@@ -1159,7 +1661,8 @@ impl GraphWorkerAdapter {
             GraphProducerRole::Falsifier,
             "stalker-memory-provenance",
         )?;
-        let snapshot = self.service.store.snapshot()?;
+        let campaign = self.service.active_campaign()?;
+        let snapshot = campaign.store.snapshot()?;
         let evidence = evidence_for_scope(&evidence_ids, &snapshot)?;
         let evidence_id = evidence_ids
             .iter()
@@ -1173,7 +1676,7 @@ impl GraphWorkerAdapter {
             .map(|edge| edge.edge_id.clone())
             .collect::<Vec<_>>();
         let memory = StrategyMemory::new(
-            self.service.graph_id.clone(),
+            campaign.graph_id,
             scoped_hypothesis_id("malicious-activity", evidence_id),
             HypothesisDelta::new(related_edges, [], []),
             evidence_ids.iter().cloned().map(|evidence_id| {
@@ -1216,7 +1719,10 @@ impl GraphWorkerAdapter {
             return Err(GraphServiceError::TaskUnavailable(claimed.claim.task_id));
         };
         let evidence_ids = claimed.request.evidence_scope.evidence_ids.clone();
-        let evidence = evidence_for_scope(&evidence_ids, &self.service.store.snapshot()?)?;
+        let evidence = evidence_for_scope(
+            &evidence_ids,
+            &self.service.active_campaign()?.store.snapshot()?,
+        )?;
         self.accept_terminal(
             claimed,
             completed_at,
@@ -1247,12 +1753,13 @@ impl GraphWorkerAdapter {
         }
         let task_id = claimed.claim.task_id.clone();
         let task_kind = claimed.request.kind;
+        let campaign = self.service.active_campaign()?;
         let mut state = self
             .service
             .state
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
-        let snapshot = self.service.store.snapshot()?;
+        let snapshot = campaign.store.snapshot()?;
         let evidence_ids = match kind {
             TaskCompletionKind::EvidenceAdded => evidence
                 .iter()
@@ -1300,7 +1807,7 @@ impl GraphWorkerAdapter {
             .map(|(memory, expiry)| (Some(memory), Some(expiry)))
             .unwrap_or((None, None));
         let committed = state.coordinator.ledger_mut().accept_terminal_once(
-            self.service.store.as_ref(),
+            campaign.store.as_ref(),
             snapshot.revision(),
             &claimed.claim,
             envelope,
@@ -1344,49 +1851,72 @@ impl GraphWorkerAdapter {
             metrics.observe_hypothesis_graph_completion(task_kind, &completion_kind);
         }
 
-        let projection = match self
-            .service
-            .memory
-            .project_committed_task(&committed, &task_id)
-        {
-            Ok(projection) => projection,
-            Err(error) => {
-                let mut state = self
-                    .service
-                    .state
-                    .lock()
-                    .map_err(|_| GraphServiceError::Poisoned)?;
-                state.memory_projection_dirty = true;
-                state.metrics.snapshot.memory_projection_failures = state
-                    .metrics
-                    .snapshot
-                    .memory_projection_failures
-                    .saturating_add(1);
-                if let Some(metrics) = &self.service.prometheus {
-                    metrics.observe_hypothesis_graph_memory_projection_failure();
-                }
-                return Err(error.into());
-            }
-        };
-        let mut state = self
-            .service
-            .state
-            .lock()
-            .map_err(|_| GraphServiceError::Poisoned)?;
-        state.metrics.snapshot.memory_records_projected = state
-            .metrics
-            .snapshot
-            .memory_records_projected
-            .saturating_add(u64::try_from(projection.inserted).unwrap_or(u64::MAX));
-        drop(state);
-        let current = self.service.store.snapshot()?;
+        let projected = self.service.record_post_commit_memory_projection(
+            campaign.memory.project_committed_task(&committed, &task_id),
+        )?;
+        let current = campaign.store.snapshot()?;
         self.service.observe_state(current.state());
-        Ok(projection.inserted)
+        Ok(projected)
     }
 }
 
 fn task_blocks_worker_rebind(state: TaskState) -> bool {
     matches!(state, TaskState::Pending | TaskState::Claimed)
+}
+
+const fn base_task_priority(kind: TaskKind) -> u16 {
+    match kind {
+        TaskKind::AcquireEvidence => 7_000,
+        TaskKind::ChallengeEdge => 6_000,
+        TaskKind::FalsifyHypothesis => 8_000,
+    }
+}
+
+fn task_is_terminal(state: TaskState) -> bool {
+    matches!(state, TaskState::Completed | TaskState::Failed)
+}
+
+fn campaign_requires_rotation(
+    snapshot: &GraphStoreSnapshot,
+    evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
+) -> Result<bool, GraphServiceError> {
+    let state = snapshot.state();
+    let has_retained_work =
+        !state.graph.evidence.is_empty() || !state.hypotheses.is_empty() || !state.tasks.is_empty();
+    if !has_retained_work {
+        // Let ordinary admission return the precise configuration error when
+        // a single replay cannot fit even in an empty campaign.
+        return Ok(false);
+    }
+    let limits = &state.limits;
+    let retained_evidence_bytes = state
+        .graph
+        .evidence
+        .values()
+        .map(|item| item.canonical_bytes().map(|bytes| bytes.len()))
+        .try_fold(0_usize, |total, size| {
+            size.map(|size| total.saturating_add(size))
+        })?;
+    let added_evidence_bytes = evidence.canonical_bytes()?.len();
+    // Every admitted replay creates one falsification task, and a successful
+    // falsification can append one strategy-memory record. Reserve that slot
+    // at admission time so concurrent outstanding replays cannot overcommit
+    // the campaign's monotonic memory capacity before either task completes.
+    let reserved_memory_records = state
+        .tasks
+        .values()
+        .filter(|task| task.task.request.kind == TaskKind::FalsifyHypothesis)
+        .count();
+    Ok(
+        state.graph.evidence.len().saturating_add(1) > limits.max_nodes
+            || state.graph.nodes.len().saturating_add(2) > limits.max_nodes
+            || state.graph.edges.len().saturating_add(1) > limits.max_edges
+            || retained_evidence_bytes.saturating_add(added_evidence_bytes)
+                > limits.max_evidence_bytes
+            || state.hypotheses.len().saturating_add(2) > limits.max_hypotheses
+            || state.tasks.len().saturating_add(3) > limits.max_tasks
+            || reserved_memory_records.saturating_add(1) > limits.max_memory_records,
+    )
 }
 
 fn task_is_claimable_at(task: &TaskRecord, now: GraphLogicalTime) -> bool {
@@ -1407,11 +1937,13 @@ fn required_worker_kinds() -> [TaskKind; 3] {
     ]
 }
 
-fn graph_id_for_key(key: &Keypair) -> GraphId {
-    GraphId::new(format!(
-        "graph:runtime:{}",
-        sha256_hex(key.public_key().as_bytes())
-    ))
+fn graph_id_for_campaign(key: &Keypair, index: u64) -> GraphId {
+    let family = format!("graph:runtime:{}", sha256_hex(key.public_key().as_bytes()));
+    if index == 0 {
+        GraphId::new(family)
+    } else {
+        GraphId::new(format!("{family}:campaign:{index}"))
+    }
 }
 
 fn scoped_hypothesis_id(kind: &str, evidence_id: &EvidenceId) -> HypothesisId {
@@ -1549,5 +2081,27 @@ mod tests {
         assert!(!task_blocks_worker_rebind(TaskState::Completed));
         assert!(!task_blocks_worker_rebind(TaskState::Failed));
         assert!(!task_blocks_worker_rebind(TaskState::Expired));
+    }
+
+    #[test]
+    fn post_commit_memory_failure_returns_completion_and_marks_repair_dirty() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            ..HypothesisGraphConfig::default()
+        };
+        let service =
+            CollectiveHypothesisService::new(&config, Keypair::from_seed(&[12; 32]), None).unwrap();
+
+        let projected = service
+            .record_post_commit_memory_projection(Err(StrategyMemoryStoreError::InvalidState {
+                reason: "injected transient projection failure".to_string(),
+            }))
+            .unwrap();
+
+        assert_eq!(projected, 0);
+        let state = service.state.lock().unwrap();
+        assert!(state.memory_projection_dirty);
+        assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
+        assert_eq!(state.metrics.snapshot.memory_records_projected, 0);
     }
 }

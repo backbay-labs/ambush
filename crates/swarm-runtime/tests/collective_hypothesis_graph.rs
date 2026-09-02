@@ -4366,13 +4366,270 @@ fn expired_worker_lease_is_fenced_and_reclaimed() {
     assert!(reclaimed.claim.fencing_token > first.claim.fencing_token);
     assert!(reclaimed.task_generation > first.task_generation);
     let task = service
-        .operator_tasks_for(service.graph_id())
+        .operator_tasks_for(&service.graph_id())
         .unwrap()
         .into_iter()
         .find(|task| task.request.task_id == reclaimed.claim.task_id)
         .unwrap();
     assert_eq!(task.state, swarm_core::hypothesis_graph::TaskState::Claimed);
     assert_eq!(task.attempts, 2);
+}
+
+#[test]
+fn worker_can_renew_the_same_claim_repeatedly() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_lease_ms: 10,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(138), None).unwrap());
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(139),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(140)).unwrap();
+    service
+        .submit_replay(&production_replay_bundle(
+            "hunt:phase286:repeated-renewal",
+            1_700_000_090_000,
+        ))
+        .unwrap();
+
+    let mut claimed = stalker
+        .claim_next(GraphLogicalTime::new(1_700_000_090_001))
+        .unwrap()
+        .unwrap();
+    let claimed_generation = claimed.task_generation;
+    stalker
+        .renew(&mut claimed, GraphLogicalTime::new(1_700_000_090_002))
+        .unwrap();
+    let first_renewal_generation = claimed.task_generation;
+    assert!(first_renewal_generation > claimed_generation);
+    stalker
+        .renew(&mut claimed, GraphLogicalTime::new(1_700_000_090_003))
+        .unwrap();
+    assert!(claimed.task_generation > first_renewal_generation);
+}
+
+#[test]
+fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "swarm-phase286-campaign-rotation-{}-{unique}",
+        std::process::id()
+    ));
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        state_store: BundleStoreConfig::LocalFiles {
+            directory: root.display().to_string(),
+        },
+        max_hypotheses: 2,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service_key = key(141);
+    let stalker_key = key(142);
+    let weaver_key = key(143);
+    let first_replay = production_replay_bundle("hunt:phase286:campaign:first", 1_700_000_100_000);
+    let second_replay =
+        production_replay_bundle("hunt:phase286:campaign:second", 1_700_000_100_100);
+    let service =
+        Arc::new(CollectiveHypothesisService::new(&config, service_key.clone(), None).unwrap());
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key.clone(),
+        )
+        .unwrap();
+    let weaver = service
+        .worker([TaskKind::ChallengeEdge], weaver_key.clone())
+        .unwrap();
+    let first = service.submit_replay(&first_replay).unwrap();
+    let blocked = service.submit_replay(&second_replay).unwrap_err();
+    assert!(matches!(
+        blocked,
+        swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
+            outstanding_tasks: 3,
+            ..
+        }
+    ));
+
+    let challenge = weaver
+        .next_challenge_context(GraphLogicalTime::new(1_700_000_100_001))
+        .unwrap()
+        .unwrap();
+    assert!(
+        weaver
+            .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_100_001))
+            .unwrap()
+    );
+    let completion = stalker
+        .complete_stalker_hunt(
+            &first_replay.audit.hunt_id,
+            GraphLogicalTime::new(1_700_000_100_002),
+            9_700,
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(completion.acquisitions, 1);
+    assert_eq!(completion.falsifications, 1);
+
+    let second = service.submit_replay(&second_replay).unwrap();
+    assert_ne!(second.graph_id, first.graph_id);
+    assert_eq!(service.graph_id(), second.graph_id);
+    assert_eq!(service.summary().unwrap().metrics.campaign_rotations, 1);
+    let archived = service.operator_projection_for(&first.graph_id).unwrap();
+    assert_eq!(archived.graph.evidence.len(), 1);
+    assert_eq!(archived.tasks.len(), 3);
+    assert!(archived.tasks.iter().all(|task| matches!(
+        task.state,
+        swarm_core::hypothesis_graph::TaskState::Completed
+            | swarm_core::hypothesis_graph::TaskState::Failed
+    )));
+    let first_retry = service.submit_replay(&first_replay).unwrap();
+    assert!(first_retry.idempotent);
+    assert_eq!(first_retry.graph_id, first.graph_id);
+    assert_eq!(first_retry.task_ids, first.task_ids);
+
+    drop(stalker);
+    drop(weaver);
+    drop(service);
+    let restarted = Arc::new(CollectiveHypothesisService::new(&config, service_key, None).unwrap());
+    restarted
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key,
+        )
+        .unwrap();
+    restarted
+        .worker([TaskKind::ChallengeEdge], weaver_key)
+        .unwrap();
+    assert_eq!(restarted.graph_id(), second.graph_id);
+    assert_eq!(restarted.summary().unwrap().metrics.campaign_rotations, 1);
+    let retry_after_restart = restarted.submit_replay(&first_replay).unwrap();
+    assert!(retry_after_restart.idempotent);
+    assert_eq!(retry_after_restart.graph_id, first.graph_id);
+    assert_eq!(
+        restarted
+            .operator_projection_for(&first.graph_id)
+            .unwrap()
+            .digest,
+        archived.digest
+    );
+    drop(restarted);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn campaign_admission_reserves_memory_for_each_outstanding_falsification() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_memory_records: 1,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(144), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(145),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(146)).unwrap();
+    service
+        .submit_replay(&production_replay_bundle(
+            "hunt:phase286:memory-reservation:first",
+            1_700_000_110_000,
+        ))
+        .unwrap();
+
+    let blocked = service
+        .submit_replay(&production_replay_bundle(
+            "hunt:phase286:memory-reservation:second",
+            1_700_000_110_100,
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        blocked,
+        swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
+            outstanding_tasks: 3,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn committed_completion_survives_a_persistently_unavailable_memory_projection() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "swarm-phase286-memory-projection-failure-{}-{unique}",
+        std::process::id()
+    ));
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        state_store: BundleStoreConfig::LocalFiles {
+            directory: root.display().to_string(),
+        },
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(147), None).unwrap());
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(148),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(149)).unwrap();
+    let replay = production_replay_bundle(
+        "hunt:phase286:persistent-memory-projection-failure",
+        1_700_000_120_000,
+    );
+    service.submit_replay(&replay).unwrap();
+
+    let memory_root = root.join("strategy-memory");
+    fs::rename(&memory_root, root.join("strategy-memory-unavailable")).unwrap();
+    fs::write(&memory_root, b"projection backend unavailable").unwrap();
+
+    let completion = stalker
+        .complete_stalker_hunt(
+            &replay.audit.hunt_id,
+            GraphLogicalTime::new(1_700_000_120_001),
+            9_700,
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(completion.acquisitions, 1);
+    assert_eq!(completion.falsifications, 1);
+    assert_eq!(completion.memory_records_projected, 0);
+    let snapshot = service.store().unwrap().snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .tasks()
+            .filter(|task| task.task.state == swarm_core::hypothesis_graph::TaskState::Completed)
+            .count(),
+        2
+    );
+    assert!(service.summary().is_err());
+
+    drop(stalker);
+    drop(service);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -89,6 +89,7 @@ metrics:
   thresholds:
     min_hypothesis_time_reduction_bps: 2000
     min_attack_chain_recall_gain_bps: 1000
+    min_causal_edge_recall_bps: 8000
     max_false_causal_edge_rate_bps: 1000
     max_duplicate_work_rate_bps: 500
     min_evidence_coverage_bps: 9000

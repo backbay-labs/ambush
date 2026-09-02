@@ -1948,13 +1948,41 @@ async fn ingest_state_rejects_hypothesis_graph_hot_reload() {
     enable_collective_hypothesis_graph(&mut config, &graph_root);
     let state =
         IngestState::from_config(temp_path("hypothesis-graph-reload"), config.clone()).unwrap();
-    let mut changed = config;
+    let mut changed = config.clone();
     changed.hypothesis_graph.max_tasks += 1;
     let error = state.reload(changed).unwrap_err();
     assert!(matches!(
         error,
         super::IngestBuildError::HypothesisGraphReload
     ));
+
+    let dependent_stores = [
+        ("audit", temp_path("hypothesis-graph-reload-audit")),
+        (
+            "investigation",
+            temp_path("hypothesis-graph-reload-investigation"),
+        ),
+        (
+            "correlation",
+            temp_path("hypothesis-graph-reload-correlation"),
+        ),
+    ];
+    for (kind, directory) in dependent_stores {
+        let mut changed = config.clone();
+        let store = BundleStoreConfig::LocalFiles {
+            directory: directory.display().to_string(),
+        };
+        match kind {
+            "audit" => changed.audit.bundle_store = store,
+            "investigation" => changed.investigation.bundle_store = store,
+            "correlation" => changed.correlation.incident_store = store,
+            _ => unreachable!(),
+        }
+        assert!(matches!(
+            state.reload(changed),
+            Err(super::IngestBuildError::HypothesisGraphReload)
+        ));
+    }
 }
 
 #[test]

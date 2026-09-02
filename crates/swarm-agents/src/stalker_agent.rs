@@ -11,7 +11,9 @@ use swarm_core::types::{AgentId, HuntId, SwarmAction};
 use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate, SubstrateError,
 };
-use swarm_spine::{ConfiguredReplayBundleStore, ReplayBundleStore, ReplayStoreError};
+use swarm_spine::{
+    ConfiguredReplayBundleStore, InvestigationStatus, ReplayBundleStore, ReplayStoreError,
+};
 
 use swarm_core::agent::{AgentTickBoundaryError, AgentTickError};
 use swarm_runtime::hypothesis_graph::{GraphServiceError, GraphWorkerAdapter};
@@ -184,13 +186,47 @@ impl StalkerAgent {
                     continue;
                 }
             };
-            if investigation.bundle.status != swarm_spine::InvestigationStatus::Completed {
-                continue;
-            }
             let completed_at_ms = investigation
                 .bundle
                 .completed_at_ms
                 .unwrap_or_else(|| env.now.saturating_mul(1_000));
+            if matches!(
+                investigation.bundle.status,
+                InvestigationStatus::Queued | InvestigationStatus::Running
+            ) {
+                continue;
+            }
+            if matches!(
+                investigation.bundle.status,
+                InvestigationStatus::Failed | InvestigationStatus::TimedOut
+            ) {
+                let completion = graph
+                    .close_failed_stalker_hunt(
+                        &hunt_id,
+                        swarm_core::hypothesis_graph::GraphLogicalTime::new(completed_at_ms),
+                    )
+                    .map_err(agent_tick_error)?;
+                if completion.acquisition_no_findings == 0
+                    && completion.falsification_no_findings == 0
+                {
+                    continue;
+                }
+                actions.push(SwarmAction::PublishFindings {
+                    hunt_id: HuntId(hunt_id.clone()),
+                    findings: serde_json::json!({
+                        "hunt_id": hunt_id,
+                        "investigation_id": investigation.bundle.investigation_id,
+                        "investigation_status": investigation.bundle.status,
+                        "failure_reason": investigation.bundle.failure_reason,
+                        "graph_id": graph.graph_id(),
+                        "acquisition_no_findings": completion.acquisition_no_findings,
+                        "falsification_no_findings": completion.falsification_no_findings,
+                        "memory_records_projected": completion.memory_records_projected,
+                    }),
+                    confidence: 0.0,
+                });
+                continue;
+            }
             let completion = graph
                 .complete_stalker_hunt(
                     &hunt_id,
@@ -206,6 +242,7 @@ impl StalkerAgent {
                 )
                 .map_err(agent_tick_error)?;
             if completion.acquisitions == 0
+                && completion.acquisition_no_findings == 0
                 && completion.falsifications == 0
                 && completion.falsification_no_findings == 0
             {
@@ -218,6 +255,7 @@ impl StalkerAgent {
                     "investigation_id": investigation.bundle.investigation_id,
                     "graph_id": graph.graph_id(),
                     "acquisitions_completed": completion.acquisitions,
+                    "acquisition_no_findings": completion.acquisition_no_findings,
                     "falsifications_completed": completion.falsifications,
                     "falsification_no_findings": completion.falsification_no_findings,
                     "memory_records_projected": completion.memory_records_projected,
@@ -458,8 +496,8 @@ mod tests {
     use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
     use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
     use swarm_spine::{
-        ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore, ReplayBundle,
-        ReplayBundleStore,
+        ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore, InvestigationBundle,
+        InvestigationBundleStore, InvestigationStatus, ReplayBundle, ReplayBundleStore,
     };
     use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
@@ -848,6 +886,96 @@ mod tests {
         assert_eq!(summary.evidence_count, 1);
         assert_eq!(summary.hypothesis_count, 2);
         assert_eq!(summary.pending_task_count, 3);
+    }
+
+    #[tokio::test]
+    async fn stalker_closes_failed_investigation_work_once_as_no_finding() {
+        let hunt_id = "hunt-graph-stalker-failure";
+        let pheromone = pheromone_config();
+        let replay_store = replay_store();
+        let replay = replay_bundle(hunt_id);
+        replay_store.persist(&replay).unwrap();
+        let graph_config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 32,
+            max_claims_per_tick: 16,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph = Arc::new(
+            CollectiveHypothesisService::new(&graph_config, Keypair::from_seed(&[133; 32]), None)
+                .unwrap(),
+        );
+        let stalker_seed = [134; 32];
+        let signing_key = SigningKey::from_bytes(&stalker_seed);
+        let stalker_worker = graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&stalker_seed),
+            )
+            .unwrap();
+        graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&[135; 32]),
+            )
+            .unwrap();
+        graph.submit_replay(&replay).unwrap();
+
+        let investigation_store =
+            ConfiguredInvestigationBundleStore::from_config(&BundleStoreConfig::Memory).unwrap();
+        let failed = InvestigationBundle::queued_from_bundle(
+            &replay,
+            format!("investigation:{hunt_id}"),
+            1_700_000_000_000,
+            Default::default(),
+        )
+        .with_failure(
+            InvestigationStatus::TimedOut,
+            "investigation exceeded its budget".to_string(),
+            1_700_000_000_100,
+        );
+        investigation_store.persist(&failed).unwrap();
+        let coordinator = InvestigationCoordinator::new(
+            InvestigationConfig {
+                enabled: true,
+                worker_count: 1,
+                max_pending_jobs: 8,
+                time_budget_ms: 250,
+                bundle_store: BundleStoreConfig::Memory,
+                ..InvestigationConfig::default()
+            },
+            SummaryInvestigator,
+            investigation_store,
+        );
+        let mut agent = StalkerAgent::new_with_signing_key(
+            AgentId::from_verifying_key(&signing_key.verifying_key()),
+            signing_key,
+            replay_store,
+            coordinator,
+            substrate(&pheromone),
+            pheromone,
+        )
+        .with_hypothesis_graph(stalker_worker)
+        .unwrap();
+
+        let actions = agent.tick(&env(hunt_id)).await.unwrap();
+        let findings = actions
+            .iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => Some(findings),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(findings["investigation_status"], "timed_out");
+        assert_eq!(findings["acquisition_no_findings"], 1);
+        assert_eq!(findings["falsification_no_findings"], 1);
+        let summary = graph.summary().unwrap();
+        assert_eq!(summary.completed_task_count, 2);
+        assert_eq!(summary.pending_task_count, 1);
+        assert!(agent.tick(&env(hunt_id)).await.unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -4061,6 +4061,7 @@ pub fn validate_completion_kind(
         (TaskKind::AcquireEvidence, TaskCompletionKind::EvidenceAdded)
             | (TaskKind::AcquireEvidence, TaskCompletionKind::NoFinding)
             | (TaskKind::ChallengeEdge, TaskCompletionKind::EdgeChallenged)
+            | (TaskKind::ChallengeEdge, TaskCompletionKind::NoFinding)
             | (
                 TaskKind::FalsifyHypothesis,
                 TaskCompletionKind::HypothesisFalsified
@@ -4314,12 +4315,12 @@ impl TaskTerminalEnvelope {
                     });
                 }
             }
-            TaskKind::FalsifyHypothesis
+            TaskKind::ChallengeEdge | TaskKind::FalsifyHypothesis
                 if self.completion.kind == TaskCompletionKind::NoFinding =>
             {
                 if self.decision_link.is_some() {
                     return Err(GraphAdmissionError::InvalidTransition {
-                        reason: "a no-finding falsification cannot carry decision lineage"
+                        reason: "a no-finding reasoning task cannot carry decision lineage"
                             .to_string(),
                     });
                 }

@@ -6,7 +6,10 @@ use swarm_core::agent::{
     AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmEvent,
 };
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
-use swarm_spine::{ConfiguredIncidentStore, ConfiguredInvestigationBundleStore};
+use swarm_spine::{
+    ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, InvestigationBundleStore,
+    InvestigationStatus,
+};
 
 use swarm_runtime::correlation::CorrelationEngine;
 use swarm_runtime::hypothesis_graph::{GraphServiceError, GraphWorkerAdapter};
@@ -87,6 +90,44 @@ impl WeaverAgent {
         let Some(context) = graph.next_challenge_context(now).map_err(internal_error)? else {
             return Ok(Vec::new());
         };
+        let Some(investigation) = self
+            .investigation_store
+            .load_by_hunt_id(&context.hunt_id)
+            .map_err(internal_error)?
+        else {
+            return Ok(Vec::new());
+        };
+        match investigation.bundle.status {
+            InvestigationStatus::Queued | InvestigationStatus::Running => {
+                return Ok(Vec::new());
+            }
+            InvestigationStatus::Failed | InvestigationStatus::TimedOut => {
+                let terminal_at = investigation
+                    .bundle
+                    .completed_at_ms
+                    .map(swarm_core::hypothesis_graph::GraphLogicalTime::new)
+                    .unwrap_or(now);
+                if !graph
+                    .complete_challenge_no_finding(&context.task_id, terminal_at)
+                    .map_err(internal_error)?
+                {
+                    return Ok(Vec::new());
+                }
+                return Ok(vec![SwarmAction::PublishFindings {
+                    hunt_id: HuntId(context.hunt_id),
+                    findings: serde_json::json!({
+                        "graph_id": graph.graph_id(),
+                        "graph_task_id": context.task_id,
+                        "evidence_ids": context.evidence_ids,
+                        "investigation_status": investigation.bundle.status,
+                        "failure_reason": investigation.bundle.failure_reason,
+                        "challenge_no_finding": true,
+                    }),
+                    confidence: 0.0,
+                }]);
+            }
+            InvestigationStatus::Completed => {}
+        }
         let outcome = self
             .correlation
             .correlate_hunt(
@@ -469,5 +510,76 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn weaver_keeps_inflight_challenge_open_then_closes_terminal_failure() {
+        let hunt_id = "hunt-graph-weaver-failure";
+        let investigation_store = investigation_store();
+        let mut queued = completed_investigation(hunt_id);
+        queued.status = InvestigationStatus::Queued;
+        queued.started_at_ms = None;
+        queued.completed_at_ms = None;
+        queued.summary = None;
+        investigation_store.persist(&queued).unwrap();
+        let graph_config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 32,
+            max_claims_per_tick: 16,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph = Arc::new(
+            CollectiveHypothesisService::new(&graph_config, Keypair::from_seed(&[123; 32]), None)
+                .unwrap(),
+        );
+        graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&[124; 32]),
+            )
+            .unwrap();
+        let weaver_seed = [125; 32];
+        let signing_key = SigningKey::from_bytes(&weaver_seed);
+        let worker = graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&weaver_seed),
+            )
+            .unwrap();
+        graph.submit_replay(&replay_bundle(hunt_id)).unwrap();
+        let mut agent = WeaverAgent::new_with_signing_key(
+            AgentId::from_verifying_key(&signing_key.verifying_key()),
+            signing_key,
+            correlation(),
+            investigation_store.clone(),
+            incident_store(),
+        )
+        .with_hypothesis_graph(worker)
+        .unwrap();
+
+        assert!(agent.tick(&env(hunt_id)).await.unwrap().is_empty());
+        assert_eq!(graph.summary().unwrap().completed_task_count, 0);
+
+        let failed = queued.with_failure(
+            InvestigationStatus::Failed,
+            "investigator exhausted its retry budget".to_string(),
+            1_700_000_000_030,
+        );
+        investigation_store.persist(&failed).unwrap();
+        let actions = agent.tick(&env(hunt_id)).await.unwrap();
+        let findings = actions
+            .iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => Some(findings),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(findings["investigation_status"], "failed");
+        assert_eq!(findings["challenge_no_finding"], true);
+        assert_eq!(graph.summary().unwrap().completed_task_count, 1);
+        assert!(agent.tick(&env(hunt_id)).await.unwrap().is_empty());
     }
 }

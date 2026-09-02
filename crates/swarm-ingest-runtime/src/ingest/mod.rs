@@ -1774,7 +1774,13 @@ impl IngestState {
     }
 
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
-        if config.hypothesis_graph != self.stack.load_full().service.config.hypothesis_graph {
+        let current_stack = self.stack.load_full();
+        let current = &current_stack.service.config;
+        let graph_worker_bindings_changed = current.hypothesis_graph.enabled
+            && (config.audit.bundle_store != current.audit.bundle_store
+                || config.investigation.bundle_store != current.investigation.bundle_store
+                || config.correlation.incident_store != current.correlation.incident_store);
+        if config.hypothesis_graph != current.hypothesis_graph || graph_worker_bindings_changed {
             return Err(IngestBuildError::HypothesisGraphReload);
         }
         let strategy = strategy_status_label(&config);

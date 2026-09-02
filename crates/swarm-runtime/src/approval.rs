@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -799,9 +800,10 @@ fn verify_workflow_lock_binding(path: &Path, identity: &str) -> io::Result<()> {
 /// Identity-aware snapshot for every file participating in an approval
 /// transition. Store bytes alone are not sufficient: restoring through a
 /// pathname that was replaced after the lock precheck could overwrite an
-/// unrelated file. The lock and its identity sidecar are captured explicitly
-/// and are restored only while their original identities and ownership remain
-/// bound to the names held by the transition.
+/// unrelated file. The lock and its identity sidecar are restored only while
+/// their original identities remain bound to the transition. Data files may
+/// additionally be restored through an exact replacement inode authenticated
+/// by the current workflow's write journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ApprovalWorkflowFileSnapshot {
     bytes: Vec<u8>,
@@ -819,6 +821,20 @@ impl ApprovalWorkflowFileSnapshot {
         metadata.file_type().is_file()
             && workflow_lock_file_identity(metadata) == self.identity
             && self.matches_ownership(metadata)
+    }
+
+    fn matches_restored_content(&self, other: &Self) -> bool {
+        self.bytes == other.bytes && self.matches_snapshot_ownership(other)
+    }
+
+    #[cfg(unix)]
+    fn matches_snapshot_ownership(&self, other: &Self) -> bool {
+        self.mode == other.mode && self.uid == other.uid && self.gid == other.gid
+    }
+
+    #[cfg(not(unix))]
+    fn matches_snapshot_ownership(&self, _other: &Self) -> bool {
+        true
     }
 
     #[cfg(unix)]
@@ -839,6 +855,80 @@ struct ApprovalWorkflowSnapshot {
     roots: Vec<PathBuf>,
     files: BTreeMap<PathBuf, ApprovalWorkflowFileSnapshot>,
     lock_paths: [PathBuf; 2],
+}
+
+thread_local! {
+    /// Exact replacement inodes created by this thread's current locked
+    /// workflow. Rollback may overwrite or remove only these authenticated
+    /// writes; an unrelated pathname replacement remains fail-closed.
+    static APPROVAL_WORKFLOW_WRITE_JOURNAL: RefCell<Option<BTreeMap<PathBuf, ApprovalWorkflowFileSnapshot>>> =
+        const { RefCell::new(None) };
+}
+
+struct ApprovalWorkflowWriteJournal {
+    active: bool,
+}
+
+impl ApprovalWorkflowWriteJournal {
+    fn begin() -> io::Result<Self> {
+        APPROVAL_WORKFLOW_WRITE_JOURNAL.with(|journal| {
+            let mut journal = journal
+                .try_borrow_mut()
+                .map_err(|_| io::Error::other("approval write journal is borrowed"))?;
+            if journal.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "nested approval workflow write journal",
+                ));
+            }
+            *journal = Some(BTreeMap::new());
+            Ok(Self { active: true })
+        })
+    }
+
+    fn finish(mut self) -> io::Result<BTreeMap<PathBuf, ApprovalWorkflowFileSnapshot>> {
+        let writes = APPROVAL_WORKFLOW_WRITE_JOURNAL.with(|journal| {
+            journal
+                .try_borrow_mut()
+                .map_err(|_| io::Error::other("approval write journal is borrowed"))?
+                .take()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "approval write journal disappeared",
+                    )
+                })
+        })?;
+        self.active = false;
+        Ok(writes)
+    }
+}
+
+impl Drop for ApprovalWorkflowWriteJournal {
+    fn drop(&mut self) {
+        if self.active {
+            APPROVAL_WORKFLOW_WRITE_JOURNAL.with(|journal| {
+                if let Ok(mut journal) = journal.try_borrow_mut() {
+                    journal.take();
+                }
+            });
+        }
+    }
+}
+
+fn record_approval_workflow_write(
+    path: &Path,
+    replacement: ApprovalWorkflowFileSnapshot,
+) -> io::Result<()> {
+    APPROVAL_WORKFLOW_WRITE_JOURNAL.with(|journal| {
+        let mut journal = journal
+            .try_borrow_mut()
+            .map_err(|_| io::Error::other("approval write journal is borrowed"))?;
+        if let Some(journal) = journal.as_mut() {
+            journal.insert(path.to_path_buf(), replacement);
+        }
+        Ok(())
+    })
 }
 
 impl ApprovalWorkflowSnapshot {
@@ -892,7 +982,7 @@ impl ApprovalWorkflowSnapshot {
         Ok(())
     }
 
-    fn restore(&self) -> io::Result<()> {
+    fn restore(&self, writes: &BTreeMap<PathBuf, ApprovalWorkflowFileSnapshot>) -> io::Result<()> {
         let mut current = BTreeMap::new();
         for root in &self.roots {
             capture_snapshot_store_files(root, &mut current)?;
@@ -900,14 +990,27 @@ impl ApprovalWorkflowSnapshot {
         let mut first_error = None;
         for path in current.keys() {
             if !self.files.contains_key(path) {
-                let metadata = fs::symlink_metadata(path)?;
-                if !metadata.file_type().is_file() {
+                let Some(expected_write) = writes.get(path) else {
                     remember_snapshot_error(
                         &mut first_error,
                         io::Error::new(
                             io::ErrorKind::InvalidInput,
                             format!(
-                                "cannot remove non-regular approval artifact `{}`",
+                                "cannot remove unauthenticated approval artifact `{}`",
+                                path.display()
+                            ),
+                        ),
+                    );
+                    continue;
+                };
+                let actual = capture_workflow_snapshot_file(path)?;
+                if actual.as_ref() != Some(expected_write) {
+                    remember_snapshot_error(
+                        &mut first_error,
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "approval artifact `{}` changed after workflow write",
                                 path.display()
                             ),
                         ),
@@ -923,7 +1026,7 @@ impl ApprovalWorkflowSnapshot {
             if self.lock_paths.iter().any(|lock_path| lock_path == path) {
                 continue;
             }
-            if let Err(error) = restore_workflow_snapshot_file(path, expected) {
+            if let Err(error) = restore_workflow_snapshot_file(path, expected, writes.get(path)) {
                 remember_snapshot_error(&mut first_error, error);
             }
         }
@@ -936,7 +1039,9 @@ impl ApprovalWorkflowSnapshot {
             })?;
             match capture_workflow_snapshot_file(path)? {
                 Some(actual) if actual.identity == expected.identity => {
-                    if let Err(error) = restore_workflow_snapshot_file(path, expected) {
+                    if let Err(error) =
+                        restore_workflow_snapshot_file(path, expected, Some(&actual))
+                    {
                         remember_snapshot_error(&mut first_error, error);
                     }
                 }
@@ -1069,37 +1174,42 @@ fn capture_workflow_snapshot_file(path: &Path) -> io::Result<Option<ApprovalWork
 fn restore_workflow_snapshot_file(
     path: &Path,
     expected: &ApprovalWorkflowFileSnapshot,
+    replacement: Option<&ApprovalWorkflowFileSnapshot>,
 ) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "approval artifact `{}` disappeared during rollback",
-                    path.display()
-                ),
-            )
-        } else {
-            error
-        }
+    let current = capture_workflow_snapshot_file(path)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "approval artifact `{}` disappeared during rollback",
+                path.display()
+            ),
+        )
     })?;
-    if !expected.matches_metadata(&metadata) {
+    if current == *expected {
+        return Ok(());
+    }
+    let allowed = replacement.filter(|replacement| current == **replacement);
+    let Some(allowed) = allowed else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "approval artifact `{}` identity or ownership changed during rollback",
+                "approval artifact `{}` was not replaced by the current workflow",
                 path.display()
             ),
         ));
-    }
+    };
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     let descriptor_metadata = file.metadata()?;
-    let named_metadata = fs::symlink_metadata(path)?;
-    if !expected.matches_metadata(&descriptor_metadata)
-        || !expected.matches_metadata(&named_metadata)
-        || workflow_lock_file_identity(&descriptor_metadata)
-            != workflow_lock_file_identity(&named_metadata)
-    {
+    let named = capture_workflow_snapshot_file(path)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "approval artifact `{}` disappeared before rollback write",
+                path.display()
+            ),
+        )
+    })?;
+    if !allowed.matches_metadata(&descriptor_metadata) || named != *allowed {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -1122,7 +1232,7 @@ fn restore_workflow_snapshot_file(
             ),
         )
     })?;
-    if restored != *expected {
+    if !expected.matches_restored_content(&restored) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -1382,6 +1492,12 @@ impl FileApprovalSetStore {
             path: reports_dir.clone(),
             source,
         })?;
+        #[cfg(unix)]
+        let reports_metadata =
+            fs::symlink_metadata(&reports_dir).map_err(|source| ApprovalSetStoreError::Read {
+                path: reports_dir.clone(),
+                source,
+            })?;
         let mut report_ids = HashSet::new();
         let mut changed = false;
         for entry in entries {
@@ -1396,6 +1512,42 @@ impl FileApprovalSetStore {
                     path: path.clone(),
                     source,
                 })?;
+            let file_name = entry.file_name();
+            let is_abandoned_temporary = file_name
+                .to_str()
+                .is_some_and(|name| name.starts_with('.') && name.contains(".tmp-"));
+            if is_abandoned_temporary {
+                let metadata = entry
+                    .metadata()
+                    .map_err(|source| ApprovalSetStoreError::Read {
+                        path: path.clone(),
+                        source,
+                    })?;
+                #[cfg(unix)]
+                let owned_by_store = metadata.uid() == reports_metadata.uid();
+                #[cfg(not(unix))]
+                let owned_by_store = true;
+                if !file_type.is_file() || file_type.is_symlink() || !owned_by_store {
+                    return Err(ApprovalSetStoreError::Invalid {
+                        reason: format!(
+                            "abandoned approval temporary `{}` is not an owned regular file",
+                            path.display()
+                        ),
+                    });
+                }
+                fs::remove_file(&path).map_err(|source| ApprovalSetStoreError::Write {
+                    path: path.clone(),
+                    source,
+                })?;
+                #[cfg(unix)]
+                fs::File::open(&reports_dir)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|source| ApprovalSetStoreError::Write {
+                        path: reports_dir.clone(),
+                        source,
+                    })?;
+                continue;
+            }
             if !file_type.is_file() || file_type.is_symlink() {
                 return Err(ApprovalSetStoreError::Invalid {
                     reason: format!(
@@ -3118,9 +3270,21 @@ impl DefaultApprovalHarness {
         // atomic replacement inode for an attacker-controlled path swap.
         self.set_store.reconcile_unindexed_reports()?;
         let snapshot = self.workflow_snapshot()?;
+        let write_journal = ApprovalWorkflowWriteJournal::begin().map_err(|source| {
+            workflow_lock_error(
+                &self.ledger_store.root.join(".approval-workflow.lock"),
+                source,
+            )
+        })?;
         #[cfg(test)]
         wait_for_workflow_test_hook(&lock.path);
         let result = transition();
+        let writes = write_journal.finish().map_err(|source| {
+            workflow_lock_error(
+                &self.ledger_store.root.join(".approval-workflow.lock"),
+                source,
+            )
+        })?;
         let lock_result = lock.verify();
         let snapshot_lock_result = snapshot.verify_lock_state();
         match (result, lock_result, snapshot_lock_result) {
@@ -3145,7 +3309,7 @@ impl DefaultApprovalHarness {
                             ),
                         )
                     })?;
-                snapshot.restore().map_err(|source| {
+                snapshot.restore(&writes).map_err(|source| {
                     workflow_lock_error(
                         &self.ledger_store.root.join(".approval-workflow.lock"),
                         source,
@@ -4017,6 +4181,13 @@ where
     let json = serde_json::to_vec_pretty(value)
         .map_err(|source| parse_error(path.to_path_buf(), source))?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    // Report directories are enumerated as strict canonical JSON stores.
+    // Keep crash leftovers in the store root so an abandoned temporary can
+    // never masquerade as a report and block recovery.
+    let temp_parent = match parent.file_name().and_then(|name| name.to_str()) {
+        Some("reports" | "resume-outcomes") => parent.parent().unwrap_or(parent),
+        _ => parent,
+    };
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -4024,7 +4195,8 @@ where
     static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
     let (temp_path, mut temp_file) = loop {
         let nonce = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
+        let candidate =
+            temp_parent.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
         match OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -4038,7 +4210,37 @@ where
     let write_result = (|| -> Result<(), std::io::Error> {
         temp_file.write_all(&json)?;
         temp_file.sync_all()?;
+        let temp_metadata = temp_file.metadata()?;
+        if !temp_metadata.file_type().is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "approval temporary is not a regular file",
+            ));
+        }
+        let replacement = ApprovalWorkflowFileSnapshot {
+            bytes: json.clone(),
+            identity: workflow_lock_file_identity(&temp_metadata),
+            #[cfg(unix)]
+            mode: temp_metadata.permissions().mode(),
+            #[cfg(unix)]
+            uid: temp_metadata.uid(),
+            #[cfg(unix)]
+            gid: temp_metadata.gid(),
+        };
         fs::rename(&temp_path, path)?;
+        let named = capture_workflow_snapshot_file(path)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "approval replacement disappeared after rename",
+            )
+        })?;
+        if named != replacement {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "approval replacement identity changed during rename",
+            ));
+        }
+        record_approval_workflow_write(path, replacement)?;
         #[cfg(unix)]
         fs::File::open(parent)?.sync_all()?;
         Ok(())
@@ -5039,6 +5241,32 @@ mod tests {
             before_set_tree
         );
         assert_eq!(fs::read(&ledger_index_path).unwrap(), before_ledger_index);
+    }
+
+    #[test]
+    fn abandoned_report_temporary_is_recovered_before_workflow_reconciliation() {
+        let dir = TestDir::new("abandoned-report-temporary");
+        let harness = DefaultApprovalHarness::from_paths(
+            dir.child("approval-sets"),
+            dir.child("approval-ledgers"),
+        )
+        .unwrap();
+        let abandoned = dir
+            .child("approval-sets/reports")
+            .join(".approval-set-crash.json.tmp-42-7");
+        fs::write(&abandoned, b"{\"partial\":").unwrap();
+        let (voter_id, _) = voter("abandoned-report-temporary-voter");
+
+        let set = harness
+            .create_approval_set(
+                vec![voter_id],
+                ThresholdRule::AtLeast { required: 1 },
+                "promotion-evidence:abandoned-report-temporary",
+            )
+            .unwrap();
+
+        assert!(!abandoned.exists());
+        assert!(harness.load_approval_set(&set.set_id).unwrap().is_some());
     }
 
     #[cfg(unix)]
