@@ -1,7 +1,7 @@
 part of '../channel_detail_page.dart';
 
 const _mobileHuddleDrawerBaseHeight = 80.0;
-const _mobileHuddleDrawerRadius = 24.0;
+const _mobileHuddleDrawerRadius = Radii.chamfer;
 const _mobileHuddleDrawerMotion = Duration(milliseconds: 260);
 const _mobileHuddleDrawerCurve = Cubic(0.32, 0.72, 0, 1);
 
@@ -68,16 +68,6 @@ class MobileHuddleShell extends HookConsumerWidget {
                     drawerOpen ? _mobileHuddleDrawerRadius : 0,
                   ),
                 ),
-                boxShadow: drawerOpen
-                    ? [
-                        BoxShadow(
-                          color: context.colors.shadow.withValues(alpha: 0.44),
-                          blurRadius: 24,
-                          spreadRadius: -12,
-                          offset: Offset(0, 10),
-                        ),
-                      ]
-                    : const [],
               ),
               child: usesNativeConcentricSurface
                   ? ConcentricSheetSurface(

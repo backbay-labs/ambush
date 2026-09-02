@@ -39,13 +39,6 @@ class _LiftedMessagePreview extends StatelessWidget {
           color: context.colors.outlineVariant.withValues(alpha: 0.7),
           width: 0.5,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.18),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(_messageActionPreviewInset),

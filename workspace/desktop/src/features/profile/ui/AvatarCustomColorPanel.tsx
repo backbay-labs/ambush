@@ -146,7 +146,7 @@ export function AvatarCustomColorPanel({
       transition={PANEL_MOTION_TRANSITION}
     >
       <div
-        className="relative min-h-0 w-full flex-1 cursor-pointer overflow-hidden rounded-xl shadow-[inset_0_-18px_34px_rgba(0,0,0,0.18)]"
+        className="relative min-h-0 w-full flex-1 cursor-pointer overflow-hidden rounded-xl"
         data-testid={`${testIdPrefix}-custom-color-spectrum`}
         onPointerDown={(event) => {
           event.preventDefault();
@@ -193,9 +193,8 @@ export function AvatarCustomColorPanel({
             return (
               <span
                 className={cn(
-                  "absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/60 shadow-[0_0_4px_rgba(255,255,255,0.24)]",
-                  isSelectedGridDot &&
-                    "h-3 w-3 border-2 border-white shadow-[0_2px_10px_rgba(0,0,0,0.24)]",
+                  "absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/60",
+                  isSelectedGridDot && "h-3 w-3 border-2 border-white",
                 )}
                 key={`${column}-${row}`}
                 style={{
@@ -208,7 +207,7 @@ export function AvatarCustomColorPanel({
           })}
         </div>
         <div
-          className="pointer-events-none absolute h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white shadow-[0_5px_16px_rgba(0,0,0,0.24),inset_0_0_0_1px_rgba(0,0,0,0.06)]"
+          className="pointer-events-none absolute h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)]"
           style={{
             backgroundColor: colorDraft,
             left: gridInsetPosition(
@@ -271,7 +270,7 @@ export function AvatarCustomColorPanel({
             left: hueScrubberPosition((hue / 360) * 100),
           }}
         >
-          <div className="h-full w-full rounded-full bg-white shadow-[0_5px_18px_rgba(0,0,0,0.24),inset_0_0_0_1px_rgba(0,0,0,0.06)]" />
+          <div className="h-full w-full rounded-full bg-white shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)]" />
         </div>
       </div>
 

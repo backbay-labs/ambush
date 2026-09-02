@@ -467,7 +467,7 @@ export function AvatarFilmstripPicker({
         {frames.length > 0 ? (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute top-1/2 z-10 h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-lg border-[3px] border-white bg-white/10 shadow-[0_4px_16px_rgba(0,0,0,0.32)] ring-1 ring-black/20 transition-[left] duration-75 ease-out"
+            className="pointer-events-none absolute top-1/2 z-10 h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-lg border-[3px] border-white bg-white/10 ring-1 ring-black/20 transition-[left] duration-75 ease-out"
             data-testid={`${testIdPrefix}-animated-poster-selector`}
             style={{
               left: `clamp(${FILMSTRIP_SELECTOR_SIZE / 2}px, ${

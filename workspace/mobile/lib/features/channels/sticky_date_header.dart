@@ -75,47 +75,35 @@ class StickyDateHeader extends StatelessWidget {
   }
 
   Widget _buildFlutterSurface(BuildContext context, String label) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(Radii.full),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(Radii.full),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: ConstrainedBox(
-            key: const ValueKey('channel-sticky-date-header-surface'),
-            constraints: BoxConstraints(minHeight: heightOf(context)),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: context.colors.surface.withValues(alpha: 0.82),
-                borderRadius: BorderRadius.circular(Radii.full),
-                border: Border.all(
-                  color: context.colors.onSurface.withValues(alpha: 0.08),
-                ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(Radii.full),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: ConstrainedBox(
+          key: const ValueKey('channel-sticky-date-header-surface'),
+          constraints: BoxConstraints(minHeight: heightOf(context)),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: context.colors.surface.withValues(alpha: 0.82),
+              borderRadius: BorderRadius.circular(Radii.full),
+              border: Border.all(
+                color: context.colors.onSurface.withValues(alpha: 0.08),
               ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Grid.twelve,
-                  vertical: Grid.half,
-                ),
-                child: Semantics(
-                  header: true,
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: context.textTheme.labelMedium?.copyWith(
-                      color: context.colors.onSurfaceVariant,
-                      fontWeight: FontWeight.w500,
-                    ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Grid.twelve,
+                vertical: Grid.half,
+              ),
+              child: Semantics(
+                header: true,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.textTheme.labelMedium?.copyWith(
+                    color: context.colors.onSurfaceVariant,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ),

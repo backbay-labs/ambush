@@ -397,13 +397,6 @@ class _AnimatedFrameControl extends HookWidget {
                               color: Colors.white.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(Radii.sm),
                               border: Border.all(color: Colors.white, width: 3),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x52000000),
-                                  blurRadius: 16,
-                                  offset: Offset(0, 4),
-                                ),
-                              ],
                             ),
                           ),
                         ),

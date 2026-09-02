@@ -953,10 +953,7 @@
   .ambush-huddle-shell[data-huddle-window="false"]
   .ambush-huddle-drawer-slot
   > .ambush-huddle-drawer {
-  border-radius: calc(
-    var(--ambush-huddle-drawer-radius) -
-    var(--ambush-huddle-drawer-inset)
-  );
+  border-radius: var(--ambush-huddle-drawer-radius);
   height: 100%;
   padding-block: var(--ambush-huddle-drawer-inset);
   padding-inline: var(--ambush-huddle-drawer-inset);

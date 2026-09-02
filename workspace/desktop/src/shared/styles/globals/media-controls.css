@@ -29,7 +29,7 @@
   width: 12px;
   border-radius: 9999px;
   background: white;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
 }
 
 .video-volume-slider::-moz-range-track {
@@ -50,5 +50,5 @@
   width: 12px;
   border-radius: 9999px;
   background: white;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
 }

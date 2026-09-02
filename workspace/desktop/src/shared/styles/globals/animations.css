@@ -128,16 +128,16 @@
 }
 
 .ambush-emoji-mart em-emoji-picker {
-  --border-radius: 12px;
+  --border-radius: var(--radius);
   --category-icon-size: 24px;
   --color-border: transparent;
   --color-border-over: rgb(255 255 255 / 0.1);
   --font-family: inherit;
   --font-size: 14px;
-  --rgb-accent: var(--ambush-emoji-picker-rgb-color, 245, 247, 255);
-  --rgb-background: var(--ambush-emoji-picker-rgb-background, 54, 58, 79);
-  --rgb-color: var(--ambush-emoji-picker-rgb-color, 245, 247, 255);
-  --rgb-input: var(--ambush-emoji-picker-rgb-input, 47, 51, 68);
+  --rgb-accent: var(--ambush-emoji-picker-rgb-color, 201, 193, 183);
+  --rgb-background: var(--ambush-emoji-picker-rgb-background, 31, 31, 31);
+  --rgb-color: var(--ambush-emoji-picker-rgb-color, 201, 193, 183);
+  --rgb-input: var(--ambush-emoji-picker-rgb-input, 62, 62, 62);
   --shadow: none;
   height: 100%;
   max-height: 100%;

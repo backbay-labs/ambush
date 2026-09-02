@@ -6579,8 +6579,8 @@ void main() {
         final appSurfaceDecoration = appSurface.decoration! as BoxDecoration;
         final appSurfaceRadius =
             appSurfaceDecoration.borderRadius! as BorderRadius;
-        expect(appSurfaceRadius.bottomLeft.x, 24);
-        expect(appSurfaceRadius.bottomRight.x, 24);
+        expect(appSurfaceRadius.bottomLeft.x, Radii.chamfer);
+        expect(appSurfaceRadius.bottomRight.x, Radii.chamfer);
         expect(
           tester.getSize(find.byKey(const ValueKey('huddle-drawer-expand'))),
           const Size.square(64),

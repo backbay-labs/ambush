@@ -331,80 +331,67 @@ class _FloatingTabBar extends StatelessWidget {
       child: Align(
         alignment: Alignment.bottomCenter,
         heightFactor: 1,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(HomePage._tabBarRadius),
-            boxShadow: [
-              BoxShadow(
-                color: colorScheme.shadow.withValues(alpha: 0.10),
-                blurRadius: 20,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(HomePage._tabBarRadius),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(HomePage._tabBarRadius),
-                  color: isDark
-                      ? colorScheme.surfaceContainerHighest.withValues(
-                          alpha: 0.72,
-                        )
-                      : colorScheme.surface,
-                  border: Border.all(
-                    color: colorScheme.outlineVariant.withValues(
-                      alpha: isDark ? 0.20 : 0.38,
-                    ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(HomePage._tabBarRadius),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(HomePage._tabBarRadius),
+                color: isDark
+                    ? colorScheme.surfaceContainerHighest.withValues(
+                        alpha: 0.72,
+                      )
+                    : colorScheme.surface,
+                border: Border.all(
+                  color: colorScheme.outlineVariant.withValues(
+                    alpha: isDark ? 0.20 : 0.38,
                   ),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.all(HomePage._tabBarInnerInset),
-                  child: SizedBox(
-                    height:
-                        HomePage._tabBarHeight -
-                        (HomePage._tabBarInnerInset * 2),
-                    width: destinationWidth * destinationCount,
-                    child: Stack(
-                      children: [
-                        AnimatedAlign(
-                          alignment: selectedAlignment,
-                          duration: reducedMotion
-                              ? Duration.zero
-                              : const Duration(milliseconds: 180),
-                          curve: Curves.easeOutCubic,
-                          child: SizedBox(
-                            width: destinationWidth,
-                            height: double.infinity,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: colorScheme.primaryContainer,
-                                borderRadius: BorderRadius.circular(
-                                  HomePage._selectedTabRadius,
-                                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(HomePage._tabBarInnerInset),
+                child: SizedBox(
+                  height:
+                      HomePage._tabBarHeight - (HomePage._tabBarInnerInset * 2),
+                  width: destinationWidth * destinationCount,
+                  child: Stack(
+                    children: [
+                      AnimatedAlign(
+                        alignment: selectedAlignment,
+                        duration: reducedMotion
+                            ? Duration.zero
+                            : const Duration(milliseconds: 180),
+                        curve: Curves.easeOutCubic,
+                        child: SizedBox(
+                          width: destinationWidth,
+                          height: double.infinity,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(
+                                HomePage._selectedTabRadius,
                               ),
                             ),
                           ),
                         ),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            for (var i = 0; i < destinations.length; i++)
-                              SizedBox(
-                                width: destinationWidth,
-                                child: _FloatingTabDestination(
-                                  destination: destinations[i],
-                                  selected: i == safeSelectedIndex,
-                                  showUnreadBadge: i == 1 && hasUnreadInbox,
-                                  onTap: () => onDestinationSelected(i),
-                                ),
+                      ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (var i = 0; i < destinations.length; i++)
+                            SizedBox(
+                              width: destinationWidth,
+                              child: _FloatingTabDestination(
+                                destination: destinations[i],
+                                selected: i == safeSelectedIndex,
+                                showUnreadBadge: i == 1 && hasUnreadInbox,
+                                onTap: () => onDestinationSelected(i),
                               ),
-                          ],
-                        ),
-                      ],
-                    ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),

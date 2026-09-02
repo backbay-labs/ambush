@@ -58,7 +58,6 @@
         ) /
         0.72
       );
-    box-shadow: 0 10px 22px rgb(0 0 0 / 35%);
     color: hsl(
       var(
         --huddle-tooltip-foreground,

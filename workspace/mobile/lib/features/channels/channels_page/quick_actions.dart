@@ -126,13 +126,6 @@ class _MorphingQuickActionsButton extends HookWidget {
               decoration: BoxDecoration(
                 color: context.colors.primary,
                 borderRadius: borderRadius,
-                boxShadow: [
-                  BoxShadow(
-                    color: context.colors.shadow.withValues(alpha: 0.24),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
               ),
               child: ClipRRect(
                 borderRadius: borderRadius,

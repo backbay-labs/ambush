@@ -138,7 +138,7 @@ function harness({
       comment: { body: `@ambush-security-review ${HEAD_SHA}` },
       issue: { number: 6816 },
     },
-    repo: { owner: "block", repo: "ambush" },
+    repo: { owner: "backbay-labs", repo: "ambush" },
   };
   return {
     context,

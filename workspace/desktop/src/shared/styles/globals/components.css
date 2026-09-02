@@ -29,7 +29,7 @@
   .ambush-huddle-shell {
     --ambush-huddle-drawer-height: 5rem;
     --ambush-huddle-drawer-inset: 8px;
-    --ambush-huddle-drawer-radius: 24px;
+    --ambush-huddle-drawer-radius: var(--radius);
     --ambush-huddle-drawer-ease: cubic-bezier(0.32, 0.72, 0, 1);
     --ambush-huddle-drawer-surface: var(--huddle-drawer-surface, 0 0% 0%);
     /* Keep the drawer surface behind the lifted app so the dark background
@@ -73,9 +73,7 @@
     border-bottom-left-radius: var(--ambush-huddle-drawer-radius);
     border-bottom-right-radius: var(--ambush-huddle-drawer-radius);
     bottom: var(--ambush-huddle-drawer-height);
-    box-shadow:
-      0 10px 24px -12px rgb(0 0 0 / 62%),
-      0 2px 7px -4px rgb(0 0 0 / 42%);
+    box-shadow: 0 1px 0 0 hsl(var(--border) / 0.6);
   }
 
   .ambush-huddle-app-surface-open::after {
@@ -157,10 +155,6 @@
 
     background: hsl(var(--ambush-huddle-popover-surface));
     border-color: hsl(var(--border) / 0.6);
-    box-shadow:
-      0 6px 18px lch(0% 0 0 / 0.02),
-      0 3px 9px lch(0% 0 0 / 0.04),
-      0 1px 1px lch(0% 0 0 / 0.04);
     color: hsl(var(--foreground));
   }
 
@@ -177,10 +171,7 @@
     --popover-foreground: var(--foreground);
 
     background: hsl(var(--background));
-    box-shadow:
-      0 6px 18px lch(0% 0 0 / 0.02),
-      0 3px 9px lch(0% 0 0 / 0.04),
-      0 1px 1px lch(0% 0 0 / 0.04);
+    border: 1px solid hsl(var(--border) / 0.6);
     color: hsl(var(--foreground));
   }
 

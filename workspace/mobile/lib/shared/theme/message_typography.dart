@@ -107,7 +107,7 @@ const contentListBodyTextStyle = TextStyle(
 /// Timestamps in compact content lists.
 const contentListTimestampTextStyle = messageMetadataTextStyle;
 
-/// Filter chip labels use a tighter 15sp Inter treatment.
+/// Filter chip labels use a tighter 15sp treatment.
 const filterChipTextStyle = TextStyle(
   fontFamily: _fontFamily,
   fontSize: 15,

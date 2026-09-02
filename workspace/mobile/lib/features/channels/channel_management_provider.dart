@@ -221,13 +221,13 @@ final dmDirectoryPreviewUsers = List<DirectoryUser>.unmodifiable([
   DirectoryUser(
     pubkey: '1111111111111111111111111111111111111111111111111111111111111111',
     displayName: 'Maya Chen',
-    avatarUrl: _mockEmojiAvatar('🎨', '#8AADF4'),
+    avatarUrl: _mockEmojiAvatar('🎨', '#BCB5AD'),
     nip05Handle: 'maya@demo.ambush',
   ),
   DirectoryUser(
     pubkey: '2222222222222222222222222222222222222222222222222222222222222222',
     displayName: 'Jordan Brooks',
-    avatarUrl: _mockEmojiAvatar('🌱', '#A6DA95'),
+    avatarUrl: _mockEmojiAvatar('🌱', '#C7C0B8'),
     nip05Handle: 'jordan@demo.ambush',
   ),
   const DirectoryUser(
@@ -238,7 +238,7 @@ final dmDirectoryPreviewUsers = List<DirectoryUser>.unmodifiable([
   DirectoryUser(
     pubkey: '4444444444444444444444444444444444444444444444444444444444444444',
     displayName: 'Theo Martin',
-    avatarUrl: _mockEmojiAvatar('💻', '#C6A0F6'),
+    avatarUrl: _mockEmojiAvatar('💻', '#ECCFB9'),
     nip05Handle: 'theo@demo.ambush',
   ),
   const DirectoryUser(
