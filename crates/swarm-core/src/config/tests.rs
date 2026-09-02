@@ -159,6 +159,7 @@ fn hypothesis_graph_config_rejects_zero_and_contradictory_limits() {
 fn enabled_hypothesis_graph_config_must_admit_one_complete_replay() {
     for (field, expected) in [
         ("max_nodes", "must be at least 4"),
+        ("max_evidence_bytes", "must be at least 2048"),
         ("max_hypotheses", "must be at least 2"),
         ("max_tasks", "must be at least 3"),
         ("max_graph_depth", "must be at least 2"),

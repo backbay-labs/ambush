@@ -993,19 +993,12 @@ impl CollectiveHypothesisService {
             }),
             prometheus,
         };
-        let mut inserted = 0_usize;
         for campaign in service.campaigns()? {
             let snapshot = campaign.store.snapshot()?;
-            inserted =
-                inserted.saturating_add(campaign.memory.project_committed(&snapshot)?.inserted);
-        }
-        {
-            let mut state = service
-                .state
-                .lock()
-                .map_err(|_| GraphServiceError::Poisoned)?;
-            state.metrics.snapshot.memory_records_projected =
-                u64::try_from(inserted).unwrap_or(u64::MAX);
+            service.record_startup_memory_projection(
+                campaign.index,
+                campaign.memory.project_committed(&snapshot),
+            )?;
         }
         service.observe_state(initial.state());
         Ok(service)
@@ -1849,6 +1842,18 @@ impl CollectiveHypothesisService {
                 Ok(0)
             }
         }
+    }
+
+    fn record_startup_memory_projection(
+        &self,
+        campaign_index: u64,
+        result: Result<MemoryProjectionReport, StrategyMemoryStoreError>,
+    ) -> Result<(), GraphServiceError> {
+        // Startup replays the same repairable projection as a live terminal.
+        // The signed graph remains authoritative, so an unavailable derived
+        // memory index starts dirty/degraded rather than taking down ingest.
+        self.record_post_commit_memory_projection(campaign_index, result)?;
+        Ok(())
     }
 
     fn observe_state(&self, state: &swarm_spine::GraphStoreState) {
@@ -3365,13 +3370,21 @@ fn campaign_requires_rotation(
         .filter(|edge_id| !state.graph.edges.contains_key(*edge_id))
         .count();
     // Every admitted replay creates one falsification task, and a successful
-    // falsification can append one strategy-memory record. Reserve that slot
-    // at admission time so concurrent outstanding replays cannot overcommit
-    // the campaign's monotonic memory capacity before either task completes.
-    let reserved_memory_records = state
+    // falsification can append one strategy-memory record. Count committed
+    // memories plus only nonterminal reservations: no-finding and exhausted
+    // terminal tasks cannot publish memory and must release their capacity.
+    let committed_memory_records = state
+        .terminal_outbox
+        .values()
+        .filter(|entry| entry.memory.is_some())
+        .count();
+    let pending_memory_reservations = state
         .tasks
         .values()
-        .filter(|task| task.task.request.kind == TaskKind::FalsifyHypothesis)
+        .filter(|task| {
+            task.task.request.kind == TaskKind::FalsifyHypothesis
+                && !task_is_terminal(task.task.state)
+        })
         .count();
     Ok(
         state.graph.evidence.len().saturating_add(1) > limits.max_nodes
@@ -3381,7 +3394,10 @@ fn campaign_requires_rotation(
                 > limits.max_evidence_bytes
             || state.hypotheses.len().saturating_add(2) > limits.max_hypotheses
             || state.tasks.len().saturating_add(3) > limits.max_tasks
-            || reserved_memory_records.saturating_add(1) > limits.max_memory_records
+            || committed_memory_records
+                .saturating_add(pending_memory_reservations)
+                .saturating_add(1)
+                > limits.max_memory_records
             || topology_requires_rotation(state, candidate_edges),
     )
 }
@@ -3839,6 +3855,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(projected, 0);
+        let state = service.state.lock().unwrap();
+        assert!(state.dirty_memory_campaigns.contains_key(&0));
+        assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
+        assert_eq!(state.metrics.snapshot.memory_records_projected, 0);
+    }
+
+    #[test]
+    fn startup_memory_projection_failure_starts_dirty_instead_of_aborting() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            ..HypothesisGraphConfig::default()
+        };
+        let service =
+            CollectiveHypothesisService::new(&config, Keypair::from_seed(&[16; 32]), None).unwrap();
+
+        service
+            .record_startup_memory_projection(
+                0,
+                Err(StrategyMemoryStoreError::InvalidState {
+                    reason: "injected startup projection outage".to_string(),
+                }),
+            )
+            .unwrap();
+
         let state = service.state.lock().unwrap();
         assert!(state.dirty_memory_campaigns.contains_key(&0));
         assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);

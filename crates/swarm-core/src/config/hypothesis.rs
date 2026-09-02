@@ -3,6 +3,9 @@ use super::*;
 const DEFAULT_HYPOTHESIS_GRAPH_MAX_MEMORY_TTL_TICKS: u64 = 86_400_000;
 const DEFAULT_HYPOTHESIS_GRAPH_MAX_WORK_UNITS_PER_TICK: u32 = 10_000;
 const DEFAULT_HYPOTHESIS_GRAPH_MAX_CLAIMS_PER_TICK: u16 = 128;
+/// Minimum cumulative evidence budget that can admit one compact, signed
+/// production envelope with fixed-width digests, node IDs, and Ed25519 proof.
+pub const MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES: usize = 2 * 1024;
 
 /// Bounded collective-reasoning configuration. The feature is deliberately
 /// disabled by default so existing runtime paths retain their byte shape.
@@ -204,6 +207,14 @@ impl HypothesisGraphConfig {
                 field: "max_nodes".to_string(),
                 reason: "must be at least 4 when enabled so every normalized entity for one replay can be admitted"
                     .to_string(),
+            });
+        }
+        if self.enabled && self.max_evidence_bytes < MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_evidence_bytes".to_string(),
+                reason: format!(
+                    "must be at least {MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES} when enabled so one signed production evidence envelope can be admitted"
+                ),
             });
         }
         if self.enabled && self.max_hypotheses < 2 {

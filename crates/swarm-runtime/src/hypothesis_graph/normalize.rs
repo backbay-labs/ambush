@@ -164,7 +164,13 @@ fn normalize_telemetry_graph_with_unit<C: GraphClock + ?Sized>(
         TelemetryPayload::NetworkConnect(network) => (
             EvidenceSourceFamily::Network,
             "network_connect",
-            network_payload(network, &source_id, &source_record_id, observed_at)?,
+            network_payload(
+                network,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::DnsQuery(dns) => (
             EvidenceSourceFamily::Network,
@@ -1146,14 +1152,18 @@ fn cloudtrail_payload(
 
 fn network_payload(
     network: &NetworkConnectEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
 ) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text("network.process_name", &network.process_name, 4 * 1024)?;
+    let host_id = optional_text("network.host_id", host_id, 4 * 1024)?;
     let destination_ip = bounded_text("network.destination_ip", &network.destination_ip, 256)?;
     let protocol = bounded_text("network.protocol", &network.protocol, 256)?;
-    let source_digest = digest_projection(&("process", &process))?;
+    let origin_scope_digest =
+        digest_projection(&("network_origin", source_id, host_id.as_deref()))?;
+    let source_digest = digest_projection(&("process", &origin_scope_digest, &process))?;
     let destination_digest =
         digest_projection(&("destination", &destination_ip, network.destination_port))?;
     let process_node = ProcessNode::new(source_digest.clone(), source_digest.clone())?;
@@ -1421,9 +1431,9 @@ mod tests {
         TypedEvidencePayload,
     };
     use swarm_core::{
-        CloudTrailEvent, ExhaustedResource, InfrastructureHealthEvent, ProcessStartEvent,
-        ResourceExhaustionEvent, TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent,
-        ThermalSeverity, ThreatIntelEntry, ThreatIntelIndicatorType,
+        CloudTrailEvent, ExhaustedResource, InfrastructureHealthEvent, NetworkConnectEvent,
+        ProcessStartEvent, ResourceExhaustionEvent, TelemetryEvent, TelemetryPayload,
+        ThermalAnomalyEvent, ThermalSeverity, ThreatIntelEntry, ThreatIntelIndicatorType,
     };
     use swarm_crypto::Keypair;
 
@@ -1478,6 +1488,54 @@ mod tests {
         assert!(!encoded.contains("token=secret"));
         assert!(!encoded.contains("host-secret-that-must-not-be-causal"));
         envelope.validate().unwrap();
+    }
+
+    #[test]
+    fn network_process_identity_is_host_scoped_stable_and_redacted() {
+        let event = |event_id: &str, host_id: Option<&str>, source: &str| TelemetryEvent {
+            source: source.to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: host_id.map(str::to_string),
+            payload: TelemetryPayload::NetworkConnect(NetworkConnectEvent {
+                process_name: "curl".to_string(),
+                destination_ip: "203.0.113.10".to_string(),
+                destination_port: 443,
+                protocol: "tcp".to_string(),
+            }),
+        };
+        let normalize = |event: &TelemetryEvent| {
+            normalize_telemetry_event(
+                event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-network",
+            )
+            .unwrap()
+        };
+        let first = normalize(&event("network:1", Some("host-secret-a"), "sensor-a"));
+        let same_host = normalize(&event("network:2", Some("host-secret-a"), "sensor-a"));
+        let other_host = normalize(&event("network:3", Some("host-secret-b"), "sensor-a"));
+        let source_fallback_a = normalize(&event("network:4", None, "sensor-a"));
+        let source_fallback_b = normalize(&event("network:5", None, "sensor-b"));
+        let other_source = normalize(&event("network:6", Some("host-secret-a"), "sensor-b"));
+        let source_digest = |evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope| {
+            let TypedEvidencePayload::Network { source_digest, .. } = &evidence.payload else {
+                panic!("network telemetry must produce network evidence");
+            };
+            source_digest.clone()
+        };
+
+        assert_eq!(source_digest(&first), source_digest(&same_host));
+        assert_ne!(source_digest(&first), source_digest(&other_host));
+        assert_ne!(source_digest(&first), source_digest(&other_source));
+        assert_ne!(
+            source_digest(&source_fallback_a),
+            source_digest(&source_fallback_b)
+        );
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("host-secret-a"));
     }
 
     #[test]

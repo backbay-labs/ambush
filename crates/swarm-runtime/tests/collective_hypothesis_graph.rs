@@ -11,7 +11,9 @@ use std::fs;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use swarm_core::config::{BundleStoreConfig, HypothesisGraphConfig};
+use swarm_core::config::{
+    BundleStoreConfig, HypothesisGraphConfig, MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES,
+};
 use swarm_core::hypothesis_graph::{
     ActorNode, CausalEdge, CausalRelation, ConfidenceDistribution, DecisionKind, DecisionRecord,
     EdgeState, EventNode, EvidenceClock, EvidenceEnvelope, EvidenceScope, EvidenceSourceFamily,
@@ -4325,6 +4327,41 @@ fn enabled_minimum_node_limit_admits_parented_process_without_user() {
 }
 
 #[test]
+fn enabled_minimum_evidence_budget_admits_one_signed_production_envelope() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_evidence_bytes: MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(185), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(188),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(189)).unwrap();
+    let replay =
+        production_replay_bundle("hunt:phase286:minimum-evidence-budget", 1_700_000_090_100);
+
+    let submitted = service.submit_replay(&replay).unwrap();
+    let projection = service.operator_projection().unwrap();
+    assert!(
+        projection
+            .graph
+            .evidence
+            .contains_key(&submitted.evidence_id)
+    );
+    assert!(
+        projection.graph.evidence[&submitted.evidence_id]
+            .canonical_bytes()
+            .unwrap()
+            .len()
+            <= MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES
+    );
+}
+
+#[test]
 fn benign_or_ambiguous_investigation_closes_falsification_without_false_memory() {
     let config = HypothesisGraphConfig {
         enabled: true,
@@ -5341,6 +5378,50 @@ fn campaign_admission_reserves_memory_for_each_outstanding_falsification() {
             ..
         }
     ));
+}
+
+#[test]
+fn no_finding_falsification_releases_its_memory_reservation() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_memory_records: 1,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(186), None).unwrap());
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(187),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(190)).unwrap();
+    let first = production_replay_bundle(
+        "hunt:phase286:no-finding-releases-memory",
+        1_700_000_111_000,
+    );
+    service.submit_replay(&first).unwrap();
+    let completion = stalker
+        .complete_stalker_hunt(
+            &first.audit.hunt_id,
+            GraphLogicalTime::new(1_700_000_111_001),
+            5_000,
+            false,
+            false,
+        )
+        .unwrap();
+    assert_eq!(completion.falsification_no_findings, 1);
+    assert_eq!(completion.memory_records_projected, 0);
+    let original_graph_id = service.graph_id();
+
+    service
+        .submit_replay(&production_replay_bundle(
+            "hunt:phase286:memory-after-no-finding",
+            1_700_000_111_100,
+        ))
+        .unwrap();
+    assert_eq!(service.graph_id(), original_graph_id);
 }
 
 #[test]
