@@ -201,7 +201,7 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          ["Fizz", "Honey", "Pollen"].flatMap((name) => {
+          ["Anvil", "Lantern", "Sextant"].flatMap((name) => {
             const persona = personas.find(
               (candidate) => candidate.displayName === name,
             );

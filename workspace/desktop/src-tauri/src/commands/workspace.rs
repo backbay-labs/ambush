@@ -264,10 +264,10 @@ pub async fn apply_workspace(
 
     let state = restore_app.state::<AppState>();
     super::agents::provider_access::reconcile_on_workspace_apply(&restore_app, &state).await?;
-    // The Bumble→Pollen migration may have renamed stopped agents. Reconcile
-    // their relay profiles independently of runtime restore; successful writes
-    // record this relay while retaining the agent for other communities, and
-    // failures retry on the next workspace apply.
+    // The built-in research agent migration may have renamed stopped agents.
+    // Reconcile their relay profiles independently of runtime restore;
+    // successful writes record this relay while retaining the agent for other
+    // communities, and failures retry on the next workspace apply.
     crate::managed_agents::spawn_pending_profile_reconciliations(
         &restore_app,
         &profile_reconcile_relay,

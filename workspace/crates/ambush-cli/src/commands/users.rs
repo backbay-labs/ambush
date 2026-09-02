@@ -583,12 +583,12 @@ mod tests {
     #[test]
     fn owned_agent_lookup_matches_exact_name_case_insensitively() {
         let events = vec![
-            json!({"content": r#"{"name":"Honey"}"#, "tags": [["d", "b"]]}),
-            json!({"content": r#"{"name":"Honeybee"}"#, "tags": [["d", "c"]]}),
-            json!({"content": r#"{"name":"honey"}"#, "tags": [["d", "a"]]}),
+            json!({"content": r#"{"name":"Lantern"}"#, "tags": [["d", "b"]]}),
+            json!({"content": r#"{"name":"Lanternfly"}"#, "tags": [["d", "c"]]}),
+            json!({"content": r#"{"name":"lantern"}"#, "tags": [["d", "a"]]}),
         ];
         assert_eq!(
-            owned_agent_pubkeys_from_events(&events, "Honey"),
+            owned_agent_pubkeys_from_events(&events, "Lantern"),
             vec!["a", "b"]
         );
     }
@@ -597,9 +597,9 @@ mod tests {
     fn owned_agent_lookup_ignores_malformed_events() {
         let events = vec![
             json!({"content": "not json", "tags": [["d", "a"]]}),
-            json!({"content": r#"{"name":"Honey"}"#, "tags": [["p", "b"]]}),
+            json!({"content": r#"{"name":"Lantern"}"#, "tags": [["p", "b"]]}),
         ];
-        assert!(owned_agent_pubkeys_from_events(&events, "Honey").is_empty());
+        assert!(owned_agent_pubkeys_from_events(&events, "Lantern").is_empty());
     }
 
     fn profile_event(agent_keys: &Keys, auth_tags: Vec<serde_json::Value>) -> serde_json::Value {
@@ -607,7 +607,7 @@ mod tests {
             "pubkey": agent_keys.public_key().to_hex(),
             "kind": 0,
             "created_at": 100,
-            "content": r#"{"display_name":"Renamed Honey"}"#,
+            "content": r#"{"display_name":"Renamed Lantern"}"#,
             "tags": auth_tags,
         })
     }
@@ -730,7 +730,7 @@ mod tests {
             &owner_keys.public_key().to_hex(),
         );
 
-        assert_eq!(profiles[0]["display_name"], "Renamed Honey");
+        assert_eq!(profiles[0]["display_name"], "Renamed Lantern");
         assert_eq!(profiles[0]["verification"], "verified");
         assert_eq!(profiles[0]["owned_by_me"], true);
         assert_eq!(

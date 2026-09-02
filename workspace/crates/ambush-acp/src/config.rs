@@ -2938,8 +2938,8 @@ channels = "ALL"
     #[test]
     fn sanitize_session_title_collapses_whitespace_and_strips_control_chars() {
         assert_eq!(
-            sanitize_session_title("  Fizz\t\tthe\n Bot\u{7}  "),
-            Some("Fizz the Bot".to_string())
+            sanitize_session_title("  Anvil\t\tthe\n Bot\u{7}  "),
+            Some("Anvil the Bot".to_string())
         );
     }
 
@@ -2969,23 +2969,23 @@ channels = "ALL"
     #[test]
     fn compose_session_title_qualifies_the_agent_name_with_the_channel() {
         assert_eq!(
-            compose_session_title("Fizz", Some("ambush-dev")),
-            "Fizz · #ambush-dev"
+            compose_session_title("Anvil", Some("ambush-dev")),
+            "Anvil · #ambush-dev"
         );
     }
 
     #[test]
     fn compose_session_title_falls_back_to_bare_agent_name_without_a_channel() {
-        assert_eq!(compose_session_title("Fizz", None), "Fizz");
-        assert_eq!(compose_session_title("Fizz", Some("   ")), "Fizz");
+        assert_eq!(compose_session_title("Anvil", None), "Anvil");
+        assert_eq!(compose_session_title("Anvil", Some("   ")), "Anvil");
     }
 
     #[test]
     fn compose_session_title_truncates_the_channel_and_keeps_the_agent_name() {
         let channel = "c".repeat(200);
-        let title = compose_session_title("Fizz", Some(&channel));
+        let title = compose_session_title("Anvil", Some(&channel));
         assert_eq!(title.chars().count(), SESSION_TITLE_MAX_CHARS);
-        assert!(title.starts_with("Fizz · #c"));
+        assert!(title.starts_with("Anvil · #c"));
     }
 
     #[test]

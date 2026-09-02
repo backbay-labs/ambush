@@ -124,7 +124,7 @@ test("row 3: failed persona avatar upload never substitutes the runtime avatar",
   const input = await buildInstanceInputForDefinition(
     persona({
       id: "builtin:fizz",
-      displayName: "Fizz",
+      displayName: "Anvil",
       avatarUrl: "data:image/png;base64,aGk=",
     }),
     claudeRuntime,

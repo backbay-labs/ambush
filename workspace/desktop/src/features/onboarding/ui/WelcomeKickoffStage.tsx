@@ -7,7 +7,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 
 /** The same starter team the "Meet your starter team" onboarding step names. */
-const STAGE_CHARACTERS: readonly string[] = ["Fizz", "Honey", "Pollen"];
+const STAGE_CHARACTERS: readonly string[] = ["Anvil", "Lantern", "Sextant"];
 
 const STAGE_EXIT_ANIMATION = "motion-kickoff-stage-exit";
 

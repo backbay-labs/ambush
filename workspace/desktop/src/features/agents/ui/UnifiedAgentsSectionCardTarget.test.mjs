@@ -67,7 +67,7 @@ function agent(overrides = {}) {
 function persona(overrides = {}) {
   return {
     id: "persona-1",
-    displayName: "Fizz Prime",
+    displayName: "Anvil Prime",
     avatarUrl: null,
     model: null,
     isBuiltIn: false,
@@ -220,7 +220,7 @@ test("persona card main click records a persona target, never an explicit pubkey
   });
 
   fireEvent.click(
-    screen.getByRole("button", { name: "Fizz Prime agent profile" }),
+    screen.getByRole("button", { name: "Anvil Prime agent profile" }),
   );
 
   assert.ok(recordedPersona, "the click must record a persona target");
@@ -254,7 +254,7 @@ test("persona card main click records a persona target even for a stopped errore
   });
 
   fireEvent.click(
-    screen.getByRole("button", { name: "Fizz Prime agent profile" }),
+    screen.getByRole("button", { name: "Anvil Prime agent profile" }),
   );
 
   assert.equal(recordedPersona?.id, "persona-1");

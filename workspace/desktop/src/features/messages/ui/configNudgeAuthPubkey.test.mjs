@@ -40,7 +40,8 @@ function makeEvent(overrides = {}) {
     pubkey: HUMAN_SIGNER,
     kind: 9,
     created_at: 1_700_000_000,
-    content: "**Fizz** needs configuration.\n\n```ambush:config-nudge\n{}\n```",
+    content:
+      "**Anvil** needs configuration.\n\n```ambush:config-nudge\n{}\n```",
     tags: [["h", CHANNEL_ID]],
     sig: "sig",
     ...overrides,
@@ -53,7 +54,7 @@ function makeRelayEvent(tags) {
       kind: 9,
       created_at: 1_700_000_000,
       content:
-        "**Fizz** needs configuration.\n\n```ambush:config-nudge\n{}\n```",
+        "**Anvil** needs configuration.\n\n```ambush:config-nudge\n{}\n```",
       tags,
     },
     RELAY_SECRET,

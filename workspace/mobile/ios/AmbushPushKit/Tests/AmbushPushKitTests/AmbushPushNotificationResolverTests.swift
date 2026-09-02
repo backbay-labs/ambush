@@ -620,7 +620,7 @@ final class AmbushPushNotificationResolverTests: XCTestCase {
     let profileContent = try XCTUnwrap(
       String(
         data: JSONSerialization.data(withJSONObject: [
-          "display_name": "Fizz",
+          "display_name": "Anvil",
           "picture": picture,
         ]),
         encoding: .utf8
@@ -655,7 +655,7 @@ final class AmbushPushNotificationResolverTests: XCTestCase {
       )
     )
 
-    XCTAssertEqual(result.title, "Fizz")
+    XCTAssertEqual(result.title, "Anvil")
     XCTAssertNil(result.senderAvatarPNG)
     XCTAssertEqual(result.body, "Inline avatar profile")
     XCTAssertEqual(URLProtocolStub.requests.count, 2)

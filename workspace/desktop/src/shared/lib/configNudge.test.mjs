@@ -8,7 +8,7 @@ function withSentinel(prose, payload) {
   return `${prose}\n\n\`\`\`ambush:config-nudge\n${JSON.stringify(payload)}\n\`\`\``;
 }
 
-const FIZZ_PUBKEY = "aabbccddeeff0011";
+const ANVIL_PUBKEY = "aabbccddeeff0011";
 const ATLAS_PUBKEY = "ddeeff00112233aa";
 const CODEX_PUBKEY = "112233aabbccddee";
 
@@ -16,7 +16,7 @@ const CODEX_PUBKEY = "112233aabbccddee";
 
 test("extractConfigNudge returns null when no sentinel present", () => {
   assert.equal(
-    extractConfigNudge("**Fizz** needs configuration before it can respond."),
+    extractConfigNudge("**Anvil** needs configuration before it can respond."),
     null,
   );
 });
@@ -27,12 +27,12 @@ test("extractConfigNudge returns null for empty string", () => {
 
 test("extractConfigNudge parses env_key requirement", () => {
   const payload = {
-    agent_name: "Fizz",
-    agent_pubkey: FIZZ_PUBKEY,
+    agent_name: "Anvil",
+    agent_pubkey: ANVIL_PUBKEY,
     requirements: [{ surface: "env_key", key: "ANTHROPIC_API_KEY" }],
   };
   const content = [
-    "**Fizz** needs configuration before it can respond:",
+    "**Anvil** needs configuration before it can respond:",
     "- set `ANTHROPIC_API_KEY` in Edit Agent → Environment variables",
     "",
     "Open Edit Agent in the Ambush app to set these.",
@@ -149,7 +149,7 @@ test("extractConfigNudge returns null for malformed JSON", () => {
 
 test("extractConfigNudge returns null when JSON is valid but missing agent_name", () => {
   const content = withSentinel("prose", {
-    agent_pubkey: FIZZ_PUBKEY,
+    agent_pubkey: ANVIL_PUBKEY,
     requirements: [],
   });
   assert.equal(extractConfigNudge(content), null);
@@ -157,7 +157,7 @@ test("extractConfigNudge returns null when JSON is valid but missing agent_name"
 
 test("extractConfigNudge returns null when JSON is valid but missing agent_pubkey", () => {
   const content = withSentinel("prose", {
-    agent_name: "Fizz",
+    agent_name: "Anvil",
     requirements: [],
   });
   assert.equal(extractConfigNudge(content), null);
@@ -165,8 +165,8 @@ test("extractConfigNudge returns null when JSON is valid but missing agent_pubke
 
 test("extractConfigNudge returns null when requirements contain unknown surface", () => {
   const content = withSentinel("prose", {
-    agent_name: "Fizz",
-    agent_pubkey: FIZZ_PUBKEY,
+    agent_name: "Anvil",
+    agent_pubkey: ANVIL_PUBKEY,
     requirements: [{ surface: "unknown_surface", data: "x" }],
   });
   assert.equal(extractConfigNudge(content), null);
@@ -174,8 +174,8 @@ test("extractConfigNudge returns null when requirements contain unknown surface"
 
 test("extractConfigNudge returns null when requirements is not an array", () => {
   const content = withSentinel("prose", {
-    agent_name: "Fizz",
-    agent_pubkey: FIZZ_PUBKEY,
+    agent_name: "Anvil",
+    agent_pubkey: ANVIL_PUBKEY,
     requirements: "bad",
   });
   assert.equal(extractConfigNudge(content), null);
@@ -188,8 +188,8 @@ test("extractConfigNudge ignores regular code blocks with other language tags", 
 
 test("extractConfigNudge handles empty requirements array", () => {
   const payload = {
-    agent_name: "Fizz",
-    agent_pubkey: FIZZ_PUBKEY,
+    agent_name: "Anvil",
+    agent_pubkey: ANVIL_PUBKEY,
     requirements: [],
   };
   assert.deepEqual(extractConfigNudge(withSentinel("prose", payload)), payload);
@@ -203,10 +203,10 @@ test("stripConfigNudgeSentinel returns content unchanged when no sentinel", () =
 });
 
 test("stripConfigNudgeSentinel strips the sentinel block", () => {
-  const prose = "**Fizz** needs configuration.\n\nOpen Edit Agent.";
+  const prose = "**Anvil** needs configuration.\n\nOpen Edit Agent.";
   const payload = {
-    agent_name: "Fizz",
-    agent_pubkey: FIZZ_PUBKEY,
+    agent_name: "Anvil",
+    agent_pubkey: ANVIL_PUBKEY,
     requirements: [],
   };
   const content = withSentinel(prose, payload);
@@ -251,20 +251,20 @@ function authGuardedExtract(content, configNudgeAuthorPubkey) {
   return payload;
 }
 
-const FIZZ_PUBKEY_AUTH = "aabbccddeeff0011223344556677889900aabbcc";
+const ANVIL_PUBKEY_AUTH = "aabbccddeeff0011223344556677889900aabbcc";
 const OTHER_PUBKEY = "ffffffffffffffffffffffffffffffffffffffff";
 
 function makeNudgeBody(agentPubkey) {
   const payload = {
-    agent_name: "Fizz",
+    agent_name: "Anvil",
     agent_pubkey: agentPubkey,
     requirements: [{ surface: "env_key", key: "ANTHROPIC_API_KEY" }],
   };
-  return `**Fizz** needs configuration.\n\n\`\`\`ambush:config-nudge\n${JSON.stringify(payload)}\n\`\`\``;
+  return `**Anvil** needs configuration.\n\n\`\`\`ambush:config-nudge\n${JSON.stringify(payload)}\n\`\`\``;
 }
 
 test("authGuard_noAuthorPubkey_returnsNull", () => {
-  const body = makeNudgeBody(FIZZ_PUBKEY_AUTH);
+  const body = makeNudgeBody(ANVIL_PUBKEY_AUTH);
   assert.equal(
     authGuardedExtract(body, null),
     null,
@@ -273,7 +273,7 @@ test("authGuard_noAuthorPubkey_returnsNull", () => {
 });
 
 test("authGuard_undefinedAuthorPubkey_returnsNull", () => {
-  const body = makeNudgeBody(FIZZ_PUBKEY_AUTH);
+  const body = makeNudgeBody(ANVIL_PUBKEY_AUTH);
   assert.equal(
     authGuardedExtract(body, undefined),
     null,
@@ -282,9 +282,9 @@ test("authGuard_undefinedAuthorPubkey_returnsNull", () => {
 });
 
 test("authGuard_mismatchedAuthor_returnsNull", () => {
-  // Fence carries FIZZ_PUBKEY_AUTH but caller says the message author is OTHER_PUBKEY.
+  // Fence carries ANVIL_PUBKEY_AUTH but caller says the message author is OTHER_PUBKEY.
   // The card must not render and the fence must NOT be stripped by the caller.
-  const body = makeNudgeBody(FIZZ_PUBKEY_AUTH);
+  const body = makeNudgeBody(ANVIL_PUBKEY_AUTH);
   const result = authGuardedExtract(body, OTHER_PUBKEY);
   assert.equal(
     result,
@@ -300,16 +300,16 @@ test("authGuard_mismatchedAuthor_returnsNull", () => {
 });
 
 test("authGuard_matchingAuthor_returnsPayload", () => {
-  const body = makeNudgeBody(FIZZ_PUBKEY_AUTH);
-  const result = authGuardedExtract(body, FIZZ_PUBKEY_AUTH);
+  const body = makeNudgeBody(ANVIL_PUBKEY_AUTH);
+  const result = authGuardedExtract(body, ANVIL_PUBKEY_AUTH);
   assert.notEqual(result, null, "matching author must yield the payload");
-  assert.equal(result?.agent_pubkey, FIZZ_PUBKEY_AUTH);
+  assert.equal(result?.agent_pubkey, ANVIL_PUBKEY_AUTH);
 });
 
 test("authGuard_matchingAuthor_caseInsensitive", () => {
   // normalizePubkey lowercases both sides; mixed-case must still match.
-  const body = makeNudgeBody(FIZZ_PUBKEY_AUTH.toUpperCase());
-  const result = authGuardedExtract(body, FIZZ_PUBKEY_AUTH.toLowerCase());
+  const body = makeNudgeBody(ANVIL_PUBKEY_AUTH.toUpperCase());
+  const result = authGuardedExtract(body, ANVIL_PUBKEY_AUTH.toLowerCase());
   assert.notEqual(
     result,
     null,
@@ -374,10 +374,10 @@ test("authGuard_signerIsHuman_tagAttributedToAgent_returnsNull", () => {
 
 test("nudgePresent_extractNonNull_and_stripRemovesSentinel", () => {
   const prose =
-    "**Fizz** needs configuration before it can respond:\n- set `ANTHROPIC_API_KEY` in Edit Agent → Environment variables\n\nOpen Edit Agent in the Ambush app to set these.";
+    "**Anvil** needs configuration before it can respond:\n- set `ANTHROPIC_API_KEY` in Edit Agent → Environment variables\n\nOpen Edit Agent in the Ambush app to set these.";
   const payload = {
-    agent_name: "Fizz",
-    agent_pubkey: FIZZ_PUBKEY,
+    agent_name: "Anvil",
+    agent_pubkey: ANVIL_PUBKEY,
     requirements: [{ surface: "env_key", key: "ANTHROPIC_API_KEY" }],
   };
   const body = withSentinel(prose, payload);

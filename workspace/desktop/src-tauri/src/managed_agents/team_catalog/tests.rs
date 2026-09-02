@@ -857,7 +857,8 @@ run_fixture_table!(
 
 #[test]
 fn test_real_builtin_without_avatar_mutation_projects_successfully() {
-    // A real built-in (fizz) has a ~170 KiB oversized avatar that is stripped in member_projection.
+    // A real built-in avatar is inlined when it fits the size contract and
+    // stripped in member_projection when it does not.
     let builtin =
         crate::managed_agents::built_in_persona_definition("builtin:fizz", "2026-07-30T00:00:00Z")
             .expect("builtin:fizz must exist");

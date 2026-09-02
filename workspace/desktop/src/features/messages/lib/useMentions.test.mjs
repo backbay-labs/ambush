@@ -101,26 +101,26 @@ test("does not false-positive on partial name match", () => {
 });
 
 test("returns every mention offset", () => {
-  const text = "@Fast Fizz Codex and @Fast Fizz";
-  assert.deepEqual(getMentionOffsets(text, "Fast Fizz"), [0, 21]);
+  const text = "@Fast Anvil Codex and @Fast Anvil";
+  assert.deepEqual(getMentionOffsets(text, "Fast Anvil"), [0, 22]);
 });
 
 test("selected longer mention excludes a prefix member at the same offset", () => {
   const pubkeys = extractMentionPubkeys({
-    text: "Hive Codex(@Fast Fizz Codex)",
-    selectedMentions: new Map([["Fast Fizz Codex", "codex-pubkey"]]),
+    text: "Ledger Codex(@Fast Anvil Codex)",
+    selectedMentions: new Map([["Fast Anvil Codex", "codex-pubkey"]]),
     memberCandidates: [
       {
         kind: "identity",
-        pubkey: "fast-fizz-pubkey",
-        displayName: "Fast Fizz",
+        pubkey: "fast-anvil-pubkey",
+        displayName: "Fast Anvil",
         isMember: true,
         isAgent: true,
       },
       {
         kind: "identity",
         pubkey: "codex-pubkey",
-        displayName: "Fast Fizz Codex",
+        displayName: "Fast Anvil Codex",
         isMember: true,
         isAgent: true,
       },
@@ -132,20 +132,20 @@ test("selected longer mention excludes a prefix member at the same offset", () =
 
 test("manual longer mention excludes its prefix member", () => {
   const pubkeys = extractMentionPubkeys({
-    text: "@Fast Fizz Codex",
+    text: "@Fast Anvil Codex",
     selectedMentions: new Map(),
     memberCandidates: [
       {
         kind: "identity",
-        pubkey: "fast-fizz-pubkey",
-        displayName: "Fast Fizz",
+        pubkey: "fast-anvil-pubkey",
+        displayName: "Fast Anvil",
         isMember: true,
         isAgent: true,
       },
       {
         kind: "identity",
         pubkey: "codex-pubkey",
-        displayName: "Fast Fizz Codex",
+        displayName: "Fast Anvil Codex",
         isMember: true,
         isAgent: true,
       },
@@ -157,52 +157,52 @@ test("manual longer mention excludes its prefix member", () => {
 
 test("manual prefix mentions choose the longest name at each offset", () => {
   const pubkeys = extractMentionPubkeys({
-    text: "@Fast Fizz Codex, please pair with @Fast Fizz.",
+    text: "@Fast Anvil Codex, please pair with @Fast Anvil.",
     selectedMentions: new Map(),
     memberCandidates: [
       {
         kind: "identity",
-        pubkey: "fast-fizz-pubkey",
-        displayName: "Fast Fizz",
+        pubkey: "fast-anvil-pubkey",
+        displayName: "Fast Anvil",
         isMember: true,
         isAgent: true,
       },
       {
         kind: "identity",
         pubkey: "codex-pubkey",
-        displayName: "Fast Fizz Codex",
+        displayName: "Fast Anvil Codex",
         isMember: true,
         isAgent: true,
       },
     ],
   });
 
-  assert.deepEqual(pubkeys, ["fast-fizz-pubkey", "codex-pubkey"]);
+  assert.deepEqual(pubkeys, ["fast-anvil-pubkey", "codex-pubkey"]);
 });
 
 test("keeps manually typed prefix member mentions at distinct offsets", () => {
   const pubkeys = extractMentionPubkeys({
-    text: "@Fast Fizz Codex, please pair with @Fast Fizz.",
-    selectedMentions: new Map([["Fast Fizz Codex", "codex-pubkey"]]),
+    text: "@Fast Anvil Codex, please pair with @Fast Anvil.",
+    selectedMentions: new Map([["Fast Anvil Codex", "codex-pubkey"]]),
     memberCandidates: [
       {
         kind: "identity",
-        pubkey: "fast-fizz-pubkey",
-        displayName: "Fast Fizz",
+        pubkey: "fast-anvil-pubkey",
+        displayName: "Fast Anvil",
         isMember: true,
         isAgent: true,
       },
       {
         kind: "identity",
         pubkey: "codex-pubkey",
-        displayName: "Fast Fizz Codex",
+        displayName: "Fast Anvil Codex",
         isMember: true,
         isAgent: true,
       },
     ],
   });
 
-  assert.deepEqual(pubkeys, ["codex-pubkey", "fast-fizz-pubkey"]);
+  assert.deepEqual(pubkeys, ["codex-pubkey", "fast-anvil-pubkey"]);
 });
 
 // ── Markdown code ─────────────────────────────────────────────────────

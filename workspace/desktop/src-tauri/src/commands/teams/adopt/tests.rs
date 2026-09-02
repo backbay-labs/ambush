@@ -679,7 +679,7 @@ fn test_allowlist_respond_to_is_normalized_to_owner_only_on_adoption() {
 
 #[test]
 fn test_real_builtin_round_trips_through_publish_and_plan_add() {
-    // End-to-end reuse fix: fizz (with its ~170 KiB avatar) is published via
+    // End-to-end reuse fix: a real built-in (avatar included) is published via
     // build_team_catalog_event, parsed on the recipient side, and plan_add
     // reuses the local built-in rather than minting a copy.
     use crate::managed_agents::team_catalog::{

@@ -1,8 +1,8 @@
 # Welcome Kickoff — Failure Paths
 
 Context: the Welcome-channel kickoff choreography
-(`desktop/src/features/onboarding/welcomeKickoff.ts`) where Fizz posts an
-opener, teammates introduce themselves in-thread, and Fizz posts a closer.
+(`desktop/src/features/onboarding/welcomeKickoff.ts`) where Anvil posts an
+opener, teammates introduce themselves in-thread, and Anvil posts a closer.
 
 The file name says "silent-failures" for link stability (referenced from
 [PR #2066](https://github.com/backbay-labs/ambush/pull/2066) and
@@ -67,9 +67,9 @@ prompt fix in §2 and the closer fix in §1 are the same change in two places.
 
 ## 1. Wrong story: the closer speaks on a timer
 
-**Status: fixed on this branch. Observed 2026-07-18, 14:26.** Opener at 2:26. At 2:26+15s Fizz
-posted *"Honey and Pollen are taking longer than expected. I'm still here to
-help."* Honey and Pollen posted good intros at 2:27. The false story was never
+**Status: fixed on this branch. Observed 2026-07-18, 14:26.** Opener at 2:26. At 2:26+15s Anvil
+posted *"Lantern and Sextant are taking longer than expected. I'm still here to
+help."* Lantern and Sextant posted good intros at 2:27. The false story was never
 corrected, because it was already stamped final.
 
 ### Mechanism
@@ -79,7 +79,7 @@ corrected, because it was already stamped final.
 2. It fires. `classifyWelcomeKickoffResolution` (`:292`) splits teammates into
    `failed` (fact-based, via `failedAfterKickoff`) and `unresolved` (**merely
    no intro seen yet**).
-3. `unresolved.length > 0` → `buildWelcomeKickoffCloser([], ["Honey","Pollen"])`
+3. `unresolved.length > 0` → `buildWelcomeKickoffCloser([], ["Lantern","Sextant"])`
    → the "taking longer" text + the CTA (`:253`).
 4. It posts **with `closerMarker`** (`sendWelcomeKickoffCloser`, `:443`). That
    marker is **terminal**: every later pass early-returns on it (`:703`) and the
@@ -138,7 +138,7 @@ on a teammate that is alive but silent. A real failure never waits for it;
 The CTA only exists *inside* the closer, so waiting for intros delays the "you
 can talk to us now" handoff from ~15s to ~60s. **Accepted** (Morgan, 2026-07-18):
 the room is not dead while we wait — the opener is up and the stage shows
-*"Fizz: Working"*. The alternative (post the CTA early on its own, and post
+*"Anvil: Working"*. The alternative (post the CTA early on its own, and post
 status only when there is status worth reporting) is honest but adds a second
 message, with its own marker and idempotency, to solve a problem the stage
 already solves.
@@ -158,9 +158,9 @@ Codex specifically.
 Observed on the Codex runtime (`codex-acp`), never reproduced on Claude Code.
 21+ replies deep, each an acknowledgement of the previous acknowledgement:
 
-> **Pollen:** `@Fizz` parked; no further replies from me until there's work.
-> **Honey:** `@Fizz` understood. I won't reply again unless there's a task for me.
-> **Fizz:** `@Honey` `@Pollen` acknowledged — stay parked until `@morgan` brings a real task.
+> **Sextant:** `@Anvil` parked; no further replies from me until there's work.
+> **Lantern:** `@Anvil` understood. I won't reply again unless there's a task for me.
+> **Anvil:** `@Lantern` `@Sextant` acknowledged — stay parked until `@morgan` brings a real task.
 
 **The content was the tell: every agent was trying to end the conversation, and
 announcing it is what kept it alive.** The agents were not malfunctioning — they
@@ -257,8 +257,8 @@ false-positive, not the success.
 
 **Status: open.** The *perception* gap is handled; the paths are not.
 
-Every fallback message assumes Fizz — the lead and sender — is alive and able to
-post. **When Fizz is the thing that failed, nobody speaks.**
+Every fallback message assumes Anvil — the lead and sender — is alive and able to
+post. **When Anvil is the thing that failed, nobody speaks.**
 
 The client-side kickoff stage (characters on the Welcome composer banner) covers
 perception and has landed: after 90s with no message, they exit and the banner
@@ -269,16 +269,16 @@ What it does **not** do is explain anything:
 
 - The stage reads only "is the timeline empty" + that timer
   (`useWelcomeKickoffStage.ts`). It never reads real kickoff state, so it cannot
-  tell "Fizz crashed" from "the relay is slow" — **another stopwatch standing in
+  tell "Anvil crashed" from "the relay is slow" — **another stopwatch standing in
   for a fact.**
-- The empty channel it degrades to invites the user to `@`-mention Fizz — who,
+- The empty channel it degrades to invites the user to `@`-mention Anvil — who,
   in exactly these cases, is what isn't working. Honest, but a dead end.
 
 ### What the user CANNOT be told today
 
-1. **Fizz fails to start.** `startManagedAgent` rejects (harness binary missing,
+1. **Anvil fails to start.** `startManagedAgent` rejects (harness binary missing,
    spawn error). The effect logs `Failed to start Welcome agent…` and returns —
-   by design only Fizz sends the opener, so nobody speaks.
+   by design only Anvil sends the opener, so nobody speaks.
 2. **Any step throws.** The whole kickoff is one `try/catch` that logs
    `Failed to start the Welcome team kickoff.` and gives up. Seen in practice:
    relay unreachable / websocket down; `ensureWelcomeTeam` failure; the send
@@ -296,15 +296,15 @@ All hard-coded client-side; only teammate intro replies are LLM-generated.
 
 | # | Message | Trigger | Sender |
 |---|---|---|---|
-| 1 | Provider fallback ("connect to an AI provider in Settings…") | Readiness check fails before kickoff | Fizz (`provider-required.v1`) |
-| 2 | Happy-path opener | Team online | Fizz (`opener.v1`) |
-| 3 | Degraded opener ("I'm here with Honey and Pollen…") | Fizz online, zero teammates online within 60s | Fizz (opener + closer markers) |
-| 4 | Closer variants (clean / failed / slow) | 3s beat after intros resolve, **or the 120s intro backstop** — see [§1](#1-wrong-story-the-closer-speaks-on-a-timer) | Fizz (`closer.v1`) |
+| 1 | Provider fallback ("connect to an AI provider in Settings…") | Readiness check fails before kickoff | Anvil (`provider-required.v1`) |
+| 2 | Happy-path opener | Team online | Anvil (`opener.v1`) |
+| 3 | Degraded opener ("I'm here with Lantern and Sextant…") | Anvil online, zero teammates online within 60s | Anvil (opener + closer markers) |
+| 4 | Closer variants (clean / failed / slow) | 3s beat after intros resolve, **or the 120s intro backstop** — see [§1](#1-wrong-story-the-closer-speaks-on-a-timer) | Anvil (`closer.v1`) |
 | 5 | Setup-mode nudge ("here's what you still need to configure") | Agent spawns but requirements check fails (e.g. missing API key) | The agent process itself (ambush-acp setup-listener mode) |
 
 ### Constraints for the fix
 
-- **Fizz cannot be the messenger** — she is what failed. Any fallback must come
+- **Anvil cannot be the messenger** — it is what failed. Any fallback must come
   from the client UI (banner, intro-block state, stage `timed-out` phase), not a
   channel message impersonating an agent.
 - A relay-side/system-authored message is possible (kind-scoped system event)
@@ -410,7 +410,7 @@ surface.** `is_owner_control_command` (`lib.rs:2476`) requires *all* of: kind:9,
 `content.trim() == "!cancel"` (**exact**), and a `p` tag naming the agent. But
 every surface derives the `p` tag *from `@Name` text in the content* (Desktop:
 `hasMention.ts:143`; CLI: `resolve_content_mentions`, `messages.rs:128` —
-`SendMessageParams` has no mention flag). So `@Fizz !cancel` fails the exact
+`SendMessageParams` has no mention flag). So `@Anvil !cancel` fails the exact
 match, and bare `!cancel` produces no `p` tag. **Mutually exclusive on every
 real surface.** Only a hand-crafted signed event via `POST /events` fires them.
 The unit test passes only because it attaches the `p` tag independently of
@@ -447,11 +447,11 @@ the human:
 
 | Turn | Trigger | `p` tags | Classified |
 |---|---|---|---|
-| Honey/Pollen | Fizz: *"…until `@morgan` brings a real task"* | Honey, Pollen, **morgan** | **human → MUST reply** |
-| Fizz | Honey: *"@Fizz understood"* | Fizz | agent → optional |
+| Lantern/Sextant | Anvil: *"…until `@morgan` brings a real task"* | Lantern, Sextant, **morgan** | **human → MUST reply** |
+| Anvil | Lantern: *"@Anvil understood"* | Anvil | agent → optional |
 
 It exempts only the leg that happens not to name the human — cutting 1 of 3 legs
-**by luck**. Had Honey written *"@Fizz understood, waiting on @morgan"* —
+**by luck**. Had Lantern written *"@Anvil understood, waiting on @morgan"* —
 entirely in character — the loop survives the fix intact. **The loop's own
 content re-arms the rule meant to stop it.** A guard the symptom disables is not
 a guard. Worse, those narrative `@morgan` mentions already violated the Mentions
@@ -467,7 +467,7 @@ signal.
 *character* prompts (tone, wordplay), so a conversation-protocol rule is a
 layering violation; it would need duplicating across all three and every future
 persona; and stored copies are user-editable with modification tracking
-(`migrate_retired_personas`, `was_unmodified`) — a user rewording Fizz must not
+(`migrate_retired_personas`, `was_unmodified`) — a user rewording Anvil must not
 be able to delete a loop guard.
 
 **Fixing the loop in `welcomeKickoff.ts` copy.** Rejected: treats the trigger,

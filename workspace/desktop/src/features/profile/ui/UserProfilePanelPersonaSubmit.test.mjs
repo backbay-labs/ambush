@@ -6,7 +6,7 @@ import { validateLinkedAgentRuntimeEdit } from "./UserProfilePanelPersonaSubmit.
 function agent(overrides = {}) {
   return {
     pubkey: "deadbeef".repeat(8),
-    name: "Fizz",
+    name: "Anvil",
     personaId: "persona-1",
     relayUrl: "ws://localhost:3000",
     acpCommand: "ambush-acp",
@@ -42,7 +42,7 @@ function agent(overrides = {}) {
 function persona(overrides = {}) {
   return {
     id: "persona-1",
-    displayName: "Fizz",
+    displayName: "Anvil",
     avatarUrl: null,
     systemPrompt: "Prompt",
     runtime: "goose",
@@ -61,7 +61,7 @@ function persona(overrides = {}) {
 function updateInput(overrides = {}) {
   return {
     id: "persona-1",
-    displayName: "Fizz",
+    displayName: "Anvil",
     avatarUrl: undefined,
     systemPrompt: "Prompt",
     runtime: "claude",

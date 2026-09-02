@@ -93,7 +93,7 @@ struct AmbushPushPresentationCacheTests {
     let content = try #require(
       String(
         data: JSONSerialization.data(withJSONObject: [
-          "display_name": "Fizz",
+          "display_name": "Anvil",
           "picture": picture,
         ]),
         encoding: .utf8
@@ -112,7 +112,7 @@ struct AmbushPushPresentationCacheTests {
         communityID: "community-a",
         relayOrigin: "https://relay.example",
         pubkey: event.pubkey
-      )?.displayName == "Fizz"
+      )?.displayName == "Anvil"
     )
 
     let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])

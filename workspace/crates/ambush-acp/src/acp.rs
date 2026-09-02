@@ -3591,14 +3591,14 @@ mod tests {
             .expect("initialize should succeed");
 
         let resp = client
-            .session_new_full("/tmp", vec![], None, Some("Fizz · #ambush-dev"))
+            .session_new_full("/tmp", vec![], None, Some("Anvil · #ambush-dev"))
             .await
             .expect("session_new_full should succeed");
 
         let received = &resp.raw["_receivedRequest"];
         assert_eq!(
             received["params"]["_meta"]["sessionTitle"].as_str(),
-            Some("Fizz · #ambush-dev"),
+            Some("Anvil · #ambush-dev"),
             "title should ride in _meta.sessionTitle, out of band from the prompt"
         );
     }
@@ -3693,7 +3693,7 @@ mod tests {
                 "/tmp",
                 vec![],
                 Some(SystemPromptTransport::ClaudeMeta("Be concise")),
-                Some("Fizz · #ambush-dev"),
+                Some("Anvil · #ambush-dev"),
             )
             .await
             .expect("session_new_full should succeed");
@@ -3706,7 +3706,7 @@ mod tests {
         );
         assert_eq!(
             received["params"]["_meta"]["sessionTitle"].as_str(),
-            Some("Fizz · #ambush-dev"),
+            Some("Anvil · #ambush-dev"),
             "_meta.sessionTitle must be present alongside systemPrompt"
         );
     }

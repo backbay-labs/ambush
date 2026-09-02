@@ -1,6 +1,6 @@
 # Ambush shared compute: local GUI verification
 
-This runbook verifies the actual desktop path used by the built-in **Fizz** agent:
+This runbook verifies the actual desktop path used by the built-in **Anvil** agent:
 
 `Ambush Desktop → ambush-acp → ambush-agent → MeshLLM SDK → local/remote compute`
 
@@ -73,7 +73,7 @@ runtime are behind the `mesh-llm` feature.
      inference is reachable while still failing the agent's long prompt and
      required message-send tool call.
 4. Turn on **Share this machine**.
-5. Wait until the card says it is sharing/running. Do not start Fizz while the
+5. Wait until the card says it is sharing/running. Do not start Anvil while the
    card says downloading, preparing, or starting.
 
 Ambush may download the model on first use. The model picker ranks models for the
@@ -87,26 +87,26 @@ current hardware; avoid entering a model the card marks too large.
 3. Set **Default model** to **Default (auto)**.
 4. Click **Save defaults** and wait for **Saved**.
 
-Fizz has no pinned runtime/provider/model, so it inherits these defaults and
+Anvil has no pinned runtime/provider/model, so it inherits these defaults and
 resolves to the bundled `ambush-agent`. No API key is required.
 
-## 4. Start the real Fizz path
+## 4. Start the real Anvil path
 
-1. Find the **Fizz** card on the Agents screen.
-2. If Fizz is stopped, click the small play badge over its avatar. If it is
+1. Find the **Anvil** card on the Agents screen.
+2. If Anvil is stopped, click the small play badge over its avatar. If it is
    running, the badge is a green status dot instead of a stop control.
 3. Wait for its runtime indicator to become active.
-4. Add Fizz to a channel if it is not already a channel member.
+4. Add Anvil to a channel if it is not already a channel member.
 5. In that channel, send:
 
    ```text
-   @Fizz Reply exactly: FIZZ_MESH_OK
+   @Anvil Reply exactly: ANVIL_MESH_OK
    ```
 
-6. Confirm that Fizz replies `FIZZ_MESH_OK` in the channel.
+6. Confirm that Anvil replies `ANVIL_MESH_OK` in the channel.
 
 That channel response is the end-to-end proof. A green Compute card alone proves
-only model serving; it does not prove the Fizz harness and provider inheritance.
+only model serving; it does not prove the Anvil harness and provider inheritance.
 
 To stop a running agent, click the body/name of its card to open its profile,
 then click **Stop** near the top. The green avatar badge is status-only while the
@@ -130,17 +130,17 @@ lsof -nP -iTCP:9337 -iTCP:3131
 # The embedded OpenAI-compatible ingress should advertise the model.
 curl -sS http://127.0.0.1:9337/v1/models | jq '.data[].id'
 
-# Fizz should resolve through the real managed-agent subprocesses.
+# Anvil should resolve through the real managed-agent subprocesses.
 ps -eo pid,ppid,command | grep -E '[b]uzz-(desktop|acp|agent)'
 ```
 
-If Fizz fails, open its runtime details from the Agents screen first. Common
+If Anvil fails, open its runtime details from the Agents screen first. Common
 causes are:
 
 - launched with `just dev` instead of `just mesh=1 dev`;
 - a stale process owns `9337`/`3131`;
 - the model is still downloading or preparing;
-- Fizz is not a member of the channel;
+- Anvil is not a member of the channel;
 - defaults were changed but not saved;
 - no current Ambush membership snapshot is available (admission fails closed).
 

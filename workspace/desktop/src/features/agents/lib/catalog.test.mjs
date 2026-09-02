@@ -25,7 +25,7 @@ function createPersona(id, displayName, overrides = {}) {
 test("isCatalogPersonaSelected treats active catalog personas as selected", () => {
   assert.equal(
     isCatalogPersonaSelected(
-      createPersona("builtin:fizz", "Fizz", {
+      createPersona("builtin:fizz", "Anvil", {
         isBuiltIn: true,
         isActive: true,
       }),
@@ -34,7 +34,7 @@ test("isCatalogPersonaSelected treats active catalog personas as selected", () =
   );
   assert.equal(
     isCatalogPersonaSelected(
-      createPersona("builtin:fizz", "Fizz", {
+      createPersona("builtin:fizz", "Anvil", {
         isBuiltIn: true,
         isActive: false,
       }),
@@ -49,12 +49,15 @@ test("isCatalogPersonaSelected treats active catalog personas as selected", () =
 
 test("getPersonaLabelsById keeps every returned persona addressable", () => {
   const personas = [
-    createPersona("builtin:fizz", "Fizz", { isBuiltIn: true, isActive: false }),
+    createPersona("builtin:fizz", "Anvil", {
+      isBuiltIn: true,
+      isActive: false,
+    }),
     createPersona("custom:builder", "Builder"),
   ];
 
   assert.deepEqual(getPersonaLabelsById(personas), {
-    "builtin:fizz": "Fizz",
+    "builtin:fizz": "Anvil",
     "custom:builder": "Builder",
   });
 });

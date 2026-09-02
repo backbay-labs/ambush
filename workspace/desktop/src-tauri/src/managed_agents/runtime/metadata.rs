@@ -81,20 +81,20 @@ mod tests {
     #[test]
     fn resolve_session_title_prefers_display_name() {
         assert_eq!(
-            resolve_session_title(Some("Fizz"), "fizz-1").as_deref(),
-            Some("Fizz")
+            resolve_session_title(Some("Anvil"), "anvil-1").as_deref(),
+            Some("Anvil")
         );
     }
 
     #[test]
     fn resolve_session_title_falls_back_to_name_when_display_name_blank() {
         assert_eq!(
-            resolve_session_title(None, "fizz-1").as_deref(),
-            Some("fizz-1")
+            resolve_session_title(None, "anvil-1").as_deref(),
+            Some("anvil-1")
         );
         assert_eq!(
-            resolve_session_title(Some("  "), "fizz-1").as_deref(),
-            Some("fizz-1")
+            resolve_session_title(Some("  "), "anvil-1").as_deref(),
+            Some("anvil-1")
         );
     }
 
@@ -106,8 +106,8 @@ mod tests {
     #[test]
     fn resolve_session_title_trims_surrounding_whitespace() {
         assert_eq!(
-            resolve_session_title(Some("  Fizz  "), "fizz-1").as_deref(),
-            Some("Fizz")
+            resolve_session_title(Some("  Anvil  "), "anvil-1").as_deref(),
+            Some("Anvil")
         );
     }
 
@@ -116,9 +116,9 @@ mod tests {
     /// from turning display chrome into a spawn failure.
     #[test]
     fn resolve_session_title_strips_control_chars_that_would_fail_the_spawn() {
-        let title = resolve_session_title(Some("Fi\u{0}zz\u{7}"), "fizz-1")
+        let title = resolve_session_title(Some("An\u{0}vil\u{7}"), "anvil-1")
             .expect("a name with strippable controls still yields a title");
-        assert_eq!(title, "Fizz");
+        assert_eq!(title, "Anvil");
         assert!(!title.contains('\u{0}'));
     }
 
@@ -127,8 +127,8 @@ mod tests {
     #[test]
     fn resolve_session_title_falls_back_to_name_when_display_name_is_all_control_chars() {
         assert_eq!(
-            resolve_session_title(Some("\u{0}\u{1}"), "fizz-1").as_deref(),
-            Some("fizz-1")
+            resolve_session_title(Some("\u{0}\u{1}"), "anvil-1").as_deref(),
+            Some("anvil-1")
         );
     }
 

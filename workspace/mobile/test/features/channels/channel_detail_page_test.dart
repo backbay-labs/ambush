@@ -5685,7 +5685,7 @@ void main() {
             ),
           ],
           users: const {
-            'agent': UserProfile(pubkey: 'agent', displayName: 'Pollen'),
+            'agent': UserProfile(pubkey: 'agent', displayName: 'Sextant'),
             'self': UserProfile(pubkey: 'self', displayName: 'Self'),
           },
           members: [
@@ -5719,7 +5719,7 @@ void main() {
         findsNothing,
       );
       expect(
-        find.bySemanticsLabel('Pollen, preparing a response'),
+        find.bySemanticsLabel('Sextant, preparing a response'),
         findsOneWidget,
       );
       // The preparing transition must be announced live. The outer avatar node
@@ -5757,7 +5757,7 @@ void main() {
         find.byKey(const ValueKey('huddle-avatar-image-agent')),
         findsOneWidget,
       );
-      expect(find.bySemanticsLabel('Pollen, speaking'), findsOneWidget);
+      expect(find.bySemanticsLabel('Sextant, speaking'), findsOneWidget);
 
       // A brief audio gap must not revive the waiting state while the same
       // working signal is still active.
@@ -5817,7 +5817,7 @@ void main() {
               ),
             ],
             users: const {
-              'agent': UserProfile(pubkey: 'agent', displayName: 'Pollen'),
+              'agent': UserProfile(pubkey: 'agent', displayName: 'Sextant'),
               'self': UserProfile(pubkey: 'self', displayName: 'Self'),
             },
             // Bot membership is supplied ONLY through the ephemeral Huddle, and
@@ -5852,7 +5852,7 @@ void main() {
           findsNothing,
         );
         expect(
-          find.bySemanticsLabel('Pollen, preparing a response'),
+          find.bySemanticsLabel('Sextant, preparing a response'),
           findsOneWidget,
         );
       },
@@ -5881,7 +5881,7 @@ void main() {
             ),
           ],
           users: const {
-            'agent': UserProfile(pubkey: 'agent', displayName: 'Pollen'),
+            'agent': UserProfile(pubkey: 'agent', displayName: 'Sextant'),
             'self': UserProfile(pubkey: 'self', displayName: 'Self'),
           },
           huddleTypingNotifier: typing,
@@ -5897,7 +5897,7 @@ void main() {
 
       transport.emitRemoteAudio(peerIndex: 2);
       await tester.pump();
-      expect(find.bySemanticsLabel('Pollen, speaking'), findsOneWidget);
+      expect(find.bySemanticsLabel('Sextant, speaking'), findsOneWidget);
 
       // Let the active-speaker window close before the independently
       // transported typing signal arrives.
@@ -5947,7 +5947,7 @@ void main() {
             ),
           ],
           users: const {
-            'agent': UserProfile(pubkey: 'agent', displayName: 'Pollen'),
+            'agent': UserProfile(pubkey: 'agent', displayName: 'Sextant'),
             'self': UserProfile(pubkey: 'self', displayName: 'Self'),
           },
           huddleMembers: [
@@ -6010,7 +6010,7 @@ void main() {
         findsNothing,
       );
       expect(
-        find.bySemanticsLabel('Pollen, preparing a response'),
+        find.bySemanticsLabel('Sextant, preparing a response'),
         findsOneWidget,
       );
       expect(
@@ -6052,7 +6052,7 @@ void main() {
               ),
             ],
             users: const {
-              'agent': UserProfile(pubkey: 'agent', displayName: 'Pollen'),
+              'agent': UserProfile(pubkey: 'agent', displayName: 'Sextant'),
               'self': UserProfile(pubkey: 'self', displayName: 'Self'),
             },
             relaySessionNotifier: relaySession,
@@ -6096,7 +6096,7 @@ void main() {
         );
         final users = _FakeUserCacheNotifier(const {
           'desktop': UserProfile(pubkey: 'desktop', displayName: 'Miles'),
-          'agent': UserProfile(pubkey: 'agent', displayName: 'Pollen'),
+          'agent': UserProfile(pubkey: 'agent', displayName: 'Sextant'),
           'self': UserProfile(pubkey: 'self', displayName: 'Self'),
         });
         final navigator = _RecordingNavigatorObserver();
@@ -6200,7 +6200,7 @@ void main() {
           closeTo(muteCenter.dx, 0.01),
         );
         expect(find.text('Miles'), findsNothing);
-        expect(find.text('Pollen'), findsNothing);
+        expect(find.text('Sextant'), findsNothing);
         expect(find.text('You'), findsNothing);
         expect(
           find.byWidgetPredicate(
@@ -6294,7 +6294,7 @@ void main() {
           const UserProfile(pubkey: 'desktop', displayName: 'Miles'),
         );
         await tester.pump();
-        expect(find.text('Pollen'), findsNothing);
+        expect(find.text('Sextant'), findsNothing);
         expect(find.byKey(const ValueKey('huddle-leave')), findsOneWidget);
         expect(
           find.byKey(const ValueKey('huddle-participant-label-desktop')),
@@ -6318,10 +6318,10 @@ void main() {
         await tester.pumpAndSettle();
         expect(hapticCalls, hasLength(2));
         expect(hapticCalls.last.arguments, 'HapticFeedbackType.selectionClick');
-        expect(find.text('Pollen'), findsOneWidget);
+        expect(find.text('Sextant'), findsOneWidget);
         await tester.tapAt(const Offset(8, 8));
         await tester.pumpAndSettle();
-        expect(find.text('Pollen'), findsNothing);
+        expect(find.text('Sextant'), findsNothing);
 
         await tester.tap(
           find.byKey(const ValueKey('huddle-participant-avatar-self')),
@@ -7321,7 +7321,7 @@ void main() {
           ],
           users: const {
             'desktop': UserProfile(pubkey: 'desktop'),
-            'agent': UserProfile(pubkey: 'agent', displayName: 'Pollen'),
+            'agent': UserProfile(pubkey: 'agent', displayName: 'Sextant'),
             'self': UserProfile(pubkey: 'self'),
           },
           relayConfigNotifier: _HuddleRelayConfigNotifier(),

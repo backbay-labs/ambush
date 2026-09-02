@@ -46,7 +46,7 @@ fn merge_personas_adds_missing_built_ins() {
         .iter()
         .map(|record| record.display_name.as_str())
         .collect();
-    assert_eq!(display_names, vec!["Fizz", "Honey", "Pollen"]);
+    assert_eq!(display_names, vec!["Anvil", "Lantern", "Sextant"]);
     let active_ids: Vec<&str> = records
         .iter()
         .filter(|record| record.is_active)
@@ -69,7 +69,7 @@ fn merge_personas_preserves_custom_records() {
 
 #[test]
 fn merge_personas_preserves_builtin_edits() {
-    let mut edited_builtin = custom_persona("builtin:fizz", "My Fizz");
+    let mut edited_builtin = custom_persona("builtin:fizz", "My Anvil");
     edited_builtin.is_builtin = true;
     edited_builtin.is_active = true;
     edited_builtin.system_prompt = "User-edited instructions".to_string();
@@ -80,35 +80,35 @@ fn merge_personas_preserves_builtin_edits() {
     let (records, changed) = merge_personas(vec![edited_builtin.clone()], "2026-03-19T00:00:00Z");
 
     assert!(changed); // The remaining seeded built-ins are added.
-    let fizz = records
+    let anvil = records
         .iter()
         .find(|record| record.id == "builtin:fizz")
-        .expect("fizz built-in should exist");
-    assert_eq!(fizz.display_name, edited_builtin.display_name);
-    assert_eq!(fizz.system_prompt, edited_builtin.system_prompt);
-    assert_eq!(fizz.name_pool, edited_builtin.name_pool);
-    assert_eq!(fizz.env_vars, edited_builtin.env_vars);
-    assert_eq!(fizz.is_active, edited_builtin.is_active);
+        .expect("anvil built-in should exist");
+    assert_eq!(anvil.display_name, edited_builtin.display_name);
+    assert_eq!(anvil.system_prompt, edited_builtin.system_prompt);
+    assert_eq!(anvil.name_pool, edited_builtin.name_pool);
+    assert_eq!(anvil.env_vars, edited_builtin.env_vars);
+    assert_eq!(anvil.is_active, edited_builtin.is_active);
 }
 
 #[test]
 fn merge_personas_restores_builtin_marker_without_resetting_edits() {
-    let mut edited_builtin = custom_persona("builtin:fizz", "My Fizz");
+    let mut edited_builtin = custom_persona("builtin:fizz", "My Anvil");
     edited_builtin.is_builtin = false;
 
     let (records, changed) = merge_personas(vec![edited_builtin], "2026-03-19T00:00:00Z");
 
     assert!(changed);
-    let fizz = records
+    let anvil = records
         .iter()
         .find(|record| record.id == "builtin:fizz")
-        .expect("fizz built-in should exist");
-    assert!(fizz.is_builtin);
-    assert_eq!(fizz.display_name, "My Fizz");
+        .expect("anvil built-in should exist");
+    assert!(anvil.is_builtin);
+    assert_eq!(anvil.display_name, "My Anvil");
 }
 
 #[test]
-fn merge_personas_adds_fizz_and_retires_old_builtins_for_existing_store() {
+fn merge_personas_adds_anvil_and_retires_old_builtins_for_existing_store() {
     let mut legacy_builtins = vec![custom_persona("builtin:solo", "Solo")];
     for persona in &mut legacy_builtins {
         persona.is_builtin = true;
@@ -118,12 +118,12 @@ fn merge_personas_adds_fizz_and_retires_old_builtins_for_existing_store() {
     let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z");
 
     assert!(changed);
-    let fizz = records
+    let anvil = records
         .iter()
         .find(|record| record.id == "builtin:fizz")
-        .expect("fizz built-in should exist");
-    assert!(fizz.is_builtin);
-    assert!(fizz.is_active);
+        .expect("anvil built-in should exist");
+    assert!(anvil.is_builtin);
+    assert!(anvil.is_active);
 
     let solo = records
         .iter()
@@ -168,13 +168,13 @@ fn ensure_persona_is_active_rejects_missing_personas() {
 
 #[test]
 fn ensure_persona_is_active_rejects_inactive_personas() {
-    let mut persona = custom_persona("builtin:fizz", "Fizz");
+    let mut persona = custom_persona("builtin:fizz", "Anvil");
     persona.is_builtin = true;
     persona.is_active = false;
 
     let err = ensure_persona_is_active(&[persona], "builtin:fizz").unwrap_err();
 
-    assert_eq!(err, "Fizz is not in My Agents.");
+    assert_eq!(err, "Anvil is not in My Agents.");
 }
 
 #[test]
@@ -205,33 +205,33 @@ fn validate_persona_activation_change_rejects_non_builtins() {
 
 #[test]
 fn validate_persona_activation_change_rejects_managed_agent_references() {
-    let mut persona = custom_persona("builtin:fizz", "Fizz");
+    let mut persona = custom_persona("builtin:fizz", "Anvil");
     persona.is_builtin = true;
 
     let err = validate_persona_activation_change(&persona, false, true, false).unwrap_err();
 
     assert_eq!(
         err,
-        "Fizz is still assigned to a managed agent. Remove or reassign those agents first."
+        "Anvil is still assigned to a managed agent. Remove or reassign those agents first."
     );
 }
 
 #[test]
 fn validate_persona_activation_change_rejects_team_references() {
-    let mut persona = custom_persona("builtin:fizz", "Fizz");
+    let mut persona = custom_persona("builtin:fizz", "Anvil");
     persona.is_builtin = true;
 
     let err = validate_persona_activation_change(&persona, false, false, true).unwrap_err();
 
     assert_eq!(
         err,
-        "Fizz is still referenced by a team. Remove it from those teams first."
+        "Anvil is still referenced by a team. Remove it from those teams first."
     );
 }
 
 #[test]
 fn validate_persona_activation_change_allows_safe_builtin_updates() {
-    let mut persona = custom_persona("builtin:fizz", "Fizz");
+    let mut persona = custom_persona("builtin:fizz", "Anvil");
     persona.is_builtin = true;
 
     assert!(validate_persona_activation_change(&persona, true, false, false).is_ok());
@@ -240,7 +240,7 @@ fn validate_persona_activation_change_allows_safe_builtin_updates() {
 
 #[test]
 fn validate_persona_deletion_rejects_builtins() {
-    let mut persona = custom_persona("builtin:fizz", "Fizz");
+    let mut persona = custom_persona("builtin:fizz", "Anvil");
     persona.is_builtin = true;
 
     let err = validate_persona_deletion(&persona, false).unwrap_err();
@@ -272,7 +272,7 @@ fn validate_persona_deletion_allows_safe_custom_personas() {
 #[test]
 fn migrate_retires_unmodified_personas() {
     let now = "2026-04-01T00:00:00Z";
-    // Simulate a store from before the Fizz transition: all 6
+    // Simulate a store from before the Anvil transition: all 6
     // retired personas with original system prompts.
     let mut stored: Vec<AgentDefinition> = RETIRED_PERSONAS
         .iter()
@@ -378,36 +378,36 @@ fn migrate_is_idempotent() {
     assert!(!migrate_retired_personas(&mut stored_pre_demotion, now));
 }
 
-// ── Fizz default harness ──────────────────────────────────────────────────────
+// ── Anvil default harness ──────────────────────────────────────────────────────
 
 #[test]
-fn fizz_builtin_has_no_pinned_runtime() {
-    // The Fizz built-in must not hard-pin a runtime so it inherits the
+fn anvil_builtin_has_no_pinned_runtime() {
+    // The Anvil built-in must not hard-pin a runtime so it inherits the
     // bundled default (ambush-agent) rather than requiring goose on PATH.
     let records = built_in_persona_records("2026-01-01T00:00:00Z");
-    let fizz = records
+    let anvil = records
         .iter()
         .find(|r| r.id == "builtin:fizz")
         .expect("builtin:fizz must exist");
     assert_eq!(
-        fizz.runtime, None,
-        "Fizz built-in must not pin a runtime — it should inherit the default"
+        anvil.runtime, None,
+        "Anvil built-in must not pin a runtime — it should inherit the default"
     );
 }
 
 #[test]
-fn fizz_builtin_resolves_to_ambush_agent() {
+fn anvil_builtin_resolves_to_ambush_agent() {
     // With no runtime pin, effective_agent_command must fall through to
     // default_agent_command(), which resolves the bundled ambush-agent.
     let records = built_in_persona_records("2026-01-01T00:00:00Z");
     assert_eq!(
         effective_agent_command(Some("builtin:fizz"), &records, None),
         default_agent_command(),
-        "Fizz must resolve to the bundled default harness, not goose"
+        "Anvil must resolve to the bundled default harness, not goose"
     );
     assert_eq!(
         effective_agent_command(Some("builtin:fizz"), &records, None),
         "ambush-agent",
-        "Fizz must resolve to ambush-agent specifically"
+        "Anvil must resolve to ambush-agent specifically"
     );
 }

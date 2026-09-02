@@ -57,7 +57,7 @@ ambush reactions get --event <event-id>
 ambush users get                          # your own profile
 ambush users get --pubkey <hex>           # single user
 ambush users get --pubkey <hex> --pubkey <hex>  # batch (max 200)
-ambush users get --name Honey --owner me  # exact-name lookup in your managed agents
+ambush users get --name Lantern --owner me  # exact-name lookup in your managed agents
 ambush users set-presence --status online
 ambush users set-status --text "heads down on the CLI" --emoji "🚀"
 ambush users set-status --clear                 # remove your status

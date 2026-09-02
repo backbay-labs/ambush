@@ -89,7 +89,7 @@ fn setup_sync_layout() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let team_dir = main_instance.join("agents/teams/com.example.test-pack");
     std::fs::create_dir_all(&team_dir).unwrap();
     std::fs::write(team_dir.join("instructions.md"), "# Test pack").unwrap();
-    std::fs::write(team_dir.join("fizz.persona.md"), "# Fizz").unwrap();
+    std::fs::write(team_dir.join("anvil.persona.md"), "# Anvil").unwrap();
 
     (parent, canonical, worktree)
 }
@@ -632,7 +632,7 @@ fn reconcile_mcp_commands_clears_stale_ambush_mcp_server() {
     write_agents_json(
         dir.path(),
         &serde_json::json!([{
-            "name": "Fizz",
+            "name": "Anvil",
             "agent_command": "goose",
             "mcp_command": "ambush-mcp-server"
         }]),
@@ -662,7 +662,7 @@ fn reconcile_mcp_commands_sets_canonical_for_ambush_agent() {
 fn reconcile_mcp_commands_leaves_custom_value_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let json = serde_json::json!([{
-        "name": "Fizz",
+        "name": "Anvil",
         "agent_command": "goose",
         "mcp_command": "my-custom-mcp"
     }]);
@@ -694,7 +694,7 @@ fn reconcile_mcp_commands_is_idempotent() {
     write_agents_json(
         dir.path(),
         &serde_json::json!([{
-            "name": "Fizz",
+            "name": "Anvil",
             "agent_command": "goose",
             "mcp_command": "ambush-mcp-server"
         }]),
@@ -735,7 +735,7 @@ fn reconcile_mcp_commands_resolves_persona_runtime_over_stale_snapshot() {
     write_agents_json(
         dir.path(),
         &serde_json::json!([{
-            "name": "Fizz",
+            "name": "Anvil",
             "persona_id": "p1",
             "agent_command": "ambush-agent",
             "mcp_command": "ambush-mcp-server"
@@ -763,7 +763,7 @@ fn reconcile_mcp_commands_sees_team_dir_runtime_edit_same_launch() {
     write_agents_json(
         dir.path(),
         &serde_json::json!([{
-            "name": "Fizz",
+            "name": "Anvil",
             "persona_id": "p1",
             "agent_command": "ambush-agent",
             "mcp_command": ""
@@ -806,7 +806,7 @@ fn reconcile_mcp_commands_honors_explicit_override_over_persona() {
     write_agents_json(
         dir.path(),
         &serde_json::json!([{
-            "name": "Fizz",
+            "name": "Anvil",
             "persona_id": "p1",
             "agent_command": "goose",
             "agent_command_override": "ambush-agent",
