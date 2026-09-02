@@ -217,7 +217,7 @@ export function ForumView({
           </div>
         ) : posts.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 px-4 py-16 text-center">
-            <MessageSquareText className="h-10 w-10 text-muted-foreground/40" />
+            <MessageSquareText className="h-10 w-10 text-muted-foreground" />
             <div>
               <p className="text-sm font-medium text-foreground/70">
                 No posts yet

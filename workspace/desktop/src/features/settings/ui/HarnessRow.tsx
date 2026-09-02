@@ -159,7 +159,7 @@ function RuntimeOverflowMenu({
         ) : null}
         {onDelete ? (
           <DropdownMenuItem
-            className="text-destructive focus:text-destructive"
+            destructive
             data-testid={`custom-harness-delete-${runtime.id}`}
             onSelect={onDelete}
           >
@@ -221,9 +221,9 @@ function RuntimeActions({
           />
         </div>
       ) : isAvailable ? (
-        isAuthNeeded ? null : ( // Signed-out rows carry the amber status chip instead; never Install.
+        isAuthNeeded ? null : ( // Signed-out rows carry the status chip instead; never Install.
           <span
-            className="inline-flex shrink-0 items-center rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400"
+            className="inline-flex shrink-0 items-center rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground"
             data-testid={`doctor-runtime-ready-${runtime.id}`}
           >
             Ready
@@ -267,7 +267,7 @@ function RuntimeStatusChip({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
 
   return (
     <>
-      <span aria-hidden="true" className="text-muted-foreground/50">
+      <span aria-hidden="true" className="text-muted-foreground">
         ·
       </span>
       <span
@@ -276,7 +276,7 @@ function RuntimeStatusChip({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
           isConfigError
             ? "bg-destructive/10 text-destructive"
             : isAuthNeeded
-              ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+              ? "bg-warning-bg text-warning"
               : "bg-muted text-muted-foreground",
         )}
         data-testid={`doctor-runtime-status-${runtime.id}`}
@@ -504,7 +504,7 @@ export function HarnessRow({
         {confirmingDelete ? (
           <div className="mt-2 space-y-2">
             <p
-              className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-600 dark:text-amber-400"
+              className="rounded-lg border border-border bg-warning-bg px-3 py-1.5 text-sm text-warning"
               data-testid={`custom-harness-delete-warning-${runtime.id}`}
             >
               {confirmState.message}

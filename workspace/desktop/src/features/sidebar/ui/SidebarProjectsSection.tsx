@@ -364,7 +364,7 @@ function SidebarProjectsSectionContent() {
               })}
             </SidebarMenu>
           ) : isPending ? null : (
-            <p className="px-2 py-1 text-xs text-sidebar-foreground/50">
+            <p className="px-2 py-1 text-xs text-sidebar-foreground">
               No projects yet
             </p>
           )}
@@ -676,7 +676,7 @@ function SidebarProjectRow({
           <>
             <ContextMenuSeparator />
             <ContextMenuItem
-              className="text-destructive focus:text-destructive"
+              destructive
               data-testid={`sidebar-project-delete-menu-${project.dtag}`}
               disabled={deleteDisabled}
               onSelect={() => deferMenuAction(onDelete)}

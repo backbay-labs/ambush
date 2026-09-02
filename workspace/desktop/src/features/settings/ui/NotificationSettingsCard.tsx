@@ -93,7 +93,7 @@ export function NotificationSettingsCard({
                   : "Desktop alerts"}
               </label>
               <p
-                className="text-sm font-normal text-muted-foreground/70"
+                className="text-sm font-normal text-muted-foreground"
                 data-settings-subcopy
               >
                 {notificationSettings.desktopEnabled
@@ -121,7 +121,7 @@ export function NotificationSettingsCard({
                 Notify while viewing
               </label>
               <p
-                className="text-sm font-normal text-muted-foreground/70"
+                className="text-sm font-normal text-muted-foreground"
                 data-settings-subcopy
               >
                 Also alert for direct messages in the conversation you have
@@ -155,7 +155,7 @@ export function NotificationSettingsCard({
                     Sound
                   </label>
                   <p
-                    className="text-sm font-normal text-muted-foreground/70"
+                    className="text-sm font-normal text-muted-foreground"
                     data-settings-subcopy
                   >
                     Alert with a sound for the events below.
@@ -197,7 +197,7 @@ export function NotificationSettingsCard({
                             ) : null}
                           </span>
                           <p
-                            className="text-sm font-normal text-muted-foreground/70"
+                            className="text-sm font-normal text-muted-foreground"
                             data-settings-subcopy
                           >
                             {SLOT_DESCRIPTIONS[slot]}
@@ -268,7 +268,7 @@ export function NotificationSettingsCard({
                 Home badge
               </label>
               <p
-                className="text-sm font-normal text-muted-foreground/70"
+                className="text-sm font-normal text-muted-foreground"
                 data-settings-subcopy
               >
                 Show a Home badge for mentions and needs-action items in the

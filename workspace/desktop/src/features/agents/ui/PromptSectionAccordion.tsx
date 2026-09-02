@@ -63,7 +63,9 @@ export function PromptSectionAccordion({
               {body.length > 0 ? (
                 body
               ) : (
-                <span className="italic text-foreground/50">No metadata.</span>
+                <span className="italic text-muted-foreground">
+                  No metadata.
+                </span>
               )}
             </div>
           </div>

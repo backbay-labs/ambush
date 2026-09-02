@@ -1,20 +1,18 @@
-import 'dart:math' show cos, pi;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'ambush_logo_motion.dart';
 
-/// The Ambush mark with wings that flutter twice when the user taps it.
+/// The Ambush mark, re-engraved when the user taps it.
 ///
-/// The geometry and wing tuck match the desktop loading bee. When reduced
-/// motion is enabled, the mark stays static.
+/// The rule inks down from the top once per tap and then holds. When reduced
+/// motion is enabled the mark stays finished and still.
 class TappableAmbushLogoMotion extends HookConsumerWidget {
-  /// The rendered width of the complete bee mark.
+  /// The rendered width of the mark's square frame.
   final double width;
 
-  /// The color used for the bee silhouette.
+  /// The color of both segments.
   final Color color;
 
   const TappableAmbushLogoMotion({
@@ -25,34 +23,35 @@ class TappableAmbushLogoMotion extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final animation = useAnimationController(
-      duration: const Duration(milliseconds: 480),
-    );
+    final animation = useAnimationController(duration: ambushEngraveCycle);
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
 
-    void flutterWings() {
+    void engrave() {
       if (reducedMotion) return;
       animation.forward(from: 0);
     }
 
     return Semantics(
       button: true,
-      label: 'Ambush bee',
-      hint: 'Tap to make its wings flutter',
-      onTap: flutterWings,
+      label: 'Ambush mark',
+      hint: 'Tap to redraw it',
+      onTap: engrave,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         excludeFromSemantics: true,
-        onTap: flutterWings,
+        onTap: engrave,
         child: RepaintBoundary(
           child: AnimatedBuilder(
             animation: animation,
             builder: (context, _) {
-              final flapAmount = 0.5 - (0.5 * cos(animation.value * 4 * pi));
+              final progress = ambushEngraveProgress(
+                animation.isAnimating ? animation.value : 1,
+              );
               return AmbushLogoMotion(
                 width: width,
                 color: color,
-                flapAmount: flapAmount,
+                liveProgress: progress.live,
+                spentProgress: progress.spent,
               );
             },
           ),

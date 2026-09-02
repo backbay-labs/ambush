@@ -255,8 +255,8 @@ test("agent-style Ambush links stay chip-only with metadata tooltips", async ({
   const missingRepoColors = await missingRepoChip.evaluate((element) => {
     const styles = getComputedStyle(element);
     const probe = document.createElement("span");
-    probe.style.backgroundColor = "hsl(var(--primary) / 0.15)";
-    probe.style.color = "hsl(var(--primary))";
+    probe.style.backgroundColor = "var(--ambush-plate-hi)";
+    probe.style.color = "hsl(var(--accent-foreground))";
     document.body.append(probe);
     const semanticStyles = getComputedStyle(probe);
     const result = {
@@ -660,7 +660,7 @@ test("deleted top-level message links identify deletion and fall back to channel
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-night");
     window.localStorage.setItem("ambush-accent-color", "#c0a2f1");
   });
   const missingMessageId = "d".repeat(64);

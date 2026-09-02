@@ -32,18 +32,20 @@ function PolicyCheckbox({
         type="checkbox"
       />
       <label
-        className="flex cursor-pointer items-start gap-3 rounded-sm text-left text-xs leading-5 text-black/60 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-black"
+        className="flex cursor-pointer items-start gap-3 rounded-sm text-left text-xs leading-5 text-muted-foreground peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring"
         htmlFor={id}
       >
         <span
           aria-hidden="true"
           className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-[background-color,border-color] duration-150 motion-reduce:transition-none ${
-            checked ? "border-black bg-black" : "border-black/40 bg-white"
+            checked
+              ? "border-foreground bg-foreground"
+              : "border-border bg-transparent"
           }`}
         >
           <svg
             aria-hidden="true"
-            className="h-3 w-3 text-white"
+            className="h-3 w-3 text-primary-foreground"
             fill="none"
             viewBox="0 0 16 16"
           >
@@ -98,7 +100,7 @@ export function InviteJoinPolicyNotice({
 
   return (
     <div
-      className="w-full space-y-3 rounded-xl border border-black/10 bg-black/[0.03] p-4 text-left"
+      className="w-full space-y-3 rounded-xl border border-border bg-secondary p-4 text-left"
       data-testid="invite-join-policy-notice"
     >
       {policy.age_attestation_required ? (
@@ -120,7 +122,7 @@ export function InviteJoinPolicyNotice({
           I agree to the Ambush{" "}
           {policy.terms_markdown ? (
             <button
-              className="text-black no-underline underline-offset-4 hover:text-black/70 hover:underline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-black"
+              className="text-foreground no-underline underline-offset-4 hover:text-muted-foreground hover:underline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-ring"
               type="button"
               onClick={(event) =>
                 stopLabelActivation(
@@ -138,7 +140,7 @@ export function InviteJoinPolicyNotice({
           and{" "}
           {policy.privacy_markdown ? (
             <button
-              className="text-black no-underline underline-offset-4 hover:text-black/70 hover:underline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-black"
+              className="text-foreground no-underline underline-offset-4 hover:text-muted-foreground hover:underline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-ring"
               type="button"
               onClick={(event) =>
                 stopLabelActivation(

@@ -17,15 +17,6 @@ export const LANGUAGE_LABELS: Record<string, string> = {
   tsx: "TypeScript",
 };
 
-/** Dot accent colors cycled through language chips. */
-export const LANGUAGE_DOT_CLASSES = [
-  "bg-blue-500",
-  "bg-violet-500",
-  "bg-emerald-500",
-  "bg-orange-500",
-  "bg-pink-500",
-];
-
 /** Maps a file path to its language label, or undefined when unknown. */
 export function languageForPath(path: string): string | undefined {
   const fileName = path.split("/").pop()?.toLowerCase() ?? "";

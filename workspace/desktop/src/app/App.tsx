@@ -18,7 +18,6 @@ import {
   replaceCommunityDestinationRoute,
 } from "@/app/communityViewTransition";
 import { deriveShellRoute } from "@/app/AppShell.helpers";
-import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { CommunityThemeController } from "@/shared/theme/CommunityThemeController";
 import { useReloadShortcut } from "@/app/useReloadShortcut";
 import { useCloseWindowShortcut } from "@/app/useCloseWindowShortcut";
@@ -82,7 +81,7 @@ const LOADING_TEXT = "Setting up your community...";
 
 // Minimum time the cold-boot splash stays on screen. A real boot resolves the
 // community in well under 100ms, and the native window setup plus first paint
-// can take longer than that — without a hold, the bee is unmounted before it is
+// can take longer than that — without a hold, the mark is unmounted before it is
 // ever visible. The hold runs as an overlay above the already-mounted app, so
 // time-to-interactive is unchanged; only the reveal waits.
 const BOOT_SPLASH_MIN_VISIBLE_MS = 1_200;
@@ -144,7 +143,7 @@ function useBootSplashHold(): BootSplashPhase {
 // the very first frame even before scripting starts, avoiding a blank flash on
 // hard reload. The animated AmbushWordmark is layered on top and takes over once it
 // begins playing.
-function BeeLoader({
+function IndexLoader({
   ariaLabel,
   className,
   tintClassName = "text-foreground",
@@ -167,21 +166,19 @@ function BeeLoader({
   );
 }
 
-// Cold boot gate: the theme-adaptive grainient background with a single
-// centered Ambush bee flying over it — the same static mark as before, now with
-// its wings flapping (ported from the Ambush website's wing-flap). Replaces the
-// old "Setting up your community" text, which stays as an sr-only caption.
+// Cold boot gate: the flat room with the Ambush mark centered on it, its index
+// engraving in on a loop. The "Setting up your community" text stays as an
+// sr-only caption.
 function AppLoadingGate() {
   return (
     <div
-      className="ambush-setup-loading-shell flex min-h-dvh flex-col items-center justify-center overflow-hidden px-6 py-10"
+      className="ambush-setup-loading-shell flex min-h-dvh flex-col items-center justify-center px-6 py-10"
       data-testid="app-loading-gate"
       role="status"
     >
       <StartupWindowDragRegion />
-      <ThemeGrainientBackground />
       <span className="sr-only">{LOADING_TEXT}</span>
-      <AmbushLogoMotion className="relative z-10 h-auto w-28" />
+      <AmbushLogoMotion className="h-auto w-28" />
     </div>
   );
 }
@@ -205,7 +202,7 @@ function CommunitySwitchGate() {
       <StartupWindowDragRegion />
       <span className="sr-only">Switching community…</span>
       {showSpinner ? (
-        <BeeLoader
+        <IndexLoader
           ariaLabel="Switching community…"
           className="h-auto w-20"
           tintClassName="text-muted-foreground"
@@ -578,7 +575,7 @@ function CommunityApp({
   const isEnteringCurtain = transaction?.stage === "entering";
 
   // The app mounts (and starts loading data) beneath the splash overlay; the
-  // overlay just keeps the bee on screen long enough to be seen, then fades.
+  // overlay just keeps the mark on screen long enough to be seen, then fades.
   // Community switches keep their quiet gate.
   const showBootSplashOverlay =
     bootSplashPhase !== "done" && !isCommunitySwitch;

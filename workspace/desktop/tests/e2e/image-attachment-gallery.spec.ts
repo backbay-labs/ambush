@@ -193,7 +193,7 @@ test("image bundle lightbox navigates as a gallery", async ({ page }) => {
   expect(secondBox.x).toBeCloseTo(thirdBox.x, 0);
   expect(secondBox.y).toBeLessThan(thirdBox.y);
 
-  await expectCornerRadiusPx(mosaic, 16);
+  await expectCornerRadiusPx(mosaic, 2);
   await expectCornerRadiusPx(triggers.first(), 0);
   await expect(triggers.first().locator("img")).toHaveCSS(
     "object-fit",

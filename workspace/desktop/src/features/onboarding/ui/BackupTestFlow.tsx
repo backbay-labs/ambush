@@ -67,7 +67,7 @@ type BackupTestFlowProps = {
   onVerified?: () => void;
 };
 
-const BURST_EMOJIS = ["🎉", "✨", "🔑", "💛"] as const;
+const BURST_MARKS = ["●", "○"] as const;
 const BURST_PARTICLE_COUNT = 18;
 const VERIFICATION_CONNECTOR_DOTS = [
   "verification-dot-1",
@@ -91,14 +91,14 @@ type BurstParticle = {
   id: number;
   x: number;
   y: number;
-  emoji: string;
+  mark: string;
   delay: number;
   scale: number;
   rotate: number;
 };
 
 /**
- * One-shot radial emoji burst behind the success badge. Purely decorative —
+ * One-shot radial burst behind the success badge. Purely decorative —
  * skipped entirely under reduced motion.
  */
 function SuccessBurst() {
@@ -112,7 +112,7 @@ function SuccessBurst() {
           id: i,
           x: Math.cos(angle) * distance,
           y: Math.sin(angle) * distance,
-          emoji: BURST_EMOJIS[i % BURST_EMOJIS.length],
+          mark: BURST_MARKS[i % BURST_MARKS.length],
           delay: Math.random() * 0.18,
           scale: 0.8 + Math.random() * 0.7,
           rotate: -120 + Math.random() * 240,
@@ -135,7 +135,7 @@ function SuccessBurst() {
             scale: particle.scale,
             rotate: particle.rotate,
           }}
-          className="absolute text-xl"
+          className="absolute text-xl text-foreground"
           initial={{ x: 0, y: 0, opacity: 1, scale: 0.3, rotate: 0 }}
           key={particle.id}
           transition={{
@@ -144,7 +144,7 @@ function SuccessBurst() {
             ease: "easeOut",
           }}
         >
-          {particle.emoji}
+          {particle.mark}
         </motion.span>
       ))}
     </div>
@@ -541,7 +541,7 @@ export function BackupTestFlow({
              */
             // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only drop target; the select button is the keyboard-accessible path
             <div
-              className="absolute inset-2 z-10 mt-0! flex items-center justify-center bg-primary/10 backdrop-blur-sm"
+              className="absolute inset-2 z-10 mt-0! flex items-center justify-center bg-background/95"
               data-testid="backup-test-drop-overlay"
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
@@ -605,7 +605,7 @@ export function BackupTestFlow({
           {(() => {
             const fileRow = (
               <div
-                className="flex max-w-full items-center gap-3 rounded-2xl border border-foreground/15 bg-foreground/10 px-4 py-3 text-foreground shadow-sm animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none"
+                className="flex max-w-full items-center gap-3 rounded-2xl border border-foreground/15 bg-foreground/10 px-4 py-3 text-foreground animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none"
                 data-testid="backup-test-file-accepted"
               >
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-foreground/10">
@@ -627,7 +627,7 @@ export function BackupTestFlow({
                   className={cn(
                     "font-mono",
                     isSpotlight
-                      ? "h-14 rounded-2xl border-black/20 bg-white px-14 text-center text-lg text-black/80 shadow-none placeholder:text-black/55 focus-visible:ring-black/35"
+                      ? "h-14 rounded-2xl border-background/20 bg-foreground px-14 text-center text-lg text-background/80 shadow-none placeholder:text-background/55 focus-visible:ring-background/35"
                       : "h-10 bg-background pr-10",
                   )}
                   data-testid="backup-test-password"
@@ -649,7 +649,7 @@ export function BackupTestFlow({
                   className={cn(
                     "absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground",
                     isSpotlight &&
-                      "text-black/55 hover:bg-black/5 hover:text-black/80",
+                      "text-background/55 hover:bg-background/5 hover:text-background/80",
                   )}
                   data-testid="backup-test-password-reveal-toggle"
                   disabled={isVerifying}

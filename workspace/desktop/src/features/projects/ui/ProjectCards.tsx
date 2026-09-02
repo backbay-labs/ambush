@@ -131,8 +131,8 @@ const PROJECT_STAT_ITEMS = [
   {
     key: "issueCount",
     icon: CircleDot,
-    iconClass: "text-orange-500",
-    barClass: "bg-orange-500",
+    iconClass: "text-primary/80",
+    barClass: "bg-primary/80",
     columnClass: "w-20",
     label: (count: number) => (count === 1 ? "task" : "tasks"),
   },
@@ -291,7 +291,7 @@ function RepositoryUnavailableIndicator({
       <TooltipTrigger asChild>
         <span
           aria-label={`Repository ${label.toLowerCase()}`}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-amber-600 hover:bg-amber-500/10 dark:text-amber-300"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-warning hover:bg-warning-bg"
           role="img"
         >
           <CircleAlert className="h-3.5 w-3.5" />
@@ -312,7 +312,7 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-16 text-center">
-      <Folders className="h-10 w-10 text-muted-foreground/40" />
+      <Folders className="h-10 w-10 text-muted-foreground" />
       <div className="space-y-1">
         <p className="text-sm font-medium text-foreground">No projects yet</p>
         <p className="text-sm text-muted-foreground">
@@ -330,7 +330,7 @@ export function EmptyState({
 export function EmptyFilteredState() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 border border-dashed border-border/60 px-4 py-12 text-center">
-      <Folders className="h-9 w-9 text-muted-foreground/40" />
+      <Folders className="h-9 w-9 text-muted-foreground" />
       <div className="space-y-1">
         <p className="text-sm font-medium text-foreground">
           No matching projects
@@ -396,7 +396,7 @@ function ProjectActionsMenu({
           {projectTerminalLabel(hasLocal)}
         </DropdownMenuItem>
         <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
+          destructive
           disabled={!canDelete || disabled}
           onSelect={(event) => {
             event.preventDefault();
@@ -591,7 +591,7 @@ export const ProjectListRow = React.memo(function ProjectListRow({
       }`}
       dateSeconds={getProjectUpdatedAt(project, summary)}
       dateTestId="projects-row-date"
-      icon={<Folders className="h-3.5 w-3.5 text-muted-foreground/70" />}
+      icon={<Folders className="h-3.5 w-3.5 text-muted-foreground" />}
       onClick={() => onOpen(project)}
       people={people}
       peopleTestId="projects-row-people"

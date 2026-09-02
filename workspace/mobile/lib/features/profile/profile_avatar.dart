@@ -93,9 +93,9 @@ class ProfileAvatar extends ConsumerWidget {
                   widthFactor: _presenceDotRatio,
                   heightFactor: _presenceDotRatio,
                   child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: _presenceColor(context, presence),
-                      shape: BoxShape.circle,
+                    decoration: statusMarkDecoration(
+                      context,
+                      presenceMark(presence),
                     ),
                   ),
                 ),
@@ -103,13 +103,5 @@ class ProfileAvatar extends ConsumerWidget {
             : null,
       ),
     );
-  }
-
-  Color _presenceColor(BuildContext context, String presence) {
-    return switch (presence) {
-      'online' => context.appColors.success,
-      'away' => context.appColors.warning,
-      _ => context.colors.outline,
-    };
   }
 }

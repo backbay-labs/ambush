@@ -1386,7 +1386,7 @@ test("renders agent profile ingress subviews from the Playwright mock bridge", a
   ).toHaveClass(/text-xs/);
   await expect(
     infoSection.getByRole("heading", { exact: true, name: "Info" }),
-  ).toHaveClass(/text-muted-foreground\/70/);
+  ).toHaveClass(/text-muted-foreground/);
   await expect(
     infoSection.locator('[data-slot="panel-section-header"]'),
   ).toHaveClass(/px-4/);

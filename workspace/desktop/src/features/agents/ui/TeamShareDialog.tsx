@@ -42,7 +42,7 @@ export function TeamShareDialog({
         // present-and-failing.
         team.isBuiltin ? null : (
           <section
-            className="relative flex min-h-16 w-full items-center gap-3 rounded-2xl bg-background px-5 py-4 shadow-2xl"
+            className="relative flex min-h-16 w-full items-center gap-3 rounded-2xl border border-border bg-background px-5 py-4"
             data-testid="team-share-catalog"
           >
             <BookUser className="h-4 w-4 shrink-0 text-muted-foreground" />

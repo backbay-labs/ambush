@@ -196,7 +196,7 @@ test("AuxiliaryPanelHeader keeps resize border in single-panel mode when request
   );
 
   assert.match(html, /after:-left-px/);
-  assert.match(html, /peer-hover\/auxiliary-panel-resize:after:bg-border\/80/);
+  assert.match(html, /peer-hover\/auxiliary-panel-resize:after:bg-foreground/);
 });
 
 test("AuxiliaryPanelHeader omits resize border in single-panel mode by default", () => {
@@ -220,7 +220,7 @@ test("AuxiliaryPanelHeader omits resize border in single-panel mode by default",
   assert.doesNotMatch(html, /after:-left-px/);
   assert.doesNotMatch(
     html,
-    /peer-hover\/auxiliary-panel-resize:after:bg-border\/80/,
+    /peer-hover\/auxiliary-panel-resize:after:bg-foreground/,
   );
 });
 

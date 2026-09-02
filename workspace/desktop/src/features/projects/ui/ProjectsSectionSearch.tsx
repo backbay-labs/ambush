@@ -103,7 +103,7 @@ export function ProjectsSectionSearch({
             >
               <input
                 aria-label={`Search ${projectsSectionTitle(filter)}`}
-                className="min-w-0 flex-1 bg-transparent px-2 pr-36 text-sm text-foreground outline-none placeholder:text-muted-foreground/55"
+                className="min-w-0 flex-1 bg-transparent px-2 pr-36 text-sm text-foreground outline-none placeholder:text-muted-foreground"
                 data-testid="projects-section-search-input"
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={(event) => {

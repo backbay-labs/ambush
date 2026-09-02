@@ -181,7 +181,7 @@ export function CreateAgentRespondToField({
   // user and the selection they came here to make.
   const accessWarning = warningText ? (
     <div
-      className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-bg px-3 py-2.5"
+      className="flex items-start gap-2 rounded-xl border border-border bg-warning-bg px-3 py-2.5"
       data-testid="agent-access-warning"
     >
       <AlertTriangle
@@ -217,7 +217,7 @@ export function CreateAgentRespondToField({
         />
       ) : (
         <select
-          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
+          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
           data-testid="agent-respond-to-select"
           disabled={disabled}
           id="agent-respond-to"

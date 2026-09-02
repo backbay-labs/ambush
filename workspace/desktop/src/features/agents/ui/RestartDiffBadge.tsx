@@ -110,7 +110,7 @@ function DiffList({
     variant === "tooltip" ? "text-secondary-foreground/80" : "text-foreground";
   const overflowClass =
     variant === "tooltip"
-      ? "text-secondary-foreground/60"
+      ? "text-secondary-foreground"
       : "text-muted-foreground";
 
   return (

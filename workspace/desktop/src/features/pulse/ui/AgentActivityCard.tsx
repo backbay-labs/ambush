@@ -2,6 +2,7 @@ import { Bot, ChevronDown, ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import type { AgentNoteGroup } from "@/features/pulse/lib/groupAgentNotes";
+import { getPresenceDotClassName } from "@/features/presence/lib/presence";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import type { UserProfileSummary } from "@/shared/api/types";
 import { Markdown } from "@/shared/ui/markdown";
@@ -30,13 +31,11 @@ function formatRelativeTime(unixSeconds: number): string {
 }
 
 function StatusDot({ status }: { status: "online" | "away" | "offline" }) {
-  const color =
-    status === "online"
-      ? "bg-emerald-500"
-      : status === "away"
-        ? "bg-amber-500"
-        : "bg-zinc-400";
-  return <span className={`inline-block h-2 w-2 rounded-full ${color}`} />;
+  return (
+    <span
+      className={`inline-block h-2 w-2 rounded-full ${getPresenceDotClassName(status)}`}
+    />
+  );
 }
 
 export function AgentActivityCard({

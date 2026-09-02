@@ -148,7 +148,7 @@ export function RepositoryBranchDropdown({
             ) : null}
             {onDeleteBranch ? (
               <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
+                destructive
                 data-testid="project-delete-branch"
                 disabled={deleteBranchDisabled}
                 onSelect={onDeleteBranch}
@@ -301,7 +301,7 @@ export function RepoSourceDropdown({
               <DownloadCloud className="text-muted-foreground" />
             )}
             <span className="text-muted-foreground">{controls.localLabel}</span>
-            <span className="ml-auto rounded-md border border-input/60 bg-background px-2 py-0.5 text-xs font-medium text-foreground shadow-xs group-focus:border-input">
+            <span className="ml-auto rounded-md border border-input/60 bg-background px-2 py-0.5 text-xs font-medium text-foreground group-focus:border-input">
               {controls.clonePending ? "Cloning…" : "Clone"}
             </span>
           </DropdownMenuItem>

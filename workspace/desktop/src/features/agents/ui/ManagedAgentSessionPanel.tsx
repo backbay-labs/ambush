@@ -131,7 +131,7 @@ export function ManagedAgentSessionPanel({
   return (
     <section
       className={cn(
-        "rounded-lg border border-border/70 bg-background/80 shadow-xs",
+        "rounded-lg border border-border/70 bg-background/80",
         panelPadding && "p-4",
         autoTail && "flex flex-col overflow-hidden",
         className,

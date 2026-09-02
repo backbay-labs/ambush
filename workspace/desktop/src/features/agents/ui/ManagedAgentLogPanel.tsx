@@ -37,7 +37,7 @@ export function ManagedAgentLogPanel({
         "flex flex-col",
         isInline
           ? "h-full min-h-0"
-          : "rounded-[28px] border border-border/70 bg-card/90 p-5 shadow-xs",
+          : "rounded-2xl border border-border/70 bg-card/90 p-5",
       )}
     >
       {!selectedAgent ? (
@@ -72,7 +72,7 @@ export function ManagedAgentLogPanel({
           className={cn(
             isBare
               ? "overflow-hidden rounded-2xl bg-muted/20 text-xs text-foreground"
-              : "overflow-hidden rounded-xl border border-border/70 bg-[#17171d] text-xs text-zinc-100",
+              : "overflow-hidden rounded-xl border border-border/70 bg-night text-xs text-foreground",
             isInline ? "flex min-h-0 flex-1 flex-col" : "mt-4",
           )}
         >
@@ -85,24 +85,27 @@ export function ManagedAgentLogPanel({
           ) : null}
           <div className="p-4">
             <Skeleton
-              className={cn("h-4 w-48", isBare ? "bg-muted" : "bg-white/10")}
+              className={cn(
+                "h-4 w-48",
+                isBare ? "bg-muted" : "bg-foreground/10",
+              )}
             />
             <Skeleton
               className={cn(
                 "mt-3 h-4 w-full",
-                isBare ? "bg-muted" : "bg-white/10",
+                isBare ? "bg-muted" : "bg-foreground/10",
               )}
             />
             <Skeleton
               className={cn(
                 "mt-2 h-4 w-full",
-                isBare ? "bg-muted" : "bg-white/10",
+                isBare ? "bg-muted" : "bg-foreground/10",
               )}
             />
             <Skeleton
               className={cn(
                 "mt-2 h-4 w-3/4",
-                isBare ? "bg-muted" : "bg-white/10",
+                isBare ? "bg-muted" : "bg-foreground/10",
               )}
             />
           </div>
@@ -112,7 +115,7 @@ export function ManagedAgentLogPanel({
           className={cn(
             isBare
               ? "overflow-hidden rounded-2xl bg-muted/20 text-xs text-foreground"
-              : "overflow-hidden rounded-xl border border-border/70 bg-[#17171d] text-xs text-zinc-100",
+              : "overflow-hidden rounded-xl border border-border/70 bg-night text-xs text-foreground",
             isInline && "flex min-h-0 flex-1 flex-col",
             !isInline && "mt-4",
           )}
@@ -159,20 +162,20 @@ function HarnessLogHeader({
   const fileTitle = `${selectedAgent.name} · ${logFileLabel}`;
 
   return (
-    <div className="flex min-h-12 items-center justify-between gap-3 border-b border-white/10 px-3 py-2">
+    <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border px-3 py-2">
       <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="min-w-0 truncate text-2xs font-semibold uppercase tracking-wide text-zinc-300">
+        <span className="min-w-0 truncate text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
           Harness Log
         </span>
         <span
-          className="min-w-0 truncate font-mono text-2xs text-zinc-500"
+          className="min-w-0 truncate font-mono text-2xs text-muted-foreground"
           title={fileTitle}
         >
           {selectedAgent.name} · {logFileLabel}
         </span>
       </div>
       <CopyButton
-        className="h-6 rounded-md bg-black/40 px-2 text-zinc-300 hover:bg-black/70 hover:text-white"
+        className="h-6 rounded-md bg-foreground/10 px-2 text-muted-foreground hover:bg-foreground/15 hover:text-foreground"
         label="Copy log"
         size="xs"
         value={logContent}

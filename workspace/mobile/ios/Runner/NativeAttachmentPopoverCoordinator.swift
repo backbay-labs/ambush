@@ -315,16 +315,16 @@ enum NativeAttachmentMenuLayout {
 }
 
 enum NativeAttachmentMenuTypography {
-  static let interPostScriptName = "InterVariable"
+  static let bodyPostScriptName = "IBMPlexSans-Regular"
 
-  private static let registeredInter: Bool = {
+  private static let registeredBodyFont: Bool = {
     let fontURL = Bundle.main.bundleURL
       .appendingPathComponent("Frameworks")
       .appendingPathComponent("App.framework")
       .appendingPathComponent("flutter_assets")
       .appendingPathComponent("assets")
       .appendingPathComponent("fonts")
-      .appendingPathComponent("InterVariable.ttf")
+      .appendingPathComponent("IBMPlexSans-Regular.ttf")
     guard FileManager.default.fileExists(atPath: fontURL.path) else {
       return false
     }
@@ -339,7 +339,7 @@ enum NativeAttachmentMenuTypography {
     forTextStyle textStyle: UIFont.TextStyle,
     compatibleWith traitCollection: UITraitCollection? = nil
   ) -> UIFont {
-    _ = registeredInter
+    _ = registeredBodyFont
     let scaledPointSize = UIFontMetrics(forTextStyle: textStyle).scaledValue(
       for: 20,
       compatibleWith: traitCollection
@@ -349,14 +349,14 @@ enum NativeAttachmentMenuTypography {
       compatibleWith: traitCollection
     )
     guard
-      let interFont = UIFont(
-        name: interPostScriptName,
+      let bodyFont = UIFont(
+        name: bodyPostScriptName,
         size: scaledPointSize
       )
     else {
       return preferredFont
     }
-    return interFont
+    return bodyFont
   }
 }
 

@@ -8,7 +8,7 @@ export function MessageTimelineErrorCard({
 }) {
   return (
     <div
-      className="mt-auto rounded-2xl border border-dashed border-destructive/50 bg-destructive/5 px-6 py-10 text-center shadow-xs"
+      className="mt-auto rounded-2xl border border-dashed border-destructive/50 bg-destructive/5 px-6 py-10 text-center"
       data-testid="message-timeline-error"
       role="alert"
     >

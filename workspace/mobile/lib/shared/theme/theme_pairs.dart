@@ -8,7 +8,7 @@ import 'theme_catalog.dart';
 /// Ambush leads the map the way it leads desktop's, so the first-party pair sorts
 /// ahead of the borrowed syntax themes wherever insertion order is preserved.
 const themePairs = <String, String>{
-  'ambush': 'ambush-dark',
+  'ambush-day': 'ambush-night',
   'catppuccin-latte': 'catppuccin-mocha',
   'everforest-light': 'everforest-dark',
   'github-light': 'github-dark',
@@ -97,6 +97,7 @@ ThemeGroups themeGroups() {
 /// Tokens that only describe a theme's brightness, stripped from paired labels.
 const _modeTokens = <String>{
   'light',
+  'day',
   'latte',
   'dawn',
   'lotus',

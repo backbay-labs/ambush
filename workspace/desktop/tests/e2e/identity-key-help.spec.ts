@@ -89,5 +89,5 @@ test("identity key help stays readable when the app resolves dark mode", async (
   // against the white card.
   await expect(
     dialog.getByRole("heading", { name: "What’s an identity key?" }),
-  ).toHaveCSS("color", "rgb(23, 23, 23)");
+  ).toHaveCSS("color", "rgb(41, 32, 25)");
 });

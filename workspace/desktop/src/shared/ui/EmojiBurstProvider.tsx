@@ -286,6 +286,26 @@ function roundedRectPath(
   context.closePath();
 }
 
+const LABEL_FONT =
+  '500 11px "IBM Plex Sans Variable", "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif';
+const LABEL_RADIUS = 2;
+
+type LabelPalette = {
+  ground: string;
+  ink: string;
+};
+
+function readLabelPalette(): LabelPalette {
+  const styles = getComputedStyle(document.documentElement);
+  const read = (name: string, fallback: string) =>
+    styles.getPropertyValue(name).trim() || fallback;
+
+  return {
+    ground: read("--ambush-night", "#171717"),
+    ink: read("--ambush-ink", "#C9C1B7"),
+  };
+}
+
 function fitParticleLabel(
   context: CanvasRenderingContext2D,
   label: string,
@@ -310,13 +330,13 @@ function drawParticleLabel(
   particle: Particle,
   dpr: number,
   drawSize: number,
+  palette: LabelPalette,
 ) {
   const label = particle.label?.trim();
   if (!label) return;
 
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.font =
-    '500 11px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  context.font = LABEL_FONT;
   context.textAlign = "center";
   context.textBaseline = "middle";
 
@@ -330,10 +350,10 @@ function drawParticleLabel(
   const x = particle.x - width / 2;
   const y = particle.y + drawSize * 0.32 - height / 2;
 
-  roundedRectPath(context, x, y, width, height, height / 2);
-  context.fillStyle = "rgba(0, 0, 0, 0.72)";
+  roundedRectPath(context, x, y, width, height, LABEL_RADIUS);
+  context.fillStyle = palette.ground;
   context.fill();
-  context.fillStyle = "rgb(255, 255, 255)";
+  context.fillStyle = palette.ink;
   context.fillText(text, particle.x, y + height / 2 + 0.5, width - 12);
 }
 
@@ -572,6 +592,7 @@ export function EmojiBurstProvider({
     if (!canvas || !context) return;
     const activeCanvas = canvas;
     const activeContext = context;
+    const labelPalette = readLabelPalette();
 
     function frame() {
       const particles = particlesRef.current;
@@ -624,7 +645,13 @@ export function EmojiBurstProvider({
           drawSize,
           drawSize,
         );
-        drawParticleLabel(activeContext, particle, dpr, labelReferenceSize);
+        drawParticleLabel(
+          activeContext,
+          particle,
+          dpr,
+          labelReferenceSize,
+          labelPalette,
+        );
       }
 
       activeContext.globalAlpha = 1;

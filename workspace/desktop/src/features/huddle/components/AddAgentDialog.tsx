@@ -152,7 +152,7 @@ export function AddAgentDialog({
         ) : null}
 
         {warning ? (
-          <p className="rounded-lg border border-warning/30 bg-warning-bg px-4 py-3 text-sm text-warning">
+          <p className="rounded-lg border border-border bg-warning-bg px-4 py-3 text-sm text-warning">
             {warning}
           </p>
         ) : null}

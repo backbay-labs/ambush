@@ -172,7 +172,7 @@ function AgentCardViewerContent({
         <div className="flex flex-col gap-4">
           <img
             alt={`${agentName} trading card`}
-            className="mx-auto max-h-[28rem] rounded-lg border shadow-lg"
+            className="mx-auto max-h-[28rem] rounded-lg border"
             data-testid="agent-card-preview"
             onContextMenu={(event) => {
               event.preventDefault();
@@ -350,7 +350,7 @@ function AgentCardGalleryContent() {
                 {entry.thumbJpegBase64 ? (
                   <img
                     alt={`${entry.agentName} trading card`}
-                    className="aspect-2/3 w-full rounded-lg border object-cover shadow-sm transition-transform group-hover:scale-[1.02]"
+                    className="aspect-2/3 w-full rounded-lg border object-cover transition-transform group-hover:scale-[1.02]"
                     src={`data:image/jpeg;base64,${entry.thumbJpegBase64}`}
                   />
                 ) : (

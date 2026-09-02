@@ -206,7 +206,7 @@ export function AddTeamToChannelDialog({
                 Channel
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 disabled={channels.length === 0 || deployMutation.isPending}
                 id="team-channel-id"
                 onChange={(event) => setChannelId(event.target.value)}
@@ -231,7 +231,7 @@ export function AddTeamToChannelDialog({
                 Role
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 disabled={deployMutation.isPending}
                 id="team-channel-role"
                 onChange={(event) =>
@@ -265,7 +265,7 @@ export function AddTeamToChannelDialog({
             {runtimeWarnings.length > 0
               ? runtimeWarnings.map((warning) => (
                   <div
-                    className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3"
+                    className="flex gap-3 rounded-2xl border border-border bg-warning-bg px-4 py-3"
                     key={warning}
                   >
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

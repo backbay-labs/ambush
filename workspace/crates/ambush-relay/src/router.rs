@@ -258,10 +258,11 @@ async fn read_spa_index(index: &std::path::Path) -> axum::response::Response {
 /// The admin dashboard holds the operator token in `sessionStorage`, so its
 /// documents and assets are locked to same-origin code with no framing. `blob:`
 /// images are required: attachments are fetched with the token and rendered
-/// from object URLs. Applied only to the admin host — the public bundle keeps
-/// its own headers.
+/// from object URLs. `font-src 'self'` is required for the bundle's
+/// self-hosted webfonts. Applied only to the admin host — the public bundle
+/// keeps its own headers.
 #[rustfmt::skip]
-const ADMIN_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+const ADMIN_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
 fn with_admin_csp(mut response: axum::response::Response) -> axum::response::Response {
     response.headers_mut().insert(

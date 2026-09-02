@@ -910,7 +910,7 @@ function HeaderMoreMenu({
       </Tooltip>
       <DropdownMenuContent align="end">
         <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
+          destructive
           disabled={isDeletingMessage}
           onClick={onDelete}
         >

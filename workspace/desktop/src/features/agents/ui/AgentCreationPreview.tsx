@@ -456,7 +456,7 @@ export function AgentCreationPreview({
           <TabsList className="relative isolate mb-3 grid h-9 w-full grid-cols-2 overflow-hidden rounded-lg bg-muted p-0.5">
             <div
               aria-hidden="true"
-              className="absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-background shadow-sm transition-transform duration-[250ms] ease-out"
+              className="absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-background transition-transform duration-[250ms] ease-out"
               style={{
                 transform: `translateX(${activeTab === "emoji" ? 100 : 0}%)`,
                 width: "calc((100% - 4px) / 2)",
@@ -504,11 +504,11 @@ export function AgentCreationPreview({
 
             {/* URL input */}
             <div className="flex h-10 items-center gap-2.5 rounded-lg bg-muted px-3">
-              <Link2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              <Link2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <input
                 autoCapitalize="none"
                 autoCorrect="off"
-                className="min-w-0 flex-1 bg-transparent text-xs font-medium text-foreground outline-none placeholder:text-muted-foreground/50"
+                className="min-w-0 flex-1 bg-transparent text-xs font-medium text-foreground outline-none placeholder:text-muted-foreground"
                 disabled={disabled || isUploading}
                 onChange={(event) => setAvatarUrlDraft(event.target.value)}
                 onKeyDown={(event) => {
@@ -723,7 +723,7 @@ export function AgentCreationPreview({
               <div
                 aria-label={`${label} ${assetLabel}`}
                 className={cn(
-                  "relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden shadow-xs transition-[background-color] duration-200 ease-out",
+                  "relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden transition-[background-color] duration-200 ease-out",
                   isRoundedSquare
                     ? isCompact
                       ? "rounded-2xl"
@@ -746,7 +746,7 @@ export function AgentCreationPreview({
               <img
                 alt={`${label} ${assetLabel}`}
                 className={cn(
-                  "h-full w-full object-cover shadow-xs",
+                  "h-full w-full object-cover",
                   isCompact ? "rounded-2xl" : "rounded-[2rem]",
                 )}
                 src={avatarUrl}
@@ -808,7 +808,7 @@ export function AgentCreationPreview({
                       <button
                         aria-label={`Edit ${assetLabel}`}
                         className={cn(
-                          "flex items-center justify-center rounded-full bg-sidebar-active text-sidebar-active-foreground shadow-lg transition-[background-color,scale] duration-150 ease-out hover:scale-[1.04] hover:bg-sidebar-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-90 disabled:hover:scale-100",
+                          "flex items-center justify-center rounded-full bg-sidebar-active text-sidebar-active-foreground transition-[background-color,scale] duration-150 ease-out hover:scale-[1.04] hover:bg-sidebar-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-90 disabled:hover:scale-100",
                           isCompact ? "h-6 w-6" : "h-9 w-9",
                         )}
                         disabled={disabled || isUploading}
@@ -851,7 +851,7 @@ export function AgentCreationPreview({
                     <div
                       aria-label={`${label} ${assetLabel}`}
                       className={cn(
-                        "relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden shadow-xs transition-[background-color] duration-200 ease-out",
+                        "relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden transition-[background-color] duration-200 ease-out",
                         isCompact ? "rounded-2xl" : "rounded-[2rem]",
                       )}
                       role="img"
@@ -880,7 +880,7 @@ export function AgentCreationPreview({
                     <img
                       alt={`${label} ${assetLabel}`}
                       className={cn(
-                        "h-full w-full object-cover shadow-xs transition-shadow duration-150",
+                        "h-full w-full object-cover transition-shadow duration-150",
                         isCompact ? "rounded-2xl" : "rounded-[2rem]",
                         isDragOverAvatar &&
                           !isAvatarMenuOpen &&
@@ -897,7 +897,7 @@ export function AgentCreationPreview({
                       <button
                         aria-label={`Edit ${assetLabel}`}
                         className={cn(
-                          "flex items-center justify-center rounded-full bg-sidebar-active text-sidebar-active-foreground shadow-lg transition-[background-color,scale] duration-150 ease-out hover:scale-[1.04] hover:bg-sidebar-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-90 disabled:hover:scale-100",
+                          "flex items-center justify-center rounded-full bg-sidebar-active text-sidebar-active-foreground transition-[background-color,scale] duration-150 ease-out hover:scale-[1.04] hover:bg-sidebar-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-90 disabled:hover:scale-100",
                           isCompact ? "h-6 w-6" : "h-9 w-9",
                         )}
                         disabled={disabled || isUploading}
@@ -938,7 +938,7 @@ export function AgentCreationPreview({
                   {emojiAvatarPreview ? (
                     <div
                       aria-label={`${label} ${assetLabel}`}
-                      className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full shadow-xs transition-[background-color] duration-200 ease-out"
+                      className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full transition-[background-color] duration-200 ease-out"
                       role="img"
                       style={{
                         backgroundColor: emojiAvatarPreview.color,
@@ -980,7 +980,7 @@ export function AgentCreationPreview({
                   <button
                     aria-label={`Add ${assetLabel}`}
                     className={cn(
-                      "flex items-center justify-center border-2 border-dashed border-border bg-background text-primary shadow-xs transition-[background-color,border-color,color,box-shadow,scale] duration-150 ease-out hover:scale-[1.02] hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-60 disabled:hover:scale-100",
+                      "flex items-center justify-center border-2 border-dashed border-border bg-background text-primary transition-[background-color,border-color,color,box-shadow,scale] duration-150 ease-out hover:scale-[1.02] hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-60 disabled:hover:scale-100",
                       isCompact ? "h-16 w-16" : "h-36 w-36",
                       isRoundedSquare
                         ? isCompact
@@ -1015,7 +1015,7 @@ export function AgentCreationPreview({
         </Popover>
 
         {uploadErrorMessage ? (
-          <p className="max-w-full rounded-md bg-background/95 px-2 py-1 text-center text-xs text-destructive shadow-xs">
+          <p className="max-w-full rounded-md border border-border bg-background/95 px-2 py-1 text-center text-xs text-destructive">
             {uploadErrorMessage}
           </p>
         ) : null}

@@ -36,13 +36,14 @@ type TokenSetting = {
 
 type Rgb = readonly [number, number, number];
 
+/** Quiet tints: one lightness, low chroma, legible on a light or dark ground. */
 const FALLBACK_HUES: Readonly<Record<string, string>> = {
-  red: "#d75f5f",
-  green: "#5faf87",
-  yellow: "#d7af5f",
-  blue: "#5f87d7",
-  magenta: "#af87d7",
-  cyan: "#5fafd7",
+  red: "#8d706f",
+  green: "#6c7b6a",
+  yellow: "#847563",
+  blue: "#66798a",
+  magenta: "#817284",
+  cyan: "#5c7d7d",
 };
 
 const SCOPE_ANCHORS: Readonly<Record<string, readonly string[]>> = {

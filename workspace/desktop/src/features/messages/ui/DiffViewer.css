@@ -1,55 +1,25 @@
-:root {
-  --ambush-diff-insert-gutter-bg: 143 58% 91%;
-  --ambush-diff-insert-code-bg: 140 56% 96%;
-  --ambush-diff-insert-edit-bg: 142 44% 82%;
-  --ambush-diff-insert-text: 143 63% 20%;
-  --ambush-diff-delete-gutter-bg: 352 73% 93%;
-  --ambush-diff-delete-code-bg: 356 87% 97%;
-  --ambush-diff-delete-edit-bg: 353 64% 84%;
-  --ambush-diff-delete-text: 356 55% 24%;
-}
-
-.dark {
-  --ambush-diff-insert-gutter-bg: 143 33% 20%;
-  --ambush-diff-insert-code-bg: 143 29% 15%;
-  --ambush-diff-insert-edit-bg: 143 30% 27%;
-  --ambush-diff-insert-text: 143 47% 78%;
-  --ambush-diff-delete-gutter-bg: 353 28% 20%;
-  --ambush-diff-delete-code-bg: 353 25% 15%;
-  --ambush-diff-delete-edit-bg: 353 31% 27%;
-  --ambush-diff-delete-text: 352 71% 83%;
-}
-
 .ambush-diff-theme {
   --diff-background-color: transparent;
   --diff-text-color: hsl(var(--foreground));
   --diff-font-family:
-    "SFMono-Regular", "Geist Mono", ui-monospace, "Cascadia Code",
-    "Source Code Pro", Menlo, Consolas, monospace;
+    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --diff-selection-background-color: hsl(var(--accent) / 0.9);
   --diff-selection-text-color: hsl(var(--accent-foreground));
-  --diff-gutter-insert-background-color: hsl(
-    var(--ambush-diff-insert-gutter-bg)
-  );
-  --diff-gutter-insert-text-color: hsl(var(--ambush-diff-insert-text));
-  --diff-gutter-delete-background-color: hsl(
-    var(--ambush-diff-delete-gutter-bg)
-  );
-  --diff-gutter-delete-text-color: hsl(var(--ambush-diff-delete-text));
+  /* An addition is lit and asserted; a removal is recessed and spent. */
+  --diff-gutter-insert-background-color: var(--ambush-plate-hi);
+  --diff-gutter-insert-text-color: var(--ambush-ink);
+  --diff-gutter-delete-background-color: var(--ambush-rule);
+  --diff-gutter-delete-text-color: var(--ambush-ink-dim);
   --diff-gutter-selected-background-color: hsl(var(--accent) / 0.45);
   --diff-gutter-selected-text-color: hsl(var(--foreground));
-  --diff-code-insert-background-color: hsl(var(--ambush-diff-insert-code-bg));
-  --diff-code-insert-text-color: hsl(var(--ambush-diff-insert-text));
-  --diff-code-delete-background-color: hsl(var(--ambush-diff-delete-code-bg));
-  --diff-code-delete-text-color: hsl(var(--ambush-diff-delete-text));
-  --diff-code-insert-edit-background-color: hsl(
-    var(--ambush-diff-insert-edit-bg)
-  );
-  --diff-code-insert-edit-text-color: hsl(var(--ambush-diff-insert-text));
-  --diff-code-delete-edit-background-color: hsl(
-    var(--ambush-diff-delete-edit-bg)
-  );
-  --diff-code-delete-edit-text-color: hsl(var(--ambush-diff-delete-text));
+  --diff-code-insert-background-color: var(--ambush-plate);
+  --diff-code-insert-text-color: var(--ambush-ink);
+  --diff-code-delete-background-color: var(--ambush-steel);
+  --diff-code-delete-text-color: var(--ambush-ink-dim);
+  --diff-code-insert-edit-background-color: var(--ambush-plate-hi);
+  --diff-code-insert-edit-text-color: var(--ambush-ink);
+  --diff-code-delete-edit-background-color: var(--ambush-rule);
+  --diff-code-delete-edit-text-color: var(--ambush-ink-dim);
   --diff-code-selected-background-color: hsl(var(--accent) / 0.35);
   --diff-code-selected-text-color: hsl(var(--foreground));
   --diff-omit-gutter-line-color: hsl(var(--border));

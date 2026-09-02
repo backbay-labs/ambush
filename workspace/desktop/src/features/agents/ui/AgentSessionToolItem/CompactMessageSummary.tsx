@@ -138,7 +138,7 @@ export function CompactMessageSummary({
         <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
           <div
             className={cn(
-              "w-full min-w-0 rounded-2xl border px-3 py-2 shadow-sm",
+              "w-full min-w-0 rounded-2xl border px-3 py-2",
               isCompactPreview
                 ? "text-xs leading-4"
                 : "text-sm leading-relaxed",

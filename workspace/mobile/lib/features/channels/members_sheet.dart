@@ -235,14 +235,14 @@ class _MemberTile extends ConsumerWidget {
               children: [
                 AmbushLoadingIndicator(
                   size: 14,
-                  color: context.appColors.success,
+                  color: context.colors.onSurface,
                   semanticLabel: 'Agent working',
                 ),
                 const SizedBox(width: Grid.half),
                 Text(
                   'Working\u2026',
                   style: context.textTheme.bodySmall?.copyWith(
-                    color: context.appColors.success,
+                    color: context.colors.onSurface,
                     fontWeight: FontWeight.w600,
                   ),
                 ),

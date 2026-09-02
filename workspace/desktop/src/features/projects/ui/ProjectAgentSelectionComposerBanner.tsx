@@ -57,7 +57,7 @@ export function ProjectAgentSelectionComposerBanner({
 
   return (
     <div className="px-3" data-testid="projects-agent-selection-context">
-      <section className="relative z-0 -mb-4 rounded-t-2xl border border-b-0 border-border/60 bg-muted/55 px-3 pb-6 pt-2.5 text-muted-foreground backdrop-blur-sm">
+      <section className="relative z-0 -mb-4 rounded-t-2xl border border-b-0 border-border/60 bg-muted px-3 pb-6 pt-2.5 text-muted-foreground">
         <button
           aria-expanded={expanded}
           className="flex w-full min-w-0 items-center gap-2 text-left text-xs font-medium text-foreground"

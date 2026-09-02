@@ -20,16 +20,16 @@ const MENU_RELAY_VIDEO_URL = `http://localhost:3000/media/${MENU_RELAY_VIDEO_SHA
 const MENU_OFF_RELAY_VIDEO_SHA = "f".repeat(64);
 const MENU_OFF_RELAY_VIDEO_URL = `https://cdn.example.com/media/${MENU_OFF_RELAY_VIDEO_SHA}.mp4`;
 const VIDEO_REVIEW_NEUTRAL_ACCENT = "neutral";
-const VIDEO_REVIEW_LIGHT_THEME = "catppuccin-latte";
+const VIDEO_REVIEW_LIGHT_THEME = "ambush-day";
 // The fresh-profile default is the Ambush theme, which pins the neutral accent
 // regardless of the stored accent color. Accent-driven review foreground
 // assertions must run on a non-Ambush theme for the seeded accent to apply.
 const VIDEO_REVIEW_ACCENT_THEME = "houston";
 const VIDEO_REVIEW_ACCENT = "#ec4899";
-const VIDEO_REVIEW_ACCENT_FOREGROUND_RGB = "rgb(240, 115, 177)";
+const VIDEO_REVIEW_ACCENT_FOREGROUND_RGB = "rgb(241, 116, 178)";
 const VIDEO_REVIEW_INDIGO_ACCENT = "#6366f1";
-const VIDEO_REVIEW_INDIGO_FOREGROUND_RGB = "rgb(141, 143, 245)";
-const VIDEO_REVIEW_NEUTRAL_DARK_RGB = "rgb(250, 250, 250)";
+const VIDEO_REVIEW_INDIGO_FOREGROUND_RGB = "rgb(142, 144, 245)";
+const VIDEO_REVIEW_NEUTRAL_DARK_RGB = "rgb(201, 193, 183)";
 const POSTER_DATA_URL =
   "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNjAgODAiPjxyZWN0IHdpZHRoPSIxNjAiIGhlaWdodD0iODAiIGZpbGw9IiMyNjQ2NTMiLz48Y2lyY2xlIGN4PSI1NCIgY3k9IjQwIiByPSIyMiIgZmlsbD0iI2YyYzE0ZSIvPjxwYXRoIGQ9Ik05MiAyNGg0NHYzMkg5MnoiIGZpbGw9IiNmNzgxNTQiLz48L3N2Zz4=";
 
@@ -328,7 +328,7 @@ test("video upload previews use poster frames and inline videos open review mode
 
   const inlinePlayer = page.getByTestId("video-player").last();
   const inlineSurface = inlinePlayer.locator("[data-smooth-corners]").first();
-  await expectCornerRadiusPx(inlineSurface, 16);
+  await expectCornerRadiusPx(inlineSurface, 2);
   await expectSmoothCorners(inlineSurface);
   const inlineVideo = inlinePlayer.locator("video");
   await inlinePlayer.getByRole("button", { name: "Play video" }).click();
@@ -1098,7 +1098,7 @@ test("video replies in threads open the review comments view", async ({
   await expect(posterPreview).toHaveAttribute("src", POSTER_DATA_URL);
   await expect(
     reviewDialog.getByTestId("video-review-comments-panel"),
-  ).toHaveCSS("background-color", "oklch(0.145 0 0)");
+  ).toHaveCSS("background-color", "rgb(23, 23, 23)");
   const modalTimecode = reviewDialog
     .getByRole("button", { name: "Jump to 00:01" })
     .first();

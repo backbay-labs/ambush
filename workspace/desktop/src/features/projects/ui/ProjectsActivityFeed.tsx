@@ -429,7 +429,7 @@ function ActivityCard({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start gap-2">
             <div
-              className="min-w-0 flex-1 text-xs text-muted-foreground/70"
+              className="min-w-0 flex-1 text-xs text-muted-foreground"
               data-projects-text-priority="secondary"
             >
               <span>
@@ -439,7 +439,7 @@ function ActivityCard({
                     triggerElement="span"
                   >
                     <button
-                      className="pointer-events-auto relative z-10 rounded-sm font-semibold text-muted-foreground/75 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                      className="pointer-events-auto relative z-10 rounded-sm font-semibold text-muted-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                       type="button"
                     >
                       {actorLabel}
@@ -450,7 +450,7 @@ function ActivityCard({
                 )}{" "}
                 {item.action}{" "}
                 <button
-                  className="pointer-events-auto relative z-10 inline-block max-w-48 truncate rounded-sm align-bottom font-semibold text-muted-foreground/75 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring sm:max-w-64 2xl:max-w-none"
+                  className="pointer-events-auto relative z-10 inline-block max-w-48 truncate rounded-sm align-bottom font-semibold text-muted-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring sm:max-w-64 2xl:max-w-none"
                   onClick={onOpenProject}
                   type="button"
                 >
@@ -500,7 +500,7 @@ function ActivityCard({
             {item.body ? (
               <p
                 className={cn(
-                  "mt-0.5 text-sm leading-6 text-muted-foreground/65",
+                  "mt-0.5 text-sm leading-6 text-muted-foreground",
                   compact ? "line-clamp-1" : "line-clamp-2",
                 )}
                 data-projects-text-priority="secondary"

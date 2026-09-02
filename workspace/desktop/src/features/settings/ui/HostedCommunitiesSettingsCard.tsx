@@ -42,7 +42,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/shared/ui/alert-dialog";
-import { Button, buttonVariants } from "@/shared/ui/button";
+import { Button } from "@/shared/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -436,7 +436,7 @@ export function HostedCommunitiesSettingsCard() {
         <div className="rounded-xl border border-border/70 p-5">
           <h3 className="font-medium">Sign in to manage hosted communities</h3>
           <p
-            className="mt-2 max-w-2xl text-sm text-muted-foreground/70"
+            className="mt-2 max-w-2xl text-sm text-muted-foreground"
             data-settings-subcopy
           >
             Authentication opens in your browser and returns securely to Ambush.
@@ -477,19 +477,24 @@ export function HostedCommunitiesSettingsCard() {
           </div>
 
           {!identity ? (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-5">
-              <h3 className="font-medium">
-                Link this account to your Ambush identity
-              </h3>
-              <p
-                className="mt-2 text-sm text-muted-foreground/70"
-                data-settings-subcopy
-              >
-                This Builderlab account isn&apos;t linked to an Ambush identity
-                yet. Connect this device&apos;s key to create and own
-                communities under it — Ambush signs a one-time challenge
-                locally, so your private key never leaves Desktop.
-              </p>
+            <div className="rounded-xl border border-border bg-warning-bg p-5">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <div>
+                  <h3 className="font-medium">
+                    Link this account to your Ambush identity
+                  </h3>
+                  <p
+                    className="mt-2 text-sm text-muted-foreground"
+                    data-settings-subcopy
+                  >
+                    This Builderlab account isn&apos;t linked to an Ambush
+                    identity yet. Connect this device&apos;s key to create and
+                    own communities under it — Ambush signs a one-time challenge
+                    locally, so your private key never leaves Desktop.
+                  </p>
+                </div>
+              </div>
               <Button
                 className="mt-4"
                 disabled={busy}
@@ -502,15 +507,15 @@ export function HostedCommunitiesSettingsCard() {
               </Button>
             </div>
           ) : identityMismatch ? (
-            <div className="rounded-xl border border-amber-500/50 bg-amber-500/5 p-5">
+            <div className="rounded-xl border border-border bg-warning-bg p-5">
               <div className="flex items-start gap-2">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                 <div>
                   <h3 className="font-medium">
                     This account is connected to a different Ambush identity
                   </h3>
                   <p
-                    className="mt-2 text-sm text-muted-foreground/70"
+                    className="mt-2 text-sm text-muted-foreground"
                     data-settings-subcopy
                   >
                     Your Builderlab account owns communities under another
@@ -546,7 +551,7 @@ export function HostedCommunitiesSettingsCard() {
           ) : (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 p-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Ambush
+                <CheckCircle2 className="h-4 w-4 text-foreground" /> Ambush
                 identity connected
                 {identity.npub ? (
                   <span className="font-mono text-xs">{identity.npub}</span>
@@ -623,7 +628,7 @@ export function HostedCommunitiesSettingsCard() {
             <div>
               <h3 className="font-medium">Create a community</h3>
               <p
-                className="mt-1 text-sm text-muted-foreground/70"
+                className="mt-1 text-sm text-muted-foreground"
                 data-settings-subcopy
               >
                 Choose the address your team will use to connect.
@@ -669,7 +674,7 @@ export function HostedCommunitiesSettingsCard() {
                 That address is already taken.
               </p>
             ) : availability === true ? (
-              <p className="text-sm text-emerald-600">
+              <p className="text-sm text-foreground">
                 That address is available.
               </p>
             ) : null}
@@ -727,10 +732,7 @@ function UnpairIdentityButton({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className={buttonVariants({ variant: "destructive" })}
-            onClick={onConfirm}
-          >
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
             Unpair identity
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -777,7 +779,7 @@ function CommunityRow({
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{displayName}</p>
           <p
-            className="truncate text-xs text-muted-foreground/70"
+            className="truncate text-xs text-muted-foreground"
             data-settings-subcopy
           >
             {community.normalized_host}
@@ -860,10 +862,7 @@ function CommunityRow({
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  className={buttonVariants({ variant: "destructive" })}
-                  onClick={onArchive}
-                >
+                <AlertDialogAction variant="destructive" onClick={onArchive}>
                   Archive
                 </AlertDialogAction>
               </AlertDialogFooter>

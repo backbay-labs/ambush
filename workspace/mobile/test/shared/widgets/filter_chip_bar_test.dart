@@ -39,7 +39,7 @@ void main() {
     final unselectedLabel = tester.widget<Text>(find.text('Following'));
     expect(selectedLabel.style?.fontSize, filterChipTextStyle.fontSize);
     expect(selectedLabel.style?.height, filterChipTextStyle.height);
-    expect(selectedLabel.style?.fontFamily, 'Inter');
+    expect(selectedLabel.style?.fontFamily, 'IBM Plex Sans');
     expect(selectedLabel.style?.fontWeight, FontWeight.w500);
     expect(unselectedLabel.style?.fontSize, filterChipTextStyle.fontSize);
     expect(unselectedLabel.style?.height, filterChipTextStyle.height);

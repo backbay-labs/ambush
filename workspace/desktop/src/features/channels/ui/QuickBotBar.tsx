@@ -55,7 +55,7 @@ export function QuickBotBar({ personas, pending, onAdd }: QuickBotBarProps) {
                   aria-label={`Add ${persona.displayName}`}
                   className={cn(
                     "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
-                    "border border-border/50 shadow-xs",
+                    "border border-border/50",
                     "transition-transform duration-150 hover:scale-110",
                     "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                     isThisPending && "pointer-events-none opacity-60",

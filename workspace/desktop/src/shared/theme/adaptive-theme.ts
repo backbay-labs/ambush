@@ -177,23 +177,103 @@ export interface ThemeGitColors {
   modified: string | null;
 }
 
+/**
+ * A theme's own surface palette, declared rather than derived. `night` is the
+ * darkest ground, `steel` the chrome above it, `plate` the lit surface that
+ * carries what the reader is judging, and `index` the single chromatic mark.
+ * `mode` is declared too: a light room can sit below the luminance midpoint,
+ * so the mode is never inferred from a surface.
+ */
+export interface ThemeSurfaces {
+  mode: "dark" | "light";
+  index: string;
+  night: string;
+  steel: string;
+  rule: string;
+  grad: string;
+  plate: string;
+  plateHigh: string;
+  inkDim: string;
+  inkMid: string;
+  ink: string;
+}
+
 export interface ThemeResult {
   isDark: boolean;
   vars: Record<string, string>;
 }
 
+function declaredThemeVars(s: ThemeSurfaces): ThemeResult {
+  return {
+    isDark: s.mode === "dark",
+    vars: {
+      "--background": hexToHsl(s.night),
+      "--card": hexToHsl(s.plate),
+      "--popover": hexToHsl(s.plate),
+      "--muted": hexToHsl(s.steel),
+      "--accent": hexToHsl(s.plateHigh),
+      "--secondary": hexToHsl(s.steel),
+      "--huddle-drawer-surface": hexToHsl(s.night),
+      "--huddle-control-surface": hexToHsl(s.steel),
+      "--huddle-control-hover-surface": hexToHsl(s.rule),
+      "--huddle-control-chevron-surface": hexToHsl(s.night),
+      "--huddle-control-chevron-hover-surface": hexToHsl(s.steel),
+      "--huddle-control-foreground": hexToHsl(s.ink),
+      "--huddle-popover-surface": hexToHsl(s.steel),
+      "--huddle-popover-border": hexToHsl(s.rule),
+      "--huddle-tooltip-surface": hexToHsl(s.steel),
+      "--huddle-tooltip-foreground": hexToHsl(s.ink),
+
+      "--foreground": hexToHsl(s.ink),
+      "--card-foreground": hexToHsl(s.ink),
+      "--popover-foreground": hexToHsl(s.ink),
+      "--muted-foreground": hexToHsl(s.inkDim),
+      "--accent-foreground": hexToHsl(s.ink),
+      "--secondary-foreground": hexToHsl(s.inkMid),
+
+      // Consequence is carried by the index rule at a control's edge, never by
+      // a hue: a destructive control is drawn in ink like everything else.
+      "--destructive": hexToHsl(s.ink),
+      "--destructive-foreground": hexToHsl(s.night),
+
+      "--border": hexToHsl(s.rule),
+      "--input": hexToHsl(s.rule),
+      "--ring": hexToHsl(s.ink),
+
+      "--sidebar-background": hexToHsl(s.steel),
+      "--sidebar-foreground": hexToHsl(s.inkMid),
+      "--sidebar-accent": hexToHsl(s.plate),
+      "--sidebar-accent-foreground": hexToHsl(s.ink),
+      "--sidebar-border": hexToHsl(s.rule),
+      "--sidebar-ring": hexToHsl(s.rule),
+
+      "--status-added": s.ink,
+      "--status-deleted": s.inkDim,
+      "--status-modified": s.inkMid,
+
+      "--ui-warning": s.ink,
+      "--ui-warning-bg": s.plate,
+    },
+  };
+}
+
 /**
- * Derive a full set of shadcn CSS variables from syntax theme colors.
+ * Build the shadcn CSS variables for a theme.
  *
- * Takes bg, fg, comment hex colors (+ optional git decoration colors) and
- * returns the var map ready to apply via style.setProperty().
+ * A theme that declares its own {@link ThemeSurfaces} is used verbatim;
+ * otherwise the chrome is derived from the syntax bg, fg, comment hex colors
+ * (+ optional git decoration colors). Either way the result is the var map
+ * ready to apply via style.setProperty().
  */
 export function createThemeVars(
   syntaxBg: string,
   syntaxFg: string,
   syntaxComment: string,
   gitColors?: ThemeGitColors,
+  surfaces?: ThemeSurfaces | null,
 ): ThemeResult {
+  if (surfaces) return declaredThemeVars(surfaces);
+
   const isDark = luminance(syntaxBg) < 0.5;
 
   const { chrome: chromeColor, primary: primaryBg } =

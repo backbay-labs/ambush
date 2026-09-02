@@ -131,13 +131,13 @@ export function HuddleProfileControl({
       >
         <Headphones
           aria-hidden="true"
-          className="h-4 w-4 shrink-0 text-emerald-500"
+          className="h-4 w-4 shrink-0 text-foreground"
         />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium leading-tight">
             In a huddle
           </span>
-          <span className="block truncate text-xs text-sidebar-foreground/65">
+          <span className="block truncate text-xs text-sidebar-foreground">
             {channelName ? `#${channelName}` : "Huddle"}
           </span>
         </span>

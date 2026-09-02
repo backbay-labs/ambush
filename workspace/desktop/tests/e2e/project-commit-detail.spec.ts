@@ -773,11 +773,11 @@ test("latest files commit opens its detail without a divider", async ({
   await repositoryEntryRow.hover();
   await expect(repositoryEntryCells.first()).toHaveCSS(
     "border-top-left-radius",
-    "8px",
+    "2px",
   );
   await expect(repositoryEntryCells.last()).toHaveCSS(
     "border-top-right-radius",
-    "8px",
+    "2px",
   );
   await latestCommit.click();
   await expect(page.getByTestId("project-commit-detail")).toBeVisible();
@@ -1093,7 +1093,7 @@ test("commit detail opens from the commits feed with a diff", async ({
   ).toBeVisible();
   await expect(
     firstCommitRow.getByTestId("project-commit-row-date"),
-  ).toHaveClass(/text-muted-foreground\/55/);
+  ).toHaveClass(/text-muted-foreground/);
   await waitForAnimations(page);
   await page.screenshot({
     fullPage: false,
@@ -1325,7 +1325,7 @@ test("pull request and issue feeds use compact work item rows", async ({
   ).toHaveText("0");
   await expect(
     prRows.first().getByTestId("project-pull-request-row-date"),
-  ).toHaveClass(/text-muted-foreground\/55/);
+  ).toHaveClass(/text-muted-foreground/);
   await expect(
     page.getByTestId("project-work-item-group-header").first(),
   ).toBeVisible();
@@ -1381,7 +1381,7 @@ test("pull request and issue feeds use compact work item rows", async ({
   ).toHaveText("0");
   await expect(
     issueRows.first().getByTestId("project-issue-row-date"),
-  ).toHaveClass(/text-muted-foreground\/55/);
+  ).toHaveClass(/text-muted-foreground/);
   const taskCategoryBoxes = await taskCategoryCells.evaluateAll((cells) =>
     cells.slice(0, 5).map((cell) => {
       const box = cell.getBoundingClientRect();

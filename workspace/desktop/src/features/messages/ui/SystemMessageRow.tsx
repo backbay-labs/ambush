@@ -782,12 +782,12 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
   const reactionPicker = canToggleReactions ? (
     <div
       className={cn(
-        "overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-xs backdrop-blur-sm supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
-        "max-w-0 border-0 shadow-none translate-y-1 opacity-0",
-        "group-hover/message:max-w-9 group-hover/message:border group-hover/message:border-border/70 group-hover/message:shadow-xs group-hover/message:translate-y-0 group-hover/message:opacity-100",
-        "group-focus-within/message:max-w-9 group-focus-within/message:border group-focus-within/message:border-border/70 group-focus-within/message:shadow-xs group-focus-within/message:translate-y-0 group-focus-within/message:opacity-100",
+        "overflow-hidden rounded-full border border-border/70 bg-background transition-all duration-150 ease-out",
+        "max-w-0 border-0 translate-y-1 opacity-0",
+        "group-hover/message:max-w-9 group-hover/message:border group-hover/message:border-border/70 group-hover/message:translate-y-0 group-hover/message:opacity-100",
+        "group-focus-within/message:max-w-9 group-focus-within/message:border group-focus-within/message:border-border/70 group-focus-within/message:translate-y-0 group-focus-within/message:opacity-100",
         isReactionPickerOpen
-          ? "max-w-9 border border-border/70 shadow-xs translate-y-0 opacity-100"
+          ? "max-w-9 border border-border/70 translate-y-0 opacity-100"
           : "",
       )}
     >
@@ -869,7 +869,7 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
                 profiles={profiles}
                 pubkeys={membershipPubkeys}
               />
-              <p className="min-w-0 text-left text-xs font-normal leading-4 text-muted-foreground/70">
+              <p className="min-w-0 text-left text-xs font-normal leading-4 text-muted-foreground">
                 {description.title} {description.action}
               </p>
             </div>

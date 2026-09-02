@@ -13,7 +13,7 @@ type PulseTabBarProps = {
 };
 
 const tabButtonClassName =
-  "h-7 rounded-full border border-transparent px-1.5 text-2xs font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm";
+  "h-7 rounded-full border border-transparent px-1.5 text-2xs font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background data-[active=true]:text-foreground";
 
 export function PulseTabBar({
   activeTab,
@@ -36,7 +36,7 @@ export function PulseTabBar({
                 aria-controls={getPanelId("search")}
                 aria-label="Search Pulse"
                 aria-selected={activeTab === "search"}
-                className="h-7 w-7 shrink-0 rounded-full border border-transparent p-0 text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm"
+                className="h-7 w-7 shrink-0 rounded-full border border-transparent p-0 text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background data-[active=true]:text-foreground"
                 data-active={activeTab === "search"}
                 id={getTabId("search")}
                 onClick={() => onTabChange("search")}

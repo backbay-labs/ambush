@@ -64,7 +64,7 @@ export function ChannelHero({
             </span>
           </span>
           <span
-            className="mt-1 line-clamp-6 max-w-full whitespace-pre-line text-sm leading-5 text-muted-foreground/70"
+            className="mt-1 line-clamp-6 max-w-full whitespace-pre-line text-sm leading-5 text-muted-foreground"
             data-testid="channel-management-description"
           >
             {description}
@@ -80,7 +80,7 @@ export function ChannelHero({
           </h3>
           {description ? (
             <p
-              className="mt-1 line-clamp-6 max-w-full whitespace-pre-line text-sm leading-5 text-muted-foreground/70"
+              className="mt-1 line-clamp-6 max-w-full whitespace-pre-line text-sm leading-5 text-muted-foreground"
               data-testid="channel-management-description"
             >
               {description}
@@ -196,7 +196,7 @@ export function CopyFieldRow({
           {label}
         </span>
         <span
-          className="mt-0.5 block truncate font-mono text-sm text-muted-foreground/70"
+          className="mt-0.5 block truncate font-mono text-sm text-muted-foreground"
           title={value}
         >
           {truncateIdentifier(value)}
@@ -259,7 +259,7 @@ export function InfoFieldRow({
         </span>
         <span
           className={cn(
-            "mt-0.5 block text-sm font-normal text-muted-foreground/70",
+            "mt-0.5 block text-sm font-normal text-muted-foreground",
             multiline ? "line-clamp-2 whitespace-normal leading-5" : "truncate",
           )}
         >
@@ -324,7 +324,7 @@ export function EditableInfoFieldRow({
         </span>
         <span
           className={cn(
-            "mt-0.5 block text-sm font-normal text-muted-foreground/70",
+            "mt-0.5 block text-sm font-normal text-muted-foreground",
             multiline ? "line-clamp-2 whitespace-normal leading-5" : "truncate",
           )}
         >
@@ -416,7 +416,7 @@ export const ActionFieldRow = React.forwardRef<
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium">{label}</span>
         {description ? (
-          <span className="mt-0.5 block truncate text-sm font-normal text-muted-foreground/70">
+          <span className="mt-0.5 block truncate text-sm font-normal text-muted-foreground">
             {description}
           </span>
         ) : null}
@@ -476,13 +476,13 @@ export function IngressRow({
             ) : null}
           </span>
           {description ? (
-            <span className="mt-0.5 block truncate text-sm font-normal text-muted-foreground/70">
+            <span className="mt-0.5 block truncate text-sm font-normal text-muted-foreground">
               {description}
             </span>
           ) : null}
         </span>
         {trailing ? (
-          <span className="pointer-events-none relative z-20 text-sm text-muted-foreground/70">
+          <span className="pointer-events-none relative z-20 text-sm text-muted-foreground">
             {trailing}
           </span>
         ) : null}

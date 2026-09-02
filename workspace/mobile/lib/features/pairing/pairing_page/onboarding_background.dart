@@ -9,24 +9,16 @@ class _OnboardingBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       key: const Key('pairing-onboarding-background'),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_onboardingChartreuse, _onboardingShellBottom],
-        ),
-      ),
-      child: CustomPaint(painter: const _DotGridPainter(), child: child),
+      decoration: BoxDecoration(color: _onboardingGround),
+      child: CustomPaint(painter: _DotGridPainter(), child: child),
     );
   }
 }
 
 class _DotGridPainter extends CustomPainter {
-  const _DotGridPainter();
-
   @override
   void paint(Canvas canvas, Size size) {
-    final dotPaint = Paint()..color = _onboardingInk.withValues(alpha: 0.08);
+    final dotPaint = Paint()..color = _onboardingRule;
     const spacing = 24.0;
 
     for (var x = 0.0; x <= size.width; x += spacing) {

@@ -20,8 +20,8 @@ import { PullRequestReviewersRow } from "./PullRequestReviewersRow";
 function statusClassName(status: ProjectPullRequest["status"]) {
   if (status === "Closed") return "text-destructive";
   if (status === "Draft") return "text-muted-foreground";
-  if (status === "Merged") return "text-purple-400";
-  return "text-green-500";
+  if (status === "Merged") return "text-secondary-foreground";
+  return "text-foreground";
 }
 
 /** Compact metadata under the review title: branches, reviewers, status. */
@@ -84,10 +84,10 @@ export function PullRequestMetaHeader({
             <span className="inline-flex min-w-20 justify-end gap-1.5 tabular-nums">
               {displayedDiffStats ? (
                 <>
-                  <span className="text-green-500">
+                  <span className="text-status-added">
                     +{displayedDiffStats.additions}
                   </span>
-                  <span className="text-destructive">
+                  <span className="text-status-deleted">
                     -{displayedDiffStats.deletions}
                   </span>
                 </>

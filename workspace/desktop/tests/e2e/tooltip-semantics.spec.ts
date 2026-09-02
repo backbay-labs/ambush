@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
 
-const THEMES = ["ambush", "catppuccin-mocha"] as const;
+const THEMES = ["ambush-night", "catppuccin-mocha"] as const;
 
 async function seedTheme(page: Page, theme: (typeof THEMES)[number]) {
   await page.addInitScript((value) => {

@@ -149,7 +149,7 @@ export function AddCommunityDialog({
                     Claim an Ambush address for your team.
                   </span>
                 </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
               </button>
 
               <button
@@ -169,7 +169,7 @@ export function AddCommunityDialog({
                     Use a community URL or invite link.
                   </span>
                 </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
               </button>
             </div>
           ) : mode === "join" ? (

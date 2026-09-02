@@ -152,7 +152,7 @@ export function PersonaShareRecipients({
               data-testid={`${testIdPrefix}-recipient-input-region`}
             >
               {selectedUsers.length === 0 ? (
-                <Search className="h-4 w-4 shrink-0 text-muted-foreground/55" />
+                <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
               ) : null}
               {selectedUsers.map((user) => (
                 <SelectedRecipientChip
@@ -176,7 +176,7 @@ export function PersonaShareRecipients({
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect="off"
-                className="h-7 min-w-16 flex-1 border-0 bg-transparent p-0 text-sm outline-hidden placeholder:text-muted-foreground/55"
+                className="h-7 min-w-16 flex-1 border-0 bg-transparent p-0 text-sm outline-hidden placeholder:text-muted-foreground"
                 data-testid={`${testIdPrefix}-recipient-search`}
                 disabled={disabled || selectedUsers.length >= RECIPIENT_LIMIT}
                 onChange={(event) => {

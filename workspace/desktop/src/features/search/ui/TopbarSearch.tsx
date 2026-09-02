@@ -52,7 +52,7 @@ type TopbarSearchProps = {
 const MAX_SEARCH_SUGGESTIONS = 4;
 const SEARCH_RESULT_LIMIT = 40;
 const SEARCH_SECTION_TITLE_CLASS =
-  "px-2.5 pb-1.5 pt-2 text-xs font-medium text-muted-foreground/70";
+  "px-2.5 pb-1.5 pt-2 text-xs font-medium text-muted-foreground";
 const SEARCH_RESULT_SECTION_ORDER = [
   "channels",
   "direct-messages",
@@ -245,7 +245,7 @@ function SearchHitContextLine({ label }: { label: SearchHitContextLabel }) {
     <span
       className={cn(
         MESSAGE_MARKDOWN_CLASS,
-        "mt-0 flex min-w-0 items-center gap-1.5 text-2xs font-medium leading-3 text-muted-foreground/80",
+        "mt-0 flex min-w-0 items-center gap-1.5 text-2xs font-medium leading-3 text-muted-foreground",
       )}
     >
       <span className="shrink-0">{label.text}</span>
@@ -759,7 +759,7 @@ export function TopbarSearch({
                 {title}
               </span>
               {trailingLabel ? (
-                <span className="col-start-2 row-start-1 flex shrink-0 items-center justify-self-end text-xs font-medium leading-4 text-muted-foreground/70">
+                <span className="col-start-2 row-start-1 flex shrink-0 items-center justify-self-end text-xs font-medium leading-4 text-muted-foreground">
                   {trailingLabel}
                 </span>
               ) : null}
@@ -788,7 +788,7 @@ export function TopbarSearch({
           )}
         </span>
         {result.kind !== "message" && trailingLabel ? (
-          <span className="shrink-0 text-2xs text-muted-foreground/75">
+          <span className="shrink-0 text-2xs text-muted-foreground">
             {trailingLabel}
           </span>
         ) : null}
@@ -929,8 +929,8 @@ export function TopbarSearch({
           aria-label="Search everything"
           className={
             isIconVariant
-              ? "group/search flex size-6 items-center justify-center rounded p-1 text-sidebar-foreground/50 transition-colors hover:bg-sidebar-border/35 hover:text-sidebar-foreground focus-visible:bg-sidebar-border/35 focus-visible:text-sidebar-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-              : "group/search flex h-8 w-full items-center gap-2 rounded-md bg-sidebar-border/35 px-2 text-left text-sm text-sidebar-foreground/55 transition-colors duration-150 ease-out hover:bg-sidebar-border/35 hover:text-sidebar-foreground focus-visible:bg-sidebar-border/35 focus-visible:text-sidebar-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+              ? "group/search flex size-6 items-center justify-center rounded p-1 text-sidebar-foreground transition-colors hover:bg-sidebar-border/35 hover:text-sidebar-foreground focus-visible:bg-sidebar-border/35 focus-visible:text-sidebar-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+              : "group/search flex h-8 w-full items-center gap-2 rounded-md bg-sidebar-border/35 px-2 text-left text-sm text-sidebar-foreground transition-colors duration-150 ease-out hover:bg-sidebar-border/35 hover:text-sidebar-foreground focus-visible:bg-sidebar-border/35 focus-visible:text-sidebar-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-sidebar-ring"
           }
           data-testid="open-search"
           onClick={() => openSearchDialog(null)}
@@ -942,7 +942,7 @@ export function TopbarSearch({
             className={
               isIconVariant
                 ? "h-4 w-4 shrink-0"
-                : "h-4 w-4 shrink-0 text-sidebar-foreground/45 transition-colors duration-150 ease-out group-hover/search:text-sidebar-foreground/65 group-focus-visible/search:text-sidebar-foreground"
+                : "h-4 w-4 shrink-0 text-sidebar-foreground transition-colors duration-150 ease-out group-hover/search:text-sidebar-foreground group-focus-visible/search:text-sidebar-foreground"
             }
           />
           {isIconVariant ? null : (
@@ -950,14 +950,12 @@ export function TopbarSearch({
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate transition-colors duration-150 ease-out",
-                  query
-                    ? "text-sidebar-foreground"
-                    : "text-sidebar-foreground/55",
+                  query ? "text-sidebar-foreground" : "text-sidebar-foreground",
                 )}
               >
                 {query || "Search everything"}
               </span>
-              <kbd className="shrink-0 text-2xs text-sidebar-foreground/45">
+              <kbd className="shrink-0 text-2xs text-sidebar-foreground">
                 &#x2318;K
               </kbd>
             </>
@@ -965,7 +963,7 @@ export function TopbarSearch({
         </button>
         <DialogContent
           aria-busy={isSearchLoading && visibleSearchableResults.length === 0}
-          className="mt-[18vh] max-w-2xl self-start gap-0 overflow-hidden rounded-2xl p-0 shadow-2xl"
+          className="mt-[18vh] max-w-2xl self-start gap-0 overflow-hidden rounded-2xl p-0"
           data-testid="search-results"
           onOpenAutoFocus={(event) => {
             event.preventDefault();

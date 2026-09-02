@@ -62,7 +62,7 @@ export function MembersSidebarAgentControls({
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
+              destructive
               data-testid="members-sidebar-remove-all"
               disabled={disabled}
               onClick={onRemoveAll}

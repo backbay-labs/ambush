@@ -136,8 +136,8 @@ class _InboxRow extends HookConsumerWidget {
             .clamp(0, actionExtent)
             .toDouble();
         final actionColor = isDone
-            ? context.colors.primary
-            : context.appColors.success;
+            ? context.colors.surfaceContainerHighest
+            : context.colors.primary;
         return ClipRect(
           child: Stack(
             children: [

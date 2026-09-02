@@ -66,7 +66,7 @@ export function CreateProjectFormSettings({
       <div className={cn(SETTINGS_ROW_CLASS, disabled && "opacity-50")}>
         <span className="text-sm font-medium text-foreground">
           Template
-          <span className="ml-1 text-xs font-normal text-muted-foreground/50">
+          <span className="ml-1 text-xs font-normal text-muted-foreground">
             Project home by default
           </span>
         </span>
@@ -83,7 +83,7 @@ export function CreateProjectFormSettings({
               <span className="truncate text-right">
                 {selectedTemplate?.name ?? "None"}
               </span>
-              <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -120,7 +120,7 @@ export function CreateProjectFormSettings({
       <div className={cn(SETTINGS_ROW_CLASS, teamDisabled && "opacity-50")}>
         <span className="text-sm font-medium text-foreground">
           Team
-          <span className="ml-1 text-xs font-normal text-muted-foreground/50">
+          <span className="ml-1 text-xs font-normal text-muted-foreground">
             Optional
           </span>
         </span>
@@ -137,7 +137,7 @@ export function CreateProjectFormSettings({
               <span className="truncate text-right">
                 {selectedTeam?.name ?? "None"}
               </span>
-              <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -175,7 +175,7 @@ export function CreateProjectFormSettings({
               variant="ghost"
             >
               <span className="text-right">{listingLabel}</span>
-              <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
@@ -225,7 +225,7 @@ export function CreateProjectFormSettings({
               variant="ghost"
             >
               <span className="truncate text-right">{agentLabel}</span>
-              <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent

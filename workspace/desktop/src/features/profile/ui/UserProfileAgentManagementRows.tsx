@@ -22,7 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/shared/ui/alert-dialog";
-import { Button, buttonVariants } from "@/shared/ui/button";
+import { Button } from "@/shared/ui/button";
 import { PanelSectionGroup } from "@/shared/ui/PanelSectionGroup";
 
 export function UserProfileAgentManagementRows({
@@ -283,7 +283,7 @@ function AgentDeleteConfirmDialog({
             </Button>
           </AlertDialogCancel>
           <AlertDialogAction
-            className={buttonVariants({ variant: "destructive" })}
+            variant="destructive"
             data-testid="agent-delete-confirm-action"
             disabled={isPending}
             onClick={onConfirm}

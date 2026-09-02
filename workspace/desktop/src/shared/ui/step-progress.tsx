@@ -39,13 +39,13 @@ export function StepProgress({
             aria-hidden="true"
             className={cn(
               "h-1.5 rounded-full transition-all duration-200 ease-out",
-              isActive && cn("w-6 bg-primary", activeSegmentClassName),
+              isActive && cn("w-6 bg-foreground", activeSegmentClassName),
               !isActive &&
                 isComplete &&
-                cn("w-1.5 bg-primary/35", completeSegmentClassName),
+                cn("w-1.5 bg-grad", completeSegmentClassName),
               !isActive &&
                 !isComplete &&
-                cn("w-1.5 bg-muted-foreground/25", inactiveSegmentClassName),
+                cn("w-1.5 bg-secondary", inactiveSegmentClassName),
             )}
             key={step}
           />

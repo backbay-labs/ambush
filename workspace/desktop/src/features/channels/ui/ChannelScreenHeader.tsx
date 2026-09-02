@@ -252,7 +252,7 @@ function DmHeaderParticipantStack({
           data-testid="chat-header-dm-avatar-stack-more"
           style={{ zIndex: stackItemCount }}
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary font-semibold text-secondary-foreground shadow-xs">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary font-semibold text-secondary-foreground">
             <span className="text-2xs leading-none">+{hiddenCount}</span>
           </span>
         </div>

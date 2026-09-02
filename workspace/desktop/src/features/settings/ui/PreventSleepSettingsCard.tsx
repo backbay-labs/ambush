@@ -1,3 +1,5 @@
+import { AlertTriangle } from "lucide-react";
+
 import { usePreventSleepContext } from "@/features/agents/usePreventSleep";
 import { Switch } from "@/shared/ui/switch";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
@@ -21,7 +23,7 @@ export function PreventSleepSettingsCard() {
               Keep awake while agents are active
             </label>
             <p
-              className="text-sm font-normal text-muted-foreground/70"
+              className="text-sm font-normal text-muted-foreground"
               data-settings-subcopy
             >
               Prevents your computer from sleeping while local agents are
@@ -50,10 +52,16 @@ export function PreventSleepSettingsCard() {
       )}
 
       {expired && (
-        <p className="mt-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-700 dark:text-yellow-400">
-          Sleep prevention expired after 1 hour without agent activity. It will
-          resume on the next agent activity, or toggle off and on to re-enable
-          now.
+        <p className="mt-3 flex items-start gap-2 rounded-xl border border-border bg-warning-bg px-3 py-2 text-sm text-warning">
+          <AlertTriangle
+            aria-hidden="true"
+            className="mt-0.5 h-4 w-4 shrink-0"
+          />
+          <span>
+            Sleep prevention expired after 1 hour without agent activity. It
+            will resume on the next agent activity, or toggle off and on to
+            re-enable now.
+          </span>
         </p>
       )}
     </div>

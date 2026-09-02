@@ -437,7 +437,7 @@ export function DiscussionChannelsPanel({
                 }`}
                 dateSeconds={channel.lastActivityAt}
                 dateTestId="project-channel-row-date"
-                icon={<Hash className="h-3.5 w-3.5 text-muted-foreground/70" />}
+                icon={<Hash className="h-3.5 w-3.5 text-muted-foreground" />}
                 onClick={() =>
                   openDiscussionHit({
                     channelId: channel.id,

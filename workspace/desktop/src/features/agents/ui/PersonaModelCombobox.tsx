@@ -132,12 +132,12 @@ export function PersonaModelCombobox({
             <span
               className={cn(
                 "min-w-0 flex-1 truncate",
-                !selectedOption && "text-muted-foreground/55",
+                !selectedOption && "text-muted-foreground",
               )}
             >
               {selectedOption?.label ?? placeholder}
             </span>
-            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -151,13 +151,13 @@ export function PersonaModelCombobox({
           }}
         >
           <div className="group/search flex cursor-text items-center gap-2 border-b border-border/50 px-3 py-2">
-            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/55 transition-colors duration-150 ease-out group-focus-within/search:text-foreground" />
+            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors duration-150 ease-out group-focus-within/search:text-foreground" />
             <input
               aria-label="Search models"
               autoCapitalize="none"
               autoComplete="off"
               autoCorrect="off"
-              className="block min-w-0 flex-1 border-0 bg-transparent p-0 text-sm leading-5 text-muted-foreground/55 shadow-none outline-none placeholder:text-muted-foreground/55 focus:text-foreground focus:placeholder:text-muted-foreground"
+              className="block min-w-0 flex-1 border-0 bg-transparent p-0 text-sm leading-5 text-muted-foreground shadow-none outline-none placeholder:text-muted-foreground focus:text-foreground focus:placeholder:text-muted-foreground"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Search models…"
@@ -208,7 +208,7 @@ export function PersonaModelCombobox({
                 </button>
               ))
             ) : (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground/55">
+              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
                 No models match
               </p>
             )}

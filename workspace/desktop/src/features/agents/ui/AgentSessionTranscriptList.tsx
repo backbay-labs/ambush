@@ -340,7 +340,7 @@ function isRenderableCompactItem(item: TranscriptItem) {
 function TranscriptAcpSourceBadge({ source }: { source: string }) {
   return (
     <span
-      className="mb-1 inline-flex max-w-full rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-mono text-xs leading-none text-amber-800 dark:text-amber-200"
+      className="mb-1 inline-flex max-w-full rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs leading-none text-muted-foreground"
       data-testid="transcript-acp-source"
       title={`ACP wire source: ${source}`}
     >
@@ -805,7 +805,7 @@ function TurnSetupFooter({
 
   return (
     <div
-      className="flex items-center gap-1.5 text-muted-foreground/80"
+      className="flex items-center gap-1.5 text-muted-foreground"
       data-testid="transcript-turn-setup"
     >
       {showContext ? (
@@ -822,7 +822,7 @@ function TurnSetupFooter({
           <CheckCheck aria-hidden="true" />
         </Toggle>
       ) : (
-        <span className="inline-flex shrink-0 items-center justify-center rounded-sm text-muted-foreground/70">
+        <span className="inline-flex shrink-0 items-center justify-center rounded-sm text-muted-foreground">
           <CheckCheck className="h-3.5 w-3.5" />
           <span className="sr-only">{tooltipText}</span>
         </span>

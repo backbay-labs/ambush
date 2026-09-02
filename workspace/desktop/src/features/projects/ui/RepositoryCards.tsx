@@ -89,7 +89,7 @@ function RepositoryHostIcon({
           aria-label={label}
           className={
             compact
-              ? "pointer-events-auto flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground/70"
+              ? "pointer-events-auto flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground"
               : "pointer-events-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40 text-muted-foreground"
           }
           data-testid="repository-host-icon"

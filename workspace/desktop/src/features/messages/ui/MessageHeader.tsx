@@ -41,7 +41,7 @@ export function MessageHeaderRow({
  */
 export function MessageMetaSeparator() {
   return (
-    <span aria-hidden="true" className="text-xs text-muted-foreground/40">
+    <span aria-hidden="true" className="text-xs text-muted-foreground">
       ·
     </span>
   );

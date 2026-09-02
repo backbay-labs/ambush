@@ -389,7 +389,7 @@ export function HostedCommunityOnboarding({
       autoComplete="off"
       className={
         inline
-          ? "h-[2.375rem] w-[16.5rem] rounded-full border border-[color:var(--ambush-onboarding-backup-ink)]/25 bg-[rgb(var(--ambush-hosted-community-input-bg)/0.6)] px-6 text-center text-sm shadow-none placeholder:text-foreground/30 focus-visible:ring-1 focus-visible:ring-[color:var(--ambush-onboarding-backup-ink)]/40"
+          ? "h-[2.375rem] w-[16.5rem] rounded-full border border-[color:var(--ambush-onboarding-backup-ink)]/25 bg-[rgb(var(--ambush-hosted-community-input-bg)/0.6)] px-6 text-center text-sm shadow-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-[color:var(--ambush-onboarding-backup-ink)]/40"
           : "h-auto min-w-0 flex-none rounded-none border-0 bg-transparent p-0 text-right font-mono !text-[rgb(var(--ambush-hosted-community-surface-fg))] shadow-none placeholder:!text-[rgb(var(--ambush-hosted-community-surface-fg))] placeholder:opacity-20 focus-visible:ring-0"
       }
       disabled={busy || atCommunityLimit}
@@ -505,7 +505,7 @@ export function HostedCommunityOnboarding({
               )}
               {/* Quiet breadcrumb: Ambush itself is open source; this hosted
                     relay is the one account-backed piece of the flow. */}
-              <p className="mt-6 w-full border-t border-foreground/10 pt-4 text-xs leading-5 text-foreground/45">
+              <p className="mt-6 w-full border-t border-foreground/10 pt-4 text-xs leading-5 text-muted-foreground">
                 Ambush is open source. Builderlab hosts the relay for this
                 account.
               </p>
@@ -623,7 +623,7 @@ export function HostedCommunityOnboarding({
                                 community.slug ??
                                 "Hosted community"}
                             </p>
-                            <p className="mt-1 truncate text-sm text-foreground/55">
+                            <p className="mt-1 truncate text-sm text-muted-foreground">
                               {community.normalized_host}
                             </p>
                           </div>

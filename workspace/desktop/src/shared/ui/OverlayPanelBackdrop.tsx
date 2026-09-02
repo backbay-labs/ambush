@@ -19,7 +19,7 @@ export const PANEL_BASE_CLASS =
  * the panel hangs below the viewport (100vh tall, but starting 44px down).
  */
 export const PANEL_OVERLAY_CLASS =
-  "fixed bottom-0 right-0 top-11 z-40 h-auto shadow-xl max-w-[calc(100vw-2rem)]";
+  "fixed bottom-0 right-0 top-11 z-40 h-auto max-w-[calc(100vw-2rem)]";
 
 export const PANEL_ENTER_MOTION_CLASS = "ambush-side-panel-enter";
 

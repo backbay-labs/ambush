@@ -10,15 +10,13 @@ export type TerminalBanner = Readonly<{
   cells: readonly (readonly TerminalBannerCell[])[];
 }>;
 
-const HEX = [
-  [0, 1, "_"],
-  [0, 2, "_"],
-  [1, 0, "/"],
-  [1, 3, "\\"],
-  [2, 0, "\\"],
-  [2, 1, "_"],
-  [2, 2, "_"],
-  [2, 3, "/"],
+/** One graduation on the field: a tick standing on its scale. */
+const TICK = [
+  [0, 1, "│"],
+  [1, 1, "│"],
+  [2, 1, "┴"],
+  [2, 2, "─"],
+  [2, 3, "─"],
 ] as const;
 
 const GLYPHS: Readonly<Record<string, readonly string[]>> = {
@@ -101,7 +99,7 @@ function stableRandom(band: number, index: number): number {
   return (value >>> 0) / 0xffffffff;
 }
 
-function completeHexes(columns: number, rows: number) {
+function completeTicks(columns: number, rows: number) {
   const cells: { band: number; index: number; y: number; x: number }[] = [];
   for (let band = 0, y = -2; y < rows; band += 1, y += 2) {
     for (
@@ -110,7 +108,7 @@ function completeHexes(columns: number, rows: number) {
       index += 1, x += 6
     ) {
       if (
-        HEX.every(
+        TICK.every(
           ([dy, dx]) =>
             y + dy >= 0 && y + dy < rows && x + dx >= 0 && x + dx < columns,
         )
@@ -163,20 +161,20 @@ export function buildTerminalBanner(
   const halfHeight = (frameHeight / 2) * cellAspect;
   const viewportHalfWidth = columns / 2;
   const viewportHalfHeight = (rows / 2) * cellAspect;
-  for (const hex of completeHexes(columns, rows)) {
+  for (const tick of completeTicks(columns, rows)) {
     if (
-      HEX.some(
+      TICK.some(
         ([offsetY, offsetX]) =>
-          hex.y + offsetY >= top - 1 &&
-          hex.y + offsetY < top + frameHeight + 1 &&
-          hex.x + offsetX >= left - 2 &&
-          hex.x + offsetX < left + frameWidth + 2,
+          tick.y + offsetY >= top - 1 &&
+          tick.y + offsetY < top + frameHeight + 1 &&
+          tick.x + offsetX >= left - 2 &&
+          tick.x + offsetX < left + frameWidth + 2,
       )
     ) {
       continue;
     }
-    const dx = hex.x + 1.5 - centerX;
-    const dy = (hex.y + 1 - centerY) * cellAspect;
+    const dx = tick.x + 1.5 - centerX;
+    const dy = (tick.y + 1 - centerY) * cellAspect;
     const ellipse = Math.hypot(dx / halfWidth, dy / halfHeight);
     if (ellipse <= 1) continue;
     const viewport = Math.max(
@@ -192,11 +190,18 @@ export function buildTerminalBanner(
           );
     if (
       ray > 0.55 &&
-      stableRandom(hex.band, hex.index) < ((ray - 0.55) / 0.45) ** 1.3
+      stableRandom(tick.band, tick.index) < ((ray - 0.55) / 0.45) ** 1.3
     )
       continue;
-    for (const [offsetY, offsetX, char] of HEX)
-      put(hex.y + offsetY, hex.x + offsetX, char, "field", ray * ray, "field");
+    for (const [offsetY, offsetX, char] of TICK)
+      put(
+        tick.y + offsetY,
+        tick.x + offsetX,
+        char,
+        "field",
+        ray * ray,
+        "field",
+      );
   }
 
   for (

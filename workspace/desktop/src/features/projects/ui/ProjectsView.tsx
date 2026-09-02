@@ -550,7 +550,7 @@ export function ProjectsView() {
   if (projectsQuery.isError) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
-        <p className="text-sm text-red-400">Failed to load projects</p>
+        <p className="text-sm text-destructive">Failed to load projects</p>
         <Button
           onClick={() => void projectsQuery.refetch()}
           size="sm"

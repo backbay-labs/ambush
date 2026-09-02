@@ -60,27 +60,37 @@ void main() {
     expect(dot.border, isNull);
   });
 
-  Color dotColor(WidgetTester tester) => tester
+  BoxDecoration dotDecoration(WidgetTester tester) => tester
       .widgetList<DecoratedBox>(find.byType(DecoratedBox))
       .map((box) => box.decoration)
       .whereType<BoxDecoration>()
-      .firstWhere((decoration) => decoration.shape == BoxShape.circle)
-      .color!;
+      .firstWhere((decoration) => decoration.shape == BoxShape.circle);
 
   final theme = AppTheme.light();
 
-  testWidgets('paints the dot with the presence color', (tester) async {
+  testWidgets('fills the dot when the user is online', (tester) async {
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
 
-    expect(dotColor(tester), theme.extension<AppColors>()!.success);
+    expect(dotDecoration(tester).color, theme.colorScheme.onSurface);
   });
 
-  testWidgets('mutes the dot when offline', (tester) async {
+  testWidgets('draws the dot hollow when the user is away', (tester) async {
+    await tester.pumpWidget(harness(presence: 'away'));
+    await tester.pumpAndSettle();
+
+    final decoration = dotDecoration(tester);
+    expect(decoration.color, isNull);
+    expect(decoration.border?.top.color, theme.colorScheme.onSurface);
+  });
+
+  testWidgets('draws a spent ring when the user is offline', (tester) async {
     await tester.pumpWidget(harness(presence: 'offline'));
     await tester.pumpAndSettle();
 
-    expect(dotColor(tester), theme.colorScheme.outline);
+    final decoration = dotDecoration(tester);
+    expect(decoration.color, isNull);
+    expect(decoration.border?.top.color, theme.extension<AppColors>()!.grad);
   });
 
   testWidgets('leaves the avatar unmasked when presence is hidden', (

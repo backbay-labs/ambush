@@ -351,7 +351,7 @@ export function WorkflowTriggerConditions({
                   )}
                   <ChevronRight
                     className={cn(
-                      "h-4 w-4 shrink-0 text-muted-foreground/70 transition-transform duration-150 motion-reduce:transition-none",
+                      "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
                       expanded && "rotate-90",
                     )}
                   />

@@ -12,11 +12,11 @@ async function openAppearance(
   page: Page,
   {
     linkStyle = "compact",
-    theme = "ambush",
+    theme = "ambush-day",
     threadMode = "split",
   }: {
     linkStyle?: "compact" | "rich";
-    theme?: "ambush" | "ambush-dark";
+    theme?: "ambush-day" | "ambush-night";
     threadMode?: "focus" | "split";
   } = {},
 ) {
@@ -154,7 +154,7 @@ test("appearance previews stay grouped and responsive", async ({ page }) => {
   await page.setViewportSize({ width: 840, height: 900 });
   await openAppearance(page, {
     linkStyle: "rich",
-    theme: "ambush-dark",
+    theme: "ambush-night",
     threadMode: "focus",
   });
 

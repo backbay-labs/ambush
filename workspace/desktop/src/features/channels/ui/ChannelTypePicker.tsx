@@ -87,7 +87,7 @@ export function ChannelTypePicker({
             <ProjectChannelIcon className="h-4 w-4" />
           )}
           {label}
-          <ChevronDown className="h-4 w-4 text-muted-foreground/70" />
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

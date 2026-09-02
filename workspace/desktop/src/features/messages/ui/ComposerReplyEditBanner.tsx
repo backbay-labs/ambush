@@ -4,7 +4,7 @@ import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 
 const BANNER_CLASS =
-  "relative z-0 -mb-4 flex transform-gpu gap-2 rounded-t-2xl border border-b-0 border-border/60 bg-muted/55 px-4 pb-6 pt-2.5 text-sm leading-5 text-muted-foreground backdrop-blur-sm transition-colors";
+  "relative z-0 -mb-4 flex transform-gpu gap-2 rounded-t-2xl border border-b-0 border-border/60 bg-muted px-4 pb-6 pt-2.5 text-sm leading-5 text-muted-foreground transition-colors";
 
 /**
  * The "Editing message" / "Replying to …" banner that sits above the composer
@@ -66,9 +66,7 @@ export function ComposerReplyEditBanner({
             Replying to {replyTarget.author}
           </p>
           {replyTarget.body ? (
-            <p className="truncate text-muted-foreground/80">
-              {replyTarget.body}
-            </p>
+            <p className="truncate text-muted-foreground">{replyTarget.body}</p>
           ) : null}
         </div>
         {onCancelReply ? (

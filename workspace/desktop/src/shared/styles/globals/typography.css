@@ -69,6 +69,14 @@
     font-synthesis-weight: none;
     font-variant-emoji: unicode;
     font-variant-ligatures: no-contextual;
+    /* Every figure the app emits can change, so every figure is tabular and
+       columns of them stay aligned. Prose written by people is not. */
+    font-variant-numeric: tabular-nums;
     text-rendering: optimizeLegibility;
+  }
+
+  .message-markdown,
+  .rich-text-composer .tiptap {
+    font-variant-numeric: normal;
   }
 }

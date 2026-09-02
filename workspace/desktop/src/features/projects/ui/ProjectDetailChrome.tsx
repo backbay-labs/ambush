@@ -92,7 +92,7 @@ export function ProjectDetailChrome({
       >
         <nav
           aria-label="Project breadcrumb"
-          className="absolute flex max-w-[50%] min-w-0 -translate-x-1/2 -translate-y-px items-center gap-0.5 text-xs text-sidebar-foreground/65 transition-[left] duration-200 ease-linear motion-reduce:transition-none"
+          className="absolute flex max-w-[50%] min-w-0 -translate-x-1/2 -translate-y-px items-center gap-0.5 text-xs text-sidebar-foreground transition-[left] duration-200 ease-linear motion-reduce:transition-none"
           style={{
             left: "calc(50% + var(--app-top-chrome-center-offset, 0rem))",
           }}
@@ -160,7 +160,7 @@ export function ProjectsWorkspaceChrome({
       >
         <nav
           aria-label="Projects breadcrumb"
-          className="absolute flex max-w-[50%] min-w-0 -translate-x-1/2 -translate-y-px items-center gap-0.5 text-xs text-sidebar-foreground/65 transition-[left] duration-200 ease-linear motion-reduce:transition-none"
+          className="absolute flex max-w-[50%] min-w-0 -translate-x-1/2 -translate-y-px items-center gap-0.5 text-xs text-sidebar-foreground transition-[left] duration-200 ease-linear motion-reduce:transition-none"
           style={{
             left: "calc(50% + var(--app-top-chrome-center-offset, 0rem))",
           }}

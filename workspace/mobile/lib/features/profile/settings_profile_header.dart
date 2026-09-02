@@ -210,17 +210,18 @@ class _PresencePill extends StatelessWidget {
       'online' || 'away' => presence,
       _ => 'offline',
     };
-    final (backgroundColor, foregroundColor) = switch (effectivePresence) {
-      'online' => (
-        context.appColors.success.withValues(alpha: 0.15),
-        context.appColors.success,
+    final mark = presenceMark(effectivePresence);
+    final (backgroundColor, foregroundColor) = switch (mark) {
+      StatusMark.filled => (
+        context.colors.primaryContainer,
+        context.colors.onPrimaryContainer,
       ),
-      'away' => (
-        context.appColors.warning.withValues(alpha: 0.15),
-        context.appColors.warning,
+      StatusMark.hollow => (
+        context.colors.surfaceContainerHighest,
+        context.colors.onSurface,
       ),
-      _ => (
-        context.colors.onSurfaceVariant.withValues(alpha: 0.15),
+      StatusMark.spent => (
+        context.colors.surfaceContainerHighest,
         context.colors.onSurfaceVariant,
       ),
     };
@@ -260,9 +261,9 @@ class _PresencePill extends StatelessWidget {
                             Container(
                               width: 10,
                               height: 10,
-                              decoration: BoxDecoration(
-                                color: _presenceColor(context, option),
-                                shape: BoxShape.circle,
+                              decoration: statusMarkDecoration(
+                                context,
+                                presenceMark(option),
                               ),
                             ),
                             const SizedBox(width: Grid.xxs),
@@ -326,13 +327,6 @@ String _presenceLabel(String presence) => switch (presence) {
   'away' => 'Away',
   _ => 'Offline',
 };
-
-Color _presenceColor(BuildContext context, String presence) =>
-    switch (presence) {
-      'online' => context.appColors.success,
-      'away' => context.appColors.warning,
-      _ => context.colors.outline,
-    };
 
 /// Fills the notch left by [MaskedAvatarBadge], so its size comes from the mask
 /// geometry rather than being set here.

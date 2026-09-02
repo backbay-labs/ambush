@@ -9,20 +9,17 @@ void main() {
     expect(AppTheme.dark().splashFactory, NoSplash.splashFactory);
   });
 
-  test('uses Inter and the shared elevated popover treatment', () {
+  test('uses Plex and separates the popover with a hairline', () {
     final theme = AppTheme.light();
     final popupTheme = theme.popupMenuTheme;
     final shape = popupTheme.shape! as RoundedRectangleBorder;
     final side = shape.side;
 
-    expect(popupTheme.textStyle?.fontFamily, 'Inter');
-    expect(popupTheme.elevation, 8);
-    expect(
-      popupTheme.shadowColor,
-      theme.colorScheme.shadow.withValues(alpha: 0.18),
-    );
+    expect(popupTheme.textStyle?.fontFamily, 'IBM Plex Sans');
+    expect(popupTheme.color, theme.colorScheme.surfaceContainerHigh);
+    expect(popupTheme.elevation, 0);
     expect(shape.borderRadius, BorderRadius.circular(Radii.popover));
-    expect(side.color, Colors.black.withValues(alpha: 0.04));
+    expect(side.color, theme.colorScheme.outline);
     expect(side.width, 1);
   });
 
@@ -30,11 +27,10 @@ void main() {
     final colors = AppTheme.dark().extension<AppColors>()!;
 
     expect(colors.huddleControlSurface, isNot(colors.huddleDrawerSurface));
-    expect(
-      (colors.huddleControlSurface.computeLuminance() -
-              colors.huddleDrawerSurface.computeLuminance())
-          .abs(),
-      greaterThan(0.02),
-    );
+    // Elevation is a step in lightness. At the bottom of the range relative
+    // luminance barely moves, so measure the step as a contrast ratio.
+    final control = colors.huddleControlSurface.computeLuminance() + 0.05;
+    final drawer = colors.huddleDrawerSurface.computeLuminance() + 0.05;
+    expect(control / drawer, greaterThan(1.05));
   });
 }

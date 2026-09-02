@@ -44,7 +44,7 @@ export function TranscriptTimestamp({
     return (
       <a
         className={cn(
-          "shrink-0 rounded-sm text-xs text-muted-foreground/60 transition-colors hover:text-muted-foreground/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "shrink-0 rounded-sm text-xs text-muted-foreground transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           className,
         )}
         data-testid="transcript-open-message-link"
@@ -60,7 +60,7 @@ export function TranscriptTimestamp({
   return (
     <span
       className={cn(
-        "shrink-0 cursor-default text-xs text-muted-foreground/60",
+        "shrink-0 cursor-default text-xs text-muted-foreground",
         className,
       )}
       title={fullDateTime}

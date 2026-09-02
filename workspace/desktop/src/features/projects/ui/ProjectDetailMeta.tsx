@@ -54,7 +54,7 @@ export function ProjectDetailMetaRow({
         ))}
       <span
         className={cn(
-          "w-20 shrink-0 truncate whitespace-nowrap font-normal text-muted-foreground/75",
+          "w-20 shrink-0 truncate whitespace-nowrap font-normal text-muted-foreground",
           labelClassName,
         )}
         title={label}

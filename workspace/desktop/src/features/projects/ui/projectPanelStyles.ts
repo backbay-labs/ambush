@@ -17,9 +17,8 @@ export const PROJECT_DETAIL_PANEL_CLASS =
 export const PROJECT_DETAIL_READING_COLUMN_CLASS =
   "mx-auto w-full max-w-3xl overflow-hidden";
 
-/** Shared translucent chrome for the paired project content/panel headers. */
-export const PROJECT_COLUMN_HEADER_BACKDROP_CLASS =
-  "bg-background/80 backdrop-blur-md supports-backdrop-filter:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-backdrop-filter:bg-background/55";
+/** Shared opaque chrome for the paired project content/panel headers. */
+export const PROJECT_COLUMN_HEADER_BACKDROP_CLASS = "bg-background";
 
 /** Rounded title row used above repository workspace lists and home sheets. */
 export const PROJECT_SECTION_HEADER_CLASS = "mx-4 mb-2 rounded-md bg-muted/40";

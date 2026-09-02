@@ -10,7 +10,7 @@ import {
 
 const preference = {
   version: 1,
-  theme: "houston",
+  theme: "ambush-day",
   accent: "#3b82f6",
   followSystem: false,
 };
@@ -106,7 +106,7 @@ test("fetch distinguishes absent remote state from unreadable existing state", a
 });
 
 test("live replacement delivered during empty onboarding fetch prevents default seeding", async () => {
-  const remotePreference = { ...preference, theme: "dracula" };
+  const remotePreference = { ...preference, theme: "ambush-night" };
   const updates = [];
   let liveCallback;
   globalThis.window ??= {};
@@ -332,7 +332,7 @@ test("new remote invalidates no-op suppression for A to B to A", async () => {
     await waitUntil(() => published.length === 1);
 
     manager.acceptRemote({
-      preference: { ...preference, theme: "dracula" },
+      preference: { ...preference, theme: "ambush-night" },
       createdAt: published[0].created_at,
       eventId: "remote-a",
     });
@@ -384,7 +384,7 @@ test("serializes an in-flight publish before sending the latest edit", async () 
     timer.fire();
     await waitUntil(() => published.length === 1);
 
-    const latest = { ...preference, theme: "dracula" };
+    const latest = { ...preference, theme: "ambush-night" };
     manager.publish(latest);
     timer.fire();
     await new Promise((resolve) => setImmediate(resolve));
@@ -442,7 +442,7 @@ test("republishes above a newer remote observed while publish is in flight", asy
     await waitUntil(() => published.length === 1);
 
     manager.acceptRemote({
-      preference: { ...preference, theme: "dracula" },
+      preference: { ...preference, theme: "ambush-night" },
       createdAt: published[0].created_at + 100,
       eventId: "remote-winner",
     });
@@ -520,7 +520,7 @@ test("delayed live decryption fences publish acknowledgement and preserves local
     assert.deepEqual(manager.getPending(), preference);
 
     remotePlaintext.resolve(
-      JSON.stringify({ ...preference, theme: "dracula" }),
+      JSON.stringify({ ...preference, theme: "ambush-night" }),
     );
     await waitUntil(() => timer.pending());
     assert.equal(acknowledgements.length, 0);

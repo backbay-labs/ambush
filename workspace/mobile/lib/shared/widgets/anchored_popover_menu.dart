@@ -10,21 +10,23 @@ const _popoverExitDuration = Duration(milliseconds: 110);
 const _popoverStartScale = 0.96;
 
 /// Elevation shared by anchored menus and composer popover surfaces.
-const appPopoverElevation = 8.0;
+///
+/// Zero: a popover is raised by the step in lightness from the room to the
+/// lamplit plate, and bounded by a hairline. Nothing is separated by a blur.
+const appPopoverElevation = 0.0;
 
-/// Returns the translucent surface color shared by app popovers.
+/// Returns the lit surface a popover sits on.
 Color appPopoverColor(BuildContext context) =>
-    context.colors.surface.withValues(alpha: 0.98);
+    context.colors.surfaceContainerHigh;
 
 /// Returns the shadow color shared by app popovers.
-Color appPopoverShadowColor(BuildContext context) =>
-    context.colors.shadow.withValues(alpha: 0.18);
+Color appPopoverShadowColor(BuildContext context) => Colors.transparent;
 
-/// Returns the 20px shape and composer-matching hairline shared by popovers.
+/// Returns the chamfer and hairline shared by popovers.
 RoundedRectangleBorder appPopoverShape(BuildContext context) =>
     RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(Radii.popover),
-      side: BorderSide(color: Colors.black.withValues(alpha: 0.04), width: 1),
+      side: BorderSide(color: context.colors.outline),
     );
 
 /// The horizontal edge a popover aligns to on its triggering control.

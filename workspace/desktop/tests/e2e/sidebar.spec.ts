@@ -426,7 +426,7 @@ test("channel owner can delete from the context menu", async ({ page }) => {
   await expect(page.getByTestId("stream-list")).not.toContainText("general");
 });
 
-for (const theme of ["ambush", "github-light", "catppuccin-mocha"]) {
+for (const theme of ["ambush-day", "github-light", "catppuccin-mocha"]) {
   test(`uses the continuous sidebar surface in ${theme}`, async ({ page }) => {
     await loadTheme(page, theme);
 

@@ -132,7 +132,7 @@ export function ProjectIssueCommentTimeline({
                   </ProfileAuthorName>
                 </span>
                 <span
-                  className="ml-auto w-20 shrink-0 text-right text-muted-foreground/70"
+                  className="ml-auto w-20 shrink-0 text-right text-muted-foreground"
                   title={formatExactTimestamp(comment.createdAt)}
                 >
                   {relativeTime(comment.createdAt)}

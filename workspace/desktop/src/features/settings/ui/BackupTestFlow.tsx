@@ -338,7 +338,7 @@ export function BackupTestFlow({
                 if (file) void handleFile(file);
               }}
             >
-              <span className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background shadow-sm ring-1 ring-background/15">
+              <span className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background ring-1 ring-background/15">
                 <FileUp aria-hidden="true" className="size-4" />
                 <span>Drop your backup file here</span>
               </span>

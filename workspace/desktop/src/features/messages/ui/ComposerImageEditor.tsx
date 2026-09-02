@@ -471,7 +471,7 @@ export function ComposerImageEditor({
       </div>
 
       {saveError ? (
-        <p className="text-xs text-red-300" role="alert">
+        <p className="text-xs text-destructive" role="alert">
           {saveError}
         </p>
       ) : null}

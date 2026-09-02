@@ -108,7 +108,7 @@ export function WhereToRunSection({
 
       {isProviderMode && selectedBackendProvider ? (
         <div className="space-y-4">
-          <div className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3">
+          <div className="flex gap-3 rounded-2xl border border-border bg-warning-bg px-4 py-3">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
             <p className="text-sm text-warning">
               This provider at{" "}

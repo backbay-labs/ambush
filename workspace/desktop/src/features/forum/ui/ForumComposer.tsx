@@ -578,7 +578,7 @@ export function ForumComposer({
                           <Button
                             className={cn(
                               submitMode === "secondary" &&
-                                "border-amber-500/40 text-amber-700 hover:bg-amber-500/10 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300",
+                                "border-border text-warning hover:bg-warning-bg hover:text-warning",
                             )}
                             disabled={
                               disabled || isSending || isSubmissionPending

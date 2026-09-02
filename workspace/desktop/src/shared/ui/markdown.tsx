@@ -799,7 +799,7 @@ function ImageZoomOverlay({
       </p>
       <div
         className={cn(
-          "absolute inset-0 bg-[#08090a] transition-opacity",
+          "absolute inset-0 bg-night transition-opacity",
           isOpen || isClosing ? "opacity-100" : "opacity-0",
         )}
         style={{
@@ -831,7 +831,7 @@ function ImageZoomOverlay({
         }}
       >
         <div
-          className="relative h-full w-full shadow-2xl"
+          className="relative h-full w-full"
           style={{
             ...imageLightboxCornerRadiiStyle(frameCornerRadii),
             transitionDuration: `${imageTransitionDuration}ms`,
@@ -896,7 +896,7 @@ function ImageZoomOverlay({
         <button
           aria-label="Previous image"
           className={cn(
-            "absolute left-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-muted text-muted-foreground shadow-sm backdrop-blur-xl backdrop-saturate-150 transition-[background-color,color,opacity] duration-150 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/70 sm:left-6",
+            "absolute left-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-muted text-muted-foreground transition-[background-color,color,opacity] duration-150 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/70 sm:left-6",
             isOpen ? "opacity-100" : "pointer-events-none opacity-0",
           )}
           data-image-lightbox-controls=""
@@ -913,7 +913,7 @@ function ImageZoomOverlay({
         <button
           aria-label="Next image"
           className={cn(
-            "absolute right-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-muted text-muted-foreground shadow-sm backdrop-blur-xl backdrop-saturate-150 transition-[background-color,color,opacity] duration-150 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/70 sm:right-6",
+            "absolute right-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-muted text-muted-foreground transition-[background-color,color,opacity] duration-150 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/70 sm:right-6",
             isOpen ? "opacity-100" : "pointer-events-none opacity-0",
           )}
           data-image-lightbox-controls=""
@@ -944,7 +944,7 @@ function ImageZoomOverlay({
         >
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 -z-10 rounded-[inherit] bg-muted shadow-sm backdrop-blur-xl backdrop-saturate-150"
+            className="pointer-events-none absolute inset-0 -z-10 rounded-[inherit] bg-muted"
           />
           <button
             aria-label="Download image"
@@ -1235,7 +1235,7 @@ export function createMarkdownComponents(
   blockCode = false,
 ): Components {
   const listItemClassName = "[&_p]:inline";
-  const listClassName = "space-y-1 pl-6 marker:text-muted-foreground/80";
+  const listClassName = "space-y-1 pl-6 marker:text-muted-foreground";
 
   function MarkdownAnchor({
     children,

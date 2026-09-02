@@ -3,9 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('utility containers use the stronger grouped-surface radius', () {
-    expect(Radii.container, 22);
-    expect(Radii.card, Radii.container);
+  test('every surface takes the same machined chamfer', () {
+    expect(Radii.container, Radii.chamfer);
+    expect(Radii.card, Radii.chamfer);
+    expect(Radii.dialog, Radii.chamfer);
+    expect(Radii.popover, Radii.chamfer);
+    expect(Radii.md, Radii.chamfer);
+    // Pills and circles stay capsule-shaped.
+    expect(Radii.full, greaterThan(Radii.chamfer));
   });
 
   test('exchanges utility canvas and container surface roles once', () {

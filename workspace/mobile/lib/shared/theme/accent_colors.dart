@@ -1,79 +1,81 @@
 import 'package:flutter/material.dart';
 
+import 'quiet.dart';
+
 /// Accent colors matching the desktop Ambush app.
 class AccentColor {
   final String name;
   final Color light;
   final Color dark;
-  final bool useThemeForegroundInDark;
+  final bool useThemeForeground;
   final String wireValue;
 
   const AccentColor({
     required this.name,
     required this.light,
     required this.dark,
-    this.useThemeForegroundInDark = false,
+    this.useThemeForeground = false,
     required this.wireValue,
   });
 }
 
-const accentColors = [
+final accentColors = [
   AccentColor(
     name: 'Neutral',
-    light: Color(0xFF000000),
-    dark: Color(0xFFE1E4E8),
+    light: quietDay.ink,
+    dark: quietNight.ink,
     wireValue: 'neutral',
-    useThemeForegroundInDark: true,
+    useThemeForeground: true,
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Blue',
     light: Color(0xFF3B82F6),
     dark: Color(0xFF60A5FA),
     wireValue: '#3b82f6',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Cyan',
     light: Color(0xFF06B6D4),
     dark: Color(0xFF22D3EE),
     wireValue: '#06b6d4',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Green',
     light: Color(0xFF22C55E),
     dark: Color(0xFF4ADE80),
     wireValue: '#22c55e',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Orange',
     light: Color(0xFFF97316),
     dark: Color(0xFFFB923C),
     wireValue: '#f97316',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Red',
     light: Color(0xFFEF4444),
     dark: Color(0xFFF87171),
     wireValue: '#ef4444',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Pink',
     light: Color(0xFFEC4899),
     dark: Color(0xFFF472B6),
     wireValue: '#ec4899',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Lilac',
     light: Color(0xFFC0A2F1),
     dark: Color(0xFFC0A2F1),
     wireValue: '#c0a2f1',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Purple',
     light: Color(0xFFA855F7),
     dark: Color(0xFFC084FC),
     wireValue: '#a855f7',
   ),
-  AccentColor(
+  const AccentColor(
     name: 'Indigo',
     light: Color(0xFF6366F1),
     dark: Color(0xFF818CF8),
@@ -86,20 +88,18 @@ Color accentColorForScheme(ColorScheme scheme, int accentIndex) {
     return scheme.primary;
   }
   final accent = accentColors[accentIndex];
-  if (scheme.brightness == Brightness.dark && accent.useThemeForegroundInDark) {
-    return scheme.onSurface;
-  }
+  if (accent.useThemeForeground) return scheme.onSurface;
   return scheme.brightness == Brightness.light ? accent.light : accent.dark;
 }
 
-/// New default: Black.
+/// The default: the theme's own foreground.
 ///
-/// Keep this at the end of [accentColors] so existing saved accent indexes keep
-/// pointing at the same colors.
+/// Keep this at the head of [accentColors] so existing saved accent indexes
+/// keep pointing at the same colors.
 const neutralAccentIndex = 0;
 const defaultAccentIndex = neutralAccentIndex;
 
-/// Legacy default: Catppuccin Mauve/the base theme primary.
+/// The sentinel a stored preference used before Neutral existed.
 const legacyDefaultAccentIndex = -1;
 
 int? accentIndexForWireValue(String value) {

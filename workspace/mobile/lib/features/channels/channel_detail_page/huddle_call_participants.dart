@@ -69,7 +69,7 @@ class _HuddleCallParticipants extends StatelessWidget {
     }
 
     if (!connected) {
-      return const Center(child: _HuddleLoadingBee());
+      return const Center(child: _HuddleLoadingMark());
     }
 
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
@@ -163,39 +163,38 @@ class _HuddleCallParticipants extends StatelessWidget {
   }
 }
 
-class _HuddleLoadingBee extends HookWidget {
-  const _HuddleLoadingBee();
+class _HuddleLoadingMark extends HookWidget {
+  const _HuddleLoadingMark();
 
   @override
   Widget build(BuildContext context) {
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
-    final flapController = useAnimationController(
-      duration: const Duration(milliseconds: 480),
+    final engraveController = useAnimationController(
+      duration: ambushEngraveCycle,
     );
-    final flapProgress = useAnimation(flapController);
+    final cycle = useAnimation(engraveController);
     useEffect(() {
       if (reducedMotion) {
-        flapController
+        engraveController
           ..stop()
           ..reset();
       } else {
-        flapController.repeat();
+        engraveController.repeat();
       }
       return null;
-    }, [flapController, reducedMotion]);
-    final flapAmount = reducedMotion
-        ? 0.0
-        : 0.5 - (0.5 * cos(flapProgress * 4 * pi));
+    }, [engraveController, reducedMotion]);
+    final engrave = ambushEngraveProgress(reducedMotion ? 1 : cycle);
 
     return Semantics(
       label: 'Joining Huddle',
       liveRegion: true,
       child: ExcludeSemantics(
         child: AmbushLogoMotion(
-          key: const ValueKey('huddle-loading-bee'),
+          key: const ValueKey('huddle-loading-mark'),
           width: 60,
           color: context.colors.primary,
-          flapAmount: flapAmount,
+          liveProgress: engrave.live,
+          spentProgress: engrave.spent,
         ),
       ),
     );

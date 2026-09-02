@@ -132,7 +132,7 @@ function ContextNavButton({
       className={cn(
         PROJECT_HOME_SIDEBAR_ROW_CLASS,
         pressed &&
-          "bg-sidebar-active text-sidebar-active-foreground shadow-xs hover:bg-sidebar-active hover:text-sidebar-active-foreground",
+          "bg-sidebar-active text-sidebar-active-foreground hover:bg-sidebar-active hover:text-sidebar-active-foreground",
       )}
       data-testid={testId}
       disabled={disabled}
@@ -387,9 +387,7 @@ export function ProjectHomeContextPanel({
             </ContextNavButton>
           ))
         ) : (
-          <p className="px-2 py-1 text-sm text-sidebar-foreground/60">
-            None yet
-          </p>
+          <p className="px-2 py-1 text-sm text-sidebar-foreground">None yet</p>
         )}
       </ContextSection>
     </div>

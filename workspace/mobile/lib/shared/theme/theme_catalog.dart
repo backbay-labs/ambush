@@ -1,9 +1,12 @@
-// Static catalog of all 60 Shiki syntax theme color definitions.
+// Static catalog of every syntax theme color definition the picker offers.
 //
 // Each entry contains the key colors extracted from the Shiki theme JSON:
-// bg, fg, comment (+ optional git added/deleted colors).
-// The adaptive theme engine uses these to derive a full Material ColorScheme.
+// bg, fg, comment (+ optional git added/deleted colors). A first-party theme
+// also carries its own [QuietSurfaces]; the adaptive theme engine uses that
+// verbatim and derives a full Material ColorScheme for everything else.
 import 'package:flutter/material.dart';
+
+import 'quiet.dart';
 
 class ThemeColors {
   final String name;
@@ -13,6 +16,9 @@ class ThemeColors {
   final Color? added;
   final Color? deleted;
 
+  /// A declared surface palette, used verbatim in place of derived chrome.
+  final QuietSurfaces? surfaces;
+
   const ThemeColors({
     required this.name,
     required this.bg,
@@ -20,9 +26,10 @@ class ThemeColors {
     required this.comment,
     this.added,
     this.deleted,
+    this.surfaces,
   });
 
-  bool get isDark => bg.computeLuminance() < 0.5;
+  bool get isDark => surfaces?.isDark ?? (bg.computeLuminance() < 0.5);
 
   /// Human-readable display name: 'catppuccin-mocha' → 'Catppuccin Mocha'.
   String get displayName => name
@@ -33,7 +40,7 @@ class ThemeColors {
 
 /// Known light theme names — used to show sun/moon icons before loading.
 const lightThemeNames = <String>{
-  'ambush',
+  'ambush-day',
   'catppuccin-latte',
   'everforest-light',
   'github-light',
@@ -55,8 +62,8 @@ const lightThemeNames = <String>{
 };
 
 /// All available color schemes, sorted alphabetically.
-const themeCatalog = <ThemeColors>[
-  ThemeColors(
+final themeCatalog = <ThemeColors>[
+  const ThemeColors(
     name: 'andromeeda',
     bg: Color(0xFF23262E),
     fg: Color(0xFFD5CED9),
@@ -64,7 +71,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF9BC53D),
     deleted: Color(0xFFFC644D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'aurora-x',
     bg: Color(0xFF07090F),
     fg: Color(0xFFD4D4D4),
@@ -72,7 +79,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF64D389),
     deleted: Color(0xFFDD5074),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'ayu-dark',
     bg: Color(0xFF10141C),
     fg: Color(0xFFBFBDB6),
@@ -80,26 +87,27 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF70BF56),
     deleted: Color(0xFFF26D78),
   ),
-  // Ambush and Ambush Dark are first-party: they borrow the GitHub Light / GitHub
-  // Dark palettes wholesale and are distinguished only by the branded gradient
-  // painted across the app's top section (see ambush_theme.dart).
+  // Ambush Day and Ambush Night are first-party: each declares its own Quiet
+  // surfaces, so the engine paints them verbatim rather than deriving chrome.
   ThemeColors(
-    name: 'ambush',
-    bg: Color(0xFFFFFFFF),
-    fg: Color(0xFF24292E),
-    comment: Color(0xFF6A737D),
-    added: Color(0xFF28A745),
-    deleted: Color(0xFFD73A49),
+    name: 'ambush-day',
+    bg: quietDay.steel,
+    fg: quietDay.inkMid,
+    comment: quietDay.inkDim,
+    added: quietDay.ink,
+    deleted: quietDay.inkDim,
+    surfaces: quietDay,
   ),
   ThemeColors(
-    name: 'ambush-dark',
-    bg: Color(0xFF24292E),
-    fg: Color(0xFFE1E4E8),
-    comment: Color(0xFF6A737D),
-    added: Color(0xFF34D058),
-    deleted: Color(0xFFEA4A5A),
+    name: 'ambush-night',
+    bg: quietNight.steel,
+    fg: quietNight.inkMid,
+    comment: quietNight.inkDim,
+    added: quietNight.ink,
+    deleted: quietNight.inkDim,
+    surfaces: quietNight,
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'catppuccin-frappe',
     bg: Color(0xFF303446),
     fg: Color(0xFFC6D0F5),
@@ -107,7 +115,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFA6D189),
     deleted: Color(0xFFE78284),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'catppuccin-latte',
     bg: Color(0xFFEFF1F5),
     fg: Color(0xFF4C4F69),
@@ -115,7 +123,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF40A02B),
     deleted: Color(0xFFD20F39),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'catppuccin-macchiato',
     bg: Color(0xFF24273A),
     fg: Color(0xFFCAD3F5),
@@ -123,7 +131,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFA6DA95),
     deleted: Color(0xFFED8796),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'catppuccin-mocha',
     bg: Color(0xFF1E1E2E),
     fg: Color(0xFFCDD6F4),
@@ -131,13 +139,13 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFA6E3A1),
     deleted: Color(0xFFF38BA8),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'dark-plus',
     bg: Color(0xFF1E1E1E),
     fg: Color(0xFFD4D4D4),
     comment: Color(0xFF6A9955),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'dracula',
     bg: Color(0xFF282A36),
     fg: Color(0xFFF8F8F2),
@@ -145,7 +153,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF50FA7B),
     deleted: Color(0xFFFF5555),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'dracula-soft',
     bg: Color(0xFF282A36),
     fg: Color(0xFFF6F6F4),
@@ -153,7 +161,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF50FA7B),
     deleted: Color(0xFFEE6666),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'everforest-dark',
     bg: Color(0xFF2D353B),
     fg: Color(0xFFD3C6AA),
@@ -161,7 +169,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFA7C080),
     deleted: Color(0xFFE67E80),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'everforest-light',
     bg: Color(0xFFFDF6E3),
     fg: Color(0xFF5C6A72),
@@ -169,7 +177,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF8DA101),
     deleted: Color(0xFFF85552),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'github-dark',
     bg: Color(0xFF24292E),
     fg: Color(0xFFE1E4E8),
@@ -177,7 +185,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF34D058),
     deleted: Color(0xFFEA4A5A),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'github-dark-default',
     bg: Color(0xFF0D1117),
     fg: Color(0xFFE6EDF3),
@@ -185,7 +193,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF3FB950),
     deleted: Color(0xFFF85149),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'github-dark-dimmed',
     bg: Color(0xFF22272E),
     fg: Color(0xFFADBac7),
@@ -193,7 +201,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF57AB5A),
     deleted: Color(0xFFE5534B),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'github-dark-high-contrast',
     bg: Color(0xFF0A0C10),
     fg: Color(0xFFF0F3F6),
@@ -201,7 +209,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF26CD4D),
     deleted: Color(0xFFFF6A69),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'github-light',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF24292E),
@@ -209,7 +217,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF28A745),
     deleted: Color(0xFFD73A49),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'github-light-default',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF1F2328),
@@ -217,7 +225,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF1A7F37),
     deleted: Color(0xFFCF222E),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'github-light-high-contrast',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF0E1116),
@@ -225,7 +233,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF055D20),
     deleted: Color(0xFFA0111F),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'gruvbox-dark-hard',
     bg: Color(0xFF1D2021),
     fg: Color(0xFFEBDBB2),
@@ -233,7 +241,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFEBDBB2),
     deleted: Color(0xFFCC241D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'gruvbox-dark-medium',
     bg: Color(0xFF282828),
     fg: Color(0xFFEBDBB2),
@@ -241,7 +249,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFEBDBB2),
     deleted: Color(0xFFCC241D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'gruvbox-dark-soft',
     bg: Color(0xFF32302F),
     fg: Color(0xFFEBDBB2),
@@ -249,7 +257,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFEBDBB2),
     deleted: Color(0xFFCC241D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'gruvbox-light-hard',
     bg: Color(0xFFF9F5D7),
     fg: Color(0xFF3C3836),
@@ -257,7 +265,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF3C3836),
     deleted: Color(0xFFCC241D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'gruvbox-light-medium',
     bg: Color(0xFFFBF1C7),
     fg: Color(0xFF3C3836),
@@ -265,7 +273,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF3C3836),
     deleted: Color(0xFFCC241D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'gruvbox-light-soft',
     bg: Color(0xFFF2E5BC),
     fg: Color(0xFF3C3836),
@@ -273,7 +281,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF3C3836),
     deleted: Color(0xFFCC241D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'houston',
     bg: Color(0xFF17191E),
     fg: Color(0xFFEEF0F9),
@@ -281,7 +289,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF4BF3C8),
     deleted: Color(0xFFF4587E),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'kanagawa-dragon',
     bg: Color(0xFF181616),
     fg: Color(0xFFC5C9C5),
@@ -289,7 +297,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF76946A),
     deleted: Color(0xFFC34043),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'kanagawa-lotus',
     bg: Color(0xFFF2ECBC),
     fg: Color(0xFF545464),
@@ -297,7 +305,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF6E915F),
     deleted: Color(0xFFD7474B),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'kanagawa-wave',
     bg: Color(0xFF1F1F28),
     fg: Color(0xFFDCD7BA),
@@ -305,7 +313,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF76946A),
     deleted: Color(0xFFC34043),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'laserwave',
     bg: Color(0xFF27212E),
     fg: Color(0xFFFFFFFF),
@@ -313,13 +321,13 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF74DFC4),
     deleted: Color(0xFFB381C5),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'light-plus',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF000000),
     comment: Color(0xFF008000),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'material-theme',
     bg: Color(0xFF263238),
     fg: Color(0xFFEEFFFF),
@@ -327,7 +335,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFC3E88D),
     deleted: Color(0xFFF07178),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'material-theme-darker',
     bg: Color(0xFF212121),
     fg: Color(0xFFEEFFFF),
@@ -335,7 +343,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFC3E88D),
     deleted: Color(0xFFF07178),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'material-theme-lighter',
     bg: Color(0xFFFAFAFA),
     fg: Color(0xFF90A4AE),
@@ -343,7 +351,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF91B859),
     deleted: Color(0xFFE53935),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'material-theme-ocean',
     bg: Color(0xFF0F111A),
     fg: Color(0xFFBABED8),
@@ -351,7 +359,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFC3E88D),
     deleted: Color(0xFFF07178),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'material-theme-palenight',
     bg: Color(0xFF292D3E),
     fg: Color(0xFFBABED8),
@@ -359,25 +367,25 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFC3E88D),
     deleted: Color(0xFFF07178),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'min-dark',
     bg: Color(0xFF1F1F1F),
     fg: Color(0xFFD4D4D4),
     comment: Color(0xFF6B737C),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'min-light',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF212121),
     comment: Color(0xFFC2C3C5),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'monokai',
     bg: Color(0xFF272822),
     fg: Color(0xFFF8F8F2),
     comment: Color(0xFF88846F),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'night-owl',
     bg: Color(0xFF011627),
     fg: Color(0xFFD6DEEB),
@@ -385,7 +393,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF9CCC65),
     deleted: Color(0xFFEF5350),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'nord',
     bg: Color(0xFF2E3440),
     fg: Color(0xFFD8DEE9),
@@ -393,7 +401,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFA3BE8C),
     deleted: Color(0xFFBF616A),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'one-dark-pro',
     bg: Color(0xFF282C34),
     fg: Color(0xFFABB2BF),
@@ -401,13 +409,13 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF109868),
     deleted: Color(0xFF9A353D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'one-light',
     bg: Color(0xFFFAFAFA),
     fg: Color(0xFF383A42),
     comment: Color(0xFFA0A1A7),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'plastic',
     bg: Color(0xFF21252B),
     fg: Color(0xFFA9B2C3),
@@ -415,7 +423,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF98C379),
     deleted: Color(0xFFE06C75),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'poimandres',
     bg: Color(0xFF1B1E28),
     fg: Color(0xFFA6ACCD),
@@ -423,13 +431,13 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF5FB3A1),
     deleted: Color(0xFFD0679D),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'red',
     bg: Color(0xFF390000),
     fg: Color(0xFFF8F8F8),
     comment: Color(0xFFE7C0C0),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'rose-pine',
     bg: Color(0xFF191724),
     fg: Color(0xFFE0DEF4),
@@ -437,7 +445,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF9CCFD8),
     deleted: Color(0xFF908CAA),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'rose-pine-dawn',
     bg: Color(0xFFFAF4ED),
     fg: Color(0xFF575279),
@@ -445,7 +453,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF56949F),
     deleted: Color(0xFF797593),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'rose-pine-moon',
     bg: Color(0xFF232136),
     fg: Color(0xFFE0DEF4),
@@ -453,7 +461,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF9CCFD8),
     deleted: Color(0xFF908CAA),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'slack-dark',
     bg: Color(0xFF222222),
     fg: Color(0xFFE6E6E6),
@@ -461,7 +469,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFECB22E),
     deleted: Color(0xFFFFFFFF),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'slack-ochin',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF000000),
@@ -469,7 +477,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFFECB22E),
     deleted: Color(0xFFFFFFFF),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'snazzy-light',
     bg: Color(0xFFFAFBFC),
     fg: Color(0xFF565869),
@@ -477,19 +485,19 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF2DAE58),
     deleted: Color(0xFFFF5C57),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'solarized-dark',
     bg: Color(0xFF002B36),
     fg: Color(0xFF839496),
     comment: Color(0xFF586E75),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'solarized-light',
     bg: Color(0xFFFDF6E3),
     fg: Color(0xFF657B83),
     comment: Color(0xFF93A1A1),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'synthwave-84',
     bg: Color(0xFF262335),
     fg: Color(0xFFD4D4D4),
@@ -497,7 +505,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF72F1B8),
     deleted: Color(0xFFFE4450),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'tokyo-night',
     bg: Color(0xFF1A1B26),
     fg: Color(0xFFA9B1D6),
@@ -505,7 +513,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF449DAB),
     deleted: Color(0xFF914C54),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'vesper',
     bg: Color(0xFF101010),
     fg: Color(0xFFFFFFFF),
@@ -513,7 +521,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF99FFE4),
     deleted: Color(0xFFFF8080),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'vitesse-black',
     bg: Color(0xFF000000),
     fg: Color(0xFFDBD7CA),
@@ -521,7 +529,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF4D9375),
     deleted: Color(0xFFCB7676),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'vitesse-dark',
     bg: Color(0xFF121212),
     fg: Color(0xFFDBD7CA),
@@ -529,7 +537,7 @@ const themeCatalog = <ThemeColors>[
     added: Color(0xFF4D9375),
     deleted: Color(0xFFCB7676),
   ),
-  ThemeColors(
+  const ThemeColors(
     name: 'vitesse-light',
     bg: Color(0xFFFFFFFF),
     fg: Color(0xFF393A34),

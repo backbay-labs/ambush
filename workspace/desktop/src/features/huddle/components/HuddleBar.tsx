@@ -8,6 +8,7 @@ import {
   PictureInPicture,
   PictureInPicture2,
   SmilePlus,
+  X,
 } from "lucide-react";
 import * as React from "react";
 
@@ -595,7 +596,7 @@ export function HuddleBar({
               onClick={clearHuddleError}
               type="button"
             >
-              ✕
+              <X className="h-3 w-3" />
             </button>
           </div>
         )}

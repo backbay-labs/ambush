@@ -2,6 +2,7 @@ import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
+  AlertTriangle,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -299,8 +300,9 @@ function ProfileConfigSection({
 function ClaudeConfigDirNotice() {
   return (
     <div className="mt-3 border-t border-border/50 px-4 pt-2">
-      <p className="text-xs text-muted-foreground/80">
-        ⚠ Custom <code className="font-mono text-xs">CLAUDE_CONFIG_DIR</code>{" "}
+      <p className="text-xs text-muted-foreground">
+        <AlertTriangle className="mr-1 inline-block h-3.5 w-3.5 align-[-2px]" />
+        Custom <code className="font-mono text-xs">CLAUDE_CONFIG_DIR</code>{" "}
         active — config is read from that directory. Claude Code keys its login
         to the config-dir path, so a custom dir creates a new Keychain
         namespace. The agent will need to re-authenticate unless you also set{" "}

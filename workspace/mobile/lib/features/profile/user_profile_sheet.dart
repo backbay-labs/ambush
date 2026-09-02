@@ -335,11 +335,7 @@ class _ProfilePresenceChip extends StatelessWidget {
       'online' || 'away' => presence,
       _ => 'offline',
     };
-    final backgroundColor = switch (effectivePresence) {
-      'online' => context.appColors.success,
-      'away' => context.appColors.warning,
-      _ => context.colors.onSurfaceVariant,
-    };
+    final mark = presenceMark(effectivePresence);
     final label = switch (effectivePresence) {
       'online' => 'Online',
       'away' => 'Away',
@@ -352,19 +348,36 @@ class _ProfilePresenceChip extends StatelessWidget {
         height: Grid.xl,
         child: Center(
           child: Material(
-            color: backgroundColor,
+            color: mark == StatusMark.filled
+                ? context.colors.primaryContainer
+                : context.colors.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(Radii.full),
             child: Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: Grid.xs,
                 vertical: Grid.xxs,
               ),
-              child: Text(
-                label,
-                style: filterChipTextStyle.copyWith(
-                  color: context.colors.onPrimary,
-                  fontWeight: FontWeight.w500,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: statusMarkDecoration(
+                      context,
+                      mark,
+                      ringWidth: 1,
+                    ),
+                  ),
+                  const SizedBox(width: Grid.half),
+                  Text(
+                    label,
+                    style: filterChipTextStyle.copyWith(
+                      color: statusMarkInk(context, mark),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

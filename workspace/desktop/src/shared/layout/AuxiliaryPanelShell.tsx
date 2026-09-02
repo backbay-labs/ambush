@@ -124,7 +124,7 @@ export function AuxiliaryPanel({
         }
         type="button"
       >
-        <span className="absolute bottom-0 left-1/2 top-10 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/auxiliary-panel-resize:bg-border/80 group-focus-visible/auxiliary-panel-resize:bg-border/80" />
+        <span className="absolute bottom-0 left-1/2 top-10 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/auxiliary-panel-resize:bg-foreground group-focus-visible/auxiliary-panel-resize:bg-foreground" />
       </button>
     ) : null;
 

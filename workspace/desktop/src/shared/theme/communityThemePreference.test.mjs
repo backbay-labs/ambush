@@ -28,7 +28,7 @@ function localStorageStub() {
 test("parses only the versioned stable appearance contract", () => {
   const valid = {
     version: 1,
-    theme: "houston",
+    theme: "ambush-day",
     accent: "#a855f7",
     followSystem: false,
   };
@@ -52,10 +52,10 @@ test("local preferences are isolated by pubkey and normalized relay", () => {
   globalThis.window = { localStorage: localStorageStub() };
   const aliceA = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "houston",
+    theme: "ambush-day",
     followSystem: false,
   };
-  const aliceB = { ...DEFAULT_COMMUNITY_THEME, theme: "catppuccin-latte" };
+  const aliceB = { ...DEFAULT_COMMUNITY_THEME, theme: "ambush-day" };
   const bobA = { ...DEFAULT_COMMUNITY_THEME, accent: "#ef4444" };
   assert.equal(
     writeCommunityThemePreference("alice", "WSS://A.EXAMPLE/", aliceA),
@@ -89,7 +89,7 @@ test("local preferences are isolated by pubkey and normalized relay", () => {
 
 test("dirty outbox survives restart and clears only its exact revision", () => {
   globalThis.window = { localStorage: localStorageStub() };
-  const first = { ...DEFAULT_COMMUNITY_THEME, theme: "houston" };
+  const first = { ...DEFAULT_COMMUNITY_THEME, theme: "ambush-day" };
   const second = { ...DEFAULT_COMMUNITY_THEME, accent: "#ef4444" };
 
   assert.equal(
@@ -153,7 +153,7 @@ test("remote preference still applies when its local cache write fails", () => {
 test("already-applied relay state leaves the next user edit publishable", () => {
   const applied = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "catppuccin-latte",
+    theme: "ambush-day",
     followSystem: false,
   };
 
@@ -180,7 +180,7 @@ test("no-op initialization remains programmatic", () => {
 test("confirmed first-community migration isolates later empty scopes", () => {
   const inherited = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "dracula",
+    theme: "ambush-day",
     followSystem: false,
   };
 
@@ -194,12 +194,12 @@ test("confirmed first-community migration isolates later empty scopes", () => {
 test("community switch defers stale outgoing appearance persistence", () => {
   const outgoing = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "houston",
+    theme: "ambush-day",
     followSystem: false,
   };
   const incoming = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "catppuccin-latte",
+    theme: "ambush-day",
   };
 
   assert.equal(communityThemePersistenceAction(incoming, outgoing), "defer");

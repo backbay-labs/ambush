@@ -77,8 +77,8 @@ function labelForPubkey(pubkey: string, profiles?: UserProfileLookup) {
 function pullRequestStatusClassName(status: ProjectPullRequest["status"]) {
   if (status === "Closed") return "text-destructive";
   if (status === "Draft") return "text-muted-foreground";
-  if (status === "Merged") return "text-purple-400";
-  return "text-green-500";
+  if (status === "Merged") return "text-secondary-foreground";
+  return "text-foreground";
 }
 
 const PULL_REQUEST_STATUS_ORDER: readonly ProjectPullRequest["status"][] = [
@@ -321,8 +321,8 @@ function PullRequestRow({
               }
               className={`flex items-center gap-1 rounded-md text-xs hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring ${
                 pullRequest.comments.length > 0
-                  ? "text-muted-foreground/60"
-                  : "text-muted-foreground/45"
+                  ? "text-muted-foreground"
+                  : "text-muted-foreground"
               }`}
               data-testid="project-pull-request-comments"
               onClick={onOpen}
@@ -342,7 +342,7 @@ function PullRequestRow({
             showLabel={false}
           />
           <span
-            className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground/55 sm:block"
+            className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground sm:block"
             data-testid="project-pull-request-row-date"
             title={formatExactTimestamp(pullRequest.createdAt)}
           >
@@ -731,7 +731,7 @@ export function ProjectPullRequestDetail({
                           className={`h-3 w-3 ${
                             isHistoricalDecision
                               ? "text-muted-foreground"
-                              : "text-green-600 dark:text-green-500"
+                              : "text-foreground"
                           }`}
                         />
                       ) : timelineKind === "changes-requested" ? (
@@ -739,7 +739,7 @@ export function ProjectPullRequestDetail({
                           className={`h-3 w-3 ${
                             isHistoricalDecision
                               ? "text-muted-foreground"
-                              : "text-amber-600 dark:text-amber-400"
+                              : "text-warning"
                           }`}
                         />
                       ) : timelineKind === "review-request" ? (
@@ -771,7 +771,7 @@ export function ProjectPullRequestDetail({
                         ) : null}
                       </span>
                       <span
-                        className="ml-auto w-20 shrink-0 text-right text-xs text-muted-foreground/70"
+                        className="ml-auto w-20 shrink-0 text-right text-xs text-muted-foreground"
                         title={formatExactTimestamp(item.createdAt)}
                       >
                         {relativeTime(item.createdAt)}

@@ -198,9 +198,7 @@ export function PersonaAdvancedFields({
             {AGENT_PARALLELISM_HELP}
           </p>
           {personaParallelismHint !== null ? (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              {personaParallelismHint}
-            </p>
+            <p className="text-xs text-warning">{personaParallelismHint}</p>
           ) : null}
         </div>
       </div>

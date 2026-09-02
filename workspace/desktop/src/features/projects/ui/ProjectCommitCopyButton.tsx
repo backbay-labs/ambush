@@ -38,7 +38,7 @@ export function CopyTextButton({
       type="button"
     >
       {copied ? (
-        <Check className="h-3.5 w-3.5 text-green-500" />
+        <Check className="h-3.5 w-3.5 text-foreground" />
       ) : (
         <Copy className="h-3.5 w-3.5" />
       )}

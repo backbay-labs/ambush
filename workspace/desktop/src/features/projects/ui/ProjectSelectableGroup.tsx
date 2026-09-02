@@ -104,7 +104,7 @@ export function ProjectSelectableGroup({
             {label}
           </span>
           {!expanded ? (
-            <span className="shrink-0 tabular-nums text-muted-foreground/65">
+            <span className="shrink-0 tabular-nums text-muted-foreground">
               {count}
             </span>
           ) : null}

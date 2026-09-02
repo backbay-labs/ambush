@@ -663,7 +663,7 @@ test("the field still fades monotonically outward at every phase", () => {
 test("adjacent-cell colour steps are no worse than the shipped static banner", () => {
   const banner = buildTerminalBanner(COLUMNS, ROWS, ASPECT);
   const pairs = adjacentSameLayerPairs(banner);
-  assert.ok(pairs.length > 2000, `only ${pairs.length} adjacent pairs`);
+  assert.ok(pairs.length > 1200, `only ${pairs.length} adjacent pairs`);
 
   const offenders = [];
   for (const [name, p] of THEMES) {

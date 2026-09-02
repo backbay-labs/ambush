@@ -15,35 +15,32 @@ export function RepoListItem({
   preview?: boolean;
 }) {
   return (
-    <div className="py-6 text-black dark:text-white">
+    <div className="py-6 text-foreground">
       {/* Row 1: Name + badge */}
       <div className="flex items-center gap-2">
-        <BookMarked className="h-4 w-4 shrink-0 text-black/50 dark:text-white/50" />
+        <BookMarked className="h-4 w-4 shrink-0 text-muted-foreground" />
         <Link
           to="/repos/$repoId"
           params={{ repoId: repo.id }}
           search={preview ? { preview: "repositories" } : undefined}
-          className="text-lg font-semibold text-black underline-offset-4 hover:text-black/70 hover:underline dark:text-white dark:hover:text-white/70"
+          className="text-lg font-semibold text-foreground underline-offset-4 hover:text-muted-foreground hover:underline"
         >
           {repo.name}
         </Link>
-        <Badge
-          variant="outline"
-          className="ml-1 border-black/15 text-black/60 dark:border-white/15 dark:text-white/60"
-        >
+        <Badge variant="outline" className="ml-1 text-muted-foreground">
           Public
         </Badge>
       </div>
 
       {/* Row 2: Description */}
       {repo.description && (
-        <p className="mt-1 line-clamp-2 text-sm text-black/60 dark:text-white/60">
+        <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
           {repo.description}
         </p>
       )}
 
       {/* Row 3: Metadata */}
-      <div className="mt-2 flex items-center gap-4 text-xs text-black/50 dark:text-white/50">
+      <div className="mt-2 flex items-center gap-4 text-xs text-muted-foreground">
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="cursor-default font-mono">

@@ -33,7 +33,7 @@ export function AgentIdentityCard({
   return (
     <div
       className={cn(
-        "group relative aspect-[4/5] w-full min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-muted/50 text-left shadow-xs transition-colors hover:border-border hover:bg-muted/65",
+        "group relative aspect-[4/5] w-full min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-muted/50 text-left transition-colors hover:border-border hover:bg-muted/65",
       )}
       data-testid={dataTestId}
     >

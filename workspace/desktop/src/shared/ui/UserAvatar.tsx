@@ -15,13 +15,13 @@ const sizeClasses: Record<UserAvatarSize, string> = {
 };
 
 const fallbackColorClasses = [
-  "bg-blue-500 text-white",
-  "bg-emerald-500 text-white",
-  "bg-amber-400 text-amber-950",
-  "bg-rose-500 text-white",
-  "bg-cyan-400 text-cyan-950",
-  "bg-violet-500 text-white",
-  "bg-orange-500 text-white",
+  "bg-night text-ink",
+  "bg-steel text-ink",
+  "bg-rule text-ink",
+  "bg-ink-mid text-night",
+  "bg-plate text-ink",
+  "bg-plate-hi text-ink",
+  "bg-ink-dim text-night",
 ] as const;
 
 function fallbackColorClass(displayName: string) {
@@ -64,9 +64,7 @@ export function UserAvatar({
 
   return (
     <Avatar
-      // Animated avatars carry their own backdrop disc and transparent
-      // surroundings — any container fill would flatten the pop-out.
-      className={cn(sizeClasses[size], !animated && "shadow-xs", className)}
+      className={cn(sizeClasses[size], className)}
       data-testid={testId}
       onMouseEnter={animated ? () => setIsHovered(true) : undefined}
       onMouseLeave={animated ? () => setIsHovered(false) : undefined}
@@ -74,6 +72,8 @@ export function UserAvatar({
       {src ? (
         <AvatarImage
           alt={`${displayName} avatar`}
+          // Animated avatars carry their own backdrop disc and transparent
+          // surroundings — any container fill would flatten the pop-out.
           className={cn("object-cover", !animated && "bg-secondary")}
           data-testid={testId ? `${testId}-image` : undefined}
           referrerPolicy="no-referrer"

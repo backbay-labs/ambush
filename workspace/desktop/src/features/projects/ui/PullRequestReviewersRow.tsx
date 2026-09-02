@@ -323,7 +323,7 @@ export function PullRequestReviewersRow({
                 {index > 0 ? (
                   <span
                     aria-hidden="true"
-                    className="shrink-0 text-muted-foreground/50"
+                    className="shrink-0 text-muted-foreground"
                   >
                     ·
                   </span>
@@ -331,8 +331,8 @@ export function PullRequestReviewersRow({
                 <span
                   className={cn(
                     "flex min-w-0 shrink items-center gap-1 text-sm",
-                    hasApproved && "text-green-600 dark:text-green-400",
-                    hasRequestedChanges && "text-amber-600 dark:text-amber-400",
+                    hasApproved && "text-foreground",
+                    hasRequestedChanges && "text-warning",
                     !hasApproved &&
                       !hasRequestedChanges &&
                       "text-muted-foreground",
@@ -359,7 +359,7 @@ export function PullRequestReviewersRow({
             );
           })}
           {hasHistoricalDecision ? (
-            <span className="flex min-w-0 items-center gap-1 truncate text-xs text-amber-600 dark:text-amber-400">
+            <span className="flex min-w-0 items-center gap-1 truncate text-xs text-warning">
               <History className="h-3.5 w-3.5 shrink-0" />
               Earlier decision applies to another commit
             </span>

@@ -136,7 +136,7 @@ export default function DiffMessage({
 
       {/* Truncation warning */}
       {truncated && (
-        <div className="px-3 py-2 border-t border-border/50 bg-amber-500/10 text-xs text-warning">
+        <div className="px-3 py-2 border-t border-border/50 bg-warning-bg text-xs text-warning">
           Diff truncated.{" "}
           {safeRepoUrl && commitUrl ? (
             <a

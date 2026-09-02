@@ -221,7 +221,7 @@ export function ModelPicker({
           >
             <span className="truncate">{displayLabel}</span>
             {modelOriginLabel ? (
-              <span className="shrink-0 text-2xs text-muted-foreground/70">
+              <span className="shrink-0 text-2xs text-muted-foreground">
                 ({modelOriginLabel})
               </span>
             ) : null}

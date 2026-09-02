@@ -100,7 +100,7 @@ export function AvatarUpload({
           </MaskedAvatarBadgeFrame>
           {showClear && onClear ? (
             <button
-              className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-background bg-destructive text-destructive-foreground shadow-xs transition-colors hover:bg-destructive/80"
+              className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-background bg-destructive text-destructive-foreground transition-colors hover:bg-destructive/80"
               data-testid={`${testIdPrefix}-clear`}
               onClick={onClear}
               title="Remove photo"

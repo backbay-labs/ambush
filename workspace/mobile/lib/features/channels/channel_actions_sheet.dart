@@ -451,18 +451,32 @@ class _ActionTile extends StatelessWidget {
   final bool destructive;
 
   @override
-  Widget build(BuildContext context) => ListTile(
-    contentPadding: EdgeInsets.zero,
-    leading: Icon(icon, color: destructive ? context.colors.error : null),
-    title: Text(
-      label,
-      style: destructive ? TextStyle(color: context.colors.error) : null,
-    ),
-    onTap: () {
-      unawaited(HapticFeedback.lightImpact());
-      onTap();
-    },
-  );
+  Widget build(BuildContext context) {
+    final tile = ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon, color: destructive ? context.colors.error : null),
+      title: Text(
+        label,
+        style: destructive ? TextStyle(color: context.colors.error) : null,
+      ),
+      onTap: () {
+        unawaited(HapticFeedback.lightImpact());
+        onTap();
+      },
+    );
+    if (!destructive) return tile;
+
+    // The index rule: this action cannot be taken back, and it has not been
+    // decided yet. It is painted behind the row, so it costs no layout.
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: context.appColors.index, width: 3),
+        ),
+      ),
+      child: tile,
+    );
+  }
 }
 
 Future<void> _confirmAndRun(

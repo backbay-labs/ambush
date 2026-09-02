@@ -429,7 +429,7 @@ function MemberActionsMenu({
           <>
             {showChangeRole ? <DropdownMenuSeparator /> : null}
             <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
+              destructive
               data-testid={`sidebar-remove-member-${member.pubkey}`}
               disabled={disabled}
               onClick={() => onRemoveMember(member)}
@@ -492,7 +492,7 @@ function MemberActionsMenu({
               </DropdownMenuItem>
             ) : (
               <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
+                destructive
                 data-testid={`sidebar-ban-${member.pubkey}`}
                 disabled={disabled}
                 onClick={() => onBan(member)}

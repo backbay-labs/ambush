@@ -109,10 +109,7 @@ export function LinkPreviewControls({
           {onRemove ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onClick={onRemove}
-              >
+              <DropdownMenuItem destructive onClick={onRemove}>
                 <EyeOff aria-hidden="true" />
                 Remove preview
               </DropdownMenuItem>

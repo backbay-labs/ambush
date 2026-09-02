@@ -221,26 +221,15 @@ class _DmAvatar extends ConsumerWidget {
             child: Container(
               width: 8,
               height: 8,
-              decoration: BoxDecoration(
-                color: _presenceColor(context, presence),
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: context.theme.scaffoldBackgroundColor,
-                  width: 1.5,
-                ),
+              decoration: statusMarkDecoration(
+                context,
+                presenceMark(presence),
+                separator: context.theme.scaffoldBackgroundColor,
               ),
             ),
           ),
         ],
       ),
     );
-  }
-
-  Color _presenceColor(BuildContext context, String presence) {
-    return switch (presence) {
-      'online' => context.appColors.success,
-      'away' => context.appColors.warning,
-      _ => context.colors.outline,
-    };
   }
 }

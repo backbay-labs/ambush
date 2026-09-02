@@ -187,22 +187,22 @@ function changedFileIconVisual(path: string): ChangedFileIconVisual {
   ) {
     return {
       Icon: Package,
-      className: "fill-orange-500/20 text-orange-500",
-      containerClassName: "bg-orange-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (name.includes("lock") || extension === "pem" || extension === "key") {
     return {
       Icon: FileLock2,
-      className: "fill-amber-500/20 text-amber-500",
-      containerClassName: "bg-amber-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (extension === "json") {
     return {
       Icon: FileJson,
-      className: "fill-yellow-500/20 text-yellow-500",
-      containerClassName: "bg-yellow-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (
@@ -210,92 +210,92 @@ function changedFileIconVisual(path: string): ChangedFileIconVisual {
   ) {
     return {
       Icon: Settings,
-      className: "fill-zinc-500/20 text-zinc-500",
-      containerClassName: "bg-zinc-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (["html", "xml"].includes(extension)) {
     return {
       Icon: CodeXml,
-      className: "fill-rose-500/20 text-rose-500",
-      containerClassName: "bg-rose-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (extension === "css") {
     return {
       Icon: Braces,
-      className: "fill-violet-500/20 text-violet-500",
-      containerClassName: "bg-violet-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (CODE_EXTENSIONS.has(extension)) {
     return {
       Icon: FileCode2,
-      className: "fill-blue-500/20 text-blue-500",
-      containerClassName: "bg-blue-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (IMAGE_EXTENSIONS.has(extension)) {
     return {
       Icon: FileImage,
-      className: "fill-pink-500/20 text-pink-500",
-      containerClassName: "bg-pink-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (ARCHIVE_EXTENSIONS.has(extension)) {
     return {
       Icon: FileArchive,
-      className: "fill-orange-500/20 text-orange-500",
-      containerClassName: "bg-orange-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (AUDIO_EXTENSIONS.has(extension)) {
     return {
       Icon: FileAudio,
-      className: "fill-purple-500/20 text-purple-500",
-      containerClassName: "bg-purple-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (VIDEO_EXTENSIONS.has(extension)) {
     return {
       Icon: FileVideo,
-      className: "fill-red-500/20 text-red-500",
-      containerClassName: "bg-red-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (SPREADSHEET_EXTENSIONS.has(extension)) {
     return {
       Icon: FileSpreadsheet,
-      className: "fill-emerald-500/20 text-emerald-500",
-      containerClassName: "bg-emerald-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (extension === "sql" || extension === "db" || extension === "sqlite") {
     return {
       Icon: Database,
-      className: "fill-cyan-500/20 text-cyan-500",
-      containerClassName: "bg-cyan-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (["bash", "fish", "sh", "zsh"].includes(extension)) {
     return {
       Icon: Terminal,
-      className: "fill-lime-500/20 text-lime-500",
-      containerClassName: "bg-lime-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (TEXT_EXTENSIONS.has(extension)) {
     return {
       Icon: FileText,
-      className: "fill-slate-500/20 text-slate-500",
-      containerClassName: "bg-slate-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   if (extension === "pdf") {
     return {
       Icon: FileType,
-      className: "fill-red-500/20 text-red-500",
-      containerClassName: "bg-red-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
   return {
@@ -323,8 +323,8 @@ function ChangedFileTreeIcon({ path }: { path: string }) {
 
 function ChangedFolderTreeIcon() {
   return (
-    <span className="flex h-6 w-6 shrink-0 items-center justify-center bg-sky-500/15">
-      <FolderGit2 className="h-4 w-4 fill-sky-500/25 text-sky-500" />
+    <span className="flex h-6 w-6 shrink-0 items-center justify-center bg-muted/20">
+      <FolderGit2 className="h-4 w-4 fill-muted-foreground/20 text-muted-foreground" />
     </span>
   );
 }
@@ -384,10 +384,9 @@ function diffRows(file: ProjectRepoDiffFile): DiffRow[] {
 }
 
 function diffLineClassName(type: DiffRow["type"]) {
-  if (type === "add") return "border-green-500/10 border-l-2 bg-green-500/10";
-  if (type === "delete")
-    return "border-destructive/10 border-l-2 bg-destructive/10";
-  if (type === "hunk") return "bg-sky-500/10 text-sky-500";
+  if (type === "add") return "border-border border-l-2 bg-plate";
+  if (type === "delete") return "border-border border-l-2 bg-secondary";
+  if (type === "hunk") return "bg-muted text-muted-foreground";
   return "border-transparent border-l-2";
 }
 
@@ -501,7 +500,7 @@ function DiffPreview({
   return (
     <div className="overflow-x-auto bg-background/70 font-mono text-xs leading-5">
       {file.truncated ? (
-        <div className="border-border/40 border-b bg-amber-500/10 px-4 py-2 text-amber-600 dark:text-amber-400">
+        <div className="border-border/40 border-b bg-warning-bg px-4 py-2 text-warning">
           Large diff truncated — showing the first {rows.length} lines. Use a
           local checkout to review the full change.
         </div>
@@ -541,10 +540,10 @@ function DiffPreview({
               ref={isFocused ? focusedRowRef : undefined}
               tabIndex={isFocused ? -1 : undefined}
             >
-              <span className="select-none border-border/40 border-r px-2 text-right text-muted-foreground/70">
+              <span className="select-none border-border/40 border-r px-2 text-right text-muted-foreground">
                 {row.oldLine ?? " "}
               </span>
-              <span className="select-none border-border/40 border-r px-2 text-right text-muted-foreground/70">
+              <span className="select-none border-border/40 border-r px-2 text-right text-muted-foreground">
                 {row.newLine ?? " "}
               </span>
               <span className="flex select-none items-center justify-center">
@@ -567,8 +566,8 @@ function DiffPreview({
               <span
                 className={cn(
                   "select-none px-2",
-                  row.type === "add" && "text-green-500",
-                  row.type === "delete" && "text-destructive",
+                  row.type === "add" && "text-status-added",
+                  row.type === "delete" && "text-status-deleted",
                 )}
               >
                 {linePrefix(row.type)}
@@ -836,9 +835,7 @@ export function ProjectDiffFilesPanel({
       >
         <p>Could not load changed files for this {subjectLabel}.</p>
         {message ? (
-          <p className="font-mono text-xs text-muted-foreground/80">
-            {message}
-          </p>
+          <p className="font-mono text-xs text-muted-foreground">{message}</p>
         ) : null}
       </div>
     );
@@ -905,8 +902,8 @@ export function ProjectDiffFilesPanel({
           </div>
           <div className="flex items-center gap-3">
             <span>{files.length} files changed</span>
-            <span className="text-green-500">+{stats.additions}</span>
-            <span className="text-destructive">-{stats.deletions}</span>
+            <span className="text-status-added">+{stats.additions}</span>
+            <span className="text-status-deleted">-{stats.deletions}</span>
           </div>
         </div>
 
@@ -928,7 +925,7 @@ export function ProjectDiffFilesPanel({
                 <div className="flex shrink-0 items-center gap-2 text-muted-foreground">
                   <span
                     className={cn(
-                      fileAdditions(selectedFile) > 0 && "text-green-500",
+                      fileAdditions(selectedFile) > 0 && "text-status-added",
                     )}
                   >
                     +{fileAdditions(selectedFile)}

@@ -6,31 +6,23 @@ import {
 } from "@/features/onboarding/useWelcomeKickoffStage";
 import { cn } from "@/shared/lib/cn";
 
-type StageCharacter = {
-  name: string;
-  animationUrl: string;
-};
-
-/** Same animated APNGs the "Meet your starter team" onboarding step uses. */
-const STAGE_CHARACTERS: readonly StageCharacter[] = [
-  { name: "Fizz", animationUrl: "/onboarding/starter-team/fizz.png" },
-  { name: "Honey", animationUrl: "/onboarding/starter-team/honey.png" },
-  { name: "Pollen", animationUrl: "/onboarding/starter-team/pollen.png" },
-];
+/** The same starter team the "Meet your starter team" onboarding step names. */
+const STAGE_CHARACTERS: readonly string[] = ["Fizz", "Honey", "Pollen"];
 
 const STAGE_EXIT_ANIMATION = "motion-kickoff-stage-exit";
 
 /**
- * The welcome team characters standing on top of the Welcome composer banner
- * while the team is being set up. Positioned relative to the banner wrapper
- * (`bottom-full` = feet on the banner's top edge) and purely decorative —
- * the banner's own copy carries the setup status for screen readers.
+ * The welcome team standing on top of the Welcome composer banner while the
+ * team is being set up: one initial plate per member. Positioned relative to
+ * the banner wrapper (`bottom-full` = feet on the banner's top edge) and purely
+ * decorative — the banner's own copy carries the setup status for screen
+ * readers.
  *
- * Placeholder choreography: staggered rise-from-below entrance per character
- * (CSS `motion-kickoff-character-enter`, delay via `--stagger-index`), whole
- * row crossfades out on either resolution — the first agent message landing,
- * or the wait timing out. The characters must not linger after a timeout: a
- * stage that stays up implies a team is still coming when none is.
+ * Staggered rise-from-below entrance per member (CSS
+ * `motion-kickoff-character-enter`, delay via `--stagger-index`); the whole row
+ * crossfades out on either resolution — the first agent message landing, or the
+ * wait timing out. The row must not linger after a timeout: a stage that stays
+ * up implies a team is still coming when none is.
  */
 export function WelcomeKickoffStage({
   onExitComplete,
@@ -61,15 +53,15 @@ export function WelcomeKickoffStage({
       data-testid="welcome-kickoff-stage"
       onAnimationEnd={handleAnimationEnd}
     >
-      {STAGE_CHARACTERS.map((character, index) => (
-        <img
-          alt=""
-          className="motion-kickoff-character-enter h-16 w-16 object-contain"
-          data-testid={`welcome-kickoff-stage-${character.name.toLowerCase()}`}
-          key={character.name}
-          src={character.animationUrl}
+      {STAGE_CHARACTERS.map((name, index) => (
+        <span
+          className="motion-kickoff-character-enter flex h-16 w-16 items-center justify-center rounded border border-border bg-card font-mono text-xl uppercase text-card-foreground"
+          data-testid={`welcome-kickoff-stage-${name.toLowerCase()}`}
+          key={name}
           style={{ "--stagger-index": index } as React.CSSProperties}
-        />
+        >
+          {name.slice(0, 1)}
+        </span>
       ))}
     </div>
   );

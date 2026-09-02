@@ -28,4 +28,4 @@ export const PROJECT_LIST_ROW_STATUS_CLASS =
   "hidden w-20 shrink-0 text-left text-2xs leading-3 text-muted-foreground md:block";
 
 export const PROJECT_LIST_ROW_DATE_CLASS =
-  "hidden w-24 shrink-0 text-right text-xs leading-4 text-muted-foreground/70 sm:block";
+  "hidden w-24 shrink-0 text-right text-xs leading-4 text-muted-foreground sm:block";

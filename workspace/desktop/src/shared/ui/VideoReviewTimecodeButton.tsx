@@ -21,7 +21,7 @@ function timecodeClasses({
   return cn(
     "inline-flex h-5 shrink-0 items-center rounded px-1.5 align-middle font-mono text-2xs font-semibold",
     interactive &&
-      "outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-white/60",
+      "outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-ring",
     surface === "review"
       ? [TIMECODE_ACCENT_CLASS, interactive && TIMECODE_ACCENT_HOVER_CLASS]
       : interactive

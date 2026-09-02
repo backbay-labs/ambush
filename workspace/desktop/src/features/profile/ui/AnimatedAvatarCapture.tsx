@@ -643,7 +643,7 @@ export function AnimatedAvatarCapture({
       {/* Live camera preview — kept mounted so the stream can attach. */}
       <div
         className={cn(
-          "h-full w-full overflow-hidden rounded-full bg-background/60 shadow-inner",
+          "h-full w-full overflow-hidden rounded-full border border-border bg-background/60",
           !isCameraStageVisible && "hidden",
         )}
       >
@@ -774,11 +774,11 @@ export function AnimatedAvatarCapture({
       </div>
 
       {phase === "idle" ? (
-        <div className="grid h-full w-full place-items-center rounded-full border-2 border-dashed border-border bg-background text-primary shadow-xs">
+        <div className="grid h-full w-full place-items-center rounded-full border-2 border-dashed border-border bg-background text-primary">
           <Camera className="h-10 w-10" />
         </div>
       ) : phase === "starting" ? (
-        <div className="absolute inset-0 grid place-items-center rounded-full bg-background/70 text-center shadow-inner">
+        <div className="absolute inset-0 grid place-items-center rounded-full border border-border bg-background/70 text-center">
           <div className="grid justify-items-center gap-2 px-4">
             <Spinner aria-label="Starting camera" className="h-4 w-4" />
             <span className="text-xs font-medium text-muted-foreground">
@@ -787,7 +787,7 @@ export function AnimatedAvatarCapture({
           </div>
         </div>
       ) : phase === "processing" ? (
-        <div className="grid h-full w-full place-items-center rounded-full bg-background/60 shadow-inner">
+        <div className="grid h-full w-full place-items-center rounded-full border border-border bg-background/60">
           <Spinner aria-label="Processing recording" className="h-6 w-6" />
         </div>
       ) : null}

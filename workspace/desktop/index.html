@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/ambush.svg?v=20260610" />
+    <link rel="icon" type="image/svg+xml" href="/ambush.svg?v=20260901" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title></title>
     <!--
@@ -12,7 +12,7 @@
       in tauri.conf.json. The body paints its own themed background once the app
       CSS loads, so this never shows through after boot.
 
-      The linked stylesheet (boot.css) applies the initial black background.
+      The linked stylesheet (boot.css) applies the initial night background.
       Kept as a <link> rather than an inline <style> to avoid Tauri's nonce
       injection for style-src (see boot.css for the full rationale).
 
@@ -39,7 +39,7 @@
               document.documentElement.classList.add("dark");
             } else {
               document.documentElement.classList.add("light");
-              document.documentElement.style.backgroundColor = "#fff";
+              document.documentElement.style.backgroundColor = "#BCB5AD";
             }
             return;
           }
@@ -50,7 +50,7 @@
           // before ThemeProvider mounts.
           document.documentElement.classList.add(parsed.isDark ? "dark" : "light");
         } catch {
-          /* fall back to the black default above */
+          /* fall back to the night default above */
         }
       })();
     </script>

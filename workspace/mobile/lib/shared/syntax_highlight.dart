@@ -1,63 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:highlight/highlight.dart' show highlight, Node;
 
-const highlightLightTheme = <String, TextStyle>{
-  'keyword': TextStyle(color: Color(0xFFa626a4)),
-  'built_in': TextStyle(color: Color(0xFF0184bc)),
-  'type': TextStyle(color: Color(0xFF0184bc)),
-  'literal': TextStyle(color: Color(0xFF0184bc)),
-  'number': TextStyle(color: Color(0xFF986801)),
-  'string': TextStyle(color: Color(0xFF50a14f)),
-  'symbol': TextStyle(color: Color(0xFF50a14f)),
-  'comment': TextStyle(color: Color(0xFFa0a1a7), fontStyle: FontStyle.italic),
-  'doctag': TextStyle(color: Color(0xFFa0a1a7), fontStyle: FontStyle.italic),
-  'meta': TextStyle(color: Color(0xFF986801)),
-  'attr': TextStyle(color: Color(0xFF986801)),
-  'attribute': TextStyle(color: Color(0xFF986801)),
-  'title': TextStyle(color: Color(0xFF4078f2)),
-  'title.class_': TextStyle(color: Color(0xFFc18401)),
-  'title.function_': TextStyle(color: Color(0xFF4078f2)),
-  'name': TextStyle(color: Color(0xFFe45649)),
-  'tag': TextStyle(color: Color(0xFFe45649)),
-  'selector-tag': TextStyle(color: Color(0xFFe45649)),
-  'params': TextStyle(color: Color(0xFF383a42)),
-  'variable': TextStyle(color: Color(0xFFe45649)),
-  'subst': TextStyle(color: Color(0xFFe45649)),
-  'section': TextStyle(color: Color(0xFF4078f2)),
-  'bullet': TextStyle(color: Color(0xFF4078f2)),
-  'link': TextStyle(color: Color(0xFF4078f2)),
-  'addition': TextStyle(color: Color(0xFF50a14f)),
-  'deletion': TextStyle(color: Color(0xFFe45649)),
-};
+import 'theme/quiet.dart';
 
-const highlightDarkTheme = <String, TextStyle>{
-  'keyword': TextStyle(color: Color(0xFFc678dd)),
-  'built_in': TextStyle(color: Color(0xFF56b6c2)),
-  'type': TextStyle(color: Color(0xFF56b6c2)),
-  'literal': TextStyle(color: Color(0xFF56b6c2)),
-  'number': TextStyle(color: Color(0xFFd19a66)),
-  'string': TextStyle(color: Color(0xFF98c379)),
-  'symbol': TextStyle(color: Color(0xFF98c379)),
-  'comment': TextStyle(color: Color(0xFF5c6370), fontStyle: FontStyle.italic),
-  'doctag': TextStyle(color: Color(0xFF5c6370), fontStyle: FontStyle.italic),
-  'meta': TextStyle(color: Color(0xFFd19a66)),
-  'attr': TextStyle(color: Color(0xFFd19a66)),
-  'attribute': TextStyle(color: Color(0xFFd19a66)),
-  'title': TextStyle(color: Color(0xFF61afef)),
-  'title.class_': TextStyle(color: Color(0xFFe5c07b)),
-  'title.function_': TextStyle(color: Color(0xFF61afef)),
-  'name': TextStyle(color: Color(0xFFe06c75)),
-  'tag': TextStyle(color: Color(0xFFe06c75)),
-  'selector-tag': TextStyle(color: Color(0xFFe06c75)),
-  'params': TextStyle(color: Color(0xFFabb2bf)),
-  'variable': TextStyle(color: Color(0xFFe06c75)),
-  'subst': TextStyle(color: Color(0xFFe06c75)),
-  'section': TextStyle(color: Color(0xFF61afef)),
-  'bullet': TextStyle(color: Color(0xFF61afef)),
-  'link': TextStyle(color: Color(0xFF61afef)),
-  'addition': TextStyle(color: Color(0xFF98c379)),
-  'deletion': TextStyle(color: Color(0xFFe06c75)),
-};
+/// Code inks: one lightness, low chroma, warm against cool.
+///
+/// Structure reads cool, literal content reads warm, and anything that names
+/// something reads as plain ink — so a block stays legible by role position
+/// with the hue stripped out. Comments recede to the engraved-label ink.
+Map<String, TextStyle> _codeTheme(QuietSurfaces s, QuietCodeInks inks) {
+  final structure = TextStyle(color: inks.cool);
+  final literal = TextStyle(color: inks.warm);
+  final name = TextStyle(color: s.ink);
+  final aside = TextStyle(color: s.inkDim, fontStyle: FontStyle.italic);
+  return {
+    'keyword': structure,
+    'built_in': structure,
+    'type': structure,
+    'operator': structure,
+    'punctuation': structure,
+    'literal': literal,
+    'number': literal,
+    'string': literal,
+    'symbol': literal,
+    'regexp': literal,
+    'meta': literal,
+    'attr': literal,
+    'attribute': literal,
+    'comment': aside,
+    'doctag': aside,
+    'quote': aside,
+    'title': name,
+    'title.class_': name,
+    'title.function_': name,
+    'name': name,
+    'tag': name,
+    'selector-tag': name,
+    'selector-class': name,
+    'selector-id': name,
+    'variable': name,
+    'template-variable': name,
+    'subst': name,
+    'params': TextStyle(color: s.inkMid),
+    'section': TextStyle(color: s.ink, fontWeight: FontWeight.w600),
+    'bullet': TextStyle(color: s.grad),
+    'link': TextStyle(color: s.ink, decoration: TextDecoration.underline),
+    'strong': const TextStyle(fontWeight: FontWeight.w600),
+    'emphasis': const TextStyle(fontStyle: FontStyle.italic),
+    'addition': TextStyle(color: s.ink),
+    'deletion': TextStyle(color: s.inkDim),
+  };
+}
+
+final highlightLightTheme = _codeTheme(quietDay, quietDayInks);
+final highlightDarkTheme = _codeTheme(quietNight, quietNightInks);
 
 List<InlineSpan> highlightCode(
   String code,

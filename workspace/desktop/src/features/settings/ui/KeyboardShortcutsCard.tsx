@@ -55,7 +55,7 @@ export function KeyboardShortcutsCard() {
                     {shortcut.label}
                   </span>
                   <span
-                    className="ml-2 text-muted-foreground/70"
+                    className="ml-2 text-muted-foreground"
                     data-settings-subcopy
                   >
                     {shortcut.description}

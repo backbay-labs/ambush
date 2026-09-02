@@ -1702,7 +1702,7 @@ test("project overview presents collapsible context beside grouped activity", as
     "rgba(0, 0, 0, 0)",
   );
   await expect(appContentSurface).toHaveCSS("border-radius", "0px");
-  await expect(overviewContentPod).toHaveCSS("border-radius", "16px");
+  await expect(overviewContentPod).toHaveCSS("border-radius", "2px");
   await expect(page.getByTestId("projects-workspace-chrome")).toContainText(
     "Projects",
   );
@@ -2008,7 +2008,7 @@ test("project overview chrome toggles a detached resizable agent chat", async ({
   ).toHaveCount(0);
   await expect(
     chatRail.getByTestId("projects-overview-agent-rail-panel"),
-  ).toHaveCSS("border-radius", "16px");
+  ).toHaveCSS("border-radius", "2px");
   const agentHeader = page.getByTestId("project-agent-context");
   await expect
     .poll(() =>
@@ -2016,7 +2016,7 @@ test("project overview chrome toggles a detached resizable agent chat", async ({
         (element) => getComputedStyle(element).backdropFilter,
       ),
     )
-    .not.toBe("none");
+    .toBe("none");
   await expect(contextRail).toHaveAttribute("aria-hidden", "true");
   await overviewInfo.click();
   await expect(overviewInfo).toHaveAttribute("aria-pressed", "true");
@@ -2727,7 +2727,7 @@ test("project detail chat resize tracks the pointer without easing", async ({
         (element) => getComputedStyle(element).backdropFilter,
       ),
     )
-    .not.toBe("none");
+    .toBe("none");
   const [panelBox, handleBox] = await Promise.all([
     chatPanel.boundingBox(),
     resizeHandle.boundingBox(),

@@ -316,7 +316,7 @@ function InlineReactionPicker({
                 "group-hover/reactions:pointer-events-auto group-hover/reactions:opacity-100",
                 "group-focus-within/reactions:pointer-events-auto group-focus-within/reactions:opacity-100",
                 open
-                  ? "pointer-events-auto border-border/80 bg-background text-foreground opacity-100 shadow-xs"
+                  ? "pointer-events-auto border-border/80 bg-background text-foreground opacity-100"
                   : "border-border/70 bg-muted/70",
                 REACTION_PILL_HOVER_CLASSES,
               )}

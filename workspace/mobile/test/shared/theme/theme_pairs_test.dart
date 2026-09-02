@@ -171,13 +171,12 @@ void main() {
       expect(resolved.light, generateColorScheme(findTheme(ambushThemeName)!));
     });
 
-    test('an unknown scheme name falls back to the default theme', () {
+    test('an unknown scheme name falls back to the default pair', () {
       final resolved = resolveSchemes('not-a-theme', ThemeMode.light);
 
-      expect(
-        resolved.light,
-        generateColorScheme(findTheme(defaultSchemeName)!),
-      );
+      expect(resolved.lightTheme?.name, ambushThemeName);
+      expect(resolved.light, generateColorScheme(findTheme(ambushThemeName)!));
+      expect(themePairFor(ambushThemeName), defaultSchemeName);
     });
   });
 
@@ -232,8 +231,9 @@ void main() {
       );
     });
 
-    test('a null selection resolves to the default theme', () {
-      expect(effectiveTheme(null, ThemeMode.light)?.name, defaultSchemeName);
+    test('a null selection resolves to the default pair', () {
+      expect(effectiveTheme(null, ThemeMode.dark)?.name, defaultSchemeName);
+      expect(effectiveTheme(null, ThemeMode.light)?.name, ambushThemeName);
     });
   });
 

@@ -20,9 +20,9 @@ export function ImportStatusIcon({
         <Spinner className="h-4 w-4 shrink-0 border-2 text-muted-foreground" />
       );
     case "done":
-      return <Check className="h-4 w-4 shrink-0 text-green-500" />;
+      return <Check className="h-4 w-4 shrink-0 text-foreground" />;
     case "error":
-      return <X className="h-4 w-4 shrink-0 text-destructive" />;
+      return <X className="h-4 w-4 shrink-0 text-foreground" />;
     default:
       return null;
   }

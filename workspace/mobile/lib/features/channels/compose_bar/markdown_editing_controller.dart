@@ -471,7 +471,7 @@ class _MarkdownEditingController extends TextEditingController {
       _MarkdownStyle.inlineCode ||
       _MarkdownStyle.codeBlock => inheritedStyle.merge(
         TextStyle(
-          fontFamily: 'GeistMono',
+          fontFamily: 'IBM Plex Mono',
           color: context.colors.onSurface,
           backgroundColor: context.colors.surface,
         ),
@@ -549,7 +549,7 @@ class _ComposerAgentMentionChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = textStyle.copyWith(
-      color: context.colors.primary,
+      color: context.colors.onSurface,
       fontWeight: FontWeight.w500,
       height: 1,
     );
@@ -567,14 +567,11 @@ class _ComposerAgentMentionChip extends StatelessWidget {
           Grid.quarter,
         ),
         decoration: BoxDecoration(
-          // The composer surface is already tinted, so the body chip's
-          // low-opacity fill disappears here. Keep the same chip geometry
-          // while giving this editable token enough contrast to read as one.
-          color: context.colors.primary.withValues(alpha: 0.16),
+          // The raised band inside the plate, so an editable token reads as
+          // one object against the composer surface it sits on.
+          color: context.appColors.plateHigh,
           borderRadius: BorderRadius.circular(Radii.sm),
-          border: Border.all(
-            color: context.colors.primary.withValues(alpha: 0.12),
-          ),
+          border: Border.all(color: context.colors.outline),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

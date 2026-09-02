@@ -179,10 +179,10 @@ class _MembersButton extends ConsumerWidget {
               child: Container(
                 width: 8,
                 height: 8,
-                decoration: BoxDecoration(
-                  color: context.appColors.success,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: context.colors.surface, width: 1.5),
+                decoration: statusMarkDecoration(
+                  context,
+                  StatusMark.filled,
+                  separator: context.colors.surface,
                 ),
               ),
             ),
@@ -271,13 +271,9 @@ class _DmAppBarTitle extends ConsumerWidget {
               widthFactor: _dmPresenceDotRatio,
               heightFactor: _dmPresenceDotRatio,
               child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: switch (presence) {
-                    'online' => context.appColors.success,
-                    'away' => context.appColors.warning,
-                    _ => context.colors.outline,
-                  },
-                  shape: BoxShape.circle,
+                decoration: statusMarkDecoration(
+                  context,
+                  presenceMark(presence),
                 ),
               ),
             ),

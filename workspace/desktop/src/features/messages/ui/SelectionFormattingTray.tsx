@@ -245,7 +245,7 @@ export function SelectionFormattingTray({
     <div
       ref={trayRef}
       className={cn(
-        "fixed z-50 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border/80 bg-popover p-1 text-popover-foreground shadow-lg",
+        "fixed z-50 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border/80 bg-popover p-1 text-popover-foreground",
         position.placement === "top"
           ? "-translate-x-1/2 -translate-y-full"
           : "-translate-x-1/2",

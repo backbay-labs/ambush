@@ -1,12 +1,22 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
-/** Simple hash of a hex pubkey to a hue value (0-360). */
-function pubkeyToHue(hex: string): number {
+const AVATAR_RAMP = [
+  "bg-night text-ink",
+  "bg-steel text-ink",
+  "bg-rule text-ink",
+  "bg-grad text-night",
+  "bg-plate text-ink",
+  "bg-plate-hi text-ink",
+  "bg-ink-dim text-night",
+];
+
+/** Hash of a hex pubkey to a step on the identity ramp. */
+function pubkeyToRampIndex(hex: string): number {
   let hash = 0;
   for (let i = 0; i < hex.length; i++) {
     hash = (hash * 31 + hex.charCodeAt(i)) | 0;
   }
-  return Math.abs(hash) % 360;
+  return Math.abs(hash) % AVATAR_RAMP.length;
 }
 
 export function PubkeyAvatar({
@@ -16,15 +26,14 @@ export function PubkeyAvatar({
   pubkey: string;
   size?: "sm" | "md";
 }) {
-  const hue = pubkeyToHue(pubkey);
-  const sizeClasses = size === "sm" ? "h-6 w-6 text-[10px]" : "h-8 w-8 text-xs";
+  const ramp = AVATAR_RAMP[pubkeyToRampIndex(pubkey)];
+  const sizeClasses = size === "sm" ? "h-6 w-6 text-2xs" : "h-8 w-8 text-xs";
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className={`flex items-center justify-center rounded-lg font-medium text-white ${sizeClasses}`}
-          style={{ backgroundColor: `hsl(${hue}, 55%, 45%)` }}
+          className={`flex items-center justify-center rounded-lg font-medium ${ramp} ${sizeClasses}`}
         >
           {pubkey.slice(0, 2)}
         </div>

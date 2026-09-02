@@ -46,11 +46,11 @@ class _PairingWelcomeView extends StatelessWidget {
                   width: 136,
                   height: 136,
                   alignment: Alignment.center,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Color(0x4DFFFFFF),
+                    color: _onboardingPlate,
                   ),
-                  child: const TappableAmbushLogoMotion(
+                  child: TappableAmbushLogoMotion(
                     width: 76,
                     color: _onboardingInk,
                   ),
@@ -84,7 +84,7 @@ class _PairingWelcomeView extends StatelessWidget {
                           style: _onboardingButtonStyle,
                           onPressed: isBusy ? null : onScan,
                           child: isBusy && !pairingCodeExpanded
-                              ? const SizedBox(
+                              ? SizedBox(
                                   width: 20,
                                   height: 20,
                                   child: AmbushLoadingIndicator(
@@ -131,23 +131,21 @@ class _PairingWelcomeView extends StatelessWidget {
                                       cursorColor: _onboardingInk,
                                       decoration: InputDecoration(
                                         filled: true,
-                                        fillColor: Colors.white.withValues(
-                                          alpha: 0.7,
-                                        ),
+                                        fillColor: _onboardingPlate,
                                         hintText:
                                             'nostrpair://... or ambush://...',
                                         hintStyle: context.textTheme.bodyMedium
                                             ?.copyWith(
                                               color: _onboardingMutedInk,
                                             ),
-                                        prefixIcon: const Icon(
+                                        prefixIcon: Icon(
                                           LucideIcons.link,
                                           color: _onboardingInk,
                                         ),
                                         enabledBorder: _inputBorder,
                                         disabledBorder: _inputBorder,
                                         focusedBorder: _inputBorder.copyWith(
-                                          borderSide: const BorderSide(
+                                          borderSide: BorderSide(
                                             color: _onboardingInk,
                                           ),
                                         ),
@@ -171,7 +169,7 @@ class _PairingWelcomeView extends StatelessWidget {
                                         style: _onboardingButtonStyle,
                                         onPressed: isBusy ? null : onConnect,
                                         child: isBusy
-                                            ? const SizedBox(
+                                            ? SizedBox(
                                                 width: 20,
                                                 height: 20,
                                                 child: AmbushLoadingIndicator(
@@ -234,7 +232,7 @@ class _PairingWelcomeView extends StatelessWidget {
 
 final _inputBorder = OutlineInputBorder(
   borderRadius: BorderRadius.circular(Radii.md),
-  borderSide: BorderSide(color: _onboardingInk.withValues(alpha: 0.18)),
+  borderSide: BorderSide(color: _onboardingRule),
 );
 
 final _onboardingButtonStyle = FilledButton.styleFrom(

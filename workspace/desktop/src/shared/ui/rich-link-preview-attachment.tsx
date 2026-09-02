@@ -97,7 +97,7 @@ function LinkPreviewImage({
         ) : (
           <div
             className={cn(
-              "w-full animate-pulse bg-muted-foreground/10",
+              "w-full animate-pulse bg-muted-foreground/10 motion-reduce:animate-none",
               aspectClassName,
             )}
             data-link-preview-skeleton=""
@@ -180,7 +180,7 @@ function TweetPreview({
       data-tweet-preview=""
     >
       <a
-        className="block w-fit max-w-full truncate text-xs leading-4 text-muted-foreground/70 hover:underline"
+        className="block w-fit max-w-full truncate text-xs leading-4 text-muted-foreground hover:underline"
         data-link-preview-hostname=""
         href={preview.href}
         rel="noreferrer"
@@ -282,7 +282,7 @@ export function RichLinkPreviewAttachment({
         className={cn(contentExpanded && reserveImage && "min-h-[3.875rem]")}
       >
         <a
-          className="flex w-fit max-w-full items-center gap-1.5 text-xs leading-4 text-muted-foreground/70 hover:underline"
+          className="flex w-fit max-w-full items-center gap-1.5 text-xs leading-4 text-muted-foreground hover:underline"
           data-link-preview-identity=""
           data-link-preview-hostname=""
           href={preview.href}

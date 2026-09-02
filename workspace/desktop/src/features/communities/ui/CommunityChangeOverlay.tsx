@@ -74,7 +74,7 @@ export function CommunityChangeOverlay({
     >
       {/* Background click closes */}
       <div aria-hidden="true" className="absolute inset-0" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-2xl border border-border bg-background p-8 shadow-2xl">
+      <div className="relative z-10 w-full max-w-md rounded-2xl border border-border bg-background p-8">
         <h2 className="text-xl font-semibold tracking-tight">
           Change community
         </h2>

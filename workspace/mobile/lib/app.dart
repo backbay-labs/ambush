@@ -307,9 +307,9 @@ class App extends HookConsumerWidget {
     // follows the OS across the selected theme and its pair.
     final effectiveMode = resolved.forcedMode ?? themeMode;
 
-    // Derive the gradient from the themes that produced each color scheme.
-    // This keeps fallbacks and pinned brightness changes aligned with the
-    // rendered palette rather than the raw persisted selection.
+    // Derive the top-section fill from the themes that produced each color
+    // scheme. This keeps fallbacks and pinned brightness changes aligned with
+    // the rendered palette rather than the raw persisted selection.
     final ambushLightGradient = ambushTopSectionGradient(
       resolved.lightTheme?.name ?? '',
       lightScheme.brightness,
@@ -362,10 +362,12 @@ class App extends HookConsumerWidget {
       title: 'Ambush',
       theme: AppTheme.light(
         colorScheme: lightScheme,
+        surfaces: resolved.lightTheme?.surfaces,
         topSectionGradient: ambushLightGradient,
       ),
       darkTheme: AppTheme.dark(
         colorScheme: darkScheme,
+        surfaces: resolved.darkTheme?.surfaces,
         topSectionGradient: ambushDarkGradient,
       ),
       themeMode: effectiveMode,

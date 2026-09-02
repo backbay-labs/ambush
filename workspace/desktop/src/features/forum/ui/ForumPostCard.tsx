@@ -140,7 +140,7 @@ export function ForumPostCard({
           </span>
           {summary.lastReplyAt ? (
             <>
-              <span className="text-muted-foreground/50">·</span>
+              <span className="text-muted-foreground">·</span>
               <span>last {formatRelativeTime(summary.lastReplyAt)}</span>
             </>
           ) : null}

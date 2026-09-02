@@ -48,7 +48,7 @@ async function setup(page: Page, theme: string) {
  * fragments on the transparent Ambush chrome. The collapsed sidebar must be
  * invisible and non-interactive, leaving the rail clean in every theme.
  */
-for (const theme of ["ambush", "ambush-dark", "vesper"]) {
+for (const theme of ["ambush-day", "ambush-night", "vesper"]) {
   test(`collapsed sidebar leaves the community rail clean — ${theme}`, async ({
     page,
   }) => {

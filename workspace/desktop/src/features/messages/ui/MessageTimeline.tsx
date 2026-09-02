@@ -731,7 +731,7 @@ const MessageTimelineBase = React.forwardRef<
             )}
             data-testid="message-timeline-fetching-older"
           >
-            <span className="flex items-center rounded-full bg-background/80 p-1.5 shadow-sm ring-1 ring-border/40 backdrop-blur-sm">
+            <span className="flex items-center rounded-full bg-background p-1.5 ring-1 ring-border/40">
               <Spinner className="h-4 w-4 border-2 text-muted-foreground" />
             </span>
           </div>
@@ -846,7 +846,7 @@ const MessageTimelineBase = React.forwardRef<
 
                 {showGenericEmpty ? (
                   <div
-                    className="mt-auto rounded-2xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-xs"
+                    className="mt-auto rounded-2xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center"
                     data-testid="message-empty"
                   >
                     <p className="text-base font-semibold tracking-tight">

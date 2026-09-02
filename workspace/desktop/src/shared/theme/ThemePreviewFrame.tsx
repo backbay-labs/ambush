@@ -4,44 +4,44 @@ import { cn } from "@/shared/lib/cn";
 export type ThemePreviewVars = Record<string, string>;
 
 /**
- * Ambush sidebar-gradient stop tokens, keyed by theme name. The actual custom
- * colors live once in `shared/styles/globals/theme.css`; the picker consumes
- * those same semantic variables instead of duplicating raw values here.
+ * Ambush app-canvas stop tokens, keyed by theme name. The actual colors live
+ * once in `shared/styles/globals/theme.css`; the picker consumes those same
+ * semantic variables instead of duplicating raw values here.
  */
 export const AMBUSH_GRADIENT_STOPS: Record<
   string,
   { top: string; bottom: string }
 > = {
-  ambush: {
+  "ambush-day": {
     top: "var(--ambush-gradient-light-top)",
     bottom: "var(--ambush-gradient-light-bottom)",
   },
-  "ambush-dark": {
+  "ambush-night": {
     top: "var(--ambush-gradient-dark-top)",
     bottom: "var(--ambush-gradient-dark-bottom)",
   },
 };
 
 export const LIGHT_PREVIEW_VARS: ThemePreviewVars = {
-  "--background": "0 0% 100%",
-  "--border": "0 0% 89.8%",
-  "--foreground": "0 0% 9%",
-  "--muted": "0 0% 96.1%",
-  "--muted-foreground": "0 0% 45.1%",
-  "--primary": "0 0% 9%",
-  "--sidebar-background": "0 0% 98%",
-  "--sidebar-foreground": "0 0% 9%",
+  "--background": "32.0 10.07% 70.8%",
+  "--border": "33.3 4.35% 59.4%",
+  "--foreground": "26.2 24.24% 12.9%",
+  "--muted": "32.0 11.81% 75.1%",
+  "--muted-foreground": "26.1 16.55% 27.3%",
+  "--primary": "26.2 24.24% 12.9%",
+  "--sidebar-background": "32.0 11.81% 75.1%",
+  "--sidebar-foreground": "27.0 19.23% 20.4%",
 };
 
 export const DARK_PREVIEW_VARS: ThemePreviewVars = {
-  "--background": "0 0% 3.9%",
-  "--border": "0 0% 14.9%",
-  "--foreground": "0 0% 98%",
-  "--muted": "0 0% 14.9%",
-  "--muted-foreground": "0 0% 63.9%",
-  "--primary": "0 0% 98%",
-  "--sidebar-background": "0 0% 0%",
-  "--sidebar-foreground": "0 0% 98%",
+  "--background": "0 0% 9.0%",
+  "--border": "0 0% 24.3%",
+  "--foreground": "33.3 14.29% 75.3%",
+  "--muted": "0 0% 12.2%",
+  "--muted-foreground": "33.0 9.9% 60.4%",
+  "--primary": "33.3 14.29% 75.3%",
+  "--sidebar-background": "0 0% 12.2%",
+  "--sidebar-foreground": "33.3 11.54% 69.4%",
 };
 
 function hsl(vars: ThemePreviewVars | null, key: string) {
@@ -120,7 +120,7 @@ function ThemePreviewSvg({
           y="32.175"
         />
         <rect
-          fill="#FF5F57"
+          fill="var(--ambush-grad)"
           height="2.7"
           rx="1.35"
           width="2.7"
@@ -138,7 +138,7 @@ function ThemePreviewSvg({
           y="4.7811"
         />
         <rect
-          fill="#FEBC2E"
+          fill="var(--ambush-grad)"
           height="2.7"
           rx="1.35"
           width="2.7"
@@ -156,7 +156,7 @@ function ThemePreviewSvg({
           y="4.7811"
         />
         <rect
-          fill="#28C840"
+          fill="var(--ambush-grad)"
           height="2.7"
           rx="1.35"
           width="2.7"
@@ -327,7 +327,7 @@ function SystemPreferencePreviewSvg({
           y="32.175"
         />
         <rect
-          fill="#FF5F57"
+          fill="var(--ambush-grad)"
           height="2.7"
           rx="1.35"
           width="2.7"
@@ -345,7 +345,7 @@ function SystemPreferencePreviewSvg({
           y="4.7811"
         />
         <rect
-          fill="#FEBC2E"
+          fill="var(--ambush-grad)"
           height="2.7"
           rx="1.35"
           width="2.7"
@@ -363,7 +363,7 @@ function SystemPreferencePreviewSvg({
           y="4.7811"
         />
         <rect
-          fill="#28C840"
+          fill="var(--ambush-grad)"
           height="2.7"
           rx="1.35"
           width="2.7"

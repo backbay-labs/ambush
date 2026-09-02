@@ -95,11 +95,11 @@ test("requires every frame emitter independently", () => {
     );
 });
 
-test("emits complete hexagons only and fades per ray", () => {
+test("emits complete graduations only and fades per ray", () => {
   const banner = buildTerminalBanner(112, 46, 17 / 8.4);
   assert.ok(banner);
   const field = layers(banner).get("field");
-  assert.equal(field.length % 8, 0);
+  assert.equal(field.length % 5, 0);
   assert.ok(field.some((cell) => cell.t < 0.1));
   assert.ok(field.some((cell) => cell.t > 0.5));
 });

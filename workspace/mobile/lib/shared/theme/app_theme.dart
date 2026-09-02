@@ -4,23 +4,26 @@ import 'package:flutter/services.dart';
 import 'app_colors.dart';
 import 'color_scheme.dart';
 import 'grid.dart';
+import 'quiet.dart';
 import 'text_theme.dart';
 
-/// Border radius constants matching desktop shadcn "New York" style.
-/// Desktop uses --radius: 0.625rem (10px) as base:
-///   lg = 10px, md = 8px, sm = 6px
+/// One machined chamfer, everywhere. Every surface in the product takes the
+/// same 2px corner: not square, which is the broadsheet look, and not rounded,
+/// which softens an instrument. Matches desktop, where the whole Tailwind
+/// radius scale resolves to `var(--radius)`.
 class Radii {
-  /// Small radius for compact UI elements.
-  static const double xs = 4.0;
-  static const double lg = 10.0;
-  static const double md = 8.0;
-  static const double sm = 6.0;
+  static const double chamfer = 2.0;
 
-  /// Shared strong radius for grouped rows, fields, and utility containers.
-  static const double container = 22.0;
-  static const double card = container; // Backwards-compatible card alias.
-  static const double popover = 20.0;
-  static const double dialog = 24.0; // desktop uses rounded-3xl for dialogs
+  static const double xs = chamfer;
+  static const double sm = chamfer;
+  static const double md = chamfer;
+  static const double lg = chamfer;
+
+  /// Grouped rows, fields, and utility containers.
+  static const double container = chamfer;
+  static const double card = chamfer;
+  static const double popover = chamfer;
+  static const double dialog = chamfer;
 
   /// Fully rounds pills, circles, and other capsule shapes.
   static const double full = 999.0;
@@ -29,16 +32,13 @@ class Radii {
 class AppTheme {
   static ThemeData light({
     ColorScheme? colorScheme,
+    QuietSurfaces? surfaces,
     Gradient? topSectionGradient,
   }) {
     final scheme = colorScheme ?? lightColorScheme;
-    final appColors = AppColors(
-      success: const Color(0xFF40A02B), // Catppuccin Latte Green — universal
-      warning: const Color(0xFFDF8E1D), // Latte Yellow
-      accent: scheme.tertiary,
-      huddleDrawerSurface: const Color(0xFF000000),
-      huddleControlSurface: const Color(0xFF333333),
-      onHuddleDrawer: const Color(0xFFFAFAFA),
+    final appColors = _appColors(
+      scheme,
+      colorScheme == null ? quietDay : surfaces,
       topSectionGradient: topSectionGradient,
     );
 
@@ -53,21 +53,13 @@ class AppTheme {
 
   static ThemeData dark({
     ColorScheme? colorScheme,
+    QuietSurfaces? surfaces,
     Gradient? topSectionGradient,
   }) {
     final scheme = colorScheme ?? darkColorScheme;
-    final appColors = AppColors(
-      success: const Color(
-        0xFFA6DA95,
-      ), // Catppuccin Macchiato Green — universal
-      warning: const Color(0xFFEED49F), // Macchiato Yellow
-      accent: scheme.tertiary,
-      huddleDrawerSurface: scheme.primaryContainer,
-      huddleControlSurface: Color.alphaBlend(
-        scheme.onPrimaryContainer.withValues(alpha: 0.18),
-        scheme.primaryContainer,
-      ),
-      onHuddleDrawer: scheme.onPrimaryContainer,
+    final appColors = _appColors(
+      scheme,
+      colorScheme == null ? quietNight : surfaces,
       topSectionGradient: topSectionGradient,
     );
 
@@ -77,6 +69,31 @@ class AppTheme {
       brightness: Brightness.dark,
       statusBarIconBrightness: Brightness.light,
       statusBarBrightness: Brightness.dark,
+    );
+  }
+
+  /// The roles the color scheme has no name for.
+  ///
+  /// A theme that declares [surfaces] hands them over verbatim. A borrowed
+  /// syntax theme has no index and no plate, so those roles are filled from
+  /// the scheme it derived: consequence borrows its error color, and the
+  /// raised band and graduation sit between the surfaces it does have.
+  static AppColors _appColors(
+    ColorScheme scheme,
+    QuietSurfaces? surfaces, {
+    Gradient? topSectionGradient,
+  }) {
+    return AppColors(
+      index: surfaces?.index ?? scheme.error,
+      grad: surfaces?.grad ?? scheme.outline,
+      plateHigh: surfaces?.plateHigh ?? scheme.surfaceContainerHigh,
+      inkMid:
+          surfaces?.inkMid ??
+          Color.lerp(scheme.onSurfaceVariant, scheme.onSurface, 0.5)!,
+      huddleDrawerSurface: scheme.surface,
+      huddleControlSurface: scheme.surfaceContainerHighest,
+      onHuddleDrawer: scheme.onSurface,
+      topSectionGradient: topSectionGradient,
     );
   }
 
@@ -93,7 +110,8 @@ class AppTheme {
       splashFactory: NoSplash.splashFactory,
       scaffoldBackgroundColor: scheme.surface,
       extensions: [appColors],
-      fontFamily: 'Inter',
+      fontFamily: 'IBM Plex Sans',
+      fontFamilyFallback: const ['Helvetica Neue', 'Helvetica', 'Arial'],
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
@@ -133,7 +151,7 @@ class AppTheme {
         }),
       ),
 
-      // Buttons: desktop uses rounded-md (8px), h-9 (36px), px-4 (16px)
+      // Buttons: h-9 (36px), px-4 (16px)
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: scheme.primary,
@@ -191,7 +209,7 @@ class AppTheme {
         ),
       ),
 
-      // Cards: desktop uses rounded-lg (10px), flat, no elevation
+      // Cards are flat chrome: a lightness step and a hairline, no elevation.
       cardTheme: CardThemeData(
         color: scheme.surfaceContainerHighest,
         margin: EdgeInsets.zero,
@@ -201,7 +219,7 @@ class AppTheme {
         ),
       ),
 
-      // Inputs: desktop uses outlined style, rounded-md (8px), h-9 (36px)
+      // Inputs: outlined, h-9 (36px)
       inputDecorationTheme: InputDecorationTheme(
         filled: false,
         border: OutlineInputBorder(
@@ -231,7 +249,7 @@ class AppTheme {
         isDense: true,
       ),
 
-      // Dialogs: desktop uses rounded-3xl (24px), custom overlay
+      // Dialogs: hairline edge, no elevation
       dialogTheme: DialogThemeData(
         backgroundColor: scheme.surface,
         elevation: 0,
@@ -250,10 +268,11 @@ class AppTheme {
         ),
       ),
 
+      // A track's spent portion is a graduation, never information.
       progressIndicatorTheme: ProgressIndicatorThemeData(
         strokeWidth: 2,
         color: scheme.primary,
-        circularTrackColor: scheme.onSurfaceVariant.withValues(alpha: 0.2),
+        circularTrackColor: appColors.grad,
       ),
 
       listTileTheme: ListTileThemeData(
@@ -270,7 +289,6 @@ class AppTheme {
         ),
       ),
 
-      // Chips: desktop uses rounded-sm (6px)
       chipTheme: ChipThemeData(
         labelStyle: textTheme.bodySmall?.copyWith(color: scheme.secondary),
         // M3 resolves the chip container via `color` (WidgetStateProperty);
@@ -290,11 +308,11 @@ class AppTheme {
         labelPadding: EdgeInsets.zero,
       ),
 
-      // Popups/menus share the elevated 20px mobile popover treatment.
+      // Popups and menus sit on the lamplit plate, a step above the room.
+      // Separation is the hairline, never a blur.
       popupMenuTheme: PopupMenuThemeData(
-        color: scheme.surface.withValues(alpha: 0.98),
-        elevation: 8,
-        shadowColor: scheme.shadow.withValues(alpha: 0.18),
+        color: scheme.surfaceContainerHigh,
+        elevation: 0,
         surfaceTintColor: Colors.transparent,
         textStyle: textTheme.labelLarge?.copyWith(color: scheme.onSurface),
         labelTextStyle: WidgetStatePropertyAll(
@@ -302,14 +320,11 @@ class AppTheme {
         ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Radii.popover),
-          side: BorderSide(
-            color: Colors.black.withValues(alpha: 0.04),
-            width: 1,
-          ),
+          side: BorderSide(color: scheme.outline),
         ),
       ),
 
-      // Bottom sheet: match dialog radius
+      // Bottom sheet: match the dialog chamfer
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: scheme.surface,
         elevation: 0,
@@ -320,7 +335,7 @@ class AppTheme {
         ),
       ),
 
-      // Tooltips: desktop uses rounded-md, primary bg
+      // Tooltips: an ink fill with a room-colored label
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
           color: scheme.primary,

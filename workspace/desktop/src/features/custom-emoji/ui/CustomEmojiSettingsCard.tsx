@@ -148,7 +148,7 @@ export function CustomEmojiSettingsCard() {
               <div className="min-w-0 flex-[1_1_22rem]">
                 <h4 className="text-sm font-medium">Upload an image</h4>
                 <p
-                  className="text-sm font-normal text-muted-foreground/70"
+                  className="text-sm font-normal text-muted-foreground"
                   data-settings-subcopy
                 >
                   Square images work best. GIF, PNG, JPEG, and WebP files are
@@ -195,7 +195,7 @@ export function CustomEmojiSettingsCard() {
               <div className="min-w-0 flex-[1_1_22rem]">
                 <h4 className="text-sm font-medium">Give it a name</h4>
                 <p
-                  className="text-sm font-normal text-muted-foreground/70"
+                  className="text-sm font-normal text-muted-foreground"
                   data-settings-subcopy
                 >
                   This is what you’ll type to add this emoji to messages and
@@ -228,7 +228,7 @@ export function CustomEmojiSettingsCard() {
                   </p>
                 ) : pendingUpload === null ? (
                   <p
-                    className="text-sm font-normal text-muted-foreground/70"
+                    className="text-sm font-normal text-muted-foreground"
                     data-settings-subcopy
                   >
                     Choose an image first; Ambush will suggest a name from the
@@ -236,7 +236,7 @@ export function CustomEmojiSettingsCard() {
                   </p>
                 ) : ownDuplicate ? (
                   <p
-                    className="text-sm font-normal text-muted-foreground/70"
+                    className="text-sm font-normal text-muted-foreground"
                     data-settings-subcopy
                   >
                     You already have :{normalized}: — saving will replace its

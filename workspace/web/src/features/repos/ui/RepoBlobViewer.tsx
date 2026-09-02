@@ -65,7 +65,6 @@ function CopyTextButton({ content }: { content: string }) {
     <Button
       variant="outline"
       size="sm"
-      className="border-black/10 bg-white text-black hover:bg-black/5 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(content);
@@ -95,12 +94,7 @@ function DownloadButton({
   const url = useObjectUrl(bytes, contentType);
   if (!url) return null;
   return (
-    <Button
-      asChild
-      variant="outline"
-      size="sm"
-      className="border-black/10 bg-white text-black hover:bg-black/5 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
-    >
+    <Button asChild variant="outline" size="sm">
       <a href={url} download={filename}>
         <Download className="h-4 w-4" />
         <span className="ml-2">Download</span>
@@ -114,7 +108,7 @@ function TextView({ content }: { content: string }) {
   // keyed children for an immutable text dump; not worth the linter dance for
   // v1. The browser handles wrapping/scrolling via `<pre>`.
   return (
-    <pre className="overflow-auto whitespace-pre rounded-lg border border-black/10 bg-white/50 p-4 font-mono text-sm leading-6 text-black dark:border-white/10 dark:bg-white/5 dark:text-white">
+    <pre className="overflow-auto whitespace-pre rounded-lg border border-border bg-secondary p-4 font-mono text-sm leading-6 text-foreground">
       {content}
     </pre>
   );
@@ -132,7 +126,7 @@ function ImageView({
   const url = useObjectUrl(bytes, contentType);
   if (!url) return null;
   return (
-    <div className="flex justify-center rounded-lg border border-black/10 bg-white/50 p-4 dark:border-white/10 dark:bg-white/5">
+    <div className="flex justify-center rounded-lg border border-border bg-secondary p-4">
       <img
         src={url}
         alt={filename}
@@ -162,7 +156,7 @@ function HtmlRunView({ doc }: { doc: string }) {
       title="Repository page (sandboxed)"
       srcDoc={doc}
       sandbox={RUN_SANDBOX}
-      className="h-[80vh] w-full rounded-lg border border-black/10 bg-white dark:border-white/10"
+      className="h-[80vh] w-full rounded-lg border border-border bg-secondary"
     />
   );
 }
@@ -181,7 +175,7 @@ function ViewerBody({
       return <TextView content={view.content} />;
     case "markdown":
       return (
-        <div className="prose prose-sm dark:prose-invert max-w-none rounded-lg border border-black/10 bg-white/50 p-4 dark:border-white/10 dark:bg-white/5">
+        <div className="prose prose-sm dark:prose-invert max-w-none rounded-lg border border-border bg-secondary p-4">
           <Markdown remarkPlugins={[remarkGfm]}>{view.content}</Markdown>
         </div>
       );
@@ -203,14 +197,14 @@ function ViewerBody({
       );
     case "binary":
       return (
-        <div className="rounded-lg border border-black/10 bg-white/50 p-6 text-sm text-black/60 dark:border-white/10 dark:bg-white/5 dark:text-white/60">
+        <div className="rounded-lg border border-border bg-secondary p-6 text-sm text-muted-foreground">
           Binary file — {formatBytes(view.sizeBytes)}. Use the Download button
           above to save it.
         </div>
       );
     case "too-large":
       return (
-        <div className="rounded-lg border border-black/10 bg-white/50 p-6 text-sm text-black/60 dark:border-white/10 dark:bg-white/5 dark:text-white/60">
+        <div className="rounded-lg border border-border bg-secondary p-6 text-sm text-muted-foreground">
           File is {formatBytes(view.sizeBytes)}, over the{" "}
           {formatBytes(view.limitBytes)} preview limit. Use the Download button
           above to save it.
@@ -261,7 +255,7 @@ export function RepoBlobPage() {
 
   if (ctxError) {
     return (
-      <div className="flex-1 bg-[#F3F3F3] px-4 py-8 text-black dark:bg-[#171717] dark:text-white">
+      <div className="flex-1 bg-background px-4 py-8 text-foreground">
         <BackLink repoId={repoId} preview={showMockBlob} />
         <p className="mt-4 text-sm text-destructive">
           Failed to load repository: {ctxError.message}
@@ -271,11 +265,11 @@ export function RepoBlobPage() {
   }
 
   return (
-    <div className="flex-1 bg-[#F3F3F3] px-4 py-8 text-black dark:bg-[#171717] dark:text-white">
+    <div className="flex-1 bg-background px-4 py-8 text-foreground">
       <BackLink repoId={repoId} preview={showMockBlob} />
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <FileText className="h-4 w-4 text-black/50 dark:text-white/50" />
+        <FileText className="h-4 w-4 text-muted-foreground" />
         <h1 className="min-w-0 truncate font-mono text-sm">{filepath}</h1>
         <div className="ml-auto flex items-center gap-2">
           {view &&
@@ -288,7 +282,6 @@ export function RepoBlobPage() {
             <Button
               variant={running ? "secondary" : "default"}
               size="sm"
-              className="bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
               onClick={() => setRunning((r) => !r)}
             >
               <Play className="h-4 w-4" />
@@ -314,7 +307,7 @@ export function RepoBlobPage() {
 
       <div className="mt-6">
         {ctxLoading || isLoading ? (
-          <div className="h-32 animate-pulse rounded-lg bg-black/10 dark:bg-white/10" />
+          <div className="h-32 animate-pulse rounded-lg bg-muted" />
         ) : error ? (
           <p className="text-sm text-destructive">
             Failed to load file: {(error as Error).message}
@@ -337,7 +330,7 @@ function BackLink({ repoId, preview }: { repoId: string; preview: boolean }) {
       to="/repos/$repoId"
       params={{ repoId }}
       search={preview ? { preview: "repositories" } : undefined}
-      className="inline-flex items-center gap-1 text-sm text-black/60 hover:text-black dark:text-white/60 dark:hover:text-white"
+      className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
     >
       <ArrowLeft className="h-4 w-4" />
       Back to repository

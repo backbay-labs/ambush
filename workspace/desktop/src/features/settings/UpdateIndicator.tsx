@@ -10,7 +10,7 @@ import { useUpdaterContext } from "./hooks/UpdaterProvider";
 import type { UpdateStatus } from "./hooks/use-updater";
 
 const indicatorButtonClass =
-  "relative text-muted-foreground/80 hover:bg-muted/60 hover:text-foreground";
+  "relative text-muted-foreground hover:bg-muted/60 hover:text-foreground";
 
 type IndicatorIcon = ComponentType<{
   "aria-hidden"?: boolean;
@@ -52,7 +52,7 @@ const variants: Record<
   ready: {
     Icon: RotateCw,
     label: "Update now",
-    badgeColor: "bg-emerald-500",
+    badgeColor: "bg-primary",
   },
 };
 

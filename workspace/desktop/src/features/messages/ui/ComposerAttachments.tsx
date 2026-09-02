@@ -71,7 +71,7 @@ export function DropZoneOverlay({ className }: { className?: string }) {
       )}
     >
       <span
-        className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background shadow-sm ring-1 ring-background/15"
+        className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background ring-1 ring-background/15"
         data-testid="drop-zone-label"
       >
         <UploadCloud aria-hidden="true" className="size-4" />
@@ -197,7 +197,7 @@ function ComposerSnapshotCard({
         <AttachmentActions className="ml-4">
           <AttachmentAction
             aria-label={`Remove ${displayName}`}
-            className="border-0 bg-transparent text-muted-foreground/70 shadow-none hover:text-foreground hover:shadow-none focus-visible:bg-muted focus-visible:ring-0"
+            className="border-0 bg-transparent text-muted-foreground shadow-none hover:text-foreground hover:shadow-none focus-visible:bg-muted focus-visible:ring-0"
             data-testid={`composer-${snapshotKind}-snapshot-remove`}
             onClick={() => onRemove(attachment.url)}
             title="Remove"

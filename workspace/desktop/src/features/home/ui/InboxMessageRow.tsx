@@ -115,7 +115,7 @@ export function InboxMessageRow({
   });
   const timestampNode = (
     <p
-      className="shrink-0 text-message-timestamp font-normal tabular-nums text-muted-foreground/55"
+      className="shrink-0 text-message-timestamp font-normal tabular-nums text-muted-foreground"
       data-testid="inbox-message-timestamp"
       title={message.fullTimestampLabel}
     >
@@ -182,7 +182,7 @@ export function InboxMessageRow({
             className="flex w-9 shrink-0 self-stretch items-start justify-end pt-0.5"
             title={message.fullTimestampLabel}
           >
-            <p className="shrink-0 cursor-default whitespace-nowrap text-message-timestamp font-normal tabular-nums text-muted-foreground/55 opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100">
+            <p className="shrink-0 cursor-default whitespace-nowrap text-message-timestamp font-normal tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100">
               {hoverTimestampLabel}
             </p>
           </div>

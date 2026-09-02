@@ -156,7 +156,7 @@ export function MessageModerationMenuItems({
 
       {channelId ? (
         <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
+          destructive
           data-testid={`message-kick-${message.id}`}
           disabled={isPending}
           onClick={() =>
@@ -187,7 +187,7 @@ export function MessageModerationMenuItems({
         </DropdownMenuItem>
       ) : (
         <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
+          destructive
           data-testid={`message-ban-${message.id}`}
           disabled={isPending}
           onClick={() =>

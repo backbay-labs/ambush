@@ -309,7 +309,7 @@ export function NewMessageScreen() {
       data-testid="new-message-page"
     >
       <header
-        className="relative z-40 shrink-0 cursor-default select-none border-b border-border/35 bg-background/80 px-5 py-2 backdrop-blur-md supports-backdrop-filter:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-backdrop-filter:bg-background/55"
+        className="relative z-40 shrink-0 cursor-default select-none border-b border-border/35 bg-background px-5 py-2"
         data-testid="new-message-header"
         data-tauri-drag-region
       >

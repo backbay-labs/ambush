@@ -30,13 +30,12 @@ export const topChromeInset = {
   afterTop: "after:top-0",
   /** Horizontal divider at the top edge of the content row. */
   divider:
-    "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-border/35 before:content-['']",
-  /** Shared header backdrop and bottom border below the inset row. */
-  headerBase:
-    "relative z-40 shrink-0 bg-background/80 backdrop-blur-md supports-backdrop-filter:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-backdrop-filter:bg-background/55",
+    "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-border before:content-['']",
+  /** Shared header surface and bottom border below the inset row. */
+  headerBase: "relative z-40 shrink-0 bg-background",
   /** Vertical pane divider starting at the top of the content row. */
   verticalDivider:
-    "after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-0 after:z-40 after:w-px after:bg-border/35 after:content-['']",
+    "after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-0 after:z-40 after:w-px after:bg-border after:content-['']",
 } as const;
 
 /** Tailwind class fragments for the global top chrome backdrop strip. */

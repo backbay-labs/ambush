@@ -22,9 +22,9 @@ type AppTopChromeProps = {
 // the row must not grow or shrink with the rem scale. Deliberate exception
 // to the rem-first rule.
 const TOP_CHROME_ICON_BUTTON_CLASS =
-  "h-[28px] w-[28px] rounded-[4px] text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground";
+  "h-[28px] w-[28px] rounded-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground";
 const HISTORY_ICON_BUTTON_CLASS =
-  "h-[28px] w-[24px] rounded-[4px] text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&_svg]:size-[16px]";
+  "h-[28px] w-[24px] rounded-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&_svg]:size-[16px]";
 
 function preventTopChromeWheel(event: WheelEvent) {
   event.preventDefault();

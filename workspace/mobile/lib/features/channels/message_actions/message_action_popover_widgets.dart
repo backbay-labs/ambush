@@ -138,6 +138,14 @@ class _MessageActionRow extends StatelessWidget {
     final foreground = action.destructive
         ? context.colors.error
         : context.colors.onSurface;
+    // The index rule marks the row whose action cannot be taken back.
+    final edge = action.destructive
+        ? BoxDecoration(
+            border: Border(
+              left: BorderSide(color: context.appColors.index, width: 3),
+            ),
+          )
+        : null;
     return Semantics(
       button: true,
       label: action.title,
@@ -148,30 +156,33 @@ class _MessageActionRow extends StatelessWidget {
           unawaited(HapticFeedback.lightImpact());
           onSelected(action.id);
         },
-        child: SizedBox(
-          height: height,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 32,
-                  child: Center(
-                    child: Icon(action.icon, size: 22, color: foreground),
-                  ),
-                ),
-                const SizedBox(width: Grid.twelve),
-                Expanded(
-                  child: Text(
-                    action.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: context.textTheme.bodyLarge?.copyWith(
-                      color: foreground,
+        child: DecoratedBox(
+          decoration: edge ?? const BoxDecoration(),
+          child: SizedBox(
+            height: height,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: Icon(action.icon, size: 22, color: foreground),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: Grid.twelve),
+                  Expanded(
+                    child: Text(
+                      action.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.textTheme.bodyLarge?.copyWith(
+                        color: foreground,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

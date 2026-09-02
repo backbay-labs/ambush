@@ -50,7 +50,7 @@ export function TeamIdentityCard({
           {isSymlink ? (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="flex h-6 w-6 items-center justify-center rounded-full border border-border/65 bg-background/90 text-muted-foreground shadow-xs">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full border border-border/65 bg-background/90 text-muted-foreground">
                   <Link className="h-3.5 w-3.5" />
                 </span>
               </TooltipTrigger>
@@ -60,7 +60,7 @@ export function TeamIdentityCard({
             </Tooltip>
           ) : null}
           {version ? (
-            <span className="rounded-full border border-border/65 bg-background/90 px-2 py-1 text-2xs font-medium leading-none text-muted-foreground shadow-xs">
+            <span className="rounded-full border border-border/65 bg-background/90 px-2 py-1 text-2xs font-medium leading-none text-muted-foreground">
               v{version}
             </span>
           ) : null}
@@ -69,7 +69,7 @@ export function TeamIdentityCard({
               <TooltipTrigger asChild>
                 <button
                   aria-label={`${teamName} description`}
-                  className="flex h-6 w-6 items-center justify-center rounded-full border border-border/65 bg-background/90 text-muted-foreground shadow-xs"
+                  className="flex h-6 w-6 items-center justify-center rounded-full border border-border/65 bg-background/90 text-muted-foreground"
                   type="button"
                 >
                   <Info className="h-3.5 w-3.5" />
@@ -120,7 +120,7 @@ function TeamAvatarRow({
   if (visiblePersonas.length === 0 && overflowCount === 0) {
     return (
       <div className="absolute inset-x-4 top-0 bottom-12 flex items-center justify-center">
-        <div className="flex h-24 w-24 items-center justify-center rounded-full border border-border/65 bg-background/80 text-muted-foreground shadow-xs">
+        <div className="flex h-24 w-24 items-center justify-center rounded-full border border-border/65 bg-background/80 text-muted-foreground">
           <Users className="h-9 w-9" />
         </div>
       </div>

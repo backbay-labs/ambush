@@ -211,9 +211,9 @@ export function ProjectsChannelsList({
                     }
                     icon={
                       channel ? (
-                        <Hash className="h-3.5 w-3.5 text-muted-foreground/70" />
+                        <Hash className="h-3.5 w-3.5 text-muted-foreground" />
                       ) : (
-                        <LockKeyhole className="h-3.5 w-3.5 text-muted-foreground/55" />
+                        <LockKeyhole className="h-3.5 w-3.5 text-muted-foreground" />
                       )
                     }
                     onClick={() => void goChannel(row.channelId)}

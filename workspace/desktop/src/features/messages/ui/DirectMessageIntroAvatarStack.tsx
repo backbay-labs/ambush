@@ -56,7 +56,7 @@ export function DirectMessageIntroAvatarStack({
           data-testid="message-dm-intro-avatar-stack-more"
           style={{ zIndex: stackItemCount }}
         >
-          <span className="flex h-[60px] w-[60px] items-center justify-center rounded-full bg-secondary font-semibold text-secondary-foreground shadow-xs">
+          <span className="flex h-[60px] w-[60px] items-center justify-center rounded-full bg-secondary font-semibold text-secondary-foreground">
             <span className="text-lg leading-none">+{hiddenCount}</span>
           </span>
         </div>

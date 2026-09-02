@@ -90,13 +90,16 @@ const ContextMenuItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & {
     inset?: boolean;
+    destructive?: boolean;
   }
->(({ className, inset, ...props }, ref) => (
+>(({ className, inset, destructive, ...props }, ref) => (
   <ContextMenuPrimitive.Item
     ref={ref}
     className={cn(
       "relative flex min-h-9 cursor-default select-none items-center gap-2 rounded-lg py-2 pl-2 pr-4 text-sm outline-hidden transition-colors focus:bg-muted/50 focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0",
       inset && "pl-8",
+      destructive &&
+        "ambush-index-rule rounded-l-none font-medium text-destructive focus:text-destructive",
       className,
     )}
     {...props}

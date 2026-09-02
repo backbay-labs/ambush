@@ -33,7 +33,7 @@ type NsecMaskedDisplayProps = {
 };
 
 export const ONBOARDING_KEY_FRAME_CLASS =
-  "w-full min-w-0 rounded-xl bg-white/50 px-8 py-6";
+  "w-full min-w-0 rounded-xl bg-card px-8 py-6";
 export const ONBOARDING_KEY_ROW_CLASS = "flex min-w-0 items-center gap-4";
 export const ONBOARDING_KEY_TEXT_CLASS = "ambush-onboarding-key-text";
 

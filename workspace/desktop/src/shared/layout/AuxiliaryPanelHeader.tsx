@@ -55,12 +55,11 @@ type AuxiliaryPanelTitleContentProps = React.ComponentProps<"h2">;
 type AuxiliaryPanelSurface = "default" | "soft" | "transparent";
 
 const AUXILIARY_PANEL_HEADER_HEIGHT_CLASS = "pt-13";
-export const AUXILIARY_PANEL_DEFAULT_SURFACE_CLASS =
-  "bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55";
+export const AUXILIARY_PANEL_DEFAULT_SURFACE_CLASS = "bg-background";
 const AUXILIARY_PANEL_CLOSE_LABEL = "Close panel";
 const AUXILIARY_PANEL_CLOSE_TEST_ID = "auxiliary-panel-close";
 const AUXILIARY_PANEL_RESIZE_BORDER_CLASS =
-  "after:absolute after:bottom-0 after:-left-px after:top-0 after:w-px after:bg-border/45 after:transition-colors peer-hover/auxiliary-panel-resize:after:bg-border/80 peer-focus-visible/auxiliary-panel-resize:after:bg-border/80";
+  "after:absolute after:bottom-0 after:-left-px after:top-0 after:w-px after:bg-border after:transition-colors peer-hover/auxiliary-panel-resize:after:bg-foreground peer-focus-visible/auxiliary-panel-resize:after:bg-foreground";
 
 export function getAuxiliaryPanelMode(
   isSplitLayout: boolean,
@@ -74,15 +73,9 @@ export function getAuxiliaryPanelMode(
 }
 
 function getAuxiliaryPanelSurfaceClass(surface: AuxiliaryPanelSurface) {
-  if (surface === "transparent") {
-    return "bg-transparent";
-  }
-
-  if (surface === "soft") {
-    return "bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35";
-  }
-
-  return AUXILIARY_PANEL_DEFAULT_SURFACE_CLASS;
+  return surface === "transparent"
+    ? "bg-transparent"
+    : AUXILIARY_PANEL_DEFAULT_SURFACE_CLASS;
 }
 
 type AuxiliaryPanelHeaderBackdropProps = {
@@ -152,7 +145,7 @@ export function AuxiliaryPanelHeader({
                       ? "min-h-11 px-3 py-1.5 text-left shadow-none"
                       : "min-h-13 px-5 py-2",
                     inset === "wide" && "sm:pl-6",
-                    bordered && "border-b border-border/35",
+                    bordered && "border-b border-border",
                     getAuxiliaryPanelSurfaceClass(effectiveSurface),
                   ),
           )}

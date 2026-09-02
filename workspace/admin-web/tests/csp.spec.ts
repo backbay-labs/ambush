@@ -80,7 +80,9 @@ test("the linked favicon loads under the admin csp", async ({ page }) => {
 
   await page.goto("/");
 
-  const href = await page.locator("link[rel=icon]").getAttribute("href");
+  const href = await page
+    .locator('link[rel=icon][type="image/svg+xml"]')
+    .getAttribute("href");
   expect(href).toBe("/favicon.svg");
 
   // Headless Chromium never issues the `<link rel=icon>` request itself, so

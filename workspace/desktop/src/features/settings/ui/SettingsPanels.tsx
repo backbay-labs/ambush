@@ -34,7 +34,11 @@ import { LocalArchiveSettingsCard } from "@/features/local-archive/ui/LocalArchi
 import { cn } from "@/shared/lib/cn";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { Badge } from "@/shared/ui/badge";
-import { isAmbushTheme, useTheme } from "@/shared/theme/ThemeProvider";
+import {
+  isAmbushTheme,
+  resolveEffectiveAccent,
+  useTheme,
+} from "@/shared/theme/ThemeProvider";
 import {
   LIGHT_THEMES,
   SYNTAX_THEMES,
@@ -245,13 +249,14 @@ function formatThemeLabel(name: string): string {
 
 /**
  * Derive a display label for a paired theme from its light variant name.
- * Strips mode-specific tokens (light, latte, dawn, lotus, ochin, lighter, plus)
- * from any position, handling names like "github-light-default", "light-plus",
+ * Strips mode-specific tokens (light, day, latte, dawn, lotus, ochin, lighter,
+ * plus) from any position, handling names like "github-light-default",
  * "material-theme-lighter", and "gruvbox-light-soft".
  */
 function pairedThemeLabel(lightName: string): string {
   const modeTokens = new Set([
     "light",
+    "day",
     "latte",
     "dawn",
     "lotus",
@@ -457,10 +462,11 @@ function ThemeSettingsCard() {
   const [selectedMode, setSelectedMode] = useState<AppearanceMode>(activeMode);
   const [themeStyleExpanded, setThemeStyleExpanded] = useState(false);
 
+  // Preview the accent the theme will actually apply, not the stored one.
   const getVars = (name: SyntaxThemeName) =>
     withAccentPreviewVars(
       previewVarsByTheme[name] ?? getThemeFallbackPreviewVars(name),
-      accentColor,
+      resolveEffectiveAccent(name, accentColor),
     );
 
   // All light themes (paired light + light-only)
@@ -670,7 +676,7 @@ function ThemeSettingsCard() {
             <div className="min-w-0">
               <p className="text-sm font-medium">Color mode</p>
               <p
-                className="text-sm font-normal text-muted-foreground/70"
+                className="text-sm font-normal text-muted-foreground"
                 data-settings-subcopy
               >
                 Follow your system or choose a light or dark appearance.
@@ -695,7 +701,7 @@ function ThemeSettingsCard() {
             <div className="min-w-0">
               <p className="text-sm font-medium">Theme style</p>
               <p
-                className="text-sm font-normal text-muted-foreground/70"
+                className="text-sm font-normal text-muted-foreground"
                 data-settings-subcopy
               >
                 Choose the colors used throughout Ambush.

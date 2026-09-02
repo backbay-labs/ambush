@@ -25,8 +25,8 @@ export function ProjectDetailUnavailableState(
   if (props.kind === "load-error") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-16 text-center">
-        <FolderGit2 className="h-10 w-10 text-muted-foreground/40" />
-        <p className="text-sm text-red-400">Failed to load project</p>
+        <FolderGit2 className="h-10 w-10 text-muted-foreground" />
+        <p className="text-sm text-destructive">Failed to load project</p>
         <div className="flex items-center gap-2">
           <Button onClick={props.onRetry} size="sm" variant="outline">
             Retry
@@ -43,7 +43,7 @@ export function ProjectDetailUnavailableState(
   if (props.kind === "not-found") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-16 text-center">
-        <FolderGit2 className="h-10 w-10 text-muted-foreground/40" />
+        <FolderGit2 className="h-10 w-10 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">
           This project could not be found.
         </p>
@@ -57,7 +57,7 @@ export function ProjectDetailUnavailableState(
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-16 text-center">
-      <FolderGit2 className="h-10 w-10 text-muted-foreground/40" />
+      <FolderGit2 className="h-10 w-10 text-muted-foreground" />
       <p className="text-sm font-medium text-foreground">
         {props.project.name}
       </p>

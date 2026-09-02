@@ -290,8 +290,8 @@ test.describe("restart-diff screenshots", () => {
     await expect(restartAction).toHaveText("Restart");
     await expect(restartAction).toHaveAttribute("aria-label", "Restart Agent");
     await expect(restartAction).toHaveClass(/bg-transparent/);
-    await expect(restartAction).toHaveClass(/text-amber-800/);
-    await expect(restartAction).toHaveClass(/dark:text-amber-400/);
+    await expect(restartAction).toHaveClass(/text-warning/);
+    await expect(restartAction).toHaveClass(/hover:bg-warning-bg/);
     await expect(restartAction.locator("svg")).toHaveCount(0);
     await expect(restartAction).toHaveCSS("width", "72px");
     await expect(restartAction).toHaveCSS("height", "36px");

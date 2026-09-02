@@ -14,7 +14,7 @@ const rules = [
 
 const overrides = new Set([
   // Avatar fallback initials — two glyphs inside an avatar disc.
-  "src/features/repos/ui/PubkeyAvatar.tsx:29",
+  "src/features/repos/ui/PubkeyAvatar.tsx:38",
   // Array window (first N pubkeys), not string truncation.
   "src/features/repos/ui/OrgSidebar.tsx:22",
 ]);

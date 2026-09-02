@@ -24,7 +24,7 @@ export function DayDivider({
       data-testid={testId}
       data-day-label={label}
     >
-      <p className="relative z-10 shrink-0 rounded-full border border-border/70 bg-background px-2.5 py-1 text-2xs font-medium tracking-[0.02em] text-muted-foreground/70">
+      <p className="relative z-10 shrink-0 rounded-full border border-border/70 bg-background px-2.5 py-1 text-2xs font-medium tracking-[0.02em] text-muted-foreground">
         {label}
       </p>
     </section>

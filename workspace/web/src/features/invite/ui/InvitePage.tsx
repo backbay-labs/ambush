@@ -9,6 +9,7 @@ import {
 import { hasNip07Provider } from "@/shared/lib/nostr-signer";
 import { relayWsUrl } from "@/shared/lib/relay-url";
 import { Button } from "@/shared/ui/button";
+import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -185,24 +186,19 @@ export function InvitePage({ code }: { code: string }) {
   }, [closeMacChoice, showMacChoice]);
 
   return (
-    <div
-      className="flex flex-1 flex-col items-center justify-center px-4 py-16 text-center"
-      style={{
-        backgroundImage: "linear-gradient(180deg, #D7D72E 0%, #D7E7F6 100%)",
-      }}
-    >
+    <div className="flex flex-1 flex-col items-center justify-center bg-background px-4 py-16 text-center">
       <div className="w-full max-w-xl space-y-4">
-        <div className="flex w-full flex-col items-center rounded-3xl bg-white px-6 py-10 sm:px-12 sm:py-12">
+        <div className="flex w-full flex-col items-center rounded-3xl bg-card px-6 py-10 text-card-foreground sm:px-12 sm:py-12">
           <div
-            className="h-12 w-12 overflow-hidden bg-black"
+            className="h-12 w-12 overflow-hidden bg-night"
             style={{ borderRadius: "22.37%" }}
           >
             <img alt="Ambush" className="h-full w-full" src={ambushAppIcon} />
           </div>
-          <h1 className="mt-4 text-2xl font-semibold tracking-tight text-black">
+          <h1 className="mt-4 text-2xl font-semibold tracking-tight">
             You&apos;re invited to
           </h1>
-          <p className="mt-9 font-mono text-lg text-black/70">{host}</p>
+          <p className="mt-9 font-mono text-lg text-muted-foreground">{host}</p>
 
           <div
             className={`grid w-full max-w-md overflow-hidden transition-[grid-template-rows,margin,opacity,transform] duration-[220ms] [transition-timing-function:cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none ${
@@ -228,7 +224,7 @@ export function InvitePage({ code }: { code: string }) {
           <div className="mt-9 w-full max-w-md space-y-2">
             {browserSigningAvailable ? (
               <Button
-                className="h-10 w-full bg-black text-white hover:bg-black/90 focus-visible:ring-black disabled:cursor-not-allowed disabled:bg-black/30 disabled:text-white/70"
+                className="h-10 w-full disabled:cursor-not-allowed"
                 disabled={disabled}
                 onClick={joinInBrowser}
               >
@@ -238,11 +234,8 @@ export function InvitePage({ code }: { code: string }) {
             {policy === null ? (
               <Button
                 asChild
-                className={`h-10 w-full ${
-                  browserSigningAvailable
-                    ? "border border-black bg-white text-black hover:bg-black/5"
-                    : "bg-black text-white hover:bg-black/90 focus-visible:ring-black"
-                }`}
+                variant={browserSigningAvailable ? "outline" : "default"}
+                className="h-10 w-full"
               >
                 <a
                   href={`ambush://join?relay=${encodeURIComponent(relay)}&code=${encodeURIComponent(code)}`}
@@ -252,11 +245,8 @@ export function InvitePage({ code }: { code: string }) {
               </Button>
             ) : (
               <Button
-                className={`h-10 w-full disabled:cursor-not-allowed disabled:bg-black/30 disabled:text-white/70 ${
-                  browserSigningAvailable
-                    ? "border border-black bg-white text-black hover:bg-black/5"
-                    : "bg-black text-white hover:bg-black/90 focus-visible:ring-black"
-                }`}
+                variant={browserSigningAvailable ? "outline" : "default"}
+                className="h-10 w-full disabled:cursor-not-allowed"
                 disabled={disabled}
                 onClick={openInvite}
               >
@@ -264,18 +254,22 @@ export function InvitePage({ code }: { code: string }) {
               </Button>
             )}
             {browserJoinError ? (
-              <p className="text-sm text-red-700" role="alert">
+              <p
+                className="flex items-center justify-center gap-1.5 text-sm text-foreground"
+                role="alert"
+              >
+                <AlertTriangle className="h-4 w-4 shrink-0" />
                 {browserJoinError}
               </p>
             ) : null}
           </div>
         </div>
-        <p className="flex h-[3.125rem] items-center justify-center rounded-2xl bg-white text-sm text-black/60">
+        <p className="flex h-[3.125rem] items-center justify-center rounded-2xl bg-card text-sm text-muted-foreground">
           Don&apos;t have the app?{" "}
           <a
             aria-expanded={needsMacChoice ? showMacChoice : undefined}
             aria-haspopup={needsMacChoice ? "dialog" : undefined}
-            className="ml-1 font-medium text-black underline-offset-4 hover:text-black/70 hover:underline focus-visible:underline"
+            className="ml-1 font-medium text-foreground underline-offset-4 hover:text-muted-foreground hover:underline focus-visible:underline"
             href={downloadUrl}
             ref={downloadTriggerRef}
             rel="noreferrer"
@@ -301,19 +295,19 @@ export function InvitePage({ code }: { code: string }) {
             if (event.currentTarget === event.target) closeMacChoice();
           }}
         >
-          <div className="w-full max-w-lg rounded-3xl bg-white p-7 text-black shadow-xl sm:p-9">
+          <div className="w-full max-w-lg rounded-3xl bg-card p-7 text-card-foreground shadow-xl sm:p-9">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight">
                   Which Mac do you have?
                 </h2>
-                <p className="mt-2 text-sm text-black/60">
+                <p className="mt-2 text-sm text-muted-foreground">
                   Choose based on when your Mac was released.
                 </p>
               </div>
               <button
                 aria-label="Close"
-                className="text-2xl leading-none text-black/60 hover:text-black"
+                className="text-2xl leading-none text-muted-foreground hover:text-foreground"
                 type="button"
                 onClick={closeMacChoice}
               >
@@ -323,7 +317,7 @@ export function InvitePage({ code }: { code: string }) {
             <div className="mt-6 grid gap-3">
               <a
                 aria-disabled={choosingMacDownload}
-                className="rounded-2xl border border-black p-5 text-black no-underline hover:bg-black hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                className="rounded-2xl border border-border p-5 no-underline hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-disabled:pointer-events-none aria-disabled:opacity-50"
                 href={AMBUSH_RELEASES_URL}
                 onClick={(event) =>
                   void chooseMacDownload(event, {
@@ -339,7 +333,7 @@ export function InvitePage({ code }: { code: string }) {
               </a>
               <a
                 aria-disabled={choosingMacDownload}
-                className="rounded-2xl border border-black p-5 text-black no-underline hover:bg-black hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                className="rounded-2xl border border-border p-5 no-underline hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-disabled:pointer-events-none aria-disabled:opacity-50"
                 href={AMBUSH_RELEASES_URL}
                 onClick={(event) =>
                   void chooseMacDownload(event, {
@@ -373,12 +367,12 @@ export function InvitePage({ code }: { code: string }) {
             if (event.currentTarget === event.target) setDocument(null);
           }}
         >
-          <div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 text-black shadow-xl sm:p-8">
+          <div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-card p-6 text-card-foreground shadow-xl sm:p-8">
             <div className="mb-6 flex items-start justify-between gap-4">
               <h2 className="text-xl font-semibold">{document.title}</h2>
               <button
                 aria-label="Close"
-                className="text-2xl leading-none text-black/60 hover:text-black"
+                className="text-2xl leading-none text-muted-foreground hover:text-foreground"
                 type="button"
                 onClick={() => setDocument(null)}
               >

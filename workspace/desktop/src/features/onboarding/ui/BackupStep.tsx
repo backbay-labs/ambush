@@ -206,7 +206,7 @@ export function BackupStep({
               data-testid="backup-option-panel"
             >
               <span className="text-lg font-medium">{storageTitle}</span>
-              <span className="mt-3 block text-sm leading-6 text-foreground/65">
+              <span className="mt-3 block text-sm leading-6 text-muted-foreground">
                 {storageDescription}
               </span>
             </div>
@@ -218,7 +218,7 @@ export function BackupStep({
               <span className="text-lg font-medium">
                 Saved in your password manager
               </span>
-              <span className="mt-3 block text-sm leading-6 text-foreground/65">
+              <span className="mt-3 block text-sm leading-6 text-muted-foreground">
                 Copy your identity key, then save it in a password manager like
                 1Password.
               </span>
@@ -255,7 +255,7 @@ export function BackupStep({
               <span className="text-lg font-medium">
                 Locked in a backup file
               </span>
-              <span className="mt-3 block text-sm leading-6 text-foreground/65">
+              <span className="mt-3 block text-sm leading-6 text-muted-foreground">
                 Create a backup file and choose a password you can remember.
                 You’ll need both to restore your account.
               </span>

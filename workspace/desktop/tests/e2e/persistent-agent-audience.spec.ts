@@ -1365,7 +1365,7 @@ test("reduced motion removes addressed agents without spatial animation", async 
   await expect(removeButton).toHaveCount(0);
 });
 
-for (const theme of ["ambush", "ambush-dark"]) {
+for (const theme of ["ambush-day", "ambush-night"]) {
   test(`captures the mention-button placement in ${theme}`, async ({
     page,
   }) => {
@@ -1401,7 +1401,7 @@ test("the mention-button placement fits the narrow composer", async ({
 });
 
 test("captures the lightweight auto-pin popover", async ({ page }) => {
-  await seedTheme(page, "ambush-dark");
+  await seedTheme(page, "ambush-night");
   await installAudienceFixtures(page);
   await openGeneral(page);
 

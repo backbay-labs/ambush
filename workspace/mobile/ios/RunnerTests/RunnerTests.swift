@@ -338,7 +338,7 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(NativeAttachmentMenuLayout.labelTextStyle, .title3)
   }
 
-  func testNativeAttachmentMenuUsesInterAndSharedPopoverChrome() {
+  func testNativeAttachmentMenuUsesPlexAndSharedPopoverChrome() {
     let font = NativeAttachmentMenuTypography.font(
       forTextStyle: NativeAttachmentMenuLayout.labelTextStyle
     )
@@ -350,8 +350,8 @@ class RunnerTests: XCTestCase {
     )
     let titleLabel = button.subviews.compactMap { $0 as? UILabel }.first
 
-    XCTAssertTrue(font.fontName.hasPrefix("Inter"))
-    XCTAssertTrue(titleLabel?.font.fontName.hasPrefix("Inter") == true)
+    XCTAssertTrue(font.fontName.hasPrefix("IBMPlexSans"))
+    XCTAssertTrue(titleLabel?.font.fontName.hasPrefix("IBMPlexSans") == true)
     XCTAssertEqual(NativeAttachmentPopoverStyle.cornerRadius, 20)
     XCTAssertEqual(NativeAttachmentPopoverStyle.borderWidth, 1)
     XCTAssertEqual(NativeAttachmentPopoverStyle.shadowOpacity, 0.18)

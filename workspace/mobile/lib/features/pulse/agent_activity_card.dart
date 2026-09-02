@@ -54,13 +54,10 @@ class AgentActivityCard extends HookConsumerWidget {
                       child: Container(
                         width: 10,
                         height: 10,
-                        decoration: BoxDecoration(
-                          color: context.appColors.success,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: context.colors.surface,
-                            width: 1.5,
-                          ),
+                        decoration: statusMarkDecoration(
+                          context,
+                          StatusMark.filled,
+                          separator: context.colors.surface,
                         ),
                       ),
                     ),

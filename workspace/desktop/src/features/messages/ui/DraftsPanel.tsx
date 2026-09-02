@@ -390,7 +390,7 @@ function DraftRow({
             >
               {channelLabel}
             </span>
-            <span className="shrink-0 text-muted-foreground/70">
+            <span className="shrink-0 text-muted-foreground">
               {formatDraftCreatedAt(entry.draft)}
             </span>
             {isOrphaned ? (
@@ -413,7 +413,7 @@ function DraftRow({
       </button>
 
       {/* Hover action buttons: edit / delete / send (order per spec) */}
-      <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-background/95 p-0.5 opacity-0 shadow-xs ring-1 ring-border/70 transition-opacity group-hover/draft-row:pointer-events-auto group-hover/draft-row:opacity-100 group-focus-within/draft-row:pointer-events-auto group-focus-within/draft-row:opacity-100">
+      <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-background/95 p-0.5 opacity-0 ring-1 ring-border/70 transition-opacity group-hover/draft-row:pointer-events-auto group-hover/draft-row:opacity-100 group-focus-within/draft-row:pointer-events-auto group-focus-within/draft-row:opacity-100">
         {isSent ? null : (
           <>
             <DraftRowActionButton
@@ -635,7 +635,7 @@ export function DraftsPanel({
   if (items.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-        <FileText className="h-8 w-8 text-muted-foreground/50" />
+        <FileText className="h-8 w-8 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">No drafts</p>
       </div>
     );

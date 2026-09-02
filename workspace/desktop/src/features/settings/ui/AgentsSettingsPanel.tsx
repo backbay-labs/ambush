@@ -34,7 +34,7 @@ export function AgentsSettingsPanel() {
                 Automatically mention agents
               </label>
               <p
-                className="mt-0.5 text-sm text-muted-foreground/70"
+                className="mt-0.5 text-sm text-muted-foreground"
                 data-settings-subcopy
               >
                 After you mention them once

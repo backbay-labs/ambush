@@ -264,10 +264,10 @@ test("repository pages show a centered Ambush loader while fetching", async ({
   await expect(
     loader.getByRole("img", { name: "Loading repository" }),
   ).toBeVisible();
-  const animatedMark = loader.locator(".ambush-logo__mark");
+  const animatedMark = loader.locator(".ambush-index__seg--live");
   await expect(animatedMark).toHaveCSS(
     "animation-name",
-    "ambush-logo-scale-pulse",
+    "ambush-index-engrave-live",
   );
   await expect(animatedMark).toHaveCSS("opacity", "1");
   await expect(loader).toHaveCSS("justify-content", "center");
@@ -356,7 +356,7 @@ test("projects v3 workspace screenshot states", async ({ page }) => {
     "project-context-card",
   );
   await expect(projectContextCard).toBeVisible();
-  await expect(projectContextCard).toHaveCSS("border-radius", "16px");
+  await expect(projectContextCard).toHaveCSS("border-radius", "2px");
   const repositoryHeading = repositoryActionsPanel.getByRole("heading", {
     name: "ambush",
     exact: true,
@@ -492,7 +492,7 @@ test("projects v3 workspace screenshot states", async ({ page }) => {
         (element) => getComputedStyle(element).backdropFilter,
       ),
     )
-    .not.toBe("none");
+    .toBe("none");
   const projectPanelLayout = page.getByTestId("project-panel-layout");
   const projectContentPod = page.getByTestId("project-content-pod");
   const appContentSurface = page
@@ -505,7 +505,7 @@ test("projects v3 workspace screenshot states", async ({ page }) => {
     "rgba(0, 0, 0, 0)",
   );
   await expect(appContentSurface).toHaveCSS("border-radius", "0px");
-  await expect(projectContentPod).toHaveCSS("border-radius", "16px");
+  await expect(projectContentPod).toHaveCSS("border-radius", "2px");
   await expect(projectContentPod).toHaveCSS("box-shadow", "none");
   await expect(repositoryActionsPanel).toHaveCSS("border-radius", "0px");
   await expect(repositoryActionsPanel).toHaveCSS(
@@ -517,10 +517,10 @@ test("projects v3 workspace screenshot states", async ({ page }) => {
     "background-color",
     "rgba(0, 0, 0, 0)",
   );
-  await expect(projectContentPod).toHaveCSS("border-radius", "16px");
-  await expect(projectContextCard).toHaveCSS("border-radius", "16px");
+  await expect(projectContentPod).toHaveCSS("border-radius", "2px");
+  await expect(projectContextCard).toHaveCSS("border-radius", "2px");
   await page.evaluate(() => document.documentElement.classList.remove("dark"));
-  await expect(projectContextCard).toHaveCSS("border-radius", "16px");
+  await expect(projectContextCard).toHaveCSS("border-radius", "2px");
   await expect(projectContextCard).toHaveCSS("border-width", "0px");
   await expect(projectContextCard).toHaveCSS("box-shadow", "none");
   const [
@@ -660,7 +660,7 @@ test("projects v3 workspace screenshot states", async ({ page }) => {
   await expect(agentChatPanel).toBeVisible();
   await expect(projectPanelLayout).toHaveAttribute("data-detached", "false");
   await expect(projectContentPod).toHaveCount(0);
-  await expect(appContentSurface).toHaveCSS("border-radius", "16px");
+  await expect(appContentSurface).toHaveCSS("border-radius", "2px");
   await expect
     .poll(() =>
       appContentSurface.evaluate(
@@ -878,7 +878,7 @@ test("projects v3 workspace screenshot states", async ({ page }) => {
   ).toBeVisible();
   await expect(
     workspacePanel.getByTestId("project-repository-entry-icon").first(),
-  ).toHaveCSS("border-radius", "8px");
+  ).toHaveCSS("border-radius", "2px");
   const repositoryEntryCell = workspacePanel
     .getByTestId("project-repository-entry-row")
     .first()
@@ -1021,7 +1021,7 @@ test("projects v3 workspace screenshot states", async ({ page }) => {
   expect(newIssueBounds?.x).toBeGreaterThan(issuesHeadingBounds?.x ?? 0);
   const issueRow = page.getByTestId("project-issue-row").first();
   await expect(issueRow).toBeVisible({ timeout: 10_000 });
-  await expect(issueRow).toHaveCSS("border-radius", "8px");
+  await expect(issueRow).toHaveCSS("border-radius", "2px");
   const [issueHeaderBounds, firstIssueBounds, secondIssueBounds] =
     await Promise.all([
       page.getByTestId("project-work-item-group-header").first().boundingBox(),

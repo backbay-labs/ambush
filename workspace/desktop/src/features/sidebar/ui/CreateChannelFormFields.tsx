@@ -25,7 +25,7 @@ import { ChannelTypeSettings } from "@/features/channels/ui/ChannelTypeSettings"
 import type { CreateChannelFormState } from "@/features/sidebar/lib/useCreateChannelForm";
 
 const CREATE_LABEL_OPTIONAL_CLASS =
-  "ml-1 text-xs font-normal text-muted-foreground/50";
+  "ml-1 text-xs font-normal text-muted-foreground";
 const NO_TEMPLATE_VALUE = "__no-template__";
 
 export const CREATE_CHANNEL_FORM_ID = "create-channel-form";
@@ -170,7 +170,7 @@ export function CreateChannelFormFields({
               <span className="truncate text-right">
                 {selectedTemplate?.name ?? "None"}
               </span>
-              <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent

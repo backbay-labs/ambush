@@ -421,15 +421,15 @@ class _ToolItemWidget extends HookWidget {
   BuildContext context,
 ) {
   if (isError || status == ToolStatus.failed) {
-    return (context.colors.error, 'Error', LucideIcons.circleX);
+    return (context.colors.onSurface, 'Error', LucideIcons.circleX);
   }
   if (status == ToolStatus.completed) {
-    return (context.appColors.success, 'Done', LucideIcons.circleCheck);
+    return (context.colors.onSurface, 'Done', LucideIcons.circleCheck);
   }
   if (status == ToolStatus.pending) {
     return (context.colors.onSurfaceVariant, 'Pending', LucideIcons.circleDot);
   }
-  return (context.appColors.warning, 'Running', LucideIcons.clock3);
+  return (context.appColors.inkMid, 'Running', LucideIcons.clock3);
 }
 
 String _formatToolName(String toolName) {

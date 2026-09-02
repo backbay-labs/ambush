@@ -146,7 +146,7 @@ export function TeamsSection({
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
+                        destructive
                         disabled={isPending}
                         onClick={() => onDelete(team)}
                       >

@@ -6,8 +6,8 @@ type ComposerDockGlassBackdropProps = {
 };
 
 /**
- * Applies the composer dock's shared blur without adding color or layout.
- * Reuse it for composer-adjacent surfaces that need the same glass treatment.
+ * Applies the composer dock's shared opaque fill without adding layout.
+ * Reuse it for composer-adjacent surfaces that need the same dock treatment.
  */
 export function ComposerDockGlassBackdrop({
   className,
@@ -16,10 +16,7 @@ export function ComposerDockGlassBackdrop({
   return (
     <div
       aria-hidden="true"
-      className={cn(
-        "pointer-events-none backdrop-blur-md dark:backdrop-blur-xl",
-        className,
-      )}
+      className={cn("pointer-events-none bg-background", className)}
       data-testid={testId}
     />
   );
@@ -30,7 +27,7 @@ type ComposerDockBackdropProps = {
 };
 
 /**
- * Owns the dock's stable backdrop blur separately from the resizing composer.
+ * Owns the dock's stable backdrop fill separately from the resizing composer.
  * An opaque rail mask covers the portion released for activity content.
  */
 export function ComposerDockBackdrop({

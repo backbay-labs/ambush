@@ -182,10 +182,7 @@ export function ChannelTemplatesSettingsCard() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={handleDelete}
-            >
+            <AlertDialogAction variant="destructive" onClick={handleDelete}>
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -222,14 +219,14 @@ function TemplateRow({
         </div>
         {template.description ? (
           <p
-            className="mt-0.5 truncate text-sm font-normal text-muted-foreground/70"
+            className="mt-0.5 truncate text-sm font-normal text-muted-foreground"
             data-settings-subcopy
           >
             {template.description}
           </p>
         ) : null}
         <div
-          className="mt-1 flex items-center gap-3 text-xs text-muted-foreground/70"
+          className="mt-1 flex items-center gap-3 text-xs text-muted-foreground"
           data-settings-subcopy
         >
           {personaCount > 0 ? (
@@ -274,10 +271,7 @@ function TemplateRow({
             Duplicate
           </DropdownMenuItem>
           {!template.isBuiltin ? (
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onClick={onDelete}
-            >
+            <DropdownMenuItem destructive onClick={onDelete}>
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
             </DropdownMenuItem>
@@ -541,10 +535,7 @@ export function TemplateFormDialog({
               rows={4}
               value={canvasTemplate}
             />
-            <p
-              className="text-xs text-muted-foreground/70"
-              data-settings-subcopy
-            >
+            <p className="text-xs text-muted-foreground" data-settings-subcopy>
               Use {"{channel.name}"} and {"{template.name}"} as placeholders.
             </p>
           </div>
@@ -619,7 +610,7 @@ function TemplateTeamSelector({
       <div>
         <div className="text-sm font-medium">Teams</div>
         <p
-          className="text-sm font-normal text-muted-foreground/70"
+          className="text-sm font-normal text-muted-foreground"
           data-settings-subcopy
         >
           Select teams to include in this template.
@@ -697,7 +688,7 @@ function RuntimeAssignments({
       <div>
         <div className="text-sm font-medium">Runtimes</div>
         <p
-          className="text-sm font-normal text-muted-foreground/70"
+          className="text-sm font-normal text-muted-foreground"
           data-settings-subcopy
         >
           Choose which runtime to use for each agent.
@@ -774,7 +765,7 @@ function RuntimeRow({
         <span className="truncate text-sm">{label}</span>
       </div>
       <select
-        className="h-7 rounded-md border border-input bg-background px-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+        className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         value={value}

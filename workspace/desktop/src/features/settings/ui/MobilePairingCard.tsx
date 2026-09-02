@@ -76,7 +76,7 @@ function PairingStepIndicator({
       className={cn(
         "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-base font-semibold transition-[background-color,color] duration-[250ms] ease-in-out motion-reduce:transition-none",
         complete
-          ? "bg-green-600 text-white"
+          ? "bg-primary text-primary-foreground"
           : "bg-secondary text-secondary-foreground",
       )}
       data-completed={complete ? "true" : "false"}
@@ -123,7 +123,7 @@ function PairingSteps({ step }: { step: PairingStep }) {
         <div className="min-w-0 pt-0.5">
           <p className="text-base font-medium">Scan QR code</p>
           <p
-            className="mt-1 text-sm text-muted-foreground/70"
+            className="mt-1 text-sm text-muted-foreground"
             data-settings-subcopy
           >
             Open Ambush on your mobile device and scan the code shown here.
@@ -140,7 +140,7 @@ function PairingSteps({ step }: { step: PairingStep }) {
         <div className="min-w-0 pt-0.5">
           <p className="text-base font-medium">Confirm mobile code</p>
           <p
-            className="mt-1 text-sm text-muted-foreground/70"
+            className="mt-1 text-sm text-muted-foreground"
             data-settings-subcopy
           >
             Check that the six-digit code matches on both devices, then confirm
@@ -163,7 +163,7 @@ function PairingSteps({ step }: { step: PairingStep }) {
             {isPaired ? "Paired" : "Pair your mobile app"}
           </p>
           <p
-            className="mt-1 text-sm text-muted-foreground/70"
+            className="mt-1 text-sm text-muted-foreground"
             data-settings-subcopy
           >
             {isPaired
@@ -517,8 +517,8 @@ export function MobilePairingCard({
                 )
               ) : step === "done" ? (
                 <div className="flex flex-col items-center gap-3 text-center">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-                    <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent">
+                    <Check className="h-6 w-6 text-accent-foreground" />
                   </div>
                   <p className="text-base font-medium">Paired</p>
                 </div>

@@ -171,7 +171,7 @@ class NoteCard extends HookConsumerWidget {
                           ? Icons.favorite
                           : LucideIcons.heart,
                       label: effectiveCount > 0 ? '$effectiveCount' : null,
-                      color: effectiveUpvoted ? Colors.redAccent : null,
+                      color: effectiveUpvoted ? context.colors.onSurface : null,
                       onTap: () async {
                         final next = !effectiveUpvoted;
                         pendingUpvote.value = next;

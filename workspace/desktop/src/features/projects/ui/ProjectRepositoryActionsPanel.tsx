@@ -101,7 +101,7 @@ function RepositoryPanelSection({
       data-testid={testId}
     >
       {title ? (
-        <h3 className="flex h-7 min-w-0 items-center truncate text-sm font-normal text-muted-foreground/70">
+        <h3 className="flex h-7 min-w-0 items-center truncate text-sm font-normal text-muted-foreground">
           {title}
         </h3>
       ) : null}
@@ -238,7 +238,7 @@ export function ProjectRepositoryActionsPanel({
               />
             ) : (
               <>
-                <h2 className="min-w-0 truncate text-sm font-normal text-muted-foreground/70">
+                <h2 className="min-w-0 truncate text-sm font-normal text-muted-foreground">
                   {selectedIssue?.title ??
                     selectedPullRequest?.title ??
                     repository.name}

@@ -1,40 +1,35 @@
-import 'dart:math' show min;
-
 import 'package:flutter/material.dart';
 
-/// The Ambush mark at a caller-controlled wing position.
+/// The Ambush mark: an index rule stepped once, at the instant its state
+/// changed.
 ///
-/// The geometry matches the desktop loading bee. Callers drive the wings
-/// themselves, which lets one painter serve both the tap-to-flutter mark
-/// ([TappableAmbushLogoMotion]) and the pull-to-refresh indicator
-/// ([AmbushRefreshIndicator]).
+/// A single vertical rule runs the height of the frame and, at one instant,
+/// displaces sideways by exactly its own width. Above the step is the part
+/// still running; below it is the part already spent. Callers drive how far
+/// each segment has been inked in, which lets one painter serve the static
+/// mark and the pull-to-refresh indicator.
+///
+/// Inside the app the mark is furniture: it paints in one [color] rather than
+/// the index hue, because a warm stroke here would say something is undecided
+/// when nothing is.
 class AmbushLogoMotion extends StatelessWidget {
-  /// The rendered width of the complete bee mark.
-  ///
-  /// Height follows from the mark's 466:309 aspect ratio.
+  /// The rendered width of the mark's square frame.
   final double width;
 
-  /// The color used for the bee silhouette, wings, and pupils.
+  /// The color of both segments.
   final Color color;
 
-  /// How far the wings are tucked toward the body, from 0 to 1.
-  ///
-  /// 0 renders the wings fully spread; 1 renders them at their innermost
-  /// tuck. Callers animate this to flap the wings.
-  final double flapAmount;
+  /// How far the live segment has been inked, from 0 to 1.
+  final double liveProgress;
 
-  /// How far the pupils have grown, from 0 to 1, or null for cutout eyes.
-  ///
-  /// Only the pull-to-refresh treatment sets this. Leaving it null preserves
-  /// the mark's ordinary cutout eyes; a non-null value fills them in, with 1
-  /// drawing the pupils at full size.
-  final double? eyeProgress;
+  /// How far the spent segment has been inked, from 0 to 1.
+  final double spentProgress;
 
   const AmbushLogoMotion({
     required this.width,
     required this.color,
-    required this.flapAmount,
-    this.eyeProgress,
+    this.liveProgress = 1,
+    this.spentProgress = 1,
     super.key,
   });
 
@@ -42,116 +37,86 @@ class AmbushLogoMotion extends StatelessWidget {
   Widget build(BuildContext context) {
     return RepaintBoundary(
       child: CustomPaint(
-        size: Size(width, width * 309 / 466),
-        painter: _AmbushLogoMotionPainter(
+        size: Size.square(width),
+        painter: _AmbushMarkPainter(
           color: color,
-          flapAmount: flapAmount,
-          eyeProgress: eyeProgress,
+          liveProgress: liveProgress,
+          spentProgress: spentProgress,
         ),
       ),
     );
   }
 }
 
-class _AmbushLogoMotionPainter extends CustomPainter {
+class _AmbushMarkPainter extends CustomPainter {
   final Color color;
-  final double flapAmount;
-  final double? eyeProgress;
+  final double liveProgress;
+  final double spentProgress;
 
-  const _AmbushLogoMotionPainter({
+  const _AmbushMarkPainter({
     required this.color,
-    required this.flapAmount,
-    this.eyeProgress,
+    required this.liveProgress,
+    required this.spentProgress,
   });
+
+  // The construction: a 256-unit square on a module of 8, stroke 64. The two
+  // segments overlap by 16 so the rule reads as one rule displaced rather than
+  // as two bars.
+  static const _live = Rect.fromLTWH(64, 0, 64, 152);
+  static const _spent = Rect.fromLTWH(128, 136, 64, 120);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final scale = min(size.width / 466, size.height / 309);
-    final renderedWidth = 466 * scale;
-    final renderedHeight = 309 * scale;
+    final scale = size.shortestSide / 256;
+    final paint = Paint()..color = color;
 
     canvas
       ..save()
       ..translate(
-        (size.width - renderedWidth) / 2,
-        (size.height - renderedHeight) / 2,
+        (size.width - (256 * scale)) / 2,
+        (size.height - (256 * scale)) / 2,
       )
       ..scale(scale);
 
-    final wingRadiusX = 91.7 * (1 - (0.38 * flapAmount));
-    final wingTranslation = 30 * flapAmount;
-    final leftWing = Path()
-      ..addOval(
-        Rect.fromCenter(
-          center: Offset(91.7 + wingTranslation, 154.5),
-          width: wingRadiusX * 2,
-          height: 183.4,
-        ),
+    // Each segment inks down from its own top edge.
+    void segment(Rect rect, double progress) {
+      final inked = progress.clamp(0.0, 1.0);
+      if (inked <= 0) return;
+      canvas.drawRect(
+        Rect.fromLTWH(rect.left, rect.top, rect.width, rect.height * inked),
+        paint,
       );
-    final rightWing = Path()
-      ..addOval(
-        Rect.fromCenter(
-          center: Offset(374.3 - wingTranslation, 154.5),
-          width: wingRadiusX * 2,
-          height: 183.4,
-        ),
-      );
-    final body = Path()
-      ..addRRect(
-        RRect.fromRectAndRadius(
-          const Rect.fromLTWH(128, 0, 210, 309),
-          const Radius.circular(34),
-        ),
-      );
-    final cutouts = Path()
-      ..addOval(
-        Rect.fromCenter(
-          center: const Offset(193.3, 84.4),
-          width: 54,
-          height: 54,
-        ),
-      )
-      ..addOval(
-        Rect.fromCenter(center: const Offset(276, 84.4), width: 54, height: 54),
-      )
-      ..addRRect(
-        RRect.fromRectAndRadius(
-          const Rect.fromLTWH(166.3, 157.2, 136.9, 38.3),
-          const Radius.circular(5),
-        ),
-      )
-      ..addRRect(
-        RRect.fromRectAndRadius(
-          const Rect.fromLTWH(166.9, 235.1, 136.2, 37.6),
-          const Radius.circular(5),
-        ),
-      );
-    final wings = Path.combine(PathOperation.union, leftWing, rightWing);
-    final silhouette = Path.combine(PathOperation.union, wings, body);
-    final finishedMark = Path.combine(
-      PathOperation.difference,
-      silhouette,
-      cutouts,
-    );
-
-    canvas.drawPath(finishedMark, Paint()..color = color);
-
-    if (eyeProgress case final progress?) {
-      // The eye cutouts are 54px wide. A full pupil must reach their 27px
-      // radius so the emoji-eye overlay never exposes the background beneath.
-      final pupilRadius = 27 * progress.clamp(0.0, 1.0);
-      final pupilPaint = Paint()..color = color;
-      canvas
-        ..drawCircle(const Offset(193.3, 84.4), pupilRadius, pupilPaint)
-        ..drawCircle(const Offset(276, 84.4), pupilRadius, pupilPaint);
     }
+
+    segment(_live, liveProgress);
+    segment(_spent, spentProgress);
 
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(_AmbushLogoMotionPainter oldDelegate) =>
+  bool shouldRepaint(_AmbushMarkPainter oldDelegate) =>
       color != oldDelegate.color ||
-      flapAmount != oldDelegate.flapAmount ||
-      eyeProgress != oldDelegate.eyeProgress;
+      liveProgress != oldDelegate.liveProgress ||
+      spentProgress != oldDelegate.spentProgress;
 }
+
+/// How far each segment has been inked at position [t] of one engrave cycle.
+///
+/// The live segment inks down from the top first and the spent segment follows
+/// it; both then hold for the rest of the cycle. Matches the desktop keyframes.
+({double live, double spent}) ambushEngraveProgress(double t) {
+  final position = t.clamp(0.0, 1.0);
+  return (
+    live: _engraveSegment(position, 0, 0.26),
+    spent: _engraveSegment(position, 0.20, 0.44),
+  );
+}
+
+const _engraveCurve = Cubic(0.16, 1, 0.3, 1);
+
+/// The duration of one engrave cycle.
+const ambushEngraveCycle = Duration(milliseconds: 2100);
+
+double _engraveSegment(double t, double start, double end) =>
+    _engraveCurve.transform(((t - start) / (end - start)).clamp(0.0, 1.0));

@@ -35,16 +35,16 @@ function StepStatusBadge({ status }: { status: string }) {
 function StepStatusIcon({ status }: { status: string }) {
   switch (status) {
     case "completed":
-      return <Check className="h-4 w-4 text-green-500" />;
+      return <Check className="h-4 w-4 text-foreground" />;
     case "failed":
     case "error":
-      return <X className="h-4 w-4 text-red-500" />;
+      return <X className="h-4 w-4 text-foreground" />;
     case "skipped":
       return <SkipForward className="h-4 w-4 text-muted-foreground" />;
     case "waiting_approval":
-      return <Clock className="h-4 w-4 text-amber-500" />;
+      return <Clock className="h-4 w-4 text-warning" />;
     default:
-      return <Clock className="h-4 w-4 text-blue-500" />;
+      return <Clock className="h-4 w-4 text-muted-foreground" />;
   }
 }
 
@@ -77,7 +77,7 @@ export function WorkflowRunTrace({
 
         return (
           <div
-            className="rounded-xl border border-border/60 bg-background/80 p-3 shadow-xs"
+            className="rounded-xl border border-border/60 bg-background/80 p-3"
             key={step.stepId}
           >
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -104,17 +104,17 @@ export function WorkflowRunTrace({
             ) : null}
             {step.error ? (
               <div className="mt-3">
-                <p className="mb-1 text-2xs font-medium uppercase tracking-[0.16em] text-red-400">
+                <p className="mb-1 text-2xs font-medium uppercase tracking-[0.16em] text-foreground">
                   Error
                 </p>
-                <pre className="max-h-32 overflow-auto rounded-lg bg-red-500/10 px-3 py-2 font-mono text-xs text-red-400">
+                <pre className="max-h-32 overflow-auto rounded-lg border border-border bg-secondary px-3 py-2 font-mono text-xs text-foreground">
                   {step.error}
                 </pre>
               </div>
             ) : null}
             {pendingApproval ? (
               <div className="mt-3">
-                <p className="mb-2 text-2xs font-medium uppercase tracking-[0.16em] text-amber-600">
+                <p className="mb-2 text-2xs font-medium uppercase tracking-[0.16em] text-warning">
                   Pending approval
                 </p>
                 <WorkflowApprovalCard approval={pendingApproval} />

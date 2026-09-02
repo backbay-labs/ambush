@@ -141,7 +141,7 @@ function OverviewStatRow({
         <Icon className="h-3.5 w-3.5 shrink-0" />
         {label}
       </span>
-      <span className="font-medium tabular-nums text-muted-foreground/65">
+      <span className="font-medium tabular-nums text-muted-foreground">
         {count}
       </span>
     </button>
@@ -263,7 +263,7 @@ export function ProjectsOverviewContextPanel({
         ) : (
           <div className="flex min-w-0 items-center justify-between gap-2">
             <h2
-              className="min-w-0 truncate text-sm font-normal text-muted-foreground/70"
+              className="min-w-0 truncate text-sm font-normal text-muted-foreground"
               data-testid="projects-overview-context-title"
             >
               {context.title}

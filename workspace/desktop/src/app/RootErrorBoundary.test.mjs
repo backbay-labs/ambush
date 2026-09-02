@@ -54,7 +54,7 @@ test("ThemeProvider renders defaults when localStorage reads are denied", async 
   render(
     createElement(
       ThemeProvider,
-      { defaultTheme: "ambush" },
+      { defaultTheme: "ambush-night" },
       createElement("p", null, "Ambush is visible"),
     ),
   );

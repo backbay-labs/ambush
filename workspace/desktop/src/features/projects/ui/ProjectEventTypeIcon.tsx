@@ -45,18 +45,15 @@ export const PROJECT_EVENT_VISUALS: Record<
   },
   "pull-request": {
     icon: GitPullRequest,
-    iconClassName: "text-green-600 dark:text-green-500",
-    badgeClassName:
-      "bg-green-600/10 text-green-700 dark:bg-green-500/10 dark:text-green-400",
-    detailClassName:
-      "border-green-600/30 text-green-700 dark:border-green-500/30 dark:text-green-400",
+    iconClassName: "text-foreground",
+    badgeClassName: "bg-accent text-foreground",
+    detailClassName: "border-border text-foreground",
   },
   issue: {
     icon: CircleDot,
-    iconClassName: "text-orange-500",
-    badgeClassName: "bg-orange-500/10 text-orange-700 dark:text-orange-300",
-    detailClassName:
-      "border-orange-500/30 text-orange-700 dark:border-orange-500/30 dark:text-orange-300",
+    iconClassName: "text-foreground",
+    badgeClassName: "bg-accent text-foreground",
+    detailClassName: "border-border text-foreground",
   },
   comment: {
     icon: MessageSquare,
@@ -66,26 +63,21 @@ export const PROJECT_EVENT_VISUALS: Record<
   },
   approval: {
     icon: Check,
-    iconClassName: "text-green-600 dark:text-green-500",
-    badgeClassName:
-      "bg-green-600/10 text-green-700 dark:bg-green-500/10 dark:text-green-400",
-    detailClassName:
-      "border-green-600/30 text-green-700 dark:border-green-500/30 dark:text-green-400",
+    iconClassName: "text-foreground",
+    badgeClassName: "bg-accent text-foreground",
+    detailClassName: "border-border text-foreground",
   },
   "changes-requested": {
     icon: TriangleAlert,
-    iconClassName: "text-amber-600 dark:text-amber-400",
-    badgeClassName:
-      "bg-amber-500/10 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300",
-    detailClassName: "border-amber-500/40 text-amber-700 dark:text-amber-400",
+    iconClassName: "text-warning",
+    badgeClassName: "bg-warning-bg text-warning",
+    detailClassName: "border-border text-warning",
   },
   "review-request": {
     icon: UserPlus,
-    iconClassName: "text-blue-600 dark:text-blue-400",
-    badgeClassName:
-      "bg-blue-600/10 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300",
-    detailClassName:
-      "border-blue-600/30 text-blue-700 dark:border-blue-500/30 dark:text-blue-300",
+    iconClassName: "text-foreground",
+    badgeClassName: "bg-accent text-foreground",
+    detailClassName: "border-border text-foreground",
   },
 };
 

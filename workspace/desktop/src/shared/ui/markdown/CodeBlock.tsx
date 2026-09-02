@@ -10,7 +10,7 @@ import {
 } from "shiki";
 
 import { useTheme } from "@/shared/theme/ThemeProvider";
-import { resolveShikiThemeName } from "@/shared/theme/theme-loader";
+import { shikiThemeSource } from "@/shared/theme/theme-loader";
 import { copyCodeBlockToClipboard } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -100,13 +100,11 @@ export function MarkdownCodeBlock({
     <div className="group relative" data-code-block="">
       <pre
         ref={codeBlockRef}
-        className="max-h-[400px] overflow-x-auto overflow-y-auto rounded-2xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs"
+        className="max-h-[400px] overflow-x-auto overflow-y-auto rounded-2xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12"
         style={{ borderRadius: "1rem" }}
       >
         {language && (
-          <div className="mb-1 text-xs text-muted-foreground/70">
-            {language}
-          </div>
+          <div className="mb-1 text-xs text-muted-foreground">{language}</div>
         )}
         {children}
       </pre>
@@ -114,7 +112,7 @@ export function MarkdownCodeBlock({
         <TooltipTrigger asChild>
           <Button
             aria-label="Copy code block"
-            className="absolute right-2 top-2 h-7 w-7 bg-background/80 text-muted-foreground opacity-0 shadow-xs ring-1 ring-border/60 backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 disabled:opacity-60"
+            className="absolute right-2 top-2 h-7 w-7 bg-background/80 text-muted-foreground opacity-0 ring-1 ring-border/60 backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 disabled:opacity-60"
             disabled={isCopying}
             onClick={handleCopy}
             size="icon"
@@ -140,11 +138,7 @@ export function SyntaxHighlightedCode({
   code: string;
   language: string;
 } & React.ComponentProps<"code">) {
-  const { themeName } = useTheme();
-  // Ambush aliases ("ambush" / "ambush-dark") are not bundled Shiki themes — resolve
-  // to the real bundle (github-light / github-dark) before touching Shiki, or
-  // it throws and code blocks fall back to plain text.
-  const shikiTheme = resolveShikiThemeName(themeName);
+  const { themeName: shikiTheme } = useTheme();
   const [loadedKey, setLoadedKey] = React.useState(0);
 
   React.useEffect(() => {
@@ -166,7 +160,7 @@ export function SyntaxHighlightedCode({
         }
         if (!loadedThemes.has(shikiTheme)) {
           try {
-            await shikiHighlighter.loadTheme(shikiTheme as BundledTheme);
+            await shikiHighlighter.loadTheme(shikiThemeSource(shikiTheme));
             loadedThemes.add(shikiTheme);
             loaded = true;
           } catch {

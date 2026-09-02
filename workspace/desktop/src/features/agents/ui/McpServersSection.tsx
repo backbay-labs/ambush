@@ -84,7 +84,7 @@ export function McpServersSection({
       {extensions.length > 0 && fileCaption ? (
         <p
           className={cn(
-            "truncate text-xs text-muted-foreground/70",
+            "truncate text-xs text-muted-foreground",
             variant === "compact" ? "py-1" : "px-4 py-2",
           )}
         >
@@ -113,7 +113,7 @@ function McpServerRow({
         <span className="block truncate text-sm font-medium text-foreground">
           {extension.name}
         </span>
-        <span className="mt-0.5 block truncate text-sm text-muted-foreground/70">
+        <span className="mt-0.5 block truncate text-sm text-muted-foreground">
           {extension.kind}
         </span>
       </span>

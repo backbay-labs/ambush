@@ -160,9 +160,8 @@ export function focusTargetForRequirement(
  * Inline card rendered when the desktop detects a `ambush:config-nudge`
  * sentinel in a kind:9 message body.
  *
- * Uses the `Attachment` primitive's built-in `state="error"` destructive-tint
- * variant so it is visually distinct and consistent with other error states in
- * the system.
+ * Uses the `Attachment` primitive's built-in `state="error"` surface so it is
+ * visually distinct and consistent with other error states in the system.
  *
  * Routing:
  * (A) Any card with a `git_bash` requirement, or one whose requirements are all
@@ -240,20 +239,19 @@ export function ConfigNudgeCard({
   return (
     <Attachment
       className={cn(
-        "max-w-[min(100%,32rem)] shrink-0 shadow-none",
-        // Affordance: cursor-pointer + subtle hover lift — omitted for
-        // informational-only cards which have no click destination.
-        !informationalOnly && "cursor-pointer hover:shadow-sm",
+        "max-w-[min(100%,32rem)] shrink-0",
+        // Informational-only cards have no click destination.
+        !informationalOnly && "cursor-pointer",
         className,
       )}
       orientation="horizontal"
       state="error"
     >
-      <AttachmentMedia className="text-destructive">
+      <AttachmentMedia className="text-warning">
         <AlertTriangle aria-hidden="true" className="h-4 w-4" />
       </AttachmentMedia>
       <AttachmentContent>
-        <AttachmentTitle className="whitespace-normal text-destructive line-clamp-2">
+        <AttachmentTitle className="whitespace-normal text-warning line-clamp-2">
           {nudge.agent_name} needs configuration
         </AttachmentTitle>
         <div className="mt-1 flex flex-col gap-0.5">

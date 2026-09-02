@@ -325,7 +325,7 @@ export function AvatarOutlineToggle({
       aria-pressed={enabled}
       className={cn(
         "grid h-12 w-12 shrink-0 place-items-center rounded-full border border-foreground/10 bg-background text-foreground transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        enabled ? "shadow-xs" : "text-muted-foreground",
+        enabled ? "border-foreground/30" : "text-muted-foreground",
       )}
       data-testid={`${testIdPrefix}-animated-outline-toggle`}
       disabled={disabled}
@@ -441,7 +441,7 @@ export function AvatarFilmstripPicker({
         role="slider"
         tabIndex={disabled ? -1 : 0}
       >
-        <div className="absolute inset-0 overflow-hidden rounded-md border border-foreground/10 bg-background/70 shadow-inner">
+        <div className="absolute inset-0 overflow-hidden rounded-md border border-foreground/10 bg-background/70">
           {frames.length === 0 ? (
             <div className="grid h-full w-full place-items-center">
               <Spinner

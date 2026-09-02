@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   const local = CommunityThemePreference(
-    theme: 'ambush',
+    theme: 'ambush-day',
     accent: '#3b82f6',
     followSystem: true,
   );
@@ -115,7 +115,7 @@ void main() {
       );
 
       await manager.initialize();
-      expect(applied.single.theme, 'ambush');
+      expect(applied.single.theme, 'ambush-day');
 
       session.emit(
         _event(

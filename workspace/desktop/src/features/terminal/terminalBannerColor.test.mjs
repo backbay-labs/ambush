@@ -95,7 +95,7 @@ test("themes whose own palette lacks three hues fall back to synthesis", () => {
   const synth = THEMES.filter(([, p]) => bannerStops(p).mode === "synth")
     .map(([name]) => name)
     .sort();
-  assert.deepEqual(synth, ["min-dark", "vesper"]);
+  assert.deepEqual(synth, ["ambush-day", "ambush-night", "min-dark", "vesper"]);
 });
 
 test("the three stops are distinct by hue AND by sRGB distance", () => {

@@ -2,21 +2,63 @@
 export default {
   theme: {
     extend: {
+      fontSize: {
+        "2xs": "0.6875rem",
+      },
+      boxShadow: {
+        "2xs": "none",
+        xs: "none",
+        sm: "none",
+        DEFAULT: "none",
+        md: "none",
+        lg: "none",
+        xl: "none",
+        "2xl": "none",
+      },
       borderRadius: {
+        none: "0px",
+        xs: "var(--radius)",
+        sm: "var(--radius)",
+        DEFAULT: "var(--radius)",
+        md: "var(--radius)",
         lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        xl: "var(--radius)",
+        "2xl": "var(--radius)",
+        "3xl": "var(--radius)",
+        full: "9999px",
       },
       fontFamily: {
         sans: [
-          '"Inter Variable"',
-          "Inter",
-          '"Avenir Next"',
-          '"Segoe UI"',
+          '"IBM Plex Sans Variable"',
+          '"IBM Plex Sans"',
+          '"Helvetica Neue"',
+          "Helvetica",
+          "Arial",
           "sans-serif",
+        ],
+        mono: [
+          '"IBM Plex Mono"',
+          "ui-monospace",
+          '"SF Mono"',
+          "Menlo",
+          "monospace",
         ],
       },
       colors: {
+        index: "var(--ambush-index)",
+        night: "var(--ambush-night)",
+        steel: "var(--ambush-steel)",
+        rule: "var(--ambush-rule)",
+        grad: "var(--ambush-grad)",
+        plate: {
+          DEFAULT: "var(--ambush-plate)",
+          hi: "var(--ambush-plate-hi)",
+        },
+        ink: {
+          DEFAULT: "var(--ambush-ink)",
+          mid: "var(--ambush-ink-mid)",
+          dim: "var(--ambush-ink-dim)",
+        },
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         card: {

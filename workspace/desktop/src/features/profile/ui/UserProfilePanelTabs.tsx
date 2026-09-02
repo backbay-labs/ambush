@@ -167,7 +167,7 @@ export function ProfileTabBar({
       >
         <div
           aria-hidden="true"
-          className="absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-background shadow-sm transition-transform duration-[220ms] ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none"
+          className="absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-background transition-transform duration-[220ms] ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none"
           data-testid="user-profile-tab-indicator"
           style={{
             transform: `translateX(${activeIndex * 100}%)`,
@@ -546,7 +546,7 @@ function ProfileLiveActivityEmbed({
               </span>
               {activeChannelName ? (
                 <span
-                  className="block truncate text-xs font-medium text-muted-foreground/75"
+                  className="block truncate text-xs font-medium text-muted-foreground"
                   data-testid="user-profile-activity-channel-label"
                   title={`#${activeChannelName}`}
                 >
@@ -782,14 +782,12 @@ export function ProfileRuntimeTabContent({
     <div className="space-y-4" data-testid="user-profile-runtime-sections">
       {needsRestart ? (
         <div
-          className="flex items-start gap-3 rounded-2xl bg-amber-500/10 px-4 py-3"
+          className="flex items-start gap-3 rounded-2xl bg-warning-bg px-4 py-3"
           data-testid="needs-restart-banner"
         >
-          <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
           <div className="min-w-0 text-sm">
-            <p className="font-medium text-amber-600 dark:text-amber-400">
-              Restart required
-            </p>
+            <p className="font-medium text-warning">Restart required</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {autoRestartEnabled
                 ? AUTO_RESTART_ON_BLURB

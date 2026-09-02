@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
+import type { VariantProps } from "class-variance-authority";
 
 import { cn } from "@/shared/lib/cn";
 import { buttonVariants } from "@/shared/ui/button";
@@ -25,7 +26,7 @@ const AlertDialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Overlay
     className={cn(
-      "fixed inset-0 z-50 bg-black/60",
+      "fixed inset-0 z-50 bg-background/70",
       MODAL_OVERLAY_MOTION_CLASS,
       MODAL_BACKDROP_BLUR_CLASS,
       className,
@@ -73,7 +74,8 @@ const AlertDialogContent = React.forwardRef<
         <AlertDialogPrimitive.Content
           className={cn(
             "pointer-events-auto grid w-[calc(100vw-2rem)] max-w-md gap-4 outline-hidden",
-            surface === "default" && "rounded-3xl bg-background p-6 shadow-2xl",
+            surface === "default" &&
+              "rounded-3xl border border-border bg-popover p-6 text-popover-foreground",
             surface === "textured" &&
               texturedSurfaceClasses({
                 size: textureSize,
@@ -143,10 +145,11 @@ AlertDialogDescription.displayName =
 
 const AlertDialogAction = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Action>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>
->(({ className, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> &
+    Pick<VariantProps<typeof buttonVariants>, "variant">
+>(({ className, variant, ...props }, ref) => (
   <AlertDialogPrimitive.Action
-    className={cn(buttonVariants(), className)}
+    className={cn(buttonVariants({ variant }), className)}
     ref={ref}
     {...props}
   />

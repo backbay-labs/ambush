@@ -5,7 +5,6 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
-import { useTheme } from "@/shared/theme/ThemeProvider";
 import "./card-texture.css";
 import { MODAL_BACKDROP_BLUR_CLASS } from "@/shared/ui/modalBackdrop";
 import {
@@ -21,23 +20,20 @@ const DialogClose = DialogPrimitive.Close;
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
->(({ className, ...props }, ref) => {
-  const { isDark } = useTheme();
-
-  return (
-    <DialogPrimitive.Overlay
-      className={cn(
-        "fixed inset-0 z-50",
-        MODAL_OVERLAY_MOTION_CLASS,
-        MODAL_BACKDROP_BLUR_CLASS,
-        isDark ? "bg-black/60" : "bg-black/10",
-        className,
-      )}
-      ref={ref}
-      {...props}
-    />
-  );
-});
+>(({ className, ...props }, ref) => (
+  // The scrim is the room itself, so no surface under it composites darker
+  // than night.
+  <DialogPrimitive.Overlay
+    className={cn(
+      "fixed inset-0 z-50 bg-background/70",
+      MODAL_OVERLAY_MOTION_CLASS,
+      MODAL_BACKDROP_BLUR_CLASS,
+      className,
+    )}
+    ref={ref}
+    {...props}
+  />
+));
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 type DialogContentProps = React.ComponentPropsWithoutRef<
@@ -101,7 +97,8 @@ const DialogContent = React.forwardRef<
         <DialogPrimitive.Content
           className={cn(
             "pointer-events-auto relative grid w-[calc(100vw-2rem)] max-w-2xl gap-4 outline-hidden",
-            surface === "default" && "rounded-2xl bg-background p-6 shadow-2xl",
+            surface === "default" &&
+              "rounded-2xl border border-border bg-popover p-6 text-popover-foreground",
             surface === "none" && "bg-transparent p-0 shadow-none",
             surface === "textured" &&
               "ambush-card-textured isolate box-border w-full rounded-none border-0 bg-transparent p-[var(--ambush-card-textured-safe-inset)] shadow-none",

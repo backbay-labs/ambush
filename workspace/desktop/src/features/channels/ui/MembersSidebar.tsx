@@ -728,7 +728,7 @@ export function MembersSidebar({
               className={MODAL_SEARCH_SHELL_CLASS}
               htmlFor="channel-management-search-users"
             >
-              <UserRoundPlus className="h-4 w-4 shrink-0 text-muted-foreground/55 transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-within/search:text-foreground" />
+              <UserRoundPlus className="h-4 w-4 shrink-0 text-muted-foreground transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-within/search:text-foreground" />
               <input
                 autoCapitalize="none"
                 autoCorrect="off"
@@ -930,7 +930,7 @@ function SearchResultSectionTitle({
   children: React.ReactNode;
 }) {
   return (
-    <div className="sticky top-0 z-10 mr-3 flex min-h-9 items-center gap-2 bg-background/95 px-4 pb-1.5 pt-3 text-xs font-medium text-muted-foreground/75 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+    <div className="sticky top-0 z-10 mr-3 flex min-h-9 items-center gap-2 bg-background/95 px-4 pb-1.5 pt-3 text-xs font-medium text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <span>{children}</span>
       {action ? <span>{action}</span> : null}
     </div>

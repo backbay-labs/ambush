@@ -70,7 +70,7 @@ export function RelayConnectionOverlay({
           key="relay-connection-overlay"
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
         >
-          <div className="pointer-events-auto rounded-xl bg-background shadow-md">
+          <div className="pointer-events-auto rounded-xl border border-border bg-background">
             <SidebarRelayConnectionCard
               isConnected={card.isRelayConnectionSuccess}
               isReconnectPending={card.isRelayReconnectPending}
@@ -97,7 +97,7 @@ export function RelayConnectionOverlay({
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
         >
           <div
-            className="pointer-events-auto flex items-center gap-2 rounded-xl bg-background px-3 py-2.5 text-sm text-destructive shadow-md"
+            className="pointer-events-auto flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-destructive"
             data-testid="relay-error-overlay"
             role="alert"
           >

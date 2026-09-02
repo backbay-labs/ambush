@@ -22,7 +22,7 @@ const Progress = React.forwardRef<
       aria-valuemin={0}
       aria-valuenow={clamped ?? undefined}
       className={cn(
-        "relative h-2 w-full overflow-hidden rounded-full bg-primary/20",
+        "relative h-2 w-full overflow-hidden rounded-xs bg-secondary",
         className,
       )}
       ref={ref}
@@ -30,10 +30,10 @@ const Progress = React.forwardRef<
       {...props}
     >
       {clamped === null ? (
-        <div className="h-full w-1/3 animate-[progress-indeterminate_1.2s_ease-in-out_infinite] rounded-full bg-primary" />
+        <div className="h-full w-1/3 animate-[progress-indeterminate_1.2s_ease-in-out_infinite] rounded-xs bg-foreground" />
       ) : (
         <div
-          className="h-full w-full flex-1 rounded-full bg-primary transition-transform duration-200"
+          className="h-full w-full flex-1 rounded-xs bg-foreground transition-transform duration-200"
           style={{ transform: `translateX(-${100 - clamped}%)` }}
         />
       )}

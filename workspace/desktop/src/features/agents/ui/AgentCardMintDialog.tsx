@@ -349,7 +349,7 @@ export function AgentCardMintDialog({
             </div>
             {showMemoryWarning ? (
               <div
-                className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
+                className="flex items-start gap-2 rounded-md border border-border bg-warning-bg px-3 py-2 text-sm text-warning"
                 data-testid="agent-card-memory-warning"
               >
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />

@@ -49,7 +49,7 @@ const MAX_VRAM_DRAFT_STORAGE_KEY = "ambush.mesh-compute.share.max-vram-gb.v1";
 const MESH_SELECT_TRIGGER_CLASS = cn(
   PERSONA_FIELD_CONTROL_CLASS,
   PERSONA_FIELD_SHELL_CLASS,
-  "h-11 px-3 py-2 leading-6 hover:bg-muted/40 focus:bg-muted/40 [&>svg]:text-muted-foreground/60",
+  "h-11 px-3 py-2 leading-6 hover:bg-muted/40 focus:bg-muted/40 [&>svg]:text-muted-foreground",
 );
 
 const SHARE_COMPUTE_REVEAL_TRANSITION = {
@@ -378,7 +378,7 @@ export function MeshComputeSettingsCard() {
                       <p
                         className={
                           servingIndicator.hasRemoteConsumers
-                            ? "text-2xs text-emerald-600 dark:text-emerald-400"
+                            ? "text-2xs font-medium text-foreground"
                             : "text-2xs text-muted-foreground"
                         }
                         data-testid="mesh-serving-usage"
@@ -461,9 +461,9 @@ const FIT_LABEL: Record<MeshCatalogEntry["fit"], string> = {
 };
 
 const FIT_CLASS: Record<MeshCatalogEntry["fit"], string> = {
-  comfortable: "text-green-600 dark:text-green-400",
-  tight: "text-amber-600 dark:text-amber-400",
-  tradeoff: "text-orange-600 dark:text-orange-400",
+  comfortable: "text-muted-foreground",
+  tight: "text-warning",
+  tradeoff: "text-warning",
   too_large: "text-destructive",
 };
 
@@ -552,7 +552,7 @@ function MeshModelPicker({
         onValueChange={handleModelChange}
         options={options}
         placeholder="Select a model"
-        placeholderClassName="text-muted-foreground/55"
+        placeholderClassName="text-muted-foreground"
         searchable
         testId="mesh-share-compute-model"
         value={selectedValue}
@@ -575,7 +575,7 @@ function MeshModelPicker({
         />
       ) : null}
       <p
-        className="text-sm font-normal text-muted-foreground/70"
+        className="text-sm font-normal text-muted-foreground"
         data-settings-subcopy
       >
         {catalog
@@ -671,7 +671,7 @@ function StatusLine({
     }
     if (health.status === "degraded") {
       return (
-        <p className="text-sm text-amber-600 dark:text-amber-400">
+        <p className="text-sm text-warning">
           Active{modelLabel ? ` — ${modelLabel}` : ""}. {health.reason}
         </p>
       );

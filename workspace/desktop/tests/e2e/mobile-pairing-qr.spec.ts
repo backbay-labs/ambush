@@ -62,7 +62,7 @@ test("mobile pairing starts on demand and reveals the QR code", async ({
   const startButton = card.getByTestId("start-pairing-button");
   await expect(card).toBeVisible();
   await expect(card).toHaveCSS("border-top-width", "0px");
-  await expect(card).toHaveCSS("border-radius", "16px");
+  await expect(card).toHaveCSS("border-radius", "2px");
   expect(
     await card.evaluate((element) => getComputedStyle(element).backgroundColor),
   ).not.toBe("rgba(0, 0, 0, 0)");
@@ -267,7 +267,7 @@ test("pairing completion updates the final step and resets after leaving", async
   ).toHaveCount(6);
   await expect(
     confirmationCode.getByTestId("pairing-sas-code-digit-1"),
-  ).toHaveCSS("border-radius", "12px");
+  ).toHaveCSS("border-radius", "2px");
   await expect(
     confirmationCode.getByTestId("pairing-sas-code-digit-1"),
   ).toHaveCSS("box-shadow", "none");

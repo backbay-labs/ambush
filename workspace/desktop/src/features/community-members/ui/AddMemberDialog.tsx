@@ -223,7 +223,7 @@ export function DirectAddMemberForm({
                 >
                   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                     {selectedUsers.length === 0 ? (
-                      <Search className="h-4 w-4 shrink-0 text-muted-foreground/55" />
+                      <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
                     ) : null}
                     {selectedUsers.map((user) => (
                       <motion.div
@@ -250,7 +250,7 @@ export function DirectAddMemberForm({
                       aria-expanded={isPickerOpen}
                       autoCapitalize="none"
                       autoCorrect="off"
-                      className="h-7 w-auto min-w-16 flex-1 border-0 bg-transparent px-0 py-0.5 text-sm shadow-none outline-hidden placeholder:text-muted-foreground/55 focus-visible:ring-0"
+                      className="h-7 w-auto min-w-16 flex-1 border-0 bg-transparent px-0 py-0.5 text-sm shadow-none outline-hidden placeholder:text-muted-foreground focus-visible:ring-0"
                       data-testid="member-pubkey-input"
                       disabled={addMutation.isPending}
                       id="member-search"

@@ -334,7 +334,7 @@ function PassphraseGeneratorPopover({
           className={cn(
             "absolute right-9 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground",
             securityTheme &&
-              "text-black/55 hover:bg-black/5 hover:text-black/80",
+              "text-background/55 hover:bg-background/5 hover:text-background/80",
           )}
           data-testid="backup-passphrase-generate"
           disabled={disabled}
@@ -635,7 +635,7 @@ export function EncryptedBackupCreator({
             className={cn(
               "font-mono",
               variant === "spotlight"
-                ? "h-14 rounded-2xl border-black/20 bg-white px-20 text-center text-lg text-black/80 shadow-none placeholder:text-black/55 focus-visible:ring-black/35"
+                ? "h-14 rounded-2xl border-background/20 bg-foreground px-20 text-center text-lg text-background/80 shadow-none placeholder:text-background/55 focus-visible:ring-background/35"
                 : "h-10 bg-background pr-19",
             )}
             data-testid="backup-passphrase-input"
@@ -685,7 +685,7 @@ export function EncryptedBackupCreator({
               aria-hidden
               className={cn(
                 "pointer-events-none absolute inset-y-0 left-3 flex items-center font-mono tracking-widest text-foreground",
-                variant === "spotlight" && "text-black/80",
+                variant === "spotlight" && "text-background/80",
               )}
               data-testid="backup-saved-password-mask"
             >
@@ -708,7 +708,7 @@ export function EncryptedBackupCreator({
             className={cn(
               "absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground",
               variant === "spotlight" &&
-                "text-black/55 hover:bg-black/5 hover:text-black/80",
+                "text-background/55 hover:bg-background/5 hover:text-background/80",
             )}
             data-testid="backup-passphrase-reveal-toggle"
             disabled={state.downloadPending}

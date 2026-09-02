@@ -1,4 +1,11 @@
-import { ChevronDown, ChevronRight, Pencil, Play, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Play,
+  X,
+} from "lucide-react";
 import * as React from "react";
 
 import {
@@ -229,7 +236,7 @@ export function WorkflowDetailPanel({
                       <div
                         className={`overflow-hidden rounded-xl border bg-card/70 transition-colors ${
                           isSelected
-                            ? "border-primary/40 bg-primary/5 shadow-xs"
+                            ? "border-primary/40 bg-primary/5"
                             : "border-border/70 hover:bg-muted/20"
                         }`}
                         key={run.id}
@@ -291,7 +298,7 @@ export function WorkflowDetailPanel({
                             <div className="mb-3 flex items-center gap-2 text-2xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
                               <span>Execution Trace</span>
                               {approvalsQuery.isFetching ? (
-                                <span className="text-2xs tracking-[0.12em] text-muted-foreground/80">
+                                <span className="text-2xs tracking-[0.12em] text-muted-foreground">
                                   Refreshing approvals...
                                 </span>
                               ) : null}
@@ -316,7 +323,10 @@ export function WorkflowDetailPanel({
           </div>
         ) : workflowQuery.isError ? (
           <div className="flex h-32 flex-col items-center justify-center gap-2">
-            <p className="text-sm text-red-400">Failed to load workflow</p>
+            <p className="flex items-center gap-1.5 text-sm text-foreground">
+              <AlertTriangle aria-hidden="true" className="h-4 w-4 shrink-0" />
+              Failed to load workflow
+            </p>
           </div>
         ) : (
           <div

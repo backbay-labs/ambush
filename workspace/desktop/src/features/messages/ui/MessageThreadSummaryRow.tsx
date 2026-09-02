@@ -252,10 +252,10 @@ export function MessageThreadSummaryRow({
             ) : null}
             {summary.lastReplyAt ? (
               <>
-                <span className="mx-1 font-normal text-muted-foreground/50">
+                <span className="mx-1 font-normal text-muted-foreground">
                   ·
                 </span>
-                <span className="inline-grid font-normal text-muted-foreground/70">
+                <span className="inline-grid font-normal text-muted-foreground">
                   <span
                     className="col-start-1 row-start-1 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
                     data-testid="message-thread-summary-last-reply"

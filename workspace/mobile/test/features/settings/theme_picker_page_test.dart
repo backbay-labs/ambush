@@ -72,22 +72,22 @@ void main() {
           findsNothing,
         );
         expect(
-          find.byKey(const ValueKey('theme-preview-name-ambush')),
+          find.byKey(const ValueKey('theme-preview-name-ambush-day')),
           findsOneWidget,
         );
 
         final nameBounds = tester.getRect(
-          find.byKey(const ValueKey('theme-preview-name-ambush')),
+          find.byKey(const ValueKey('theme-preview-name-ambush-day')),
         );
         final previewBounds = tester.getRect(
-          find.byKey(const ValueKey('theme-device-pair-preview-ambush')),
+          find.byKey(const ValueKey('theme-device-pair-preview-ambush-day')),
         );
         expect(nameBounds.bottom, lessThan(previewBounds.bottom));
         expect(previewBounds.top - nameBounds.bottom, closeTo(Grid.md, 1));
         expect(
           tester
               .widget<FittedBox>(
-                find.byKey(const ValueKey('theme-full-preview-ambush')),
+                find.byKey(const ValueKey('theme-full-preview-ambush-day')),
               )
               .alignment,
           Alignment.center,
@@ -118,10 +118,10 @@ void main() {
       await _pumpPicker(tester);
 
       final nameBounds = tester.getRect(
-        find.byKey(const ValueKey('theme-preview-name-ambush')),
+        find.byKey(const ValueKey('theme-preview-name-ambush-day')),
       );
       final cardBounds = tester.getRect(
-        find.byKey(const ValueKey('theme-preview-page-ambush')),
+        find.byKey(const ValueKey('theme-preview-page-ambush-day')),
       );
       expect(cardBounds.contains(nameBounds.topLeft), isTrue);
       expect(cardBounds.contains(nameBounds.bottomRight), isTrue);
@@ -148,7 +148,7 @@ void main() {
         final chatFrame = tester.widget<Container>(
           find
               .descendant(
-                of: find.byKey(const ValueKey('theme-full-chat-ambush')),
+                of: find.byKey(const ValueKey('theme-full-chat-ambush-day')),
                 matching: find.byType(Container),
               )
               .first,
@@ -185,7 +185,7 @@ void main() {
       await tester.pump();
 
       final titleMotion = tester.widget<Transform>(
-        find.byKey(const ValueKey('theme-preview-name-motion-ambush')),
+        find.byKey(const ValueKey('theme-preview-name-motion-ambush-day')),
       );
       expect(titleMotion.transform.getTranslation().x, lessThan(0));
 
@@ -202,7 +202,7 @@ void main() {
       await tester.pump();
 
       final titleMotion = tester.widget<Transform>(
-        find.byKey(const ValueKey('theme-preview-name-motion-ambush')),
+        find.byKey(const ValueKey('theme-preview-name-motion-ambush-day')),
       );
       expect(titleMotion.transform.getTranslation().x, 0);
 
@@ -275,7 +275,7 @@ void main() {
           .byKey(const ValueKey('theme-preview-community-identity'))
           .first;
       final home = tester.getRect(
-        find.byKey(const ValueKey('theme-full-home-ambush')),
+        find.byKey(const ValueKey('theme-full-home-ambush-day')),
       );
       final identityBounds = tester.getRect(identity);
       expect(
@@ -305,7 +305,7 @@ void main() {
         find.byKey(const ValueKey('theme-chat-header-title')).first,
       );
       final chatFrame = tester.getRect(
-        find.byKey(const ValueKey('theme-full-chat-ambush')),
+        find.byKey(const ValueKey('theme-full-chat-ambush-day')),
       );
       expect(
         (title.left - chatFrame.left) / chatFrame.width * 393,
@@ -405,19 +405,22 @@ void main() {
     ) async {
       final instance = await _pumpPicker(
         tester,
-        prefs: {'ambush_theme_mode': 'system', 'ambush_color_scheme': 'ambush'},
+        prefs: {
+          'ambush_theme_mode': 'system',
+          'ambush_color_scheme': 'ambush-day',
+        },
       );
 
       await _swipeToNextTheme(tester);
-      expect(instance.getString('ambush_color_scheme'), 'ambush');
+      expect(instance.getString('ambush_color_scheme'), 'ambush-day');
       expect(
-        find.byKey(const ValueKey('theme-preview-name-ambush')),
+        find.byKey(const ValueKey('theme-preview-name-ambush-day')),
         findsNothing,
       );
 
       await tester.tap(find.byKey(const ValueKey('theme-preview-set')));
       await tester.pumpAndSettle();
-      expect(instance.getString('ambush_color_scheme'), isNot('ambush'));
+      expect(instance.getString('ambush_color_scheme'), isNot('ambush-day'));
     });
 
     testWidgets('Set submits one complete theme preference', (tester) async {
@@ -431,7 +434,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(notifier.preferenceWrites, 1);
-      expect(notifier.lastPreference?.theme, isNot('ambush'));
+      expect(notifier.lastPreference?.theme, isNot('ambush-day'));
       expect(notifier.lastPreference?.followSystem, isTrue);
       expect(notifier.lastPreference?.accent, defaultCommunityTheme.accent);
     });
@@ -445,7 +448,7 @@ void main() {
         tester,
         prefs: {
           'ambush_theme_mode': 'system',
-          'ambush_color_scheme': 'ambush',
+          'ambush_color_scheme': 'ambush-day',
           'ambush_accent_color': legacyGreen,
         },
       );
@@ -454,7 +457,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('theme-preview-set')));
       await tester.pumpAndSettle();
 
-      expect(instance.getString('ambush_color_scheme'), isNot('ambush'));
+      expect(instance.getString('ambush_color_scheme'), isNot('ambush-day'));
       expect(instance.getInt('ambush_accent_color'), green);
     });
 
@@ -463,7 +466,10 @@ void main() {
     ) async {
       await _pumpPicker(
         tester,
-        prefs: {'ambush_theme_mode': 'system', 'ambush_color_scheme': 'ambush'},
+        prefs: {
+          'ambush_theme_mode': 'system',
+          'ambush_color_scheme': 'ambush-day',
+        },
       );
 
       expect(
@@ -742,7 +748,7 @@ void main() {
     });
 
     testWidgets('Ambush keeps the accent action unavailable', (tester) async {
-      await _pumpPicker(tester, prefs: {'ambush_color_scheme': 'ambush'});
+      await _pumpPicker(tester, prefs: {'ambush_color_scheme': 'ambush-day'});
       expect(
         find.byKey(const ValueKey('theme-preview-accent-action-button')),
         findsNothing,

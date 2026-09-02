@@ -62,21 +62,22 @@ function IdentityRow({
   copyValue?: string;
 }) {
   return (
-    <div className="flex min-h-16 items-center justify-between gap-4 px-4 py-3">
-      <div className="min-w-0 space-y-1">
-        <p className="text-sm font-medium">{label}</p>
-        <p
-          className="min-w-0 truncate text-sm text-muted-foreground"
-          data-testid={testId}
-          title={value}
-        >
-          {value}
-        </p>
-      </div>
+    <div className="flex min-h-16 items-center gap-4 px-4 py-3">
+      {/* Keys right-aligned against a fixed gutter; values start at one edge. */}
+      <p className="w-32 shrink-0 text-right text-sm text-muted-foreground">
+        {label}
+      </p>
+      <p
+        className="min-w-0 flex-1 truncate text-sm font-medium"
+        data-testid={testId}
+        title={value}
+      >
+        {value}
+      </p>
       {copyValue ? (
         <button
           aria-label={`Copy ${label}`}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-muted px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded bg-muted px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           data-testid={`copy-${testId}`}
           onClick={async () => {
             await writeTextToClipboard(copyValue);
@@ -607,7 +608,7 @@ export function ProfileSettingsCard({
                           {shouldShowAnimatedPreview ? null : emojiAvatarPreview ? (
                             <div
                               aria-label={`${resolvedName} avatar`}
-                              className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full shadow-xs"
+                              className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full"
                               data-testid="profile-avatar-preview"
                               role="img"
                               style={{
@@ -696,7 +697,7 @@ export function ProfileSettingsCard({
                               </label>
                               {isEditingProfileMetadata ? (
                                 <Input
-                                  className="h-auto border-0 bg-transparent px-0 py-0 text-sm text-muted-foreground shadow-none placeholder:text-muted-foreground/60 focus-visible:ring-0"
+                                  className="h-auto border-0 bg-transparent px-0 py-0 text-sm text-muted-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
                                   data-testid="profile-display-name"
                                   disabled={updateProfileMutation.isPending}
                                   id="profile-display-name"
@@ -729,7 +730,7 @@ export function ProfileSettingsCard({
                               </label>
                               {isEditingProfileMetadata ? (
                                 <Textarea
-                                  className="min-h-[72px] resize-none border-0 bg-transparent px-0 py-0 text-sm leading-6 text-muted-foreground shadow-none placeholder:text-muted-foreground/60 focus-visible:ring-0"
+                                  className="min-h-[72px] resize-none border-0 bg-transparent px-0 py-0 text-sm leading-6 text-muted-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
                                   data-testid="profile-about"
                                   disabled={updateProfileMutation.isPending}
                                   id="profile-about"
@@ -746,7 +747,7 @@ export function ProfileSettingsCard({
                                     "min-w-0 break-words text-sm",
                                     aboutDraft
                                       ? "text-muted-foreground"
-                                      : "text-muted-foreground/55",
+                                      : "text-muted-foreground",
                                   )}
                                   data-testid="profile-about-value"
                                   title={aboutDraft || "Not set"}
@@ -772,7 +773,7 @@ export function ProfileSettingsCard({
                                   Identity details
                                 </p>
                                 <p
-                                  className="text-sm font-normal text-muted-foreground/70"
+                                  className="text-sm font-normal text-muted-foreground"
                                   data-settings-subcopy
                                 >
                                   Your keypair and NIP-05 handle are fixed for

@@ -20,10 +20,10 @@ export function ComposerTimeoutBanner({
 
   return (
     <div
-      className="relative z-0 mx-5 -mb-3 flex items-center gap-2 rounded-t-2xl border border-b-0 border-amber-500/30 bg-amber-500/15 px-4 pb-5 pt-2.5 text-sm leading-5 text-foreground backdrop-blur-sm"
+      className="relative z-0 mx-5 -mb-3 flex items-center gap-2 rounded-t-2xl border border-b-0 border-border bg-warning-bg px-4 pb-5 pt-2.5 text-sm leading-5 text-foreground"
       data-testid="composer-timeout-banner"
     >
-      <Clock aria-hidden className="h-4 w-4 shrink-0 text-amber-600" />
+      <Clock aria-hidden className="h-4 w-4 shrink-0 text-warning" />
       <span className="min-w-0">
         {remaining
           ? `You're timed out by community moderators — ${remaining} left.`

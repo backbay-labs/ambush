@@ -213,8 +213,8 @@ export function IdentityRecoveryPairing({
           </div>
         ) : step === "done" ? (
           <div className="flex flex-col items-center gap-3 text-foreground">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-              <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-foreground">
+              <Check className="h-6 w-6 text-background" />
             </div>
             <p className="text-sm font-medium">Identity received securely</p>
           </div>
@@ -240,7 +240,7 @@ export function IdentityRecoveryPairing({
       </div>
       {step === "loading" || (step === "qr" && qrUri) ? (
         <Button
-          className="w-full border-foreground/20 bg-white text-foreground shadow-none hover:bg-black/5"
+          className="w-full border-foreground/20 bg-background text-foreground shadow-none hover:bg-foreground/5"
           data-testid="copy-identity-recovery-code"
           disabled={step === "loading"}
           onClick={() => void copyPairingCode()}

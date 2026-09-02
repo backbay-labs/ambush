@@ -215,15 +215,13 @@ class _ConnectionBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (color, label) = switch (connection) {
-      ObserverConnectionState.idle => (context.colors.onSurfaceVariant, 'Idle'),
-      ObserverConnectionState.connecting => (
-        context.appColors.warning,
-        'Connecting',
-      ),
-      ObserverConnectionState.open => (context.appColors.success, 'Live'),
-      ObserverConnectionState.error => (context.colors.error, 'Error'),
+    final (mark, label) = switch (connection) {
+      ObserverConnectionState.idle => (StatusMark.spent, 'Idle'),
+      ObserverConnectionState.connecting => (StatusMark.hollow, 'Connecting'),
+      ObserverConnectionState.open => (StatusMark.filled, 'Live'),
+      ObserverConnectionState.error => (StatusMark.filled, 'Error'),
     };
+    final color = statusMarkInk(context, mark);
 
     return Container(
       padding: const EdgeInsets.symmetric(

@@ -449,7 +449,7 @@ export function ChannelBrowserDialog({
                   className="flex min-w-0 flex-1 cursor-text items-center gap-3"
                   htmlFor="channel-browser-search"
                 >
-                  <Search className="h-4 w-4 shrink-0 text-muted-foreground/55 transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-within/search:text-foreground" />
+                  <Search className="h-4 w-4 shrink-0 text-muted-foreground transition-colors duration-150 ease-out group-hover/search:text-muted-foreground group-focus-within/search:text-foreground" />
                   <input
                     autoCapitalize="none"
                     autoCorrect="off"
@@ -622,7 +622,7 @@ export function ChannelBrowserDialog({
                       title={emptyTitle}
                     />
                   ) : (
-                    <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70 shadow-xs divide-y divide-border/55">
+                    <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70 divide-y divide-border/55">
                       {orderedVisibleChannels.map((channel, index) => (
                         <ChannelCard
                           channel={channel}

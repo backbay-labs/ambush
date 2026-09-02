@@ -79,7 +79,7 @@ export function ProjectRightPanelControls({
         aria-label={terminalOpen ? "Hide Ambush Term" : "Open Ambush Term"}
         aria-pressed={terminalOpen}
         className={cn(
-          "h-7 w-7 text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          "h-7 w-7 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
           terminalOpen && "bg-sidebar-accent text-sidebar-accent-foreground",
         )}
         data-testid="project-terminal-toggle"

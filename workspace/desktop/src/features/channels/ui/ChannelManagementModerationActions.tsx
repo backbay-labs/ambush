@@ -166,7 +166,7 @@ export function ChannelManagementModerationActions({
   return (
     <div
       className={cn(
-        "absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-full border border-border/60 p-1 shadow-sm",
+        "absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-full border border-border/60 p-1",
         isDark
           ? "bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70"
           : "bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/80",

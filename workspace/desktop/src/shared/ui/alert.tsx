@@ -9,7 +9,7 @@ const alertVariants = cva(
     variants: {
       variant: {
         default: "bg-muted/40",
-        destructive: "bg-destructive/10",
+        destructive: "border border-border bg-warning-bg",
       },
     },
     defaultVariants: {

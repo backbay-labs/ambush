@@ -105,7 +105,7 @@ export function ProjectWorkItemRow({
       {onOpen ? (
         <button
           className={cn(
-            "w-[4.75rem] shrink-0 truncate rounded-sm text-left text-xs font-medium tabular-nums text-muted-foreground/55 transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+            "w-[4.75rem] shrink-0 truncate rounded-sm text-left text-xs font-medium tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
             identifierClassName,
           )}
           data-projects-text-priority="secondary"
@@ -119,7 +119,7 @@ export function ProjectWorkItemRow({
       ) : (
         <span
           className={cn(
-            "w-[4.75rem] shrink-0 truncate text-xs font-medium tabular-nums text-muted-foreground/55",
+            "w-[4.75rem] shrink-0 truncate text-xs font-medium tabular-nums text-muted-foreground",
             identifierClassName,
           )}
           data-projects-text-priority="secondary"
@@ -130,16 +130,16 @@ export function ProjectWorkItemRow({
       )}
       {metadata ? (
         <div
-          className="hidden min-w-0 shrink items-center gap-1.5 overflow-hidden text-xs text-muted-foreground/60 lg:flex"
+          className="hidden min-w-0 shrink items-center gap-1.5 overflow-hidden text-xs text-muted-foreground lg:flex"
           data-projects-text-priority="secondary"
         >
-          <span className="text-muted-foreground/45">›</span>
+          <span className="text-muted-foreground">›</span>
           {metadata}
         </div>
       ) : null}
       {trailing ? (
         <div
-          className="ml-auto flex shrink-0 items-center gap-2 pl-2 text-muted-foreground/60"
+          className="ml-auto flex shrink-0 items-center gap-2 pl-2 text-muted-foreground"
           data-projects-text-priority="secondary"
         >
           {trailing}

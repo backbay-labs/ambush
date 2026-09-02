@@ -21,7 +21,7 @@ export function EphemeralChannelBadge({
       aria-label={display.tooltipLabel}
       className={cn(
         "h-4 w-4 shrink-0",
-        isHeader ? "text-muted-foreground" : "text-sidebar-foreground/45",
+        isHeader ? "text-muted-foreground" : "text-sidebar-foreground",
       )}
       data-testid={testId}
       role="img"

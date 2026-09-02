@@ -30,7 +30,7 @@ export function ProjectPanelState({
       data-project-detail-panel={panel ? "" : undefined}
       data-testid={testId}
     >
-      <Icon className="h-9 w-9 text-muted-foreground/35" />
+      <Icon className="h-9 w-9 text-muted-foreground" />
       <div className="max-w-sm space-y-1">
         <p className="text-sm font-medium text-foreground">{title}</p>
         {description ? (

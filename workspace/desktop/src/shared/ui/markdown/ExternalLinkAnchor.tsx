@@ -43,7 +43,9 @@ export function ExternalLinkAnchor({
       {...anchorProps}
       className={cn(
         "font-medium underline underline-offset-4 transition-colors",
-        isLinearLink ? "linear-link" : "text-primary hover:text-primary/80",
+        isLinearLink
+          ? "linear-link"
+          : "text-foreground decoration-grad hover:decoration-current",
       )}
       href={href}
       onContextMenuCapture={(event) => {

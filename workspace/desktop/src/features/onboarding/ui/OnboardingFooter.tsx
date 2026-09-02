@@ -25,9 +25,8 @@ export type OnboardingBackAction = {
  * `OnboardingSlideTransition`'s transform. A transformed ancestor establishes a
  * containing block that would otherwise trap `position: fixed`, which is why
  * the CTAs can't simply live inside the step and use `fixed` themselves. The
- * slot stays inside the `.ambush-onboarding-neutral-theme` subtree so
- * `--ambush-welcome-chartreuse` and the theme color tokens still resolve for the
- * docked buttons.
+ * slot stays inside the `.ambush-onboarding-neutral-theme` subtree so its
+ * theme color tokens still resolve for the docked buttons.
  */
 export function OnboardingFooterProvider({
   backAction,
@@ -42,9 +41,9 @@ export function OnboardingFooterProvider({
     <OnboardingFooterTargetContext.Provider value={target}>
       {children}
       {/* Scrim: on pages taller than the viewport, content scrolls under the
-          docked CTA. This bottom-anchored fade to the shell's bottom color
-          (invisible on short pages and on the flat chartreuse landing) gives
-          the CTA a floor to sit on instead of colliding with form fields. */}
+          docked CTA. This bottom-anchored fade to the shell's ground color
+          (invisible on short pages) gives the CTA a floor to sit on instead of
+          colliding with form fields. */}
       <div
         aria-hidden
         className="pointer-events-none fixed inset-x-0 bottom-0 z-10 h-36 bg-[linear-gradient(to_top,var(--ambush-onboarding-shell-bottom)_35%,transparent)]"
@@ -52,7 +51,7 @@ export function OnboardingFooterProvider({
       {backAction ? (
         <div className="fixed bottom-5 left-6 z-20">
           <Button
-            className="h-9 rounded-full bg-foreground/10 px-6 text-sm text-foreground hover:bg-foreground/15 hover:text-foreground"
+            className="h-9 rounded bg-foreground/10 px-6 text-sm text-foreground hover:bg-foreground/15 hover:text-foreground"
             data-testid={backAction.testId ?? "onboarding-back"}
             disabled={backAction.disabled}
             onClick={backAction.onClick}

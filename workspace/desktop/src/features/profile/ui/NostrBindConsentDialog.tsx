@@ -156,7 +156,7 @@ function SignedResponseControls({
   return (
     <div className="space-y-4" data-testid="nostr-bind-manual-fallback-content">
       <pre
-        className="max-h-56 w-full overflow-auto rounded-2xl border border-border/70 bg-muted/60 p-4 text-left shadow-xs"
+        className="max-h-56 w-full overflow-auto rounded-2xl border border-border/70 bg-muted/60 p-4 text-left"
         data-testid="nostr-bind-signed-response"
       >
         <code className="whitespace-pre-wrap break-all font-mono text-xs leading-5 text-foreground">
@@ -653,7 +653,7 @@ export function NostrBindConsentDialog() {
             <div className="m-auto flex w-full max-w-[500px] flex-col items-center text-center">
               <img
                 alt="Ambush"
-                className="h-14 w-14 rounded-xl shadow-xs"
+                className="h-14 w-14 rounded-xl"
                 src="/app-icon@2x.png"
                 srcSet="/app-icon@2x.png 1x, /app-icon@3x.png 2x"
               />
@@ -687,7 +687,7 @@ export function NostrBindConsentDialog() {
 
                   {payload.returnMode === "browser_fragment_v1" ? (
                     <details
-                      className="group mt-10 w-full overflow-hidden rounded-2xl border border-border/70 bg-muted/30 text-left shadow-xs"
+                      className="group mt-10 w-full overflow-hidden rounded-2xl border border-border/70 bg-muted/30 text-left"
                       data-testid="nostr-bind-manual-fallback"
                       onToggle={(event) =>
                         setIsManualFallbackOpen(event.currentTarget.open)
@@ -774,10 +774,7 @@ export function NostrBindConsentDialog() {
                                 index === 0 ? "one-time-code" : "off"
                               }
                               className={cn(
-                                "absolute inset-0 h-full w-full rounded-xl border text-center text-transparent shadow-xs caret-transparent selection:bg-transparent selection:text-transparent transition-[border-color,box-shadow] focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
-                                systemColorScheme === "light"
-                                  ? "bg-[#fafafa]"
-                                  : "bg-muted",
+                                "absolute inset-0 h-full w-full rounded-xl border bg-muted text-center text-transparent caret-transparent selection:bg-transparent selection:text-transparent transition-[border-color,box-shadow] focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
                                 hasCodeMismatch
                                   ? "border-destructive focus-visible:border-destructive focus-visible:ring-2 focus-visible:ring-destructive/25"
                                   : "border-input/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",

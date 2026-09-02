@@ -30,7 +30,7 @@ export function SuppressedActivity(props: ActivityRenderClassItemProps) {
         verb={labelParts?.verb ?? props.item.descriptor.label}
       />
       {duration ? (
-        <span className="shrink-0 text-xs text-muted-foreground/60">
+        <span className="shrink-0 text-xs text-muted-foreground">
           {duration}
         </span>
       ) : null}

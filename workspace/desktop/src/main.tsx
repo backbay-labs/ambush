@@ -3,10 +3,10 @@ import ReactDOM from "react-dom/client";
 import { App } from "@/app/App";
 import { RootErrorBoundary } from "@/app/RootErrorBoundary";
 import { NostrBindConsentDialog } from "@/features/profile/ui/NostrBindConsentDialog";
-import "@fontsource-variable/inter/opsz.css";
-import "@fontsource-variable/inter/opsz-italic.css";
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/700.css";
+import "@fontsource-variable/ibm-plex-sans/wght.css";
+import "@fontsource-variable/ibm-plex-sans/wght-italic.css";
+import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource/ibm-plex-mono/700.css";
 import "@/shared/styles/globals.css";
 import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
 import { migrateLegacyCommunityStorageBeforeRender } from "@/features/communities/legacyCommunityStorage";
@@ -92,7 +92,7 @@ function renderApp() {
           <CommunityOnboardingProvider
             enabled={huddleWindowChannelId() === null}
           >
-            <ThemeProvider defaultTheme="ambush">
+            <ThemeProvider defaultTheme="ambush-night">
               <TooltipProvider>
                 <EmojiBurstProvider>
                   <PoofBurstProvider>

@@ -86,7 +86,7 @@ export function PersonaActionsMenu({
           </DropdownMenuItem>
         ) : (
           <DropdownMenuItem
-            className="text-destructive focus:text-destructive"
+            destructive
             disabled={disabled}
             onClick={() => {
               if (persona.isBuiltIn) {

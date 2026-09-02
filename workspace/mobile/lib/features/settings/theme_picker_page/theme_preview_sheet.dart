@@ -373,8 +373,16 @@ class _ThemeDevicePairPreview extends StatelessWidget {
       scheme.brightness,
     );
     final previewTheme = scheme.brightness == Brightness.dark
-        ? AppTheme.dark(colorScheme: scheme, topSectionGradient: gradient)
-        : AppTheme.light(colorScheme: scheme, topSectionGradient: gradient);
+        ? AppTheme.dark(
+            colorScheme: scheme,
+            surfaces: displayed.surfaces,
+            topSectionGradient: gradient,
+          )
+        : AppTheme.light(
+            colorScheme: scheme,
+            surfaces: displayed.surfaces,
+            topSectionGradient: gradient,
+          );
 
     return Row(
       key: ValueKey('theme-device-pair-preview-${theme.name}'),

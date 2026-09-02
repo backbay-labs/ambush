@@ -145,7 +145,7 @@ export function HarnessCatalogDialog({
           <div className="flex max-h-56 min-h-0 flex-col sm:max-h-none sm:w-56">
             <div className="px-3 pt-3">
               <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sidebar-foreground/50" />
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sidebar-foreground" />
                 <Input
                   aria-label="Search runtimes"
                   className="h-8 border-sidebar-border bg-sidebar-accent/40 pl-8 text-sm"
@@ -170,7 +170,7 @@ export function HarnessCatalogDialog({
                     undefined), so this renders nothing there. */}
                 {isRefreshing ? (
                   <div
-                    className="flex items-center gap-1.5 px-4 py-1 text-xs text-sidebar-foreground/50"
+                    className="flex items-center gap-1.5 px-4 py-1 text-xs text-sidebar-foreground"
                     data-testid="harness-catalog-refreshing"
                   >
                     <Spinner className="h-2.5 w-2.5" />
@@ -196,7 +196,7 @@ export function HarnessCatalogDialog({
                   <CatalogListSkeleton />
                 ) : isColdError ? (
                   <div
-                    className="flex items-center justify-between gap-2 px-4 py-2 text-sm text-sidebar-foreground/60"
+                    className="flex items-center justify-between gap-2 px-4 py-2 text-sm text-sidebar-foreground"
                     data-testid="harness-catalog-load-error"
                   >
                     <span>Couldn't load runtimes.</span>
@@ -210,7 +210,7 @@ export function HarnessCatalogDialog({
                     </button>
                   </div>
                 ) : filtered.length === 0 ? (
-                  <p className="px-4 py-2 text-sm text-sidebar-foreground/60">
+                  <p className="px-4 py-2 text-sm text-sidebar-foreground">
                     {isSearching ? "No runtimes match." : "No runtimes found."}
                   </p>
                 ) : (
@@ -332,7 +332,7 @@ function CatalogSection({
     <div>
       <button
         aria-expanded={open}
-        className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left text-2xs font-semibold uppercase tracking-wider text-sidebar-foreground/60 transition-colors hover:text-sidebar-foreground focus:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+        className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left text-2xs font-semibold uppercase tracking-wider text-sidebar-foreground transition-colors hover:text-sidebar-foreground focus:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
         data-testid={testId}
         onClick={onToggle}
         type="button"
@@ -440,7 +440,7 @@ function CatalogListItem({
       {isReady ? (
         <span
           aria-label={`${entry.label} is ready`}
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"
           role="img"
         />
       ) : null}
@@ -531,7 +531,7 @@ function CatalogDetail({ entry }: { entry: AcpRuntimeCatalogEntry }) {
               // entryStatusLabel is the single availability→label source
               // shared with the row chip — when it has something to say
               // (setup needed, sign-in needed, config error) it outranks the
-              // green Ready chip even for available entries.
+              // Ready chip even for available entries.
               <span
                 className="mt-1 inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
                 data-testid={`harness-catalog-status-${entry.id}`}
@@ -539,7 +539,7 @@ function CatalogDetail({ entry }: { entry: AcpRuntimeCatalogEntry }) {
                 {statusLabel}
               </span>
             ) : isReady ? (
-              <span className="mt-1 inline-flex items-center rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              <span className="mt-1 inline-flex items-center rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
                 Ready
               </span>
             ) : null}
@@ -584,7 +584,7 @@ function CatalogDetail({ entry }: { entry: AcpRuntimeCatalogEntry }) {
         <div className="flex shrink-0 items-center justify-end gap-3 border-t border-border/60 bg-background px-5 py-3">
           {isSecondaryCta ? (
             <p
-              className="text-xs text-muted-foreground/80"
+              className="text-xs text-muted-foreground"
               data-testid={`harness-catalog-ready-hint-${entry.id}`}
             >
               Already set up

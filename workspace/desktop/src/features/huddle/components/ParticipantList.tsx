@@ -240,7 +240,7 @@ export function HuddleParticipantsControl({
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-sm font-medium">Participants</h2>
-        <span className="shrink-0 text-xs text-foreground/60">
+        <span className="shrink-0 text-xs text-muted-foreground">
           {participantLabel}
         </span>
       </div>
@@ -265,7 +265,7 @@ export function HuddleParticipantsControl({
                 <div className="truncate text-sm font-medium">
                   {displayName}
                 </div>
-                <div className="truncate text-xs text-foreground/60">
+                <div className="truncate text-xs text-muted-foreground">
                   {isActive ? "Speaking" : isAgent ? "Agent" : "In huddle"}
                 </div>
               </div>
@@ -273,7 +273,7 @@ export function HuddleParticipantsControl({
               {isAgent && onRemoveAgent && (
                 <Button
                   aria-label={`Remove ${displayName} from huddle`}
-                  className="h-7 w-7 shrink-0 text-foreground/65 hover:bg-destructive/15 hover:text-destructive"
+                  className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
                   onClick={() => void onRemoveAgent(pubkey)}
                   size="icon"
                   type="button"
@@ -402,7 +402,7 @@ export function HuddleParticipantsControl({
               "relative z-10 shrink-0 px-1 text-2xs font-semibold shadow-none tabular-nums",
               appearance === "room"
                 ? "ambush-huddle-participant-tile min-h-[6.375rem] min-w-28 rounded-xl border border-border/70 bg-muted/45 text-foreground/70 hover:bg-muted/65 hover:text-foreground"
-                : "h-9 min-w-9 rounded-full border-2 border-black bg-white/15 text-white hover:bg-white/25 hover:text-white",
+                : "h-9 min-w-9 rounded-full border-2 border-border bg-muted/45 text-foreground/70 hover:bg-muted/65 hover:text-foreground",
             )}
             type="button"
             variant="ghost"
@@ -452,7 +452,7 @@ function ParticipantAvatar({
       <ProfileAvatar
         avatarUrl={participant.avatarUrl}
         label={participant.displayName}
-        className="h-full w-full rounded-full border-2 border-black text-2xs"
+        className="h-full w-full rounded-full border-2 border-border text-2xs"
       />
     </span>
   );

@@ -176,7 +176,7 @@ export function AgentDropdownSelect({
           aria-haspopup="listbox"
           aria-required={ariaRequired}
           className={cn(
-            "flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm font-normal shadow-xs transition-colors hover:bg-background/90 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
+            "flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm font-normal transition-colors hover:bg-background/90 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
             className,
           )}
           data-testid={testId}
@@ -190,7 +190,7 @@ export function AgentDropdownSelect({
             className={cn(
               "min-w-0 truncate",
               isPlaceholderSelection &&
-                (placeholderClassName ?? "text-foreground/45"),
+                (placeholderClassName ?? "text-muted-foreground"),
             )}
           >
             {selectedLabel ?? selectedOption?.label ?? placeholder}
@@ -199,7 +199,7 @@ export function AgentDropdownSelect({
             aria-hidden="true"
             className={cn(
               "ml-3 h-4 w-4 shrink-0 transition-transform duration-150",
-              disabled ? "text-foreground/30" : "text-foreground",
+              disabled ? "text-muted-foreground" : "text-foreground",
               open && "rotate-180",
             )}
           />
@@ -207,10 +207,9 @@ export function AgentDropdownSelect({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="z-[100] max-h-72 overflow-y-auto rounded-2xl border-foreground/10 bg-white p-1.5 text-foreground opacity-100 data-[state=closed]:animate-none data-[state=open]:animate-none"
+        className="z-[100] max-h-72 overflow-y-auto rounded-2xl p-1.5 text-foreground opacity-100 data-[state=closed]:animate-none data-[state=open]:animate-none"
         sideOffset={8}
         style={{
-          boxShadow: "0 16px 36px rgb(0 0 0 / 0.12)",
           width: "var(--radix-popover-trigger-width)",
         }}
       >
@@ -224,12 +223,12 @@ export function AgentDropdownSelect({
             <div className="relative">
               <Search
                 aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground/45"
+                className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
               />
               <Input
                 aria-label="Search models"
                 autoFocus
-                className="h-9 rounded-xl border-foreground/10 bg-white pl-9 text-sm"
+                className="h-9 rounded-xl pl-9 text-sm"
                 data-testid={testId ? `${testId}-search` : undefined}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search models…"
@@ -239,7 +238,7 @@ export function AgentDropdownSelect({
           ) : null}
           {filteredOptions.length === 0 ? (
             <p
-              className="px-3 py-2 text-sm text-foreground/55"
+              className="px-3 py-2 text-sm text-muted-foreground"
               data-testid={testId ? `${testId}-empty` : undefined}
             >
               {showSearch && query.trim().length > 0
@@ -254,9 +253,9 @@ export function AgentDropdownSelect({
                 aria-disabled={option.disabled || undefined}
                 aria-selected={selected}
                 className={cn(
-                  "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm leading-5 text-black opacity-100 transition-colors hover:bg-black/5 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-black/30",
-                  selected && "bg-[var(--ambush-welcome-chartreuse)]/35",
-                  option.disabled && "cursor-not-allowed text-black/35",
+                  "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm leading-5 text-foreground opacity-100 transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                  selected && "bg-accent",
+                  option.disabled && "cursor-not-allowed text-muted-foreground",
                 )}
                 data-testid={optionTestId(testId, option.value)}
                 data-value={option.value}
@@ -274,8 +273,8 @@ export function AgentDropdownSelect({
                 <Check
                   aria-hidden="true"
                   className={cn(
-                    "h-4 w-4 shrink-0 text-black transition-opacity",
-                    option.disabled && "text-black/35",
+                    "h-4 w-4 shrink-0 text-foreground transition-opacity",
+                    option.disabled && "text-muted-foreground",
                     selected ? "opacity-100" : "opacity-0",
                   )}
                   strokeWidth={2.5}
@@ -555,7 +554,7 @@ export function AgentModelField({
     <select
       aria-required={isRequired}
       className={cn(
-        "flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs disabled:cursor-not-allowed disabled:opacity-60",
+        "flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60",
         useChevronIcon && "appearance-none pr-10",
         selectClassName,
       )}
@@ -648,7 +647,7 @@ export function AgentProviderField({
       </RequiredFieldLabel>
       <select
         aria-required={isRequired}
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
         disabled={disabled}
         id="agent-provider"
         onChange={(event) => onProviderChange(event.target.value)}

@@ -7,41 +7,29 @@ import { AmbushMark } from "@/shared/ui/ambush-logo/AmbushMark";
  */
 export const TOTAL_ONBOARDING_PAGES = 7;
 
-/** Shared pill shape (38px tall) for every onboarding primary CTA. */
-const ONBOARDING_CTA_SHAPE = "h-[2.375rem] rounded-full px-6";
+/** Shared control shape (38px tall) for every onboarding primary CTA. */
+const ONBOARDING_CTA_SHAPE = "h-[2.375rem] rounded px-6";
 
-/**
- * Primary-CTA styling for the in-step onboarding pages: the shared pill with a
- * light-blue label (`--ambush-onboarding-cta-label`, available on any
- * `.ambush-onboarding-neutral-theme` subtree).
- */
-export const ONBOARDING_PRIMARY_CTA_CLASS = `${ONBOARDING_CTA_SHAPE} text-[var(--ambush-onboarding-cta-label)]`;
+/** Primary-CTA styling for every onboarding page: the shared pill, ink-filled. */
+export const ONBOARDING_PRIMARY_CTA_CLASS = `${ONBOARDING_CTA_SHAPE} text-primary-foreground`;
 
-/** Inverted primary action used only on dark backup-security surfaces. */
-export const ONBOARDING_SECURITY_PRIMARY_CTA_CLASS = `${ONBOARDING_CTA_SHAPE} bg-white text-black/80 hover:bg-white/90 hover:text-black`;
+/** Inverted primary action used only on the backup-security surfaces. */
+export const ONBOARDING_SECURITY_PRIMARY_CTA_CLASS = `${ONBOARDING_CTA_SHAPE} bg-foreground text-background hover:bg-foreground/90`;
 
-/**
- * Primary-CTA styling for the landing screen only: the shared pill with the
- * chartreuse label (`--ambush-welcome-chartreuse`). The blue label is reserved
- * for the CTAs inside the steps.
- */
-export const ONBOARDING_LANDING_CTA_CLASS = `${ONBOARDING_CTA_SHAPE} text-[var(--ambush-welcome-chartreuse)]`;
-
-/** Shared quiet pill for secondary actions throughout onboarding. */
+/** Shared quiet control for secondary actions throughout onboarding. */
 export const ONBOARDING_SECONDARY_CTA_CLASS =
-  "h-9 rounded-full bg-foreground/10 px-6 text-foreground hover:bg-foreground/15 hover:text-foreground";
+  "h-9 rounded bg-foreground/10 px-6 text-foreground hover:bg-foreground/15 hover:text-foreground";
 
 /**
- * Icon-control styling for onboarding surfaces that sit on the textured card:
- * olive backup ink (`--ambush-onboarding-backup-ink`) with a plain
- * brighten-to-foreground hover (no hover pill, which would read as a floating
- * box on the texture). Used by the identity-help dialog close button and the
+ * Icon-control styling for onboarding surfaces that sit on the card: dim ink
+ * (`--ambush-onboarding-backup-ink`) with a plain brighten-to-foreground hover
+ * and no hover box. Used by the identity-help dialog close button and the
  * key-import reveal toggle.
  */
 export const ONBOARDING_INK_ICON_CLASS =
   "text-[color:var(--ambush-onboarding-backup-ink)] hover:bg-transparent hover:text-foreground";
 
-/** Icon controls on the dark noisy backup surfaces stay visually unboxed. */
+/** Icon controls on the backup security surfaces stay visually unboxed. */
 export const ONBOARDING_SECURITY_ICON_CLASS =
   "text-muted-foreground hover:bg-transparent hover:text-foreground";
 

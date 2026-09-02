@@ -11,7 +11,7 @@ export const ProjectsOverviewNarrowContextToggle = React.forwardRef<
   <Button
     aria-label={open ? "Hide project context" : "Show project context"}
     aria-pressed={open}
-    className="h-7 w-7 text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+    className="h-7 w-7 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
     data-testid="projects-overview-context-toggle"
     onClick={onToggle}
     ref={ref}

@@ -2025,14 +2025,14 @@ test("connected first-community profile keeps Back bottom-left and balances the 
     };
   });
   expect(nameKeyStyles.backgroundColor).toMatch(
-    /^(rgba\(255, 255, 255, 0\.95\)|oklab\(.+ \/ 0\.95\))$/,
+    /^(rgba\(236, 207, 185, 0\.95\)|oklab\(.+ \/ 0\.95\))$/,
   );
-  expect(nameKeyStyles.borderColor).toBe("rgba(113, 113, 6, 0.28)");
+  expect(nameKeyStyles.borderColor).toBe("rgba(81, 68, 58, 0.28)");
   expect(nameKeyStyles.boxShadow).toContain(
-    "rgba(113, 113, 6, 0.5) 0px 0px 0px 1px inset",
+    "rgba(81, 68, 58, 0.5) 0px 0px 0px 1px inset",
   );
   expect(nameKeyStyles).toMatchObject({
-    borderRadius: "16px",
+    borderRadius: "2px",
     fontSize: "14px",
   });
   await expect(page.getByText("Your username", { exact: true })).toBeVisible();
@@ -2060,8 +2060,8 @@ test("connected first-community profile keeps Back bottom-left and balances the 
       color: styles.color,
     };
   });
-  expect(dialogStyles.backgroundColor).toBe("rgb(255, 255, 255)");
-  expect(dialogStyles.color).toBe("rgb(23, 23, 23)");
+  expect(dialogStyles.backgroundColor).toBe("rgb(236, 207, 185)");
+  expect(dialogStyles.color).toBe("rgb(41, 32, 25)");
   expect(dialogStyles.boxShadow).not.toBe("none");
   const dialogOverlay = page.getByTestId("dialog-overlay");
   const overlayStyles = await dialogOverlay.evaluate((element) => {
@@ -2185,8 +2185,8 @@ test("connected first-community profile keeps Back bottom-left and balances the 
     return { backgroundColor: styles.backgroundColor, color: styles.color };
   });
   expect(saveStyles).toEqual({
-    backgroundColor: "rgb(23, 23, 23)",
-    color: "rgb(240, 240, 205)",
+    backgroundColor: "rgb(41, 32, 25)",
+    color: "rgb(188, 181, 173)",
   });
   const defaultDialogHeight = imageDialogHeight;
   await page.getByRole("tab", { name: "Emoji" }).click();
@@ -2237,8 +2237,8 @@ test("connected first-community profile keeps Back bottom-left and balances the 
     };
   });
   expect(captureButtonStyles).toMatchObject({
-    backgroundColor: "rgb(23, 23, 23)",
-    color: "rgb(240, 240, 205)",
+    backgroundColor: "rgb(41, 32, 25)",
+    color: "rgb(188, 181, 173)",
     height: "38px",
   });
   expect(captureButtonStyles.borderRadius).toBeGreaterThan(1_000);
@@ -3008,7 +3008,7 @@ test("avatar step reveals preset backgrounds after the first emoji pick", async 
   await expect(page.getByTestId("onboarding-avatar-color-grid")).toBeVisible();
   await expect(page.getByTestId("onboarding-avatar-preview")).not.toHaveCSS(
     "background-color",
-    "rgb(255, 255, 255)",
+    "rgb(236, 207, 185)",
   );
 });
 

@@ -122,7 +122,7 @@ export function AgentSnapshotCard({
 
   return (
     <Attachment
-      className="my-1 inline-flex w-fit max-w-full shadow-none"
+      className="my-1 inline-flex w-fit max-w-full"
       data-testid="agent-snapshot-card"
       state={importState.phase === "error" ? "error" : "done"}
     >
@@ -130,7 +130,7 @@ export function AgentSnapshotCard({
         className={cn(
           showThumb
             ? "relative h-9 w-9"
-            : "bg-primary/10 text-primary ring-1 ring-primary/20 dark:bg-primary/15",
+            : "bg-accent text-accent-foreground ring-1 ring-border",
         )}
         variant={showThumb ? "image" : "icon"}
       >
@@ -165,7 +165,7 @@ export function AgentSnapshotCard({
         </AttachmentTitle>
         {importState.phase === "error" ? (
           <AttachmentDescription
-            className="overflow-visible whitespace-normal text-clip text-destructive"
+            className="overflow-visible whitespace-normal text-clip text-warning"
             data-testid="agent-snapshot-card-error"
           >
             {importState.message}
@@ -193,7 +193,7 @@ export function AgentSnapshotCard({
           <Download />
         </AttachmentAction>
         <AttachmentAction
-          className="text-primary-foreground shadow-none hover:bg-primary/90 hover:text-primary-foreground hover:shadow-none"
+          className="text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
           data-testid="agent-snapshot-card-import"
           disabled={isFetching}
           onClick={handleImport}
@@ -201,7 +201,11 @@ export function AgentSnapshotCard({
           type="button"
           variant="default"
         >
-          {isFetching ? <Loader2 className="animate-spin" /> : <SnapshotIcon />}
+          {isFetching ? (
+            <Loader2 className="animate-spin motion-reduce:animate-none" />
+          ) : (
+            <SnapshotIcon />
+          )}
           {isFetching
             ? "Loading…"
             : snapshotKind === "team"

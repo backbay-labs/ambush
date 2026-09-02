@@ -446,7 +446,7 @@ export function SnapshotShareDialog({
         showCloseButton={false}
       >
         <div
-          className="relative rounded-2xl bg-background p-6 pb-4 shadow-2xl"
+          className="relative rounded-2xl border border-border bg-background p-6 pb-4"
           data-testid={`${testIdPrefix}-main-card`}
         >
           <DialogHeader>
@@ -638,7 +638,7 @@ export function SnapshotShareDialog({
                   transition={warningTransition}
                 >
                   <div
-                    className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
+                    className="flex items-start gap-2 rounded-md border border-border bg-warning-bg px-3 py-2 text-sm text-warning"
                     data-testid={`${testIdPrefix}-memory-warning`}
                   >
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -654,7 +654,7 @@ export function SnapshotShareDialog({
         </div>
         {beforeExport}
         <button
-          className="relative flex min-h-14 w-full items-center gap-3 rounded-2xl bg-background px-5 py-4 text-left text-sm font-medium shadow-2xl outline-hidden transition-colors hover:bg-muted focus-visible:bg-muted disabled:cursor-default disabled:opacity-100"
+          className="relative flex min-h-14 w-full items-center gap-3 rounded-2xl border border-border bg-background px-5 py-4 text-left text-sm font-medium outline-hidden transition-colors hover:bg-muted focus-visible:bg-muted disabled:cursor-default disabled:opacity-100"
           data-testid={`${testIdPrefix}-export`}
           disabled={isActionPending}
           onClick={onExport}
@@ -710,7 +710,7 @@ export function PersonaShareDialog({
       beforeExport={
         persona.isBuiltIn ? null : (
           <section
-            className="relative flex min-h-16 w-full items-center gap-3 rounded-2xl bg-background px-5 py-4 shadow-2xl"
+            className="relative flex min-h-16 w-full items-center gap-3 rounded-2xl border border-border bg-background px-5 py-4"
             data-testid="persona-share-catalog"
           >
             <BookUser className="h-4 w-4 shrink-0 text-muted-foreground" />

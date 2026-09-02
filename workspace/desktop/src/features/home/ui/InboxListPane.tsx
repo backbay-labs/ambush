@@ -94,10 +94,10 @@ function InboxLabel({
         MESSAGE_MARKDOWN_CLASS,
         "mt-0 flex min-h-[var(--inline-chip-min-height)] min-w-0 items-center gap-1.5 text-2xs leading-3 group-hover/inbox-item:pr-[6.75rem] group-focus-within/inbox-item:pr-[6.75rem]",
         isActionRequired && !isDone
-          ? "font-medium text-amber-600/80 dark:text-amber-300/80"
+          ? "font-medium text-warning"
           : isDone
-            ? "font-normal text-muted-foreground/70"
-            : "font-medium text-muted-foreground/80",
+            ? "font-normal text-muted-foreground"
+            : "font-medium text-muted-foreground",
       )}
       data-inbox-type-label=""
     >
@@ -418,7 +418,7 @@ export function InboxListPane({
                 </span>
                 <span
                   className={cn(
-                    "flex shrink-0 items-center gap-1.5 text-xs leading-4 text-muted-foreground/70 transition-opacity group-hover/inbox-item:opacity-0 group-focus-within/inbox-item:opacity-0",
+                    "flex shrink-0 items-center gap-1.5 text-xs leading-4 text-muted-foreground transition-opacity group-hover/inbox-item:opacity-0 group-focus-within/inbox-item:opacity-0",
                     isDone ? "font-normal" : "font-medium",
                   )}
                 >
@@ -443,7 +443,7 @@ export function InboxListPane({
               />
               {dueReminder ? (
                 <div
-                  className="mt-1 flex items-center gap-1 text-2xs font-medium text-amber-600/80 dark:text-amber-300/80"
+                  className="mt-1 flex items-center gap-1 text-2xs font-medium text-warning"
                   data-testid="home-inbox-reminder-due"
                 >
                   <Bell className="h-3 w-3" />
@@ -785,7 +785,8 @@ function InboxRowActionButton({
           aria-label={label}
           className={cn(
             "flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
-            active && "bg-blue-500/10 text-blue-500 hover:text-blue-500",
+            active &&
+              "bg-accent text-accent-foreground hover:text-accent-foreground",
           )}
           disabled={disabled}
           onClick={(event) => {

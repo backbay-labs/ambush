@@ -15,7 +15,7 @@ function FeatureRow({ feature }: { feature: FeatureDefinition }) {
         <p className="text-sm font-medium" id={`${switchId}-label`}>
           {feature.name}
         </p>
-        <p className="text-xs text-muted-foreground/70" data-settings-subcopy>
+        <p className="text-xs text-muted-foreground" data-settings-subcopy>
           {feature.description}
         </p>
       </div>

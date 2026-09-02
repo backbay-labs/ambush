@@ -1429,7 +1429,7 @@ void main() {
       final material = tester.widget<Material>(surface);
       final shape = material.shape! as RoundedRectangleBorder;
       expect(shape.borderRadius, BorderRadius.circular(Radii.popover));
-      expect(shape.side.color, Colors.black.withValues(alpha: 0.04));
+      expect(shape.side.color, tester.element(surface).colors.outline);
       expect(material.elevation, appPopoverElevation);
       expect(
         material.shadowColor,
@@ -1437,7 +1437,7 @@ void main() {
       );
       expect(
         tester.widget<Text>(find.text('general')).style?.fontFamily,
-        'Inter',
+        'IBM Plex Sans',
       );
     });
 
@@ -2410,7 +2410,7 @@ void main() {
       final material = tester.widget<Material>(surface);
       final shape = material.shape! as RoundedRectangleBorder;
       expect(shape.borderRadius, BorderRadius.circular(Radii.popover));
-      expect(shape.side.color, Colors.black.withValues(alpha: 0.04));
+      expect(shape.side.color, tester.element(surface).colors.outline);
       expect(material.elevation, appPopoverElevation);
       expect(
         material.shadowColor,
@@ -2425,7 +2425,7 @@ void main() {
       for (final label in ['Camera', 'Photos', 'Video', 'Files']) {
         final text = tester.widget<Text>(find.text(label));
         expect(text.style?.fontSize, 20);
-        expect(text.style?.fontFamily, 'Inter');
+        expect(text.style?.fontFamily, 'IBM Plex Sans');
       }
       final icons = [
         for (final label in ['camera', 'photos', 'video', 'files'])
@@ -3023,7 +3023,7 @@ void main() {
       );
       expect(
         spans.singleWhere((span) => span.text == 'code').style.fontFamily,
-        'GeistMono',
+        'IBM Plex Mono',
       );
       expect(
         spans

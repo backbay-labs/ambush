@@ -341,7 +341,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                         className={cn(
                           "flex min-h-3.5 min-w-0 items-center gap-1.5 text-2xs leading-none",
                           index === selectedIndex
-                            ? "text-accent-foreground/60"
+                            ? "text-accent-foreground"
                             : "text-muted-foreground",
                         )}
                       >

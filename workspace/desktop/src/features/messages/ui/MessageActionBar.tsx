@@ -296,7 +296,7 @@ function MoreActionsMenu({
 
           {onDelete ? (
             <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
+              destructive
               data-testid={`delete-message-${message.id}`}
               onClick={() => {
                 setIsDeleteDialogOpen(true);
@@ -500,7 +500,7 @@ export const MessageActionBar = React.memo(function MessageActionBar({
       )}
       data-testid={`message-action-bar-${message.id}`}
     >
-      <div className="overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-xs backdrop-blur-sm supports-[backdrop-filter]:bg-background/85">
+      <div className="overflow-hidden rounded-full border border-border/70 bg-background">
         <div className="flex items-center gap-0.5 p-1">
           {hasReactionAction && quickReactionItems.length > 0 ? (
             <div className="hidden items-center gap-0.5 sm:flex">

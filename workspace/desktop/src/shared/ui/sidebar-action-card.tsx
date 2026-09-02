@@ -153,7 +153,7 @@ function SidebarActionDismissButton({
     <button
       aria-label={label}
       className={cn(
-        "group/dismiss pointer-events-none absolute -right-1 -top-2 z-10 h-6 w-6 rounded-full text-muted-foreground/45 transition-colors duration-150 ease-out hover:text-foreground/80 focus-visible:pointer-events-auto focus-visible:text-foreground/80 focus-visible:outline-hidden group-hover/sidebar-action-card:pointer-events-auto group-hover/sidebar-compact-action-card:pointer-events-auto",
+        "group/dismiss pointer-events-none absolute -right-1 -top-2 z-10 h-6 w-6 rounded-full text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground/80 focus-visible:pointer-events-auto focus-visible:text-foreground/80 focus-visible:outline-hidden group-hover/sidebar-action-card:pointer-events-auto group-hover/sidebar-compact-action-card:pointer-events-auto",
         POOF_TRIGGER_CLASS,
         className,
       )}
@@ -172,7 +172,7 @@ function SidebarActionDismissButton({
       }}
       type="button"
     >
-      <span className="flex h-full w-full scale-95 items-center justify-center rounded-full bg-background opacity-0 shadow-sm ring-1 ring-border/70 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:scale-100 group-focus-visible/dismiss:scale-100 group-focus-visible/dismiss:opacity-100 group-focus-visible/dismiss:ring-2 group-focus-visible/dismiss:ring-muted-foreground/40 group-hover/sidebar-action-card:scale-100 group-hover/sidebar-action-card:opacity-100 group-hover/sidebar-compact-action-card:scale-100 group-hover/sidebar-compact-action-card:opacity-100">
+      <span className="flex h-full w-full scale-95 items-center justify-center rounded-full bg-background opacity-0 ring-1 ring-border/70 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:scale-100 group-focus-visible/dismiss:scale-100 group-focus-visible/dismiss:opacity-100 group-focus-visible/dismiss:ring-2 group-focus-visible/dismiss:ring-muted-foreground/40 group-hover/sidebar-action-card:scale-100 group-hover/sidebar-action-card:opacity-100 group-hover/sidebar-compact-action-card:scale-100 group-hover/sidebar-compact-action-card:opacity-100">
         <X aria-hidden="true" className="h-4 w-4" />
       </span>
     </button>
@@ -251,12 +251,12 @@ export function SidebarCompactActionCard({
       <button
         aria-label={actionAriaLabel}
         className={cn(
-          "flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left shadow-xs transition-[background-color,border-color,color,box-shadow] duration-150 ease-out focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-muted-foreground/40 disabled:cursor-default disabled:opacity-100",
+          "flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition-[background-color,border-color,color] duration-150 ease-out focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-muted-foreground/40 disabled:cursor-default disabled:opacity-100",
           isSuccess
             ? "ambush-sidebar-action-card--success disabled:cursor-default disabled:opacity-100"
             : surface === "secondary"
-              ? "border-border/70 bg-secondary/80 text-secondary-foreground hover:border-border hover:bg-secondary dark:bg-secondary/60 dark:hover:bg-secondary/70"
-              : "border-border/70 bg-background/70 text-foreground hover:border-border hover:bg-muted/40 dark:bg-background/50 dark:hover:bg-muted/30",
+              ? "border-border/70 bg-secondary text-secondary-foreground hover:border-border hover:bg-accent hover:text-accent-foreground"
+              : "border-border/70 bg-background text-foreground hover:border-border hover:bg-accent hover:text-accent-foreground",
         )}
         data-testid={actionTestId}
         disabled={actionDisabled}

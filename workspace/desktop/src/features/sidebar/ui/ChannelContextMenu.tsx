@@ -325,7 +325,7 @@ export function ChannelContextMenuItems({
       {showChannelActions ? <ContextMenuSeparator /> : null}
       {onLeaveChannel ? (
         <ContextMenuItem
-          className="text-destructive focus:text-destructive"
+          destructive
           onSelect={() => deferMenuAction(() => onLeaveChannel(channel))}
         >
           <ContextMenuIconSlot>
@@ -363,7 +363,7 @@ export function ChannelContextMenuItems({
       ) : null}
       {canDeleteChannel ? (
         <ContextMenuItem
-          className="text-destructive focus:text-destructive"
+          destructive
           data-testid={`delete-channel-${channel.name}`}
           onSelect={() => deferMenuAction(() => onDeleteChannel?.(channel))}
         >

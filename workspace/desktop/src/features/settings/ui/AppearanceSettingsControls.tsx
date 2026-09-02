@@ -58,7 +58,7 @@ export function ProminentActiveTabSetting() {
           Prominent active tab
         </label>
         <p
-          className="text-sm font-normal text-muted-foreground/70"
+          className="text-sm font-normal text-muted-foreground"
           data-settings-subcopy
         >
           Give the selected navigation item a higher-contrast background.
@@ -148,7 +148,7 @@ function ConversationDensityPreviewMessage({
           <span className="text-message font-semibold leading-message-author tracking-normal text-foreground">
             {author}
           </span>
-          <span className="text-message-timestamp font-normal text-muted-foreground/65">
+          <span className="text-message-timestamp font-normal text-muted-foreground">
             {timestamp}
           </span>
         </div>
@@ -168,7 +168,7 @@ function ConversationPreview() {
         className="relative overflow-hidden rounded-xl border border-border/65 bg-transparent"
         data-testid="conversation-preview-surface"
       >
-        <span className="absolute right-3.5 top-3 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground/55">
+        <span className="absolute right-3.5 top-3 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground">
           <Eye aria-hidden="true" className="size-3" />
           Preview
         </span>
@@ -210,7 +210,7 @@ export function ConversationDisplaySettings() {
         <div className="min-w-0">
           <p className="text-sm font-medium">Font size</p>
           <p
-            className="text-sm font-normal text-muted-foreground/70"
+            className="text-sm font-normal text-muted-foreground"
             data-settings-subcopy
           >
             Applies across conversations and interface text
@@ -231,7 +231,7 @@ export function ConversationDisplaySettings() {
         <div className="min-w-0">
           <p className="text-sm font-medium">Conversation density</p>
           <p
-            className="text-sm font-normal text-muted-foreground/70"
+            className="text-sm font-normal text-muted-foreground"
             data-settings-subcopy
           >
             Spacing in conversations and Markdown content across Ambush
@@ -282,13 +282,13 @@ function ambushGradientSampleImage(isDark: boolean): string {
   const readToken = (token: string, fallback: string): string =>
     styles?.getPropertyValue(token).trim() || fallback;
   const top = isDark
-    ? readToken("--ambush-gradient-dark-top", "#4a4616")
-    : readToken("--ambush-gradient-light-top", "#e6e6b6");
+    ? readToken("--ambush-gradient-dark-top", "#1f1f1f")
+    : readToken("--ambush-gradient-light-top", "#c7c0b8");
   const bottom = isDark
-    ? readToken("--ambush-gradient-dark-bottom", "#0a1423")
-    : readToken("--ambush-gradient-light-bottom", "#c4d0da");
+    ? readToken("--ambush-gradient-dark-bottom", "#1f1f1f")
+    : readToken("--ambush-gradient-light-bottom", "#c7c0b8");
   const shapeToken = isDark ? "--foreground" : "--background";
-  const shapeFallback = isDark ? "0 0% 98%" : "0 0% 100%";
+  const shapeFallback = isDark ? "33.3 14.29% 75.3%" : "32 10.07% 70.8%";
   const shape = `hsl(${readToken(shapeToken, shapeFallback)})`;
   const shapeOpacities = isDark ? [0.5, 0.38, 0.28] : [0.82, 0.68, 0.52];
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 382 200"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient></defs><rect width="382" height="200" fill="url(#g)"/><rect x="76" y="64" width="72" height="72" rx="22" fill="${shape}" opacity="${shapeOpacities[0]}"/><rect x="168" y="76" width="96" height="18" rx="9" fill="${shape}" opacity="${shapeOpacities[1]}"/><rect x="168" y="106" width="138" height="18" rx="9" fill="${shape}" opacity="${shapeOpacities[2]}"/></svg>`;
@@ -320,7 +320,7 @@ function LinkPreviewSample({ style }: { style: LinkPreviewStyle }) {
         data-testid="link-preview-sample-surface"
         inert
       >
-        <span className="absolute right-3.5 top-3 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground/55">
+        <span className="absolute right-3.5 top-3 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground">
           <Eye aria-hidden="true" className="size-3" />
           Preview
         </span>
@@ -353,7 +353,7 @@ export function LinkPreviewStyleSetting() {
         <div className="min-w-0">
           <p className="text-sm font-medium">Link previews</p>
           <p
-            className="text-sm font-normal text-muted-foreground/70"
+            className="text-sm font-normal text-muted-foreground"
             data-settings-subcopy
           >
             {activeOption.description}
@@ -411,7 +411,7 @@ export function GlassBackgroundSetting() {
       <div className="min-w-0">
         <p className="text-sm font-medium">Glass opacity</p>
         <p
-          className="text-sm font-normal text-muted-foreground/70"
+          className="text-sm font-normal text-muted-foreground"
           data-settings-subcopy
           id="glass-opacity-description"
         >
@@ -450,7 +450,7 @@ export function GlassBackgroundSetting() {
             Glass background
           </label>
           <p
-            className="text-sm font-normal text-muted-foreground/70"
+            className="text-sm font-normal text-muted-foreground"
             data-settings-subcopy
           >
             {glassBackgroundSupported
@@ -507,11 +507,11 @@ function ThreadLayoutDiagram({ mode }: { mode: ThreadViewMode }) {
   // Inline SVG resolves CSS variables, so the frame gradient references the
   // Ambush gradient tokens directly and follows theme.css automatically.
   const gradientTop = isDark
-    ? "var(--ambush-gradient-dark-top, #4a4616)"
-    : "var(--ambush-gradient-light-top, #e6e6b6)";
+    ? "var(--ambush-gradient-dark-top, #1f1f1f)"
+    : "var(--ambush-gradient-light-top, #c7c0b8)";
   const gradientBottom = isDark
-    ? "var(--ambush-gradient-dark-bottom, #0a1423)"
-    : "var(--ambush-gradient-light-bottom, #c4d0da)";
+    ? "var(--ambush-gradient-dark-bottom, #1f1f1f)"
+    : "var(--ambush-gradient-light-bottom, #c7c0b8)";
   const channelSurface = "hsl(var(--muted))";
   const threadSurface = "hsl(var(--background))";
   const channelOpacity = isDark ? 0.88 : 0.78;
@@ -590,7 +590,7 @@ function ThreadLayoutPreview({ mode }: { mode: ThreadViewMode }) {
         className="relative overflow-hidden rounded-xl border border-border/65 bg-transparent"
         data-testid="thread-layout-preview-surface"
       >
-        <span className="absolute right-3.5 top-3 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground/55">
+        <span className="absolute right-3.5 top-3 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground">
           <Eye aria-hidden="true" className="size-3" />
           Preview
         </span>
@@ -628,7 +628,7 @@ export function ThreadLayoutSetting() {
             ) : null}
           </p>
           <p
-            className="text-sm font-normal text-muted-foreground/70"
+            className="text-sm font-normal text-muted-foreground"
             data-settings-subcopy
           >
             {activeOption.description}
@@ -665,7 +665,7 @@ export function AccentPickerContent({
       <div className="min-w-0">
         <p className="text-sm font-medium">Accent color</p>
         <p
-          className="text-sm font-normal text-muted-foreground/70"
+          className="text-sm font-normal text-muted-foreground"
           data-settings-subcopy
         >
           Choose the highlight color used throughout Ambush.
@@ -684,8 +684,8 @@ export function AccentPickerContent({
               : color.value;
             const selectionColor = isNeutral
               ? isDark
-                ? "#000000"
-                : "#FFFFFF"
+                ? "#171717"
+                : "#BCB5AD"
               : contrastColorForBackground(color.value);
 
             return (

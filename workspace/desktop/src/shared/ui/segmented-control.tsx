@@ -176,7 +176,7 @@ export function SegmentedControl<Value extends string>({
       <div
         aria-hidden="true"
         className={cn(
-          "absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-background shadow-sm transition-transform duration-200 ease-in-out motion-reduce:transition-none",
+          "absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-accent transition-transform duration-200 ease-in-out motion-reduce:transition-none",
           previewValue && "duration-0",
         )}
         data-testid={indicatorTestId ?? `${testId}-indicator`}

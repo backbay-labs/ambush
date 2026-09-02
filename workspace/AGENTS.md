@@ -532,7 +532,7 @@ The mobile app lives in `mobile/` — a Flutter app using Riverpod + Hooks.
 ### Architecture
 
 - **State management:** Riverpod + `flutter_hooks` (`HookConsumerWidget`)
-- **Theme:** Catppuccin Latte (light) / Macchiato (dark) — matches desktop
+- **Theme:** Ambush Day (light) / Ambush Night (dark) — matches desktop
 - **Features:** Isolated under `lib/features/`, shared code in `lib/shared/`
 - **Nostr models:** `lib/shared/relay/nostr_models.dart` — event kinds must
   stay in sync with `desktop/src/shared/constants/kinds.ts`

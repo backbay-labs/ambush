@@ -59,10 +59,10 @@ import { ProjectWorkItemRow } from "./ProjectWorkItemRow";
 import { ProjectPanelState } from "./ProjectPanelState";
 
 export function issueStatusClassName(status: ProjectIssue["status"]) {
-  if (status === "Triage" || status === "In Progress") return "text-amber-500";
+  if (status === "Triage" || status === "In Progress") return "text-warning";
   if (status === "Backlog") return "text-muted-foreground";
-  if (status === "In Review") return "text-green-500";
-  if (status === "Done") return "text-purple-400";
+  if (status === "In Review") return "text-foreground";
+  if (status === "Done") return "text-secondary-foreground";
   if (status === "Closed") return "text-destructive";
   return "text-muted-foreground";
 }
@@ -74,14 +74,14 @@ function issueStatusVisual(status: ProjectIssue["status"]): {
 } {
   if (status === "Done") {
     return {
-      className: "text-purple-400",
+      className: issueStatusClassName(status),
       icon: CircleCheck,
       progress: "completed",
     };
   }
   if (status === "Closed") {
     return {
-      className: "text-destructive",
+      className: issueStatusClassName(status),
       icon: CircleX,
       progress: "canceled",
     };
@@ -195,7 +195,7 @@ function IssueRow({
       trailing={
         <>
           <span
-            className="hidden w-24 shrink-0 truncate text-right text-xs text-muted-foreground/60 md:block"
+            className="hidden w-24 shrink-0 truncate text-right text-xs text-muted-foreground md:block"
             data-testid="project-issue-row-category"
           >
             {projectTaskCategoryLabel(issue.category)}
@@ -217,7 +217,7 @@ function IssueRow({
               />
             </span>
             <span
-              className="flex min-w-5 shrink-0 justify-end text-muted-foreground/45"
+              className="flex min-w-5 shrink-0 justify-end text-muted-foreground"
               data-testid="project-issue-assignee-cell"
             >
               {issue.assignees.length > 0 ? (
@@ -246,8 +246,8 @@ function IssueRow({
               }
               className={`flex items-center gap-1 rounded-md text-xs hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring ${
                 issue.comments.length > 0
-                  ? "text-muted-foreground/60"
-                  : "text-muted-foreground/45"
+                  ? "text-muted-foreground"
+                  : "text-muted-foreground"
               }`}
               data-testid="project-issue-comments"
               onClick={onOpen}
@@ -258,7 +258,7 @@ function IssueRow({
             </button>
           </span>
           <span
-            className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground/55 sm:block"
+            className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground sm:block"
             data-testid="project-issue-row-date"
             title={new Date(issue.createdAt * 1_000).toLocaleString()}
           >

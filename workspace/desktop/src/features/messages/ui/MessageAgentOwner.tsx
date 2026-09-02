@@ -11,7 +11,7 @@ export function MessageAgentOwner({
 }) {
   return (
     <span
-      className="inline-flex min-w-0 max-w-56 items-baseline gap-1 text-xs leading-4 text-muted-foreground/65"
+      className="inline-flex min-w-0 max-w-56 items-baseline gap-1 text-xs leading-4 text-muted-foreground"
       data-testid="message-agent-owner"
     >
       <span className="sr-only">

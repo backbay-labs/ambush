@@ -65,21 +65,21 @@ const ACTION_ICONS: Record<string, LucideIcon> = {
 };
 
 const TRIGGER_ACCENTS: Record<string, string> = {
-  diff_posted: "border-violet-400/30 bg-violet-600 text-white",
-  message_posted: "border-blue-400/30 bg-blue-600 text-white",
-  reaction_added: "border-pink-400/30 bg-pink-600 text-white",
-  schedule: "border-emerald-400/30 bg-emerald-600 text-white",
-  webhook: "border-orange-300/30 bg-orange-500 text-white",
+  diff_posted: "border-border bg-secondary text-secondary-foreground",
+  message_posted: "border-border bg-secondary text-secondary-foreground",
+  reaction_added: "border-border bg-secondary text-secondary-foreground",
+  schedule: "border-border bg-secondary text-secondary-foreground",
+  webhook: "border-border bg-secondary text-secondary-foreground",
 };
 
 const ACTION_ACCENTS: Record<string, string> = {
-  add_reaction: "border-pink-400/30 bg-pink-600 text-white",
-  call_webhook: "border-orange-300/30 bg-orange-500 text-white",
-  delay: "border-sky-300/30 bg-sky-500 text-white",
-  request_approval: "border-emerald-300/30 bg-emerald-600 text-white",
-  send_dm: "border-indigo-300/30 bg-indigo-600 text-white",
-  send_message: "border-blue-300/30 bg-blue-600 text-white",
-  set_channel_topic: "border-violet-300/30 bg-violet-600 text-white",
+  add_reaction: "border-border bg-secondary text-secondary-foreground",
+  call_webhook: "border-border bg-secondary text-secondary-foreground",
+  delay: "border-border bg-secondary text-secondary-foreground",
+  request_approval: "border-border bg-secondary text-secondary-foreground",
+  send_dm: "border-border bg-secondary text-secondary-foreground",
+  send_message: "border-border bg-secondary text-secondary-foreground",
+  set_channel_topic: "border-border bg-secondary text-secondary-foreground",
 };
 
 function StatusToggle({
@@ -124,7 +124,7 @@ function ActionTile({
     <span
       aria-hidden="true"
       className={cn(
-        "absolute inset-y-0 flex w-9 items-center justify-center rounded-xl border shadow-xs",
+        "absolute inset-y-0 flex w-9 items-center justify-center rounded-xl border",
         accent ?? "border-border/65 bg-background/80 text-muted-foreground",
         className,
       )}
@@ -229,7 +229,7 @@ export function WorkflowCard({
   return (
     <div
       className={cn(
-        "group relative flex min-h-60 w-full flex-col overflow-hidden rounded-2xl bg-muted/50 p-5 text-left text-foreground shadow-xs transition-colors hover:bg-muted/65",
+        "group relative flex min-h-60 w-full flex-col overflow-hidden rounded-2xl border border-border/60 bg-muted/50 p-5 text-left text-foreground transition-colors hover:bg-muted/65",
       )}
       data-testid={`workflow-card-${workflow.id}`}
     >
@@ -246,8 +246,9 @@ export function WorkflowCard({
           <div className="flex items-center gap-2" aria-hidden="true">
             <span
               className={cn(
-                "flex h-9 w-9 items-center justify-center rounded-xl border shadow-xs",
-                triggerAccent ?? "border-slate-400/30 bg-slate-600 text-white",
+                "flex h-9 w-9 items-center justify-center rounded-xl border",
+                triggerAccent ??
+                  "border-border/65 bg-background/80 text-muted-foreground",
               )}
             >
               {triggerEmoji ? (
@@ -260,7 +261,7 @@ export function WorkflowCard({
             </span>
             {actionTiles.length > 0 ? (
               <>
-                <ArrowRight className="h-4 w-4 text-muted-foreground/60" />
+                <ArrowRight className="h-4 w-4 text-muted-foreground" />
                 <ActionTileStack
                   actions={actionTiles}
                   animationSequence={triggerAnimationSequence}

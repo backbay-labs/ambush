@@ -129,7 +129,7 @@ function ThreadComposerSkeleton({
             THREAD_PANEL_COMPOSER_GUTTER_CLASS,
           )}
         >
-          <div className="relative isolate rounded-2xl border border-border/50 bg-background/80 px-3 pb-2 pt-3 shadow-none backdrop-blur-md sm:px-4">
+          <div className="relative isolate rounded-2xl border border-border/50 bg-background px-3 pb-2 pt-3 shadow-none sm:px-4">
             <Skeleton className="h-5 w-48 max-w-full" />
             <div className="mt-4 flex items-center gap-2">
               <Skeleton className="h-8 w-8 rounded-lg" />

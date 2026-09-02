@@ -85,7 +85,7 @@ function AvatarPreview({
       {emojiAvatar ? (
         <div
           aria-label={`${previewName} avatar`}
-          className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full shadow-xs transition-colors duration-[250ms] ease-out"
+          className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full transition-colors duration-[250ms] ease-out"
           data-testid="onboarding-avatar-preview"
           role="img"
           style={{ backgroundColor: emojiAvatar.color }}
@@ -104,7 +104,7 @@ function AvatarPreview({
       ) : !hasAvatarUrl ? (
         <div
           aria-label="Add a display image"
-          className="flex h-full w-full shrink-0 items-center justify-center rounded-full border-2 border-dashed border-border bg-background text-primary shadow-xs"
+          className="flex h-full w-full shrink-0 items-center justify-center rounded-full border-2 border-dashed border-border bg-background text-primary"
           data-testid="onboarding-avatar-preview"
           role="img"
         >

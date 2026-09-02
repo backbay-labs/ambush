@@ -108,7 +108,7 @@ async function installFakeHuddleMicrophone(
 
 test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-night");
   });
   await installMockBridge(page, {
     huddle: {
@@ -270,7 +270,7 @@ test("floats the in-app huddle tray over the glass background", async ({
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-night");
     window.localStorage.setItem("ambush-glass-background", "true");
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
     Object.defineProperty(navigator, "platform", {
@@ -343,7 +343,7 @@ test("keeps the popped-out huddle dock full-width over glass", async ({
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-night");
     window.localStorage.setItem("ambush-glass-background", "true");
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
     Object.defineProperty(navigator, "platform", {
@@ -963,9 +963,8 @@ test("keeps the colored startup surface while huddle controls connect", async ({
     page.getByRole("status", { name: "Starting huddle" }),
   ).toBeVisible();
   await expect(
-    page.getByTestId("huddle-starting-view").locator(".bee-sprite"),
+    page.getByTestId("huddle-starting-view").locator(".ambush-index"),
   ).toBeVisible();
-  await expect(page.getByTestId("setup-grainient-background")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Leave huddle" }),
   ).toBeVisible();

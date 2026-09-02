@@ -18,12 +18,14 @@ import 'pairing_qr_scanner.dart';
 part 'pairing_page/onboarding_background.dart';
 part 'pairing_page/pairing_welcome_view.dart';
 
-const _onboardingChartreuse = Color(0xFFD7D72E);
-const _onboardingShellBottom = Color(0xFFD7E7F6);
-const _onboardingCtaLabel = Color(0xFFD7E6F0);
-const _onboardingInk = Color(0xFF111111);
-const _onboardingMutedInk = Color(0xB3111111);
-const _onboardingErrorInk = Color(0xFF7A1025);
+// First run always opens on the daylit room, whatever the OS is set to: the
+// shell is one flat ground with the record laid on the lamplit plate.
+final _onboardingGround = quietDay.night;
+final _onboardingPlate = quietDay.plate;
+final _onboardingRule = quietDay.rule;
+final _onboardingCtaLabel = quietDay.night;
+final _onboardingInk = quietDay.ink;
+final _onboardingMutedInk = quietDay.inkDim;
 
 class PairingPage extends HookConsumerWidget {
   /// When true, the pairing page is being used to add a new community
@@ -288,11 +290,9 @@ class _SasVerificationView extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(vertical: Grid.xs),
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: context.colors.primary.withValues(alpha: 0.15),
-                        ),
+                        color: _onboardingPlate,
+                        borderRadius: BorderRadius.circular(Radii.chamfer),
+                        border: Border.all(color: _onboardingRule),
                       ),
                       child: Text(
                         sasCode[index],
@@ -318,7 +318,7 @@ class _SasVerificationView extends StatelessWidget {
                 : (value) => onProtectionChanged(value ?? false),
             activeColor: _onboardingInk,
             checkColor: _onboardingCtaLabel,
-            side: const BorderSide(color: _onboardingInk),
+            side: BorderSide(color: _onboardingInk),
             controlAffinity: ListTileControlAffinity.leading,
             contentPadding: EdgeInsets.zero,
             title: Text(
@@ -340,9 +340,7 @@ class _SasVerificationView extends StatelessWidget {
           Text(
             errorMessage!,
             textAlign: TextAlign.center,
-            style: context.textTheme.bodySmall?.copyWith(
-              color: _onboardingErrorInk,
-            ),
+            style: context.textTheme.bodySmall?.copyWith(color: _onboardingInk),
           ),
         ],
       ],

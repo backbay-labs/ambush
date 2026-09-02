@@ -221,7 +221,7 @@ function MemoryStaleErrorBanner({
   return (
     <div
       className={cn(
-        "mb-2 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/5 px-2 py-1.5 text-xs",
+        "mb-2 flex items-center gap-2 rounded-md border border-border bg-warning-bg px-2 py-1.5 text-xs",
         variant === "grouped" && "mx-3 mt-3",
       )}
       data-testid="agent-memory-stale-error"
@@ -392,7 +392,7 @@ function MemoryTruncatedHint({ variant }: { variant: MemorySectionVariant }) {
       <TooltipTrigger asChild>
         <div
           className={cn(
-            "flex justify-center border-warning/30 bg-warning/5 px-4 py-2",
+            "flex justify-center border-border bg-warning-bg px-4 py-2",
             variant === "grouped" ? "border-t" : "rounded-2xl border",
           )}
           data-testid="agent-memory-truncated"
@@ -454,7 +454,7 @@ function MemoryDanglingRefsHint({ slugs }: { slugs: string[] }) {
       className="-mx-4 -mb-2 mt-2 px-2 pb-1"
       data-testid="agent-memory-dangling-hint"
     >
-      <div className="rounded-xl bg-warning/5 px-2.5 py-2 text-xs leading-5">
+      <div className="rounded-xl bg-warning-bg px-2.5 py-2 text-xs leading-5">
         <p className="text-warning">
           Missing {slugs.length === 1 ? "link" : "links"}:{" "}
           {slugs.map((slug, index) => (
@@ -469,7 +469,7 @@ function MemoryDanglingRefsHint({ slugs }: { slugs: string[] }) {
             </React.Fragment>
           ))}
         </p>
-        <p className="mt-0.5 text-foreground/50">
+        <p className="mt-0.5 text-muted-foreground">
           {MEMORY_DANGLING_REF_TOOLTIP}
         </p>
       </div>
@@ -484,7 +484,7 @@ function MemorySlugTitle({ slug }: { slug: string }) {
   if (segments.length === 1) {
     return (
       <span
-        className={segments[0] === "mem" ? "text-foreground/40" : undefined}
+        className={segments[0] === "mem" ? "text-muted-foreground" : undefined}
       >
         {segments[0]}
       </span>
@@ -498,11 +498,11 @@ function MemorySlugTitle({ slug }: { slug: string }) {
         return (
           <React.Fragment key={segmentPath}>
             {index > 0 ? (
-              <span className="px-0.5 text-foreground/40">/</span>
+              <span className="px-0.5 text-muted-foreground">/</span>
             ) : null}
             <span
               className={cn(
-                segment === "mem" ? "text-foreground/40" : "text-foreground",
+                segment === "mem" ? "text-muted-foreground" : "text-foreground",
               )}
             >
               {segment}
@@ -588,7 +588,7 @@ function MemoryEntryAccordion({
           ref={bodyRef}
         >
           {isEmpty ? (
-            <span className="italic text-foreground/50">(empty)</span>
+            <span className="italic text-muted-foreground">(empty)</span>
           ) : (
             <MemoryBodyText body={entry.body} />
           )}

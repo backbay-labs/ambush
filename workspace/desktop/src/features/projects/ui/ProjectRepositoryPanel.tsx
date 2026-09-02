@@ -261,8 +261,8 @@ function fileIconVisual(entry: RepositoryFileEntry): FileIconVisual {
   if (entry.type === "directory") {
     return {
       Icon: FolderGit2,
-      className: "fill-sky-500/25 text-sky-500",
-      containerClassName: "bg-sky-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
@@ -276,24 +276,24 @@ function fileIconVisual(entry: RepositoryFileEntry): FileIconVisual {
   ) {
     return {
       Icon: Package,
-      className: "fill-orange-500/20 text-orange-500",
-      containerClassName: "bg-orange-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (name.includes("lock") || extension === "pem" || extension === "key") {
     return {
       Icon: FileLock2,
-      className: "fill-amber-500/20 text-amber-500",
-      containerClassName: "bg-amber-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (extension === "json") {
     return {
       Icon: FileJson,
-      className: "fill-yellow-500/20 text-yellow-500",
-      containerClassName: "bg-yellow-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
@@ -302,104 +302,104 @@ function fileIconVisual(entry: RepositoryFileEntry): FileIconVisual {
   ) {
     return {
       Icon: Settings,
-      className: "fill-zinc-500/20 text-zinc-500",
-      containerClassName: "bg-zinc-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (["html", "xml"].includes(extension)) {
     return {
       Icon: CodeXml,
-      className: "fill-rose-500/20 text-rose-500",
-      containerClassName: "bg-rose-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (extension === "css") {
     return {
       Icon: Braces,
-      className: "fill-violet-500/20 text-violet-500",
-      containerClassName: "bg-violet-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (CODE_EXTENSIONS.has(extension)) {
     return {
       Icon: FileCode2,
-      className: "fill-blue-500/20 text-blue-500",
-      containerClassName: "bg-blue-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (IMAGE_EXTENSIONS.has(extension)) {
     return {
       Icon: FileImage,
-      className: "fill-pink-500/20 text-pink-500",
-      containerClassName: "bg-pink-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (ARCHIVE_EXTENSIONS.has(extension)) {
     return {
       Icon: FileArchive,
-      className: "fill-orange-500/20 text-orange-500",
-      containerClassName: "bg-orange-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (AUDIO_EXTENSIONS.has(extension)) {
     return {
       Icon: FileAudio,
-      className: "fill-purple-500/20 text-purple-500",
-      containerClassName: "bg-purple-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (VIDEO_EXTENSIONS.has(extension)) {
     return {
       Icon: FileVideo,
-      className: "fill-red-500/20 text-red-500",
-      containerClassName: "bg-red-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (SPREADSHEET_EXTENSIONS.has(extension)) {
     return {
       Icon: FileSpreadsheet,
-      className: "fill-emerald-500/20 text-emerald-500",
-      containerClassName: "bg-emerald-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (extension === "sql" || extension === "db" || extension === "sqlite") {
     return {
       Icon: Database,
-      className: "fill-cyan-500/20 text-cyan-500",
-      containerClassName: "bg-cyan-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (["bash", "fish", "sh", "zsh"].includes(extension)) {
     return {
       Icon: Terminal,
-      className: "fill-lime-500/20 text-lime-500",
-      containerClassName: "bg-lime-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (TEXT_EXTENSIONS.has(extension)) {
     return {
       Icon: FileText,
-      className: "fill-slate-500/20 text-slate-500",
-      containerClassName: "bg-slate-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
   if (extension === "pdf") {
     return {
       Icon: FileType,
-      className: "fill-red-500/20 text-red-500",
-      containerClassName: "bg-red-500/15",
+      className: "fill-muted-foreground/20 text-muted-foreground",
+      containerClassName: "bg-muted/20",
     };
   }
 
@@ -561,14 +561,14 @@ function FileContentPanel({
           const nextPath = directorySegments.slice(0, index + 1).join("/");
           return (
             <React.Fragment key={nextPath}>
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <BreadcrumbButton onClick={() => onOpenPath(nextPath)}>
                 {segment}
               </BreadcrumbButton>
             </React.Fragment>
           );
         })}
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <FileDiff className="h-4 w-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate px-1.5 py-1 font-mono text-xs text-foreground">
           {fileName}
@@ -815,7 +815,7 @@ export function RepositoryFilesPanel({
           )}
           {sourceControls && pathSegments.length > 0 ? (
             <>
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <BreadcrumbButton onClick={() => openPath("")}>
                 Files
               </BreadcrumbButton>
@@ -825,7 +825,7 @@ export function RepositoryFilesPanel({
             const nextPath = pathSegments.slice(0, index + 1).join("/");
             return (
               <React.Fragment key={nextPath}>
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <BreadcrumbButton onClick={() => openPath(nextPath)}>
                   {segment}
                 </BreadcrumbButton>

@@ -126,7 +126,7 @@ export function SignOutSection() {
         <SettingsOptionRow>
           <div className="min-w-0">
             <p
-              className="text-sm font-normal text-muted-foreground/70"
+              className="text-sm font-normal text-muted-foreground"
               data-settings-subcopy
             >
               Removes your identity key and all local app data from this device.

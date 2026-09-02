@@ -193,7 +193,7 @@ export function PullRequestReviewCard({
         >
           {canApprove ? (
             <Button
-              className="h-8 gap-1.5 bg-green-600 px-3.5 text-white shadow-sm hover:bg-green-700"
+              className="h-8 gap-1.5 px-3.5"
               disabled={reviewDecisionPending}
               onClick={() => setApproveDialogOpen(true)}
               size="xs"
@@ -267,7 +267,7 @@ export function PullRequestReviewCard({
                 ) : null}
                 {canClose ? (
                   <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
+                    destructive
                     onSelect={() => {
                       void handleStatusChange("closed");
                     }}
@@ -313,7 +313,6 @@ export function PullRequestReviewCard({
               Cancel
             </Button>
             <Button
-              className="bg-green-600 text-white hover:bg-green-700"
               disabled={isApproving}
               onClick={() => {
                 void handleApprove();

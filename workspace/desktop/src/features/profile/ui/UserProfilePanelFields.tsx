@@ -516,7 +516,7 @@ function ProfileFieldRow({
         </span>
         {!isTrailingDisplay ? (
           <span
-            className="mt-0.5 block truncate text-sm text-muted-foreground/70"
+            className="mt-0.5 block truncate text-sm text-muted-foreground"
             title={field.displayValue}
           >
             {field.displayNode ?? field.displayValue}

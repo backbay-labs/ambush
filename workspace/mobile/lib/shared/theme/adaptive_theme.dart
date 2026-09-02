@@ -2,13 +2,15 @@
 //
 // Derives a Material 3 [ColorScheme] from a syntax theme's key colors
 // (bg, fg, comment, git). Detects light vs dark from background luminance
-// and adjusts accordingly.
+// and adjusts accordingly. A theme that declares its own surfaces skips the
+// derivation entirely.
 //
 // Ported from desktop/src/shared/theme/adaptive-theme.ts.
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'color_scheme.dart' show contrastForeground;
+import 'quiet.dart';
 import 'theme_catalog.dart';
 
 double _luminance(Color c) => c.computeLuminance();
@@ -88,7 +90,9 @@ Color _findColorWithLuminance(Color base, double targetLum) {
 
 /// Generate a full Material 3 [ColorScheme] from syntax theme colors.
 ///
-/// Maps the desktop's CSS variable system to Material 3 semantic slots:
+/// A theme that declares its own [QuietSurfaces] is painted verbatim.
+/// Otherwise the chrome is derived, mapping the desktop's CSS variable system
+/// to Material 3 semantic slots:
 ///   --background     → surface
 ///   --foreground     → onSurface
 ///   --muted          → surfaceContainerHighest
@@ -98,6 +102,8 @@ Color _findColorWithLuminance(Color base, double targetLum) {
 ///   --destructive    → error
 ///   --sidebar-bg     → surfaceContainerLowest (chrome)
 ColorScheme generateColorScheme(ThemeColors theme) {
+  if (theme.surfaces case final declared?) return quietColorScheme(declared);
+
   final isDark = theme.isDark;
   final syntaxBg = theme.bg;
   final syntaxFg = theme.fg;

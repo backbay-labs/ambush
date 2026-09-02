@@ -243,8 +243,8 @@ export function CommunitySwitcher({
         <ChevronDown
           className={
             isProfileVariant
-              ? "h-4 w-4 shrink-0 text-sidebar-foreground/45"
-              : "h-4 w-4 shrink-0 text-sidebar-foreground/50"
+              ? "h-4 w-4 shrink-0 text-sidebar-foreground"
+              : "h-4 w-4 shrink-0 text-sidebar-foreground"
           }
         />
       )}
@@ -379,7 +379,7 @@ export function CommunitySwitcher({
                 ? `${activeCommunity?.name ?? "Community"} — ${connectionLabel}`
                 : "Switch community"
             }
-            className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-sidebar-foreground/50 outline-hidden transition-colors hover:text-sidebar-foreground focus:outline-none focus-visible:outline-none data-[state=open]:text-sidebar-foreground"
+            className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-sidebar-foreground outline-hidden transition-colors hover:text-sidebar-foreground focus:outline-none focus-visible:outline-none data-[state=open]:text-sidebar-foreground"
             data-testid="community-switcher"
             type="button"
           >

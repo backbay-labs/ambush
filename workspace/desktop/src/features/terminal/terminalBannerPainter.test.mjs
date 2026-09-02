@@ -78,7 +78,7 @@ test("paints every emitted banner glyph at terminal cell coordinates", () => {
   assert.equal(paintTerminalBanner(target.canvas, banner, palette, 2), true);
   assert.equal(target.draws.length, emitted.length);
   assert.ok(target.draws.some(([char]) => char === "█"));
-  assert.ok(target.draws.some(([char]) => char === "/"));
+  assert.ok(target.draws.some(([char]) => char === "│"));
   assert.ok(target.draws.some(([, x, y]) => x > 0 && y > 0));
   assert.equal(target.canvas.width, 2000);
   assert.equal(target.canvas.height, 1200);

@@ -5596,7 +5596,7 @@ void main() {
       expect(relaySession.publishedKinds, isEmpty);
     });
 
-    testWidgets('shows the flapping bee instead of an avatar while joining', (
+    testWidgets('engraves the mark instead of an avatar while joining', (
       tester,
     ) async {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -5629,28 +5629,28 @@ void main() {
       await tester.pump();
       await tester.pump();
 
-      final loadingBee = find.byKey(const ValueKey('huddle-loading-bee'));
-      expect(loadingBee, findsOneWidget);
+      final loadingMark = find.byKey(const ValueKey('huddle-loading-mark'));
+      expect(loadingMark, findsOneWidget);
       expect(find.byType(AmbushLogoMotion), findsOneWidget);
-      expect(tester.widget<AmbushLogoMotion>(loadingBee).width, 60);
+      expect(tester.widget<AmbushLogoMotion>(loadingMark).width, 60);
       expect(find.bySemanticsLabel('Joining Huddle'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('huddle-participant-avatar-self')),
         findsNothing,
       );
-      final initialFlap = tester
-          .widget<AmbushLogoMotion>(loadingBee)
-          .flapAmount;
+      final initialLive = tester
+          .widget<AmbushLogoMotion>(loadingMark)
+          .liveProgress;
       await tester.pump(const Duration(milliseconds: 120));
       expect(
-        tester.widget<AmbushLogoMotion>(loadingBee).flapAmount,
-        isNot(initialFlap),
+        tester.widget<AmbushLogoMotion>(loadingMark).liveProgress,
+        isNot(initialLive),
       );
 
       connectGate.complete();
       await tester.pumpAndSettle();
 
-      expect(loadingBee, findsNothing);
+      expect(loadingMark, findsNothing);
       expect(
         find.byKey(const ValueKey('huddle-participant-avatar-self')),
         findsOneWidget,

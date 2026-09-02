@@ -202,7 +202,7 @@ export function VoiceSettingsCard() {
                 Agent text to speech
               </label>
               <p
-                className="text-sm text-muted-foreground/70"
+                className="text-sm text-muted-foreground"
                 data-settings-subcopy
               >
                 Read new agent messages aloud in the order they arrive.
@@ -233,7 +233,7 @@ export function VoiceSettingsCard() {
               <div className="min-w-0">
                 <p className="text-sm font-medium">Pocket TTS voice</p>
                 <p
-                  className="text-sm text-muted-foreground/70"
+                  className="text-sm text-muted-foreground"
                   data-settings-subcopy
                 >
                   Voice files stay private on this device.
@@ -363,7 +363,7 @@ export function VoiceSettingsCard() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              variant="destructive"
               data-testid="confirm-pocket-voice-delete"
               disabled={busy || !deleteCandidate}
               onClick={(event) => {

@@ -113,7 +113,7 @@ export function CompactLinkPreviewAttachment({
               <LinkPreviewImageFallback preview={preview} />
             ) : (
               <div
-                className="h-full w-full animate-pulse bg-muted-foreground/10"
+                className="h-full w-full animate-pulse bg-muted-foreground/10 motion-reduce:animate-none"
                 data-link-preview-skeleton=""
               />
             )}
@@ -121,7 +121,7 @@ export function CompactLinkPreviewAttachment({
         ) : null}
         <AttachmentContent className={reserveImage ? "px-2 py-1.5" : undefined}>
           <a
-            className="relative z-20 flex w-fit max-w-full min-w-0 items-center gap-1.5 text-xs font-normal leading-4 text-muted-foreground/70 group-hover/attachment:underline"
+            className="relative z-20 flex w-fit max-w-full min-w-0 items-center gap-1.5 text-xs font-normal leading-4 text-muted-foreground group-hover/attachment:underline"
             data-link-preview-hostname=""
             href={preview.href}
             onClick={
@@ -158,7 +158,7 @@ export function CompactLinkPreviewAttachment({
             {preview.title}
           </AttachmentTitle>
           {preview.description ? (
-            <AttachmentDescription className="text-muted-foreground/70">
+            <AttachmentDescription className="text-muted-foreground">
               {preview.description}
             </AttachmentDescription>
           ) : null}

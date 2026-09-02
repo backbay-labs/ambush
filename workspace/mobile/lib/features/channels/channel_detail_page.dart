@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math' show cos, max, min, pi;
+import 'dart:math' show max, min;
 import 'dart:ui' show ImageFilter, lerpDouble;
 
 import 'package:flutter/foundation.dart';

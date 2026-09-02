@@ -317,15 +317,13 @@ class _CommunitySelectionIndicator extends StatelessWidget {
       child: Container(
         width: 24,
         height: 24,
-        decoration: BoxDecoration(
-          color: isActive ? context.appColors.success : Colors.transparent,
-          border: isActive
-              ? null
-              : Border.all(color: context.colors.outlineVariant, width: 2),
-          shape: BoxShape.circle,
+        decoration: statusMarkDecoration(
+          context,
+          isActive ? StatusMark.filled : StatusMark.spent,
+          ringWidth: 2,
         ),
         child: isActive
-            ? const Icon(LucideIcons.check, color: Colors.white, size: 16)
+            ? Icon(LucideIcons.check, color: context.colors.onPrimary, size: 16)
             : null,
       ),
     );

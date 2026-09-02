@@ -134,7 +134,7 @@ export function CurrentChannelSearchAction({
             <span className="font-medium text-foreground">{channelLabel}</span>
           </span>
         </span>
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground/70">
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {isDirectMessage
             ? "Search messages in this conversation."
             : "Search messages in this channel"}

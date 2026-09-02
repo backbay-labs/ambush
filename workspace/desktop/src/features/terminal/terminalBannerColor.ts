@@ -8,8 +8,8 @@
  *
  * Why the palette and not the CSS vars: `--primary` is a user preference that
  * collapses to `--foreground` on the Ambush themes (ThemeProvider.tsx), and
- * `--secondary` / `--accent` are assigned the same 6% hover tint
- * (adaptive-theme.ts:241-243). A literal primary/secondary/accent fade is two
+ * `--secondary` / `--accent` can be assigned the same surface
+ * (adaptive-theme.ts). A literal primary/secondary/accent fade is two
  * stops, one of which is the background. The TerminalPalette carries the
  * theme's real hues, so the three stops come from there.
  *
@@ -142,6 +142,12 @@ const CHROMA_MIN = 16; // Lab C*: below this a "hue" is a grey
 // Quoting a degrees figure next to this threshold compares different units.
 const HUE_MIN = 12;
 const SRGB_MIN = 45; // min pairwise sRGB distance, conjoined with HUE_MIN
+// Half-arc, in degrees, for a synthesized triad. 40 is where a theme with any
+// hue of its own lands; a fully achromatic palette has to open further before
+// three stops read apart, and 80 is as far as the fade stays one hue family.
+const SYNTH_SPREAD_MIN = 40;
+const SYNTH_SPREAD_STEP = 10;
+const SYNTH_SPREAD_MAX = 80;
 
 /** Euclidean sRGB distance. Guards near-coincident stops that differ in hue
  *  angle but barely in appearance. NOT sufficient alone: it counts lightness,
@@ -296,22 +302,34 @@ export function bannerStops(p: TerminalPalette): {
   }
   let mode: "native" | "synth" = "native";
   if (!stops) {
-    // Near-monochrome theme (vesper, min-dark): rotate +/-40 deg in LCh around
-    // the theme's own most chromatic colour. It stays the theme's hue family —
-    // a restrained theme stays restrained, it just gains a fade.
+    // Near-monochrome theme (vesper, min-dark, the two Ambush themes): rotate
+    // in LCh around the theme's own most chromatic colour. It stays the
+    // theme's hue family — a restrained theme stays restrained, it just gains
+    // a fade. The arc opens only as far as the distinctness gate demands, so
+    // a theme whose fallback already passes at 40 deg is left where it was.
     mode = "synth";
     const anchor = pool.reduce((a, b) => (chroma(b) > chroma(a) ? b : a));
     const v = lab(anchor),
       C = Math.max(Math.hypot(v.a, v.b), 22),
       h0 = (Math.atan2(v.b, v.a) * 180) / Math.PI;
-    stops = [-40, 0, 40].map((d) => {
-      const h = ((h0 + d) * Math.PI) / 180;
-      return lift(
-        lab2hex(v.L, C * Math.cos(h), C * Math.sin(h)),
-        bg,
-        WORDMARK_FLOOR,
-      );
-    });
+    const triad = (spread: number) =>
+      [-spread, 0, spread].map((d) => {
+        const h = ((h0 + d) * Math.PI) / 180;
+        return lift(
+          lab2hex(v.L, C * Math.cos(h), C * Math.sin(h)),
+          bg,
+          WORDMARK_FLOOR,
+        );
+      }) as [string, string, string];
+    stops = triad(SYNTH_SPREAD_MIN);
+    for (
+      let spread = SYNTH_SPREAD_MIN + SYNTH_SPREAD_STEP;
+      spread <= SYNTH_SPREAD_MAX &&
+      !stopsAreDistinct(stops as [string, string, string]);
+      spread += SYNTH_SPREAD_STEP
+    ) {
+      stops = triad(spread);
+    }
   }
   // order by hue angle so the sweep is monotone across the wordmark
   stops.sort((a, b) => {

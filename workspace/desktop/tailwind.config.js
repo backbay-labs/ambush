@@ -45,23 +45,37 @@ export default {
         8: "calc(var(--ambush-type-rem) * 2)",
         "message-author": "var(--conversation-author-line-height)",
       },
+      // Separation is drawn, never blurred: surfaces are told apart by a
+      // hairline and by a step in lightness. The stock scale collapses so a
+      // stray `shadow-lg` cannot reintroduce a glow.
       boxShadow: {
-        "content-edge": "-1px -1px 0 0 hsl(var(--sidebar-border) / 0.45)",
-        // Edge + elevation for a surface anchored to the right of the content
-        // area, whose only exposed edge faces left. Tailwind's stock shadows are
-        // all y-offset, so they cast almost nothing sideways — `shadow-xl` on a
-        // left-facing edge is nearly invisible. Both layers run -x so they wrap
-        // the surface's rounded left corners: the hairline draws the boundary
-        // (and carries dark mode, where a black shadow reads as nothing), the
-        // soft layer carries the lift. A left-only `border` can't do this job —
-        // it tapers out at each corner instead of turning it.
-        "panel-left":
-          "-1px 0 0 0 hsl(var(--border) / 0.8), -16px 0 32px -12px rgb(0 0 0 / 0.18)",
+        "2xs": "none",
+        xs: "none",
+        sm: "none",
+        DEFAULT: "none",
+        md: "none",
+        lg: "none",
+        xl: "none",
+        "2xl": "none",
+        "content-edge": "-1px -1px 0 0 hsl(var(--sidebar-border))",
+        // A left-facing boundary. Tailwind's stock shadows are all y-offset,
+        // so they cast almost nothing sideways; this draws the edge the panel
+        // actually exposes, turning its rounded corners with it.
+        "panel-left": "-1px 0 0 0 hsl(var(--border))",
       },
+      // A machined chamfer, uniform everywhere. Circles stay circles.
       borderRadius: {
+        none: "0px",
+        xs: "var(--radius)",
+        sm: "var(--radius)",
+        DEFAULT: "var(--radius)",
+        md: "var(--radius)",
         lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        xl: "var(--radius)",
+        "2xl": "var(--radius)",
+        "3xl": "var(--radius)",
+        "4xl": "var(--radius)",
+        full: "9999px",
       },
       spacing: {
         4.5: "1.125rem",
@@ -72,11 +86,19 @@ export default {
       },
       fontFamily: {
         sans: [
-          '"Inter Variable"',
-          "Inter",
-          '"Avenir Next"',
-          '"Segoe UI"',
+          '"IBM Plex Sans Variable"',
+          '"IBM Plex Sans"',
+          '"Helvetica Neue"',
+          "Helvetica",
+          "Arial",
           "sans-serif",
+        ],
+        mono: [
+          '"IBM Plex Mono"',
+          "ui-monospace",
+          '"SF Mono"',
+          "Menlo",
+          "monospace",
         ],
       },
       colors: {
@@ -133,6 +155,23 @@ export default {
         warning: {
           DEFAULT: "var(--ui-warning)",
           bg: "var(--ui-warning-bg)",
+        },
+        // The Quiet palette itself. Reach for a semantic token above when one
+        // fits; these are for the roles shadcn has no name for — the index
+        // mark, the plate's raised head, graduations, and mid ink.
+        index: "var(--ambush-index)",
+        night: "var(--ambush-night)",
+        steel: "var(--ambush-steel)",
+        rule: "var(--ambush-rule)",
+        grad: "var(--ambush-grad)",
+        plate: {
+          DEFAULT: "var(--ambush-plate)",
+          hi: "var(--ambush-plate-hi)",
+        },
+        ink: {
+          DEFAULT: "var(--ambush-ink)",
+          mid: "var(--ambush-ink-mid)",
+          dim: "var(--ambush-ink-dim)",
         },
       },
     },

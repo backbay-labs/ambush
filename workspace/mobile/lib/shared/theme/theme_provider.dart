@@ -13,9 +13,9 @@ const _themeModeKey = 'ambush_theme_mode';
 const _accentKey = 'ambush_accent_color';
 const _schemeKey = 'ambush_color_scheme';
 
-/// Ambush ships as the default: the first-party pair, so a fresh install gets the
-/// branded top-section gradient without picking a theme first.
-const defaultSchemeName = ambushThemeName;
+/// Ambush Night ships as the default, so a fresh install opens on the darkened
+/// room rather than a borrowed syntax palette.
+const defaultSchemeName = ambushDarkThemeName;
 const defaultSchemeDisplayName = 'Ambush';
 
 /// Pre-loaded SharedPreferences instance, overridden in main().

@@ -298,7 +298,7 @@ export function NostrKeyImportForm({
                   // Symmetric px reserves the absolutely positioned toggle's
                   // footprint on BOTH sides, so the centered key text never
                   // runs under the eye control and stays optically centered.
-                  className="h-[3.6875rem] rounded-none border-0 bg-transparent px-10 text-center font-mono !text-4xl text-[color:var(--ambush-onboarding-backup-ink)] shadow-none placeholder:text-foreground/30 focus-visible:ring-0"
+                  className="h-[3.6875rem] rounded-none border-0 bg-transparent px-10 text-center font-mono !text-4xl text-[color:var(--ambush-onboarding-backup-ink)] shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
                   data-testid="nostr-import-nsec-input"
                   id="nostr-private-key"
                   onChange={(event) => {
@@ -402,11 +402,11 @@ export function NostrKeyImportForm({
           </div>
           {isDragging ? (
             <fieldset
-              className="absolute inset-[var(--ambush-card-textured-safe-inset)] z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 backdrop-blur-sm"
+              className="absolute inset-[var(--ambush-card-textured-safe-inset)] z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background"
               data-dragging="true"
               data-testid="nostr-import-backup-drop"
             >
-              <span className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background shadow-sm ring-1 ring-background/15">
+              <span className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background ring-1 ring-background/15">
                 <KeyRound aria-hidden="true" className="size-4" />
                 <span>Drop your backup file here</span>
               </span>
@@ -498,7 +498,7 @@ export function NostrKeyImportForm({
             <Input
               autoComplete="current-password"
               autoCorrect="off"
-              className="h-14 rounded-2xl border-black/20 bg-white px-12 text-center font-mono text-lg text-black/80 shadow-none placeholder:text-black/55 focus-visible:ring-black/35"
+              className="h-14 rounded-2xl border-background/20 bg-foreground px-12 text-center font-mono text-lg text-background/80 shadow-none placeholder:text-background/55 focus-visible:ring-background/35"
               data-testid="nostr-import-passphrase"
               id="nostr-import-passphrase"
               onChange={(event) => {
@@ -513,7 +513,7 @@ export function NostrKeyImportForm({
             />
             <Button
               aria-label={isRevealed ? "Hide password" : "Reveal password"}
-              className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 text-black/55 hover:bg-black/5 hover:text-black/80"
+              className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 text-background/55 hover:bg-background/5 hover:text-background/80"
               data-testid="nostr-import-passphrase-reveal-toggle"
               disabled={isInteractionDisabled}
               onClick={() => setIsRevealed((current) => !current)}

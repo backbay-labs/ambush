@@ -146,7 +146,7 @@ export function DraftDetailPane({
                 <span className="text-xs font-medium text-muted-foreground">
                   Draft
                 </span>
-                <span className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground/55">
+                <span className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground">
                   {formatDraftCreatedAt(entry.draft)}
                 </span>
               </div>
@@ -204,7 +204,7 @@ function DraftActionBar({
         className="-m-1 p-1 opacity-100 transition-opacity duration-150 ease-out sm:pointer-events-none sm:opacity-0 sm:group-hover/message:pointer-events-auto sm:group-hover/message:opacity-100 sm:group-focus-within/message:pointer-events-auto sm:group-focus-within/message:opacity-100"
         data-testid="home-inbox-draft-action-bar"
       >
-        <div className="overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-xs backdrop-blur-sm supports-[backdrop-filter]:bg-background/85">
+        <div className="overflow-hidden rounded-full border border-border/70 bg-background">
           <div className="flex items-center gap-0.5 p-1">
             <DraftActionButton
               disabled={!canOpen}

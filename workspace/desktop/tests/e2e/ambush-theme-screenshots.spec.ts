@@ -58,17 +58,25 @@ async function openChannel(page: Page) {
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 }
 
+/** Quiet surface tokens, per mode, as the browser reports them. */
+const NIGHT = { light: "rgb(188, 181, 173)", dark: "rgb(23, 23, 23)" } as const;
+const PLATE = { light: "rgb(236, 207, 185)", dark: "rgb(51, 40, 30)" } as const;
+const PLATE_HIGH = {
+  light: "rgb(244, 215, 196)",
+  dark: "rgb(61, 48, 37)",
+} as const;
+const INK_DIM = {
+  light: "rgb(81, 68, 58)",
+  dark: "rgb(164, 155, 144)",
+} as const;
+const RULE = { light: "rgb(156, 152, 147)", dark: "rgb(62, 62, 62)" } as const;
+
 async function expectAmbushSidebarPalette(page: Page, mode: "light" | "dark") {
-  const mutedColor =
-    mode === "light" ? "rgba(0, 0, 0, 0.4)" : "rgba(255, 255, 255, 0.4)";
-  const searchSurface =
-    mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-  const rowHoverSurface =
-    mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-  const activeSurface =
-    mode === "light" ? "rgba(0, 0, 0, 0.07)" : "rgba(255, 255, 255, 0.16)";
-  const chromeColor =
-    mode === "light" ? "rgba(0, 0, 0, 0.5)" : "rgba(255, 255, 255, 0.5)";
+  const mutedColor = mode === "light" ? INK_DIM.light : INK_DIM.dark;
+  const searchSurface = mode === "light" ? NIGHT.light : NIGHT.dark;
+  const rowHoverSurface = mode === "light" ? PLATE.light : PLATE.dark;
+  const activeSurface = mode === "light" ? PLATE.light : PLATE.dark;
+  const chromeColor = mode === "light" ? INK_DIM.light : INK_DIM.dark;
   const search = page.getByTestId("open-search");
   const pinnedHeader = page.getByTestId("sidebar-pinned-header");
   const sidebarScroller = page.locator(".ambush-sidebar-scrollbar");
@@ -210,7 +218,7 @@ async function expectAmbushSidebarPalette(page: Page, mode: "light" | "dark") {
     (element) =>
       getComputedStyle(element, "::-webkit-scrollbar-thumb").backgroundColor,
   );
-  expect(scrollbarThumbColor).toBe(searchSurface);
+  expect(scrollbarThumbColor).toBe(mode === "light" ? RULE.light : RULE.dark);
 }
 
 async function expectIconlessSectionTitleAligned(
@@ -240,32 +248,21 @@ async function expectIconlessSectionTitleAligned(
   expect(Math.abs(titleBox.x - firstRowIconX)).toBeLessThanOrEqual(0.5);
 }
 
-async function expectAmbushContentShadow(page: Page, mode: "light" | "dark") {
+async function expectAmbushContentShadow(page: Page) {
   const effects = await page.evaluate(() => {
     const shell = document.querySelector(".ambush-huddle-shell");
     const content = document.querySelector("[data-ambush-content-surface]");
-    const shadowViewport = document.querySelector(
-      "[data-ambush-shadow-viewport]",
-    );
     return {
       appStroke: shell ? getComputedStyle(shell, "::before").boxShadow : "",
       contentShadow: content ? getComputedStyle(content).boxShadow : "",
-      shadowViewportOverflow: shadowViewport
-        ? getComputedStyle(shadowViewport).overflow
-        : "",
     };
   });
 
+  // The content card is bounded by a hairline in both modes. A blur radius
+  // here means a soft drop shadow crept back in.
   expect(effects.appStroke).toBe("none");
-  if (mode === "light") {
-    expect(effects.contentShadow).toContain("4px");
-    expect(effects.contentShadow).toContain("rgba(0, 0, 0, 0.07)");
-    expect(effects.shadowViewportOverflow).toBe("visible");
-  } else {
-    expect(effects.contentShadow).not.toContain("4px");
-    expect(effects.contentShadow).not.toContain("rgba(255, 255, 255, 0.07)");
-    expect(effects.shadowViewportOverflow).toBe("hidden");
-  }
+  expect(effects.contentShadow).toContain("-1px -1px");
+  expect(effects.contentShadow).not.toContain("4px");
 }
 
 async function expectAmbushGradientPaint(
@@ -299,7 +296,7 @@ async function expectAmbushGradientPaint(
     };
   });
 
-  expect(paint.theme).toBe(mode === "light" ? "ambush" : "ambush-dark");
+  expect(paint.theme).toBe(mode === "light" ? "ambush-day" : "ambush-night");
   expect(paint.isDark).toBe(mode === "dark");
   expect(paint.surfaceImage).toBe("none");
   expect(paint.lightImage).not.toBe("");
@@ -314,8 +311,7 @@ async function expectAmbushGradientPaint(
 }
 
 async function expectAmbushSettingsPalette(page: Page, mode: "light" | "dark") {
-  const mutedColor =
-    mode === "light" ? "rgba(0, 0, 0, 0.4)" : "rgba(255, 255, 255, 0.4)";
+  const mutedColor = mode === "light" ? INK_DIM.light : INK_DIM.dark;
   const sidebar = page.getByTestId("settings-sidebar");
   const sectionLabel = sidebar
     .locator('[data-sidebar="group-label"]')
@@ -337,10 +333,10 @@ async function expectAmbushSettingsPalette(page: Page, mode: "light" | "dark") {
 
 async function expectAppliedAmbushTheme(
   page: Page,
-  themeName: "ambush" | "ambush-dark",
-  storedTheme: "ambush" | "ambush-dark" = themeName,
+  themeName: "ambush-day" | "ambush-night",
+  storedTheme: "ambush-day" | "ambush-night" = themeName,
 ) {
-  const isDark = themeName === "ambush-dark";
+  const isDark = themeName === "ambush-night";
   await expect
     .poll(() =>
       page.evaluate((storageKey) => {
@@ -361,8 +357,8 @@ async function expectAppliedAmbushTheme(
       storedTheme,
       isDark,
       ambushTheme: themeName,
-      gradientTop: isDark ? "#4a4616" : "#e6e6b6",
-      gradientBottom: isDark ? "#0a1423" : "#c4d0da",
+      gradientTop: isDark ? "#1f1f1f" : "#c7c0b8",
+      gradientBottom: isDark ? "#1f1f1f" : "#c7c0b8",
     });
 }
 
@@ -386,12 +382,12 @@ async function emitNativeThemeChange(page: Page, theme: "light" | "dark") {
 }
 
 test("ambush light sidebar gradient", async ({ page }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   await openChannel(page);
   await expectAmbushGradientPaint(page, "light");
   await expectAmbushSidebarPalette(page, "light");
-  await expectAmbushContentShadow(page, "light");
+  await expectAmbushContentShadow(page);
   await expectIconlessSectionTitleAligned(page, "stream-list");
   await expectIconlessSectionTitleAligned(page, "dm-list");
   await waitForAnimations(page);
@@ -401,17 +397,17 @@ test("ambush light sidebar gradient", async ({ page }) => {
 });
 
 test("ambush dark sidebar gradient", async ({ page }) => {
-  await seedTheme(page, "ambush-dark");
+  await seedTheme(page, "ambush-night");
   await installMockBridge(page);
   await openChannel(page);
   await expectAmbushGradientPaint(page, "dark");
   await expectAmbushSidebarPalette(page, "dark");
-  await expectAmbushContentShadow(page, "dark");
+  await expectAmbushContentShadow(page);
   await expectIconlessSectionTitleAligned(page, "stream-list");
   await expectIconlessSectionTitleAligned(page, "dm-list");
   await expect(page.locator("[data-ambush-content-surface]")).toHaveCSS(
     "background-color",
-    "rgb(26, 26, 26)",
+    NIGHT.dark,
   );
   await waitForAnimations(page);
   await page
@@ -422,7 +418,7 @@ test("ambush dark sidebar gradient", async ({ page }) => {
 test("custom section icon and name align with channel columns", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await seedIconChannelSection(page);
   await installMockBridge(page);
   await openChannel(page);
@@ -545,7 +541,7 @@ test("appearance groups theme and preferences into labeled rows", async ({
   await themeStyleTrigger.click();
   await expect(themeStyleTrigger).toHaveAttribute("aria-expanded", "true");
   await expect(themeStyleOptions).toBeVisible();
-  await themeCard.getByTestId("theme-option-ambush").click();
+  await themeCard.getByTestId("theme-option-ambush-day").click();
   await expect(themeStyleTrigger).toHaveAttribute("aria-expanded", "true");
   await expect(themeStyleOptions).toBeVisible();
   await expect(
@@ -644,7 +640,7 @@ test("appearance groups theme and preferences into labeled rows", async ({
 test("app font size and conversation density apply independently", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   await openAppearance(page, "light");
 
@@ -1164,21 +1160,21 @@ test("app font size and conversation density apply independently", async ({
 });
 
 test("appearance picker — system tab (Ambush follows OS)", async ({ page }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   const panel = await openAppearance(page, "system");
   await panel.screenshot({ path: `${SHOTS}/03-picker-system.png` });
 });
 
 test("appearance picker — light tab (Ambush)", async ({ page }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   const panel = await openAppearance(page, "light");
   await panel.screenshot({ path: `${SHOTS}/04-picker-light.png` });
 });
 
 test("appearance picker — dark tab (Ambush Dark)", async ({ page }) => {
-  await seedTheme(page, "ambush-dark");
+  await seedTheme(page, "ambush-night");
   await installMockBridge(page);
   const panel = await openAppearance(page, "dark");
   await panel.screenshot({ path: `${SHOTS}/05-picker-dark.png` });
@@ -1187,7 +1183,7 @@ test("appearance picker — dark tab (Ambush Dark)", async ({ page }) => {
 test("settings nav uses Ambush active pill + hover (light)", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("open-settings").click();
@@ -1220,7 +1216,7 @@ test("settings nav uses Ambush active pill + hover (light)", async ({
 test("settings nav uses Ambush active pill + hover (dark)", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush-dark");
+  await seedTheme(page, "ambush-night");
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("open-settings").click();
@@ -1231,7 +1227,7 @@ test("settings nav uses Ambush active pill + hover (dark)", async ({
   await expectAmbushSettingsPalette(page, "dark");
   await expect(page.getByTestId("settings-content-surface")).toHaveCSS(
     "background-color",
-    "rgb(26, 26, 26)",
+    NIGHT.dark,
   );
   await waitForAnimations(page);
   await sidebar.screenshot({ path: `${SHOTS}/07-settings-nav-dark.png` });
@@ -1243,7 +1239,7 @@ test("settings nav uses Ambush active pill + hover (dark)", async ({
 test("prominent active tab is opt-in and switches selection surfaces", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   await openAppearance(page, "light");
 
@@ -1252,7 +1248,7 @@ test("prominent active tab is opt-in and switches selection surfaces", async ({
   const toggle = page.getByTestId("prominent-active-tab-toggle");
   await expect(toggle).not.toBeChecked();
   await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
-  await expect(activeRow).toHaveCSS("background-color", "rgba(0, 0, 0, 0.07)");
+  await expect(activeRow).toHaveCSS("background-color", PLATE.light);
   const subtleTextStyle = await activeRow.evaluate((element) => {
     const styles = getComputedStyle(element);
     return { color: styles.color, fontWeight: styles.fontWeight };
@@ -1269,10 +1265,7 @@ test("prominent active tab is opt-in and switches selection surfaces", async ({
   await toggle.click();
   await expect(toggle).toBeChecked();
   await expect(root).toHaveAttribute("data-prominent-active-tab", "");
-  await expect(activeRow).toHaveCSS(
-    "background-color",
-    "rgba(255, 255, 255, 0.82)",
-  );
+  await expect(activeRow).toHaveCSS("background-color", PLATE_HIGH.light);
   await expect
     .poll(() =>
       page.evaluate(
@@ -1289,7 +1282,7 @@ test("prominent active tab is opt-in and switches selection surfaces", async ({
 
   await toggle.click();
   await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
-  await expect(activeRow).toHaveCSS("background-color", "rgba(0, 0, 0, 0.07)");
+  await expect(activeRow).toHaveCSS("background-color", PLATE.light);
   await expect
     .poll(() =>
       page.evaluate(
@@ -1303,7 +1296,7 @@ test("prominent active tab is opt-in and switches selection surfaces", async ({
 test("prominent channel and direct-message rows share one flat active state", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await page.addInitScript(
     ({ key }) => window.localStorage.setItem(key, "true"),
     { key: PROMINENT_ACTIVE_TAB_STORAGE_KEY },
@@ -1314,43 +1307,37 @@ test("prominent channel and direct-message rows share one flat active state", as
   const channelRow = page.getByTestId("channel-general");
   const directMessageRow = page.getByTestId("channel-alice-tyler");
 
-  await expect(channelRow).toHaveCSS(
-    "background-color",
-    "rgba(255, 255, 255, 0.82)",
-  );
+  await expect(channelRow).toHaveCSS("background-color", PLATE_HIGH.light);
   await expect(channelRow).toHaveCSS("box-shadow", "none");
   await channelRow.hover();
-  await expect(channelRow).toHaveCSS(
-    "background-color",
-    "rgba(255, 255, 255, 0.82)",
-  );
+  await expect(channelRow).toHaveCSS("background-color", PLATE_HIGH.light);
 
   await directMessageRow.click();
   await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
   await expect(directMessageRow).toHaveCSS(
     "background-color",
-    "rgba(255, 255, 255, 0.82)",
+    PLATE_HIGH.light,
   );
   await expect(directMessageRow).toHaveCSS("box-shadow", "none");
   await directMessageRow.hover();
   await expect(directMessageRow).toHaveCSS(
     "background-color",
-    "rgba(255, 255, 255, 0.82)",
+    PLATE_HIGH.light,
   );
 });
 
 for (const { activeSurface, hoverSurface, mode, theme } of [
   {
-    activeSurface: "rgba(0, 0, 0, 0.07)",
-    hoverSurface: "rgba(0, 0, 0, 0.04)",
+    activeSurface: PLATE.light,
+    hoverSurface: PLATE.light,
     mode: "light" as const,
-    theme: "ambush",
+    theme: "ambush-day",
   },
   {
-    activeSurface: "rgba(255, 255, 255, 0.16)",
-    hoverSurface: "rgba(255, 255, 255, 0.04)",
+    activeSurface: PLATE.dark,
+    hoverSurface: PLATE.dark,
     mode: "dark" as const,
-    theme: "ambush-dark",
+    theme: "ambush-night",
   },
 ]) {
   test(`non-prominent ${theme} selection matches production`, async ({
@@ -1449,7 +1436,7 @@ for (const { mode, theme } of [
 test("settings content uses the same inset surface as the main app", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   const searchBox = await page.getByTestId("open-search").boundingBox();
@@ -1529,7 +1516,7 @@ test("settings content uses the same inset surface as the main app", async ({
 });
 
 test("appearance hides accent picker under Ambush", async ({ page }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   const panel = await openAppearance(page, "light");
   // The accent picker is hidden while an Ambush theme is active. Its neutral
@@ -1539,7 +1526,7 @@ test("appearance hides accent picker under Ambush", async ({ page }) => {
 });
 
 test("glass background keeps the content panel solid", async ({ page }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await page.addInitScript(() => {
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
     Object.defineProperty(navigator, "platform", {
@@ -1590,7 +1577,7 @@ test("glass background keeps the content panel solid", async ({ page }) => {
     page.getByTestId("thread-layout-control-indicator"),
   ];
   for (const control of matchingRadiusControls) {
-    await expect(control).toHaveCSS("border-radius", "8px");
+    await expect(control).toHaveCSS("border-radius", "2px");
   }
   await expect(page.getByTestId("glass-opacity-value")).toHaveCount(0);
   await expect(
@@ -1673,7 +1660,7 @@ test("glass background keeps the content panel solid", async ({ page }) => {
 });
 
 test("glass background is unavailable on Linux", async ({ page }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await page.addInitScript((storageKey) => {
     window.localStorage.setItem(storageKey, "true");
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
@@ -1790,7 +1777,7 @@ test("accent picker reveals/hides when toggling Ambush", async ({ page }) => {
 
   // Switch to Ambush — picker should leave (allow the exit animation to settle).
   await page.getByTestId("theme-style-trigger").click();
-  await page.getByTestId("theme-option-ambush").click();
+  await page.getByTestId("theme-option-ambush-day").click();
   await expect(page.getByTestId("theme-style-trigger")).toHaveAttribute(
     "aria-expanded",
     "true",
@@ -1842,31 +1829,31 @@ test("accent picker reveals/hides when toggling Ambush", async ({ page }) => {
 test("Ambush light and dark modes apply live without a reload", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await installMockBridge(page);
   await openAppearance(page, "light");
-  await expectAppliedAmbushTheme(page, "ambush");
+  await expectAppliedAmbushTheme(page, "ambush-day");
   const lightGradient = await expectAmbushGradientPaint(page, "light");
 
   await page.getByTestId("appearance-mode-dark").click();
-  await expectAppliedAmbushTheme(page, "ambush-dark");
+  await expectAppliedAmbushTheme(page, "ambush-night");
   const darkGradient = await expectAmbushGradientPaint(page, "dark");
   expect(darkGradient).not.toBe(lightGradient);
 
   await page.getByTestId("appearance-mode-light").click();
-  await expectAppliedAmbushTheme(page, "ambush");
+  await expectAppliedAmbushTheme(page, "ambush-day");
   await expectAmbushGradientPaint(page, "light");
 
   // Exercise the overlap that previously let a slower, stale theme load win.
   await page.getByTestId("appearance-mode-dark").click();
   await page.getByTestId("appearance-mode-light").click();
-  await expectAppliedAmbushTheme(page, "ambush");
+  await expectAppliedAmbushTheme(page, "ambush-day");
 });
 
 test("Ambush follows native system theme changes without a reload", async ({
   page,
 }) => {
-  await seedTheme(page, "ambush");
+  await seedTheme(page, "ambush-day");
   await page.addInitScript(() => {
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
   });
@@ -1874,10 +1861,10 @@ test("Ambush follows native system theme changes without a reload", async ({
   await openAppearance(page, "system");
 
   await emitNativeThemeChange(page, "dark");
-  await expectAppliedAmbushTheme(page, "ambush-dark", "ambush");
+  await expectAppliedAmbushTheme(page, "ambush-night", "ambush-day");
   await expectAmbushGradientPaint(page, "dark");
 
   await emitNativeThemeChange(page, "light");
-  await expectAppliedAmbushTheme(page, "ambush", "ambush");
+  await expectAppliedAmbushTheme(page, "ambush-day", "ambush-day");
   await expectAmbushGradientPaint(page, "light");
 });

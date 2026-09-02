@@ -1,4 +1,4 @@
-import { Plus, RefreshCw } from "lucide-react";
+import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { stringify as yamlStringify } from "yaml";
@@ -66,7 +66,7 @@ function WorkflowsListSkeleton() {
     <div className={WORKFLOW_CARD_GRID_CLASS}>
       {["first", "second", "third", "fourth"].map((card) => (
         <div
-          className="flex min-h-60 flex-col rounded-2xl bg-muted/50 p-5 shadow-xs"
+          className="flex min-h-60 flex-col rounded-2xl border border-border/60 bg-muted/50 p-5"
           key={card}
         >
           <div className="flex items-start justify-between">
@@ -91,7 +91,7 @@ function CreateWorkflowCard({ onClick }: { onClick: () => void }) {
   return (
     <button
       aria-label="Create Workflow"
-      className="group relative flex min-h-60 w-full min-w-0 items-center justify-center overflow-hidden rounded-2xl border border-dashed border-border/80 bg-transparent text-muted-foreground shadow-xs transition-colors hover:border-border hover:bg-muted/70 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+      className="group relative flex min-h-60 w-full min-w-0 items-center justify-center overflow-hidden rounded-2xl border border-dashed border-border/80 bg-transparent text-muted-foreground transition-colors hover:border-border hover:bg-muted/70 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
       data-testid="new-workflow-card"
       onClick={onClick}
       type="button"
@@ -301,7 +301,13 @@ export function WorkflowsView({
             <WorkflowsListSkeleton />
           ) : allWorkflowsQuery.isError ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
-              <p className="text-sm text-red-400">Failed to load workflows</p>
+              <p className="flex items-center gap-1.5 text-sm text-foreground">
+                <AlertTriangle
+                  aria-hidden="true"
+                  className="h-4 w-4 shrink-0"
+                />
+                Failed to load workflows
+              </p>
               <Button
                 onClick={() => void allWorkflowsQuery.refetch()}
                 size="sm"

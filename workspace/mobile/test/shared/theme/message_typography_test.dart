@@ -10,12 +10,22 @@ void main() {
     required double lineHeight,
     required double letterSpacing,
   }) {
-    expect(style.fontFamily, 'Inter');
+    expect(style.fontFamily, 'IBM Plex Sans');
     expect(style.fontSize, fontSize);
     expect(style.fontWeight, fontWeight);
     expect(style.height, closeTo(lineHeight / fontSize, 0.0001));
     expect(style.letterSpacing, letterSpacing);
   }
+
+  test('conversation copy keeps proportional figures', () {
+    // Interface text is tabular so a changing figure holds its column; human
+    // prose opts back out so digits are not monospaced mid-sentence.
+    expect(messageBodyTextStyle.fontFeatures, proportionalFigures);
+    expect(messageUsernameTextStyle.fontFeatures, proportionalFigures);
+    expect(messageTimestampTextStyle.fontFeatures, tabularFigures);
+    expect(reactionCountTextStyle.fontFeatures, tabularFigures);
+    expect(bodyExtraSmallTextStyle.fontFeatures, tabularFigures);
+  });
 
   test('message typography matches the shared mobile scale', () {
     expectStyle(

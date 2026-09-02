@@ -36,7 +36,7 @@ export function SentFromThreadLine({
 
   return (
     <div
-      className={`${MESSAGE_MARKDOWN_CLASS} mb-1 flex min-h-[var(--inline-chip-min-height)] min-w-0 items-center gap-1.5 pt-0.5 text-sm font-normal leading-4 text-muted-foreground/70`}
+      className={`${MESSAGE_MARKDOWN_CLASS} mb-1 flex min-h-[var(--inline-chip-min-height)] min-w-0 items-center gap-1.5 pt-0.5 text-sm font-normal leading-4 text-muted-foreground`}
       data-testid="sent-from-thread"
     >
       <span className="shrink-0">Sent from thread:</span>

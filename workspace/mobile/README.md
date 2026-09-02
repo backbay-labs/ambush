@@ -178,13 +178,13 @@ lib/
 ├── main.dart              # Entry point, Riverpod bootstrap
 ├── app.dart               # MaterialApp with theme
 ├── shared/
-│   └── theme/             # Catppuccin light/dark, spacing tokens, extensions
+│   └── theme/             # Ambush Day/Night, spacing tokens, extensions
 └── features/
     └── home/              # Placeholder home surface
 ```
 
 - **State management:** Riverpod + Hooks (`HookConsumerWidget`)
-- **Theme:** Catppuccin Latte (light) / Macchiato (dark) — matches desktop
+- **Theme:** Ambush Day (light) / Ambush Night (dark) — matches desktop
 - **Spacing:** `Grid` tokens for consistent spacing
 - **Linting:** `flutter_lints` + `riverpod_lint` via `custom_lint`
 - **Feature isolation:** No cross-feature imports except `shared/`

@@ -1170,7 +1170,7 @@ export function VideoPlayer({
             aria-label="Open video review"
             data-video-review-launcher=""
             title="Open video review"
-            className="group absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full text-white shadow-sm outline-hidden focus-visible:ring-2 focus-visible:ring-white/60"
+            className="group absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full text-white outline-hidden focus-visible:ring-2 focus-visible:ring-white/60"
             onClick={handleOpenReview}
           >
             <span className="relative isolate flex h-full w-full items-center justify-center rounded-full transition-transform duration-200 ease-out group-hover:scale-110">
@@ -1629,7 +1629,7 @@ function VideoReviewDialog({
   return createPortal(
     <div
       className={cn(
-        "dark video-review-theme fixed inset-0 z-50 flex min-h-0 min-w-0 items-center justify-center bg-black/75 p-4 text-foreground sm:p-8 lg:p-10",
+        "dark video-review-theme fixed inset-0 z-50 flex min-h-0 min-w-0 items-center justify-center bg-background/90 p-4 text-foreground sm:p-8 lg:p-10",
         MODAL_BACKDROP_BLUR_CLASS,
       )}
     >
@@ -1644,7 +1644,7 @@ function VideoReviewDialog({
         aria-describedby="video-review-description"
         aria-labelledby="video-review-title"
         aria-modal="true"
-        className="relative z-10 flex h-full max-h-[980px] min-h-0 w-full max-w-[1520px] min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-background text-foreground shadow-2xl outline-hidden"
+        className="relative z-10 flex h-full max-h-[980px] min-h-0 w-full max-w-[1520px] min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-background text-foreground outline-hidden"
         data-testid="video-review-dialog"
         role="dialog"
       >
@@ -1803,7 +1803,7 @@ function VideoReviewDialog({
                             <TooltipTrigger asChild>
                               <button
                                 aria-label={`Seek to ${item.timecode}`}
-                                className="absolute top-1/2 z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/40 bg-black/60 shadow-md transition-transform hover:scale-110 outline-hidden focus-visible:ring-2 focus-visible:ring-white/60"
+                                className="absolute top-1/2 z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/40 bg-black/60 transition-transform hover:scale-110 outline-hidden focus-visible:ring-2 focus-visible:ring-white/60"
                                 data-video-review-marker=""
                                 style={{ left }}
                                 type="button"
@@ -1811,7 +1811,7 @@ function VideoReviewDialog({
                               >
                                 <UserAvatar
                                   avatarUrl={item.comment.avatarUrl ?? null}
-                                  className="h-4 w-4 shadow-none"
+                                  className="h-4 w-4"
                                   displayName={item.comment.author}
                                   size="xs"
                                 />
@@ -1892,7 +1892,7 @@ function VideoReviewDialog({
                     </Tooltip>
                     {isEmojiPickerOpen ? (
                       <div
-                        className="absolute bottom-full right-0 z-30 mb-2 overflow-hidden rounded-2xl shadow-2xl"
+                        className="absolute bottom-full right-0 z-30 mb-2 overflow-hidden rounded-2xl border border-border"
                         data-testid="video-review-emoji-picker"
                       >
                         <EmojiPicker
@@ -1909,12 +1909,12 @@ function VideoReviewDialog({
 
           {showCommentsPanel ? (
             <aside
-              className="relative z-10 min-h-0 shrink-0 overflow-hidden bg-neutral-950 transition-[width] duration-200 ease-out"
+              className="relative z-10 min-h-0 shrink-0 overflow-hidden bg-background transition-[width] duration-200 ease-out"
               data-testid="video-review-comments-panel"
               inert={!isPanelOpen || undefined}
               style={{ width: isPanelOpen ? 380 : 0 }}
             >
-              <div className="flex h-full w-[380px] min-h-0 flex-col border-l border-border bg-neutral-950">
+              <div className="flex h-full w-[380px] min-h-0 flex-col border-l border-border bg-background">
                 <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
                   <div className="flex min-w-0 items-center gap-2">
                     <MessageCircle className="h-4 w-4 text-muted-foreground" />
@@ -1967,7 +1967,7 @@ function VideoReviewDialog({
                         "rounded-md px-2 py-1 font-mono text-xs font-semibold transition-colors",
                         !replyTarget && postAtCurrentFrame
                           ? VIDEO_REVIEW_TIMECODE_ACCENT_CLASS
-                          : "bg-muted text-muted-foreground/70",
+                          : "bg-muted text-muted-foreground",
                       )}
                       data-testid="video-review-composer-timecode"
                     >
@@ -2141,7 +2141,7 @@ function VideoReviewCommentBody({
       <div className="flex items-center gap-2">
         <UserAvatar
           avatarUrl={item.comment.avatarUrl ?? null}
-          className="h-6 w-6 shadow-none"
+          className="h-6 w-6"
           displayName={item.comment.author}
           size="xs"
         />
@@ -2171,7 +2171,7 @@ function VideoReviewCommentBody({
               className={cn(
                 "flex h-7 items-center gap-1 rounded-full border px-2 text-xs transition-colors",
                 reaction.reactedByCurrentUser
-                  ? "border-primary/60 bg-primary/20 text-primary"
+                  ? "border-border bg-accent text-accent-foreground"
                   : "border-border bg-muted/40 text-muted-foreground hover:bg-muted",
               )}
               disabled={!onToggleReaction}

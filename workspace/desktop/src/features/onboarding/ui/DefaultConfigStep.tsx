@@ -247,7 +247,7 @@ function AgentDefaultsSection({
               Default harness
             </label>
             <AgentDropdownSelect
-              className="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
+              className="h-12 rounded-2xl border-foreground/15 bg-background px-4 py-2 text-sm shadow-none hover:bg-background/95"
               id="global-agent-default-harness"
               onValueChange={handleHarnessChange}
               options={harnessOptions}
@@ -286,7 +286,7 @@ function AgentDefaultsSection({
             onValidityChange={setConfigIsValid}
             placeholderClassName="text-foreground/70"
             runtimeFileConfig={runtimeFileConfig}
-            selectClassName="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
+            selectClassName="h-12 rounded-2xl border-foreground/15 bg-background px-4 py-2 text-sm shadow-none hover:bg-background/95"
             disclosure="onboarding-essential"
             unstyled
             useCustomSelect

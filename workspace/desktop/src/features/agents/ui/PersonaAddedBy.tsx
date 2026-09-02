@@ -11,7 +11,7 @@ export function PersonaAddedBy({
 }: PersonaAddedByProps) {
   return (
     <p className={cn("truncate text-xs leading-tight", className)}>
-      <span className="text-muted-foreground/55">Added by</span>{" "}
+      <span className="text-muted-foreground">Added by</span>{" "}
       <span className="text-muted-foreground">{label}</span>
     </p>
   );

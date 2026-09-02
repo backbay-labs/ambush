@@ -618,7 +618,7 @@ export function ProjectsAgentPromptPage({
 
   const promptBox = (
     <>
-      <div className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm">
+      <div className="rounded-2xl border border-border/60 bg-card p-3">
         {/* biome-ignore lint/a11y/noStaticElementInteractions: Escape closes the full-page prompt while Tiptap owns text input */}
         <div
           className="rich-text-composer relative max-h-40 min-h-10 overflow-y-auto"
@@ -706,7 +706,7 @@ export function ProjectsAgentPromptPage({
                           className={cn(
                             "ml-2 h-1.5 w-1.5 shrink-0 rounded-full",
                             candidate.isActive
-                              ? "bg-emerald-500"
+                              ? "bg-foreground"
                               : "bg-muted-foreground/40",
                           )}
                         />

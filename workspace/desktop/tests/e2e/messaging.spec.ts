@@ -568,8 +568,8 @@ test("sent link preview media uses the authenticated proxy in compact and rich c
   const compactThumbnailFrame = compactPreview
     .locator("[data-link-preview-thumbnail]")
     .first();
-  await expectCornerRadiusPx(compactPreview, 16);
-  await expectCornerRadiusPx(compactThumbnailFrame, 16);
+  await expectCornerRadiusPx(compactPreview, 2);
+  await expectCornerRadiusPx(compactThumbnailFrame, 2);
   await expectSmoothCorners(compactThumbnailFrame);
 
   await openSettings(page, "appearance");
@@ -2663,7 +2663,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
   await expect(sourceLine).toHaveClass(/text-sm/);
   await expect(sourceLine).toHaveClass(/font-normal/);
   await expect(sourceLine).toHaveClass(/leading-4/);
-  await expect(sourceLine).toHaveClass(/text-muted-foreground\/70/);
+  await expect(sourceLine).toHaveClass(/text-muted-foreground/);
   const rootLink = sourceLine.locator("[data-message-link]");
   const sourcePrefix = sourceLine.locator("span").first();
   const rootLinkLabel = rootContent;

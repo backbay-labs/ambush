@@ -353,11 +353,11 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
                   What are you looking for?
                 </h2>
                 <div className="relative w-full max-w-lg">
-                  <div className="relative rounded-full border border-foreground/10 bg-background/80 p-1 shadow-[0_12px_48px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_16px_70px_rgba(0,0,0,0.55)]">
-                    <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground dark:text-white/55" />
+                  <div className="relative rounded-full border border-border bg-card p-1">
+                    <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       autoFocus
-                      className="h-9 rounded-full border-0 bg-transparent pl-10 pr-12 text-sm shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0 dark:text-white dark:placeholder:text-white/60"
+                      className="h-9 rounded-full border-0 bg-transparent pl-10 pr-12 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
                       onChange={(event) => setSearchQuery(event.target.value)}
                       placeholder="What would you like to know?"
                       type="search"
@@ -365,7 +365,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
                     />
                     <button
                       aria-label="Search Pulse"
-                      className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-foreground/10 text-foreground transition-colors hover:bg-foreground/15 dark:bg-white/85 dark:text-black dark:hover:bg-white"
+                      className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-foreground/10 text-foreground transition-colors hover:bg-foreground/15"
                       type="button"
                     >
                       <Search className="h-4 w-4" />
@@ -389,7 +389,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
               )}
               <ForumComposer
                 autocompleteBelow
-                className="pulse-composer overflow-hidden rounded-2xl border-border/50 bg-background/70 p-2 shadow-none backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
+                className="pulse-composer overflow-hidden rounded-2xl border-border/50 bg-background p-2 shadow-none"
                 compact
                 header={
                   <div className="flex min-w-0 items-center gap-2">

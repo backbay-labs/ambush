@@ -357,11 +357,11 @@ export function EnvVarsEditor({
                   className={cn(
                     "flex min-h-11 flex-1 items-center gap-1.5 px-3",
                     PERSONA_FIELD_SHELL_CLASS,
-                    "border-amber-500/40 bg-amber-50/30 dark:bg-amber-950/20",
+                    "border-border bg-warning-bg",
                   )}
                 >
                   <Lock
-                    className="h-3 w-3 shrink-0 text-muted-foreground/60"
+                    className="h-3 w-3 shrink-0 text-muted-foreground"
                     aria-hidden
                   />
                   <span
@@ -371,7 +371,7 @@ export function EnvVarsEditor({
                     {key}
                   </span>
                   {isMissing ? (
-                    <span className="ml-1 flex items-center gap-0.5 rounded-sm bg-amber-100 px-1 py-0.5 text-2xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                    <span className="ml-1 flex items-center gap-0.5 rounded-sm bg-warning-bg px-1 py-0.5 text-2xs font-medium text-warning">
                       <AlertCircle className="h-2.5 w-2.5" aria-hidden />
                       Required
                     </span>
@@ -450,11 +450,11 @@ export function EnvVarsEditor({
                 )}
               >
                 <Lock
-                  className="h-3 w-3 shrink-0 text-muted-foreground/40"
+                  className="h-3 w-3 shrink-0 text-muted-foreground"
                   aria-hidden
                 />
                 <span
-                  className="font-mono text-sm leading-6 text-foreground/60"
+                  className="font-mono text-sm leading-6 text-muted-foreground"
                   data-testid="env-vars-file-satisfied-key"
                 >
                   {key}
@@ -495,11 +495,11 @@ export function EnvVarsEditor({
                   )}
                 >
                   <Lock
-                    className="h-3 w-3 shrink-0 text-muted-foreground/40"
+                    className="h-3 w-3 shrink-0 text-muted-foreground"
                     aria-hidden
                   />
                   <span
-                    className="font-mono text-sm leading-6 text-foreground/60"
+                    className="font-mono text-sm leading-6 text-muted-foreground"
                     data-testid="env-vars-inherited-key"
                   >
                     {irow.key}
@@ -519,7 +519,7 @@ export function EnvVarsEditor({
                     className={cn(
                       "font-mono text-sm",
                       irow.masked
-                        ? "text-muted-foreground/50"
+                        ? "text-muted-foreground"
                         : "text-foreground/70",
                     )}
                     data-testid="env-vars-inherited-value"

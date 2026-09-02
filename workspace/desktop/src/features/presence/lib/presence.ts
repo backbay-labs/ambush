@@ -85,22 +85,22 @@ export function getPresenceLabel(status: PresenceStatus) {
 export function getPresenceDotClassName(status: PresenceStatus) {
   switch (status) {
     case "online":
-      return "bg-emerald-500";
+      return "bg-foreground";
     case "away":
-      return "bg-amber-500";
+      return "border border-foreground bg-transparent";
     case "offline":
-      return "bg-muted-foreground/35";
+      return "border border-grad bg-transparent";
   }
 }
 
-// Chip styling for the presence pill (colored fill + matching text, no dot).
+// Chip styling for the presence pill (fill + matching text, no dot).
 export function getPresenceChipClassName(status: PresenceStatus) {
   switch (status) {
     case "online":
-      return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400";
+      return "bg-accent text-accent-foreground";
     case "away":
-      return "bg-amber-500/15 text-amber-600 dark:text-amber-400";
+      return "bg-secondary text-secondary-foreground";
     case "offline":
-      return "bg-muted-foreground/15 text-muted-foreground";
+      return "bg-muted text-muted-foreground";
   }
 }

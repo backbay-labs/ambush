@@ -22,7 +22,7 @@ export function ShellCommandBlock({
         fadeFromClassName="from-muted"
         maxHeightClassName="max-h-36"
       >
-        <p className="whitespace-pre-wrap wrap-break-word text-muted-foreground/70">
+        <p className="whitespace-pre-wrap wrap-break-word text-muted-foreground">
           <Terminal className="mr-2 inline h-3.5 w-3.5 align-[-0.1875rem] text-primary" />
           {command}
         </p>

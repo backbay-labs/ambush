@@ -20,7 +20,7 @@ export function SettingsSectionHeader({
       action={action}
       className="mb-12"
       description={
-        <span data-settings-subcopy className="text-muted-foreground/70">
+        <span data-settings-subcopy className="text-muted-foreground">
           {description}
         </span>
       }

@@ -88,7 +88,7 @@ function ObserverArchiveSection({
               Archive my agents' observer frames
             </label>
             <p
-              className="text-sm font-normal text-muted-foreground/70"
+              className="text-sm font-normal text-muted-foreground"
               data-settings-subcopy
             >
               {`Saves kind ${KIND_AGENT_OBSERVER_FRAME} observer frames addressed to your pubkey. These are ephemeral — not stored by the relay — so local archiving is the only way to retain them.`}
@@ -132,7 +132,7 @@ function AgentMetricArchiveSection({
               Archive my agents' turn metrics
             </label>
             <p
-              className="text-sm font-normal text-muted-foreground/70"
+              className="text-sm font-normal text-muted-foreground"
               data-settings-subcopy
             >
               Saves kind {KIND_AGENT_TURN_METRIC} turn-metric events addressed
@@ -240,10 +240,7 @@ function CustomKindsInput({ value, onChange }: CustomKindsInputProps) {
         type="text"
         value={value}
       />
-      <p
-        className="mt-1 text-xs text-muted-foreground/70"
-        data-settings-subcopy
-      >
+      <p className="mt-1 text-xs text-muted-foreground" data-settings-subcopy>
         Space- or comma-separated non-negative integers. Kinds already in the
         checklist above are ignored.
       </p>
@@ -575,7 +572,7 @@ export function LocalArchiveSettingsCard() {
                         {scopeLabel(sub, channelNameById)}
                       </p>
                       <p
-                        className="text-xs text-muted-foreground/70"
+                        className="text-xs text-muted-foreground"
                         data-settings-subcopy
                       >
                         {sub.scopeType} · kinds: {kindSummary(sub.kinds)}
@@ -617,7 +614,7 @@ export function LocalArchiveSettingsCard() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">Subscribe to a channel</p>
                   <p
-                    className="text-xs text-muted-foreground/70"
+                    className="text-xs text-muted-foreground"
                     data-settings-subcopy
                   >
                     Choose a channel and select which event types to archive.

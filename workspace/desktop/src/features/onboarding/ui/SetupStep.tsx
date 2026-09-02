@@ -80,11 +80,11 @@ function RuntimeReadinessIndicator({
   return (
     <span
       aria-hidden="true"
-      className="pointer-events-none absolute right-8 top-8 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--ambush-welcome-chartreuse)] bg-[var(--ambush-welcome-chartreuse)]"
+      className="pointer-events-none absolute right-8 top-8 flex h-8 w-8 items-center justify-center rounded-full border border-foreground bg-foreground"
       data-testid={`onboarding-runtime-check-${runtime.id}`}
     >
       <Check
-        className="h-4 w-4 text-foreground"
+        className="h-4 w-4 text-background"
         data-testid={`onboarding-runtime-checkmark-${runtime.id}`}
         strokeWidth={3}
       />
@@ -155,7 +155,7 @@ function RuntimeStatus({
       <div className="flex flex-col items-center gap-1.5">
         <Button
           aria-label={`Sign in to ${runtime.label}`}
-          className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
+          className="ambush-onboarding-runtime-setup h-5 rounded-full bg-foreground/10 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-foreground/15"
           data-testid={`onboarding-runtime-instructions-${runtime.id}`}
           onClick={() => {
             if (didSignInCheckTimeOut) {
@@ -209,7 +209,7 @@ function RuntimeStatus({
     return (
       <div
         aria-label={`Installing ${runtime.label}`}
-        className="flex h-5 items-center gap-2 rounded-full bg-white/60 px-2.5 font-mono text-badge font-normal uppercase text-foreground"
+        className="flex h-5 items-center gap-2 rounded-full bg-muted px-2.5 font-mono text-badge font-normal uppercase text-foreground"
         role="status"
       >
         <Spinner className="h-3 w-3 border-2 text-foreground" />
@@ -230,7 +230,7 @@ function RuntimeStatus({
       return (
         <div
           aria-label={`Rechecking ${runtime.label}`}
-          className="flex h-5 items-center gap-2 rounded-full bg-[#EBEFEF] px-2.5 font-mono text-badge font-normal uppercase text-foreground"
+          className="flex h-5 items-center gap-2 rounded-full bg-muted px-2.5 font-mono text-badge font-normal uppercase text-foreground"
           data-testid={`onboarding-runtime-rechecking-${runtime.id}`}
           role="status"
         >
@@ -243,7 +243,7 @@ function RuntimeStatus({
       return (
         <Button
           aria-label={`Check ${runtime.label} again`}
-          className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
+          className="ambush-onboarding-runtime-setup h-5 rounded-full bg-foreground/10 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-foreground/15"
           data-testid={`onboarding-runtime-recheck-${runtime.id}`}
           onClick={() => void runtimesQuery.forceRefresh()}
           type="button"
@@ -257,14 +257,14 @@ function RuntimeStatus({
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            className="inline-flex h-5 cursor-default items-center rounded-full bg-[#EBEFEF] px-2.5 font-mono text-badge font-normal uppercase text-foreground"
+            className="inline-flex h-5 cursor-default items-center rounded-full bg-muted px-2.5 font-mono text-badge font-normal uppercase text-foreground"
             data-testid={`onboarding-runtime-ready-${runtime.id}`}
           >
             READY
           </span>
         </TooltipTrigger>
         <TooltipContent
-          className="max-w-80 bg-black text-left text-xs text-white shadow-sm"
+          className="max-w-80 bg-popover text-left text-xs text-popover-foreground"
           side="top"
         >
           <RuntimeDetails runtime={runtime} />
@@ -280,7 +280,7 @@ function RuntimeStatus({
     return (
       <Button
         aria-label={`Check ${runtime.label} again`}
-        className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
+        className="ambush-onboarding-runtime-setup h-5 rounded-full bg-foreground/10 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-foreground/15"
         disabled={runtimesQuery.isFetching}
         onClick={() => void runtimesQuery.forceRefresh()}
         type="button"
@@ -296,7 +296,7 @@ function RuntimeStatus({
     return (
       <Button
         aria-label={`${installError ? "Retry installing" : "Install"} ${runtime.label}`}
-        className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
+        className="ambush-onboarding-runtime-setup h-5 rounded-full bg-foreground/10 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-foreground/15"
         data-testid={`onboarding-runtime-install-${runtime.id}`}
         onClick={onInstall}
         type="button"
@@ -310,7 +310,7 @@ function RuntimeStatus({
   return (
     <Button
       aria-label={`View ${runtime.label} install instructions`}
-      className="ambush-onboarding-runtime-setup h-5 rounded-full bg-[var(--ambush-welcome-chartreuse)]/30 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-[var(--ambush-welcome-chartreuse)]/40"
+      className="ambush-onboarding-runtime-setup h-5 rounded-full bg-foreground/10 px-2.5 font-mono !text-badge font-normal uppercase text-foreground hover:bg-foreground/15"
       data-testid={`onboarding-runtime-instructions-${runtime.id}`}
       onClick={() => void openUrl(runtime.installInstructionsUrl)}
       type="button"
@@ -333,11 +333,11 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
     );
     return (
       <>
-        <p className="text-xs leading-4 text-white">
+        <p className="text-xs leading-4 text-popover-foreground">
           {description.charAt(0).toUpperCase() + description.slice(1)}
         </p>
         {runtime.defaultArgs.length > 0 ? (
-          <p className="mt-1 text-xs leading-4 text-white">
+          <p className="mt-1 text-xs leading-4 text-popover-foreground">
             Args:{" "}
             <code className="font-mono">{runtime.defaultArgs.join(", ")}</code>
           </p>
@@ -349,10 +349,10 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
   if (runtime.availability === "adapter_missing") {
     return (
       <>
-        <p className="text-xs leading-4 text-white">
+        <p className="text-xs leading-4 text-popover-foreground">
           CLI detected; ACP adapter missing.
         </p>
-        <p className="mt-1 text-xs leading-4 text-white">
+        <p className="mt-1 text-xs leading-4 text-popover-foreground">
           {runtime.installHint}
         </p>
       </>
@@ -362,22 +362,22 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
   if (runtime.availability === "adapter_outdated") {
     return (
       <>
-        <p className="text-xs leading-4 text-white">
+        <p className="text-xs leading-4 text-popover-foreground">
           ACP adapter detected but outdated — reinstall required.
         </p>
-        <p className="mt-1 text-xs leading-4 text-white">
+        <p className="mt-1 text-xs leading-4 text-popover-foreground">
           This updates the machine-global{" "}
-          <code className="rounded bg-white/10 px-0.5 font-mono text-xs text-white">
+          <code className="rounded bg-foreground/10 px-0.5 font-mono text-xs text-popover-foreground">
             codex-acp
           </code>{" "}
           adapter. Older Ambush releases using the legacy adapter contract may
           lose community access until{" "}
-          <code className="rounded bg-white/10 px-0.5 font-mono text-xs text-white">
+          <code className="rounded bg-foreground/10 px-0.5 font-mono text-xs text-popover-foreground">
             @zed-industries/codex-acp@0.16.0
           </code>{" "}
           is restored.
         </p>
-        <p className="mt-1 text-xs leading-4 text-white">
+        <p className="mt-1 text-xs leading-4 text-popover-foreground">
           {runtime.installHint}
         </p>
       </>
@@ -387,10 +387,10 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
   if (runtime.availability === "cli_missing") {
     return (
       <>
-        <p className="text-xs leading-4 text-white">
+        <p className="text-xs leading-4 text-popover-foreground">
           ACP adapter detected; CLI missing.
         </p>
-        <p className="mt-1 text-xs leading-4 text-white">
+        <p className="mt-1 text-xs leading-4 text-popover-foreground">
           {runtime.installHint}
         </p>
       </>
@@ -399,8 +399,12 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
 
   return (
     <>
-      <p className="text-xs leading-4 text-white">Not installed yet.</p>
-      <p className="mt-1 text-xs leading-4 text-white">{runtime.installHint}</p>
+      <p className="text-xs leading-4 text-popover-foreground">
+        Not installed yet.
+      </p>
+      <p className="mt-1 text-xs leading-4 text-popover-foreground">
+        {runtime.installHint}
+      </p>
     </>
   );
 }
@@ -682,7 +686,7 @@ function RuntimeProvidersSection({
           <RuntimeProvidersLoadingState />
         ) : errorMessage ? null : (
           <p
-            className="max-w-[560px] rounded-2xl bg-white/70 px-6 py-6 text-sm text-muted-foreground"
+            className="max-w-[560px] rounded-2xl bg-muted px-6 py-6 text-sm text-muted-foreground"
             data-testid="onboarding-acp-empty"
           >
             No supported command-line harnesses were detected yet. Install a

@@ -1,5 +1,5 @@
 import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
-import { ACCENT_COLORS } from "./ThemeProvider";
+import { ACCENT_COLORS, NEUTRAL_ACCENT } from "./ThemeProvider";
 import { SYNTAX_THEMES, type SyntaxThemeName } from "./theme-loader";
 
 const STORAGE_KEY_PREFIX = "ambush-community-theme.v1";
@@ -15,8 +15,8 @@ export type CommunityThemePreference = {
 
 export const DEFAULT_COMMUNITY_THEME: CommunityThemePreference = Object.freeze({
   version: 1,
-  theme: "ambush",
-  accent: "#3b82f6",
+  theme: "ambush-night",
+  accent: NEUTRAL_ACCENT,
   followSystem: true,
 });
 

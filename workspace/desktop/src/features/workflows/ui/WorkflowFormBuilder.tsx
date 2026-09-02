@@ -274,12 +274,12 @@ function WorkflowNode({
           </span>
           <span className="min-w-0 flex-1">
             {showTitle ? (
-              <span className="block text-2xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+              <span className="block text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {title}
               </span>
             ) : null}
             {subtitle ? (
-              <span className="block truncate text-2xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+              <span className="block truncate text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {subtitle}
               </span>
             ) : null}
@@ -323,7 +323,7 @@ function WorkflowNode({
                 title === "Trigger" ? "Add step" : `Add after ${title}`
               }
               className={cn(
-                "relative z-10 h-7 w-7 rounded-full bg-background shadow-sm",
+                "relative z-10 h-7 w-7 rounded-full bg-background",
                 !terminal &&
                   "pointer-events-none absolute scale-125 opacity-0 transition-[opacity,transform,background-color,color,border-color,box-shadow] duration-200 ease-out group-hover:pointer-events-auto group-hover:scale-100 group-hover:opacity-100 group-data-[menu-open=true]:pointer-events-auto group-data-[menu-open=true]:scale-100 group-data-[menu-open=true]:opacity-100 focus-visible:pointer-events-auto focus-visible:scale-100 focus-visible:opacity-100 motion-reduce:transition-none",
               )}
@@ -810,7 +810,7 @@ export const WorkflowFormBuilder = React.forwardRef<
                           : { duration: 0.24, ease: [0.22, 1, 0.36, 1] }
                       }
                     >
-                      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-muted/40 [@container(max-width:58rem)]:bg-background [@container(max-width:58rem)]:shadow-2xl">
+                      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-muted/40 [@container(max-width:58rem)]:bg-background [@container(max-width:58rem)]:shadow-panel-left">
                         <div
                           aria-hidden="true"
                           className="pointer-events-none absolute inset-0 z-0 hidden bg-muted/40 [@container(max-width:58rem)]:block"

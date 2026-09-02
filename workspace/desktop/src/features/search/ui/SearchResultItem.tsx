@@ -117,8 +117,8 @@ export function SearchResultShell({
     <button
       className={
         isSelected
-          ? "w-full rounded-2xl border border-primary/30 bg-primary/10 px-4 py-4 text-left shadow-xs outline-hidden transition-colors"
-          : "w-full rounded-2xl border border-border/80 bg-card/60 px-4 py-4 text-left shadow-xs outline-hidden transition-colors hover:border-primary/20 hover:bg-accent"
+          ? "w-full rounded-2xl border border-primary/30 bg-primary/10 px-4 py-4 text-left outline-hidden transition-colors"
+          : "w-full rounded-2xl border border-border/80 bg-card/60 px-4 py-4 text-left outline-hidden transition-colors hover:border-primary/20 hover:bg-accent"
       }
       data-testid={testId}
       onClick={onClick}

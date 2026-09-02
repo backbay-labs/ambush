@@ -1,9 +1,39 @@
 :root {
+  --radius: 2px;
+  --ambush-index: #943106;
+  --ambush-night: #bcb5ad;
+  --ambush-steel: #c7c0b8;
+  --ambush-rule: #9c9893;
+  --ambush-grad: #7a7672;
+  --ambush-plate: #eccfb9;
+  --ambush-plate-hi: #f4d7c4;
+  --ambush-ink-dim: #51443a;
+  --ambush-ink-mid: #3e332a;
+  --ambush-ink: #292019;
+
   font-family:
-    "Helvetica Neue", Helvetica, Arial, ui-sans-serif, system-ui, sans-serif;
-  color: #231e1e;
-  background: #d7e7f6;
+    "IBM Plex Sans Variable", "IBM Plex Sans", "Helvetica Neue", Helvetica,
+    Arial, ui-sans-serif, system-ui, sans-serif;
+  color: var(--ambush-ink);
+  background: var(--ambush-night);
   font-synthesis: none;
+  font-variant-numeric: tabular-nums;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ambush-index: #e05e28;
+    --ambush-night: #171717;
+    --ambush-steel: #1f1f1f;
+    --ambush-rule: #3e3e3e;
+    --ambush-grad: #727272;
+    --ambush-plate: #33281e;
+    --ambush-plate-hi: #3d3025;
+    --ambush-ink-dim: #a49b90;
+    --ambush-ink-mid: #bab2a8;
+    --ambush-ink: #c9c1b7;
+  }
 }
 
 * {
@@ -29,17 +59,22 @@ select {
 }
 
 button {
-  color: white;
-  background: #231e1e;
+  color: var(--ambush-night);
+  background: var(--ambush-ink);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius);
   padding: 0.75rem 1.25rem;
   cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  opacity: 0.9;
 }
 
 .app {
   min-height: 100vh;
-  background: linear-gradient(180deg, #d7d72e 0%, #dfe379 24%, #d7e7f6 78%);
+  background: var(--ambush-night);
 }
 
 .app-header {
@@ -63,7 +98,7 @@ button {
 
 .brand b {
   font-weight: 400;
-  color: rgb(35 30 30 / 60%);
+  color: var(--ambush-ink-dim);
 }
 
 .brand-mark {
@@ -71,9 +106,9 @@ button {
   height: 2.5rem;
   display: grid;
   place-items: center;
-  border-radius: 0.7rem;
-  color: #d7d72e;
-  background: #231e1e;
+  border-radius: var(--radius);
+  color: var(--ambush-ink);
+  background: var(--ambush-steel);
 }
 
 .brand-mark svg {
@@ -86,10 +121,9 @@ nav {
   align-items: center;
   gap: 0.35rem;
   padding: 0.3rem;
-  border: 1px solid rgb(35 30 30 / 10%);
-  border-radius: 999px;
-  background: rgb(255 255 255 / 42%);
-  backdrop-filter: blur(12px);
+  border: 1px solid var(--ambush-rule);
+  border-radius: var(--radius);
+  background: var(--ambush-steel);
 }
 
 .nav-link {
@@ -97,8 +131,8 @@ nav {
   align-items: center;
   gap: 0.5rem;
   padding: 0.65rem 1rem;
-  border-radius: 999px;
-  color: rgb(35 30 30 / 60%);
+  border-radius: var(--radius);
+  color: var(--ambush-ink-dim);
   font-size: 0.9rem;
   letter-spacing: -0.035em;
   transition:
@@ -117,13 +151,12 @@ nav {
 }
 
 .nav-link:hover {
-  color: #231e1e;
+  color: var(--ambush-ink);
 }
 
 .nav-link[aria-current="page"] {
-  color: #231e1e;
-  background: white;
-  box-shadow: 0 0.2rem 1rem rgb(35 30 30 / 8%);
+  color: var(--ambush-ink);
+  background: var(--ambush-plate);
 }
 
 main {
@@ -139,7 +172,7 @@ main {
 
 .page-title > p {
   margin: 0 0 1rem;
-  color: rgb(35 30 30 / 55%);
+  color: var(--ambush-ink-dim);
   font-size: 0.78rem;
   font-weight: 500;
   letter-spacing: 0.12em;
@@ -157,7 +190,7 @@ h1 {
 .page-title > span {
   display: block;
   margin-top: 1.5rem;
-  color: rgb(35 30 30 / 62%);
+  color: var(--ambush-ink-mid);
   font-size: 1.05rem;
   line-height: 1.5;
   letter-spacing: -0.035em;
@@ -169,7 +202,7 @@ h1 {
   align-items: center;
   gap: 0.35rem;
   margin-bottom: 2.25rem;
-  color: rgb(35 30 30 / 62%);
+  color: var(--ambush-ink-dim);
   font-size: 0.9rem;
   letter-spacing: -0.035em;
 }
@@ -186,10 +219,9 @@ h1 {
   align-items: end;
   margin-bottom: 0.75rem;
   padding: 1rem;
-  border: 1px solid rgb(35 30 30 / 10%);
-  border-radius: 1.25rem;
-  background: rgb(255 255 255 / 45%);
-  backdrop-filter: blur(12px);
+  border: 1px solid var(--ambush-rule);
+  border-radius: var(--radius);
+  background: var(--ambush-steel);
 }
 
 .feedback-filters label {
@@ -199,7 +231,7 @@ h1 {
 }
 
 .feedback-filters label > span {
-  color: rgb(35 30 30 / 48%);
+  color: var(--ambush-ink-dim);
   font-size: 0.7rem;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -208,17 +240,17 @@ h1 {
 .feedback-filters input,
 .feedback-filters select {
   min-height: 2.75rem;
-  border: 1px solid rgb(35 30 30 / 12%);
-  border-radius: 999px;
+  border: 1px solid var(--ambush-rule);
+  border-radius: var(--radius);
   outline: none;
-  color: #231e1e;
-  background: white;
+  color: var(--ambush-ink);
+  background: var(--ambush-steel);
 }
 
 .feedback-filters input:focus,
 .feedback-filters select:focus {
-  border-color: #231e1e;
-  box-shadow: 0 0 0 3px rgb(35 30 30 / 10%);
+  border-color: var(--ambush-ink);
+  box-shadow: 0 0 0 2px var(--ambush-ink);
 }
 
 .feedback-filters select {
@@ -245,28 +277,29 @@ h1 {
   height: 1rem;
   transform: translateY(-50%);
   fill: none;
-  stroke: rgb(35 30 30 / 45%);
+  stroke: var(--ambush-ink-dim);
   stroke-width: 1.7;
   stroke-linecap: round;
 }
 
 .result-count {
   margin: 0 0 0.75rem;
-  color: rgb(35 30 30 / 48%);
+  color: var(--ambush-ink-dim);
   font-size: 0.78rem;
 }
 
 .card-link {
   display: block;
-  border-radius: 1.6rem;
+  border-radius: var(--radius);
 }
 
 .record-card,
 .detail,
 .state {
-  background: white;
-  border-radius: 1.6rem;
-  box-shadow: 0 1rem 4rem rgb(35 30 30 / 6%);
+  background: var(--ambush-plate);
+  color: var(--ambush-ink);
+  border: 1px solid var(--ambush-rule);
+  border-radius: var(--radius);
 }
 
 .record-card {
@@ -277,8 +310,13 @@ h1 {
   gap: 1.4rem;
   padding: 1.2rem 1.5rem;
   transition:
-    transform 180ms ease,
-    box-shadow 180ms ease;
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.card-link:hover .record-card {
+  background: var(--ambush-plate-hi);
+  border-color: var(--ambush-ink-dim);
 }
 
 .feedback-record {
@@ -302,17 +340,17 @@ h1 {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  color: rgb(35 30 30 / 62%);
+  color: var(--ambush-ink-mid);
   font-size: 0.78rem;
 }
 
 .feedback-status select {
   font: inherit;
   padding: 0.25rem 0.4rem;
-  border-radius: 0.4rem;
-  border: 1px solid rgb(35 30 30 / 18%);
-  background: #fff;
-  color: #231e1e;
+  border-radius: var(--radius);
+  border: 1px solid var(--ambush-rule);
+  background: var(--ambush-steel);
+  color: var(--ambush-ink);
   cursor: pointer;
 }
 
@@ -322,26 +360,22 @@ h1 {
 }
 
 .status-error {
-  color: #b3261e;
+  color: var(--ambush-ink);
   font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .provenance-unavailable {
   font-style: italic;
-  color: rgb(35 30 30 / 45%);
+  color: var(--ambush-ink-dim);
 }
 
 .record-open-link {
   display: grid;
   place-items: center;
   padding: 0.5rem;
-  border-radius: 999px;
-  color: rgb(35 30 30 / 30%);
-}
-
-.card-link:hover .record-card {
-  transform: translateY(-2px);
-  box-shadow: 0 1.4rem 4.5rem rgb(35 30 30 / 12%);
+  border-radius: var(--radius);
+  color: var(--ambush-grad);
 }
 
 .record-icon {
@@ -350,15 +384,12 @@ h1 {
   display: grid;
   place-items: center;
   border-radius: 999px;
-  color: #231e1e;
+  color: var(--ambush-ink);
 }
 
-.report-icon {
-  background: #d7d72e;
-}
-
+.report-icon,
 .feedback-icon {
-  background: #d7e7f6;
+  background: var(--ambush-steel);
 }
 
 .record-icon svg {
@@ -382,10 +413,10 @@ h1 {
 .status {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
-  background: #f2f2ed;
+  border-radius: var(--radius);
+  background: var(--ambush-steel);
   padding: 0.25rem 0.55rem;
-  color: rgb(35 30 30 / 65%);
+  color: var(--ambush-ink-mid);
   font-size: 0.7rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -408,7 +439,7 @@ h1 {
 .record-primary strong {
   max-width: 42rem;
   overflow: hidden;
-  color: #231e1e;
+  color: var(--ambush-ink);
   font-size: 1rem;
   font-weight: 400;
   line-height: 1.35;
@@ -430,33 +461,35 @@ h1 {
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  color: rgb(35 30 30 / 55%);
+  color: var(--ambush-ink-mid);
   font-size: 0.78rem;
 }
 
 code {
-  color: rgb(35 30 30 / 50%);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--ambush-ink-dim);
+  font-family:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    monospace;
   font-size: 0.75rem;
   word-break: break-all;
 }
 
 .record-provenance code {
   padding-left: 0.65rem;
-  border-left: 1px solid rgb(35 30 30 / 14%);
+  border-left: 1px solid var(--ambush-rule);
 }
 
 .record-date {
   display: grid;
   justify-items: end;
   gap: 0.3rem;
-  color: rgb(35 30 30 / 48%);
+  color: var(--ambush-ink-mid);
   font-size: 0.78rem;
   letter-spacing: -0.025em;
 }
 
 .record-date span {
-  color: rgb(35 30 30 / 32%);
+  color: var(--ambush-ink-dim);
   font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -477,7 +510,7 @@ code {
 }
 
 .record-card > .arrow-icon {
-  color: rgb(35 30 30 / 30%);
+  color: var(--ambush-grad);
 }
 
 .detail {
@@ -489,7 +522,7 @@ code {
   align-items: center;
   gap: 1rem;
   padding-bottom: 2rem;
-  border-bottom: 1px solid rgb(35 30 30 / 9%);
+  border-bottom: 1px solid var(--ambush-rule);
 }
 
 .detail-heading h2 {
@@ -507,7 +540,7 @@ dl {
 }
 
 dt {
-  color: rgb(35 30 30 / 48%);
+  color: var(--ambush-ink-dim);
   font-size: 0.82rem;
 }
 
@@ -520,9 +553,9 @@ dd {
   display: grid;
   justify-items: start;
   gap: 1rem;
-  border-left: 3px solid #d7d72e;
-  border-radius: 0 0.8rem 0.8rem 0;
-  background: #f6f6f1;
+  border-left: 3px solid var(--ambush-rule);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--ambush-steel);
   padding: 1rem;
 }
 
@@ -539,19 +572,19 @@ dd {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 0.4rem 0.75rem;
   width: 100%;
-  color: rgb(35 30 30 / 48%);
+  color: var(--ambush-ink-dim);
   font-size: 0.78rem;
 }
 
 .message-unavailable {
-  color: rgb(35 30 30 / 60%);
+  color: var(--ambush-ink-mid);
   font-style: italic;
 }
 
 .sensitive {
-  border-left: 3px solid #d7d72e;
-  border-radius: 0 0.8rem 0.8rem 0;
-  background: #f6f6f1;
+  border-left: 3px solid var(--ambush-rule);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--ambush-steel);
   padding: 1rem;
   line-height: 1.5;
 }
@@ -571,9 +604,9 @@ dd {
 .image-attachment {
   overflow: hidden;
   margin: 0;
-  border: 1px solid rgb(35 30 30 / 10%);
-  border-radius: 1rem;
-  background: #f6f6f1;
+  border: 1px solid var(--ambush-rule);
+  border-radius: var(--radius);
+  background: var(--ambush-steel);
 }
 
 .image-attachment a {
@@ -585,7 +618,7 @@ dd {
   max-height: 32rem;
   display: block;
   object-fit: contain;
-  background: rgb(35 30 30 / 4%);
+  background: var(--ambush-night);
 }
 
 .image-attachment figcaption,
@@ -617,15 +650,15 @@ dd {
 
 .image-attachment small,
 .file-attachment small {
-  color: rgb(35 30 30 / 48%);
+  color: var(--ambush-ink-dim);
   font-size: 0.7rem;
 }
 
 .file-attachment {
   align-self: start;
-  border: 1px solid rgb(35 30 30 / 10%);
-  border-radius: 1rem;
-  background: #f6f6f1;
+  border: 1px solid var(--ambush-rule);
+  border-radius: var(--radius);
+  background: var(--ambush-steel);
 }
 
 .file-attachment:hover strong {
@@ -667,14 +700,14 @@ dd {
   place-content: center;
   justify-items: center;
   padding: 2rem;
-  color: rgb(35 30 30 / 56%);
+  color: var(--ambush-ink-mid);
   text-align: center;
   letter-spacing: -0.035em;
 }
 
 .state h2 {
   margin: 0;
-  color: #231e1e;
+  color: var(--ambush-ink);
   font-size: 1.4rem;
   font-weight: 400;
 }
@@ -684,7 +717,7 @@ dd {
 }
 
 .state.error {
-  color: #9f2424;
+  color: var(--ambush-ink);
 }
 
 .auth-prompt button {
@@ -695,7 +728,7 @@ dd {
   min-height: 8rem;
   display: grid;
   place-content: center;
-  color: rgb(35 30 30 / 48%);
+  color: var(--ambush-ink-dim);
   font-size: 0.8rem;
 }
 

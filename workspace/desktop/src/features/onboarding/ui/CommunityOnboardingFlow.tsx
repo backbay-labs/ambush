@@ -53,12 +53,6 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
   );
 }
 
-const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
-  Fizz: "/onboarding/starter-team/fizz.png",
-  Honey: "/onboarding/starter-team/honey.png",
-  Pollen: "/onboarding/starter-team/pollen.png",
-};
-
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
 /**
@@ -103,7 +97,7 @@ function AvatarCircle({
     >
       {emojiAvatar ? (
         <span
-          className="flex h-36 w-36 items-center justify-center overflow-hidden rounded-full text-5xl shadow-xs"
+          className="flex h-36 w-36 items-center justify-center overflow-hidden rounded-full text-5xl"
           style={{ backgroundColor: emojiAvatar.color }}
         >
           {emojiAvatar.emoji}
@@ -117,7 +111,7 @@ function AvatarCircle({
         />
       ) : (
         <span
-          className="flex h-36 w-36 items-center justify-center rounded-full bg-white/30 text-[var(--ambush-onboarding-backup-ink)] transition-colors group-hover:bg-white/40"
+          className="flex h-36 w-36 items-center justify-center rounded-full bg-foreground/10 text-[var(--ambush-onboarding-backup-ink)] transition-colors group-hover:bg-foreground/15"
           data-testid="community-avatar-empty"
         >
           <Plus className="h-7 w-7" aria-hidden="true" />
@@ -590,7 +584,7 @@ export function CommunityOnboardingFlow({
                         autoCapitalize="none"
                         autoComplete="username"
                         autoCorrect="off"
-                        className="h-14 rounded-2xl border-[color:rgb(var(--ambush-onboarding-avatar-control-fg)_/_0.28)] bg-[rgb(var(--ambush-onboarding-avatar-dialog-bg)/0.95)] px-5 text-sm shadow-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[color:rgb(var(--ambush-onboarding-avatar-control-fg)_/_0.5)] md:text-sm"
+                        className="h-14 rounded-2xl border-[color:rgb(var(--ambush-onboarding-avatar-control-fg)_/_0.28)] bg-[rgb(var(--ambush-onboarding-avatar-dialog-bg)/0.95)] px-5 text-sm shadow-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[color:rgb(var(--ambush-onboarding-avatar-control-fg)_/_0.5)] md:text-sm"
                         data-testid="community-profile-name-key"
                         disabled={isPending || isUploadingAvatar}
                         id="community-display-name"
@@ -633,7 +627,7 @@ export function CommunityOnboardingFlow({
                   open={isAvatarEditorOpen}
                 >
                   <DialogContent
-                    className="ambush-onboarding-neutral-theme w-[min(calc(100vw-2rem),920px)] max-w-[920px] gap-0 overflow-hidden rounded-[18px] bg-[rgb(var(--ambush-onboarding-avatar-dialog-bg))] px-8 pb-6 pt-10 text-sm text-foreground shadow-[0_28px_90px_rgb(var(--ambush-onboarding-avatar-dialog-shadow)_/_0.28),0_8px_28px_rgb(var(--ambush-onboarding-avatar-dialog-shadow)_/_0.18)] transition-[height] duration-[250ms] ease-out"
+                    className="ambush-onboarding-neutral-theme w-[min(calc(100vw-2rem),920px)] max-w-[920px] gap-0 overflow-hidden rounded-3xl border border-border bg-[rgb(var(--ambush-onboarding-avatar-dialog-bg))] px-8 pb-6 pt-10 text-sm text-foreground transition-[height] duration-[250ms] ease-out"
                     closeButtonClassName="right-6 top-6 h-10 w-10 rounded-full bg-[rgb(var(--ambush-onboarding-avatar-action-bg))] text-[rgb(var(--ambush-onboarding-avatar-action-fg))] hover:bg-[rgb(var(--ambush-onboarding-avatar-action-bg)/0.9)] hover:text-[rgb(var(--ambush-onboarding-avatar-action-fg))]"
                     data-system-color-scheme="light"
                     data-testid="community-avatar-editor-key-frame"
@@ -685,7 +679,7 @@ export function CommunityOnboardingFlow({
                                 return emojiAvatar ? (
                                   <div
                                     aria-label={`${displayName.trim() || "Your profile"} avatar`}
-                                    className="flex h-full w-full items-center justify-center overflow-hidden rounded-full text-6xl shadow-xs"
+                                    className="flex h-full w-full items-center justify-center overflow-hidden rounded-full text-6xl"
                                     data-testid="community-avatar-live-preview"
                                     role="img"
                                     style={{
@@ -759,34 +753,22 @@ export function CommunityOnboardingFlow({
                 <div className="flex w-full flex-1 items-center justify-center py-10">
                   {starterPersonas.length > 0 ? (
                     <div className="flex flex-wrap justify-center gap-8">
-                      {starterPersonas.map((persona) => {
-                        const animationUrl =
-                          STARTER_PERSONA_ANIMATIONS[persona.displayName];
-                        return (
-                          <div
-                            className="flex w-40 flex-col items-center gap-3"
-                            key={persona.id}
-                          >
-                            {animationUrl ? (
-                              <img
-                                alt={`${persona.displayName} animated character`}
-                                className="h-40 w-40 object-contain"
-                                data-testid={`starter-persona-${persona.displayName.toLowerCase()}`}
-                                src={animationUrl}
-                              />
-                            ) : (
-                              <ProfileAvatar
-                                avatarUrl={persona.avatarUrl}
-                                className="h-28 w-28 text-3xl"
-                                label={persona.displayName}
-                              />
-                            )}
-                            <span className="font-mono text-xs font-medium uppercase tracking-[0.15em]">
-                              {persona.displayName}
-                            </span>
-                          </div>
-                        );
-                      })}
+                      {starterPersonas.map((persona) => (
+                        <div
+                          className="flex w-40 flex-col items-center gap-3"
+                          key={persona.id}
+                        >
+                          <ProfileAvatar
+                            avatarUrl={persona.avatarUrl}
+                            className="h-28 w-28 text-3xl"
+                            label={persona.displayName}
+                            testId={`starter-persona-${persona.displayName.toLowerCase()}`}
+                          />
+                          <span className="font-mono text-xs font-medium uppercase tracking-[0.15em]">
+                            {persona.displayName}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   ) : null}
                 </div>

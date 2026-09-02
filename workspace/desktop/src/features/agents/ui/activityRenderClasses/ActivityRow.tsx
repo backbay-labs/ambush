@@ -81,7 +81,7 @@ export function ActivityRow({
         {summaryChildren}
         <ChevronDown
           className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground/60 transition-transform group-hover/row:text-foreground",
+            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-hover/row:text-foreground",
             openToneScope === "summary"
               ? "group-open/summary:rotate-180 group-open/summary:text-foreground"
               : "group-open:rotate-180 group-open:text-foreground",
@@ -124,7 +124,7 @@ export function ActivityRowLabel({
     >
       <span
         className={cn(
-          "shrink-0 font-semibold text-muted-foreground/50",
+          "shrink-0 font-semibold text-muted-foreground",
           isCompactPreview ? "text-xs" : "text-sm",
           openToneScope === "none"
             ? null
@@ -138,7 +138,7 @@ export function ActivityRowLabel({
       {object ? (
         <span
           className={cn(
-            "min-w-0 truncate font-normal text-muted-foreground/60",
+            "min-w-0 truncate font-normal text-muted-foreground",
             isCompactPreview ? "text-xs" : "text-sm",
             openToneScope === "none"
               ? null

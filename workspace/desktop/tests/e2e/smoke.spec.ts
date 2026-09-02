@@ -357,7 +357,7 @@ test("highlights the query in search results and the opened message", async ({
   const result = page.getByTestId("search-result-mock-engineering-shipped");
   await expect(result).toBeVisible();
   await expect(result.locator("mark")).toHaveText("shipped");
-  await expect(result.locator("mark")).toHaveClass(/bg-yellow-300/);
+  await expect(result.locator("mark")).toHaveClass(/underline/);
 
   await result.click();
 

@@ -14,6 +14,8 @@ import { isMacPlatform } from "@/shared/lib/platform";
 import { getStorageItem } from "@/shared/lib/safeStorage";
 import { createThemeVars, hexToHsl } from "./adaptive-theme";
 import {
+  AMBUSH_DAY_THEME_NAME,
+  AMBUSH_NIGHT_THEME_NAME,
   SYNTAX_THEMES,
   type SyntaxThemeName,
   type ThemeInfo,
@@ -35,8 +37,8 @@ export const DEFAULT_GLASS_OPACITY = 65;
 export const DEFAULT_PROMINENT_ACTIVE_TAB = false;
 export const NEUTRAL_ACCENT = "neutral";
 const FOLLOW_SYSTEM_KEY = "ambush-follow-system";
-const VIDEO_REVIEW_NEUTRAL_ACCENT = "0 0% 98%";
-const VIDEO_REVIEW_CHIP_SURFACE = "#161616";
+const VIDEO_REVIEW_NEUTRAL_ACCENT = "33.3 14.29% 75.3%";
+const VIDEO_REVIEW_CHIP_SURFACE = "#171717";
 const VIDEO_REVIEW_TEXT_CONTRAST = 4.5;
 const VIDEO_REVIEW_CHIP_BACKGROUND_ALPHAS = [0.15, 0.3] as const;
 const GLASS_VIBRANCY_MATERIAL = "sidebar";
@@ -102,8 +104,10 @@ function readStoredTheme(fallback: SyntaxThemeName): SyntaxThemeName {
   if (!stored) return fallback;
 
   // Migrate legacy values
-  if (stored === "light") return "catppuccin-latte";
-  if (stored === "dark" || stored === "system") return "houston";
+  if (stored === "light" || stored === "ambush") return AMBUSH_DAY_THEME_NAME;
+  if (stored === "dark" || stored === "system" || stored === "ambush-dark") {
+    return AMBUSH_NIGHT_THEME_NAME;
+  }
 
   return isValidThemeName(stored) ? stored : fallback;
 }
@@ -237,21 +241,24 @@ function applyAccentColor(value: string) {
 }
 
 /**
- * The Ambush themes ship with a fixed neutral accent (the GitHub black/white
- * foreground) rather than a user-selectable accent color. When an Ambush theme is
- * active we force `NEUTRAL_ACCENT` regardless of the stored preference, and the
+ * The Ambush themes ship with a fixed neutral accent — ink on the room —
+ * rather than a user-selectable accent color, because the palette spends its
+ * whole chromatic budget on the index mark. When an Ambush theme is active we
+ * force `NEUTRAL_ACCENT` regardless of the stored preference, and the
  * appearance panel hides the accent picker. The user's chosen accent is left
  * untouched in storage so it returns when they switch back to another theme.
  */
 export function isAmbushTheme(themeName: string): boolean {
-  return themeName === "ambush" || themeName === "ambush-dark";
+  return (
+    themeName === AMBUSH_NIGHT_THEME_NAME || themeName === AMBUSH_DAY_THEME_NAME
+  );
 }
 
 /**
  * Resolve the accent to actually apply for a theme: Ambush themes are pinned to
  * the neutral accent; every other theme uses the stored/selected accent.
  */
-function resolveEffectiveAccent(
+export function resolveEffectiveAccent(
   themeName: string,
   accentColor: string,
 ): string {
@@ -401,6 +408,9 @@ function applyCachedVars(): string | null {
     const cached = window.localStorage.getItem(CACHE_KEY);
     if (!cached) return null;
     const { themeName, vars, isDark } = JSON.parse(cached);
+    // A cache for a theme this build does not ship would paint a palette the
+    // stylesheet no longer agrees with; drop it and let applyTheme repaint.
+    if (!isValidThemeName(themeName)) return null;
     const root = document.documentElement;
     for (const [key, value] of Object.entries(vars)) {
       root.style.setProperty(key, value as string);
@@ -435,11 +445,13 @@ async function applyTheme(name: SyntaxThemeName): Promise<{
   if (requestToken !== themeApplyRequest) return null;
 
   const info = extractThemeInfo(name, themeData);
-  const { isDark, vars } = createThemeVars(info.bg, info.fg, info.comment, {
-    added: info.added,
-    deleted: info.deleted,
-    modified: info.modified,
-  });
+  const { isDark, vars } = createThemeVars(
+    info.bg,
+    info.fg,
+    info.comment,
+    { added: info.added, deleted: info.deleted, modified: info.modified },
+    info.surfaces,
+  );
 
   const root = document.documentElement;
   for (const [key, value] of Object.entries(vars)) {
@@ -479,7 +491,7 @@ async function applyTheme(name: SyntaxThemeName): Promise<{
 
 export function ThemeProvider({
   children,
-  defaultTheme = "ambush",
+  defaultTheme = "ambush-night",
 }: ThemeProviderProps) {
   const glassBackgroundSupported = isTauri() && isMacPlatform();
 
@@ -525,7 +537,7 @@ export function ThemeProvider({
     const stored = getStorageItem(FOLLOW_SYSTEM_KEY);
     if (stored !== null) return stored === "true";
     // Fresh profiles (no saved theme) default to System mode so the Ambush
-    // default tracks the OS light/dark scheme. Profiles that picked a theme
+    // pair tracks the OS light/dark scheme. Profiles that picked a theme
     // before this toggle existed keep their fixed theme until they opt in.
     return getStorageItem(THEME_STORAGE_KEY) === null;
   });

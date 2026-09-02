@@ -1,5 +1,5 @@
 import { cn } from "@/shared/lib/cn";
-import AmbushLogoAnimation from "@/shared/ui/ambush-logo/AmbushLogoAnimation";
+import { AmbushLogoMotion } from "@/shared/ui/ambush-logo/AmbushLogoMotion";
 
 /** Centered, low-emphasis loading state for page and panel fetches. */
 export function AmbushLoadingState({
@@ -14,21 +14,16 @@ export function AmbushLoadingState({
   return (
     <div
       className={cn(
-        "flex w-full items-center justify-center text-muted-foreground/45",
+        "flex w-full items-center justify-center text-muted-foreground",
         fill ? "min-h-0 flex-1" : "min-h-[calc(100dvh-7rem)]",
         className,
       )}
       data-testid="ambush-loading-state"
       role="status"
     >
-      <AmbushLogoAnimation
-        ariaLabel={label}
-        className="ambush-logo--scale-pulse"
-        fullScreen={false}
-        showBackground={false}
-        style={{ width: "2rem" }}
-        textured={false}
-      />
+      <span aria-label={label} className="block w-8" role="img">
+        <AmbushLogoMotion />
+      </span>
     </div>
   );
 }

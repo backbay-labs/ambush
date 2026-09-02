@@ -4,12 +4,15 @@ import 'package:ambush/shared/theme/theme.dart';
 
 void main() {
   group('default accent', () {
-    test('uses black on the default light scheme', () {
+    test('uses the theme foreground on the default light scheme', () {
       final resolved = resolveSchemes(null, ThemeMode.light);
 
       final accented = applyAccent(resolved.light, defaultAccentIndex);
 
-      expect(accented.primary, const Color(0xFF000000));
+      // Nothing in the product reaches black or white: the neutral accent is
+      // the theme's own ink.
+      expect(accented.primary, resolved.light.onSurface);
+      expect(accented.primary, quietDay.ink);
     });
 
     test('uses the theme foreground on forced dark schemes', () {

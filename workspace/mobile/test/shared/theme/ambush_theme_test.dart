@@ -10,18 +10,46 @@ void main() {
       expect(findTheme(ambushDarkThemeName), isNotNull);
     });
 
-    test('borrow the GitHub palettes', () {
-      final ambush = findTheme(ambushThemeName)!;
-      final github = findTheme('github-light')!;
-      expect(ambush.bg, github.bg);
-      expect(ambush.fg, github.fg);
-      expect(ambush.comment, github.comment);
+    test('declare their own Quiet surfaces', () {
+      final day = findTheme(ambushThemeName)!;
+      expect(day.surfaces, quietDay);
+      expect(day.bg, quietDay.steel);
+      expect(day.fg, quietDay.inkMid);
+      expect(day.comment, quietDay.inkDim);
 
-      final ambushDark = findTheme(ambushDarkThemeName)!;
-      final githubDark = findTheme('github-dark')!;
-      expect(ambushDark.bg, githubDark.bg);
-      expect(ambushDark.fg, githubDark.fg);
-      expect(ambushDark.comment, githubDark.comment);
+      final night = findTheme(ambushDarkThemeName)!;
+      expect(night.surfaces, quietNight);
+      expect(night.bg, quietNight.steel);
+      expect(night.fg, quietNight.inkMid);
+      expect(night.comment, quietNight.inkDim);
+    });
+
+    test('paint their declared surfaces verbatim', () {
+      final scheme = generateColorScheme(findTheme(ambushDarkThemeName)!);
+      expect(scheme.surface, quietNight.night);
+      expect(scheme.onSurface, quietNight.ink);
+      expect(scheme.onSurfaceVariant, quietNight.inkDim);
+      expect(scheme.surfaceContainerHighest, quietNight.steel);
+      expect(scheme.surfaceContainerHigh, quietNight.plate);
+      expect(scheme.outline, quietNight.rule);
+      // Consequence travels on the index rule, so error is ink like the rest.
+      expect(scheme.error, quietNight.ink);
+    });
+
+    test('carry the index as the one chromatic role', () {
+      final night = AppTheme.dark(
+        colorScheme: generateColorScheme(findTheme(ambushDarkThemeName)!),
+        surfaces: quietNight,
+      );
+      expect(night.extension<AppColors>()!.index, quietNight.index);
+      expect(night.extension<AppColors>()!.grad, quietNight.grad);
+
+      final day = AppTheme.light(
+        colorScheme: generateColorScheme(findTheme(ambushThemeName)!),
+        surfaces: quietDay,
+      );
+      expect(day.extension<AppColors>()!.index, quietDay.index);
+      expect(day.extension<AppColors>()!.grad, quietDay.grad);
     });
 
     test('are a light/dark pair', () {
@@ -114,13 +142,17 @@ void main() {
       expect(ambushTopSectionGradient('nord', Brightness.dark), isNull);
     });
 
-    test('paints top to bottom for both halves of the pair', () {
+    test('paints one flat field for both halves of the pair', () {
       for (final name in [ambushThemeName, ambushDarkThemeName]) {
-        final gradient = ambushTopSectionGradient(name, Brightness.light);
-        expect(gradient, isNotNull, reason: '$name should be gradient-backed');
-        expect(gradient!.begin, Alignment.topCenter);
-        expect(gradient.end, Alignment.bottomCenter);
-        expect(gradient.colors, hasLength(2));
+        final fill = ambushTopSectionGradient(name, Brightness.light);
+        expect(fill, isNotNull, reason: '$name should carry a top section');
+        expect(fill!.begin, Alignment.topCenter);
+        expect(fill.end, Alignment.bottomCenter);
+        expect(fill.colors, hasLength(2));
+        // Both stops are the same chrome: separation is a hairline and a step
+        // in lightness, never a gradient.
+        expect(fill.colors.first, fill.colors.last);
+        expect(fill.colors.first, quietDay.steel);
       }
     });
 
@@ -211,12 +243,14 @@ void main() {
       expect(decoration.color, isNotNull);
     });
 
-    testWidgets('Ambush section labels use 80% neutral foreground', (
+    testWidgets('Ambush section labels sit one step above the label ink', (
       tester,
     ) async {
       await tester.pumpWidget(
         harness(
           AppTheme.light(
+            colorScheme: generateColorScheme(findTheme(ambushThemeName)!),
+            surfaces: quietDay,
             topSectionGradient: ambushTopSectionGradient(
               ambushThemeName,
               Brightness.light,
@@ -226,10 +260,7 @@ void main() {
       );
 
       final context = tester.element(find.text('Home'));
-      expect(
-        navigationSectionForeground(context),
-        Colors.black.withValues(alpha: 0.8),
-      );
+      expect(navigationSectionForeground(context), quietDay.inkMid);
     });
 
     testWidgets('navigation roles inherit non-Ambush theme tokens', (
@@ -256,11 +287,12 @@ void main() {
       final context = tester.element(find.byType(SizedBox));
       expect(navigationPrimaryForeground(context), primaryForeground);
       expect(navigationSecondaryForeground(context), secondaryForeground);
+      // A theme with no AppColors extension has no ink ladder to step up.
       expect(navigationSectionForeground(context), secondaryForeground);
       expect(navigationSearchSurface(context), searchSurface);
       expect(
         navigationDivider(context, 0.15),
-        primaryForeground.withValues(alpha: 0.15),
+        theme.colorScheme.outline.withValues(alpha: 0.15),
       );
     });
   });

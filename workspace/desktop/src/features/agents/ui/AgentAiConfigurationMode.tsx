@@ -86,7 +86,7 @@ export function AgentAiConfigurationModeField({
         <TabsList className="relative isolate grid h-9 w-full grid-cols-2 overflow-hidden rounded-lg bg-muted p-0.5">
           <div
             aria-hidden="true"
-            className="absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-background shadow-sm transition-transform duration-[250ms] ease-out"
+            className="absolute bottom-0.5 left-0.5 top-0.5 z-0 rounded-md bg-background transition-transform duration-[250ms] ease-out"
             style={{
               transform: `translateX(${mode === "custom" ? 100 : 0}%)`,
               width: "calc((100% - 4px) / 2)",

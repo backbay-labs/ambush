@@ -89,12 +89,9 @@ void main() {
         find.byKey(const Key('pairing-onboarding-background')),
       );
       final backgroundDecoration = background.decoration as BoxDecoration;
-      final backgroundGradient =
-          backgroundDecoration.gradient! as LinearGradient;
-      expect(backgroundGradient.colors, const [
-        Color(0xFFD7D72E),
-        Color(0xFFD7E7F6),
-      ]);
+      // One flat daylit ground, whatever the OS appearance is set to.
+      expect(backgroundDecoration.gradient, isNull);
+      expect(backgroundDecoration.color, quietDay.night);
       expect(
         tester.widget<Scaffold>(find.byType(Scaffold)).backgroundColor,
         Colors.transparent,
@@ -464,9 +461,9 @@ void main() {
         );
       }
 
-      const onboardingInk = Color(0xFF111111);
-      const onboardingMutedInk = Color(0xB3111111);
-      const onboardingCtaLabel = Color(0xFFD7E6F0);
+      final onboardingInk = quietDay.ink;
+      final onboardingMutedInk = quietDay.inkDim;
+      final onboardingCtaLabel = quietDay.night;
       final theme = AppTheme.dark();
       final protectionTile = tester.widget<CheckboxListTile>(
         find.byKey(const Key('protect-sensitive-actions-checkbox')),
@@ -482,22 +479,20 @@ void main() {
       final firstDigitContainer = tester.widget<Container>(digitFinders.first);
       final firstDigitDecoration =
           firstDigitContainer.decoration! as BoxDecoration;
-      expect(firstDigitDecoration.color, Colors.white.withValues(alpha: 0.7));
-      expect(
-        (firstDigitDecoration.border! as Border).top.color,
-        theme.colorScheme.primary.withValues(alpha: 0.15),
-      );
+      expect(firstDigitDecoration.color, quietDay.plate);
+      expect((firstDigitDecoration.border! as Border).top.color, quietDay.rule);
       final firstDigitText = tester.widget<Text>(
         find.descendant(of: digitFinders.first, matching: find.text('1')),
       );
-      expect(firstDigitText.style?.fontFamily, 'Inter');
+      expect(firstDigitText.style?.fontFamily, 'IBM Plex Sans');
       expect(
         firstDigitText.style?.fontSize,
         theme.textTheme.displaySmall?.fontSize,
       );
       expect(firstDigitText.style?.fontSize, greaterThanOrEqualTo(36));
       expect(firstDigitText.style?.fontWeight, FontWeight.w600);
-      expect(firstDigitText.style?.fontFeatures, isNull);
+      // A code compared digit-by-digit across two devices is set tabular.
+      expect(firstDigitText.style?.fontFeatures, tabularFigures);
       expect(firstDigitText.style?.color, onboardingInk);
 
       final firstDigit = tester.getTopLeft(digitFinders[0]);
@@ -562,8 +557,7 @@ void main() {
       tester,
     ) async {
       const errorMessage = 'Identity confirmation failed. Nothing transferred.';
-      const errorInk = Color(0xFF7A1025);
-      const gradientColors = [Color(0xFFD7D72E), Color(0xFFD7E7F6)];
+      final errorInk = quietDay.ink;
 
       for (final theme in [AppTheme.light(), AppTheme.dark()]) {
         await tester.pumpWidget(
@@ -577,14 +571,13 @@ void main() {
           ),
         );
 
+        // The message carries the failure; the ink only has to be readable.
         final errorText = tester.widget<Text>(find.text(errorMessage));
         expect(errorText.style?.color, errorInk);
-        for (final background in gradientColors) {
-          expect(
-            _contrastRatio(errorInk, background),
-            greaterThanOrEqualTo(4.5),
-          );
-        }
+        expect(
+          _contrastRatio(errorInk, quietDay.night),
+          greaterThanOrEqualTo(4.5),
+        );
         expect(tester.takeException(), isNull);
       }
     });

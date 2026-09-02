@@ -112,8 +112,8 @@ export function ProjectCommitDetailPanel({
           {diff ? (
             <ProjectDetailMetaRow icon={GitCommitHorizontal} label="Changes">
               <span className="flex items-center gap-1.5">
-                <span className="text-green-500">+{diff.additions}</span>
-                <span className="text-destructive">-{diff.deletions}</span>
+                <span className="text-status-added">+{diff.additions}</span>
+                <span className="text-status-deleted">-{diff.deletions}</span>
               </span>
             </ProjectDetailMetaRow>
           ) : null}

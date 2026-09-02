@@ -335,7 +335,7 @@ function ChannelLoadingBody({ hasHeader = false }: { hasHeader?: boolean }) {
               aria-hidden="true"
               className="absolute inset-x-0 bottom-0 h-5 bg-background"
             />
-            <div className="relative isolate rounded-2xl border border-border/50 bg-background/80 px-3 pb-2 pt-3 shadow-none backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55 sm:px-4">
+            <div className="relative isolate rounded-2xl border border-border bg-background px-3 pb-2 pt-3 sm:px-4">
               <Skeleton className="h-5 w-56 max-w-full" />
               <div className="mt-4 flex items-center gap-2">
                 <Skeleton className="h-8 w-8 rounded-lg" />

@@ -275,7 +275,7 @@ export function SectionActionsMenu({
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
+              destructive
               onSelect={() => deferMenuAction(onDeleteSection)}
             >
               <Trash2 className="h-4 w-4" />
@@ -720,10 +720,7 @@ export function CustomChannelSection({
                   Move down
                 </ContextMenuItem>
                 <ContextMenuSeparator />
-                <ContextMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={onDeleteSection}
-                >
+                <ContextMenuItem destructive onClick={onDeleteSection}>
                   <Trash2 className="h-4 w-4" />
                   Delete section
                 </ContextMenuItem>

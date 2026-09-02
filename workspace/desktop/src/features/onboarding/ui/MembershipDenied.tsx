@@ -98,11 +98,11 @@ export function MembershipDenied({
 
   return (
     <div
-      className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.14),transparent_48%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))] px-4 py-8"
+      className="flex min-h-dvh items-center justify-center bg-background px-4 py-8"
       data-testid="membership-denied"
     >
       <StartupWindowDragRegion />
-      <div className="w-full max-w-md rounded-[28px] border border-border/70 bg-background/92 p-8 shadow-2xl backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-3xl border border-border/70 bg-card p-8">
         <div className="space-y-3">
           <Badge variant="warning">Membership required</Badge>
           <div className="flex items-center gap-3">
@@ -139,7 +139,7 @@ export function MembershipDenied({
                 variant="outline"
               >
                 {copied ? (
-                  <Check className="h-4 w-4 text-emerald-500" />
+                  <Check className="h-4 w-4 text-foreground" />
                 ) : (
                   <Copy className="h-4 w-4" />
                 )}

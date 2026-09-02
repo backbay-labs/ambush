@@ -26,7 +26,7 @@ function Attachment({
       ref={attachmentRef}
       className={cn(
         "group/attachment relative flex min-w-0 gap-3 overflow-hidden rounded-2xl border border-border/70 bg-muted/30 text-left transition-colors",
-        "hover:border-border hover:bg-muted/50 data-[state=error]:border-destructive/40 data-[state=error]:bg-destructive/10",
+        "hover:border-border hover:bg-muted/50 data-[state=error]:border-border data-[state=error]:bg-warning-bg",
         "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
         orientation === "horizontal" && "items-center",
         orientation === "vertical" && "flex-col",
@@ -85,7 +85,7 @@ function AttachmentTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "truncate text-sm font-semibold leading-5 text-foreground group-data-[state=processing]/attachment:animate-pulse group-data-[state=uploading]/attachment:animate-pulse",
+        "truncate text-sm font-semibold leading-5 text-foreground group-data-[state=processing]/attachment:animate-pulse group-data-[state=uploading]/attachment:animate-pulse motion-reduce:animate-none",
         className,
       )}
       data-slot="attachment-title"

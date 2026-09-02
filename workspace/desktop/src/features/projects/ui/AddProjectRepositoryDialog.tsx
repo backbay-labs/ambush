@@ -12,7 +12,7 @@ import { Input } from "@/shared/ui/input";
 const FIELD_SHELL_CLASS =
   "flex min-h-11 items-center rounded-xl border border-input bg-muted/40 px-3 transition-colors hover:border-muted-foreground/40 focus-within:border-muted-foreground/50";
 const FIELD_CONTROL_CLASS =
-  "h-8 border-0 bg-transparent px-0 py-0 text-muted-foreground/55 shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus:bg-transparent focus:text-foreground focus-visible:ring-0";
+  "h-8 border-0 bg-transparent px-0 py-0 text-muted-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground focus:bg-transparent focus:text-foreground focus-visible:ring-0";
 
 export function AddProjectRepositoryDialog({
   accessChannelId,
@@ -221,7 +221,7 @@ export function AddProjectRepositoryDialog({
               htmlFor="add-project-repository-clone-url"
             >
               Clone URL
-              <span className="ml-1 text-xs font-normal text-muted-foreground/50">
+              <span className="ml-1 text-xs font-normal text-muted-foreground">
                 Optional
               </span>
             </label>

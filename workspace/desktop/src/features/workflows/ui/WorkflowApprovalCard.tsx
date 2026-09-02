@@ -13,7 +13,7 @@ export function WorkflowApprovalCard({ approval }: WorkflowApprovalCardProps) {
 
   return (
     <div
-      className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3"
+      className="rounded-lg border border-border bg-card p-3"
       data-testid="workflow-approval-card"
     >
       <p className="mb-2 text-sm font-medium">Approval Required</p>

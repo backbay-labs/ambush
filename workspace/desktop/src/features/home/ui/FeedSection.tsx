@@ -148,7 +148,7 @@ export function FeedSection({
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {title}
         </h2>
-        <span className="text-xs text-muted-foreground/70">{items.length}</span>
+        <span className="text-xs text-muted-foreground">{items.length}</span>
       </div>
 
       {items.length === 0 ? (
@@ -156,7 +156,7 @@ export function FeedSection({
           <p className="text-sm font-medium text-muted-foreground">
             {emptyTitle}
           </p>
-          <p className="mt-1 text-xs text-muted-foreground/70">
+          <p className="mt-1 text-xs text-muted-foreground">
             {emptyDescription}
           </p>
         </div>
@@ -220,7 +220,7 @@ export function FeedSection({
                       #{item.channelName}
                     </span>
                   ) : null}
-                  <span className="ml-auto shrink-0 text-2xs text-muted-foreground/60">
+                  <span className="ml-auto shrink-0 text-2xs text-muted-foreground">
                     {formatRelativeTime(item.createdAt)}
                   </span>
                 </div>
@@ -251,7 +251,7 @@ export function FeedSection({
                     size="icon"
                     type="button"
                     variant="ghost"
-                    className={`pointer-events-auto absolute right-1.5 top-1.5 opacity-0 transition-opacity group-hover:opacity-100 ${isDone ? "text-green-500 opacity-100" : "text-muted-foreground"}`}
+                    className={`pointer-events-auto absolute right-1.5 top-1.5 opacity-0 transition-opacity group-hover:opacity-100 ${isDone ? "text-foreground opacity-100" : "text-muted-foreground"}`}
                   >
                     <Check />
                   </Button>

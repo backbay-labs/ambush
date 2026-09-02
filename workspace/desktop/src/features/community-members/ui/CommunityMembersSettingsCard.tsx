@@ -149,14 +149,14 @@ function RelayMemberRow({
             pubkey={member.pubkey}
           />
           {member.role === "owner" ? (
-            <Crown className="h-4 w-4 text-amber-500" />
+            <Crown className="h-4 w-4 text-foreground" />
           ) : null}
           {member.role === "admin" ? (
-            <Shield className="h-4 w-4 text-blue-500" />
+            <Shield className="h-4 w-4 text-muted-foreground" />
           ) : null}
         </div>
         <div
-          className="flex items-center gap-1.5 text-xs text-muted-foreground/70"
+          className="flex items-center gap-1.5 text-xs text-muted-foreground"
           data-settings-subcopy
         >
           <span className="shrink-0 capitalize">{member.role}</span>
@@ -226,7 +226,7 @@ function RelayMemberRow({
             ) : null}
             {canRemove ? (
               <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
+                destructive
                 onClick={() =>
                   void mutateWithToast(
                     () => removeMutation.mutateAsync(member.pubkey),

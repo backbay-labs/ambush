@@ -211,7 +211,7 @@ export function AmbushInlineLink({
       <button
         {...props}
         type="button"
-        className="cursor-pointer font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
+        className="cursor-pointer font-medium text-foreground underline underline-offset-4 decoration-grad transition-colors hover:decoration-current"
         onClick={onOpenLink}
         onContextMenuCapture={onContextMenuCapture}
       >

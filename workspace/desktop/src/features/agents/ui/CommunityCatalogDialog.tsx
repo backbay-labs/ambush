@@ -334,7 +334,7 @@ export function CommunityCatalogDialog({
                 className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm"
                 data-testid="agent-catalog-drop-overlay"
               >
-                <p className="rounded-full bg-background/90 px-4 py-2 text-sm font-medium text-primary shadow-sm">
+                <p className="rounded-full border border-border bg-background/90 px-4 py-2 text-sm font-medium text-primary">
                   Drop .agent.json or .agent.png to import
                 </p>
               </div>
@@ -369,7 +369,7 @@ export function CommunityCatalogDialog({
 
                 {!personasLoading && personas.length > 0 ? (
                   <div className="mb-1">
-                    <p className="px-4 pb-1 pt-2 text-2xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">
+                    <p className="px-4 pb-1 pt-2 text-2xs font-semibold uppercase tracking-wider text-sidebar-foreground">
                       Agents
                     </p>
                     <div className="space-y-1">
@@ -413,7 +413,7 @@ export function CommunityCatalogDialog({
 
                 {!teamsLoading && teams.length > 0 ? (
                   <div className="mb-1">
-                    <p className="px-4 pb-1 pt-2 text-2xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">
+                    <p className="px-4 pb-1 pt-2 text-2xs font-semibold uppercase tracking-wider text-sidebar-foreground">
                       Teams
                     </p>
                     <div className="space-y-1">
@@ -455,7 +455,7 @@ export function CommunityCatalogDialog({
             </div>
 
             {/* Detail pane */}
-            <div className="relative z-10 mb-3 ml-px mr-3 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-background shadow-[-1px_0_0_0_hsl(var(--sidebar-border)/0.45)]">
+            <div className="relative z-10 mb-3 ml-px mr-3 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-background shadow-panel-left">
               {isCreateSelected
                 ? createContent({
                     onDirtyChange: handleCreateDirtyChange,
@@ -660,7 +660,7 @@ function CatalogEmptyState() {
       <p className="mt-3 text-sm font-semibold text-sidebar-foreground">
         Nothing shared yet
       </p>
-      <p className="mt-1 text-xs text-sidebar-foreground/60">
+      <p className="mt-1 text-xs text-sidebar-foreground">
         Shared agents and teams will appear here.
       </p>
     </div>
@@ -878,7 +878,7 @@ function TeamCatalogMemberRow({ member }: TeamCatalogMemberRowProps) {
             {member.systemPrompt.trim().length > 0 ? (
               <AgentInstructionReview instructions={member.systemPrompt} />
             ) : (
-              <p className="mt-3 text-sm italic text-muted-foreground/60">
+              <p className="mt-3 text-sm italic text-muted-foreground">
                 No instructions
               </p>
             )}

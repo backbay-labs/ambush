@@ -1,4 +1,16 @@
 @layer components {
+  /* An irreversible action that has not been decided yet stands behind the
+     index rule. The control itself is hollow against a filled default, so the
+     distinction survives with the colour stripped out. */
+  .ambush-index-rule {
+    border-left: 3px solid var(--ambush-index);
+  }
+
+  .ambush-destructive-control {
+    border: 2px solid hsl(var(--destructive));
+    border-left: 6px solid var(--ambush-index);
+  }
+
   /* Primary navigation rows share one inactive hierarchy, including preview
    * features that can appear between the permanent destinations. Keeping the
    * treatment on the menu prevents newly gated rows from silently rendering
@@ -272,117 +284,42 @@
   }
 
   .ambush-onboarding-neutral-theme.ambush-startup-shell {
-    /* Dot grid over the chartreuse→light-blue gradient (dots layer first so
-       they sit on top). The welcome page overrides this with dots over a flat
-       chartreuse fill below. */
-    background-image:
-      radial-gradient(circle, rgb(0 0 0 / 0.08) 1px, transparent 1px),
-      linear-gradient(
-        to bottom,
-        var(--ambush-welcome-chartreuse),
-        var(--ambush-onboarding-shell-bottom)
-      );
-    background-size:
-      24px 24px,
-      auto;
-  }
-
-  .ambush-onboarding-neutral-theme.ambush-startup-shell.ambush-onboarding-welcome {
-    background-color: var(--ambush-welcome-chartreuse);
-    /* Landing is a flat chartreuse field, so the docked-footer scrim must match
-       it (not the gradient's light-blue bottom) to stay invisible. */
-    --ambush-onboarding-shell-bottom: var(--ambush-welcome-chartreuse);
-    /* Subtle dot grid: 2px dots spaced on a 24px lattice. */
-    background-image: radial-gradient(
-      circle,
-      rgb(0 0 0 / 0.08) 1px,
-      transparent 1px
-    );
-    background-size: 24px 24px;
+    background-color: hsl(var(--background));
   }
 
   .ambush-onboarding-neutral-theme {
-    /* Landing "chartreuse" — the welcome background; reused for the CTA label. */
-    --ambush-welcome-chartreuse: #d7d72e;
-    /* Bottom stop of the onboarding shell gradient; also the docked-footer
-       scrim color so content scrolling under the CTA fades into the page. */
-    --ambush-onboarding-shell-bottom: #d7e7f6;
-    /* Label color for the primary onboarding CTA (light blue on the dark pill). */
-    --ambush-onboarding-cta-label: #d7e6f0;
-    /* Olive ink for the backup step's private key and its "never share" caption,
-       reading against the fuzzy-white key frame. */
-    --ambush-onboarding-backup-ink: #717106;
-    --background: 0 0% 100%;
-    --foreground: 0 0% 9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 9%;
-    --ambush-onboarding-emoji-picker-background: 245, 245, 245;
-    --ambush-onboarding-emoji-picker-color: 23, 23, 23;
-    --ambush-onboarding-emoji-picker-input: 255, 255, 255;
-    --ambush-onboarding-avatar-dialog-bg: 255 255 255;
-    --ambush-onboarding-avatar-accent-bg: 240 240 205;
-    --ambush-onboarding-avatar-accent-fg: 113 113 6;
-    --ambush-onboarding-avatar-action-bg: 23 23 23;
-    --ambush-onboarding-avatar-action-fg: 240 240 205;
-    --ambush-onboarding-avatar-control-fg: 113 113 6;
-    --ambush-onboarding-avatar-dialog-shadow: 0 0 0;
-  }
-
-  /*
-   * Backup options and password backup intentionally leave the bright
-   * onboarding world for a dark security-focused subview. Keep these semantic
-   * overrides on a reusable class as well as the shell so portaled
-   * popovers/dialogs can opt into the same treatment.
-   */
-  .ambush-onboarding-security-theme {
     color-scheme: dark;
-    --ambush-onboarding-shell-bottom: #082b49;
-    --ambush-onboarding-cta-label: #f5f5f5;
-    --background: 222 45% 4%;
-    --foreground: 0 0% 96%;
-    --card: 220 14% 11%;
-    --card-foreground: 0 0% 96%;
-    --popover: 220 14% 9%;
-    --popover-foreground: 0 0% 96%;
-    --primary: 0 0% 16%;
-    --primary-foreground: 0 0% 96%;
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 96%;
-    --muted: 0 0% 12%;
-    --muted-foreground: 0 0% 72%;
-    --accent: 0 0% 16%;
-    --accent-foreground: 0 0% 96%;
-    --destructive: 0 84% 70%;
-    --destructive-foreground: 0 0% 4%;
-    --border: 0 0% 22%;
-    --input: 0 0% 22%;
-    --ring: 0 0% 84%;
-  }
-
-  .ambush-onboarding-neutral-theme.ambush-startup-shell.ambush-onboarding-security-theme {
-    background-color: #010103;
-    background-image:
-      radial-gradient(circle, rgb(143 211 255 / 0.11) 1px, transparent 1px),
-      radial-gradient(
-        ellipse at 50% 58%,
-        rgb(28 112 196 / 0.24) 0%,
-        rgb(18 76 138 / 0.1) 38%,
-        transparent 66%
-      ),
-      linear-gradient(to bottom, #010103 0%, #040914 46%, #082b49 100%);
-    background-size:
-      24px 24px,
-      auto,
-      auto;
+    --ambush-onboarding-shell-bottom: #171717;
+    --ambush-onboarding-backup-ink: #a49b90;
+    --background: 0 0% 9.0%;
+    --foreground: 33.3 14.29% 75.3%;
+    --card: 28.6 25.93% 15.9%;
+    --card-foreground: 33.3 14.29% 75.3%;
+    --popover: 28.6 25.93% 15.9%;
+    --popover-foreground: 33.3 14.29% 75.3%;
+    --primary: 33.3 14.29% 75.3%;
+    --primary-foreground: 0 0% 9.0%;
+    --secondary: 0 0% 12.2%;
+    --secondary-foreground: 33.3 11.54% 69.4%;
+    --muted: 0 0% 12.2%;
+    --muted-foreground: 33 9.9% 60.4%;
+    --accent: 27.5 24.49% 19.2%;
+    --accent-foreground: 33.3 14.29% 75.3%;
+    --destructive: 33.3 14.29% 75.3%;
+    --destructive-foreground: 0 0% 9.0%;
+    --border: 0 0% 24.3%;
+    --input: 0 0% 24.3%;
+    --ring: 33.3 14.29% 75.3%;
+    --ambush-onboarding-emoji-picker-background: 31, 31, 31;
+    --ambush-onboarding-emoji-picker-color: 201, 193, 183;
+    --ambush-onboarding-emoji-picker-input: 23, 23, 23;
+    --ambush-onboarding-avatar-dialog-bg: 51 40 30;
+    --ambush-onboarding-avatar-accent-bg: 61 48 37;
+    --ambush-onboarding-avatar-accent-fg: 201 193 183;
+    --ambush-onboarding-avatar-action-bg: 201 193 183;
+    --ambush-onboarding-avatar-action-fg: 23 23 23;
+    --ambush-onboarding-avatar-control-fg: 164 155 144;
+    --ambush-onboarding-avatar-dialog-shadow: 0 0 0;
   }
 
   .ambush-onboarding-key-text {
@@ -391,87 +328,79 @@
     color: var(--ambush-onboarding-backup-ink);
   }
 
-  .dark .ambush-onboarding-neutral-theme:not(.ambush-startup-shell) {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --ambush-onboarding-emoji-picker-background: 38, 38, 38;
-    --ambush-onboarding-emoji-picker-color: 250, 250, 250;
-    --ambush-onboarding-emoji-picker-input: 10, 10, 10;
-    --ambush-onboarding-avatar-dialog-bg: 24 24 20;
-    --ambush-onboarding-avatar-accent-bg: 211 211 163;
-    --ambush-onboarding-avatar-accent-fg: 24 24 20;
-    --ambush-onboarding-avatar-action-bg: 113 113 6;
-    --ambush-onboarding-avatar-action-fg: 240 240 205;
-    --ambush-onboarding-avatar-control-fg: 224 224 176;
+  .ambush-onboarding-neutral-theme[data-system-color-scheme="light"] {
+    color-scheme: light;
+    --ambush-onboarding-shell-bottom: #bcb5ad;
+    --ambush-onboarding-backup-ink: #51443a;
+    --background: 32 10.07% 70.8%;
+    --foreground: 26.2 24.24% 12.9%;
+    --card: 25.9 57.3% 82.5%;
+    --card-foreground: 26.2 24.24% 12.9%;
+    --popover: 25.9 57.3% 82.5%;
+    --popover-foreground: 26.2 24.24% 12.9%;
+    --primary: 26.2 24.24% 12.9%;
+    --primary-foreground: 32 10.07% 70.8%;
+    --secondary: 32 11.81% 75.1%;
+    --secondary-foreground: 27 19.23% 20.4%;
+    --muted: 32 11.81% 75.1%;
+    --muted-foreground: 26.1 16.55% 27.3%;
+    --accent: 23.7 68.57% 86.3%;
+    --accent-foreground: 26.2 24.24% 12.9%;
+    --destructive: 26.2 24.24% 12.9%;
+    --destructive-foreground: 32 10.07% 70.8%;
+    --border: 33.3 4.35% 59.4%;
+    --input: 33.3 4.35% 59.4%;
+    --ring: 26.2 24.24% 12.9%;
+    --ambush-onboarding-emoji-picker-background: 199, 192, 184;
+    --ambush-onboarding-emoji-picker-color: 41, 32, 25;
+    --ambush-onboarding-emoji-picker-input: 244, 215, 196;
+    --ambush-onboarding-avatar-dialog-bg: 236 207 185;
+    --ambush-onboarding-avatar-accent-bg: 244 215 196;
+    --ambush-onboarding-avatar-accent-fg: 41 32 25;
+    --ambush-onboarding-avatar-action-bg: 41 32 25;
+    --ambush-onboarding-avatar-action-fg: 188 181 173;
+    --ambush-onboarding-avatar-control-fg: 81 68 58;
     --ambush-onboarding-avatar-dialog-shadow: 0 0 0;
   }
 
-  .ambush-onboarding-neutral-theme[data-system-color-scheme="light"],
-  .dark
-    .ambush-onboarding-neutral-theme[data-system-color-scheme="light"]:not(
-      .ambush-startup-shell
-    ) {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 9%;
-    --ambush-onboarding-emoji-picker-background: 245, 245, 245;
-    --ambush-onboarding-emoji-picker-color: 23, 23, 23;
-    --ambush-onboarding-emoji-picker-input: 255, 255, 255;
-    --ambush-onboarding-avatar-dialog-bg: 255 255 255;
-    --ambush-onboarding-avatar-accent-bg: 240 240 205;
-    --ambush-onboarding-avatar-accent-fg: 113 113 6;
-    --ambush-onboarding-avatar-action-bg: 23 23 23;
-    --ambush-onboarding-avatar-action-fg: 240 240 205;
-    --ambush-onboarding-avatar-control-fg: 113 113 6;
-    --ambush-onboarding-avatar-dialog-shadow: 0 0 0;
-  }
-
-  .ambush-onboarding-neutral-theme[data-system-color-scheme="dark"]:not(
-    .ambush-startup-shell
-  ) {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --ambush-onboarding-emoji-picker-background: 38, 38, 38;
-    --ambush-onboarding-emoji-picker-color: 250, 250, 250;
-    --ambush-onboarding-emoji-picker-input: 10, 10, 10;
-    --ambush-onboarding-avatar-dialog-bg: 24 24 20;
-    --ambush-onboarding-avatar-accent-bg: 211 211 163;
-    --ambush-onboarding-avatar-accent-fg: 24 24 20;
-    --ambush-onboarding-avatar-action-bg: 113 113 6;
-    --ambush-onboarding-avatar-action-fg: 240 240 205;
-    --ambush-onboarding-avatar-control-fg: 224 224 176;
+  /*
+   * Backup options and password backup are a security sub-view. They hold the
+   * night room whatever the shell around them resolved to, so the surface a
+   * key is written on never changes under the reader.
+   */
+  .ambush-onboarding-security-theme,
+  .ambush-onboarding-neutral-theme[data-system-color-scheme].ambush-onboarding-security-theme {
+    color-scheme: dark;
+    --ambush-onboarding-shell-bottom: #171717;
+    --ambush-onboarding-backup-ink: #a49b90;
+    --background: 0 0% 9.0%;
+    --foreground: 33.3 14.29% 75.3%;
+    --card: 28.6 25.93% 15.9%;
+    --card-foreground: 33.3 14.29% 75.3%;
+    --popover: 28.6 25.93% 15.9%;
+    --popover-foreground: 33.3 14.29% 75.3%;
+    --primary: 33.3 14.29% 75.3%;
+    --primary-foreground: 0 0% 9.0%;
+    --secondary: 0 0% 12.2%;
+    --secondary-foreground: 33.3 11.54% 69.4%;
+    --muted: 0 0% 12.2%;
+    --muted-foreground: 33 9.9% 60.4%;
+    --accent: 27.5 24.49% 19.2%;
+    --accent-foreground: 33.3 14.29% 75.3%;
+    --destructive: 33.3 14.29% 75.3%;
+    --destructive-foreground: 0 0% 9.0%;
+    --border: 0 0% 24.3%;
+    --input: 0 0% 24.3%;
+    --ring: 33.3 14.29% 75.3%;
+    --ambush-onboarding-emoji-picker-background: 31, 31, 31;
+    --ambush-onboarding-emoji-picker-color: 201, 193, 183;
+    --ambush-onboarding-emoji-picker-input: 23, 23, 23;
+    --ambush-onboarding-avatar-dialog-bg: 51 40 30;
+    --ambush-onboarding-avatar-accent-bg: 61 48 37;
+    --ambush-onboarding-avatar-accent-fg: 201 193 183;
+    --ambush-onboarding-avatar-action-bg: 201 193 183;
+    --ambush-onboarding-avatar-action-fg: 23 23 23;
+    --ambush-onboarding-avatar-control-fg: 164 155 144;
     --ambush-onboarding-avatar-dialog-shadow: 0 0 0;
   }
 
@@ -581,7 +510,7 @@
   .ambush-onboarding-runtime-setup[data-setup-flash="true"]::after {
     animation: ambush-onboarding-runtime-setup-ring 560ms
       cubic-bezier(0.22, 1, 0.36, 1) both;
-    border: 1px solid var(--ambush-welcome-chartreuse);
+    border: 1px solid hsl(var(--foreground));
     border-radius: inherit;
     content: "";
     inset: -0.25rem;
@@ -733,7 +662,7 @@
 
     .ambush-onboarding-runtime-setup[data-setup-flash="true"] {
       animation: none;
-      outline: 2px solid var(--ambush-welcome-chartreuse);
+      outline: 2px solid hsl(var(--foreground));
       outline-offset: 2px;
       will-change: auto;
     }

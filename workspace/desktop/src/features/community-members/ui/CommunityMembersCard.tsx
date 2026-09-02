@@ -43,7 +43,7 @@ function RoleBadge({ role }: { role: RelayMemberRole }) {
       className={cn(
         "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
         role === "owner" && "bg-primary/10 text-primary",
-        role === "admin" && "bg-blue-500/10 text-blue-500",
+        role === "admin" && "bg-secondary text-muted-foreground",
         role === "member" && "bg-muted text-muted-foreground",
       )}
     >
@@ -57,7 +57,7 @@ function RoleIcon({ role }: { role: RelayMemberRole }) {
     case "owner":
       return <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />;
     case "admin":
-      return <Shield className="h-4 w-4 shrink-0 text-blue-500" />;
+      return <Shield className="h-4 w-4 shrink-0 text-muted-foreground" />;
     default:
       return <User className="h-4 w-4 shrink-0 text-muted-foreground" />;
   }
@@ -148,10 +148,7 @@ function MemberRow({
             ) : null}
             {canRemove && canChangeRole ? <DropdownMenuSeparator /> : null}
             {canRemove ? (
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onClick={() => onRemove(member)}
-              >
+              <DropdownMenuItem destructive onClick={() => onRemove(member)}>
                 Remove
               </DropdownMenuItem>
             ) : null}

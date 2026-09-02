@@ -420,7 +420,7 @@ export function HostedCommunityCreateFlow({
             spellCheck={false}
             value={name}
           />
-          <span className="shrink-0 text-sm text-muted-foreground/70">
+          <span className="shrink-0 text-sm text-muted-foreground">
             .{HOSTED_COMMUNITY_SUFFIX}
           </span>
         </div>

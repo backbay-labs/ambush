@@ -111,7 +111,7 @@ function ThreadPreviewRow({
             <span className="min-w-0 flex-1 truncate text-sm font-semibold leading-4 text-foreground">
               {item.senderLabel}
             </span>
-            <span className="shrink-0 text-xs leading-4 text-muted-foreground/70 transition-opacity group-hover/activity-row:opacity-0 group-focus-within/activity-row:opacity-0">
+            <span className="shrink-0 text-xs leading-4 text-muted-foreground transition-opacity group-hover/activity-row:opacity-0 group-focus-within/activity-row:opacity-0">
               {item.timestampLabel}
             </span>
           </div>
@@ -132,7 +132,7 @@ function ThreadPreviewRow({
           />
         </div>
       </div>
-      <div className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-full bg-muted/95 p-0.5 opacity-0 shadow-xs transition-opacity group-hover/activity-row:pointer-events-auto group-hover/activity-row:opacity-100 group-focus-within/activity-row:pointer-events-auto group-focus-within/activity-row:opacity-100">
+      <div className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-full border border-border bg-muted/95 p-0.5 opacity-0 transition-opacity group-hover/activity-row:pointer-events-auto group-hover/activity-row:opacity-100 group-focus-within/activity-row:pointer-events-auto group-focus-within/activity-row:opacity-100">
         <RowActionButton label="Mark as read" onClick={onMarkRead}>
           <MailOpen />
         </RowActionButton>
@@ -175,7 +175,7 @@ function WorkingAgentRow({
           <span className="min-w-0 flex-1 truncate text-sm font-semibold leading-4 text-foreground">
             {name}
           </span>
-          <span className="shrink-0 text-xs leading-4 text-muted-foreground/70">
+          <span className="shrink-0 text-xs leading-4 text-muted-foreground">
             {elapsed}
           </span>
         </div>

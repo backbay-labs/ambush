@@ -130,7 +130,7 @@ test.describe("community rail", () => {
     );
     expect(activeStyle.backgroundColor).toBe(inactiveStyle.backgroundColor);
     expect(activeStyle.borderRadius).toBe(inactiveStyle.borderRadius);
-    expect(activeStyle.borderRadius).toBe("12px");
+    expect(activeStyle.borderRadius).toBe("2px");
     expect(activeStyle.color).toBe(inactiveStyle.color);
     expect(activeStyle.outlineColor).toBe(inactiveStyle.outlineColor);
     expect(activeStyle.outlineStyle).toBe("solid");
@@ -1263,7 +1263,7 @@ test.describe("community rail", () => {
 
   test("hides the rail with a single community", async ({ page }) => {
     await page.addInitScript((themeStorageKey) => {
-      window.localStorage.setItem(themeStorageKey, "ambush-dark");
+      window.localStorage.setItem(themeStorageKey, "ambush-night");
     }, THEME_STORAGE_KEY);
     await installMockBridge(page, undefined, { skipCommunitySeed: true });
     await seedCommunities(page, [COMMUNITY_A], COMMUNITY_A.id);

@@ -248,6 +248,6 @@ test("active search queries bypass the cache and highlight every match", () => {
 
   assert.notEqual(first, second);
   assert.equal((html.match(/data-search-match="true"/g) ?? []).length, 2);
-  assert.match(html, /bg-yellow-300/);
+  assert.match(html, /underline/);
   assert.match(html, /<code>bold<\/code>/);
 });

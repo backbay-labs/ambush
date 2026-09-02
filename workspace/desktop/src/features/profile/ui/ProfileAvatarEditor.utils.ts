@@ -638,9 +638,9 @@ export function useEmojiMartThemeVars() {
       const input = hslToRgbString(styles.getPropertyValue("--input"));
 
       setThemeVars({
-        "--ambush-emoji-picker-rgb-background": muted ?? "54, 58, 79",
-        "--ambush-emoji-picker-rgb-color": foreground ?? "245, 247, 255",
-        "--ambush-emoji-picker-rgb-input": input ?? "47, 51, 68",
+        "--ambush-emoji-picker-rgb-background": muted ?? "31, 31, 31",
+        "--ambush-emoji-picker-rgb-color": foreground ?? "201, 193, 183",
+        "--ambush-emoji-picker-rgb-input": input ?? "62, 62, 62",
       } as React.CSSProperties);
     };
 

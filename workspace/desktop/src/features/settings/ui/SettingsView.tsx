@@ -272,10 +272,10 @@ export function SettingsView({
           ) : null}
           {shouldWarnMissingMembershipSnapshot(myMembershipQuery.data) ? (
             <div
-              className="mx-3 flex items-start gap-2 rounded-md border border-amber-500/40 px-3 py-2 text-xs text-sidebar-foreground"
+              className="mx-3 flex items-start gap-2 rounded-md border border-border bg-warning-bg px-3 py-2 text-xs text-warning"
               data-testid="community-access-snapshot-missing"
             >
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               Invite settings are unavailable. Relay recovery may still be in
               progress.
             </div>
@@ -302,7 +302,7 @@ export function SettingsView({
         <SidebarFooter>
           {appVersion ? (
             <p
-              className="px-2 pb-1 text-xs text-sidebar-foreground/45"
+              className="px-2 pb-1 text-xs text-sidebar-foreground"
               data-ambush-sidebar-secondary
               data-testid="settings-version"
             >

@@ -345,7 +345,7 @@ void main() {
     final material = tester.widget<Material>(surface);
     final shape = material.shape! as RoundedRectangleBorder;
     expect(shape.borderRadius, BorderRadius.circular(Radii.popover));
-    expect(shape.side.color, Colors.black.withValues(alpha: 0.04));
+    expect(shape.side.color, tester.element(surface).colors.outline);
     expect(material.elevation, appPopoverElevation);
     expect(
       material.shadowColor,
@@ -800,7 +800,10 @@ void main() {
     final markUnreadMaterial = tester.widget<Material>(
       find.descendant(of: markUnreadAction, matching: find.byType(Material)),
     );
-    expect(markUnreadMaterial.color, tester.element(row).colors.primary);
+    expect(
+      markUnreadMaterial.color,
+      tester.element(row).colors.surfaceContainerHighest,
+    );
     expect(markUnreadMaterial.borderRadius, BorderRadius.circular(Radii.full));
 
     await tester.tap(find.byKey(const ValueKey('inbox-swipe-read-m1')));
@@ -814,7 +817,7 @@ void main() {
     final markReadMaterial = tester.widget<Material>(
       find.descendant(of: markReadAction, matching: find.byType(Material)),
     );
-    expect(markReadMaterial.color, tester.element(row).appColors.success);
+    expect(markReadMaterial.color, tester.element(row).colors.primary);
     expect(markReadMaterial.color, isNot(markUnreadMaterial.color));
   });
 

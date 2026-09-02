@@ -90,7 +90,7 @@ test.describe("channel muting", () => {
 
   test("02b — muted channels recede further in dark mode", async ({ page }) => {
     await page.addInitScript(() => {
-      window.localStorage.setItem("ambush-theme", "ambush-dark");
+      window.localStorage.setItem("ambush-theme", "ambush-night");
     });
     await seedMuteState(page, ENGINEERING_CHANNEL_ID);
     await installMockBridge(page);

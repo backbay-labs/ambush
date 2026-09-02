@@ -8,6 +8,7 @@ import {
   persistCurrentIdentity,
 } from "@/shared/api/tauriIdentity";
 import type { IdentityStorage } from "@/shared/api/types";
+import { AmbushLockup } from "@/shared/ui/ambush-logo/AmbushLockup";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -33,7 +34,7 @@ import {
 } from "./NostrKeyImportForm";
 import {
   ONBOARDING_INK_ICON_CLASS,
-  ONBOARDING_LANDING_CTA_CLASS,
+  ONBOARDING_PRIMARY_CTA_CLASS,
   ONBOARDING_SECONDARY_CTA_CLASS,
   OnboardingChrome,
 } from "./OnboardingChrome";
@@ -285,11 +286,7 @@ export function MachineOnboardingFlow({
     <div
       className={`ambush-onboarding-neutral-theme ambush-startup-shell flex max-h-dvh items-start justify-center overflow-x-hidden overflow-y-auto px-4 text-foreground ${
         isSecuritySubview ? "ambush-onboarding-security-theme" : ""
-      } ${
-        page === "identity"
-          ? "ambush-onboarding-welcome py-8"
-          : "pb-28 pt-[106px]"
-      }`}
+      } ${page === "identity" ? "py-8" : "pb-28 pt-[106px]"}`}
       data-testid="machine-onboarding-gate"
     >
       <StartupWindowDragRegion />
@@ -311,11 +308,7 @@ export function MachineOnboardingFlow({
               direction={transitionDirection}
               transitionKey={`machine-identity-${transitionDirection}`}
             >
-              <img
-                alt="Ambush"
-                className="w-full max-w-[600px]"
-                src="/landing/ambush-wordmark.png"
-              />
+              <AmbushLockup className="text-6xl text-foreground" />
               <p className="mt-2 max-w-[560px] text-center text-2xl font-normal leading-none text-foreground">
                 Your people, your agents, your projects —<br />
                 all in one place.
@@ -325,7 +318,7 @@ export function MachineOnboardingFlow({
               ) : null}
               <div className="mt-10 flex flex-col items-center gap-3">
                 <Button
-                  className={ONBOARDING_LANDING_CTA_CLASS}
+                  className={ONBOARDING_PRIMARY_CTA_CLASS}
                   disabled={isPending}
                   onClick={() => void loadFreshIdentity()}
                   type="button"

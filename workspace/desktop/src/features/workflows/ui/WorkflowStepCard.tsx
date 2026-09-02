@@ -1,4 +1,4 @@
-import { ChevronRight, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
 import { cn } from "@/shared/lib/cn";
@@ -54,7 +54,7 @@ function StepSettingAccordion({
         </span>
         <ChevronRight
           className={cn(
-            "h-4 w-4 shrink-0 text-muted-foreground/70 transition-transform duration-150 motion-reduce:transition-none",
+            "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
             expanded && "rotate-90",
           )}
         />
@@ -78,28 +78,37 @@ function runControlsSummary(step: StepFormState): string {
   return "Default";
 }
 
+function BackendHint({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-start gap-1.5 rounded-md border border-border bg-warning-bg px-2 py-1 text-xs text-warning">
+      <AlertTriangle aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
 function BackendSupportHint({ action }: { action: StepFormState["action"] }) {
   switch (action) {
     case "send_dm":
       return (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-700">
+        <BackendHint>
           Backend note: `send_dm` is not executed yet, so runs fail at this
           step.
-        </p>
+        </BackendHint>
       );
     case "set_channel_topic":
       return (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-700">
+        <BackendHint>
           Backend note: `set_channel_topic` is not executed yet, so runs fail at
           this step.
-        </p>
+        </BackendHint>
       );
     case "request_approval":
       return (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-700">
+        <BackendHint>
           Backend note: approval gates still stop runs with WF-08; approval
           records are not persisted yet.
-        </p>
+        </BackendHint>
       );
     default:
       return null;
@@ -181,9 +190,15 @@ function StepConfigFields({
                 manual triggers require a channel.
               </p>
               {triggerType === "webhook" && !(step.channel ?? "").trim() ? (
-                <p className="text-xs text-amber-700">
-                  This step will fail for webhook-triggered runs until a channel
-                  override is set.
+                <p className="flex items-start gap-1.5 text-xs text-warning">
+                  <AlertTriangle
+                    aria-hidden="true"
+                    className="mt-0.5 h-3 w-3 shrink-0"
+                  />
+                  <span>
+                    This step will fail for webhook-triggered runs until a
+                    channel override is set.
+                  </span>
                 </p>
               ) : null}
             </div>

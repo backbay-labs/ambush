@@ -500,10 +500,10 @@ export const MessageRow = React.memo(
             {message.respondTo === "anyone" ? (
               <AlertTriangle
                 aria-hidden="true"
-                className="h-2.5 w-2.5 fill-background text-amber-500"
+                className="h-2.5 w-2.5 fill-background text-warning"
               />
             ) : (
-              <span className="h-2 w-2 rounded-full bg-blue-500" />
+              <span className="h-2 w-2 rounded-full bg-foreground" />
             )}
           </span>
         ) : null}
@@ -606,7 +606,7 @@ export const MessageRow = React.memo(
         <>
           {message.pending ? (
             <p
-              className="font-normal text-muted-foreground/70"
+              className="font-normal text-muted-foreground"
               data-testid="message-send-status"
             >
               Sending…
@@ -615,7 +615,7 @@ export const MessageRow = React.memo(
           {message.edited ? (
             <Tooltip>
               <TooltipTrigger asChild>
-                <p className="text-muted-foreground/70">(edited)</p>
+                <p className="text-muted-foreground">(edited)</p>
               </TooltipTrigger>
               <TooltipContent>This message has been edited</TooltipContent>
             </Tooltip>
@@ -895,7 +895,7 @@ export const MessageRow = React.memo(
                 : "px-2",
             "flex gap-2.5",
             isDisplayedAsContinuation ? "items-center" : "items-start",
-            hasActiveReminder ? "bg-blue-500/10" : "",
+            hasActiveReminder ? "bg-accent" : "",
             highlighted
               ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
               : "",

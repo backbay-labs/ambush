@@ -1,10 +1,10 @@
 @layer components {
   .ambush-terminal-substrate {
-    background: var(--ambush-terminal-background, #101014);
-    color: var(--ambush-terminal-foreground, #e8e8ec);
+    background: var(--ambush-terminal-background, #171717);
+    color: var(--ambush-terminal-foreground, #c9c1b7);
     display: flex;
     flex-direction: column;
-    font-family: "JetBrains Mono", monospace;
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
     font-variant-ligatures: none;
     inset: 0;
     position: absolute;
@@ -41,7 +41,7 @@
     align-items: center;
     background: transparent;
     border: 0;
-    border-radius: calc(var(--radius) - 2px);
+    border-radius: var(--radius);
     color: hsl(var(--muted-foreground));
     display: flex;
     font: inherit;
@@ -187,7 +187,10 @@
     bottom: 0;
     color: transparent;
     font:
-      14px / 17px "JetBrains Mono",
+      14px / 17px "IBM Plex Mono",
+      ui-monospace,
+      "SF Mono",
+      Menlo,
       monospace;
     left: 1.25rem;
     margin: 0;
@@ -298,7 +301,7 @@
     align-items: center;
     background: transparent;
     border: 0;
-    border-radius: calc(var(--radius) - 2px);
+    border-radius: var(--radius);
     color: hsl(var(--muted-foreground));
     display: inline-flex;
     height: 30px;

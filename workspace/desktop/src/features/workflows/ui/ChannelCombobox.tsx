@@ -27,7 +27,7 @@ function ChannelPrivacyIcon({ channel }: { channel: Channel }) {
         : Hash;
 
   return (
-    <Icon aria-hidden className="h-5 w-5 shrink-0 text-muted-foreground/60" />
+    <Icon aria-hidden className="h-5 w-5 shrink-0 text-muted-foreground" />
   );
 }
 

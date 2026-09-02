@@ -73,7 +73,7 @@
   min-height: var(--inline-chip-min-height);
   padding: var(--inline-chip-padding-block-start)
     var(--inline-chip-padding-inline) var(--inline-chip-padding-block-end);
-  border-radius: calc(var(--radius) - 4px);
+  border-radius: var(--radius);
   font-weight: 500;
   line-height: 1;
   vertical-align: baseline;
@@ -83,8 +83,8 @@
 
 .message-markdown .mention-chip {
   font-size: inherit;
-  background: hsl(var(--primary) / 0.15);
-  color: hsl(var(--primary));
+  background: var(--ambush-plate-hi);
+  color: hsl(var(--accent-foreground));
 }
 
 .message-markdown .mention-chip.wrapping-inline-chip {
@@ -274,7 +274,7 @@
 .message-markdown .inline-code-chip,
 .message-markdown :not(pre) > code {
   font-size: var(--inline-code-font-size);
-  font-family: ui-monospace, monospace;
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   background: hsl(var(--muted));
   color: inherit;
 }
@@ -368,17 +368,9 @@
 }
 
 .code-line-diff-add {
-  background-color: hsl(120 40% 50% / 0.15);
+  background-color: var(--ambush-plate-hi);
 }
 
 .code-line-diff-remove {
-  background-color: hsl(0 60% 50% / 0.15);
-}
-
-.dark .code-line-diff-add {
-  background-color: hsl(120 40% 50% / 0.12);
-}
-
-.dark .code-line-diff-remove {
-  background-color: hsl(0 60% 50% / 0.12);
+  background-color: var(--ambush-night);
 }

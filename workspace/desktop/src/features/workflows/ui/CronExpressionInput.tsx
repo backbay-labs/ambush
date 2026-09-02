@@ -88,7 +88,7 @@ export function CronExpressionInput({
               autoCorrect="off"
               className={cn(
                 "h-11 min-w-0 border-l border-input/50 bg-transparent px-1 text-center font-mono text-sm text-foreground outline-hidden first:border-l-0",
-                "placeholder:text-muted-foreground/60 focus:z-10 focus:bg-muted/35",
+                "placeholder:text-muted-foreground focus:z-10 focus:bg-muted/35",
                 "disabled:cursor-not-allowed",
                 validationErrors[index] &&
                   "bg-destructive/5 text-destructive focus:bg-destructive/10",

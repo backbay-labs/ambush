@@ -965,7 +965,7 @@ test("selecting a person mention inserts @Name into input", async ({
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("ambush-theme", "ambush-dark");
+    window.localStorage.setItem("ambush-theme", "ambush-night");
   });
   await page.goto("/");
   await page.getByTestId("channel-general").click();

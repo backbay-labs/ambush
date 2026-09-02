@@ -313,9 +313,9 @@ export function RemindersPanel({
   if (groups.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-8">
-        <Bell className="h-8 w-8 text-muted-foreground/50" />
+        <Bell className="h-8 w-8 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">No reminders</p>
-        <p className="text-xs text-muted-foreground/70">
+        <p className="text-xs text-muted-foreground">
           Use "Remind me later" on any message to create one.
         </p>
       </div>

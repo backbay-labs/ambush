@@ -52,12 +52,12 @@ export function PersonaDropdownField({
             <span
               className={cn(
                 "min-w-0 flex-1 truncate",
-                !selectedOption && "text-muted-foreground/55",
+                !selectedOption && "text-muted-foreground",
               )}
             >
               {selectedOption?.label ?? placeholder}
             </span>
-            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent

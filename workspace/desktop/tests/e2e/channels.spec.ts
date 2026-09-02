@@ -2099,7 +2099,7 @@ test("channel date divider keeps the date sticky while the separator rule scroll
   );
   await expect(
     composerOverlay.getByTestId("composer-dock-backdrop").locator("div"),
-  ).not.toHaveCSS("backdrop-filter", "none");
+  ).toHaveCSS("backdrop-filter", "none");
   const composerRailMask = composerOverlay.getByTestId(
     "composer-dock-rail-mask",
   );
@@ -2729,7 +2729,7 @@ test("manage channel shows member avatars and owner-only row controls", async ({
     name: "Details",
   });
   await expect(detailsTitle).toHaveClass(/text-xs/);
-  await expect(detailsTitle).toHaveClass(/text-muted-foreground\/70/);
+  await expect(detailsTitle).toHaveClass(/text-muted-foreground/);
   await expect(
     detailsSection.locator('[data-slot="panel-section-header"]'),
   ).toHaveClass(/px-4/);

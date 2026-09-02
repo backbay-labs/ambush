@@ -4,13 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'accent_colors.dart';
+import 'ambush_theme.dart';
 import 'theme_catalog.dart';
-import 'theme_provider.dart' show effectiveTheme, schemeForAppearanceMode;
+import 'theme_provider.dart'
+    show defaultSchemeName, effectiveTheme, schemeForAppearanceMode;
 
 const communityThemeDTag = 'community-theme';
 const defaultCommunityTheme = CommunityThemePreference(
-  theme: 'ambush',
-  accent: '#3b82f6',
+  theme: ambushDarkThemeName,
+  accent: 'neutral',
   followSystem: true,
 );
 
@@ -148,7 +150,8 @@ class CommunityThemeStorage {
         ThemeMode.values.where((value) => value.name == modeName).firstOrNull ??
         ThemeMode.system;
     final storedTheme = prefs.getString(_legacySchemeKey);
-    final theme = findTheme(storedTheme ?? 'ambush')?.name ?? 'ambush';
+    final theme =
+        findTheme(storedTheme ?? defaultSchemeName)?.name ?? defaultSchemeName;
     final legacyAccent = prefs.getInt(_legacyAccentKey);
     final resolvedTheme = switch (mode) {
       ThemeMode.system => schemeForAppearanceMode(theme, mode) ?? theme,
