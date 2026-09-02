@@ -2740,9 +2740,16 @@ async fn infrastructure_detector_replays_reach_enabled_collective_graph() {
         .unwrap()
         .operator_projection()
         .unwrap();
-    // Two normalized nodes and one replay event per signal, plus the shared
-    // fallback host asset retained once across all three replays.
-    assert_eq!(projection.graph.nodes.len(), 10);
+    // Each infrastructure adapter supplies its own normalized event and asset;
+    // fallback observation reuses those exact identities instead of adding a
+    // redundant replay event and host alias.
+    assert_eq!(projection.graph.nodes.len(), 6);
+    assert_eq!(projection.graph.edges.len(), 3);
+    assert!(projection.graph.edges.values().all(|edge| {
+        edge.relation == swarm_core::hypothesis_graph::CausalRelation::ObservedIn
+            && projection.graph.nodes.contains_key(&edge.from)
+            && projection.graph.nodes.contains_key(&edge.to)
+    }));
     for evidence in projection.graph.evidence.values() {
         for entity_id in evidence.entity_ids() {
             assert!(

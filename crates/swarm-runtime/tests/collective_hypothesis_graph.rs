@@ -4211,6 +4211,61 @@ fn seed_signal_converges_through_real_runtime() {
 }
 
 #[test]
+fn enabled_minimum_node_limit_admits_parented_process_without_user() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_nodes: 4,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(138), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(139),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(140)).unwrap();
+
+    let mut replay = production_replay_bundle(
+        "hunt:phase286:parented-process-without-user",
+        1_700_000_090_000,
+    );
+    replay.event.payload = match replay.event.payload {
+        TelemetryPayload::ProcessStart(mut process) => {
+            assert_ne!(process.parent_process, "<none>");
+            process.user = None;
+            TelemetryPayload::ProcessStart(process)
+        }
+        _ => unreachable!(),
+    };
+
+    let submission = service.submit_replay(&replay).unwrap();
+    let projection = service.operator_projection().unwrap();
+    assert_eq!(projection.graph.nodes.len(), 4);
+    let evidence = &projection.graph.evidence[&submission.evidence_id];
+    assert_eq!(evidence.entity_ids().len(), 2);
+    assert!(
+        evidence
+            .entity_ids()
+            .iter()
+            .all(|node_id| projection.graph.nodes.contains_key(node_id))
+    );
+    let edge = projection.graph.edges.values().next().unwrap();
+    assert_eq!(edge.relation, CausalRelation::ObservedIn);
+    assert!(evidence.entity_ids().contains(&edge.from));
+    assert!(matches!(
+        projection.graph.nodes[&edge.from],
+        GraphNode::Event(_)
+    ));
+    assert!(matches!(
+        projection.graph.nodes[&edge.to],
+        GraphNode::Asset(_)
+    ));
+}
+
+#[test]
 fn benign_or_ambiguous_investigation_closes_falsification_without_false_memory() {
     let config = HypothesisGraphConfig {
         enabled: true,
@@ -4847,6 +4902,10 @@ fn retry_exhausted_weaver_terminal_replays_until_durably_acknowledged() {
     assert_eq!(pending[0].task_id, first.claim.task_id);
     assert_eq!(pending[0].hunt_id, hunt_id);
     assert!(pending[0].no_finding);
+    assert_eq!(
+        pending[0].retry_exhaustion_failure_summary.as_deref(),
+        Some(swarm_core::hypothesis_graph::TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY)
+    );
     assert_eq!(
         service.operator_projection().unwrap().terminal_publications,
         1

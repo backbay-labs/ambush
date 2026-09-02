@@ -24,7 +24,7 @@ use swarm_core::types::AgentId;
 use swarm_crypto::Keypair;
 
 use super::clock::DeterministicScheduler;
-use super::inference::infer_causal_relations;
+use super::inference::{InferredCausalRelation, infer_causal_relations};
 
 const MANIFEST_REL: &str = "scenarios/collective-hypothesis-graph/manifest.yaml";
 const BASELINE_REL: &str = "docs/benchmarks/collective-hypothesis-graph-baseline.json";
@@ -411,6 +411,7 @@ struct ExecutedScenarioGraph {
     graph: HypothesisGraph,
     topology: BTreeMap<EvidenceId, EvidenceTopology>,
     semantic_node_ids: BTreeMap<GraphNodeId, String>,
+    semantic_evidence_ids: BTreeMap<EvidenceId, String>,
 }
 
 #[derive(Default)]
@@ -584,26 +585,55 @@ fn benchmark_entity_node(
     })
 }
 
-const fn source_semantics(source_family: EvidenceSourceFamily) -> (CausalRelation, KillChainStage) {
-    match source_family {
-        EvidenceSourceFamily::Process => (CausalRelation::Uses, KillChainStage::Execution),
-        EvidenceSourceFamily::Identity => (CausalRelation::Assumes, KillChainStage::InitialAccess),
-        EvidenceSourceFamily::Kubernetes => {
-            (CausalRelation::Creates, KillChainStage::LateralMovement)
+fn inferred_kill_chain_stage(
+    payload: &TypedEvidencePayload,
+    candidate: &InferredCausalRelation,
+) -> Result<Option<KillChainStage>, CollectiveBenchmarkError> {
+    let signal_kind = match payload {
+        TypedEvidencePayload::Signal { signal_kind, .. }
+        | TypedEvidencePayload::Process { signal_kind, .. }
+        | TypedEvidencePayload::Identity { signal_kind, .. }
+        | TypedEvidencePayload::KubernetesAudit { signal_kind, .. }
+        | TypedEvidencePayload::Cloudtrail { signal_kind, .. }
+        | TypedEvidencePayload::Network { signal_kind, .. }
+        | TypedEvidencePayload::ThreatIntelligence { signal_kind, .. } => signal_kind.as_str(),
+    };
+    let stage = match candidate.relation {
+        CausalRelation::Spawns | CausalRelation::Uses | CausalRelation::DependsOn => {
+            Some(KillChainStage::Execution)
         }
-        EvidenceSourceFamily::Cloudtrail => {
-            (CausalRelation::Assumes, KillChainStage::CredentialAccess)
+        CausalRelation::Creates => Some(KillChainStage::LateralMovement),
+        CausalRelation::Contacts | CausalRelation::MatchesIndicator => {
+            Some(KillChainStage::CommandAndControl)
         }
-        EvidenceSourceFamily::Network => {
-            (CausalRelation::Contacts, KillChainStage::CommandAndControl)
-        }
-        EvidenceSourceFamily::Infrastructure => {
-            (CausalRelation::DependsOn, KillChainStage::Execution)
-        }
-        EvidenceSourceFamily::ThreatIntelligence => (
-            CausalRelation::MatchesIndicator,
-            KillChainStage::CommandAndControl,
-        ),
+        CausalRelation::Assumes => match signal_kind {
+            "anomalous_role_assumption" | "anomalous_service_authentication" => {
+                Some(KillChainStage::InitialAccess)
+            }
+            "role_used_from_new_source" | "secret_read_after_role_assumption" => {
+                Some(KillChainStage::CredentialAccess)
+            }
+            _ => {
+                return Err(CollectiveBenchmarkError::Contract(format!(
+                    "inferred assumption signal `{signal_kind}` has no kill-chain semantic"
+                )));
+            }
+        },
+        CausalRelation::ObservedIn
+        | CausalRelation::Supports
+        | CausalRelation::Refutes
+        | CausalRelation::Contradicts => None,
+    };
+    Ok(stage)
+}
+
+const fn kill_chain_stage_id(stage: KillChainStage) -> &'static str {
+    match stage {
+        KillChainStage::InitialAccess => "stage:initial-access",
+        KillChainStage::Execution => "stage:execution",
+        KillChainStage::CredentialAccess => "stage:credential-access",
+        KillChainStage::LateralMovement => "stage:lateral-movement",
+        KillChainStage::CommandAndControl => "stage:command-and-control",
     }
 }
 
@@ -661,7 +691,7 @@ fn execute_reasoning_lane(
     let signer = Keypair::from_seed(&seed);
     let producer = AgentId::from_public_key_hex(&signer.public_key().to_hex());
     let mut scenarios = Vec::with_capacity(fixtures.len());
-    for (fixture_index, fixture) in fixtures.into_iter().enumerate() {
+    for (fixture_index, fixture) in fixtures.iter().copied().enumerate() {
         let mut limits = GraphResourceLimits::default();
         limits.max_nodes = manifest.limits.max_nodes;
         limits.max_edges = manifest.limits.max_edges;
@@ -679,6 +709,7 @@ fn execute_reasoning_lane(
         let mut topology = BTreeMap::new();
         let mut semantic_nodes = BTreeMap::<String, GraphNodeId>::new();
         let mut semantic_node_ids = BTreeMap::<GraphNodeId, String>::new();
+        let mut semantic_evidence_ids = BTreeMap::<EvidenceId, String>::new();
 
         for (sequence, event) in fixture.events.iter().enumerate() {
             if mode == ReasoningLaneMode::FixedInvestigator
@@ -761,13 +792,15 @@ fn execute_reasoning_lane(
                     "benchmark evidence admission failed: {error}"
                 ))
             })?;
-            topology.insert(evidence_id, EvidenceTopology { entity_node_ids });
+            topology.insert(evidence_id.clone(), EvidenceTopology { entity_node_ids });
+            semantic_evidence_ids.insert(evidence_id, event.evidence_id.clone());
         }
 
         scenarios.push(ExecutedScenarioGraph {
             graph,
             topology,
             semantic_node_ids,
+            semantic_evidence_ids,
         });
     }
 
@@ -906,9 +939,8 @@ fn execute_reasoning_lane(
                     evidence.evidence_id
                 )));
             }
-            let (_, stage) = source_semantics(evidence.source_family);
-            let stage = stage_evidence.entry(stage).or_default();
             for candidate in inferred {
+                let inferred_stage = inferred_kill_chain_stage(&evidence.payload, &candidate)?;
                 let edge = signed_benchmark_edge(
                     &signer,
                     &candidate.from,
@@ -924,12 +956,15 @@ fn execute_reasoning_lane(
                         "benchmark causal-edge admission failed: {error}"
                     ))
                 })?;
-                stage
-                    .node_ids
-                    .extend([candidate.from.clone(), candidate.to.clone()]);
-                stage.edge_ids.insert(edge_id);
+                if let Some(inferred_stage) = inferred_stage {
+                    let stage = stage_evidence.entry(inferred_stage).or_default();
+                    stage
+                        .node_ids
+                        .extend([candidate.from.clone(), candidate.to.clone()]);
+                    stage.edge_ids.insert(edge_id);
+                    stage.evidence_ids.insert(evidence.evidence_id.clone());
+                }
             }
-            stage.evidence_ids.insert(evidence.evidence_id);
         }
         if mode == ReasoningLaneMode::FixedInvestigator {
             // A fixed source-local investigator must explore one alternative
@@ -1053,8 +1088,24 @@ fn execute_reasoning_lane(
                 "benchmark kill-chain validation failed: {error}"
             ))
         })?;
+        let fixture = fixtures[case_index];
+        let observed_oracle_stages = fixture
+            .expected_kill_chain
+            .iter()
+            .filter(|expected| expected.status == StageStatus::Observed)
+            .filter(|expected| {
+                reconstruction.claims.iter().any(|claim| {
+                    kill_chain_stage_id(claim.stage) == expected.stage_id
+                        && expected.evidence_ids.iter().any(|id| {
+                            claim.evidence_ids.iter().any(|evidence_id| {
+                                scenario.semantic_evidence_ids.get(evidence_id) == Some(id)
+                            })
+                        })
+                })
+            })
+            .count();
         observed_stages = observed_stages
-            .saturating_add(u64::try_from(reconstruction.claims.len()).unwrap_or(u64::MAX));
+            .saturating_add(u64::try_from(observed_oracle_stages).unwrap_or(u64::MAX));
         let adjudication = DecisionRecord::new(
             DecisionKind::Adjudicate,
             selected,
@@ -1224,12 +1275,44 @@ fn validate_inputs(
                 fixture.scenario_id
             )));
         }
+        let fixture_stage_ids = fixture
+            .expected_kill_chain
+            .iter()
+            .map(|stage| stage.stage_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let truth_stage_ids = manifest
+            .truth
+            .kill_chain_stage_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let fixture_evidence_ids = fixture
+            .events
+            .iter()
+            .map(|event| event.evidence_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if fixture_stage_ids.len() != fixture.expected_kill_chain.len()
+            || fixture_stage_ids != truth_stage_ids
+            || fixture_evidence_ids.len() != fixture.events.len()
+        {
+            return Err(CollectiveBenchmarkError::Contract(format!(
+                "fixture `{}` must contain unique evidence and exactly one oracle row per truth stage",
+                fixture.scenario_id
+            )));
+        }
         for stage in &fixture.expected_kill_chain {
             let status_matches_evidence = match stage.status {
                 StageStatus::Observed => !stage.evidence_ids.is_empty(),
                 StageStatus::MissingEvidence => stage.evidence_ids.is_empty(),
             };
+            let stage_evidence_ids = stage
+                .evidence_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
             if !status_matches_evidence
+                || stage_evidence_ids.len() != stage.evidence_ids.len()
+                || !stage_evidence_ids.is_subset(&fixture_evidence_ids)
                 || !manifest
                     .truth
                     .kill_chain_stage_ids
@@ -1502,7 +1585,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_metrics_depend_on_admitted_evidence_not_fixture_oracle_rows() {
+    fn semantic_metrics_use_inferred_relations_and_exact_oracle_stage_matches() {
         let (manifest, training, withheld) = inputs();
         let executed = execute_reasoning_lane(
             &manifest,
@@ -1522,19 +1605,72 @@ mod tests {
         {
             event.relation_ids.clear();
         }
-        mutated_training.expected_kill_chain.clear();
-        mutated_withheld.expected_kill_chain.clear();
-        let without_oracle_rows = execute_reasoning_lane(
+        let without_relation_hints = execute_reasoning_lane(
             &manifest,
             [&mutated_training, &mutated_withheld],
             ReasoningLaneMode::Collective,
         )
         .unwrap();
-        assert_eq!(without_oracle_rows.observed_edges, executed.observed_edges);
         assert_eq!(
-            without_oracle_rows.observed_stages,
+            without_relation_hints.observed_edges,
+            executed.observed_edges
+        );
+        assert_eq!(
+            without_relation_hints.observed_stages,
             executed.observed_stages
         );
+
+        for fixture in [&mut mutated_training, &mut mutated_withheld] {
+            assert_eq!(
+                fixture.expected_kill_chain[0].stage_id,
+                "stage:initial-access"
+            );
+            assert_eq!(
+                fixture.expected_kill_chain[2].stage_id,
+                "stage:credential-access"
+            );
+        }
+        for fixture in [&mut mutated_training, &mut mutated_withheld] {
+            // Keep a valid, unique set of stage IDs but attach the initial-access
+            // and credential-access evidence to the opposite stages. Merely
+            // counting reconstructed claims would miss this semantic defect.
+            let initial_access = fixture.expected_kill_chain[0].stage_id.clone();
+            fixture.expected_kill_chain[0].stage_id =
+                fixture.expected_kill_chain[2].stage_id.clone();
+            fixture.expected_kill_chain[2].stage_id = initial_access;
+        }
+        let mismatched_stage_oracle = execute_reasoning_lane(
+            &manifest,
+            [&mutated_training, &mutated_withheld],
+            ReasoningLaneMode::Collective,
+        )
+        .unwrap();
+        assert_eq!(mismatched_stage_oracle.observed_stages, 5);
+
+        for event in mutated_training
+            .events
+            .iter_mut()
+            .chain(mutated_withheld.events.iter_mut())
+        {
+            event.source_family = match event.source_family {
+                SourceFamily::Identity => SourceFamily::Cloudtrail,
+                SourceFamily::Cloudtrail => SourceFamily::Identity,
+                family => family,
+            };
+        }
+        for fixture in [&mut mutated_training, &mut mutated_withheld] {
+            let credential_access = fixture.expected_kill_chain[0].stage_id.clone();
+            fixture.expected_kill_chain[0].stage_id =
+                fixture.expected_kill_chain[2].stage_id.clone();
+            fixture.expected_kill_chain[2].stage_id = credential_access;
+        }
+        let with_swapped_source_families = execute_reasoning_lane(
+            &manifest,
+            [&mutated_training, &mutated_withheld],
+            ReasoningLaneMode::Collective,
+        )
+        .unwrap();
+        assert_eq!(with_swapped_source_families.observed_stages, 9);
 
         for event in mutated_training
             .events

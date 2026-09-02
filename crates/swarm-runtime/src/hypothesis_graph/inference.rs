@@ -160,13 +160,17 @@ pub fn infer_causal_relations(
             CausalRelation::Assumes,
             signal_kind,
         )?],
-        TypedEvidencePayload::KubernetesAudit { .. } => vec![inferred(
-            entity_ids,
-            0,
-            1,
-            CausalRelation::Creates,
-            signal_kind,
-        )?],
+        TypedEvidencePayload::KubernetesAudit { verb, .. }
+            if verb.eq_ignore_ascii_case("create") =>
+        {
+            vec![inferred(
+                entity_ids,
+                0,
+                1,
+                CausalRelation::Creates,
+                signal_kind,
+            )?]
+        }
         TypedEvidencePayload::Network { .. } => vec![inferred(
             entity_ids,
             0,
@@ -181,7 +185,9 @@ pub fn infer_causal_relations(
             CausalRelation::MatchesIndicator,
             signal_kind,
         )?],
-        TypedEvidencePayload::Process { .. } | TypedEvidencePayload::Identity { .. } => Vec::new(),
+        TypedEvidencePayload::Process { .. }
+        | TypedEvidencePayload::Identity { .. }
+        | TypedEvidencePayload::KubernetesAudit { .. } => Vec::new(),
     };
     Ok(candidates)
 }
@@ -207,5 +213,29 @@ mod tests {
         assert_eq!(inferred[0].from, GraphNodeId::new("credential"));
         assert_eq!(inferred[0].to, GraphNodeId::new("process"));
         assert_eq!(inferred[0].relation, CausalRelation::Uses);
+    }
+
+    #[test]
+    fn kubernetes_creation_inference_rejects_non_creating_verbs() {
+        let payload = |verb: &str| TypedEvidencePayload::KubernetesAudit {
+            signal_kind: "kubernetes_audit".to_string(),
+            audit_id: format!("audit:{verb}"),
+            verb: verb.to_string(),
+            resource_digest: "resource".to_string(),
+            entity_ids: vec![GraphNodeId::new("actor"), GraphNodeId::new("resource")],
+            content_digest: "0".repeat(64),
+        };
+
+        let create = infer_causal_relations(&payload("create")).expect("create should infer");
+        assert_eq!(create.len(), 1);
+        assert_eq!(create[0].relation, CausalRelation::Creates);
+        for verb in ["get", "list", "watch", "update", "patch", "delete"] {
+            assert!(
+                infer_causal_relations(&payload(verb))
+                    .expect("non-creating verb should be valid")
+                    .is_empty(),
+                "verb `{verb}` must not infer a creates edge"
+            );
+        }
     }
 }

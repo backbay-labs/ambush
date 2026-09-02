@@ -223,7 +223,11 @@ struct CollectiveHypothesisState {
     pending_worker_publications: BTreeMap<(u64, TaskId), PendingWorkerPublication>,
     pending_stalker_acquisition_hunts: BTreeSet<String>,
     pending_stalker_falsification_hunts: BTreeSet<String>,
-    memory_projection_dirty: bool,
+    /// Campaign index to the last failure epoch observed for that projection.
+    /// The epoch prevents a successful repair of an older snapshot from
+    /// clearing a concurrent failure for a later committed terminal.
+    dirty_memory_campaigns: BTreeMap<u64, u64>,
+    memory_projection_failure_epoch: u64,
 }
 
 #[derive(Clone)]
@@ -243,6 +247,7 @@ struct PendingWorkerPublication {
     task_kind: TaskKind,
     completion_kind: TaskCompletionKind,
     evidence_ids: BTreeSet<EvidenceId>,
+    retry_exhaustion_failure_summary: Option<String>,
 }
 
 struct CampaignRegistry {
@@ -976,7 +981,8 @@ impl CollectiveHypothesisService {
                 pending_worker_publications,
                 pending_stalker_acquisition_hunts,
                 pending_stalker_falsification_hunts,
-                memory_projection_dirty: false,
+                dirty_memory_campaigns: BTreeMap::new(),
+                memory_projection_failure_epoch: 0,
             }),
             prometheus,
         };
@@ -1501,7 +1507,6 @@ impl CollectiveHypothesisService {
             campaigns.campaigns.push(campaign.clone());
         }
         state.coordinator = coordinator;
-        state.memory_projection_dirty = false;
         state.metrics.snapshot.campaign_rotations =
             state.metrics.snapshot.campaign_rotations.saturating_add(1);
         self.active_campaign_index.store(index, Ordering::Release);
@@ -1510,8 +1515,8 @@ impl CollectiveHypothesisService {
     }
 
     pub fn summary(&self) -> Result<GraphSummaryProjection, GraphServiceError> {
-        self.repair_memory_projection()?;
         let campaign = self.active_campaign()?;
+        self.repair_memory_projection_for_campaign(campaign.index)?;
         self.summary_for_campaign(&campaign)
     }
 
@@ -1537,7 +1542,6 @@ impl CollectiveHypothesisService {
             }
             .into());
         }
-        self.repair_memory_projection()?;
         let campaigns = self
             .campaigns
             .read()
@@ -1562,6 +1566,7 @@ impl CollectiveHypothesisService {
         selected
             .into_iter()
             .map(|campaign| {
+                self.repair_memory_projection_for_campaign(campaign.index)?;
                 self.summary_for_campaign(&campaign)
                     .map(|summary| (campaign.index, summary))
             })
@@ -1611,8 +1616,8 @@ impl CollectiveHypothesisService {
     }
 
     pub fn operator_projection(&self) -> Result<GraphOperatorProjection, GraphServiceError> {
-        self.repair_memory_projection()?;
         let campaign = self.active_campaign()?;
+        self.repair_memory_projection_for_campaign(campaign.index)?;
         self.operator_projection_for_campaign(&campaign)
     }
 
@@ -1653,9 +1658,7 @@ impl CollectiveHypothesisService {
         graph_id: &GraphId,
     ) -> Result<GraphOperatorProjection, GraphServiceError> {
         let campaign = self.campaign_for(graph_id)?;
-        if campaign.index == self.active_campaign_index.load(Ordering::Acquire) {
-            self.repair_memory_projection()?;
-        }
+        self.repair_memory_projection_for_campaign(campaign.index)?;
         self.operator_projection_for_campaign(&campaign)
     }
 
@@ -1687,9 +1690,7 @@ impl CollectiveHypothesisService {
         graph_id: &GraphId,
     ) -> Result<Vec<StrategyMemoryRecord>, GraphServiceError> {
         let campaign = self.campaign_for(graph_id)?;
-        if campaign.index == self.active_campaign_index.load(Ordering::Acquire) {
-            self.repair_memory_projection()?;
-        }
+        self.repair_memory_projection_for_campaign(campaign.index)?;
         Ok(campaign
             .memory
             .store()
@@ -1703,9 +1704,7 @@ impl CollectiveHypothesisService {
         limit: usize,
     ) -> Result<Vec<StrategyMemoryRecord>, GraphServiceError> {
         let campaign = self.campaign_for(graph_id)?;
-        if campaign.index == self.active_campaign_index.load(Ordering::Acquire) {
-            self.repair_memory_projection()?;
-        }
+        self.repair_memory_projection_for_campaign(campaign.index)?;
         Ok(campaign.memory.store().list_page(after, limit)?)
     }
 
@@ -1721,45 +1720,66 @@ impl CollectiveHypothesisService {
             })
     }
 
-    fn repair_memory_projection(&self) -> Result<(), GraphServiceError> {
-        let dirty = self
+    fn repair_memory_projection_for_campaign(
+        &self,
+        campaign_index: u64,
+    ) -> Result<(), GraphServiceError> {
+        let Some(failure_epoch) = self
             .state
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?
-            .memory_projection_dirty;
-        if !dirty {
+            .dirty_memory_campaigns
+            .get(&campaign_index)
+            .copied()
+        else {
             return Ok(());
-        }
-        let campaign = self.active_campaign()?;
+        };
+        let campaign = self.campaign_at(campaign_index)?;
         let snapshot = campaign.store.snapshot()?;
-        let projection = campaign.memory.project_committed(&snapshot)?;
+        let projection = match campaign.memory.project_committed(&snapshot) {
+            Ok(projection) => projection,
+            Err(error) => {
+                self.record_advisory_memory_failure(campaign_index, &error)?;
+                return Err(GraphServiceError::Memory(error));
+            }
+        };
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
         state.metrics.snapshot.memory_records_projected = state
             .metrics
             .snapshot
             .memory_records_projected
             .saturating_add(u64::try_from(projection.inserted).unwrap_or(u64::MAX));
-        state.memory_projection_dirty = false;
+        if state.dirty_memory_campaigns.get(&campaign_index) == Some(&failure_epoch) {
+            state.dirty_memory_campaigns.remove(&campaign_index);
+        }
         Ok(())
     }
 
     fn repair_memory_projection_for_work(&self) -> Result<bool, GraphServiceError> {
-        match self.repair_memory_projection() {
+        let campaign_index = self.active_campaign_index.load(Ordering::Acquire);
+        match self.repair_memory_projection_for_campaign(campaign_index) {
             Ok(()) => Ok(true),
-            Err(GraphServiceError::Memory(error)) => {
-                self.record_advisory_memory_failure(&error)?;
-                Ok(false)
-            }
+            Err(GraphServiceError::Memory(_)) => Ok(false),
             Err(error) => Err(error),
         }
     }
 
     fn record_advisory_memory_failure(
         &self,
+        campaign_index: u64,
         error: &StrategyMemoryStoreError,
     ) -> Result<(), GraphServiceError> {
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
-        state.memory_projection_dirty = true;
+        state.memory_projection_failure_epoch = state
+            .memory_projection_failure_epoch
+            .checked_add(1)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "strategy-memory projection failure epoch exhausted".to_string(),
+            })?;
+        let failure_epoch = state.memory_projection_failure_epoch;
+        state
+            .dirty_memory_campaigns
+            .insert(campaign_index, failure_epoch);
         state.metrics.snapshot.memory_projection_failures = state
             .metrics
             .snapshot
@@ -1771,7 +1791,7 @@ impl CollectiveHypothesisService {
         }
         tracing::warn!(
             reason = %error,
-            graph_id = %self.graph_id(),
+            campaign_index,
             "strategy-memory projection is degraded; collective reasoning is continuing with base task priorities"
         );
         Ok(())
@@ -1779,6 +1799,7 @@ impl CollectiveHypothesisService {
 
     fn record_post_commit_memory_projection(
         &self,
+        campaign_index: u64,
         result: Result<MemoryProjectionReport, StrategyMemoryStoreError>,
     ) -> Result<usize, GraphServiceError> {
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
@@ -1793,7 +1814,7 @@ impl CollectiveHypothesisService {
             }
             Err(error) => {
                 drop(state);
-                self.record_advisory_memory_failure(&error)?;
+                self.record_advisory_memory_failure(campaign_index, &error)?;
                 // The graph terminal and its embedded memory have already
                 // committed atomically. Treat the external memory index as a
                 // repairable projection: returning an error here would make
@@ -1874,18 +1895,19 @@ impl CollectiveHypothesisService {
             .iter()
             .map(|task| self.priority_for_task(campaign, task, snapshot, now))
             .collect::<Result<Vec<_>, GraphServiceError>>();
-        self.resolve_advisory_priorities(base_priorities(), attempted)
+        self.resolve_advisory_priorities(campaign.index, base_priorities(), attempted)
     }
 
     fn resolve_advisory_priorities(
         &self,
+        campaign_index: u64,
         base_priorities: Vec<MemoryPriorityProjection>,
         attempted: Result<Vec<MemoryPriorityProjection>, GraphServiceError>,
     ) -> Result<Vec<MemoryPriorityProjection>, GraphServiceError> {
         match attempted {
             Ok(priorities) => Ok(priorities),
             Err(GraphServiceError::Memory(error)) => {
-                self.record_advisory_memory_failure(&error)?;
+                self.record_advisory_memory_failure(campaign_index, &error)?;
                 Ok(base_priorities)
             }
             Err(error) => Err(error),
@@ -1946,6 +1968,9 @@ pub struct WeaverGraphPublication {
     pub hunt_id: String,
     pub evidence_ids: BTreeSet<EvidenceId>,
     pub no_finding: bool,
+    /// Present only for a store-authenticated retry-exhaustion terminal. This
+    /// distinguishes scheduler failure from a worker-authored no-finding.
+    pub retry_exhaustion_failure_summary: Option<String>,
 }
 
 struct TerminalPublication {
@@ -2201,6 +2226,9 @@ impl GraphWorkerAdapter {
                 hunt_id: publication.hunt_id.clone(),
                 evidence_ids: publication.evidence_ids.clone(),
                 no_finding: publication.completion_kind == TaskCompletionKind::NoFinding,
+                retry_exhaustion_failure_summary: publication
+                    .retry_exhaustion_failure_summary
+                    .clone(),
             })
             .collect())
     }
@@ -3083,6 +3111,7 @@ impl GraphWorkerAdapter {
         }
 
         let projected = self.service.record_post_commit_memory_projection(
+            campaign.index,
             campaign.memory.project_committed_task(&committed, &task_id),
         )?;
         let current = campaign.store.snapshot()?;
@@ -3220,46 +3249,56 @@ fn fallback_observation_records(
         }
         .into());
     }
-    let event_node = swarm_core::hypothesis_graph::EventNode::new(
-        "runtime_replay",
-        replay.event.event_id.clone(),
-        evidence.clock.observed_at,
-    )?;
-    let asset_kind = if replay.event.host_id.is_some() {
-        "host"
-    } else {
-        "telemetry_source"
+    let existing_event_node_id = normalized_nodes.iter().find_map(|node| match node {
+        GraphNode::Event(event) => Some(event.node_id.clone()),
+        _ => None,
+    });
+    let event_node_id = match existing_event_node_id {
+        Some(node_id) => node_id,
+        None => {
+            // Normalizers currently emit an event node for every telemetry
+            // family. Preserve a fail-closed fallback for future typed inputs
+            // without duplicating an already-normalized event identity.
+            let event_node = swarm_core::hypothesis_graph::EventNode::new(
+                "runtime_replay",
+                replay.event.event_id.clone(),
+                evidence.clock.observed_at,
+            )?;
+            let node_id = event_node.node_id.clone();
+            normalized_nodes.push(GraphNode::Event(event_node));
+            node_id
+        }
     };
-    let asset_material = replay
-        .event
-        .host_id
-        .as_deref()
-        .unwrap_or(replay.event.source.as_str());
-    let asset_node = AssetNode::new(sha256_hex(asset_material.as_bytes()), asset_kind)?;
+    let asset_node_id = if let Some(node_id) = normalized_nodes.iter().find_map(|node| match node {
+        GraphNode::Asset(asset) => Some(asset.node_id.clone()),
+        _ => None,
+    }) {
+        node_id
+    } else {
+        let asset_kind = if replay.event.host_id.is_some() {
+            "host"
+        } else {
+            "telemetry_source"
+        };
+        let asset_material = replay
+            .event
+            .host_id
+            .as_deref()
+            .unwrap_or(replay.event.source.as_str());
+        let asset_node = AssetNode::new(sha256_hex(asset_material.as_bytes()), asset_kind)?;
+        let node_id = asset_node.node_id.clone();
+        normalized_nodes.push(GraphNode::Asset(asset_node));
+        node_id
+    };
     let edge = signed_runtime_edge(
-        &event_node.node_id,
-        &asset_node.node_id,
+        &event_node_id,
+        &asset_node_id,
         CausalRelation::ObservedIn,
         evidence,
         signer,
         confidence_basis_points,
         "runtime-replay-observation-edge",
     )?;
-    for node in [GraphNode::Event(event_node), GraphNode::Asset(asset_node)] {
-        match normalized_nodes
-            .iter()
-            .find(|existing| existing.id() == node.id())
-        {
-            Some(existing) if existing != &node => {
-                return Err(GraphAdmissionError::IdCollision {
-                    id: node.id().as_str().to_string(),
-                }
-                .into());
-            }
-            Some(_) => {}
-            None => normalized_nodes.push(node),
-        }
-    }
     Ok((normalized_nodes, vec![edge]))
 }
 
@@ -3498,6 +3537,7 @@ fn pending_worker_publication_for_task(
         task_kind: task.request.kind,
         completion_kind: outbox.envelope.completion.kind.clone(),
         evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
+        retry_exhaustion_failure_summary: None,
     }))
 }
 
@@ -3531,6 +3571,7 @@ fn pending_worker_publication_for_retry_exhaustion(
         task_kind: task.request.kind,
         completion_kind: TaskCompletionKind::NoFinding,
         evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
+        retry_exhaustion_failure_summary: Some(outbox.failure_summary_digest.clone()),
     }))
 }
 
@@ -3739,14 +3780,17 @@ mod tests {
             CollectiveHypothesisService::new(&config, Keypair::from_seed(&[12; 32]), None).unwrap();
 
         let projected = service
-            .record_post_commit_memory_projection(Err(StrategyMemoryStoreError::InvalidState {
-                reason: "injected transient projection failure".to_string(),
-            }))
+            .record_post_commit_memory_projection(
+                0,
+                Err(StrategyMemoryStoreError::InvalidState {
+                    reason: "injected transient projection failure".to_string(),
+                }),
+            )
             .unwrap();
 
         assert_eq!(projected, 0);
         let state = service.state.lock().unwrap();
-        assert!(state.memory_projection_dirty);
+        assert!(state.dirty_memory_campaigns.contains_key(&0));
         assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
         assert_eq!(state.metrics.snapshot.memory_records_projected, 0);
     }
@@ -3762,6 +3806,7 @@ mod tests {
         let base = vec![MemoryPriorityProjection::unchanged(4_200)];
         let resolved = service
             .resolve_advisory_priorities(
+                0,
                 base.clone(),
                 Err(GraphServiceError::Memory(
                     StrategyMemoryStoreError::InvalidState {
@@ -3773,8 +3818,57 @@ mod tests {
 
         assert_eq!(resolved, base);
         let state = service.state.lock().unwrap();
-        assert!(state.memory_projection_dirty);
+        assert!(state.dirty_memory_campaigns.contains_key(&0));
         assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
+    }
+
+    #[test]
+    fn campaign_rotation_preserves_and_repairs_archived_memory_projection_state() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            ..HypothesisGraphConfig::default()
+        };
+        let service =
+            CollectiveHypothesisService::new(&config, Keypair::from_seed(&[15; 32]), None).unwrap();
+        service
+            .record_post_commit_memory_projection(
+                0,
+                Err(StrategyMemoryStoreError::InvalidState {
+                    reason: "injected pre-rotation projection failure".to_string(),
+                }),
+            )
+            .unwrap();
+        let current = service.active_campaign().unwrap();
+        let rotated = {
+            let mut state = service.state.lock().unwrap();
+            service.rotate_campaign(&mut state, &current).unwrap()
+        };
+        assert_eq!(rotated.index, 1);
+        assert!(
+            service
+                .state
+                .lock()
+                .unwrap()
+                .dirty_memory_campaigns
+                .contains_key(&0),
+            "rotation must retain the archived campaign repair target"
+        );
+
+        assert!(
+            service
+                .operator_memory_for(&current.graph_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .state
+                .lock()
+                .unwrap()
+                .dirty_memory_campaigns
+                .is_empty(),
+            "repair must target and clear the archived campaign marker"
+        );
     }
 
     #[test]

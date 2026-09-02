@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use swarm_core::agent::{
     AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmEvent,
 };
-use swarm_core::hypothesis_graph::TaskId;
+use swarm_core::hypothesis_graph::{TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY, TaskId};
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
 use swarm_spine::{
     ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, IncidentStore,
@@ -213,12 +213,16 @@ impl WeaverAgent {
             publication.graph_id, publication.task_id, investigation.bundle.investigation_id
         );
         if publication.no_finding {
-            if !matches!(
-                investigation.bundle.status,
-                InvestigationStatus::Failed | InvestigationStatus::TimedOut
-            ) {
+            let retry_exhausted = publication.retry_exhaustion_failure_summary.as_deref()
+                == Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY);
+            if !retry_exhausted
+                && !matches!(
+                    investigation.bundle.status,
+                    InvestigationStatus::Failed | InvestigationStatus::TimedOut
+                )
+            {
                 return Err(internal_error(std::io::Error::other(format!(
-                    "Weaver no-finding publication `{}` has non-failed investigation status",
+                    "Weaver worker no-finding publication `{}` has non-failed investigation status",
                     publication.task_id
                 ))));
             }
@@ -232,6 +236,7 @@ impl WeaverAgent {
                     "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
                     "investigation_status": investigation.bundle.status,
                     "failure_reason": investigation.bundle.failure_reason,
+                    "task_failure_summary": publication.retry_exhaustion_failure_summary,
                     "challenge_no_finding": true,
                 }),
                 confidence: 0.0,
@@ -822,6 +827,101 @@ mod tests {
         drop(final_agent);
         drop(graph);
         std::fs::remove_dir_all(graph_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn weaver_publishes_retry_exhaustion_after_investigation_completed() {
+        let hunt_id = "hunt-graph-weaver-completed-retry-exhaustion";
+        let investigation_store = investigation_store();
+        investigation_store
+            .persist(&completed_investigation(hunt_id))
+            .unwrap();
+        let graph_config = HypothesisGraphConfig {
+            enabled: true,
+            max_lease_ms: 10,
+            max_retries: 2,
+            max_work_units_per_tick: 32,
+            max_claims_per_tick: 16,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph = Arc::new(
+            CollectiveHypothesisService::new(&graph_config, Keypair::from_seed(&[129; 32]), None)
+                .unwrap(),
+        );
+        graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&[130; 32]),
+            )
+            .unwrap();
+        let weaver_seed = [131; 32];
+        let signing_key = SigningKey::from_bytes(&weaver_seed);
+        let worker = graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&weaver_seed),
+            )
+            .unwrap();
+        graph.submit_replay(&replay_bundle(hunt_id)).unwrap();
+
+        let first = worker
+            .claim_next(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                1_700_000_000_001,
+            ))
+            .unwrap()
+            .unwrap();
+        let second = worker
+            .claim_next(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                1_700_000_000_011,
+            ))
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.claim.task_id, second.claim.task_id);
+        assert!(
+            worker
+                .claim_next(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                    1_700_000_000_021,
+                ))
+                .unwrap()
+                .is_none()
+        );
+
+        let mut agent = WeaverAgent::new_with_signing_key(
+            AgentId::from_verifying_key(&signing_key.verifying_key()),
+            signing_key,
+            correlation(),
+            investigation_store,
+            incident_store(),
+        )
+        .with_hypothesis_graph(worker)
+        .unwrap();
+        let actions = agent.tick(&env(hunt_id)).await.unwrap();
+        let findings = actions
+            .iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => Some(findings),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(findings["investigation_status"], "completed");
+        assert_eq!(findings["challenge_no_finding"], true);
+        assert_eq!(
+            findings["task_failure_summary"],
+            swarm_core::hypothesis_graph::TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY
+        );
+        assert!(agent.tick(&env(hunt_id)).await.unwrap().is_empty());
+        assert!(
+            graph
+                .operator_projection()
+                .unwrap()
+                .tasks
+                .iter()
+                .any(|task| task.request.task_id == first.claim.task_id
+                    && task.state == swarm_core::hypothesis_graph::TaskState::Failed)
+        );
     }
 
     #[tokio::test]
