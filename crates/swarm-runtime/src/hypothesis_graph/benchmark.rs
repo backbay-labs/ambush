@@ -13,16 +13,18 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use swarm_core::hypothesis_graph::{
-    AssetNode, CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeId, EdgeState,
-    EventNode, EvidenceClock, EvidenceId, EvidenceSourceFamily, GraphId, GraphLogicalTime,
-    GraphNode, GraphNodeId, GraphProducerRole, GraphResourceLimits, HypothesisGraph, HypothesisId,
-    HypothesisStatus, KillChainClaim, KillChainReconstruction, KillChainStage, OrderingClaim,
-    SourceLineage, TaskId, TaskKind, TypedEvidencePayload,
+    ActorNode, AssetNode, CausalEdge, CausalRelation, CredentialNode, DecisionKind, DecisionRecord,
+    EdgeId, EdgeState, EventNode, EvidenceClock, EvidenceId, EvidenceSourceFamily, GraphId,
+    GraphLogicalTime, GraphNode, GraphNodeId, GraphProducerRole, GraphResourceLimits,
+    HypothesisGraph, HypothesisId, HypothesisStatus, KillChainClaim, KillChainReconstruction,
+    KillChainStage, OrderingClaim, ProcessNode, SourceLineage, TaskId, TaskKind,
+    TypedEvidencePayload,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::Keypair;
 
 use super::clock::DeterministicScheduler;
+use super::inference::infer_causal_relations;
 
 const MANIFEST_REL: &str = "scenarios/collective-hypothesis-graph/manifest.yaml";
 const BASELINE_REL: &str = "docs/benchmarks/collective-hypothesis-graph-baseline.json";
@@ -148,9 +150,51 @@ struct TruthContract {
     hypothesis_ids: Vec<String>,
     selected_hypothesis_id: String,
     node_ids: Vec<String>,
-    causal_edge_ids: Vec<String>,
+    causal_edges: Vec<CausalEdgeContract>,
     kill_chain_stage_ids: Vec<String>,
     required_evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CausalEdgeContract {
+    edge_id: String,
+    from: String,
+    to: String,
+    relation: CausalRelation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CausalEdgeIdentity {
+    from: String,
+    to: String,
+    relation: &'static str,
+}
+
+impl From<&CausalEdgeContract> for CausalEdgeIdentity {
+    fn from(contract: &CausalEdgeContract) -> Self {
+        Self {
+            from: contract.from.clone(),
+            to: contract.to.clone(),
+            relation: causal_relation_name(contract.relation),
+        }
+    }
+}
+
+const fn causal_relation_name(relation: CausalRelation) -> &'static str {
+    match relation {
+        CausalRelation::ObservedIn => "observed_in",
+        CausalRelation::Spawns => "spawns",
+        CausalRelation::Uses => "uses",
+        CausalRelation::Contacts => "contacts",
+        CausalRelation::Assumes => "assumes",
+        CausalRelation::Creates => "creates",
+        CausalRelation::DependsOn => "depends_on",
+        CausalRelation::Supports => "supports",
+        CausalRelation::Refutes => "refutes",
+        CausalRelation::Contradicts => "contradicts",
+        CausalRelation::MatchesIndicator => "matches_indicator",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -348,7 +392,7 @@ struct ExecutedReasoningLane {
     admitted_causal_edges: u64,
     false_causal_edges: u64,
     observed_stages: u64,
-    observed_relations: BTreeSet<String>,
+    observed_edges: BTreeSet<CausalEdgeIdentity>,
     adjudications: Vec<DecisionRecord>,
 }
 
@@ -360,14 +404,13 @@ enum ReasoningLaneMode {
 
 #[derive(Debug, Clone)]
 struct EvidenceTopology {
-    event_node_id: GraphNodeId,
-    asset_node_id: GraphNodeId,
-    primary_edge_id: Option<EdgeId>,
+    entity_node_ids: Vec<GraphNodeId>,
 }
 
 struct ExecutedScenarioGraph {
     graph: HypothesisGraph,
     topology: BTreeMap<EvidenceId, EvidenceTopology>,
+    semantic_node_ids: BTreeMap<GraphNodeId, String>,
 }
 
 #[derive(Default)]
@@ -518,20 +561,27 @@ fn execute_task_lane(
     })
 }
 
-fn semantic_relation_id(relation: CausalRelation) -> Option<&'static str> {
-    match relation {
-        CausalRelation::Uses => Some("edge:credential-used-by-process"),
-        CausalRelation::Spawns => Some("edge:process-spawned-network-client"),
-        CausalRelation::Assumes => Some("edge:principal-assumed-role"),
-        CausalRelation::Creates => Some("edge:role-created-workload"),
-        CausalRelation::Contacts => Some("edge:workload-contacted-destination"),
-        CausalRelation::MatchesIndicator => Some("edge:indicator-matched-destination"),
-        CausalRelation::ObservedIn
-        | CausalRelation::DependsOn
-        | CausalRelation::Supports
-        | CausalRelation::Refutes
-        | CausalRelation::Contradicts => None,
-    }
+fn benchmark_entity_node(
+    semantic_id: &str,
+    observed_at: GraphLogicalTime,
+) -> Result<GraphNode, CollectiveBenchmarkError> {
+    let digest = sha256(semantic_id.as_bytes());
+    let node = if semantic_id.starts_with("node:actor:") {
+        ActorNode::new(digest, "benchmark_actor").map(GraphNode::Actor)
+    } else if semantic_id.starts_with("node:credential:") {
+        CredentialNode::new(digest, "benchmark_credential").map(GraphNode::Credential)
+    } else if semantic_id.starts_with("node:process:") {
+        ProcessNode::new(digest.clone(), digest).map(GraphNode::Process)
+    } else if semantic_id.starts_with("node:event:") {
+        EventNode::new("benchmark_entity", semantic_id, observed_at).map(GraphNode::Event)
+    } else {
+        AssetNode::new(digest, "benchmark_asset").map(GraphNode::Asset)
+    };
+    node.map_err(|error| {
+        CollectiveBenchmarkError::Contract(format!(
+            "benchmark semantic-node construction failed: {error}"
+        ))
+    })
 }
 
 const fn source_semantics(source_family: EvidenceSourceFamily) -> (CausalRelation, KillChainStage) {
@@ -627,6 +677,8 @@ fn execute_reasoning_lane(
             ))
         })?;
         let mut topology = BTreeMap::new();
+        let mut semantic_nodes = BTreeMap::<String, GraphNodeId>::new();
+        let mut semantic_node_ids = BTreeMap::<GraphNodeId, String>::new();
 
         for (sequence, event) in fixture.events.iter().enumerate() {
             if mode == ReasoningLaneMode::FixedInvestigator
@@ -635,39 +687,27 @@ fn execute_reasoning_lane(
                 continue;
             }
             let observed_at = GraphLogicalTime::new(event.logical_time_ms);
-            let event_node = EventNode::new("benchmark_signal", &event.event_id, observed_at)
-                .map_err(|error| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "benchmark event-node admission failed: {error}"
-                    ))
-                })?;
-            let asset_node = AssetNode::new(
-                sha256(event.source_family.as_str().as_bytes()),
-                event.source_family.as_str(),
-            )
-            .map_err(|error| {
-                CollectiveBenchmarkError::Contract(format!(
-                    "benchmark asset-node admission failed: {error}"
-                ))
-            })?;
-            let event_node_id = event_node.node_id.clone();
-            let asset_node_id = asset_node.node_id.clone();
-            graph
-                .admit_node(GraphNode::Event(event_node))
-                .and_then(|()| graph.admit_node(GraphNode::Asset(asset_node)))
-                .map_err(|error| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "benchmark graph-node admission failed: {error}"
-                    ))
-                })?;
+            let mut entity_node_ids = Vec::with_capacity(event.entity_ids.len());
+            for semantic_id in &event.entity_ids {
+                let node_id = if let Some(node_id) = semantic_nodes.get(semantic_id) {
+                    node_id.clone()
+                } else {
+                    let node = benchmark_entity_node(semantic_id, observed_at)?;
+                    let node_id = node.id().clone();
+                    graph.admit_node(node).map_err(|error| {
+                        CollectiveBenchmarkError::Contract(format!(
+                            "benchmark semantic-node admission failed: {error}"
+                        ))
+                    })?;
+                    semantic_nodes.insert(semantic_id.clone(), node_id.clone());
+                    semantic_node_ids.insert(node_id.clone(), semantic_id.clone());
+                    node_id
+                };
+                entity_node_ids.push(node_id);
+            }
             let payload = TypedEvidencePayload::Signal {
                 signal_kind: event.signal_kind.clone(),
-                entity_ids: event
-                    .entity_ids
-                    .iter()
-                    .cloned()
-                    .map(GraphNodeId::new)
-                    .collect(),
+                entity_ids: entity_node_ids.clone(),
                 // Fixture relation IDs are expected-output oracle data. The
                 // executed lane derives causal relations below from admitted
                 // signed evidence and never copies those oracle labels into
@@ -721,50 +761,18 @@ fn execute_reasoning_lane(
                     "benchmark evidence admission failed: {error}"
                 ))
             })?;
-            topology.insert(
-                evidence_id,
-                EvidenceTopology {
-                    event_node_id,
-                    asset_node_id,
-                    primary_edge_id: None,
-                },
-            );
+            topology.insert(evidence_id, EvidenceTopology { entity_node_ids });
         }
 
-        if mode == ReasoningLaneMode::FixedInvestigator {
-            let evidence = graph.evidence.values().cloned().collect::<Vec<_>>();
-            for evidence in evidence {
-                let topology_entry = topology.get_mut(&evidence.evidence_id).ok_or_else(|| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "admitted control evidence `{}` has no graph topology",
-                        evidence.evidence_id
-                    ))
-                })?;
-                let (relation, _) = source_semantics(evidence.source_family);
-                let edge = signed_benchmark_edge(
-                    &signer,
-                    &topology_entry.event_node_id,
-                    &topology_entry.asset_node_id,
-                    evidence.evidence_id.clone(),
-                    relation,
-                    evidence.clock.observed_at,
-                    EdgeState::Validated,
-                )?;
-                topology_entry.primary_edge_id = Some(edge.edge_id.clone());
-                graph.admit_edge(edge).map_err(|error| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "fixed-investigator causal-edge admission failed: {error}"
-                    ))
-                })?;
-            }
-        }
-
-        scenarios.push(ExecutedScenarioGraph { graph, topology });
+        scenarios.push(ExecutedScenarioGraph {
+            graph,
+            topology,
+            semantic_node_ids,
+        });
     }
 
     let mut admitted_evidence = 0_u64;
     let mut observed_stages = 0_u64;
-    let mut observed_relations = BTreeSet::new();
     let mut adjudications = Vec::with_capacity(scenarios.len());
     for (case_index, scenario) in scenarios.iter_mut().enumerate() {
         admitted_evidence = admitted_evidence
@@ -872,21 +880,41 @@ fn execute_reasoning_lane(
                         evidence.evidence_id
                     ))
                 })?;
-            let (relation, stage) = source_semantics(evidence.source_family);
-            let edge_id = if mode == ReasoningLaneMode::FixedInvestigator {
-                topology.primary_edge_id.clone().ok_or_else(|| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "fixed-investigator evidence `{}` has no primary causal edge",
-                        evidence.evidence_id
-                    ))
-                })?
-            } else {
+            let payload_entity_ids = match &evidence.payload {
+                TypedEvidencePayload::Signal { entity_ids, .. } => entity_ids,
+                _ => {
+                    return Err(CollectiveBenchmarkError::Contract(
+                        "benchmark produced a non-signal evidence payload".to_string(),
+                    ));
+                }
+            };
+            if payload_entity_ids != &topology.entity_node_ids {
+                return Err(CollectiveBenchmarkError::Contract(format!(
+                    "evidence `{}` topology differs from its signed payload",
+                    evidence.evidence_id
+                )));
+            }
+            let inferred = infer_causal_relations(&evidence.payload).map_err(|error| {
+                CollectiveBenchmarkError::Contract(format!(
+                    "production causal inference failed for `{}`: {error}",
+                    evidence.evidence_id
+                ))
+            })?;
+            if inferred.is_empty() {
+                return Err(CollectiveBenchmarkError::Contract(format!(
+                    "selected evidence `{}` produced no causal candidate",
+                    evidence.evidence_id
+                )));
+            }
+            let (_, stage) = source_semantics(evidence.source_family);
+            let stage = stage_evidence.entry(stage).or_default();
+            for candidate in inferred {
                 let edge = signed_benchmark_edge(
                     &signer,
-                    &topology.event_node_id,
-                    &topology.asset_node_id,
+                    &candidate.from,
+                    &candidate.to,
                     evidence.evidence_id.clone(),
-                    relation,
+                    candidate.relation,
                     evidence.clock.observed_at,
                     EdgeState::Validated,
                 )?;
@@ -896,75 +924,14 @@ fn execute_reasoning_lane(
                         "benchmark causal-edge admission failed: {error}"
                     ))
                 })?;
-                edge_id
-            };
-            let stage = stage_evidence.entry(stage).or_default();
-            stage.node_ids.extend([
-                topology.event_node_id.clone(),
-                topology.asset_node_id.clone(),
-            ]);
-            stage.edge_ids.insert(edge_id);
+                stage
+                    .node_ids
+                    .extend([candidate.from.clone(), candidate.to.clone()]);
+                stage.edge_ids.insert(edge_id);
+            }
             stage.evidence_ids.insert(evidence.evidence_id);
         }
         if mode == ReasoningLaneMode::FixedInvestigator {
-            let ordered_stages = stage_evidence
-                .iter()
-                .filter_map(|(stage, evidence)| {
-                    evidence
-                        .evidence_ids
-                        .iter()
-                        .next()
-                        .cloned()
-                        .map(|evidence_id| (*stage, evidence_id))
-                })
-                .collect::<Vec<_>>();
-            let transitions = ordered_stages
-                .windows(2)
-                .map(|pair| (pair[1].0, pair[0].1.clone(), pair[1].1.clone()))
-                .collect::<Vec<_>>();
-            for (stage, predecessor_evidence_id, evidence_id) in transitions {
-                let evidence = scenario.graph.evidence.get(&evidence_id).ok_or_else(|| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "transition evidence `{evidence_id}` is not admitted"
-                    ))
-                })?;
-                let topology = scenario.topology.get(&evidence_id).ok_or_else(|| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "transition evidence `{evidence_id}` has no graph topology"
-                    ))
-                })?;
-                let predecessor_topology = scenario
-                    .topology
-                    .get(&predecessor_evidence_id)
-                    .ok_or_else(|| {
-                        CollectiveBenchmarkError::Contract(format!(
-                            "transition predecessor evidence `{predecessor_evidence_id}` has no graph topology"
-                        ))
-                    })?;
-                let (relation, _) = source_semantics(evidence.source_family);
-                let edge = signed_benchmark_edge(
-                    &signer,
-                    &predecessor_topology.event_node_id,
-                    &topology.event_node_id,
-                    evidence_id,
-                    relation,
-                    evidence.clock.observed_at,
-                    EdgeState::Validated,
-                )?;
-                let edge_id = edge.edge_id.clone();
-                scenario.graph.admit_edge(edge).map_err(|error| {
-                    CollectiveBenchmarkError::Contract(format!(
-                        "fixed-investigator transition-edge admission failed: {error}"
-                    ))
-                })?;
-                let stage_evidence = stage_evidence.get_mut(&stage).ok_or_else(|| {
-                    CollectiveBenchmarkError::Contract(
-                        "fixed-investigator transition stage disappeared".to_string(),
-                    )
-                })?;
-                stage_evidence.edge_ids.insert(edge_id);
-            }
-
             // A fixed source-local investigator must explore one alternative
             // causal link for every internally contradictory source it
             // resolves. Those speculative links are admitted as rejected
@@ -1032,10 +999,23 @@ fn execute_reasoning_lane(
                 })
                 .collect::<Result<Vec<_>, CollectiveBenchmarkError>>()?;
             for (evidence, topology) in speculative_inputs {
+                let from = topology.entity_node_ids.first().ok_or_else(|| {
+                    CollectiveBenchmarkError::Contract(
+                        "speculative evidence has no semantic source".to_string(),
+                    )
+                })?;
+                let to = topology.entity_node_ids.last().ok_or_else(|| {
+                    CollectiveBenchmarkError::Contract(
+                        "speculative evidence has no semantic target".to_string(),
+                    )
+                })?;
+                if from == to {
+                    continue;
+                }
                 let edge = signed_benchmark_edge(
                     &signer,
-                    &topology.event_node_id,
-                    &topology.asset_node_id,
+                    from,
+                    to,
                     evidence.evidence_id,
                     CausalRelation::ObservedIn,
                     evidence.clock.observed_at,
@@ -1048,12 +1028,6 @@ fn execute_reasoning_lane(
                 })?;
             }
         }
-        for edge in scenario.graph.edges.values() {
-            if let Some(relation_id) = semantic_relation_id(edge.relation) {
-                observed_relations.insert(relation_id.to_string());
-            }
-        }
-
         let mut claims = Vec::new();
         let mut predecessor = None;
         for (stage, evidence) in stage_evidence {
@@ -1100,24 +1074,36 @@ fn execute_reasoning_lane(
         adjudications.push(adjudication);
     }
 
-    let truth_relations = manifest
+    let truth_edges = manifest
         .truth
-        .causal_edge_ids
+        .causal_edges
         .iter()
-        .cloned()
+        .map(CausalEdgeIdentity::from)
         .collect::<BTreeSet<_>>();
 
+    let mut observed_edges = BTreeSet::new();
     let mut admitted_causal_edges = 0_u64;
     let mut false_causal_edges = 0_u64;
-    for edge in scenarios
-        .iter()
-        .flat_map(|scenario| scenario.graph.edges.values())
-    {
-        admitted_causal_edges = admitted_causal_edges.saturating_add(1);
-        if semantic_relation_id(edge.relation)
-            .is_none_or(|relation| !truth_relations.contains(relation))
-        {
-            false_causal_edges = false_causal_edges.saturating_add(1);
+    for scenario in &scenarios {
+        for edge in scenario.graph.edges.values() {
+            admitted_causal_edges = admitted_causal_edges.saturating_add(1);
+            let identity = scenario
+                .semantic_node_ids
+                .get(&edge.from)
+                .zip(scenario.semantic_node_ids.get(&edge.to))
+                .map(|(from, to)| CausalEdgeIdentity {
+                    from: from.clone(),
+                    to: to.clone(),
+                    relation: causal_relation_name(edge.relation),
+                });
+            match identity {
+                Some(identity) if truth_edges.contains(&identity) => {
+                    observed_edges.insert(identity);
+                }
+                Some(_) | None => {
+                    false_causal_edges = false_causal_edges.saturating_add(1);
+                }
+            }
         }
     }
 
@@ -1126,7 +1112,7 @@ fn execute_reasoning_lane(
         admitted_causal_edges,
         false_causal_edges,
         observed_stages,
-        observed_relations,
+        observed_edges,
         adjudications,
     })
 }
@@ -1195,6 +1181,32 @@ fn validate_inputs(
             "paired lane controls or task identities are invalid".to_string(),
         ));
     }
+    let truth_edge_ids = manifest
+        .truth
+        .causal_edges
+        .iter()
+        .map(|edge| edge.edge_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let truth_edge_identities = manifest
+        .truth
+        .causal_edges
+        .iter()
+        .map(CausalEdgeIdentity::from)
+        .collect::<BTreeSet<_>>();
+    if manifest.truth.causal_edges.len() as u64 != manifest.metrics.denominators.causal_edges
+        || truth_edge_ids.len() != manifest.truth.causal_edges.len()
+        || truth_edge_identities.len() != manifest.truth.causal_edges.len()
+        || manifest.truth.causal_edges.iter().any(|edge| {
+            edge.from == edge.to
+                || !manifest.truth.node_ids.contains(&edge.from)
+                || !manifest.truth.node_ids.contains(&edge.to)
+        })
+    {
+        return Err(CollectiveBenchmarkError::Contract(
+            "causal-edge oracle must contain unique IDs and full endpoint/relation identities"
+                .to_string(),
+        ));
+    }
     let expected_cases = [
         (training, ScenarioClass::TrainingAttack),
         (withheld, ScenarioClass::WithheldAttack),
@@ -1229,6 +1241,17 @@ fn validate_inputs(
                 )));
             }
         }
+        if fixture.events.iter().any(|event| {
+            event
+                .relation_ids
+                .iter()
+                .any(|relation_id| !truth_edge_ids.contains(relation_id.as_str()))
+        }) {
+            return Err(CollectiveBenchmarkError::Contract(format!(
+                "fixture `{}` references an unknown causal-edge oracle ID",
+                fixture.scenario_id
+            )));
+        }
     }
     Ok(())
 }
@@ -1249,16 +1272,7 @@ fn collective_lane(
         [training, withheld],
         ReasoningLaneMode::Collective,
     )?;
-    let truth_edges = manifest
-        .truth
-        .causal_edge_ids
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let true_edges = reasoning
-        .observed_relations
-        .intersection(&truth_edges)
-        .count() as u64;
+    let true_edges = reasoning.observed_edges.len() as u64;
     let stage_opportunities = denominators
         .attack_chain_stages
         .checked_mul(denominators.adjudicated_cases)
@@ -1270,7 +1284,7 @@ fn collective_lane(
         .executed_tasks
         .saturating_add(reasoning.admitted_evidence)
         .saturating_add(reasoning.observed_stages)
-        .saturating_add(reasoning.observed_relations.len() as u64)
+        .saturating_add(reasoning.observed_edges.len() as u64)
         .saturating_add(u64::try_from(reasoning.adjudications.len()).unwrap_or(u64::MAX));
     if logical_work_units > manifest.limits.max_work_units as u64 {
         return Err(CollectiveBenchmarkError::Contract(
@@ -1314,16 +1328,7 @@ fn fixed_investigator_lane(
         [training, withheld],
         ReasoningLaneMode::FixedInvestigator,
     )?;
-    let truth_edges = manifest
-        .truth
-        .causal_edge_ids
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let true_edges = reasoning
-        .observed_relations
-        .intersection(&truth_edges)
-        .count() as u64;
+    let true_edges = reasoning.observed_edges.len() as u64;
     let stage_opportunities = denominators
         .attack_chain_stages
         .checked_mul(denominators.adjudicated_cases)
@@ -1505,7 +1510,7 @@ mod tests {
             ReasoningLaneMode::Collective,
         )
         .unwrap();
-        assert_eq!(executed.observed_relations.len(), 5);
+        assert_eq!(executed.observed_edges.len(), 6);
         assert_eq!(executed.observed_stages, 9);
 
         let mut mutated_training = training;
@@ -1525,10 +1530,7 @@ mod tests {
             ReasoningLaneMode::Collective,
         )
         .unwrap();
-        assert_eq!(
-            without_oracle_rows.observed_relations,
-            executed.observed_relations
-        );
+        assert_eq!(without_oracle_rows.observed_edges, executed.observed_edges);
         assert_eq!(
             without_oracle_rows.observed_stages,
             executed.observed_stages
@@ -1589,9 +1591,9 @@ mod tests {
             executed,
             BenchmarkLaneMetrics {
                 median_hypothesis_time_ms: 5_000,
-                attack_chain_recall_bps: 7_000,
-                causal_edge_recall_bps: 5_000,
-                false_causal_edge_rate_bps: 1_500,
+                attack_chain_recall_bps: 8_000,
+                causal_edge_recall_bps: 6_666,
+                false_causal_edge_rate_bps: 2_857,
                 duplicate_work_rate_bps: 0,
                 evidence_coverage_bps: 7_500,
                 logical_work_units: 100,
@@ -1607,9 +1609,7 @@ mod tests {
                     && event.supports.iter().any(|id| id == selected)
             })
             .unwrap();
-        network_support
-            .entity_ids
-            .push("node:asset:independent-network-context".to_string());
+        network_support.entity_ids.swap(0, 1);
         let mutated = fixed_investigator_lane(&manifest, &training, &withheld).unwrap();
         assert_ne!(mutated, executed);
         assert_eq!(mutated.attack_chain_recall_bps, 8_000);

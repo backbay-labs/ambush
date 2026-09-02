@@ -69,9 +69,18 @@ struct TruthContract {
     hypothesis_ids: Vec<String>,
     selected_hypothesis_id: String,
     node_ids: Vec<String>,
-    causal_edge_ids: Vec<String>,
+    causal_edges: Vec<CausalEdgeContract>,
     kill_chain_stage_ids: Vec<String>,
     required_evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CausalEdgeContract {
+    edge_id: String,
+    from: String,
+    to: String,
+    relation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -290,6 +299,12 @@ fn validate_fixture(
         .checked_add(manifest.limits.max_virtual_ms as i64)
         .ok_or_else(|| "virtual clock overflows".to_string())?;
     let mut prior_time = fixture.seed_time_ms;
+    let truth_edge_ids = manifest
+        .truth
+        .causal_edges
+        .iter()
+        .map(|edge| edge.edge_id.as_str())
+        .collect::<BTreeSet<_>>();
     for event in &fixture.events {
         if event.signal_kind.trim().is_empty()
             || event.supports.is_empty()
@@ -316,6 +331,16 @@ fn validate_fixture(
         if event.supports.iter().any(|id| event.refutes.contains(id)) {
             return Err(format!(
                 "event {} both supports and refutes a hypothesis",
+                event.event_id
+            ));
+        }
+        if event
+            .relation_ids
+            .iter()
+            .any(|edge_id| !truth_edge_ids.contains(edge_id.as_str()))
+        {
+            return Err(format!(
+                "event {} names an unknown causal edge",
                 event.event_id
             ));
         }
@@ -395,7 +420,40 @@ fn validate_manifest_and_corpus(
     }
     nonempty_unique(&manifest.truth.hypothesis_ids, "truth hypothesis IDs")?;
     nonempty_unique(&manifest.truth.node_ids, "truth node IDs")?;
-    nonempty_unique(&manifest.truth.causal_edge_ids, "truth edge IDs")?;
+    let truth_edge_ids = manifest
+        .truth
+        .causal_edges
+        .iter()
+        .map(|edge| edge.edge_id.clone())
+        .collect::<Vec<_>>();
+    nonempty_unique(&truth_edge_ids, "truth edge IDs")?;
+    let valid_relations = [
+        "observed_in",
+        "spawns",
+        "uses",
+        "contacts",
+        "assumes",
+        "creates",
+        "depends_on",
+        "supports",
+        "refutes",
+        "contradicts",
+        "matches_indicator",
+    ];
+    if manifest.truth.causal_edges.iter().any(|edge| {
+        edge.from == edge.to
+            || !manifest.truth.node_ids.contains(&edge.from)
+            || !manifest.truth.node_ids.contains(&edge.to)
+            || !valid_relations.contains(&edge.relation.as_str())
+    }) || !all_unique(
+        manifest
+            .truth
+            .causal_edges
+            .iter()
+            .map(|edge| format!("{}|{}|{}", edge.from, edge.to, edge.relation)),
+    ) {
+        return Err("truth causal edges lack unique valid endpoints and relations".to_string());
+    }
     nonempty_unique(
         &manifest.truth.kill_chain_stage_ids,
         "truth kill-chain stage IDs",
@@ -438,7 +496,7 @@ fn validate_manifest_and_corpus(
     let denominators = &manifest.metrics.denominators;
     if denominators.adjudicated_cases == 0
         || denominators.attack_chain_stages != manifest.truth.kill_chain_stage_ids.len() as u64
-        || denominators.causal_edges != manifest.truth.causal_edge_ids.len() as u64
+        || denominators.causal_edges != manifest.truth.causal_edges.len() as u64
         || denominators.logical_tasks != manifest.task_identities.len() as u64
         || denominators.evidence_claims == 0
     {
@@ -629,7 +687,7 @@ fn benchmark_manifest_is_strict() {
     assert!(validate_manifest_and_corpus(&duplicate_id, &training, &withheld).is_err());
 
     let mut absent_truth = manifest.clone();
-    absent_truth.truth.causal_edge_ids.clear();
+    absent_truth.truth.causal_edges.clear();
     assert!(validate_manifest_and_corpus(&absent_truth, &training, &withheld).is_err());
 
     let mut overlapping_withheld = withheld.clone();

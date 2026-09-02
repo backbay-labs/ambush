@@ -1490,11 +1490,19 @@ fn replay_submission_failure_is_retryable(error: &GraphServiceError) -> bool {
     match error {
         // These failures are derived from the replay's own bounded, typed
         // graph material. Replaying the same bytes cannot make them valid.
-        GraphServiceError::Admission(_)
-        | GraphServiceError::Store(
-            GraphStoreError::Admission(_)
-            | GraphStoreError::Canonicalization { .. }
-            | GraphStoreError::ResourceLimit { .. },
+        GraphServiceError::Admission(admission)
+        | GraphServiceError::Store(GraphStoreError::Admission(admission)) => matches!(
+            admission,
+            swarm_core::hypothesis_graph::GraphAdmissionError::ResourceLimitExceeded {
+                resource,
+                ..
+            } if matches!(
+                resource.as_str(),
+                "scheduler.work_units_per_tick" | "scheduler.claims_per_tick"
+            )
+        ),
+        GraphServiceError::Store(
+            GraphStoreError::Canonicalization { .. } | GraphStoreError::ResourceLimit { .. },
         ) => false,
 
         // Everything else describes service composition, durable state,
@@ -2428,7 +2436,8 @@ impl IngestState {
         }
 
         let mut reconcile_bundle = |bundle_id: &str,
-                                    replay: Option<ReplayBundleLookup>|
+                                    replay: Option<ReplayBundleLookup>,
+                                    advance_logical_tick: bool|
          -> Result<
             ReplayReconciliationDisposition,
             ReplayStoreError,
@@ -2444,7 +2453,12 @@ impl IngestState {
                 );
                 return Ok(ReplayReconciliationDisposition::Quarantined);
             };
-            match graph.submit_replay(&replay.bundle) {
+            let submission = if advance_logical_tick {
+                graph.retry_persisted_replay(&replay.bundle)
+            } else {
+                graph.submit_replay(&replay.bundle)
+            };
+            match submission {
                 Ok(submission) if submission.idempotent => {
                     report.idempotent = report.idempotent.saturating_add(1);
                     Ok(ReplayReconciliationDisposition::Idempotent)
@@ -2485,7 +2499,8 @@ impl IngestState {
             .collect::<Vec<_>>()
         {
             let replay = replay_store.load_by_bundle_id(&bundle_id)?;
-            if reconcile_bundle(&bundle_id, replay)? != ReplayReconciliationDisposition::Retry {
+            if reconcile_bundle(&bundle_id, replay, true)? != ReplayReconciliationDisposition::Retry
+            {
                 checkpoint.retry_bundle_ids.remove(&bundle_id);
             }
         }
@@ -2520,7 +2535,7 @@ impl IngestState {
                         ),
                     });
                 }
-                if reconcile_bundle(&record.bundle_id, replay)?
+                if reconcile_bundle(&record.bundle_id, replay, false)?
                     == ReplayReconciliationDisposition::Retry
                 {
                     if checkpoint.retry_bundle_ids.len() < HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {

@@ -2021,7 +2021,7 @@ mod tests {
     fn failed_budget_probe_is_byte_identical() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 1,
+            max_work_units_per_tick: 3,
             max_claims_per_tick: 1,
             ..HypothesisGraphConfig::default()
         };
@@ -2029,7 +2029,7 @@ mod tests {
         let ledger = HypothesisTaskLedger::from_config(&config, tick).unwrap();
         let before = ledger.scheduler_budget().clone();
         let mut probe = before.clone();
-        assert!(probe.admit_at(&config, tick, 2, 0).is_err());
+        assert!(probe.admit_at(&config, tick, 4, 0).is_err());
         assert_eq!(ledger.scheduler_budget(), &before);
     }
 
@@ -2083,7 +2083,7 @@ mod tests {
     fn restart_and_state_deserialize_restore_budget_without_reset() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 2,
+            max_work_units_per_tick: 3,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2100,6 +2100,8 @@ mod tests {
             evidence_task_request(&graph_id, "budget-restart-two", 52, 10);
         let (descriptor_three, request_three, _) =
             evidence_task_request(&graph_id, "budget-restart-three", 53, 10);
+        let (descriptor_four, request_four, _) =
+            evidence_task_request(&graph_id, "budget-restart-four", 54, 10);
 
         let initial = store.snapshot().unwrap();
         let mut ledger =
@@ -2128,16 +2130,15 @@ mod tests {
             .create_task(&store, first.revision(), descriptor_two, request_two)
             .unwrap();
         assert_eq!(second.scheduler_budget().unwrap().work_units_used(), 2);
-        let before_exhausted = second.canonical_bytes().unwrap();
+        let third = restarted
+            .create_task(&store, second.revision(), descriptor_three, request_three)
+            .unwrap();
+        assert_eq!(third.scheduler_budget().unwrap().work_units_used(), 3);
+        let before_exhausted = third.canonical_bytes().unwrap();
         let budget_before_exhausted = restarted.scheduler_budget().clone();
         assert!(
             restarted
-                .create_task(
-                    &store,
-                    second.revision(),
-                    descriptor_three.clone(),
-                    request_three,
-                )
+                .create_task(&store, third.revision(), descriptor_four, request_four,)
                 .is_err()
         );
         assert_eq!(restarted.scheduler_budget(), &budget_before_exhausted);
@@ -2149,11 +2150,11 @@ mod tests {
         // A newer logical tick resets usage only as part of a successful
         // durable admission; the reset and the new unit share one CAS.
         let (descriptor_next_tick, request_next_tick, _) =
-            evidence_task_request(&graph_id, "budget-restart-next-tick", 54, 11);
+            evidence_task_request(&graph_id, "budget-restart-next-tick", 55, 11);
         let reset = restarted
             .create_task(
                 &store,
-                second.revision(),
+                third.revision(),
                 descriptor_next_tick,
                 request_next_tick,
             )

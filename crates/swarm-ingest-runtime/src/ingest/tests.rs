@@ -2238,6 +2238,74 @@ async fn startup_reconciliation_recovers_durable_replays_missing_from_graph() {
 }
 
 #[tokio::test]
+async fn scheduler_budget_replay_failure_advances_tick_and_converges() {
+    let mut config = test_config("suspicious_process_tree");
+    let graph_root = temp_path("reconcile-scheduler-budget-retry");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    config.hypothesis_graph.max_work_units_per_tick = 3;
+    let state =
+        IngestState::from_config(temp_path("reconcile-scheduler-budget-retry-config"), config)
+            .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[168; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[169; 32]),
+        )
+        .unwrap()
+        .unwrap();
+
+    let created_at_ms = 1_700_000_130_000;
+    seed_platform_replay_bundle(&state, "same-tick-first", "host-a", created_at_ms);
+    seed_platform_replay_bundle(&state, "same-tick-second", "host-b", created_at_ms);
+    let first = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(first.examined, 2);
+    assert_eq!(first.admitted, 1);
+    assert_eq!(first.retryable_failures, 1);
+    assert_eq!(first.quarantined, 0);
+    let checkpoint = state
+        .current_replay_store()
+        .hypothesis_graph_checkpoint()
+        .unwrap();
+    assert_eq!(checkpoint.cursor_sequence, 2);
+    assert_eq!(checkpoint.retry_bundle_ids.len(), 1);
+
+    let retry = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(retry.examined, 1);
+    assert_eq!(retry.admitted, 1);
+    assert_eq!(retry.retryable_failures, 0);
+    assert_eq!(retry.quarantined, 0);
+    assert!(
+        state
+            .current_replay_store()
+            .hypothesis_graph_checkpoint()
+            .unwrap()
+            .retry_bundle_ids
+            .is_empty()
+    );
+    assert_eq!(
+        state
+            .current_hypothesis_graph()
+            .unwrap()
+            .summary()
+            .unwrap()
+            .evidence_count,
+        2
+    );
+    drop(state);
+    fs::remove_dir_all(graph_root).unwrap();
+}
+
+#[tokio::test]
 async fn reconciliation_checkpoint_survives_restart_and_admits_lexically_earlier_bundle() {
     let mut config = test_config("suspicious_process_tree");
     let graph_root = temp_path("reconcile-durable-sequence-cursor");
@@ -2420,6 +2488,18 @@ fn replay_reconciliation_quarantines_only_replay_local_failures() {
     assert!(!super::replay_submission_failure_is_retryable(
         &invalid_replay
     ));
+
+    for resource in ["scheduler.work_units_per_tick", "scheduler.claims_per_tick"] {
+        let exhausted_tick = swarm_runtime::hypothesis_graph::service::GraphServiceError::Admission(
+            swarm_core::hypothesis_graph::GraphAdmissionError::ResourceLimitExceeded {
+                resource: resource.to_string(),
+                limit: 3,
+            },
+        );
+        assert!(super::replay_submission_failure_is_retryable(
+            &exhausted_tick
+        ));
+    }
 
     let oversized_replay = swarm_runtime::hypothesis_graph::service::GraphServiceError::Store(
         swarm_spine::GraphStoreError::ResourceLimit {

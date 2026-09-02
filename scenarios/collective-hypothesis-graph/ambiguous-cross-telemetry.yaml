@@ -13,7 +13,7 @@ events:
     signal_kind: unsigned_parent_child_execution
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:process:runner-a, node:event:seed-a]
+    entity_ids: [node:credential:role-a, node:process:runner-a, node:event:seed-a]
     relation_ids: [edge:credential-used-by-process]
   - event_id: event:process:refute
     evidence_id: evidence:process:refute
@@ -49,7 +49,7 @@ events:
     signal_kind: privileged_workload_creation
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:asset:workload-a, node:credential:role-a]
+    entity_ids: [node:credential:role-a, node:asset:workload-a]
     relation_ids: [edge:role-created-workload]
   - event_id: event:kubernetes:refute
     evidence_id: evidence:kubernetes:refute
@@ -85,8 +85,8 @@ events:
     signal_kind: rare_egress_destination
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:asset:workload-a]
-    relation_ids: [edge:workload-contacted-destination]
+    entity_ids: [node:process:runner-a, node:asset:workload-a, node:asset:destination-a]
+    relation_ids: [edge:process-spawned-network-client, edge:workload-contacted-destination]
   - event_id: event:network:refute
     evidence_id: evidence:network:refute
     source_family: network
@@ -103,7 +103,7 @@ events:
     signal_kind: active_campaign_indicator_match
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:actor:principal-a]
+    entity_ids: [node:asset:indicator-a, node:asset:destination-a]
     relation_ids: [edge:indicator-matched-destination]
   - event_id: event:threat-intelligence:refute
     evidence_id: evidence:threat-intelligence:refute

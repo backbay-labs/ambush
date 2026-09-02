@@ -199,6 +199,24 @@ impl HypothesisGraphConfig {
     pub fn validate_reasoning_limits(
         &self,
     ) -> Result<(), crate::hypothesis_graph::GraphAdmissionError> {
+        if self.enabled && self.max_nodes < 2 {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_nodes".to_string(),
+                reason: "must be at least 2 when enabled so one replay can be admitted".to_string(),
+            });
+        }
+        if self.enabled && self.max_hypotheses < 2 {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_hypotheses".to_string(),
+                reason: "must be at least 2 when enabled so one replay can be admitted".to_string(),
+            });
+        }
+        if self.enabled && self.max_tasks < 3 {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_tasks".to_string(),
+                reason: "must be at least 3 when enabled so one replay can be admitted".to_string(),
+            });
+        }
         if self.max_memory_ttl_ticks == 0
             || self.max_memory_ttl_ticks > crate::hypothesis_graph::MAX_STRATEGY_MEMORY_TTL_TICKS
         {
@@ -210,14 +228,15 @@ impl HypothesisGraphConfig {
                 ),
             });
         }
-        if self.max_work_units_per_tick == 0
+        let minimum_work_units = if self.enabled { 3 } else { 1 };
+        if self.max_work_units_per_tick < minimum_work_units
             || self.max_work_units_per_tick
                 > crate::hypothesis_graph::SchedulerBudget::MAX_WORK_UNITS
         {
             return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
                 field: "max_work_units_per_tick".to_string(),
                 reason: format!(
-                    "must be between 1 and {}",
+                    "must be between {minimum_work_units} and {}",
                     crate::hypothesis_graph::SchedulerBudget::MAX_WORK_UNITS
                 ),
             });

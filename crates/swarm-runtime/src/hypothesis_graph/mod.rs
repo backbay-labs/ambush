@@ -9,6 +9,7 @@ pub mod benchmark;
 pub mod clock;
 pub mod containment_plan;
 pub mod hypotheses;
+pub mod inference;
 pub mod kill_chain;
 pub mod memory;
 pub mod normalize;
@@ -35,6 +36,7 @@ pub use hypotheses::{
     HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput, competing_hypotheses,
     unresolved_task_targets,
 };
+pub use inference::{InferredCausalRelation, infer_causal_relations};
 pub use kill_chain::reconstruct_kill_chain;
 pub use memory::{
     MemoryPriorityProjection, MemoryProjectionReport, StrategyMemoryProjector,

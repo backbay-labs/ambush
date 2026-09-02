@@ -156,6 +156,28 @@ fn hypothesis_graph_config_rejects_zero_and_contradictory_limits() {
 }
 
 #[test]
+fn enabled_hypothesis_graph_config_must_admit_one_complete_replay() {
+    for (field, expected) in [
+        ("max_nodes", "must be at least 2"),
+        ("max_hypotheses", "must be at least 2"),
+        ("max_tasks", "must be at least 3"),
+        ("max_work_units_per_tick", "must be between 3"),
+    ] {
+        let mut value = serde_json::to_value(HypothesisGraphConfig {
+            enabled: true,
+            ..HypothesisGraphConfig::default()
+        })
+        .unwrap();
+        value[field] = serde_json::json!(1);
+        let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{field} produced unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
 fn hypothesis_graph_config_round_trips_all_limits() {
     let expected = HypothesisGraphConfig {
         enabled: true,

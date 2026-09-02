@@ -220,6 +220,8 @@ struct CollectiveHypothesisState {
     metrics: GraphServiceMetrics,
     worker_claimants: BTreeMap<TaskKind, AgentId>,
     pending_worker_publications: BTreeMap<(u64, TaskId), PendingWorkerPublication>,
+    pending_stalker_acquisition_hunts: BTreeSet<String>,
+    pending_stalker_falsification_hunts: BTreeSet<String>,
     memory_projection_dirty: bool,
 }
 
@@ -932,6 +934,16 @@ impl CollectiveHypothesisService {
         let mut service_metrics = GraphServiceMetrics::default();
         service_metrics.snapshot.campaign_rotations = active.index;
         let pending_worker_publications = pending_worker_publications(&campaigns)?;
+        let pending_stalker_acquisition_hunts = pending_worker_publications
+            .values()
+            .filter(|publication| publication.task_kind == TaskKind::AcquireEvidence)
+            .map(|publication| publication.hunt_id.clone())
+            .collect();
+        let pending_stalker_falsification_hunts = pending_worker_publications
+            .values()
+            .filter(|publication| publication.task_kind == TaskKind::FalsifyHypothesis)
+            .map(|publication| publication.hunt_id.clone())
+            .collect();
         let service = Self {
             config: config.clone(),
             campaigns: RwLock::new(CampaignRegistry { campaigns }),
@@ -944,6 +956,8 @@ impl CollectiveHypothesisService {
                 metrics: service_metrics,
                 worker_claimants: BTreeMap::new(),
                 pending_worker_publications,
+                pending_stalker_acquisition_hunts,
+                pending_stalker_falsification_hunts,
                 memory_projection_dirty: false,
             }),
             prometheus,
@@ -1115,12 +1129,46 @@ impl CollectiveHypothesisService {
         &self,
         replay: &ReplayBundle,
     ) -> Result<GraphSubmission, GraphServiceError> {
+        self.submit_replay_at(replay, false)
+    }
+
+    /// Retry one already-durable replay on the next graph logical tick.
+    /// Reusing an exhausted tick would make scheduler-budget failures
+    /// permanent even though their durable disposition is retryable.
+    pub fn retry_persisted_replay(
+        &self,
+        replay: &ReplayBundle,
+    ) -> Result<GraphSubmission, GraphServiceError> {
+        self.submit_replay_at(replay, true)
+    }
+
+    fn submit_replay_at(
+        &self,
+        replay: &ReplayBundle,
+        advance_logical_tick: bool,
+    ) -> Result<GraphSubmission, GraphServiceError> {
         let _operation = self
             .operation
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
         let _memory_projection_available = self.repair_memory_projection_for_work()?;
-        let result = self.submit_replay_inner(replay);
+        let minimum_logical_time = if advance_logical_tick {
+            Some(
+                self.active_campaign()?
+                    .store
+                    .snapshot()?
+                    .state()
+                    .logical_time_high_water
+                    .checked_add(1)
+                    .ok_or_else(|| GraphAdmissionError::InvalidField {
+                        field: "replay.retry_at".to_string(),
+                        reason: "logical retry tick overflow".to_string(),
+                    })?,
+            )
+        } else {
+            None
+        };
+        let result = self.submit_replay_inner(replay, minimum_logical_time);
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
         match &result {
             Ok(_) => {
@@ -1144,6 +1192,7 @@ impl CollectiveHypothesisService {
     fn submit_replay_inner(
         &self,
         replay: &ReplayBundle,
+        minimum_logical_time: Option<GraphLogicalTime>,
     ) -> Result<GraphSubmission, GraphServiceError> {
         let replay_ingested_at = GraphLogicalTime::new(replay.audit.created_at_ms);
         replay_ingested_at.validate()?;
@@ -1242,7 +1291,8 @@ impl CollectiveHypothesisService {
                 replay
                     .audit
                     .created_at_ms
-                    .max(initial.state().logical_time_high_water.as_millis()),
+                    .max(initial.state().logical_time_high_water.as_millis())
+                    .max(minimum_logical_time.map_or(i64::MIN, GraphLogicalTime::as_millis)),
             );
             logical_time.validate()?;
             let assessments = vec![
@@ -1581,7 +1631,10 @@ impl CollectiveHypothesisService {
             graph: snapshot.graph().clone(),
             hypotheses: snapshot.hypotheses().clone(),
             tasks: snapshot.tasks().map(|task| task.task.clone()).collect(),
-            terminal_publications: snapshot.terminal_outbox().len(),
+            terminal_publications: snapshot
+                .terminal_outbox()
+                .len()
+                .saturating_add(snapshot.retry_exhaustion_outbox().len()),
             memory,
             logical_time_high_water: snapshot.state().logical_time_high_water,
             metrics,
@@ -1964,17 +2017,32 @@ impl GraphWorkerAdapter {
             .state
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
-        let mut hunts = state
-            .pending_worker_publications
-            .values()
-            .filter(|publication| {
-                matches!(
-                    publication.task_kind,
-                    TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
-                ) && self.capabilities.contains(&publication.task_kind)
-            })
-            .map(|publication| publication.hunt_id.clone())
-            .collect::<BTreeSet<_>>();
+        let limit =
+            usize::try_from(self.service.config.max_work_units_per_tick).unwrap_or(usize::MAX);
+        let mut hunts = if self.capabilities.contains(&TaskKind::AcquireEvidence)
+            && self.capabilities.contains(&TaskKind::FalsifyHypothesis)
+        {
+            state
+                .pending_stalker_acquisition_hunts
+                .union(&state.pending_stalker_falsification_hunts)
+                .take(limit)
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        } else if self.capabilities.contains(&TaskKind::AcquireEvidence) {
+            state
+                .pending_stalker_acquisition_hunts
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        } else {
+            state
+                .pending_stalker_falsification_hunts
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        };
         drop(state);
         // Campaign rotation refuses outstanding tasks, so live recovery only
         // needs to inspect the active graph. Archived campaigns are consulted
@@ -1992,6 +2060,9 @@ impl GraphWorkerAdapter {
                 )
                 && !task_is_terminal(task.task.state)
         }) {
+            if hunts.len() >= limit {
+                break;
+            }
             if let Some(hunt_id) = hunt_for_evidence_scope(
                 &task.task.request.evidence_scope.evidence_ids,
                 snapshot.graph(),
@@ -2015,6 +2086,7 @@ impl GraphWorkerAdapter {
             .values()
             .filter(|publication| {
                 publication.hunt_id == hunt_id
+                    && self.capabilities.contains(&publication.task_kind)
                     && matches!(
                         publication.task_kind,
                         TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
@@ -2028,10 +2100,12 @@ impl GraphWorkerAdapter {
             let tasks = snapshot
                 .tasks()
                 .filter(|task| {
-                    matches!(
-                        task.task.request.kind,
-                        TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
-                    ) && task_matches_hunt(&task.task, hunt_id, &snapshot)
+                    self.capabilities.contains(&task.task.request.kind)
+                        && matches!(
+                            task.task.request.kind,
+                            TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
+                        )
+                        && task_matches_hunt(&task.task, hunt_id, &snapshot)
                 })
                 .collect::<Vec<_>>();
             if tasks.is_empty() {
@@ -2042,14 +2116,24 @@ impl GraphWorkerAdapter {
             }
             let mut completion = StalkerGraphCompletion::default();
             for task in tasks {
-                let Some(publication) = snapshot.terminal_outbox().get(&task.task.request.task_id)
-                else {
+                let task_id = &task.task.request.task_id;
+                let worker_publication = snapshot
+                    .terminal_outbox()
+                    .get(task_id)
+                    .filter(|publication| publication.publication_acknowledged == Some(false));
+                let terminal_kind = worker_publication
+                    .map(|publication| publication.envelope.completion.kind.clone())
+                    .or_else(|| {
+                        snapshot
+                            .retry_exhaustion_outbox()
+                            .get(task_id)
+                            .is_some_and(|publication| !publication.publication_acknowledged)
+                            .then_some(TaskCompletionKind::NoFinding)
+                    });
+                let Some(terminal_kind) = terminal_kind else {
                     continue;
                 };
-                match (
-                    publication.envelope.capability.kind,
-                    &publication.envelope.completion.kind,
-                ) {
+                match (task.task.request.kind, terminal_kind) {
                     (TaskKind::AcquireEvidence, TaskCompletionKind::EvidenceAdded) => {
                         completion.acquisitions = completion.acquisitions.saturating_add(1);
                     }
@@ -2066,7 +2150,7 @@ impl GraphWorkerAdapter {
                     }
                     _ => {}
                 }
-                if publication.memory.is_some() {
+                if worker_publication.is_some_and(|publication| publication.memory.is_some()) {
                     completion.memory_records_projected =
                         completion.memory_records_projected.saturating_add(1);
                 }
@@ -2128,6 +2212,7 @@ impl GraphWorkerAdapter {
                     publication.task_kind,
                     TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
                 )
+                && self.capabilities.contains(&publication.task_kind)
         })
     }
 
@@ -2177,15 +2262,22 @@ impl GraphWorkerAdapter {
             let mut next = snapshot.state().clone();
             let mut changed = false;
             for task_id in task_ids {
-                let publication = next.terminal_outbox.get_mut(&task_id).ok_or_else(|| {
-                    GraphStoreError::InvalidState {
+                if let Some(publication) = next.terminal_outbox.get_mut(&task_id) {
+                    if publication.publication_acknowledged == Some(false) {
+                        publication.publication_acknowledged = Some(true);
+                        changed = true;
+                    }
+                } else if let Some(publication) = next.retry_exhaustion_outbox.get_mut(&task_id) {
+                    if !publication.publication_acknowledged {
+                        publication.publication_acknowledged = true;
+                        changed = true;
+                    }
+                } else {
+                    return Err(GraphStoreError::InvalidState {
                         reason: "pending worker publication references an unknown outbox entry"
                             .to_string(),
                     }
-                })?;
-                if publication.publication_acknowledged == Some(false) {
-                    publication.publication_acknowledged = Some(true);
-                    changed = true;
+                    .into());
                 }
             }
             if changed {
@@ -2200,7 +2292,21 @@ impl GraphWorkerAdapter {
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
         for key in selected {
-            state.pending_worker_publications.remove(&key);
+            if let Some(publication) = state.pending_worker_publications.remove(&key) {
+                match publication.task_kind {
+                    TaskKind::AcquireEvidence => {
+                        state
+                            .pending_stalker_acquisition_hunts
+                            .remove(&publication.hunt_id);
+                    }
+                    TaskKind::FalsifyHypothesis => {
+                        state
+                            .pending_stalker_falsification_hunts
+                            .remove(&publication.hunt_id);
+                    }
+                    TaskKind::ChallengeEdge => {}
+                }
+            }
         }
         Ok(())
     }
@@ -2286,6 +2392,34 @@ impl GraphWorkerAdapter {
                             .to_string(),
                     }
                     .into());
+                }
+                if let Some(publication) = pending_worker_publication_for_retry_exhaustion(
+                    &campaign,
+                    &exhausted_snapshot,
+                    &task.request.task_id,
+                )? {
+                    let mut state = self
+                        .service
+                        .state
+                        .lock()
+                        .map_err(|_| GraphServiceError::Poisoned)?;
+                    match publication.task_kind {
+                        TaskKind::AcquireEvidence => {
+                            state
+                                .pending_stalker_acquisition_hunts
+                                .insert(publication.hunt_id.clone());
+                        }
+                        TaskKind::FalsifyHypothesis => {
+                            state
+                                .pending_stalker_falsification_hunts
+                                .insert(publication.hunt_id.clone());
+                        }
+                        TaskKind::ChallengeEdge => {}
+                    }
+                    state.pending_worker_publications.insert(
+                        (publication.campaign_index, publication.task_id.clone()),
+                        publication,
+                    );
                 }
                 continue;
             }
@@ -2918,6 +3052,19 @@ impl GraphWorkerAdapter {
         if let Some(publication) =
             pending_worker_publication_for_task(&campaign, &committed, &task_id)?
         {
+            match publication.task_kind {
+                TaskKind::AcquireEvidence => {
+                    state
+                        .pending_stalker_acquisition_hunts
+                        .insert(publication.hunt_id.clone());
+                }
+                TaskKind::FalsifyHypothesis => {
+                    state
+                        .pending_stalker_falsification_hunts
+                        .insert(publication.hunt_id.clone());
+                }
+                TaskKind::ChallengeEdge => {}
+            }
             state.pending_worker_publications.insert(
                 (publication.campaign_index, publication.task_id.clone()),
                 publication,
@@ -3125,6 +3272,39 @@ fn pending_worker_publication_for_task(
     }))
 }
 
+fn pending_worker_publication_for_retry_exhaustion(
+    campaign: &HypothesisCampaign,
+    snapshot: &GraphStoreSnapshot,
+    task_id: &TaskId,
+) -> Result<Option<PendingWorkerPublication>, GraphServiceError> {
+    let Some(task) = snapshot.state().tasks.get(task_id).map(|task| &task.task) else {
+        return Err(GraphStoreError::InvalidState {
+            reason: "retry-exhaustion publication index references an unknown task".to_string(),
+        }
+        .into());
+    };
+    let Some(outbox) = snapshot.retry_exhaustion_outbox().get(task_id) else {
+        return Ok(None);
+    };
+    if outbox.publication_acknowledged {
+        return Ok(None);
+    }
+    let Some(hunt_id) =
+        hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot.graph())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(PendingWorkerPublication {
+        campaign_index: campaign.index,
+        graph_id: campaign.graph_id.clone(),
+        task_id: task_id.clone(),
+        hunt_id,
+        task_kind: task.request.kind,
+        completion_kind: TaskCompletionKind::NoFinding,
+        evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
+    }))
+}
+
 fn pending_worker_publications(
     campaigns: &[HypothesisCampaign],
 ) -> Result<BTreeMap<(u64, TaskId), PendingWorkerPublication>, GraphServiceError> {
@@ -3134,6 +3314,13 @@ fn pending_worker_publications(
         for task_id in snapshot.terminal_outbox().keys() {
             if let Some(publication) =
                 pending_worker_publication_for_task(campaign, &snapshot, task_id)?
+            {
+                pending.insert((campaign.index, task_id.clone()), publication);
+            }
+        }
+        for task_id in snapshot.retry_exhaustion_outbox().keys() {
+            if let Some(publication) =
+                pending_worker_publication_for_retry_exhaustion(campaign, &snapshot, task_id)?
             {
                 pending.insert((campaign.index, task_id.clone()), publication);
             }
