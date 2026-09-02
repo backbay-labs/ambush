@@ -659,15 +659,87 @@ fn persist_campaign_head(
     Ok(())
 }
 
-fn validate_campaign_indexes(latest_index: u64, indexes: &[u64]) -> Result<(), GraphServiceError> {
-    let contiguous = u64::try_from(indexes.len()) == Ok(latest_index)
-        && indexes.iter().copied().enumerate().all(|(offset, index)| {
-            u64::try_from(offset).ok().and_then(|v| v.checked_add(1)) == Some(index)
-        });
-    if !contiguous {
+fn validate_campaign_indexes(
+    latest_index: u64,
+    indexes: &[u64],
+) -> Result<Option<u64>, GraphServiceError> {
+    let committed_len =
+        usize::try_from(latest_index).map_err(|_| GraphServiceError::CampaignIndexMismatch {
+            latest_index,
+            observed_indexes: indexes.to_vec(),
+        })?;
+    let committed_contiguous = indexes.len() >= committed_len
+        && indexes[..committed_len]
+            .iter()
+            .copied()
+            .enumerate()
+            .all(|(offset, index)| {
+                u64::try_from(offset)
+                    .ok()
+                    .and_then(|value| value.checked_add(1))
+                    == Some(index)
+            });
+    let trailing = match indexes.get(committed_len..).unwrap_or_default() {
+        [] => None,
+        [index] if latest_index.checked_add(1) == Some(*index) => Some(*index),
+        _ => {
+            return Err(GraphServiceError::CampaignIndexMismatch {
+                latest_index,
+                observed_indexes: indexes.to_vec(),
+            });
+        }
+    };
+    if !committed_contiguous {
         return Err(GraphServiceError::CampaignIndexMismatch {
             latest_index,
             observed_indexes: indexes.to_vec(),
+        });
+    }
+    Ok(trailing)
+}
+
+fn validate_unactivated_campaign(
+    campaign: &HypothesisCampaign,
+    campaign_directory: &Path,
+    config: &HypothesisGraphConfig,
+) -> Result<(), GraphServiceError> {
+    let snapshot = campaign.store.snapshot()?;
+    let state = snapshot.state();
+    let graph = snapshot.graph();
+    let expected_budget = SchedulerBudget::new_with_config(config, GraphLogicalTime::new(0))?;
+    let pristine = snapshot.revision().generation == 1
+        && state.generation == 1
+        && state
+            .predecessor_digest
+            .as_deref()
+            .is_some_and(|digest| !digest.is_empty())
+        && state.migration_marker == GRAPH_STATE_MIGRATION_HYPOTHESES
+        && state.scheduler_budget.as_ref() == Some(&expected_budget)
+        && state.logical_time_high_water == GraphLogicalTime::new(0)
+        && graph.version == 0
+        && graph.nodes.is_empty()
+        && graph.evidence.is_empty()
+        && graph.edges.is_empty()
+        && graph.contradictions.is_empty()
+        && graph.conflicts.is_empty()
+        && state.hypotheses.is_empty()
+        && state.tasks.is_empty()
+        && state.logical_task_descriptors.is_empty()
+        && state.task_tombstones.is_empty()
+        && state.terminal_outbox.is_empty()
+        && state.fencing_counter == 0
+        && state.cross_graph_links.is_empty()
+        && state.result_projection_digest.is_none()
+        && state.operator_projection_digest.is_none()
+        && campaign
+            .memory
+            .store()
+            .list(1)
+            .map_err(GraphServiceError::Memory)?
+            .is_empty();
+    if !pristine {
+        return Err(GraphServiceError::InvalidCampaignEntry {
+            path: campaign_directory.to_path_buf(),
         });
     }
     Ok(())
@@ -744,7 +816,7 @@ fn load_campaigns(
                 }
             };
             let latest_index = head.as_ref().map_or(0, |head| head.latest_index);
-            validate_campaign_indexes(latest_index, &indexes)?;
+            let unactivated_index = validate_campaign_indexes(latest_index, &indexes)?;
 
             let mut campaigns = vec![open_campaign(
                 0,
@@ -756,7 +828,10 @@ fn load_campaigns(
             if head.is_none() {
                 persist_campaign_head(root, signer, 0)?;
             }
-            for index in indexes {
+            for index in indexes
+                .into_iter()
+                .take_while(|index| *index <= latest_index)
+            {
                 let campaign_directory = campaign_root.join(index.to_string());
                 campaigns.push(open_campaign(
                     index,
@@ -765,6 +840,23 @@ fn load_campaigns(
                     Some(&campaign_directory.join("graph")),
                     Some(&campaign_directory.join("strategy-memory")),
                 )?);
+            }
+            if let Some(index) = unactivated_index {
+                let campaign_directory = campaign_root.join(index.to_string());
+                let unactivated = open_campaign(
+                    index,
+                    config,
+                    signer,
+                    Some(&campaign_directory.join("graph")),
+                    Some(&campaign_directory.join("strategy-memory")),
+                )?;
+                // `campaign-head.json` is the activation authority. A crash can
+                // leave exactly one initialized successor directory before the
+                // head advances. Authenticate it and require pristine state,
+                // then leave it in place for the next serialized rotation to
+                // reuse. Any populated or noncontiguous trailing directory is
+                // still rejected as possible rollback/tamper.
+                validate_unactivated_campaign(&unactivated, &campaign_directory, config)?;
             }
             Ok((campaigns, Some(campaign_root)))
         }
@@ -1292,6 +1384,22 @@ impl CollectiveHypothesisService {
     pub fn summary(&self) -> Result<GraphSummaryProjection, GraphServiceError> {
         self.repair_memory_projection()?;
         let campaign = self.active_campaign()?;
+        self.summary_for_campaign(&campaign)
+    }
+
+    pub fn summaries(&self) -> Result<Vec<GraphSummaryProjection>, GraphServiceError> {
+        self.repair_memory_projection()?;
+        self.campaigns()?
+            .into_iter()
+            .rev()
+            .map(|campaign| self.summary_for_campaign(&campaign))
+            .collect()
+    }
+
+    fn summary_for_campaign(
+        &self,
+        campaign: &HypothesisCampaign,
+    ) -> Result<GraphSummaryProjection, GraphServiceError> {
         let snapshot = campaign.store.snapshot()?;
         let memory_count = campaign
             .memory
@@ -1313,7 +1421,7 @@ impl CollectiveHypothesisService {
             .filter(|task| task.task.state == TaskState::Completed)
             .count();
         Ok(GraphSummaryProjection {
-            graph_id: campaign.graph_id,
+            graph_id: campaign.graph_id.clone(),
             generation: snapshot.revision().generation,
             graph_version: snapshot.graph().version,
             evidence_count: snapshot.graph().evidence.len(),
@@ -1389,6 +1497,55 @@ impl CollectiveHypothesisService {
             .collect())
     }
 
+    pub fn operator_task_page_for(
+        &self,
+        graph_id: &GraphId,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphServiceError> {
+        if limit == 0 {
+            return Err(GraphStoreError::InvalidState {
+                reason: "operator task page limit must be positive".to_string(),
+            }
+            .into());
+        }
+        let campaign = self.campaign_for(graph_id)?;
+        let snapshot = campaign.store.snapshot()?;
+        let mut page = Vec::with_capacity(limit.min(snapshot.state().tasks.len()));
+        for durable in snapshot.tasks() {
+            let task = &durable.task;
+            let after_cursor = after.is_none_or(|(generation, stable_id)| {
+                task.generation < generation
+                    || (task.generation == generation && task.request.task_id.as_str() < stable_id)
+            });
+            if !after_cursor {
+                continue;
+            }
+            let insertion = page
+                .binary_search_by(|candidate| {
+                    let candidate: &&TaskRecord = candidate;
+                    let left = *candidate;
+                    let right = task;
+                    right.generation.cmp(&left.generation).then_with(|| {
+                        right
+                            .request
+                            .task_id
+                            .as_str()
+                            .cmp(left.request.task_id.as_str())
+                    })
+                })
+                .unwrap_or_else(|position| position);
+            if insertion >= limit {
+                continue;
+            }
+            page.insert(insertion, task);
+            if page.len() > limit {
+                page.pop();
+            }
+        }
+        Ok(page.into_iter().cloned().collect())
+    }
+
     pub fn operator_memory_for(
         &self,
         graph_id: &GraphId,
@@ -1401,6 +1558,19 @@ impl CollectiveHypothesisService {
             .memory
             .store()
             .list(self.config.max_memory_records)?)
+    }
+
+    pub fn operator_memory_page_for(
+        &self,
+        graph_id: &GraphId,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<StrategyMemoryRecord>, GraphServiceError> {
+        let campaign = self.campaign_for(graph_id)?;
+        if campaign.index == self.active_campaign_index.load(Ordering::Acquire) {
+            self.repair_memory_projection()?;
+        }
+        Ok(campaign.memory.store().list_page(after, limit)?)
     }
 
     fn campaign_for(&self, graph_id: &GraphId) -> Result<HypothesisCampaign, GraphServiceError> {
@@ -1627,6 +1797,12 @@ pub struct StalkerGraphCompletion {
     pub memory_records_projected: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StalkerGraphPublication {
+    pub graph_id: GraphId,
+    pub completion: StalkerGraphCompletion,
+}
+
 struct TerminalPublication {
     kind: TaskCompletionKind,
     evidence: Vec<swarm_core::hypothesis_graph::EvidenceEnvelope>,
@@ -1683,25 +1859,93 @@ impl GraphWorkerAdapter {
                 TaskKind::AcquireEvidence,
             ));
         }
-        let campaign = self.service.active_campaign()?;
-        let snapshot = campaign.store.snapshot()?;
         let mut hunts = BTreeSet::new();
-        for task in snapshot.tasks().filter(|task| {
-            self.capabilities.contains(&task.task.request.kind)
-                && task_is_visible_to_claimant(
-                    task.task.state,
-                    &task.task.request.claimant,
-                    &self.claimant,
-                )
-        }) {
-            if let Some(hunt_id) = hunt_for_evidence_scope(
-                &task.task.request.evidence_scope.evidence_ids,
-                snapshot.graph(),
-            ) {
-                hunts.insert(hunt_id);
+        for campaign in self.service.campaigns()? {
+            let snapshot = campaign.store.snapshot()?;
+            for task in snapshot.tasks().filter(|task| {
+                self.capabilities.contains(&task.task.request.kind)
+                    && (task_is_visible_to_claimant(
+                        task.task.state,
+                        &task.task.request.claimant,
+                        &self.claimant,
+                    ) || snapshot
+                        .terminal_outbox()
+                        .contains_key(&task.task.request.task_id))
+            }) {
+                if let Some(hunt_id) = hunt_for_evidence_scope(
+                    &task.task.request.evidence_scope.evidence_ids,
+                    snapshot.graph(),
+                ) {
+                    hunts.insert(hunt_id);
+                }
             }
         }
         Ok(hunts.into_iter().collect())
+    }
+
+    pub fn committed_stalker_publication(
+        &self,
+        hunt_id: &str,
+    ) -> Result<Option<StalkerGraphPublication>, GraphServiceError> {
+        for campaign in self.service.campaigns()?.into_iter().rev() {
+            let snapshot = campaign.store.snapshot()?;
+            let tasks = snapshot
+                .tasks()
+                .filter(|task| {
+                    matches!(
+                        task.task.request.kind,
+                        TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
+                    ) && task_matches_hunt(&task.task, hunt_id, &snapshot)
+                })
+                .collect::<Vec<_>>();
+            if tasks.is_empty() {
+                continue;
+            }
+            if tasks.iter().any(|task| !task_is_terminal(task.task.state)) {
+                return Ok(None);
+            }
+            let mut completion = StalkerGraphCompletion::default();
+            for task in tasks {
+                let Some(publication) = snapshot.terminal_outbox().get(&task.task.request.task_id)
+                else {
+                    continue;
+                };
+                match (
+                    publication.envelope.capability.kind,
+                    &publication.envelope.completion.kind,
+                ) {
+                    (TaskKind::AcquireEvidence, TaskCompletionKind::EvidenceAdded) => {
+                        completion.acquisitions = completion.acquisitions.saturating_add(1);
+                    }
+                    (TaskKind::AcquireEvidence, TaskCompletionKind::NoFinding) => {
+                        completion.acquisition_no_findings =
+                            completion.acquisition_no_findings.saturating_add(1);
+                    }
+                    (TaskKind::FalsifyHypothesis, TaskCompletionKind::HypothesisFalsified) => {
+                        completion.falsifications = completion.falsifications.saturating_add(1);
+                    }
+                    (TaskKind::FalsifyHypothesis, TaskCompletionKind::NoFinding) => {
+                        completion.falsification_no_findings =
+                            completion.falsification_no_findings.saturating_add(1);
+                    }
+                    _ => {}
+                }
+                if publication.memory.is_some() {
+                    completion.memory_records_projected =
+                        completion.memory_records_projected.saturating_add(1);
+                }
+            }
+            let terminal_count = completion
+                .acquisitions
+                .saturating_add(completion.acquisition_no_findings)
+                .saturating_add(completion.falsifications)
+                .saturating_add(completion.falsification_no_findings);
+            return Ok((terminal_count > 0).then_some(StalkerGraphPublication {
+                graph_id: campaign.graph_id,
+                completion,
+            }));
+        }
+        Ok(None)
     }
 
     pub fn claim_next(
@@ -2734,5 +2978,50 @@ mod tests {
         let state = service.state.lock().unwrap();
         assert!(state.memory_projection_dirty);
         assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
+    }
+
+    #[test]
+    fn restart_authenticates_and_recovers_pristine_unactivated_campaign() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-phase286-unactivated-campaign-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            state_store: BundleStoreConfig::LocalFiles {
+                directory: root.display().to_string(),
+            },
+            ..HypothesisGraphConfig::default()
+        };
+        let signer = Keypair::from_seed(&[14; 32]);
+        let initial = CollectiveHypothesisService::new(&config, signer.clone(), None).unwrap();
+        let initial_graph_id = initial.graph_id();
+        drop(initial);
+
+        let campaign_directory = root.join("campaigns").join("1");
+        fs::create_dir_all(&campaign_directory).unwrap();
+        let unactivated = open_campaign(
+            1,
+            &config,
+            &signer,
+            Some(&campaign_directory.join("graph")),
+            Some(&campaign_directory.join("strategy-memory")),
+        )
+        .unwrap();
+        validate_unactivated_campaign(&unactivated, &campaign_directory, &config).unwrap();
+        drop(unactivated);
+
+        let restarted = CollectiveHypothesisService::new(&config, signer, None).unwrap();
+        assert_eq!(restarted.graph_id(), initial_graph_id);
+        assert_eq!(restarted.summaries().unwrap().len(), 1);
+        assert_eq!(
+            load_campaign_head(&root.join(CAMPAIGN_HEAD_FILE), &restarted.signer)
+                .unwrap()
+                .latest_index,
+            0
+        );
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
     }
 }

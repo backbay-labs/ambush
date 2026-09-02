@@ -32,6 +32,7 @@ pub struct StalkerAgent {
     pheromone_config: PheromoneConfig,
     queued_hunts: HashSet<String>,
     published_hunts: HashSet<String>,
+    pending_graph_publication_acks: HashSet<String>,
     hypothesis_graph: Option<GraphWorkerAdapter>,
     role: AgentRole,
     health: AgentHealth,
@@ -118,6 +119,7 @@ impl StalkerAgent {
             pheromone_config,
             queued_hunts: HashSet::new(),
             published_hunts: HashSet::new(),
+            pending_graph_publication_acks: HashSet::new(),
             hypothesis_graph: None,
             role: AgentRole::Stalker,
             health: AgentHealth::Healthy,
@@ -148,12 +150,35 @@ impl StalkerAgent {
     ) -> Result<Vec<SwarmAction>, SwarmError> {
         let mut actions = Vec::new();
         let mut first_error = None;
+        // A prior tick's actions have passed through the dispatcher's
+        // synchronous apply phase before this tick can begin. Persist the
+        // acknowledgement now, one tick after emission. A crash before this
+        // point deliberately leaves the durable graph terminal pending so the
+        // replacement Stalker replays it at least once.
+        for hunt_id in self
+            .pending_graph_publication_acks
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            match self.investigation.acknowledge_graph_findings(&hunt_id) {
+                Ok(Some(_)) => {
+                    self.pending_graph_publication_acks.remove(&hunt_id);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(agent_tick_error(error));
+                    }
+                }
+            }
+        }
         let mut hunts = detection_hunts(&env.pheromones);
         for hunt_id in graph
             .outstanding_stalker_hunts()
             .map_err(agent_tick_error)?
         {
-            if !hunts.contains(&hunt_id) {
+            if !self.published_hunts.contains(&hunt_id) && !hunts.contains(&hunt_id) {
                 hunts.push(hunt_id);
             }
         }
@@ -216,6 +241,10 @@ impl StalkerAgent {
                 return Ok(actions);
             }
         };
+        if investigation.bundle.graph_findings_published || self.published_hunts.contains(hunt_id) {
+            self.published_hunts.insert(hunt_id.to_string());
+            return Ok(actions);
+        }
         if matches!(
             investigation.bundle.status,
             InvestigationStatus::Queued | InvestigationStatus::Running
@@ -251,14 +280,24 @@ impl StalkerAgent {
             // Outstanding work prevents campaign rotation before this point.
             // Capture the campaign identity before the terminal commit so a
             // concurrent post-commit rotation cannot relabel the publication.
-            let graph_id = graph.graph_id();
-            let completion = graph
+            graph
                 .close_failed_stalker_hunt(hunt_id, worker_now)
                 .map_err(agent_tick_error)?;
-            if completion.acquisition_no_findings == 0 && completion.falsification_no_findings == 0
-            {
+            let Some(publication) = graph
+                .committed_stalker_publication(hunt_id)
+                .map_err(agent_tick_error)?
+            else {
                 return Ok(actions);
-            }
+            };
+            let graph_id = publication.graph_id;
+            let completion = publication.completion;
+            let publication_id = format!(
+                "stalker-findings:{}:{}:{}",
+                graph_id, hunt_id, investigation.bundle.investigation_id
+            );
+            self.published_hunts.insert(hunt_id.to_string());
+            self.pending_graph_publication_acks
+                .insert(hunt_id.to_string());
             actions.push(SwarmAction::PublishFindings {
                 hunt_id: HuntId(hunt_id.to_string()),
                 findings: serde_json::json!({
@@ -268,6 +307,7 @@ impl StalkerAgent {
                     "investigation_status": investigation.bundle.status,
                     "failure_reason": investigation.bundle.failure_reason,
                     "graph_id": graph_id,
+                    "publication_id": publication_id,
                     "acquisition_no_findings": completion.acquisition_no_findings,
                     "falsification_no_findings": completion.falsification_no_findings,
                     "memory_records_projected": completion.memory_records_projected,
@@ -276,8 +316,7 @@ impl StalkerAgent {
             });
             return Ok(actions);
         }
-        let graph_id = graph.graph_id();
-        let completion = graph
+        graph
             .complete_stalker_hunt(
                 hunt_id,
                 worker_now,
@@ -291,13 +330,21 @@ impl StalkerAgent {
                     .is_some_and(|selected| selected.starts_with("malicious_")),
             )
             .map_err(agent_tick_error)?;
-        if completion.acquisitions == 0
-            && completion.acquisition_no_findings == 0
-            && completion.falsifications == 0
-            && completion.falsification_no_findings == 0
-        {
+        let Some(publication) = graph
+            .committed_stalker_publication(hunt_id)
+            .map_err(agent_tick_error)?
+        else {
             return Ok(actions);
-        }
+        };
+        let graph_id = publication.graph_id;
+        let completion = publication.completion;
+        let publication_id = format!(
+            "stalker-findings:{}:{}:{}",
+            graph_id, hunt_id, investigation.bundle.investigation_id
+        );
+        self.published_hunts.insert(hunt_id.to_string());
+        self.pending_graph_publication_acks
+            .insert(hunt_id.to_string());
         actions.push(SwarmAction::PublishFindings {
             hunt_id: HuntId(hunt_id.to_string()),
             findings: serde_json::json!({
@@ -305,6 +352,7 @@ impl StalkerAgent {
                 "investigation_id": investigation.bundle.investigation_id,
                 "investigation_completed_at_ms": investigation_completed_at_ms,
                 "graph_id": graph_id,
+                "publication_id": publication_id,
                 "acquisitions_completed": completion.acquisitions,
                 "acquisition_no_findings": completion.acquisition_no_findings,
                 "falsifications_completed": completion.falsifications,
@@ -899,6 +947,167 @@ mod tests {
         );
         assert!(substrate.recent_deposits(10).await.unwrap().is_empty());
         assert_eq!(graph.summary().unwrap().completed_task_count, 2);
+    }
+
+    #[tokio::test]
+    async fn stalker_replays_committed_graph_publication_after_crash_then_durably_acks() {
+        let hunt_id = "hunt-graph-publication-crash";
+        let pheromone = pheromone_config();
+        let replay_store = replay_store();
+        let replay = replay_bundle(hunt_id);
+        replay_store.persist(&replay).unwrap();
+        let graph_config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 32,
+            max_claims_per_tick: 16,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph = Arc::new(
+            CollectiveHypothesisService::new(&graph_config, Keypair::from_seed(&[142; 32]), None)
+                .unwrap(),
+        );
+        let stalker_seed = [143; 32];
+        let signing_key = SigningKey::from_bytes(&stalker_seed);
+        let stalker_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&[144; 32]),
+            )
+            .unwrap();
+        let investigation = investigation();
+        let substrate = substrate(&pheromone);
+        let worker = graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&stalker_seed),
+            )
+            .unwrap();
+        graph.submit_replay(&replay).unwrap();
+        let mut agent = StalkerAgent::new_with_signing_key(
+            stalker_id.clone(),
+            signing_key.clone(),
+            replay_store.clone(),
+            investigation.clone(),
+            substrate.clone(),
+            pheromone.clone(),
+        )
+        .with_hypothesis_graph(worker)
+        .unwrap();
+        let mut recovered_env = env(hunt_id);
+        recovered_env.pheromones.clear();
+
+        assert!(
+            agent
+                .tick(&recovered_env)
+                .await
+                .unwrap()
+                .iter()
+                .any(|action| matches!(action, SwarmAction::ClaimInvestigation { .. }))
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if investigation
+                    .load_by_hunt_id(hunt_id)
+                    .unwrap()
+                    .is_some_and(|lookup| lookup.bundle.status == InvestigationStatus::Completed)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let first_publication = agent
+            .tick(&recovered_env)
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => {
+                    findings["publication_id"].as_str().map(ToString::to_string)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            !investigation
+                .load_by_hunt_id(hunt_id)
+                .unwrap()
+                .unwrap()
+                .bundle
+                .graph_findings_published
+        );
+        drop(agent);
+
+        let replacement_worker = graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&stalker_seed),
+            )
+            .unwrap();
+        let mut replacement = StalkerAgent::new_with_signing_key(
+            stalker_id.clone(),
+            signing_key.clone(),
+            replay_store.clone(),
+            investigation.clone(),
+            substrate.clone(),
+            pheromone.clone(),
+        )
+        .with_hypothesis_graph(replacement_worker)
+        .unwrap();
+        let replayed_publication = replacement
+            .tick(&recovered_env)
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => {
+                    findings["publication_id"].as_str().map(ToString::to_string)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(replayed_publication, first_publication);
+
+        assert!(replacement.tick(&recovered_env).await.unwrap().is_empty());
+        assert!(
+            investigation
+                .load_by_hunt_id(hunt_id)
+                .unwrap()
+                .unwrap()
+                .bundle
+                .graph_findings_published
+        );
+        drop(replacement);
+
+        let final_worker = graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&stalker_seed),
+            )
+            .unwrap();
+        let mut final_agent = StalkerAgent::new_with_signing_key(
+            stalker_id,
+            signing_key,
+            replay_store,
+            investigation,
+            substrate,
+            pheromone,
+        )
+        .with_hypothesis_graph(final_worker)
+        .unwrap();
+        assert!(final_agent.tick(&recovered_env).await.unwrap().is_empty());
     }
 
     #[tokio::test]

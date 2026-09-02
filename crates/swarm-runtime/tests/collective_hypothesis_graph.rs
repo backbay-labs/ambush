@@ -4163,7 +4163,16 @@ fn benign_or_ambiguous_investigation_closes_falsification_without_false_memory()
     );
     assert_eq!(projection.metrics.completed_falsifications, 1);
     assert_eq!(projection.metrics.falsification_no_findings, 1);
-    assert!(stalker.outstanding_stalker_hunts().unwrap().is_empty());
+    assert_eq!(
+        stalker.outstanding_stalker_hunts().unwrap(),
+        vec![replay.audit.hunt_id.clone()]
+    );
+    let committed = stalker
+        .committed_stalker_publication(&replay.audit.hunt_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.completion.acquisitions, 1);
+    assert_eq!(committed.completion.falsification_no_findings, 1);
 }
 
 #[test]
@@ -4618,6 +4627,12 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     assert_eq!(challenge.graph_id, first.graph_id);
     assert_eq!(service.graph_id(), second.graph_id);
     assert_eq!(service.summary().unwrap().metrics.campaign_rotations, 1);
+    let summaries = service.summaries().unwrap();
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0].graph_id, second.graph_id);
+    assert_eq!(summaries[1].graph_id, first.graph_id);
+    assert_eq!(summaries[0].evidence_count, 1);
+    assert_eq!(summaries[1].evidence_count, 1);
     let archived = service.operator_projection_for(&first.graph_id).unwrap();
     assert_eq!(archived.graph.evidence.len(), 1);
     assert_eq!(archived.tasks.len(), 3);
@@ -4626,6 +4641,35 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
         swarm_core::hypothesis_graph::TaskState::Completed
             | swarm_core::hypothesis_graph::TaskState::Failed
     )));
+    let first_task_page = service
+        .operator_task_page_for(&first.graph_id, None, 2)
+        .unwrap();
+    assert_eq!(first_task_page.len(), 2);
+    let task_cursor = first_task_page.last().unwrap();
+    let second_task_page = service
+        .operator_task_page_for(
+            &first.graph_id,
+            Some((task_cursor.generation, task_cursor.request.task_id.as_str())),
+            2,
+        )
+        .unwrap();
+    assert_eq!(second_task_page.len(), 1);
+    assert!(
+        first_task_page
+            .iter()
+            .chain(&second_task_page)
+            .map(|task| task.request.task_id.clone())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == 3
+    );
+    assert_eq!(
+        service
+            .operator_memory_page_for(&first.graph_id, None, 1)
+            .unwrap()
+            .len(),
+        1
+    );
     let first_retry = service.submit_replay(&first_replay).unwrap();
     assert!(first_retry.idempotent);
     assert_eq!(first_retry.graph_id, first.graph_id);
@@ -4646,6 +4690,10 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
         .unwrap();
     assert_eq!(restarted.graph_id(), second.graph_id);
     assert_eq!(restarted.summary().unwrap().metrics.campaign_rotations, 1);
+    let restarted_summaries = restarted.summaries().unwrap();
+    assert_eq!(restarted_summaries.len(), 2);
+    assert_eq!(restarted_summaries[0].graph_id, second.graph_id);
+    assert_eq!(restarted_summaries[1].graph_id, first.graph_id);
     let retry_after_restart = restarted.submit_replay(&first_replay).unwrap();
     assert!(retry_after_restart.idempotent);
     assert_eq!(retry_after_restart.graph_id, first.graph_id);

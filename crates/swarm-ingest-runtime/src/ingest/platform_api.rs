@@ -682,14 +682,6 @@ pub(super) fn finalize_platform_page<T>(
     PlatformApiEnvelope::new(items, cursor)
 }
 
-fn is_after_graph_collection_cursor(
-    item: &GraphCollectionCursor,
-    cursor: &GraphCollectionCursor,
-) -> bool {
-    item.generation < cursor.generation
-        || (item.generation == cursor.generation && item.stable_id < cursor.stable_id)
-}
-
 fn finalize_graph_collection_page<T>(
     mut items: Vec<T>,
     page_size: usize,
@@ -1167,7 +1159,7 @@ async fn platform_hypothesis_graphs_handler(
 ) -> Result<Json<PlatformApiEnvelope<GraphSummaryProjection>>, PlatformApiError> {
     let summaries = state
         .current_hypothesis_graph()
-        .map(|service| service.summary().map(|summary| vec![summary]))
+        .map(|service| service.summaries())
         .transpose()
         .map_err(map_hypothesis_graph_error)?
         .unwrap_or_default();
@@ -1211,29 +1203,15 @@ async fn platform_hypothesis_graph_tasks_handler(
         .as_deref()
         .map(GraphCollectionCursor::parse)
         .transpose()?;
-    let mut tasks = require_hypothesis_graph(&state)?
-        .operator_tasks_for(&graph_id)
+    let tasks = require_hypothesis_graph(&state)?
+        .operator_task_page_for(
+            &graph_id,
+            cursor
+                .as_ref()
+                .map(|cursor| (cursor.generation, cursor.stable_id.as_str())),
+            page_size.saturating_add(1),
+        )
         .map_err(map_hypothesis_graph_error)?;
-    tasks.sort_by(|left, right| {
-        right.generation.cmp(&left.generation).then_with(|| {
-            right
-                .request
-                .task_id
-                .as_str()
-                .cmp(left.request.task_id.as_str())
-        })
-    });
-    if let Some(cursor) = cursor.as_ref() {
-        tasks.retain(|task| {
-            is_after_graph_collection_cursor(
-                &GraphCollectionCursor {
-                    generation: task.generation,
-                    stable_id: task.request.task_id.to_string(),
-                },
-                cursor,
-            )
-        });
-    }
     let page = finalize_graph_collection_page(tasks, page_size, |task| GraphCollectionCursor {
         generation: task.generation,
         stable_id: task.request.task_id.to_string(),
@@ -1261,29 +1239,15 @@ async fn platform_hypothesis_graph_memory_handler(
         .as_deref()
         .map(GraphCollectionCursor::parse)
         .transpose()?;
-    let mut memory = require_hypothesis_graph(&state)?
-        .operator_memory_for(&graph_id)
+    let memory = require_hypothesis_graph(&state)?
+        .operator_memory_page_for(
+            &graph_id,
+            cursor
+                .as_ref()
+                .map(|cursor| (cursor.generation, cursor.stable_id.as_str())),
+            page_size.saturating_add(1),
+        )
         .map_err(map_hypothesis_graph_error)?;
-    memory.sort_by(|left, right| {
-        right.generation.cmp(&left.generation).then_with(|| {
-            right
-                .memory
-                .memory_id
-                .as_str()
-                .cmp(left.memory.memory_id.as_str())
-        })
-    });
-    if let Some(cursor) = cursor.as_ref() {
-        memory.retain(|record| {
-            is_after_graph_collection_cursor(
-                &GraphCollectionCursor {
-                    generation: record.generation,
-                    stable_id: record.memory.memory_id.to_string(),
-                },
-                cursor,
-            )
-        });
-    }
     let page = finalize_graph_collection_page(memory, page_size, |record| GraphCollectionCursor {
         generation: record.generation,
         stable_id: record.memory.memory_id.to_string(),

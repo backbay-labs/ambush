@@ -126,6 +126,7 @@ type IngestBuiltRuntime = (
 const MAX_INGEST_FUTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
 const TIMESTAMP_MILLISECONDS_CUTOFF: i64 = 100_000_000_000;
 const HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE: usize = 256;
+const HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES: usize = 256;
 
 type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send + Sync>;
 
@@ -1661,6 +1662,7 @@ pub struct IngestState {
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
     hypothesis_graph: Option<Arc<CollectiveHypothesisService>>,
     hypothesis_graph_admission_notify: Option<Arc<tokio::sync::Notify>>,
+    hypothesis_graph_reconciliation_lock: Arc<Mutex<()>>,
 }
 
 impl IngestState {
@@ -1771,6 +1773,7 @@ impl IngestState {
             )),
             hypothesis_graph,
             hypothesis_graph_admission_notify: None,
+            hypothesis_graph_reconciliation_lock: Arc::new(Mutex::new(())),
         };
         state.install_notification_payload_builder();
         Ok(state)
@@ -2299,66 +2302,114 @@ impl IngestState {
             .transpose()
     }
 
-    /// Reconcile every durable replay after production worker identities have
-    /// registered. The store is scanned in bounded, stable pages so records
-    /// that previously failed admission cannot age out of a recent-record
-    /// window. Individual graph failures remain a visible degraded lane rather
-    /// than preventing the detect runtime from starting; unreadable replay
-    /// storage still fails the reconciliation.
+    /// Reconcile durable replays added since the last admission checkpoint.
+    ///
+    /// The durable monotonic cursor prevents a lifetime rescan on every wake,
+    /// while a bounded durable retry set preserves individual graph failures
+    /// without allowing an unbounded poison queue. Reconciliation is serialized
+    /// across cloned runtime state so concurrent wakeups cannot lose checkpoint
+    /// updates. Unreadable replay storage still fails the reconciliation.
     pub fn reconcile_hypothesis_graph_replays(
         &self,
     ) -> Result<HypothesisGraphReplayReconciliation, ReplayStoreError> {
         let Some(graph) = self.current_hypothesis_graph() else {
             return Ok(HypothesisGraphReplayReconciliation::default());
         };
+        let _reconciliation_guard = self
+            .hypothesis_graph_reconciliation_lock
+            .lock()
+            .map_err(|_| ReplayStoreError::PoisonedLock)?;
         let replay_store = self.current_replay_store();
         let mut report = HypothesisGraphReplayReconciliation::default();
-        let mut after_bundle_id = None;
-        loop {
-            let records = replay_store.scan_after_bundle_id(
-                after_bundle_id.as_deref(),
-                HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE,
-            )?;
-            let page_len = records.len();
-            if page_len == 0 {
-                break;
-            }
-            for record in records {
-                after_bundle_id = Some(record.bundle_id.clone());
-                report.examined = report.examined.saturating_add(1);
-                let Some(replay) = replay_store.load_by_bundle_id(&record.bundle_id)? else {
+        let mut checkpoint = replay_store.hypothesis_graph_checkpoint()?;
+        if checkpoint.retry_bundle_ids.len() > HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
+            return Err(ReplayStoreError::InvalidState {
+                reason: format!(
+                    "hypothesis graph replay retry set contains {} entries; maximum is {}",
+                    checkpoint.retry_bundle_ids.len(),
+                    HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES
+                ),
+            });
+        }
+
+        let mut reconcile_bundle = |bundle_id: &str| -> Result<bool, ReplayStoreError> {
+            report.examined = report.examined.saturating_add(1);
+            let Some(replay) = replay_store.load_by_bundle_id(bundle_id)? else {
+                report.failures = report.failures.saturating_add(1);
+                tracing::warn!(
+                    bundle_id,
+                    module = module_path!(),
+                    "durable replay disappeared during hypothesis graph reconciliation"
+                );
+                return Ok(false);
+            };
+            match graph.submit_replay(&replay.bundle) {
+                Ok(submission) if submission.idempotent => {
+                    report.idempotent = report.idempotent.saturating_add(1);
+                    Ok(true)
+                }
+                Ok(_) => {
+                    report.admitted = report.admitted.saturating_add(1);
+                    Ok(true)
+                }
+                Err(error) => {
                     report.failures = report.failures.saturating_add(1);
                     tracing::warn!(
-                        bundle_id = %record.bundle_id,
-                        hunt_id = %record.hunt_id,
+                        bundle_id = %replay.record.bundle_id,
+                        hunt_id = %replay.record.hunt_id,
+                        reason = %error,
                         module = module_path!(),
-                        "durable replay disappeared during hypothesis graph startup reconciliation"
+                        "durable replay hypothesis graph reconciliation degraded"
                     );
-                    continue;
-                };
-                match graph.submit_replay(&replay.bundle) {
-                    Ok(submission) if submission.idempotent => {
-                        report.idempotent = report.idempotent.saturating_add(1);
-                    }
-                    Ok(_) => {
-                        report.admitted = report.admitted.saturating_add(1);
-                    }
-                    Err(error) => {
-                        report.failures = report.failures.saturating_add(1);
-                        tracing::warn!(
-                            bundle_id = %record.bundle_id,
-                            hunt_id = %record.hunt_id,
-                            reason = %error,
-                            module = module_path!(),
-                            "durable replay hypothesis graph startup reconciliation degraded"
-                        );
-                    }
+                    Ok(false)
                 }
             }
-            if page_len < HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE {
-                break;
+        };
+
+        for bundle_id in checkpoint
+            .retry_bundle_ids
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            if reconcile_bundle(&bundle_id)? {
+                checkpoint.retry_bundle_ids.remove(&bundle_id);
             }
         }
+
+        loop {
+            if checkpoint.retry_bundle_ids.len() == HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
+                break;
+            }
+            let records = replay_store.scan_after_sequence(
+                checkpoint.cursor_sequence,
+                HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE,
+            )?;
+            if records.is_empty() {
+                break;
+            }
+            let mut previous_sequence = checkpoint.cursor_sequence;
+            for record in records {
+                if checkpoint.retry_bundle_ids.len() == HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
+                    break;
+                }
+                if record.store_sequence <= previous_sequence {
+                    return Err(ReplayStoreError::InvalidState {
+                        reason: format!(
+                            "replay sequence page is not strictly increasing after {}: observed {} for `{}`",
+                            previous_sequence, record.store_sequence, record.bundle_id
+                        ),
+                    });
+                }
+                if !reconcile_bundle(&record.bundle_id)? {
+                    checkpoint.retry_bundle_ids.insert(record.bundle_id.clone());
+                }
+                checkpoint.cursor_sequence = record.store_sequence;
+                previous_sequence = record.store_sequence;
+            }
+            replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
+        }
+        replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
         Ok(report)
     }
 

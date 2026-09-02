@@ -838,6 +838,32 @@ where
         Ok(self.store.load_by_hunt_id(hunt_id)?)
     }
 
+    pub fn acknowledge_graph_findings(
+        &self,
+        hunt_id: &str,
+    ) -> Result<Option<InvestigationBundleRecord>, InvestigationError> {
+        let Some(investigation) = self.store.load_by_hunt_id(hunt_id)? else {
+            return Ok(None);
+        };
+        if investigation.bundle.graph_findings_published {
+            return Ok(Some(investigation.record));
+        }
+        if !matches!(
+            investigation.bundle.status,
+            InvestigationStatus::Completed
+                | InvestigationStatus::Failed
+                | InvestigationStatus::TimedOut
+        ) {
+            return Err(InvestigationError::IdempotencyConflict(format!(
+                "investigation `{}` cannot acknowledge graph findings before terminal state",
+                investigation.bundle.investigation_id
+            )));
+        }
+        Ok(Some(self.store.persist(
+            &investigation.bundle.with_graph_findings_published(),
+        )?))
+    }
+
     pub fn load_by_receipt_id(
         &self,
         receipt_id: &str,

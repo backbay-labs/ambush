@@ -97,9 +97,9 @@ pub use investigation::{
 };
 pub use spine_error::{SpineError, SpineResult};
 pub use store::{
-    ConfiguredReplayBundleStore, FileReplayBundleStore, MemoryReplayBundleStore,
-    ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
-    ReplayStoreHealth,
+    ConfiguredReplayBundleStore, FileReplayBundleStore, HypothesisGraphReplayCheckpoint,
+    MemoryReplayBundleStore, ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore,
+    ReplayPreview, ReplayStoreError, ReplayStoreHealth,
 };
 pub use strategy_memory::{
     FileStrategyMemoryStore, MemoryStrategyMemoryStore, RetrievedStrategyMemory,

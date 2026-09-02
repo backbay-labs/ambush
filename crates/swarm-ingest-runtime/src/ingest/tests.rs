@@ -557,6 +557,7 @@ fn seed_platform_investigation_bundle(
             vote_lineage: Vec::new(),
             decision: swarm_spine::InvestigationDecision::default(),
             failure_reason: None,
+            graph_findings_published: false,
         })
         .unwrap();
 }
@@ -2228,11 +2229,92 @@ async fn startup_reconciliation_recovers_durable_replays_missing_from_graph() {
     assert_eq!(summary.pending_task_count, 6);
 
     let retry = state.reconcile_hypothesis_graph_replays().unwrap();
-    assert_eq!(retry.examined, 2);
+    assert_eq!(retry.examined, 0);
     assert_eq!(retry.admitted, 0);
-    assert_eq!(retry.idempotent, 2);
+    assert_eq!(retry.idempotent, 0);
     assert_eq!(retry.failures, 0);
     drop(state);
+    fs::remove_dir_all(graph_root).unwrap();
+}
+
+#[tokio::test]
+async fn reconciliation_checkpoint_survives_restart_and_admits_lexically_earlier_bundle() {
+    let mut config = test_config("suspicious_process_tree");
+    let graph_root = temp_path("reconcile-durable-sequence-cursor");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    let config_path = temp_path("reconcile-durable-sequence-cursor-config");
+    let runtime_signing_key = ed25519_dalek::SigningKey::from_bytes(&[133; 32]);
+    let state = IngestState::from_config_with_signing_key(
+        config_path.clone(),
+        config.clone(),
+        runtime_signing_key.clone(),
+    )
+    .unwrap();
+    seed_platform_replay_bundle(&state, "z-first-persisted", "host-z", 1_700_000_031_000);
+    state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[134; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[135; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    let first = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(first.examined, 1);
+    assert_eq!(first.admitted, 1);
+    drop(state);
+
+    let restarted =
+        IngestState::from_config_with_signing_key(config_path, config, runtime_signing_key)
+            .unwrap();
+    restarted
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[134; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    restarted
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[135; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    seed_platform_replay_bundle(
+        &restarted,
+        "a-second-persisted",
+        "host-a",
+        1_700_000_031_001,
+    );
+    let second = restarted.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(second.examined, 1);
+    assert_eq!(second.admitted, 1);
+    assert_eq!(second.idempotent, 0);
+    assert_eq!(second.failures, 0);
+    assert_eq!(
+        restarted
+            .current_hypothesis_graph()
+            .unwrap()
+            .summary()
+            .unwrap()
+            .evidence_count,
+        2
+    );
+
+    drop(restarted);
     fs::remove_dir_all(graph_root).unwrap();
 }
 
@@ -2392,8 +2474,8 @@ async fn reconciliation_retries_old_failed_replays_beyond_graph_task_capacity() 
         );
     }
     let blocked = state.reconcile_hypothesis_graph_replays().unwrap();
-    assert_eq!(blocked.examined, 5);
-    assert_eq!(blocked.idempotent, 1);
+    assert_eq!(blocked.examined, 4);
+    assert_eq!(blocked.idempotent, 0);
     assert_eq!(blocked.admitted, 0);
     assert_eq!(blocked.failures, 4);
 
@@ -2423,8 +2505,8 @@ async fn reconciliation_retries_old_failed_replays_beyond_graph_task_capacity() 
     );
 
     let retried = state.reconcile_hypothesis_graph_replays().unwrap();
-    assert_eq!(retried.examined, 5);
-    assert_eq!(retried.idempotent, 1);
+    assert_eq!(retried.examined, 4);
+    assert_eq!(retried.idempotent, 0);
     assert_eq!(retried.admitted, 1);
     assert_eq!(retried.failures, 3);
     let old_failed_replay = state
@@ -3407,6 +3489,7 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
     enable_platform_api(&mut config);
     let graph_root = temp_path("platform-hypothesis-graph-store");
     enable_collective_hypothesis_graph(&mut config, &graph_root);
+    config.hypothesis_graph.max_hypotheses = 4;
     let state = IngestState::from_config(temp_path("platform-hypothesis-graph"), config).unwrap();
     let hunt_id = "evt-platform-hypothesis-graph";
     let created_at_ms = 1_700_000_020_000;
@@ -3429,7 +3512,7 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         )
         .unwrap()
         .unwrap();
-    state
+    let weaver = state
         .current_hypothesis_graph_worker(
             [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
             &ed25519_dalek::SigningKey::from_bytes(&[124; 32]),
@@ -3448,6 +3531,21 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         .unwrap();
     assert_eq!(completion.acquisitions, 1);
     assert_eq!(completion.falsifications, 1);
+    let first_challenge = weaver
+        .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+            created_at_ms + 2,
+        ))
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_challenge.hunt_id, hunt_id);
+    assert!(
+        weaver
+            .complete_challenge(
+                &first_challenge.task_id,
+                swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 3),
+            )
+            .unwrap()
+    );
     let graph_id = graph.graph_id().to_string();
     let app = detect_http_router(state.clone());
 
@@ -3571,6 +3669,21 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         )
         .unwrap();
     assert_eq!(second_completion.memory_records_projected, 1);
+    let second_challenge = weaver
+        .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+            created_at_ms + 12,
+        ))
+        .unwrap()
+        .unwrap();
+    assert_eq!(second_challenge.hunt_id, second_hunt_id);
+    assert!(
+        weaver
+            .complete_challenge(
+                &second_challenge.task_id,
+                swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 13),
+            )
+            .unwrap()
+    );
 
     let first_memory_page = app
         .clone()
@@ -3615,6 +3728,34 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         first_memory_id
     );
     assert!(second_memory_page.get("cursor").is_none());
+
+    let third_hunt_id = "evt-platform-hypothesis-graph-third";
+    seed_platform_replay_bundle(&state, third_hunt_id, "host-graph", created_at_ms + 20);
+    let third_replay = state
+        .current_replay_store()
+        .load_by_hunt_id(third_hunt_id)
+        .unwrap()
+        .unwrap()
+        .bundle;
+    let third_submission = graph.submit_replay(&third_replay).unwrap();
+    assert_ne!(third_submission.graph_id.to_string(), graph_id);
+    let rotated_summaries = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/hypothesis-graphs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotated_summaries.status(), StatusCode::OK);
+    let rotated_summaries: Value = parse_json(rotated_summaries).await;
+    assert_eq!(rotated_summaries["data"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        rotated_summaries["data"][0]["graph_id"],
+        third_submission.graph_id.to_string()
+    );
+    assert_eq!(rotated_summaries["data"][1]["graph_id"], graph_id);
 
     let invalid_page = app
         .clone()

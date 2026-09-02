@@ -113,6 +113,8 @@ pub struct InvestigationBundle {
     #[serde(default)]
     pub decision: InvestigationDecision,
     pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub graph_findings_published: bool,
 }
 
 impl InvestigationBundle {
@@ -152,6 +154,7 @@ impl InvestigationBundle {
             vote_lineage: Vec::new(),
             decision: InvestigationDecision::default(),
             failure_reason: None,
+            graph_findings_published: false,
         }
     }
 
@@ -202,6 +205,11 @@ impl InvestigationBundle {
         self
     }
 
+    pub fn with_graph_findings_published(mut self) -> Self {
+        self.graph_findings_published = true;
+        self
+    }
+
     pub fn last_updated_ms(&self) -> i64 {
         self.completed_at_ms
             .or(self.started_at_ms)
@@ -232,6 +240,7 @@ pub struct InvestigationBundleRecord {
     pub selected_interpretation_id: Option<String>,
     pub final_confidence_basis_points: u16,
     pub ambiguous: bool,
+    pub graph_findings_published: bool,
     pub summary_preview: Option<String>,
     pub failure_reason: Option<String>,
     pub correlation_keys: Vec<String>,
@@ -261,6 +270,7 @@ impl InvestigationBundleRecord {
             selected_interpretation_id: bundle.decision.selected_interpretation_id.clone(),
             final_confidence_basis_points: bundle.decision.final_confidence_basis_points,
             ambiguous: bundle.decision.ambiguous,
+            graph_findings_published: bundle.graph_findings_published,
             summary_preview: bundle
                 .summary
                 .as_ref()
@@ -995,7 +1005,17 @@ fn validate_investigation_persist_transition(
     );
     let regresses_running = persisted.status == InvestigationStatus::Running
         && attempted.status == InvestigationStatus::Queued;
-    if (persisted_is_terminal && persisted != attempted) || regresses_running {
+    let publication_ack = if persisted_is_terminal
+        && !persisted.graph_findings_published
+        && attempted.graph_findings_published
+    {
+        let mut expected = persisted.clone();
+        expected.graph_findings_published = true;
+        &expected == attempted
+    } else {
+        false
+    };
+    if (persisted_is_terminal && persisted != attempted && !publication_ack) || regresses_running {
         return Err(InvestigationStoreError::StatusRegression {
             investigation_id: persisted.investigation_id.clone(),
             persisted: persisted.status,
@@ -1398,6 +1418,50 @@ mod tests {
                 .bundle,
             terminal
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn assert_terminal_graph_publication_ack(store: &dyn super::InvestigationBundleStore) {
+        let terminal = sample_investigation_bundle();
+        assert!(!terminal.graph_findings_published);
+        store.persist(&terminal).unwrap();
+
+        let acknowledged = terminal.clone().with_graph_findings_published();
+        let record = store.persist(&acknowledged).unwrap();
+        assert!(record.graph_findings_published);
+        store.persist(&acknowledged).unwrap();
+
+        assert!(matches!(
+            store.persist(&terminal),
+            Err(InvestigationStoreError::StatusRegression { .. })
+        ));
+        let mut mutated = acknowledged.clone();
+        mutated.summary = Some("terminal payload mutation".to_string());
+        assert!(matches!(
+            store.persist(&mutated),
+            Err(InvestigationStoreError::StatusRegression { .. })
+        ));
+        assert_eq!(
+            store
+                .load_by_investigation_id(&terminal.investigation_id)
+                .unwrap()
+                .unwrap()
+                .bundle,
+            acknowledged
+        );
+    }
+
+    #[test]
+    fn terminal_investigation_allows_only_one_way_graph_publication_ack() {
+        assert_terminal_graph_publication_ack(&super::MemoryInvestigationBundleStore::default());
+
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-publication-ack-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let files = FileInvestigationBundleStore::open(&root).unwrap();
+        assert_terminal_graph_publication_ack(&files);
         std::fs::remove_dir_all(root).unwrap();
     }
 
